@@ -3,14 +3,26 @@
  * Handles async processing of large file uploads to prevent blocking
  */
 
+export interface SnowflakeImportConfig {
+  tableName: string;
+  database?: string;
+  schema?: string;
+  account?: string;
+  username?: string;
+  password?: string;
+  warehouse?: string;
+  role?: string;
+}
+
 interface UploadJob {
   jobId: string;
   sessionId: string;
   username: string;
   fileName: string;
-  fileBuffer: Buffer;
-  mimeType: string;
+  fileBuffer?: Buffer;
+  mimeType?: string;
   blobInfo?: { blobUrl: string; blobName: string };
+  snowflakeImport?: SnowflakeImportConfig;
   status: 'pending' | 'uploading' | 'parsing' | 'analyzing' | 'saving' | 'completed' | 'failed';
   progress: number; // 0-100
   error?: string;
@@ -25,6 +37,11 @@ class UploadQueue {
   private processing: Set<string> = new Set();
   private readonly MAX_CONCURRENT = 3; // Process max 3 files concurrently
   private readonly MAX_QUEUE_SIZE = 50;
+  // Feature flag: compute detailed Python-based data summary statistics during upload
+  // This can add significant time for large files, so it's disabled by default to
+  // keep initial upload/analysis faster. When enabled, it populates dataSummaryStatistics
+  // for the Data Summary modal during the initial upload instead of on-demand.
+  private readonly ENABLE_UPLOAD_DATA_SUMMARY_STATS = false;
 
   /**
    * Add a new upload job to the queue
@@ -61,6 +78,34 @@ class UploadQueue {
     // Start processing if not at max capacity
     this.processNext();
     
+    return jobId;
+  }
+
+  /**
+   * Add a Snowflake table import job (same queue, same status endpoint)
+   */
+  async enqueueSnowflakeImport(
+    sessionId: string,
+    username: string,
+    fileName: string,
+    snowflakeImport: SnowflakeImportConfig
+  ): Promise<string> {
+    if (this.jobs.size >= this.MAX_QUEUE_SIZE) {
+      throw new Error('Upload queue is full. Please try again later.');
+    }
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const job: UploadJob = {
+      jobId,
+      sessionId,
+      username,
+      fileName,
+      snowflakeImport,
+      status: 'pending',
+      progress: 0,
+      createdAt: Date.now(),
+    };
+    this.jobs.set(jobId, job);
+    this.processNext();
     return jobId;
   }
 
@@ -124,14 +169,101 @@ class UploadQueue {
       const { saveChartsToBlob } = await import('../lib/blobStorage.js');
       const queryCache = (await import('../lib/cache.js')).default;
 
-      // Check if file should use large file processing
-      const useLargeFileProcessing = shouldUseLargeFileProcessing(job.fileBuffer.length);
-      
       let data: Record<string, any>[];
       let summary: ReturnType<typeof createDataSummary>;
       let storagePath: string | undefined;
+      let chunkIndexBlob: { blobName: string; totalChunks: number; totalRows: number } | undefined;
+      let useLargeFileProcessing = false;
+      let useChunking = false;
 
-      if (useLargeFileProcessing) {
+      // Snowflake import: fetch table data then run same analysis pipeline
+      if (job.snowflakeImport) {
+        job.status = 'parsing';
+        job.progress = 10;
+        const { fetchTableData } = await import('../lib/snowflakeService.js');
+        data = await fetchTableData(job.snowflakeImport);
+        if (!data || data.length === 0) {
+          throw new Error('No data found in Snowflake table');
+        }
+        summary = createDataSummary(data);
+        data = convertDashToZeroForNumericColumns(data, summary.numericColumns);
+        summary = createDataSummary(data);
+        job.progress = 40;
+      } else if (job.fileBuffer) {
+        // File upload path
+        useLargeFileProcessing = shouldUseLargeFileProcessing(job.fileBuffer.length);
+        useChunking = job.fileBuffer.length >= 10 * 1024 * 1024; // 10MB threshold for chunking
+
+      // Try chunking first for files >= 10MB (faster upload and query)
+      if (useChunking) {
+        try {
+          const { chunkFile } = await import('../lib/chunkingService.js');
+          console.log(`📦 File is ${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB. Using chunking for faster processing...`);
+          
+          job.status = 'parsing';
+          job.progress = 5;
+          
+          // Parse file first to get summary (needed for chunking)
+          const tempData = await parseFile(job.fileBuffer, job.fileName);
+          if (tempData.length === 0) {
+            throw new Error('No data found in file');
+          }
+          
+          summary = createDataSummary(tempData);
+          const tempDataProcessed = convertDashToZeroForNumericColumns(tempData, summary.numericColumns);
+          summary = createDataSummary(tempDataProcessed);
+          
+          job.progress = 10;
+          
+          // Chunk the file
+          const chunkIndex = await chunkFile(
+            job.fileBuffer,
+            job.sessionId,
+            job.fileName,
+            summary,
+            (progress) => {
+              job.progress = 10 + Math.floor(progress.progress * 0.3); // Use 30% of progress for chunking
+              if (progress.message) {
+                console.log(`  ${progress.message}`);
+              }
+            }
+          );
+          
+          chunkIndexBlob = {
+            blobName: `chunks/${job.sessionId}/index.json`,
+            totalChunks: chunkIndex.totalChunks,
+            totalRows: chunkIndex.totalRows,
+          };
+          
+          // OPTIMIZATION: For very large files, load only a sample of chunks for AI analysis
+          // This dramatically speeds up processing while maintaining statistical accuracy
+          const { loadChunkData } = await import('../lib/chunkingService.js');
+          const MAX_ROWS_FOR_AI = 100000; // Load max 100K rows for AI analysis
+          const shouldSampleChunks = chunkIndex.totalRows > MAX_ROWS_FOR_AI;
+          
+          if (shouldSampleChunks) {
+            // Load chunks proportionally to get ~100K rows
+            const targetChunks = Math.ceil((MAX_ROWS_FOR_AI / chunkIndex.totalRows) * chunkIndex.totalChunks);
+            const chunksToLoad = Math.min(targetChunks, chunkIndex.totalChunks);
+            const step = Math.floor(chunkIndex.totalChunks / chunksToLoad);
+            const sampledChunks = chunkIndex.chunks.filter((_, idx) => idx % step === 0).slice(0, chunksToLoad);
+            console.log(`📦 Loading ${sampledChunks.length} of ${chunkIndex.totalChunks} chunks (sampled from ${chunkIndex.totalRows} rows) for faster AI analysis...`);
+            data = await loadChunkData(sampledChunks);
+            console.log(`✅ Loaded ${data.length} rows (sampled) from ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total) for AI analysis`);
+          } else {
+            console.log(`📦 Loading ALL ${chunkIndex.totalChunks} chunks for full data analysis (${chunkIndex.totalRows} rows total)...`);
+            data = await loadChunkData(chunkIndex.chunks); // Load ALL chunks for smaller files
+            console.log(`✅ File chunked into ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total), loaded ${data.length} rows for AI analysis`);
+          }
+          job.progress = 40;
+        } catch (chunkError) {
+          console.warn('⚠️ Chunking failed, falling back to standard processing:', chunkError);
+          // Fall through to standard processing
+          useChunking = false;
+        }
+      }
+
+      if (!useChunking && useLargeFileProcessing) {
         // Use streaming and columnar storage for large files
         console.log(`📦 Large file detected (${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB). Using streaming pipeline...`);
         
@@ -154,13 +286,11 @@ class UploadQueue {
           summary = result.summary;
           storagePath = result.storagePath;
           
-          // For large files, we don't load all data into memory
-          // Instead, we'll use sampled data for AI analysis
-          // Get a representative sample for analysis (up to 50k rows)
-          const sampleSize = Math.min(50000, result.rowCount);
-          data = await getDataForAnalysis(job.sessionId, undefined, sampleSize);
+          // Load ALL data for AI analysis (no sampling - full data integrity)
+          console.log(`📊 Loading ALL ${result.rowCount} rows for full data analysis...`);
+          data = await getDataForAnalysis(job.sessionId, undefined, undefined); // undefined = no limit, load all
           
-          console.log(`✅ Large file processed: ${result.rowCount} rows, using ${data.length} sample rows for analysis`);
+          console.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows for analysis`);
         } catch (largeFileError) {
           const errorMsg = largeFileError instanceof Error ? largeFileError.message : String(largeFileError);
           throw new Error(`Failed to process large file: ${errorMsg}`);
@@ -197,13 +327,40 @@ class UploadQueue {
           throw new Error(`Failed to create data summary: ${errorMsg}`);
         }
       }
+      } // end else if (job.fileBuffer)
 
       // Step 3: Analyze with AI (this is the slowest part)
       job.status = 'analyzing';
       job.progress = 40;
       let charts, insights;
       try {
-        const result = await analyzeUpload(data, summary, job.fileName);
+        // OPTIMIZATION: For large files, use aggressive optimizations to speed up upload
+        // 1. Skip chart insights generation (saves 4-6 AI calls)
+        // 2. Use sampled data for AI analysis instead of full dataset (much faster)
+        const shouldSkipChartInsights = useChunking || useLargeFileProcessing || data.length > 50000;
+        // For large files, always sample data for AI analysis to reduce latency.
+        // We use a smaller, but still statistically meaningful, sample size to
+        // balance quality and performance.
+        const MAX_SAMPLE_FOR_AI = 20000;
+        const shouldUseSampledDataForAI = data.length > MAX_SAMPLE_FOR_AI;
+        
+        let dataForAI = data;
+        if (shouldUseSampledDataForAI) {
+          // Sample data for AI analysis - 20K rows is statistically sufficient
+          const step = Math.floor(data.length / MAX_SAMPLE_FOR_AI);
+          const sampled: Record<string, any>[] = [];
+          for (let i = 0; i < data.length && sampled.length < MAX_SAMPLE_FOR_AI; i += step) {
+            sampled.push(data[i]);
+          }
+          dataForAI = sampled;
+          console.log(`⚡ Performance optimization: Using ${sampled.length} sampled rows (from ${data.length} total) for AI analysis to speed up processing`);
+        }
+        
+        if (shouldSkipChartInsights) {
+          console.log(`⚡ Performance optimization: Skipping chart insights generation for large file (${data.length} rows). Insights will be generated on-demand.`);
+        }
+        
+        const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
         charts = result.charts;
         insights = result.insights;
       } catch (analyzeError) {
@@ -217,13 +374,18 @@ class UploadQueue {
         throw new Error(`AI analysis failed: ${errorMsg}`);
       }
 
-      // Step 4: Generate suggestions
+      // Step 4: Generate suggestions (skip for large files to speed up upload)
       job.progress = 60;
       let suggestions: string[] = [];
-      try {
-        suggestions = await generateAISuggestions([], summary);
-      } catch (suggestionError) {
-        console.error('Failed to generate AI suggestions:', suggestionError);
+      const shouldSkipSuggestions = useChunking || useLargeFileProcessing || data.length > 50000;
+      if (!shouldSkipSuggestions) {
+        try {
+          suggestions = await generateAISuggestions([], summary);
+        } catch (suggestionError) {
+          console.error('Failed to generate AI suggestions:', suggestionError);
+        }
+      } else {
+        console.log(`⚡ Performance optimization: Skipping AI suggestions generation for large file. Suggestions can be generated on-demand.`);
       }
 
       // Step 5: Sanitize charts (with memory optimization for large datasets)
@@ -285,58 +447,64 @@ class UploadQueue {
       const columnStatistics = generateColumnStatistics(data, summary.numericColumns);
       
       // Step 7.5: Compute detailed data summary statistics (for Data Summary modal)
+      // NOTE: This step can be expensive for large files because it calls into the
+      // Python service and scans up to 50k rows. To keep initial upload time low,
+      // it's guarded by a feature flag and disabled by default. The Data Summary
+      // modal can still compute these statistics on-demand when opened.
       let dataSummaryStatistics: any = undefined;
-      try {
-        const { getDataSummary } = await import('../lib/dataOps/pythonService.js');
-        
-        // Sample data if too large (same logic as in endpoint)
-        let dataForSummary = data;
-        const MAX_ROWS_FOR_SUMMARY = 50000;
-        if (data.length > MAX_ROWS_FOR_SUMMARY) {
-          console.log(`📊 Computing data summary: sampling ${MAX_ROWS_FOR_SUMMARY} rows from ${data.length} total rows`);
-          const step = Math.floor(data.length / MAX_ROWS_FOR_SUMMARY);
-          const sampledData: Record<string, any>[] = [];
-          for (let i = 0; i < data.length && sampledData.length < MAX_ROWS_FOR_SUMMARY; i += step) {
-            sampledData.push(data[i]);
+      if (this.ENABLE_UPLOAD_DATA_SUMMARY_STATS) {
+        try {
+          const { getDataSummary } = await import('../lib/dataOps/pythonService.js');
+          
+          // Sample data if too large (same logic as in endpoint)
+          let dataForSummary = data;
+          const MAX_ROWS_FOR_SUMMARY = 50000;
+          if (data.length > MAX_ROWS_FOR_SUMMARY) {
+            console.log(`📊 Computing data summary: sampling ${MAX_ROWS_FOR_SUMMARY} rows from ${data.length} total rows`);
+            const step = Math.floor(data.length / MAX_ROWS_FOR_SUMMARY);
+            const sampledData: Record<string, any>[] = [];
+            for (let i = 0; i < data.length && sampledData.length < MAX_ROWS_FOR_SUMMARY; i += step) {
+              sampledData.push(data[i]);
+            }
+            dataForSummary = sampledData;
           }
-          dataForSummary = sampledData;
-        }
-        
-        console.log(`📊 Computing detailed data summary statistics...`);
-        const summaryResponse = await getDataSummary(dataForSummary);
-        
-        // Calculate quality score
-        const fullDataRowCount = summary.rowCount;
-        const totalCells = summaryResponse.summary.reduce((sum, col) => sum + fullDataRowCount, 0);
-        const totalNulls = summaryResponse.summary.reduce((sum, col) => {
-          const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
-          return sum + Math.round(nullPercentage * fullDataRowCount);
-        }, 0);
-        const nullPercentage = totalCells > 0 ? (totalNulls / totalCells) * 100 : 0;
-        const qualityScore = Math.max(0, Math.round(100 - nullPercentage));
-        
-        // Scale summary statistics to full dataset size
-        const scaledSummary = summaryResponse.summary.map(col => {
-          const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
-          const scaledNulls = Math.round(nullPercentage * fullDataRowCount);
-          return {
-            ...col,
-            total_values: fullDataRowCount,
-            null_values: scaledNulls,
-            non_null_values: fullDataRowCount - scaledNulls,
+          
+          console.log(`📊 Computing detailed data summary statistics...`);
+          const summaryResponse = await getDataSummary(dataForSummary);
+          
+          // Calculate quality score
+          const fullDataRowCount = summary.rowCount;
+          const totalCells = summaryResponse.summary.reduce((sum, col) => sum + fullDataRowCount, 0);
+          const totalNulls = summaryResponse.summary.reduce((sum, col) => {
+            const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
+            return sum + Math.round(nullPercentage * fullDataRowCount);
+          }, 0);
+          const nullPercentage = totalCells > 0 ? (totalNulls / totalCells) * 100 : 0;
+          const qualityScore = Math.max(0, Math.round(100 - nullPercentage));
+          
+          // Scale summary statistics to full dataset size
+          const scaledSummary = summaryResponse.summary.map(col => {
+            const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
+            const scaledNulls = Math.round(nullPercentage * fullDataRowCount);
+            return {
+              ...col,
+              total_values: fullDataRowCount,
+              null_values: scaledNulls,
+              non_null_values: fullDataRowCount - scaledNulls,
+            };
+          });
+          
+          dataSummaryStatistics = {
+            summary: scaledSummary,
+            qualityScore,
+            computedAt: Date.now(),
           };
-        });
-        
-        dataSummaryStatistics = {
-          summary: scaledSummary,
-          qualityScore,
-          computedAt: Date.now(),
-        };
-        
-        console.log(`✅ Data summary statistics computed successfully (quality score: ${qualityScore})`);
-      } catch (summaryError) {
-        console.error('⚠️ Failed to compute data summary statistics during upload:', summaryError);
-        // Don't fail the upload - this is optional
+          
+          console.log(`✅ Data summary statistics computed successfully (quality score: ${qualityScore})`);
+        } catch (summaryError) {
+          console.error('⚠️ Failed to compute data summary statistics during upload:', summaryError);
+          // Don't fail the upload - this is optional
+        }
       }
       
       // Step 8: Prepare sample rows
@@ -424,13 +592,15 @@ class UploadQueue {
             sampleRows,
             // Store columnar storage path for large files
             columnarStoragePath: useLargeFileProcessing ? storagePath : undefined,
+            // Store chunk index for chunked files
+            chunkIndexBlob: chunkIndexBlob,
             columnStatistics,
             dataSummaryStatistics, // Store pre-computed data summary statistics
             insights,
             analysisMetadata: {
               totalProcessingTime: processingTime,
               aiModelUsed: 'gpt-4o',
-              fileSize: job.fileBuffer.length,
+              fileSize: job.fileBuffer?.length ?? 0,
               analysisVersion: '1.0.0'
             },
             // Update blobInfo if it wasn't set in placeholder
@@ -477,7 +647,7 @@ class UploadQueue {
             {
               totalProcessingTime: processingTime,
               aiModelUsed: 'gpt-4o',
-              fileSize: job.fileBuffer.length,
+              fileSize: job.fileBuffer?.length ?? 0,
               analysisVersion: '1.0.0'
             },
             insights,
@@ -514,10 +684,10 @@ class UploadQueue {
         blobInfo: job.blobInfo,
       };
 
-      // Clean up file buffer from memory after processing
-      // Note: We can't explicitly free the buffer, but removing the reference helps GC
-      // The buffer will be garbage collected when the job is cleaned up
-      delete (job as any).fileBuffer;
+      // Clean up file buffer from memory after processing (file uploads only)
+      if (job.fileBuffer) {
+        delete (job as any).fileBuffer;
+      }
       
       // Clear timeout on successful completion
       clearTimeout(timeoutId);

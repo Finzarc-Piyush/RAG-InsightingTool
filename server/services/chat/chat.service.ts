@@ -17,6 +17,8 @@ import { extractRequiredColumns, extractColumnsFromHistory } from "../../lib/age
 import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
+import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
+import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
 
 export interface ProcessChatMessageParams {
   sessionId: string;
@@ -58,9 +60,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   // Extract required columns for optimized loading
   let requiredColumns: string[] = [];
+  let parsedQuery: any = null;
   try {
     const intent = await classifyIntent(message, processingChatHistory || [], chatDocument.dataSummary);
-    let parsedQuery: any = null;
     try {
       parsedQuery = await parseUserQuery(message, chatDocument.dataSummary, processingChatHistory || []);
     } catch (error) {
@@ -103,11 +105,41 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
   }
   
   // Load the latest data (including any modifications from data operations)
-  // Use column-specific loading for large datasets
-  const latestData = requiredColumns.length > 0
-    ? await loadDataForColumns(chatDocument, requiredColumns)
-    : await loadLatestData(chatDocument);
-  console.log(`✅ Loaded ${latestData.length} rows of data for analysis`);
+  // For columnar (DuckDB) sessions and analytical/info-seeking questions, load only a sample
+  // and run the plan in DuckDB to avoid loading full data (faster chat).
+  const queryFilters = parsedQuery
+    ? {
+        timeFilters: parsedQuery.timeFilters || undefined,
+        valueFilters: parsedQuery.valueFilters || undefined,
+        exclusionFilters: parsedQuery.exclusionFilters || undefined,
+      }
+    : undefined;
+
+  const columnarStoragePath = !!(chatDocument as { columnarStoragePath?: string }).columnarStoragePath;
+  const useDuckDBPlan =
+    columnarStoragePath &&
+    (isInformationSeekingQuery(message) || isAnalyticalQuery(message));
+
+  let latestData: Record<string, any>[];
+  let columnarStoragePathOpt: boolean | undefined;
+  let loadFullDataOpt: (() => Promise<Record<string, any>[]>) | undefined;
+
+  if (useDuckDBPlan) {
+    console.log('📊 Columnar session + analytical query: using DuckDB plan path (sample only, no full load)');
+    latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000);
+    columnarStoragePathOpt = true;
+    loadFullDataOpt = () =>
+      requiredColumns.length > 0
+        ? loadDataForColumns(chatDocument, requiredColumns, queryFilters)
+        : loadLatestData(chatDocument, undefined, queryFilters);
+    console.log(`✅ Loaded ${latestData.length} sample rows for plan generation`);
+  } else {
+    latestData =
+      requiredColumns.length > 0
+        ? await loadDataForColumns(chatDocument, requiredColumns, queryFilters)
+        : await loadLatestData(chatDocument, undefined, queryFilters);
+    console.log(`✅ Loaded ${latestData.length} rows of data for analysis`);
+  }
   
   // Get chat-level insights from the document
   const chatLevelInsights = chatDocument.insights && Array.isArray(chatDocument.insights) && chatDocument.insights.length > 0
@@ -116,6 +148,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   // Answer the question using the latest data
   // Include permanent context if available
+  // Pass columnarStoragePath and loadFullData for DuckDB plan path (analytical queries on large files)
   const answerResult = await answerQuestion(
     latestData,
     message,
@@ -125,7 +158,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     chatLevelInsights,
     undefined, // onThinkingStep
     undefined, // mode
-    chatDocument.permanentContext // permanent context
+    chatDocument.permanentContext, // permanent context
+    columnarStoragePathOpt,
+    loadFullDataOpt
   );
 
   // Enrich charts with data and insights

@@ -1,5 +1,6 @@
-// Main server file
-import 'dotenv/config';
+// Main server file - load .env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
+import './loadEnv.js';
+
 import express from "express";
 import { corsConfig } from "./middleware/index.js";
 import { registerRoutes } from "./routes/index.js";
@@ -38,6 +39,17 @@ export function createApp() {
     import("./lib/blobStorage.js").then(m => m.initializeBlobStorage()).catch((error) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.warn("⚠️ Azure Blob Storage initialization failed, continuing without it:", errorMessage);
+    }),
+    import("./lib/snowflakeService.js").then(m => m.verifySnowflakeConnection()).then((result) => {
+      if (result.ok) {
+        console.log("✅ Snowflake: connected at startup");
+      } else {
+        console.warn("⚠️ Snowflake: connection at startup failed:", result.message || "Unknown error");
+        console.warn("   Set SNOWFLAKE_ACCOUNT, SNOWFLAKE_USERNAME, SNOWFLAKE_PASSWORD, SNOWFLAKE_WAREHOUSE in .env to enable Import from Snowflake");
+      }
+    }).catch((error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.warn("⚠️ Snowflake: startup check failed, continuing without it:", errorMessage);
     })
   ]).catch(() => {
     // Ignore - services are optional

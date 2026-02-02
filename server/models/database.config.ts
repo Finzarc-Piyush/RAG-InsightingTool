@@ -4,7 +4,7 @@
  */
 import { CosmosClient, Database, Container } from "@azure/cosmos";
 
-// CosmosDB configuration
+// CosmosDB configuration (read at module load after loadEnv has run)
 const COSMOS_ENDPOINT = process.env.COSMOS_ENDPOINT || "";
 const COSMOS_KEY = process.env.COSMOS_KEY || "";
 const COSMOS_DATABASE_ID = process.env.COSMOS_DATABASE_ID || "marico-insights";
@@ -13,12 +13,17 @@ const COSMOS_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_DASHBOARDS_CONTAINER_I
 const COSMOS_SHARED_ANALYSES_CONTAINER_ID = process.env.COSMOS_SHARED_ANALYSES_CONTAINER_ID || "shared-analyses";
 const COSMOS_SHARED_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_SHARED_DASHBOARDS_CONTAINER_ID || "shared-dashboards";
 
-// Initialize CosmosDB client
-// Note: Connection retries are handled at the application level via retryOnConnectionError
-const client = new CosmosClient({
-  endpoint: COSMOS_ENDPOINT,
-  key: COSMOS_KEY,
-});
+// Lazy CosmosDB client so we don't throw "Invalid URL" at load time when env is not yet loaded or not set
+let clientInstance: CosmosClient | null = null;
+function getClient(): CosmosClient {
+  if (!clientInstance) {
+    if (!COSMOS_ENDPOINT || !COSMOS_KEY) {
+      throw new Error("CosmosDB not configured. Set COSMOS_ENDPOINT and COSMOS_KEY in server/.env");
+    }
+    clientInstance = new CosmosClient({ endpoint: COSMOS_ENDPOINT, key: COSMOS_KEY });
+  }
+  return clientInstance;
+}
 
 let database: Database;
 let container: Container;
@@ -62,10 +67,10 @@ const createContainerSafely = async (
       } catch (retryError) {
         // If container already exists, try to read it
         try {
-          const { container } = database.container(containerId);
-          await container.read();
+          const containerRef = database.container(containerId);
+          await containerRef.read();
           console.log(`✅ Using existing container: ${containerId}`);
-          return container;
+          return containerRef;
         } catch (readError) {
           throw retryError;
         }
@@ -76,11 +81,10 @@ const createContainerSafely = async (
     if (errorMessage.includes("throughput limit") || errorMessage.includes("RU/s")) {
       console.warn(`⚠️ Throughput limit reached for container ${containerId}, attempting to use existing container...`);
       try {
-        const { container } = database.container(containerId);
-        // Try to read container to verify it exists
-        await container.read();
+        const containerRef = database.container(containerId);
+        await containerRef.read();
         console.log(`✅ Using existing container: ${containerId}`);
-        return container;
+        return containerRef;
       } catch (readError) {
         // Container doesn't exist, re-throw original error
         throw error;
@@ -116,7 +120,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
       console.log("🔄 Initializing CosmosDB...");
 
       // Create database if it doesn't exist
-      const { database: db } = await client.databases.createIfNotExists({
+      const { database: db } = await getClient().databases.createIfNotExists({
         id: COSMOS_DATABASE_ID,
       });
       database = db;
@@ -311,7 +315,7 @@ export const waitForSharedAnalysesContainer = async (
 /**
  * Get the CosmosDB client instance
  */
-export const getCosmosClient = () => client;
+export const getCosmosClient = () => getClient();
 
 /**
  * Wait for shared dashboards container to be initialized

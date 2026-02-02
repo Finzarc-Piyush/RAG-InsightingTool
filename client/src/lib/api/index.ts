@@ -5,6 +5,8 @@ export { sessionsApi } from "./sessions";
 export { dashboardsApi } from "./dashboards";
 export { sharedAnalysesApi } from "./sharedAnalyses";
 export { sharedDashboardsApi } from "./sharedDashboards";
+export { snowflakeApi } from "./snowflake";
+export type { SnowflakeTableInfo, SnowflakeImportResponse } from "./snowflake";
 export { streamChatRequest, streamDataOpsChatRequest, downloadModifiedDataset } from "./chat";
 export type { StreamChatCallbacks, StreamDataOpsCallbacks, DataOpsResponse } from "./chat";
 

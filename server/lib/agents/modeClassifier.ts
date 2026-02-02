@@ -89,7 +89,11 @@ CONTEXT RULES:
 
 CLASSIFICATION RULES:
 
+0. CRITICAL – CORRELATION is always "analysis", never "dataOps":
+   * If the user asks for CORRELATION (e.g. "correlation of X with Y", "correlation between X and Y", "correlation of column X with all the other variables", "what affects X", "what impacts X", "correlate X with Y"), ALWAYS route to "analysis". Correlation is statistical analysis, NOT a data transformation. Do NOT route correlation requests to "dataOps".
+
 1. "dataOps" - User wants to manipulate, transform, or modify the dataset itself, OR view/explore the data structure
+   * Do NOT use for correlation requests – correlation is analysis (see rule 0).
    * HIGH PRIORITY: Questions about adding, removing, or modifying columns/rows, OR viewing data structure/preview
    * Patterns: "add column", "remove column", "delete column", "filter rows", "remove rows", 
      "transform", "clean data", "merge", "join", "split", "rename column", "change column type",

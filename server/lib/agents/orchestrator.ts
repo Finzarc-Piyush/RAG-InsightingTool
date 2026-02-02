@@ -107,6 +107,18 @@ export class AgentOrchestrator {
       if (mode === 'dataOps') {
         console.log(`🔧 Data Ops Mode: Using separate route (bypassing analysis logic)`);
         
+        // Step 0: Correlation requests are ANALYSIS, not data ops - route to analysis flow immediately
+        const isCorrelationRequest = /\bcorrelation\s+(of|between|with|for)\b/i.test(question) ||
+          /\bcorrelate\s+/i.test(question) ||
+          /\b(what\s+)(affects?|impacts?|influences?)\s+/i.test(question) ||
+          /\brelationship\s+(between|of)\s+/i.test(question);
+        if (isCorrelationRequest) {
+          console.log(`📊 User asked for correlation – routing to analysis (not data ops). Correlation is analysis, not aggregation.`);
+          isGeneralQuestion = true;
+          // Fall through to analysis flow below (skip DataOpsHandler entirely)
+        }
+        
+        if (!isGeneralQuestion) {
         // Step 1: Resolve context references (minimal, just for "that", "it", etc.)
         this.emitThinkingStep(onThinkingStep, "Understanding your question", "active");
         const enrichedQuestion = resolveContextReferences(question, chatHistory);
@@ -217,6 +229,7 @@ export class AgentOrchestrator {
         }
         // If isGeneralQuestion is true, we'll continue to analysis flow below
         console.log(`📊 Continuing to analysis flow for general question`);
+        } // end if (!isGeneralQuestion) for data ops
       }
       
       // ============================================
@@ -291,11 +304,11 @@ export class AgentOrchestrator {
         } catch (error) {
           console.error('⚠️ Error detecting complex query, falling back to simple check:', error);
           // Fallback: Use simple pattern check if AI detection fails
-          isComplexQuery = finalQuestion && (
+          isComplexQuery = !!(finalQuestion && (
             /which\s+(months|categories|skus|items|products).*had.*above|which\s+(months|categories|skus|items|products).*had.*below/i.test(finalQuestion) ||
             /which\s+(months|categories|skus|items|products).*compared.*while.*also/i.test(finalQuestion) ||
             /which\s+(months|categories|skus|items|products).*above.*but.*only.*from/i.test(finalQuestion)
-          );
+          ));
         }
       }
       
