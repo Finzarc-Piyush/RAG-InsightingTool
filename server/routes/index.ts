@@ -11,10 +11,12 @@ import sharedAnalysisRoutes from "./sharedAnalyses.js";
 import sharedDashboardRoutes from "./sharedDashboards.js";
 import dataOpsRoutes from "./dataOps.js";
 import dataApiRoutes from "./dataApi.js";
+import snowflakeRoutes from "./snowflake.js";
 
 export function registerRoutes(app: Express): Server | void {
   // Register route modules
   app.use('/api', uploadRoutes);
+  app.use('/api', snowflakeRoutes);
   app.use('/api', chatRoutes);
   app.use('/api', chatManagementRoutes);
   app.use('/api', blobStorageRoutes);

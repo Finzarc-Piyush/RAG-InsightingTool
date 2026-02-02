@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { FileUpload } from '@/pages/Home/Components/FileUpload';
+import { StartAnalysisView } from '@/pages/Home/Components/StartAnalysisView';
+import { SnowflakeImportFlow } from '@/pages/Home/Components/SnowflakeImportFlow';
 import { ChatInterface } from './Components/ChatInterface';
 import { ContextModal } from './Components/ContextModal';
 import { DataSummaryModal } from './Components/DataSummaryModal';
@@ -46,6 +48,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
   const [contextModalSessionId, setContextModalSessionId] = useState<string | null>(null);
   const [isSavingContext, setIsSavingContext] = useState(false);
   const [showDataSummaryModal, setShowDataSummaryModal] = useState(false);
+  const [startMode, setStartMode] = useState<'choice' | 'upload' | 'snowflake'>('choice');
   const contextModalShownRef = useRef<Set<string>>(new Set());
   const { toast } = useToast();
   const {
@@ -76,7 +79,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     resetState,
   } = useHomeState();
 
-  const { uploadMutation, chatMutation, cancelChatRequest, thinkingSteps, thinkingTargetTimestamp } = useHomeMutations({
+  const { uploadMutation, snowflakeImportMutation, chatMutation, cancelChatRequest, thinkingSteps, thinkingTargetTimestamp } = useHomeMutations({
     sessionId,
     messages,
     mode,
@@ -634,15 +637,39 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setContextModalSessionId(null);
   };
 
-  // Don't show file upload if we're loading a session (even if sessionId isn't set yet)
-  // Only show file upload if there's no session data being loaded AND no sessionId
-  // Only auto-open the dialog when resetTrigger > 0 (explicitly starting new analysis)
+  // When "Upload new" is clicked, show upload view and open file dialog
+  useEffect(() => {
+    if (resetTrigger > 0 && !sessionId && !loadedSessionData) {
+      setStartMode('upload');
+    }
+  }, [resetTrigger, sessionId, loadedSessionData]);
+
+  // Don't show start/upload/snowflake if we're loading a session (even if sessionId isn't set yet)
+  // Only show when there's no session data being loaded AND no sessionId
   if (!sessionId && !loadedSessionData) {
+    if (startMode === 'choice') {
+      return (
+        <StartAnalysisView
+          onSelectUpload={() => setStartMode('upload')}
+          onSelectSnowflake={() => setStartMode('snowflake')}
+        />
+      );
+    }
+    if (startMode === 'snowflake') {
+      return (
+        <SnowflakeImportFlow
+          onBack={() => setStartMode('upload')}
+          onImport={({ database, schema, tableName }) => snowflakeImportMutation.mutate({ database, schema, tableName })}
+          isImporting={snowflakeImportMutation.isPending}
+        />
+      );
+    }
     return (
       <FileUpload
         onFileSelect={handleFileSelect}
         isUploading={uploadMutation.isPending}
         autoOpenTrigger={resetTrigger > 0 ? resetTrigger : 0}
+        onBack={() => setStartMode('choice')}
       />
     );
   }

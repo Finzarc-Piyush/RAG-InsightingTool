@@ -213,6 +213,20 @@ export interface DataOpsContext {
 /**
  * Parse user intent for data operations
  */
+/**
+ * Returns true if the message is clearly asking for correlation analysis (not aggregation).
+ * Correlation = relationship between variables; must be handled by Analysis, not Data Ops.
+ */
+function isCorrelationRequest(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+  return (
+    /\bcorrelation\s+(of|between|with|for)\b/i.test(lower) ||
+    /\bcorrelate\s+/i.test(lower) ||
+    /\b(what\s+)(affects?|impacts?|influences?)\s+/i.test(lower) ||
+    /\brelationship\s+(between|of)\s+/i.test(lower)
+  );
+}
+
 export async function parseDataOpsIntent(
   message: string,
   chatHistory: Message[],
@@ -221,6 +235,18 @@ export async function parseDataOpsIntent(
 ): Promise<DataOpsIntent> {
   const lowerMessage = message.toLowerCase().trim();
   const availableColumns = dataSummary.columns.map(c => c.name);
+  
+  // ---------------------------------------------------------------------------
+  // STEP -1: Correlation requests are ANALYSIS, not data ops – never treat as aggregate
+  // ---------------------------------------------------------------------------
+  if (isCorrelationRequest(message)) {
+    console.log(`📊 Correlation request detected – returning unknown to route to analysis (not aggregate).`);
+    return {
+      operation: 'unknown',
+      requiresClarification: false,
+      clarificationMessage: undefined,
+    };
+  }
   
   // ---------------------------------------------------------------------------
   // STEP 0: Use AI as PRIMARY method for ALL operations
@@ -1764,6 +1790,8 @@ ${columnsListForMatching}
 
 When deciding the operation:
 - Always interpret the USER's last message in the context of the conversation above.
+- CRITICAL – CORRELATION vs AGGREGATE (CHECK FIRST):
+  • If the user asks for CORRELATION (e.g. "correlation of X with Y", "correlation between X and Y", "correlation of column X with all the other variables", "what affects X", "what impacts X", "correlate X with Y", "relationship between X and Y"), return operation: "unknown" and requiresClarification: false. Correlation is an ANALYSIS operation (measuring how variables move together), NOT a data operation. Do NOT interpret correlation requests as "aggregate". Aggregation = group by a column and sum/avg/count to create a summary table. Correlation = statistical relationship between variables – it must be handled by the Analysis flow, never as a data op.
 - CRITICAL DEFAULT BEHAVIOR FOR OUTLIER OPERATIONS:
   • When user says "find outliers", "identify outliers", "detect outliers", "show outliers", or "what are the outliers" WITHOUT mentioning a specific column, set operation: "identify_outliers", column: null, requiresClarification: false
   • When user says "remove outliers", "treat outliers", "handle outliers", or "fix outliers" WITHOUT mentioning a specific column, set operation: "treat_outliers", column: null, requiresClarification: false
@@ -1894,9 +1922,10 @@ Operations:
   * DO NOT use "replace_value" for null imputation - ALWAYS use "remove_nulls" with method
   * If user says "remove null" or "delete null" without specifying fill/impute, default to asking for clarification.
 - "convert_type": User wants to convert column type
-- "aggregate": User wants to group data by a column and summarize other columns
+- "aggregate": User wants to group data by a column and summarize other columns (sum/avg/count) to create a summary table
+  * CRITICAL: Do NOT use for correlation requests. "Correlation of X with Y" or "correlation of column X with all variables" = ANALYSIS (return "unknown"), not aggregate. Only use "aggregate" when the user explicitly asks to aggregate/group/sum (e.g. "aggregate by X", "group by category").
   * CRITICAL: Match column names EXACTLY from the available columns list above
-  * Patterns: "aggregate by X", "aggregate X by Y using sum", "aggregate X on Y", "aggregate X, group by Y, order by Z DESC", "aggregate by Month column", "aggregate by Brand", "aggregate over X", "aggregate the whole data over X", "aggregate all data over X", "aggregate all the other columns by X", "aggregate all columns by X"
+  * Patterns: "aggregate by X", "aggregate X by Y using sum", "aggregate X on Y", "aggregate X, group by Y", "aggregate by Month column", "aggregate by Brand", "aggregate over X", "aggregate all columns by X"
   * Extract groupByColumn: the column to group by - MUST match exactly from available columns (e.g., if available columns have "status", use "status", not "s" or "Status")
   * Extract aggColumns: 
     * If user specifies specific columns: array of column names (e.g., ["qty_ordered", "price"])

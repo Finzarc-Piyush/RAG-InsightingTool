@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Message, UploadResponse, ChatResponse, ThinkingStep } from '@/shared/schema';
-import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse } from '@/lib/api';
+import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi } from '@/lib/api';
+import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
 import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
@@ -165,6 +166,59 @@ export const useHomeMutations = ({
       toast({
         title: 'Upload Failed',
         description: error instanceof Error ? error.message : 'Failed to upload file',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const applyImportStarted = async (data: { jobId: string; sessionId: string; fileName: string }) => {
+    setSessionId(data.sessionId);
+    if (setIsLargeFileLoading) setIsLargeFileLoading(true);
+    setMessages([]);
+    try {
+      const sessionData = await sessionsApi.getSessionDetails(data.sessionId);
+      const session = sessionData.session || sessionData;
+      if (session) {
+        setFileName(session.fileName || null);
+        setInitialCharts(session.charts || []);
+        setInitialInsights(session.insights || []);
+        if (session.dataSummary && session.dataSummary.rowCount > 0) {
+          if (session.sampleRows?.length) setSampleRows(session.sampleRows);
+          setColumns(session.dataSummary.columns?.map((c: any) => c.name) || []);
+          setNumericColumns(session.dataSummary.numericColumns || []);
+          setDateColumns(session.dataSummary.dateColumns || []);
+          setTotalRows(session.dataSummary.rowCount);
+          setTotalColumns(session.dataSummary.columnCount);
+        }
+      }
+    } catch (e) {
+      logger.error('Failed to fetch session details', e);
+    }
+    toast({
+      title: 'Import Started',
+      description: 'Your Snowflake table is being processed. Analysis will be available shortly.',
+    });
+    if (userEmail) {
+      queryClient.invalidateQueries({ queryKey: ['sessions', userEmail] });
+    }
+  };
+
+  const snowflakeImportMutation = useMutation({
+    mutationFn: (params: { database: string; schema: string; tableName: string }) => snowflakeApi.importTable(params),
+    onSuccess: async (data: SnowflakeImportResponse) => {
+      if (data.jobId && data.sessionId && data.fileName) {
+        await applyImportStarted({
+          jobId: data.jobId,
+          sessionId: data.sessionId,
+          fileName: data.fileName,
+        });
+      }
+    },
+    onError: (error) => {
+      if (setIsLargeFileLoading) setIsLargeFileLoading(false);
+      toast({
+        title: 'Snowflake Import Failed',
+        description: error instanceof Error ? error.message : 'Failed to import table',
         variant: 'destructive',
       });
     },
@@ -555,6 +609,7 @@ export const useHomeMutations = ({
 
   return {
     uploadMutation,
+    snowflakeImportMutation,
     chatMutation,
     cancelChatRequest,
     thinkingSteps, // Export thinking steps for display

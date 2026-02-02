@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, FileSpreadsheet, Loader2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, Loader2, ArrowLeft } from 'lucide-react';
 import { Card } from '@/components/ui/card';
-
+import { Button } from '@/components/ui/button';
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
   isUploading: boolean;
   autoOpenTrigger?: number;
+  onBack?: () => void;
 }
 
-export function FileUpload({ onFileSelect, isUploading, autoOpenTrigger = 0 }: FileUploadProps) {
+export function FileUpload({ onFileSelect, isUploading, autoOpenTrigger = 0, onBack }: FileUploadProps) {
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
       const file = acceptedFiles[0];
@@ -60,6 +61,18 @@ export function FileUpload({ onFileSelect, isUploading, autoOpenTrigger = 0 }: F
   return (
     <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
+        {onBack && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mb-4 -ml-2"
+            onClick={onBack}
+            data-testid="file-upload-back"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
+        )}
         {/* Header Section */}
         <div className="text-center mb-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-2">

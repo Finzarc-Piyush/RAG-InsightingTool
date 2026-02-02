@@ -19,6 +19,50 @@ import {
 } from './analyticalQueryEngine.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
 
+/** Context for divide-and-conquer: each AI call knows which segment of the dataset it is analyzing */
+export interface DivisionContext {
+  partIndex: number;   // 1-based (Part 1 of 3)
+  totalParts: number;
+  rowStart: number;   // 0-based start index (inclusive)
+  rowEnd: number;     // 0-based end index (exclusive)
+  totalRows: number;
+}
+
+/** Minimum rows to use split strategy; below this we run a single insights call */
+const SPLIT_THRESHOLD = 15000;
+/** Use 2 parts for 15k–30k rows, 3 parts for larger */
+const SPLIT_2_PARTS_UP_TO = 30000;
+
+/**
+ * Split dataset into 2 or 3 pieces for parallel AI analysis.
+ * Each piece gets a division context so the AI knows "Part 2 of 3 (rows 20001–40000 of 60000)".
+ */
+function splitDataForParallelAnalysis(
+  data: Record<string, any>[],
+  maxParts: 2 | 3
+): Array<{ data: Record<string, any>[]; divisionContext: DivisionContext }> {
+  const n = data.length;
+  const numParts = maxParts;
+  const partSize = Math.ceil(n / numParts);
+  const result: Array<{ data: Record<string, any>[]; divisionContext: DivisionContext }> = [];
+  for (let i = 0; i < numParts; i++) {
+    const start = i * partSize;
+    const end = Math.min(start + partSize, n);
+    if (start >= end) continue;
+    result.push({
+      data: data.slice(start, end),
+      divisionContext: {
+        partIndex: i + 1,
+        totalParts: numParts,
+        rowStart: start,
+        rowEnd: end,
+        totalRows: n,
+      },
+    });
+  }
+  return result;
+}
+
 export async function analyzeUpload(
   data: Record<string, any>[],
   summary: DataSummary,
@@ -28,18 +72,57 @@ export async function analyzeUpload(
   // Use AI generation for all file types (Excel and CSV)
   console.log('📊 Using AI chart generation for all file types');
 
-  // OPTIMIZATION: For large files, use faster model to speed up AI calls
-  // gpt-4o-mini is 2-3x faster and much cheaper while maintaining good quality
-  const useFastModel = data.length > 100000;
-  if (useFastModel) {
-    console.log(`⚡ Performance optimization: Using faster AI model (gpt-4o-mini) for large file analysis`);
+  // OPTIMIZATION: Always use faster model for upload-time analysis to minimize latency.
+  // gpt-4o-mini is 2-3x faster and much cheaper while maintaining good quality.
+  // If a higher-quality model is desired for interactive questions, that can be
+  // handled separately in the question-answering path.
+  const useFastModel = true;
+  console.log(`⚡ Performance optimization: Using faster AI model (gpt-4o-mini) for upload analysis`);
+
+  // OPTIMIZATION: Divide-and-conquer for large datasets – split into 2–3 pieces, send each to AI with division reference, combine
+  const useSplitStrategy = data.length > SPLIT_THRESHOLD;
+  const numParts: 2 | 3 = data.length > SPLIT_2_PARTS_UP_TO ? 3 : 2;
+  let chartSpecs: ChartSpec[];
+  let insights: Insight[];
+
+  if (useSplitStrategy) {
+    const splits = splitDataForParallelAnalysis(data, numParts);
+    console.log(`📊 Divide-and-conquer: splitting ${data.length} rows into ${splits.length} parts for parallel AI analysis`);
+    // Chart specs: single call (summary only, no row data)
+    const chartSpecsPromise = generateChartSpecs(summary, useFastModel);
+    // Insights: one call per part, each with division context (Part 1 of 3, rows 1–20000 of 60000, etc.)
+    const insightsPromises = splits.map(({ data: partData, divisionContext }) =>
+      generateInsights(partData, summary, useFastModel, divisionContext)
+    );
+    const [chartSpecsResult, ...insightArrays] = await Promise.all([
+      chartSpecsPromise,
+      ...insightsPromises,
+    ]);
+    chartSpecs = chartSpecsResult;
+    // Combine insights from all parts; prefix each with segment reference (Part 1 of 3, rows 1–20000), limit total to 7
+    const combined: Insight[] = [];
+    splits.forEach(({ divisionContext: ctx }, idx) => {
+      const arr = insightArrays[idx] || [];
+      const label = `[Part ${ctx.partIndex} of ${ctx.totalParts}, rows ${ctx.rowStart + 1}–${ctx.rowEnd} of ${ctx.totalRows}] `;
+      arr.forEach((insight) => {
+        combined.push({
+          id: combined.length + 1,
+          text: label + (insight.text || ''),
+        });
+      });
+    });
+    insights = combined.slice(0, 7).map((ins, i) => ({ ...ins, id: i + 1 }));
+    console.log(`✅ Combined ${insightArrays.map((a) => a.length).join('+')} insights from ${splits.length} parts → ${insights.length} total`);
+  } else {
+    // Single path: chart specs and insights in parallel (no split)
+    const [chartSpecsResult, insightsResult] = await Promise.all([
+      generateChartSpecs(summary, useFastModel),
+      generateInsights(data, summary, useFastModel),
+    ]);
+    chartSpecs = chartSpecsResult;
+    insights = insightsResult;
   }
 
-  // OPTIMIZATION: Generate chart specs and insights in parallel (saves ~60-120 seconds)
-  const [chartSpecs, insights] = await Promise.all([
-    generateChartSpecs(summary, useFastModel),
-    generateInsights(data, summary, useFastModel)
-  ]);
 
   // OPTIMIZATION: Skip chart insights generation during upload for faster processing
   // Chart insights can be generated lazily when charts are viewed
@@ -162,7 +245,9 @@ export async function answerQuestion(
   chatInsights?: Insight[],
   onThinkingStep?: (step: { step: string; status: 'pending' | 'active' | 'completed' | 'error'; timestamp: number; details?: string }) => void,
   mode?: 'analysis' | 'dataOps' | 'modeling',
-  permanentContext?: string
+  permanentContext?: string,
+  columnarStoragePath?: boolean,
+  loadFullData?: () => Promise<Record<string, any>[]>
 ): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[]; table?: any; operationResult?: any }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -184,7 +269,10 @@ export async function answerQuestion(
         sessionId,
         null,
         [],
-        chatInsights
+        chatInsights,
+        undefined,
+        columnarStoragePath,
+        loadFullData
       );
       
       if (result && result.answer && result.answer.trim().length > 0) {
@@ -1762,7 +1850,8 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
 export async function generateInsights(
   data: Record<string, any>[],
   summary: DataSummary,
-  useFastModel: boolean = false
+  useFastModel: boolean = false,
+  divisionContext?: DivisionContext
 ): Promise<Insight[]> {
   // OPTIMIZATION: Sample data for large files to speed up statistics calculation
   // For files > 50K rows, use systematic sampling to get representative statistics
@@ -1785,7 +1874,9 @@ export async function generateInsights(
     sampleData = data;
   }
 
-  // Calculate comprehensive statistics with percentiles and variability
+  // Calculate comprehensive statistics with percentiles and variability.
+  // To keep upload-time analysis fast, only consider the first few key numeric
+  // columns rather than all of them.
   const stats: Record<string, any> = {};
   const isPercent: Record<string, boolean> = {};
 
@@ -1819,7 +1910,8 @@ export async function generateInsights(
     return isPercent[col] ? `${fmt(v)}%` : fmt(v);
   };
 
-  for (const col of summary.numericColumns.slice(0, 5)) {
+  const NUMERIC_COLUMNS_FOR_UPLOAD_STATS = 3;
+  for (const col of summary.numericColumns.slice(0, NUMERIC_COLUMNS_FOR_UPLOAD_STATS)) {
     // Detect percentage columns by scanning raw values for '%'
     const rawHasPercent = sampleData
       .slice(0, 200)
@@ -1872,7 +1964,7 @@ export async function generateInsights(
   // For large files, use efficient single-pass algorithm instead of sorting all values
   // This is O(n) instead of O(n log n) and doesn't require loading all values into memory
   const topBottomStats: Record<string, {top: Array<{value: number, row: number}>, bottom: Array<{value: number, row: number}>}> = {};
-  for (const col of summary.numericColumns.slice(0, 5)) {
+  for (const col of summary.numericColumns.slice(0, NUMERIC_COLUMNS_FOR_UPLOAD_STATS)) {
     // For large files, use efficient single-pass algorithm to find top/bottom 3
     // This avoids sorting millions of values
     if (data.length > 50000) {
@@ -1922,10 +2014,17 @@ export async function generateInsights(
     }
   }
 
-  const prompt = `Analyze this dataset and provide 5-7 specific, actionable business insights with QUANTIFIED suggestions.
+  const divisionNote = divisionContext
+    ? `DIVISION REFERENCE: You are analyzing **Part ${divisionContext.partIndex} of ${divisionContext.totalParts}** of the dataset. This segment contains **rows ${divisionContext.rowStart + 1} to ${divisionContext.rowEnd}** (inclusive) of ${divisionContext.totalRows} total rows. Focus on insights specific to this segment. The statistics below are computed only on this segment.\n\n`
+    : '';
+
+  const insightCountInstruction = divisionContext
+    ? 'Provide 2-3 specific, actionable business insights for **this segment only** (they will be combined with insights from other segments).'
+    : 'Provide 5-7 specific, actionable business insights with QUANTIFIED suggestions.';
+  const prompt = `${divisionNote}Analyze this dataset and ${insightCountInstruction}
 
 DATA SUMMARY:
-- ${summary.rowCount} rows, ${summary.columnCount} columns
+- ${divisionContext ? `${data.length} rows in this segment` : `${summary.rowCount} rows`}, ${summary.columnCount} columns
 - Numeric columns: ${summary.numericColumns.join(', ')}
 
 COMPREHENSIVE STATISTICS:
@@ -2285,7 +2384,9 @@ export async function generateGeneralAnswer(
   preParsedQuery?: ParsedQuery | null,
   preTransformationNotes?: string[],
   chatInsights?: Insight[],
-  requiredColumns?: string[]
+  requiredColumns?: string[],
+  columnarStoragePath?: boolean,
+  loadFullData?: () => Promise<Record<string, any>[]>
 ): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[] }> {
   // QUERY-ONLY ARCHITECTURE: For information-seeking queries, execute query and return results (no explanations)
   if (isInformationSeekingQuery(question)) {
@@ -2304,9 +2405,23 @@ export async function generateGeneralAnswer(
       const executionPlan = await generateExecutionPlan(question, summary, chatHistory, columnIdentification, data);
       console.log('✅ Execution plan generated:', executionPlan.description);
       
-      // Step 3: Execute plan using Python engine with filtered data
-      console.log('📋 Step 3: Executing plan with filtered data...');
-      const executionResult = await executePlan(executionPlan, columnIdentification.filteredData);
+      // Step 3: Execute plan - use DuckDB when columnar storage (avoids loading full data)
+      let executionResult: { success: boolean; data?: Record<string, any>[]; error?: string } | undefined;
+      if (columnarStoragePath && sessionId) {
+        const { executePlanInDuckDB } = await import('./duckdbPlanExecutor.js');
+        console.log('📋 Step 3: Trying DuckDB plan execution (no full data load)...');
+        executionResult = await executePlanInDuckDB(sessionId, executionPlan);
+        if (executionResult.success) {
+          console.log(`✅ Query executed in DuckDB: ${executionResult.data?.length ?? 0} rows returned`);
+        } else {
+          console.log('⚠️ DuckDB plan failed, falling back to full data load:', executionResult.error);
+        }
+      }
+      if (!executionResult?.success || !executionResult?.data) {
+        const fullData = loadFullData ? await loadFullData() : columnIdentification.filteredData;
+        console.log('📋 Step 3: Executing plan with data...');
+        executionResult = await executePlan(executionPlan, fullData);
+      }
       
       if (!executionResult.success || !executionResult.data) {
         throw new Error(executionResult.error || 'Execution failed');
@@ -2423,9 +2538,23 @@ export async function generateGeneralAnswer(
       const executionPlan = await generateExecutionPlan(question, summary, chatHistory, columnIdentification, data);
       console.log('✅ Execution plan generated:', executionPlan.description);
       
-      // Step 3: Execute plan using Python engine with filtered data
-      console.log('📋 Step 3: Executing plan with filtered data...');
-      const executionResult = await executePlan(executionPlan, columnIdentification.filteredData);
+      // Step 3: Execute plan - use DuckDB when columnar storage (avoids loading full data)
+      let executionResult: { success: boolean; data?: Record<string, any>[]; error?: string } | undefined;
+      if (columnarStoragePath && sessionId) {
+        const { executePlanInDuckDB } = await import('./duckdbPlanExecutor.js');
+        console.log('📋 Step 3: Trying DuckDB plan execution (no full data load)...');
+        executionResult = await executePlanInDuckDB(sessionId, executionPlan);
+        if (executionResult.success) {
+          console.log(`✅ Query executed in DuckDB: ${executionResult.data?.length ?? 0} rows returned`);
+        } else {
+          console.log('⚠️ DuckDB plan failed, falling back to full data load:', executionResult.error);
+        }
+      }
+      if (!executionResult?.success || !executionResult?.data) {
+        const fullData = loadFullData ? await loadFullData() : columnIdentification.filteredData;
+        console.log('📋 Step 3: Executing plan with data...');
+        executionResult = await executePlan(executionPlan, fullData);
+      }
       
       if (!executionResult.success || !executionResult.data) {
         throw new Error(executionResult.error || 'Execution failed');
@@ -2433,7 +2562,7 @@ export async function generateGeneralAnswer(
       
       console.log(`✅ Query executed: ${executionResult.data.length} rows returned`);
       
-      // Step 3: Generate explanation using Azure OpenAI
+      // Step 4: Generate explanation using Azure OpenAI
       const explanation = await generateExplanation(
         question,
         executionPlan,
