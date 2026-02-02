@@ -608,6 +608,114 @@ def get_summary(data: List[Dict[str, Any]], column: Optional[str] = None) -> Dic
     }
 
 
+def suggest_initial_charts(
+    data_or_summary: Union[List[Dict[str, Any]], Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Rule-based chart suggestions for initial analysis. No AI.
+    Classifies columns from summary as numeric, date, or categorical, then emits
+    4-6 chart specs using exact column names. Matches Node ChartSpec: type, title, x, y, aggregate.
+    """
+    if isinstance(data_or_summary, list):
+        summary_response = get_summary(data_or_summary)
+    else:
+        summary_response = data_or_summary
+    summary_list = summary_response.get("summary", [])
+    if not summary_list:
+        return []
+
+    numeric_cols: List[str] = []
+    date_cols: List[str] = []
+    categorical_cols: List[str] = []
+
+    for s in summary_list:
+        name = s.get("variable", "")
+        if not name or is_id_column(name):
+            continue
+        dt = (s.get("datatype") or "").lower()
+        if dt == "date" or "datetime" in dt:
+            date_cols.append(name)
+        elif dt in ("int64", "float64", "int32", "float32", "int", "float") or (
+            s.get("mean") is not None and isinstance(s.get("mean"), (int, float))
+        ):
+            numeric_cols.append(name)
+        else:
+            categorical_cols.append(name)
+
+    suggestions: List[Dict[str, Any]] = []
+    used_pairs: set = set()
+
+    def add_spec(chart_type: str, x: str, y: str, aggregate: str, title: str) -> None:
+        key = (x, y)
+        if key in used_pairs or len(suggestions) >= 6:
+            return
+        used_pairs.add(key)
+        suggestions.append({
+            "type": chart_type,
+            "title": title,
+            "x": x,
+            "y": y,
+            "aggregate": aggregate,
+        })
+
+    # Date + numeric -> line/area (date on x, numeric on y)
+    for dcol in date_cols[:2]:
+        for ncol in numeric_cols[:3]:
+            if len(suggestions) >= 6:
+                break
+            add_spec(
+                "line",
+                dcol,
+                ncol,
+                "mean",
+                f"{ncol} over {dcol}",
+            )
+        if len(suggestions) >= 6:
+            break
+
+    # Categorical + numeric -> bar and pie
+    for ccol in categorical_cols[:4]:
+        for ncol in numeric_cols[:3]:
+            if len(suggestions) >= 6:
+                break
+            add_spec(
+                "bar",
+                ccol,
+                ncol,
+                "sum",
+                f"{ncol} by {ccol}",
+            )
+        for ncol in numeric_cols[:3]:
+            if len(suggestions) >= 6:
+                break
+            add_spec(
+                "pie",
+                ccol,
+                ncol,
+                "sum",
+                f"{ncol} share by {ccol}",
+            )
+        if len(suggestions) >= 6:
+            break
+
+    # Numeric + numeric -> scatter
+    for i, n1 in enumerate(numeric_cols[:4]):
+        for n2 in numeric_cols[i + 1 : i + 3]:
+            if len(suggestions) >= 6:
+                break
+            add_spec(
+                "scatter",
+                n1,
+                n2,
+                "none",
+                f"{n2} vs {n1}",
+            )
+        if len(suggestions) >= 6:
+            break
+
+    return suggestions[:6]
+
+
 def create_derived_column(
     data: List[Dict[str, Any]],
     new_column_name: str,

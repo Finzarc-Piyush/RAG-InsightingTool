@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Literal, Union
 import uvicorn
 from config import config
-from data_operations import remove_nulls, get_preview, get_summary, convert_type, create_derived_column, aggregate_data, pivot_table, identify_outliers, treat_outliers
+from data_operations import remove_nulls, get_preview, get_summary, suggest_initial_charts, convert_type, create_derived_column, aggregate_data, pivot_table, identify_outliers, treat_outliers
 from ml_models import (
     train_linear_regression,
     train_log_log_regression,
@@ -270,6 +270,26 @@ async def summary_endpoint(request: Dict[str, Any]):
         return result
     except Exception as e:
         print(f"Error in summary: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/initial-analysis")
+async def initial_analysis_endpoint(request: Dict[str, Any]):
+    """Initial analysis: summary stats + rule-based chart suggestions (no AI)."""
+    try:
+        data = request.get("data", [])
+        if not isinstance(data, list):
+            raise HTTPException(status_code=400, detail="Data must be a list")
+        if len(data) > config.MAX_ROWS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
+            )
+        summary_response = get_summary(data=data)
+        chart_suggestions = suggest_initial_charts(summary_response)
+        return {"summary": summary_response.get("summary", []), "chart_suggestions": chart_suggestions}
+    except Exception as e:
+        print(f"Error in initial-analysis: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

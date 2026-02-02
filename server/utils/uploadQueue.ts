@@ -163,7 +163,8 @@ class UploadQueue {
       // Import processing functions dynamically to avoid circular dependencies
       const { parseFile, createDataSummary, convertDashToZeroForNumericColumns } = await import('../lib/fileParser.js');
       const { processLargeFile, shouldUseLargeFileProcessing, getDataForAnalysis } = await import('../lib/largeFileProcessor.js');
-      const { analyzeUpload } = await import('../lib/dataAnalyzer.js');
+      const { analyzeUpload, analyzeUploadWithPython } = await import('../lib/dataAnalyzer.js');
+      const { checkPythonServiceHealth } = await import('../lib/dataOps/pythonService.js');
       const { generateAISuggestions } = await import('../lib/suggestionGenerator.js');
       const { createChatDocument, generateColumnStatistics, getChatBySessionIdEfficient, updateChatDocument, addMessagesBySessionId } = await import('../models/chat.model.js');
       const { saveChartsToBlob } = await import('../lib/blobStorage.js');
@@ -359,10 +360,26 @@ class UploadQueue {
         if (shouldSkipChartInsights) {
           console.log(`⚡ Performance optimization: Skipping chart insights generation for large file (${data.length} rows). Insights will be generated on-demand.`);
         }
-        
-        const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
-        charts = result.charts;
-        insights = result.insights;
+
+        const usePythonInitialAnalysis = process.env.USE_PYTHON_INITIAL_ANALYSIS === 'true';
+        const pythonHealthy = usePythonInitialAnalysis && (await checkPythonServiceHealth());
+        if (pythonHealthy) {
+          try {
+            console.log('📊 Using Python + 1 AI initial analysis path');
+            const result = await analyzeUploadWithPython(dataForAI, summary, job.fileName, shouldSkipChartInsights);
+            charts = result.charts;
+            insights = result.insights;
+          } catch (pythonAnalyzeError) {
+            console.warn('⚠️ Python initial analysis failed, falling back to standard analyzeUpload:', pythonAnalyzeError);
+            const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
+            charts = result.charts;
+            insights = result.insights;
+          }
+        } else {
+          const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
+          charts = result.charts;
+          insights = result.insights;
+        }
       } catch (analyzeError) {
         const errorMsg = analyzeError instanceof Error ? analyzeError.message : String(analyzeError);
         if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
