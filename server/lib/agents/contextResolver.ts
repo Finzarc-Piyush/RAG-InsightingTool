@@ -213,8 +213,10 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       const genericSuggestionMatch = content.match(/would\s+you\s+like\s+me\s+to\s+(.+?)(?:\?|\.|$)/i);
       if (genericSuggestionMatch) {
         const action = genericSuggestionMatch[1].trim();
-        // Check if it's about charts/visualizations
-        if (/chart|visualization|graph|plot|visualize|show|display/i.test(action)) {
+        // Check if it's about charts/visualizations or deeper analysis
+        // This now also supports suggestions like:
+        // \"Would you like me to analyze these metrics month-over-month for a clearer picture?\"
+        if (/chart|visualization|graph|plot|visualize|show|display|analyz|analysis|metrics/i.test(action)) {
           // If action references "these relationships" and we have original question, use it
           if (/these\s+relationships|these\s+correlations|the\s+relationships|the\s+correlations|these\s+results/i.test(action)) {
             if (originalQuestion) {

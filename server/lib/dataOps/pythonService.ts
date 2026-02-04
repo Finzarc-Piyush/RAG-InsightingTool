@@ -65,6 +65,19 @@ interface SummaryResponse {
   }>;
 }
 
+export interface ChartSuggestion {
+  type: string;
+  title: string;
+  x: string;
+  y: string;
+  aggregate: string;
+}
+
+export interface InitialAnalysisResponse {
+  summary: SummaryResponse['summary'];
+  chart_suggestions: ChartSuggestion[];
+}
+
 interface CreateDerivedColumnRequest {
   data: Record<string, any>[];
   new_column_name: string;
@@ -341,6 +354,36 @@ export async function getDataSummary(data: Record<string, any>[], column?: strin
     return await response.json() as SummaryResponse;
   } catch (error) {
     console.error('Error calling Python service summary:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get initial analysis: summary stats + rule-based chart suggestions (no AI).
+ * Used for fast upload-time analysis (Python + 1 AI call path).
+ */
+export async function getInitialAnalysis(data: Record<string, any>[]): Promise<InitialAnalysisResponse> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const response = await fetchFn(`${PYTHON_SERVICE_URL}/initial-analysis`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ data }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return await response.json() as InitialAnalysisResponse;
+  } catch (error) {
+    console.error('Error calling Python service initial-analysis:', error);
     throw error;
   }
 }

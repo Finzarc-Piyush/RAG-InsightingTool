@@ -18,6 +18,7 @@ import {
   generateQueryPlanOnly
 } from './analyticalQueryEngine.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
+import { getInitialAnalysis, type ChartSuggestion } from './dataOps/pythonService.js';
 
 /** Context for divide-and-conquer: each AI call knows which segment of the dataset it is analyzing */
 export interface DivisionContext {
@@ -165,6 +166,138 @@ export async function analyzeUpload(
       data: processedData, // Already optimized/downsampled
       ...smartDomains, // Add smart domains
       keyInsight: keyInsight, // Will be undefined if skipped, generated on-demand later
+    };
+  }));
+
+  return { charts, insights };
+}
+
+/**
+ * Python + 1 AI path: Python provides stats and rule-based chart specs; one AI call for insights.
+ * Reduces initial analysis time from 3 AI calls to 1.
+ */
+export async function analyzeUploadWithPython(
+  data: Record<string, any>[],
+  summary: DataSummary,
+  _fileName?: string,
+  skipChartInsights: boolean = false
+): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
+  const useFastModel = true;
+  const availableColumns = summary.columns.map(c => c.name);
+  const numericColumns = summary.numericColumns;
+  const dateColumns = summary.dateColumns;
+  const categoricalColumns = availableColumns.filter(
+    col => !numericColumns.includes(col) && !dateColumns.includes(col)
+  );
+
+  const py = await getInitialAnalysis(data);
+  const chartSuggestions = py.chart_suggestions || [];
+  const pySummary = py.summary || [];
+
+  const sanitizeSpec = (spec: ChartSuggestion | Record<string, any>): ChartSpec | null => {
+    let x = String(spec.x || '').trim();
+    let y = String(spec.y || '').trim();
+    if (!x || !y) return null;
+    if (!availableColumns.includes(x)) {
+      const similar = availableColumns.find(c => c.toLowerCase() === x.toLowerCase())
+        || availableColumns.find(c => c.toLowerCase().includes(x.toLowerCase()) || x.toLowerCase().includes(c.toLowerCase()))
+        || availableColumns[0];
+      x = similar;
+    }
+    if (!availableColumns.includes(y)) {
+      const similar = availableColumns.find(c => c.toLowerCase() === y.toLowerCase())
+        || availableColumns.find(c => c.toLowerCase().includes(y.toLowerCase()) || y.toLowerCase().includes(c.toLowerCase()))
+        || (numericColumns[0] || availableColumns[1]);
+      y = similar;
+    }
+    if (spec.type === 'pie' && dateColumns.includes(x)) {
+      const alt = categoricalColumns[0];
+      if (!alt) return null;
+      x = alt;
+    }
+    const aggregate = ['sum', 'mean', 'count', 'none'].includes(spec.aggregate) ? spec.aggregate : 'none';
+    const type = ['line', 'bar', 'scatter', 'pie', 'area'].includes(spec.type) ? spec.type : 'bar';
+    if (type === 'pie' && dateColumns.includes(x)) return null;
+    return { type, title: spec.title || 'Untitled Chart', x, y, aggregate };
+  };
+
+  const chartSpecs: ChartSpec[] = chartSuggestions
+    .map(s => sanitizeSpec(s))
+    .filter((s): s is ChartSpec => s !== null)
+    .slice(0, 6);
+
+  const numericSummaryRows = pySummary.filter((c: { variable?: string; mean?: number | null }) =>
+    c.variable != null && numericColumns.includes(c.variable) && c.mean != null
+  ).slice(0, 5);
+
+  const statsBlock = numericSummaryRows.map((col: { variable: string; min?: number | null; max?: number | null; mean?: number | null; median?: number | null }) =>
+    `${col.variable}: min=${col.min ?? 'N/A'}, max=${col.max ?? 'N/A'}, mean=${col.mean ?? 'N/A'}, median=${col.median ?? 'N/A'}`
+  ).join('\n');
+
+  const chartsList = chartSpecs.map(s => `- ${s.type}: "${s.title}" (x=${s.x}, y=${s.y})`).join('\n');
+
+  const insightPrompt = `Analyze this dataset and provide 3-5 specific, actionable business insights with QUANTIFIED suggestions.
+
+DATA SUMMARY:
+- ${summary.rowCount} rows, ${summary.columnCount} columns
+- Numeric columns: ${summary.numericColumns.join(', ')}
+- Date columns: ${summary.dateColumns.join(', ')}
+
+KEY STATISTICS (from data):
+${statsBlock}
+
+CHARTS BEING SHOWN (for context):
+${chartsList}
+
+Each insight MUST include: (1) A bold headline with the key finding, (2) Specific numbers from the statistics above, (3) Why it matters to the business, (4) Actionable suggestion with "**Actionable Suggestion:**" and specific targets. Use actual numbers; no vague language. Output valid JSON only:
+{"insights":[{"id":1,"text":"**Title:** ... **Why it matters:** ... **Actionable Suggestion:** ..."}, ...]}`;
+
+  const insightResponse = await openai.chat.completions.create({
+    model: (useFastModel ? 'gpt-4o-mini' : MODEL) as string,
+    messages: [
+      { role: 'system', content: 'You are a senior business analyst. Output only valid JSON with an "insights" array. Each item: { "id": number, "text": "string" }. Use specific numbers and actionable suggestions.' },
+      { role: 'user', content: insightPrompt },
+    ],
+    response_format: { type: 'json_object' as const },
+    temperature: 0.6,
+    max_tokens: 2500,
+  });
+
+  const insightContent = insightResponse.choices[0]?.message?.content || '{}';
+  let insights: Insight[] = [];
+  try {
+    const parsed = JSON.parse(insightContent);
+    const arr = parsed.insights || [];
+    insights = arr.slice(0, 7).map((item: { id?: number; text?: string }, i: number) => ({
+      id: (item.id ?? i + 1) as number,
+      text: item.text || String(item),
+    }));
+  } catch {
+    console.error('Failed to parse insights JSON from AI');
+  }
+
+  const charts = await Promise.all(chartSpecs.map(async (spec) => {
+    let processedData = processChartData(data, spec);
+    processedData = optimizeChartData(processedData, spec);
+    const smartDomains = calculateSmartDomainsForChart(
+      processedData,
+      spec.x,
+      spec.y,
+      undefined,
+      { yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true }, y2Options: undefined }
+    );
+    let keyInsight: string | undefined;
+    if (!skipChartInsights) {
+      const chartInsights = await generateChartInsights(spec, processedData, summary);
+      keyInsight = chartInsights.keyInsight;
+    }
+    return {
+      ...spec,
+      xLabel: spec.x,
+      yLabel: spec.y,
+      data: processedData,
+      ...smartDomains,
+      keyInsight,
     };
   }));
 
