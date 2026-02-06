@@ -9,15 +9,22 @@
  */
 
 import snowflake from 'snowflake-sdk';
+import fs from 'fs';
+import path from 'path';
 
 export interface SnowflakeConnectionConfig {
   account: string;
   username: string;
-  password: string;
+  password?: string; // Optional - not required for SSO/key pair auth
   warehouse: string;
   database: string;
   schema: string;
   role?: string;
+  // Key pair authentication (for SSO accounts without passwords)
+  privateKey?: string; // Private key content (PEM format)
+  privateKeyPath?: string; // Path to private key file
+  privateKeyPass?: string; // Passphrase if private key is encrypted
+  authenticator?: 'SNOWFLAKE' | 'SNOWFLAKE_JWT' | 'EXTERNALBROWSER' | string; // Default: 'SNOWFLAKE' for password, 'SNOWFLAKE_JWT' for key pair
 }
 
 /** Normalize account identifier: trim and strip any URL so only account locator remains. */
@@ -51,12 +58,17 @@ function getConnectionOptions(config?: Partial<SnowflakeConnectionConfig>): Snow
   return {
     account: normalizeAccountIdentifier(account),
     username: config?.username ?? env.SNOWFLAKE_USERNAME ?? '',
-    password: config?.password ?? env.SNOWFLAKE_PASSWORD ?? '',
+    password: config?.password ?? env.SNOWFLAKE_PASSWORD,
     warehouse: config?.warehouse ?? env.SNOWFLAKE_WAREHOUSE ?? '',
     database: config?.database ?? env.SNOWFLAKE_DATABASE ?? '',
     schema: config?.schema ?? env.SNOWFLAKE_SCHEMA ?? '',
     // Do not pass role from env: SDK puts roleName in login URL and can cause 404 on some accounts.
     role: config?.role,
+    // Key pair authentication options
+    privateKey: config?.privateKey ?? env.SNOWFLAKE_PRIVATE_KEY,
+    privateKeyPath: config?.privateKeyPath ?? env.SNOWFLAKE_PRIVATE_KEY_PATH,
+    privateKeyPass: config?.privateKeyPass ?? env.SNOWFLAKE_PRIVATE_KEY_PASS,
+    authenticator: config?.authenticator ?? env.SNOWFLAKE_AUTHENTICATOR as any,
   };
 }
 
@@ -64,9 +76,43 @@ function createConnection(config: SnowflakeConnectionConfig): snowflake.Connecti
   const opts: snowflake.ConnectionOptions = {
     account: config.account,
     username: config.username,
-    password: config.password,
     warehouse: config.warehouse,
   };
+
+  // Determine authentication method: key pair (SSO) or password
+  const hasPassword = config.password && config.password.trim().length > 0;
+  const hasPrivateKey = config.privateKey && config.privateKey.trim().length > 0;
+  const hasPrivateKeyPath = config.privateKeyPath && config.privateKeyPath.trim().length > 0;
+
+  if (hasPrivateKey || hasPrivateKeyPath) {
+    // Key pair authentication (for SSO accounts)
+    opts.authenticator = config.authenticator || 'SNOWFLAKE_JWT';
+    
+    if (hasPrivateKeyPath) {
+      // Use private key file path (SDK will read the file)
+      const keyPath = path.resolve(config.privateKeyPath!);
+      if (!fs.existsSync(keyPath)) {
+        throw new Error(`Private key file not found: ${keyPath}`);
+      }
+      opts.privateKeyPath = keyPath;
+      if (config.privateKeyPass) {
+        opts.privateKeyPass = config.privateKeyPass;
+      }
+    } else if (hasPrivateKey) {
+      // Use private key content directly
+      opts.privateKey = config.privateKey;
+      if (config.privateKeyPass) {
+        opts.privateKeyPass = config.privateKeyPass;
+      }
+    }
+  } else if (hasPassword) {
+    // Password authentication (default)
+    opts.password = config.password;
+    opts.authenticator = config.authenticator || 'SNOWFLAKE';
+  } else {
+    throw new Error('Snowflake authentication requires either password or private key (for SSO accounts).');
+  }
+
   if (config.database?.trim()) opts.database = config.database.trim();
   if (config.schema?.trim()) opts.schema = config.schema.trim();
   // Omit role so Snowflake uses the user's default role; passing role can cause 404 on login URL.
@@ -138,6 +184,29 @@ function connectionConfigKey(config: SnowflakeConnectionConfig): string {
 }
 
 /**
+ * Validate that authentication credentials are provided (either password or key pair).
+ */
+function validateAuthConfig(config: SnowflakeConnectionConfig): void {
+  const hasPassword = config.password && config.password.trim().length > 0;
+  const hasPrivateKey = config.privateKey && config.privateKey.trim().length > 0;
+  const hasPrivateKeyPath = config.privateKeyPath && config.privateKeyPath.trim().length > 0;
+  
+  if (!hasPassword && !hasPrivateKey && !hasPrivateKeyPath) {
+    throw new Error('Snowflake authentication requires either password or private key (for SSO accounts). Set SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY/SNOWFLAKE_PRIVATE_KEY_PATH in environment variables.');
+  }
+}
+
+/**
+ * Validate that required connection config is present.
+ */
+function validateConnectionConfig(config: SnowflakeConnectionConfig): void {
+  if (!config.account || !config.username || !config.warehouse) {
+    throw new Error('Snowflake connection requires account, username, and warehouse.');
+  }
+  validateAuthConfig(config);
+}
+
+/**
  * Get or create the shared Snowflake connection (no database/schema).
  * Used for all metadata queries; connection is reused.
  */
@@ -170,9 +239,7 @@ export async function listDatabases(
   config?: Partial<SnowflakeConnectionConfig>
 ): Promise<{ name: string; created_on?: string }[]> {
   const fullConfig = getConnectionOptions(config);
-  if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
-    throw new Error('Snowflake connection requires account, username, password, and warehouse.');
-  }
+  validateConnectionConfig(fullConfig);
   const connection = await getOrCreateConnection({
     ...fullConfig,
     database: '',
@@ -196,9 +263,7 @@ export async function listSchemas(
   config?: Partial<SnowflakeConnectionConfig>
 ): Promise<{ name: string }[]> {
   const fullConfig = getConnectionOptions(config);
-  if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
-    throw new Error('Snowflake connection requires account, username, password, and warehouse.');
-  }
+  validateConnectionConfig(fullConfig);
   if (!database?.trim()) {
     throw new Error('Database name is required to list schemas.');
   }
@@ -226,9 +291,7 @@ export async function listTablesInSchema(
   config?: Partial<SnowflakeConnectionConfig>
 ): Promise<{ name: string; row_count?: number; bytes?: number; database: string; schema: string }[]> {
   const fullConfig = getConnectionOptions(config);
-  if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
-    throw new Error('Snowflake connection requires account, username, password, and warehouse.');
-  }
+  validateConnectionConfig(fullConfig);
   if (!database?.trim() || !schema?.trim()) {
     throw new Error('Database and schema are required to list tables.');
   }
@@ -268,9 +331,7 @@ export async function fetchTableData(
 ): Promise<Record<string, any>[]> {
   const fullConfig = getConnectionOptions(config);
   const { tableName } = config;
-  if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
-    throw new Error('Snowflake connection requires account, username, password, and warehouse.');
-  }
+  validateConnectionConfig(fullConfig);
   if (!tableName?.trim()) {
     throw new Error('Table name is required.');
   }
@@ -297,8 +358,14 @@ export async function fetchTableData(
  */
 export async function verifySnowflakeConnection(): Promise<{ ok: boolean; message?: string }> {
   const fullConfig = getConnectionOptions(undefined);
-  if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
-    return { ok: false, message: 'Missing SNOWFLAKE_ACCOUNT, USERNAME, PASSWORD, or WAREHOUSE in env.' };
+  if (!fullConfig.account || !fullConfig.username || !fullConfig.warehouse) {
+    return { ok: false, message: 'Missing SNOWFLAKE_ACCOUNT, USERNAME, or WAREHOUSE in env.' };
+  }
+  const hasPassword = fullConfig.password && fullConfig.password.trim().length > 0;
+  const hasPrivateKey = fullConfig.privateKey && fullConfig.privateKey.trim().length > 0;
+  const hasPrivateKeyPath = fullConfig.privateKeyPath && fullConfig.privateKeyPath.trim().length > 0;
+  if (!hasPassword && !hasPrivateKey && !hasPrivateKeyPath) {
+    return { ok: false, message: 'Missing SNOWFLAKE_PASSWORD or SNOWFLAKE_PRIVATE_KEY/SNOWFLAKE_PRIVATE_KEY_PATH in env (required for SSO accounts).' };
   }
   try {
     await getOrCreateConnection({ ...fullConfig, database: '', schema: '' });
@@ -317,8 +384,14 @@ export async function testConnection(
 ): Promise<{ ok: boolean; message?: string }> {
   try {
     const fullConfig = getConnectionOptions(config);
-    if (!fullConfig.account || !fullConfig.username || !fullConfig.password) {
-      return { ok: false, message: 'Missing account, username, or password.' };
+    if (!fullConfig.account || !fullConfig.username) {
+      return { ok: false, message: 'Missing account or username.' };
+    }
+    const hasPassword = fullConfig.password && fullConfig.password.trim().length > 0;
+    const hasPrivateKey = fullConfig.privateKey && fullConfig.privateKey.trim().length > 0;
+    const hasPrivateKeyPath = fullConfig.privateKeyPath && fullConfig.privateKeyPath.trim().length > 0;
+    if (!hasPassword && !hasPrivateKey && !hasPrivateKeyPath) {
+      return { ok: false, message: 'Missing password or private key (required for SSO accounts).' };
     }
     await getOrCreateConnection({ ...fullConfig, database: '', schema: '' });
     return { ok: true };

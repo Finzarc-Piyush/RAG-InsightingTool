@@ -9,9 +9,14 @@ export interface SnowflakeImportConfig {
   schema?: string;
   account?: string;
   username?: string;
-  password?: string;
+  password?: string; // Optional - not required for SSO/key pair auth
   warehouse?: string;
   role?: string;
+  // Key pair authentication (for SSO accounts without passwords)
+  privateKey?: string;
+  privateKeyPath?: string;
+  privateKeyPass?: string;
+  authenticator?: 'SNOWFLAKE' | 'SNOWFLAKE_JWT' | 'EXTERNALBROWSER' | string;
 }
 
 interface UploadJob {
