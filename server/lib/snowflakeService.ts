@@ -128,6 +128,21 @@ function connectAsync(connection: snowflake.Connection): Promise<void> {
   });
 }
 
+/** Convert a single row (array or object) to Record<string, any> using column names. */
+function rowToRecord(row: any, columns: string[]): Record<string, any> | null {
+  if (typeof row === 'object' && row !== null && !Array.isArray(row)) {
+    return { ...row };
+  }
+  if (Array.isArray(row) && columns.length) {
+    const obj: Record<string, any> = {};
+    columns.forEach((col: string, i: number) => {
+      obj[col] = row[i];
+    });
+    return obj;
+  }
+  return null;
+}
+
 function executeAsync(
   connection: snowflake.Connection,
   sqlText: string
@@ -135,26 +150,55 @@ function executeAsync(
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText,
-      complete: (err: Error | undefined, stmt: snowflake.Statement, rows: any[] | undefined) => {
+      complete: (err: Error | undefined, stmt: snowflake.RowStatement, rows: any[] | undefined) => {
         if (err) {
           reject(err);
           return;
         }
         const rawRows = rows ?? [];
-        const result: Record<string, any>[] = [];
         const columns = stmt.getColumns?.()?.map((c: any) => c.getName()) ?? [];
+        const result: Record<string, any>[] = [];
         for (const row of rawRows) {
-          if (typeof row === 'object' && row !== null && !Array.isArray(row)) {
-            result.push({ ...row });
-          } else if (Array.isArray(row) && columns.length) {
-            const obj: Record<string, any> = {};
-            columns.forEach((col: string, i: number) => {
-              obj[col] = row[i];
-            });
-            result.push(obj);
-          }
+          const rec = rowToRecord(row, columns);
+          if (rec) result.push(rec);
         }
         resolve(result);
+      },
+    });
+  });
+}
+
+/**
+ * Execute a query and consume ALL rows via streaming (no row limit).
+ * The default execute() complete callback can receive only the first batch (e.g. 50 rows)
+ * from the Snowflake driver; streaming ensures we collect the entire result set.
+ */
+function executeStreamAsync(
+  connection: snowflake.Connection,
+  sqlText: string
+): Promise<Record<string, any>[]> {
+  return new Promise((resolve, reject) => {
+    connection.execute({
+      sqlText,
+      streamResult: true,
+      complete: (err: Error | undefined, stmt: snowflake.RowStatement) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        const columns = stmt.getColumns?.()?.map((c: any) => c.getName()) ?? [];
+        const result: Record<string, any>[] = [];
+        const stream = stmt.streamRows();
+        stream
+          .on('readable', function (this: NodeJS.ReadableStream) {
+            let row: any;
+            while ((row = this.read()) !== null) {
+              const rec = rowToRecord(row, columns);
+              if (rec) result.push(rec);
+            }
+          })
+          .on('end', () => resolve(result))
+          .on('error', (e: Error) => reject(e));
       },
     });
   });
@@ -172,8 +216,6 @@ function destroyAsync(connection: snowflake.Connection): Promise<void> {
     }
   });
 }
-
-const MAX_IMPORT_ROWS = 500_000;
 
 // Single connection reused for all metadata (created once, no database/schema in login).
 let sharedConnection: snowflake.Connection | null = null;
@@ -349,8 +391,9 @@ export async function fetchTableData(
   const escapedSchema = schema.replace(/"/g, '""');
   const escapedTable = tableName.trim().replace(/"/g, '""');
   const quotedTable = `"${escapedDb}"."${escapedSchema}"."${escapedTable}"`;
-  const sql = `SELECT * FROM ${quotedTable} LIMIT ${MAX_IMPORT_ROWS}`;
-  return executeAsync(connection, sql);
+  const sql = `SELECT * FROM ${quotedTable}`;
+  // Use streaming so we receive the full result set (no row limit); the default complete() callback may only get the first batch (e.g. 50 rows).
+  return executeStreamAsync(connection, sql);
 }
 
 /**

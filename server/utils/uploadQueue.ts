@@ -195,6 +195,21 @@ class UploadQueue {
         data = convertDashToZeroForNumericColumns(data, summary.numericColumns);
         summary = createDataSummary(data);
         job.progress = 40;
+
+        // Store Snowflake data in blob storage (same as CSV/Excel upload workflow) so chat loads full dataset
+        try {
+          const { uploadJsonDataToBlob } = await import('../lib/blobStorage.js');
+          job.status = 'parsing';
+          job.progress = 35;
+          const blobInfo = await uploadJsonDataToBlob(data, job.fileName, job.username);
+          job.blobInfo = blobInfo;
+          console.log(`✅ Snowflake data uploaded to blob storage (${data.length} rows). Chat will load full dataset from blob.`);
+        } catch (blobErr) {
+          console.error('⚠️ Failed to upload Snowflake data to blob:', blobErr);
+          throw new Error(
+            blobErr instanceof Error ? blobErr.message : 'Failed to store Snowflake data in blob storage. Check Azure blob configuration.'
+          );
+        }
       } else if (job.fileBuffer) {
         // File upload path
         useLargeFileProcessing = shouldUseLargeFileProcessing(job.fileBuffer.length);

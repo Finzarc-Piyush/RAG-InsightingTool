@@ -85,6 +85,52 @@ export const uploadFileToBlob = async (
   }
 };
 
+/**
+ * Upload in-memory data (e.g. from Snowflake import) to blob storage as JSON.
+ * Same workflow as CSV/Excel: blob is the source of truth; loadLatestData loads via blobInfo.
+ */
+export const uploadJsonDataToBlob = async (
+  data: Record<string, any>[],
+  fileName: string,
+  username: string
+): Promise<{ blobUrl: string; blobName: string }> => {
+  try {
+    const timestamp = Date.now();
+    const sanitizedUsername = username.replace(/[^a-zA-Z0-9]/g, '_');
+    const baseName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_') || 'snowflake_import';
+    const blobName = `${sanitizedUsername}/${timestamp}/${baseName}.json`;
+
+    // Serialize: ensure Date values become ISO strings for JSON
+    const serialized = JSON.stringify(data, (_key, value) =>
+      value instanceof Date ? value.toISOString() : value
+    );
+    const buffer = Buffer.from(serialized, 'utf-8');
+
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+    const uploadOptions = {
+      blobHTTPHeaders: { blobContentType: 'application/json' },
+      metadata: {
+        originalFileName: fileName,
+        uploadedBy: username,
+        uploadedAt: new Date().toISOString(),
+        source: 'snowflake',
+        rowCount: String(data.length),
+      },
+    };
+
+    await blockBlobClient.upload(buffer, buffer.length, uploadOptions);
+    const blobUrl = blockBlobClient.url;
+
+    const sizeMB = buffer.length / (1024 * 1024);
+    console.log(`✅ Snowflake data uploaded to blob storage: ${blobName} (${data.length} rows, ${sizeMB.toFixed(2)} MB)`);
+
+    return { blobUrl, blobName };
+  } catch (error) {
+    console.error("❌ Failed to upload JSON data to blob storage:", error);
+    throw error;
+  }
+};
+
 // Get file from blob storage
 export const getFileFromBlob = async (blobName: string): Promise<Buffer> => {
   try {
