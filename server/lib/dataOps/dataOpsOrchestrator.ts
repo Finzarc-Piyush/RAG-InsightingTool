@@ -57,6 +57,61 @@ async function getPreviewFromSavedData(sessionId: string, fallbackData: Record<s
 }
 
 /**
+ * Build a minimal summary from data in-process (same shape as Python service summary).
+ * Used when the Python summary service is unavailable (e.g. AbortError, timeout, service down).
+ */
+function buildMinimalSummaryFromData(data: Record<string, any>[]): Array<{
+  variable: string;
+  datatype: string;
+  total_values: number;
+  null_values: number;
+  non_null_values: number;
+  mean?: number | null;
+  min?: number | null;
+  max?: number | null;
+  mode?: any;
+}> {
+  if (!data || data.length === 0) return [];
+  const columns = Object.keys(data[0] || {});
+  const summary: Array<any> = [];
+
+  for (const col of columns) {
+    const values = data.map((row) => row[col]);
+    const total_values = values.length;
+    const null_values = values.filter((v) => v === null || v === undefined || v === '').length;
+    const non_null_values = total_values - null_values;
+    const nonNullValues = values.filter((v) => v !== null && v !== undefined && v !== '');
+
+    let datatype = 'text';
+    const numericValues: number[] = [];
+    for (const v of nonNullValues) {
+      if (typeof v === 'number' && !isNaN(v) && isFinite(v)) numericValues.push(v);
+      else if (typeof v === 'string' && v.trim() !== '') {
+        const n = Number(v);
+        if (!isNaN(n) && isFinite(n)) numericValues.push(n);
+      }
+    }
+    if (numericValues.length > 0) datatype = 'numeric';
+
+    const item: any = {
+      variable: col,
+      datatype,
+      total_values,
+      null_values,
+      non_null_values,
+    };
+    if (datatype === 'numeric' && numericValues.length > 0) {
+      const sum = numericValues.reduce((a, b) => a + b, 0);
+      item.mean = sum / numericValues.length;
+      item.min = Math.min(...numericValues);
+      item.max = Math.max(...numericValues);
+    }
+    summary.push(item);
+  }
+  return summary;
+}
+
+/**
  * Streaming helper: Process data in batches
  */
 async function processInBatches<T>(
@@ -3699,27 +3754,44 @@ export async function executeDataOperation(
     }
     
     case 'summary': {
-      const result = await getDataSummary(data, intent.column);
-      
+      let summaryList: any[];
+      try {
+        const result = await getDataSummary(data, intent.column);
+        summaryList = result.summary;
+      } catch (pythonError: any) {
+        // Python service may be down, timeout (AbortError), or unreachable – use fallback
+        const isAbort = pythonError?.name === 'AbortError' || (pythonError?.message && String(pythonError.message).includes('aborted'));
+        console.warn(
+          `⚠️ Python summary failed (${isAbort ? 'aborted/timeout' : 'error'}), using fallback:`,
+          pythonError?.message || pythonError
+        );
+        // Prefer pre-computed stats from upload if available
+        if (sessionDoc?.dataSummaryStatistics?.summary && Array.isArray(sessionDoc.dataSummaryStatistics.summary)) {
+          summaryList = sessionDoc.dataSummaryStatistics.summary;
+          console.log('✅ Using pre-computed data summary statistics from session');
+        } else {
+          summaryList = buildMinimalSummaryFromData(data);
+          console.log('✅ Using in-process minimal summary (Python service unavailable)');
+        }
+      }
+
       if (intent.column) {
-        // Single column summary
-        const columnSummary = result.summary.find((s: any) => s.variable === intent.column);
+        const columnSummary = summaryList.find((s: any) => s.variable === intent.column);
         if (columnSummary) {
           return {
             answer: `Here's a summary for column "${intent.column}":`,
-            summary: [columnSummary] // Return as array with single item for consistency
+            summary: [columnSummary]
           };
         } else {
           return {
             answer: `Column "${intent.column}" not found. Here's a summary of all columns:`,
-            summary: result.summary
+            summary: summaryList
           };
         }
       } else {
-        // All columns summary
         return {
           answer: 'Here\'s a summary of your data:',
-          summary: result.summary
+          summary: summaryList
         };
       }
     }

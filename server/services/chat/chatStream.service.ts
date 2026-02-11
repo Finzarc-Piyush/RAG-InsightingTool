@@ -19,7 +19,18 @@ import { loadLatestData } from "../../utils/dataLoader.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
+import { processStreamDataOperation } from "../dataOps/dataOpsStream.service.js";
 import { Response } from "express";
+
+/** Returns true if the message is a clear request for data summary (same patterns as data-ops summary intent). */
+function isDataSummaryRequest(message: string): boolean {
+  const lower = (message || '').toLowerCase().trim();
+  return (
+    lower.includes('data summary') ||
+    lower.includes('summary of data') ||
+    !!lower.match(/(?:give me|show me|display|view|see)\s+(?:the\s+)?(?:data\s+)?summary/i)
+  );
+}
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -90,6 +101,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if (!chatDocument) {
       sendSSE(res, 'error', { message: 'Session not found. Please upload a file first.' });
       res.end();
+      return;
+    }
+
+    // Fast path: "give me the data summary" and similar → use data-ops flow for a quick response
+    // (avoids slow AI mode detection + full analysis when user just wants the summary)
+    if (isDataSummaryRequest(message)) {
+      console.log('📋 Data summary request detected – using data-ops flow for fast response');
+      await processStreamDataOperation({
+        sessionId,
+        message,
+        username,
+        res,
+        dataOpsMode: true,
+      });
       return;
     }
 
