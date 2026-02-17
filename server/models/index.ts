@@ -19,3 +19,6 @@ export * from "./sharedAnalysis.model.js";
 // Shared Dashboard model
 export * from "./sharedDashboard.model.js";
 
+// Automation model
+export * from "./automation.model.js";
+

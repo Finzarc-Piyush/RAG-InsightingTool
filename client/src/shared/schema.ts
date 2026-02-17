@@ -354,3 +354,54 @@ export const removeChartFromDashboardRequestSchema = z.object({
     message: "Provide index or title/type to remove a chart",
   }
 );
+
+// Automations
+export const automationStepDataOpSchema = z.object({
+  type: z.literal("data_op"),
+  operation: z.string(),
+  params: z.record(z.any()).optional(),
+});
+
+export const automationStepCreateDashboardSchema = z.object({
+  type: z.literal("create_dashboard"),
+  name: z.string(),
+  charts: z.array(chartSpecSchema).optional(),
+});
+
+export const automationStepAddChartsSchema = z.object({
+  type: z.literal("add_charts"),
+  dashboardId: z.string(),
+  charts: z.array(chartSpecSchema),
+  sheetId: z.string().optional(),
+});
+
+/** Chat/analysis/modelling step: store the user message and replay through chat to get response */
+export const automationStepMessageSchema = z.object({
+  type: z.literal("message"),
+  userMessage: z.string().min(1),
+});
+
+export const automationStepSchema = z.discriminatedUnion("type", [
+  automationStepDataOpSchema,
+  automationStepCreateDashboardSchema,
+  automationStepAddChartsSchema,
+  automationStepMessageSchema,
+]);
+
+export type AutomationStepDataOp = z.infer<typeof automationStepDataOpSchema>;
+export type AutomationStepCreateDashboard = z.infer<typeof automationStepCreateDashboardSchema>;
+export type AutomationStepAddCharts = z.infer<typeof automationStepAddChartsSchema>;
+export type AutomationStepMessage = z.infer<typeof automationStepMessageSchema>;
+export type AutomationStep = z.infer<typeof automationStepSchema>;
+
+export const automationSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  steps: z.array(automationStepSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export type Automation = z.infer<typeof automationSchema>;

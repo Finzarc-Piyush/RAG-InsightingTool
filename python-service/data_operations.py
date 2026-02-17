@@ -294,6 +294,17 @@ def remove_nulls(
     # Determine which columns to process
     columns_to_process = [column] if column else df.columns.tolist()
     
+    # For mean/median imputation when no column is specified, only process numeric columns.
+    # Non-numeric columns (e.g. Month, categories) are left unchanged so we don't coerce them
+    # to numeric and wipe their values. When a specific column is requested, we still process only
+    # if it's numeric (or safely coercible in the loop) so we don't wipe text columns like Month.
+    if method in ("mean", "median") and not column:
+        numeric_cols = [c for c in columns_to_process if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
+        columns_to_process = numeric_cols if numeric_cols else columns_to_process
+    elif method in ("mean", "median") and column and column in df.columns and not pd.api.types.is_numeric_dtype(df[column]):
+        # User asked for mean/median on a non-numeric column (e.g. Month) - skip it
+        columns_to_process = []
+    
     nulls_removed = 0
     
     if method == "delete":
@@ -309,12 +320,15 @@ def remove_nulls(
             if col not in df.columns:
                 continue
             
-            # When using mean/median, try to coerce string numbers and "-" placeholders to NaN/numeric
+            # For mean/median we already restricted to numeric columns; only coerce object columns
+            # that look like numbers (e.g. "123", "45.6") and "-" placeholders, without wiping text.
             if method in ("mean", "median") and df[col].dtype == "object":
-                # Treat strings like "-", " -  ", empty strings as NaN
                 coerced = df[col].replace(r"^\s*-\s*$", np.nan, regex=True)
-                # Try to convert to numeric, coercing errors to NaN
-                df[col] = pd.to_numeric(coerced, errors="coerce")
+                coerced = pd.to_numeric(coerced, errors="coerce")
+                # Only replace column if we still have a meaningful number of numeric values
+                if coerced.notna().sum() > 0:
+                    df[col] = coerced
+                # else: leave column as-is (e.g. Month with "Jan"/"Feb" stays unchanged)
             
             null_count = df[col].isna().sum()
             if null_count == 0:

@@ -236,10 +236,11 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       return;
     }
 
-    // Send response
+    // Send response – cap preview at 50 rows to avoid large payloads and client freeze
+    const cappedPreview = Array.isArray(result.preview) ? result.preview.slice(0, 50) : result.preview;
     if (!sendSSE(res, 'response', {
       answer: result.answer,
-      preview: result.preview,
+      preview: cappedPreview,
       summary: result.summary,
       saved: result.saved,
     })) {

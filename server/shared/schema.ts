@@ -349,3 +349,72 @@ export const removeChartFromDashboardRequestSchema = z.object({
   message: "Provide index or title/type to remove a chart",
 });
 
+// Automations: saved sequences of data ops + dashboard steps
+export const automationStepDataOpSchema = z.object({
+  type: z.literal("data_op"),
+  operation: z.string(), // remove_nulls, filter, convert_type, etc.
+  params: z.record(z.any()).optional(), // column, method, customValue, filterConditions, etc.
+});
+
+export const automationStepCreateDashboardSchema = z.object({
+  type: z.literal("create_dashboard"),
+  name: z.string(),
+  charts: z.array(chartSpecSchema).optional(),
+});
+
+export const automationStepAddChartsSchema = z.object({
+  type: z.literal("add_charts"),
+  dashboardId: z.string(), // or "__last_created__" to use the dashboard created in previous step
+  charts: z.array(chartSpecSchema),
+  sheetId: z.string().optional(),
+});
+
+/** Chat/analysis/modelling step: store the user message and replay through chat to get response */
+export const automationStepMessageSchema = z.object({
+  type: z.literal("message"),
+  userMessage: z.string().min(1),
+});
+
+export const automationStepSchema = z.discriminatedUnion("type", [
+  automationStepDataOpSchema,
+  automationStepCreateDashboardSchema,
+  automationStepAddChartsSchema,
+  automationStepMessageSchema,
+]);
+
+export type AutomationStepDataOp = z.infer<typeof automationStepDataOpSchema>;
+export type AutomationStepCreateDashboard = z.infer<typeof automationStepCreateDashboardSchema>;
+export type AutomationStepAddCharts = z.infer<typeof automationStepAddChartsSchema>;
+export type AutomationStepMessage = z.infer<typeof automationStepMessageSchema>;
+export type AutomationStep = z.infer<typeof automationStepSchema>;
+
+export const automationSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  steps: z.array(automationStepSchema),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export type Automation = z.infer<typeof automationSchema>;
+
+export const createAutomationRequestSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  steps: z.array(automationStepSchema),
+});
+
+export const updateAutomationRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  steps: z.array(automationStepSchema).optional(),
+});
+
+export const runAutomationRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  automationId: z.string().min(1),
+  newDashboardName: z.string().min(1).optional(), // When applying: use this name for the new dashboard (first create_dashboard step)
+});
+

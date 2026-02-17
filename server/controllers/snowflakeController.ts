@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { listDatabases, listSchemas, listTablesInSchema } from '../lib/snowflakeService.js';
-import { createPlaceholderSession } from '../models/chat.model.js';
+import { createPlaceholderSession, updateChatDocument } from '../models/chat.model.js';
 import { uploadQueue } from '../utils/uploadQueue.js';
 
 /**
@@ -84,13 +84,21 @@ export const importSnowflakeTable = async (req: Request, res: Response) => {
     const displayName = `${database}.${schema}.${tableName}`.trim();
 
     try {
-      await createPlaceholderSession(
+      const placeholder = await createPlaceholderSession(
         usernameHeader,
         displayName,
         sessionId,
         0,
         undefined
       );
+      // Mark this session as Snowflake-backed so query execution can use pushdown
+      placeholder.sourceType = 'snowflake';
+      placeholder.snowflakeSource = {
+        database: database.trim(),
+        schema: schema.trim(),
+        tableName: tableName.trim(),
+      };
+      await updateChatDocument(placeholder);
     } catch (placeholderError: unknown) {
       console.error('Failed to create placeholder session for Snowflake import:', placeholderError);
     }

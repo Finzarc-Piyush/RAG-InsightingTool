@@ -9,6 +9,7 @@ import dataRetrievalRoutes from "./dataRetrieval.js";
 import dashboardRoutes from "./dashboards.js";
 import sharedAnalysisRoutes from "./sharedAnalyses.js";
 import sharedDashboardRoutes from "./sharedDashboards.js";
+import automationRoutes from "./automations.js";
 import dataOpsRoutes from "./dataOps.js";
 import dataApiRoutes from "./dataApi.js";
 import snowflakeRoutes from "./snowflake.js";
@@ -25,6 +26,7 @@ export function registerRoutes(app: Express): Server | void {
   app.use('/api', dashboardRoutes);
   app.use('/api', sharedAnalysisRoutes);
   app.use('/api', sharedDashboardRoutes);
+  app.use('/api', automationRoutes);
   app.use('/api', dataOpsRoutes);
   app.use('/api/data', dataApiRoutes);
 

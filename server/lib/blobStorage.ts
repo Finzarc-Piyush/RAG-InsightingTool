@@ -33,7 +33,10 @@ export const initializeBlobStorage = async () => {
   }
 };
 
-// Upload file to blob storage
+// Data flow: initial data (CSV/Excel upload or Snowflake) and filter/transform results are stored in blob.
+// Cosmos holds references: blobInfo = original, currentDataBlob = latest (after data ops). Revert = clear currentDataBlob.
+
+// Upload file to blob storage (CSV/Excel – original data)
 export const uploadFileToBlob = async (
   fileBuffer: Buffer,
   fileName: string,
@@ -87,7 +90,7 @@ export const uploadFileToBlob = async (
 
 /**
  * Upload in-memory data (e.g. from Snowflake import) to blob storage as JSON.
- * Same workflow as CSV/Excel: blob is the source of truth; loadLatestData loads via blobInfo.
+ * Original data is stored in blob; Cosmos holds blobInfo. loadLatestData loads via blobInfo when currentDataBlob is unset.
  */
 export const uploadJsonDataToBlob = async (
   data: Record<string, any>[],
@@ -248,7 +251,7 @@ export const generateSasUrl = async (
   }
 };
 
-// Update processed data blob (for data operations)
+// Update processed data blob (filter/transform results). Cosmos currentDataBlob references this; revert clears it to use blobInfo again.
 export const updateProcessedDataBlob = async (
   sessionId: string,
   data: Record<string, any>[] | Buffer,

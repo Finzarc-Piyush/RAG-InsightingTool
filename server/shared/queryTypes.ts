@@ -67,3 +67,77 @@ export interface ParsedQuery {
   notes?: string[];
 }
 
+/**
+ * Query planning & execution types
+ * Used by the two-stage planner → executor → explainer pipeline.
+ */
+
+export type QueryAction =
+  | 'aggregate'
+  | 'filter'
+  | 'groupby'
+  | 'topk'
+  | 'row_lookup';
+
+export type QueryFilterOperator =
+  | '='
+  | '>'
+  | '<'
+  | '>='
+  | '<='
+  | '!='
+  | 'contains';
+
+export interface QueryFilter {
+  column: string;
+  operator: QueryFilterOperator;
+  value: string | number | boolean | null;
+}
+
+export type QueryAggregationType =
+  | 'sum'
+  | 'avg'
+  | 'count'
+  | 'min'
+  | 'max';
+
+export interface QueryAggregation {
+  column: string;
+  type: QueryAggregationType;
+}
+
+export interface QuerySortBy {
+  column: string;
+  direction: 'asc' | 'desc';
+}
+
+export interface QueryPlan {
+  action: QueryAction;
+  filters: QueryFilter[];
+  aggregations: QueryAggregation[];
+  groupBy: string[];
+  sortBy?: QuerySortBy;
+  limit?: number;
+  /**
+   * Hint from planner about whether a full row-level scan
+   * of the dataset is required. The executor may still
+   * override this based on metadata capabilities.
+   */
+  requiresFullScan?: boolean;
+}
+
+export interface QueryResultMeta {
+  rowCount: number;
+  columns: string[];
+  action: QueryAction;
+  groupBy?: string[];
+  sortBy?: QuerySortBy;
+  limit?: number;
+  diagnostics?: string[];
+}
+
+export interface QueryResult {
+  rows: Array<Record<string, string | number | boolean | null>>;
+  meta: QueryResultMeta;
+}
+

@@ -479,13 +479,16 @@ export const useHomeMutations = ({
         return;
       }
       
+      // Cap preview at 50 rows so state never holds a huge array (avoids freeze / scroll lock)
+      const rawPreview = (data as any).preview;
+      const cappedPreview = Array.isArray(rawPreview) ? rawPreview.slice(0, 50) : undefined;
       const assistantMessage: Message & { preview?: any[]; summary?: any[] } = {
         role: 'assistant',
         content: data.answer, // Keep markdown formatting for proper rendering
         charts: data.charts,
         insights: data.insights,
         timestamp: Date.now(),
-        preview: (data as any).preview,
+        preview: cappedPreview,
         summary: (data as any).summary,
       };
       

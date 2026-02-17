@@ -21,6 +21,13 @@ export interface ChatDocument {
   chartReferences?: ChartReference[]; // References to charts stored in blob storage
   insights: Insight[]; // AI-generated insights from data analysis
   sessionId: string; // Original session ID
+  // Data source metadata
+  sourceType?: 'upload' | 'snowflake'; // Where the dataset originated from
+  snowflakeSource?: { // Original Snowflake table reference (if applicable)
+    database: string;
+    schema: string;
+    tableName: string;
+  };
   // Enhanced analysis data storage
   rawData: Record<string, any>[]; // Complete raw data from uploaded file (updated after each data operation)
   sampleRows: Record<string, any>[]; // Sample rows for preview (first 100)
@@ -255,6 +262,7 @@ export const createChatDocument = async (
     chartReferences: chartReferences.length > 0 ? chartReferences : undefined,
     insights: insights,
     sessionId,
+    sourceType: 'upload',
     rawData: shouldStoreRawData ? rawData : [], // Only store rawData if it's small enough
     sampleRows,
     columnStatistics,
@@ -328,6 +336,7 @@ export const createPlaceholderSession = async (
     createdAt: timestamp,
     lastUpdatedAt: timestamp,
     sessionId,
+    sourceType: 'upload',
     dataSummary: {
       rowCount: 0,
       columnCount: 0,

@@ -11,7 +11,7 @@ function toNumber(value: any): number {
   return Number(cleaned);
 }
 
-interface CorrelationResult {
+export interface CorrelationResult {
   variable: string;
   correlation: number;
   nPairs?: number;
@@ -53,7 +53,7 @@ export async function analyzeCorrelations(
   onProgress?: (message: string, processed?: number, total?: number) => void,
   sessionId?: string,
   generateCharts: boolean = true // New parameter to control chart generation
-): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
+): Promise<{ charts: ChartSpec[]; insights: Insight[]; correlations: CorrelationResult[] }> {
   console.log('=== CORRELATION ANALYSIS DEBUG ===');
   console.log('Target variable:', targetVariable);
   console.log('Numeric columns to analyze:', numericColumns);
@@ -72,7 +72,7 @@ export async function analyzeCorrelations(
 
   if (correlations.length === 0) {
     console.error('No correlations found!');
-    return { charts: [], insights: [] };
+    return { charts: [], insights: [], correlations: [] };
   }
 
   // Apply filter if requested
@@ -97,7 +97,8 @@ export async function analyzeCorrelations(
       insights: [{
         id: 1,
         text: `**No ${filter === 'positive' ? 'positive' : 'negative'} correlations found:** ${filterMessage} All correlations with ${targetVariable} are ${filter === 'positive' ? 'negative' : 'positive'}.`
-      }] 
+      }],
+      correlations: []
     };
   }
 
@@ -266,7 +267,7 @@ export async function analyzeCorrelations(
   // Pass topCorrelations (same as used in charts) to ensure insights match what's displayed
   const insights = await generateCorrelationInsights(targetVariable, topCorrelations, data, summaryStub, filter);
 
-  const result = { charts, insights };
+  const result = { charts, insights, correlations: topCorrelations };
 
   // Redis cache removed
 

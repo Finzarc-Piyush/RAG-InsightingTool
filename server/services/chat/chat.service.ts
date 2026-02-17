@@ -59,6 +59,17 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     : allMessages.slice(-15); // Use last 15 messages for new messages
 
   // Extract required columns for optimized loading
+  // CRITICAL: For data ops that modify the dataset (add/create column, etc.), we must load FULL data
+  // so we never save a subset and drop columns.
+  const isDataOpThatModifiesSchema =
+    /\b(add|create|new)\s+(a\s+)?column\b/i.test(message) ||
+    /\b(create|add)\s+column\s+\w+\s+(with|where|=)/i.test(message) ||
+    /\b(remove|delete|drop)\s+(the\s+)?column\b/i.test(message) ||
+    /\baggregate\s+(by|on)\b/i.test(message) ||
+    /\bpivot\b/i.test(message) ||
+    /\brename\s+column\b/i.test(message) ||
+    /\bnormalize\s+(column|the)\b/i.test(message);
+
   let requiredColumns: string[] = [];
   let parsedQuery: any = null;
   try {
@@ -68,29 +79,34 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     } catch (error) {
       // Query parsing is optional
     }
-    
-    const historyColumns = extractColumnsFromHistory(processingChatHistory || [], chatDocument.dataSummary);
-    requiredColumns = extractRequiredColumns(
-      message,
-      intent,
-      parsedQuery,
-      null,
-      chatDocument.dataSummary
-    );
-    requiredColumns = Array.from(new Set([...requiredColumns, ...historyColumns]));
-    console.log(`📊 Extracted ${requiredColumns.length} required columns for optimized loading`);
+
+    if (isDataOpThatModifiesSchema) {
+      requiredColumns = [];
+      console.log('📊 Data op that modifies schema detected; loading full data to preserve all columns');
+    } else {
+      const historyColumns = extractColumnsFromHistory(processingChatHistory || [], chatDocument.dataSummary);
+      requiredColumns = extractRequiredColumns(
+        message,
+        intent,
+        parsedQuery,
+        null,
+        chatDocument.dataSummary
+      );
+      requiredColumns = Array.from(new Set([...requiredColumns, ...historyColumns]));
+      console.log(`📊 Extracted ${requiredColumns.length} required columns for optimized loading`);
+    }
   } catch (error) {
     console.warn('⚠️ Failed to extract required columns, loading all data:', error);
   }
   
   // Check cache before loading data
-  // BUT: Skip cache for aggregation queries with category filters (data operations)
+  // Skip cache for data operations that modify schema (must use fresh full data)
   const isAggregationWithCategory = /\b(aggregated?\s+(?:column\s+name\s+)?value|aggregate|total|sum)\s+(?:for|of|in)\s+(?:the\s+)?(?:column\s+)?(?:category\s+)?[\w\s]+/i.test(message) ||
                                      /\b(?:what\s+is\s+)?(?:the\s+)?(?:aggregated?\s+(?:column\s+name\s+)?value|total|sum)\s+(?:for|of|in)\s+(?:the\s+)?(?:column\s+)?(?:category\s+)?[\w\s]+/i.test(message) ||
                                      /\b(?:aggregated?\s+value|aggregate|total|sum)\s+(?:for|of|in)\s+(?:the\s+)?column\s+category\s+[\w\s]+/i.test(message);
 
   let cachedResult: ProcessChatMessageResult | null = null;
-  if (!isAggregationWithCategory) {
+  if (!isAggregationWithCategory && !isDataOpThatModifiesSchema) {
     cachedResult = queryCache.get<ProcessChatMessageResult>(
       sessionId,
       message,
@@ -100,8 +116,8 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       console.log(`✅ Returning cached result`);
       return cachedResult;
     }
-  } else {
-    console.log(`🔄 Skipping cache for aggregation query (data operation)`);
+  } else if (isAggregationWithCategory || isDataOpThatModifiesSchema) {
+    console.log(`🔄 Skipping cache for aggregation or schema-modifying data op`);
   }
   
   // Load the latest data (including any modifications from data operations)

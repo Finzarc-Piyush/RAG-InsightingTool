@@ -4,7 +4,7 @@ import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Database, BarChart3, Settings, Info, Sparkles, Loader2, ChevronUp, ChevronDown, FileText } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Database, BarChart3, Settings, Info, Sparkles, Loader2, ChevronUp, ChevronDown, FileText, Zap, ListChecks } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -19,12 +19,23 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { getUserEmail } from '@/utils/userStorage';
 import { useToast } from '@/hooks/use-toast';
 import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
 import { FilterDataModal } from '@/components/FilterDataModal';
 import { FilterCondition } from '@/components/ColumnFilterDialog';
 import { debounce } from '@/lib/debounce';
+import { useQuery } from '@tanstack/react-query';
+import { automationsApi } from '@/lib/api';
+import { AutomationsModal } from '@/pages/Home/Components/AutomationsModal';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -52,6 +63,8 @@ interface ChatInterfaceProps {
   isReplacingAnalysis?: boolean; // Whether we're replacing the current analysis
   isLargeFileLoading?: boolean; // Whether a large file is being loaded
   onOpenDataSummary?: () => void; // Callback to open data summary modal
+  onRunAutomationComplete?: () => void; // Callback after running an automation (e.g. refetch session)
+  onAppendMessages?: (messages: Message[]) => void; // Append messages (e.g. automation steps) to chat for engagement
 }
 
 // Dynamic suggestions based on conversation context
@@ -121,8 +134,15 @@ export function ChatInterface({
   isReplacingAnalysis = false,
   isLargeFileLoading = false,
   onOpenDataSummary,
+  onRunAutomationComplete,
+  onAppendMessages,
 }: ChatInterfaceProps) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
+  const [automationsModalOpen, setAutomationsModalOpen] = useState(false);
+  const [runAutomationLoading, setRunAutomationLoading] = useState(false);
+  const [dashboardNameModalOpen, setDashboardNameModalOpen] = useState(false);
+  const [automationIdPending, setAutomationIdPending] = useState<string | null>(null);
+  const [newDashboardNameInput, setNewDashboardNameInput] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('all');
   const [showScrollToTop, setShowScrollToTop] = useState(false);
@@ -147,6 +167,163 @@ export function ChatInterface({
   });
 
   const currentUserEmail = getUserEmail()?.toLowerCase();
+
+  const { data: automationsData } = useQuery({
+    queryKey: ['automations'],
+    queryFn: () => automationsApi.list(),
+    enabled: !!sessionId,
+  });
+  const automations = automationsData?.automations ?? [];
+
+  const hasDashboardSteps = (automation: { steps?: { type: string }[] } | undefined) =>
+    automation?.steps?.some((s) => s.type === 'create_dashboard' || s.type === 'add_charts') ?? false;
+
+  const runAutomationStreamWithOptions = useCallback(
+    async (automationId: string, newDashboardName?: string) => {
+      if (!sessionId || !onAppendMessages) return;
+      const automation = automations.find((a) => a.id === automationId);
+      const automationName = automation?.name ?? 'Automation';
+      setRunAutomationLoading(true);
+      try {
+        onAppendMessages([
+          { role: 'user', content: `Applying automation: **${automationName}**`, timestamp: Date.now() },
+        ]);
+        await automationsApi.runStream(
+          automationId,
+          sessionId,
+          {
+            onStepUserMessage: (data) => {
+              onAppendMessages([
+                { role: 'user', content: data.content, timestamp: Date.now() },
+              ]);
+            },
+            onStepAssistantResponse: (data) => {
+              onAppendMessages([
+                {
+                  role: 'assistant',
+                  content: data.content,
+                  timestamp: Date.now(),
+                  charts: data.charts ?? [],
+                  insights: data.insights,
+                },
+              ]);
+            },
+            onStep: (data) => {
+              const content = `**Step ${data.stepIndex}/${data.stepsTotal}** (${data.type}): ${data.message}`;
+              onAppendMessages([
+                {
+                  role: 'assistant',
+                  content,
+                  timestamp: Date.now(),
+                  charts: data.charts ?? [],
+                },
+              ]);
+            },
+            onDone: (data) => {
+              setRunAutomationLoading(false);
+              onRunAutomationComplete?.();
+              if (data.success) {
+                toast({
+                  title: 'Automation complete',
+                  description: `${data.automationName}: ${data.stepsRun}/${data.stepsTotal} steps run.`,
+                });
+              } else {
+                toast({
+                  title: 'Automation failed',
+                  description: data.error || 'One or more steps failed.',
+                  variant: 'destructive',
+                });
+              }
+            },
+            onError: (message) => {
+              setRunAutomationLoading(false);
+              toast({
+                title: 'Error',
+                description: message || 'Failed to run automation',
+                variant: 'destructive',
+              });
+            },
+          },
+          newDashboardName?.trim() ? { newDashboardName: newDashboardName.trim() } : undefined
+        );
+      } catch (err: any) {
+        setRunAutomationLoading(false);
+        toast({
+          title: 'Error',
+          description: err?.message || 'Failed to run automation',
+          variant: 'destructive',
+        });
+      }
+    },
+    [sessionId, onAppendMessages, automations, onRunAutomationComplete, toast]
+  );
+
+  const handleRunAutomation = async (automationId: string) => {
+    if (!sessionId) return;
+    const automationFromList = automations.find((a) => a.id === automationId);
+    const automationName = automationFromList?.name ?? 'Automation';
+
+    // When automation has dashboard steps, always show "Create a new dashboard" modal so user can enter a name.
+    // Fetch automation by id to ensure we have steps (list cache might be stale or omit steps).
+    if (onAppendMessages) {
+      let automation = automationFromList;
+      if (!automation?.steps?.length) {
+        try {
+          automation = await automationsApi.get(automationId);
+        } catch (_) {
+          automation = automationFromList;
+        }
+      }
+      if (hasDashboardSteps(automation)) {
+        const firstCreateStep = automation?.steps?.find((s: any) => s.type === 'create_dashboard');
+        setAutomationIdPending(automationId);
+        setNewDashboardNameInput(firstCreateStep?.name ?? 'New Dashboard');
+        setDashboardNameModalOpen(true);
+        return;
+      }
+      await runAutomationStreamWithOptions(automationId);
+      return;
+    }
+
+    setRunAutomationLoading(true);
+    try {
+      const result = await automationsApi.run(automationId, sessionId);
+      if (result.success) {
+        toast({
+          title: 'Automation complete',
+          description: `${result.automationName}: ${result.stepsRun}/${result.stepsTotal} steps run.`,
+        });
+        onRunAutomationComplete?.();
+      } else {
+        toast({
+          title: 'Automation failed',
+          description: result.error || 'One or more steps failed.',
+          variant: 'destructive',
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Error',
+        description: err?.message || 'Failed to run automation',
+        variant: 'destructive',
+      });
+    } finally {
+      setRunAutomationLoading(false);
+    }
+  };
+
+  const handleDashboardNameModalApply = useCallback(() => {
+    if (!automationIdPending) return;
+    const name = newDashboardNameInput.trim();
+    if (!name) {
+      toast({ title: 'Enter a dashboard name', variant: 'destructive' });
+      return;
+    }
+    setDashboardNameModalOpen(false);
+    runAutomationStreamWithOptions(automationIdPending, name);
+    setAutomationIdPending(null);
+    setNewDashboardNameInput('');
+  }, [automationIdPending, newDashboardNameInput, runAutomationStreamWithOptions, toast]);
 
   // Get all collaborators: from prop, or extract from messages, and always include current user
   const collaborators = useMemo(() => {
@@ -577,10 +754,10 @@ export function ChatInterface({
         </div>
       )}
       
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main Content Area – min-h-0 so messages area can shrink and scroll */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Messages Area */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto">
+        <div ref={messagesContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-behavior-contain">
         <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
           {/* Header with Filter dropdown */}
           {(sessionId || messages.length > 0) && collaborators.length > 0 && (
@@ -742,10 +919,63 @@ export function ChatInterface({
                 </Select>
               </div>
             )}
-            {/* Filter Data Dropdown - Only show in dataOps mode */}
+            {/* Run automation / Manage automations - when session has data. modal={false} avoids aria-hidden on #root (a11y). */}
+            {sessionId && (
+              <div className="flex-shrink-0">
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={runAutomationLoading}
+                      className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl"
+                    >
+                      {runAutomationLoading ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin text-gray-600" />
+                      ) : (
+                        <Zap className="w-4 h-4 mr-2 text-gray-600" />
+                      )}
+                      <span>Automations</span>
+                      <ChevronDown className="w-4 h-4 ml-2 text-gray-600" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="top" align="start" className="w-64">
+                    {automations.length === 0 ? (
+                      <DropdownMenuItem disabled className="text-muted-foreground">
+                        No automations saved
+                      </DropdownMenuItem>
+                    ) : (
+                      automations.map((a) => (
+                        <DropdownMenuItem
+                          key={a.id}
+                          onClick={() => handleRunAutomation(a.id)}
+                          disabled={runAutomationLoading}
+                        >
+                          <Zap className="w-4 h-4 mr-2" />
+                          <span className="truncate">{a.name}</span>
+                          {a.steps?.length > 0 && (
+                            <span className="ml-2 text-xs text-muted-foreground">({a.steps.length} steps)</span>
+                          )}
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        // Defer opening modal so the dropdown closes first; avoids focus/portal conflicts that freeze the UI when closing the modal.
+                        requestAnimationFrame(() => setAutomationsModalOpen(true));
+                      }}
+                    >
+                      <ListChecks className="w-4 h-4 mr-2" />
+                      Manage automations
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+            {/* Filter Data Dropdown - Only show in dataOps mode. modal={false} avoids aria-hidden on #root (a11y). */}
             {mode === 'dataOps' && columns && columns.length > 0 && (
               <div className="flex-shrink-0">
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
@@ -896,6 +1126,65 @@ export function ChatInterface({
           onApply={handleFilterApply}
         />
       )}
+
+      {/* New dashboard name modal - when applying automation that creates a dashboard */}
+      <Dialog open={dashboardNameModalOpen} onOpenChange={setDashboardNameModalOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>Create a new dashboard</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This automation will create a dashboard and add charts. Enter a name for the new dashboard.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="new-dashboard-name">Dashboard name</Label>
+            <Input
+              id="new-dashboard-name"
+              placeholder="e.g. My Report"
+              value={newDashboardNameInput}
+              onChange={(e) => setNewDashboardNameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleDashboardNameModalApply();
+                }
+              }}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDashboardNameModalOpen(false);
+                setAutomationIdPending(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleDashboardNameModalApply}
+              disabled={!newDashboardNameInput.trim() || runAutomationLoading}
+            >
+              {runAutomationLoading ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
+              Create & apply automation
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Automations Modal - list, create, edit automations; pre-fill steps from current chat */}
+      <AutomationsModal
+        open={automationsModalOpen}
+        onOpenChange={setAutomationsModalOpen}
+        chatMessages={messages}
+      />
     </div>
   );
 }

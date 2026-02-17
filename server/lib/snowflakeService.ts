@@ -145,10 +145,11 @@ function rowToRecord(row: any, columns: string[]): Record<string, any> | null {
 
 function executeAsync(
   connection: snowflake.Connection,
-  sqlText: string
+  sqlText: string,
+  binds?: any[]
 ): Promise<Record<string, any>[]> {
   return new Promise((resolve, reject) => {
-    connection.execute({
+    const opts: snowflake.ExecuteOptions = {
       sqlText,
       complete: (err: Error | undefined, stmt: snowflake.RowStatement, rows: any[] | undefined) => {
         if (err) {
@@ -164,7 +165,11 @@ function executeAsync(
         }
         resolve(result);
       },
-    });
+    };
+    if (binds && binds.length > 0) {
+      (opts as any).binds = binds;
+    }
+    connection.execute(opts);
   });
 }
 
@@ -271,6 +276,24 @@ async function getOrCreateConnection(config: SnowflakeConnectionConfig): Promise
   sharedConnection = connection;
   sharedConnectionConfig = key;
   return connection;
+}
+
+/**
+ * Execute a parameterized query (SQL with ? placeholders and a params array).
+ * Uses the shared Snowflake connection. For use by query executor when running plans against Snowflake.
+ */
+export async function executeParameterizedQuery(
+  sqlText: string,
+  params: any[] = []
+): Promise<Record<string, any>[]> {
+  const fullConfig = getConnectionOptions(undefined);
+  validateConnectionConfig(fullConfig);
+  const connection = await getOrCreateConnection({
+    ...fullConfig,
+    database: '',
+    schema: '',
+  });
+  return executeAsync(connection, sqlText, params);
 }
 
 /**

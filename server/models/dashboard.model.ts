@@ -5,6 +5,23 @@
 import { ChartSpec, Dashboard } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 
+/** Max data points per chart when storing in Cosmos to avoid "Request size is too large" (2MB document limit) */
+const MAX_DASHBOARD_CHART_POINTS = 2000;
+
+/**
+ * Returns a copy of the chart with data trimmed/downsampled so the dashboard document stays under Cosmos size limit.
+ */
+function trimChartDataForCosmos(chart: ChartSpec): ChartSpec {
+  const data = chart.data;
+  if (!data || !Array.isArray(data) || data.length <= MAX_DASHBOARD_CHART_POINTS) {
+    return { ...chart };
+  }
+  const step = Math.ceil(data.length / MAX_DASHBOARD_CHART_POINTS);
+  const trimmed = data.filter((_: any, i: number) => i % step === 0).slice(0, MAX_DASHBOARD_CHART_POINTS);
+  console.log(`[dashboard] Trimming chart "${chart.title}" data: ${data.length} → ${trimmed.length} points for Cosmos`);
+  return { ...chart, data: trimmed };
+}
+
 /**
  * Create a new dashboard
  */
@@ -27,22 +44,25 @@ export const createDashboard = async (
   
   const timestamp = Date.now();
   const id = `${name.replace(/[^a-zA-Z0-9]/g, '_')}_${timestamp}`;
-  
+
+  // Trim chart data so dashboard document stays under Cosmos 2MB limit
+  const chartsToStore = charts.map(trimChartDataForCosmos);
+
   // Create default sheet with charts
   const defaultSheet = {
     id: 'default',
     name: 'Overview',
-    charts,
+    charts: chartsToStore,
     order: 0,
   };
-  
+
   const dashboard: Dashboard = {
     id,
     username,
     name,
     createdAt: timestamp,
     updatedAt: timestamp,
-    charts, // Keep for backward compatibility
+    charts: chartsToStore, // Keep for backward compatibility
     sheets: [defaultSheet],
   };
   const { resource } = await dashboardsContainer.items.create(dashboard);
@@ -403,11 +423,13 @@ export const addChartToDashboard = async (
   if (!targetSheet) {
     throw new Error(`Sheet with id ${targetSheetId} not found`);
   }
-  
-  targetSheet.charts.push(chart);
-  
+
+  // Trim chart data so dashboard document stays under Cosmos 2MB limit
+  const chartToStore = trimChartDataForCosmos(chart);
+  targetSheet.charts.push(chartToStore);
+
   // Also update the legacy charts array for backward compatibility
-  dashboard.charts.push(chart);
+  dashboard.charts.push(chartToStore);
   
   // Use the dashboard's owner username for the partition key when updating
   return updateDashboard(dashboard);

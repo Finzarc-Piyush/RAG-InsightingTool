@@ -3,7 +3,7 @@
  * Handles streaming chat operations with SSE
  */
 import { Message, ThinkingStep } from "../../shared/schema.js";
-import { answerQuestion } from "../../lib/dataAnalyzer.js";
+import { answerQuestion, analyzeUpload } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
 import { 
   getChatBySessionIdForUser, 
@@ -21,6 +21,10 @@ import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
 import { processStreamDataOperation } from "../dataOps/dataOpsStream.service.js";
 import { Response } from "express";
+import { planQueryWithAI, buildDatasetProfile } from "../../lib/queryPlanner.js";
+import { executeQueryPlan } from "../../lib/queryExecutor.js";
+import { explainQueryResultWithAI } from "../../lib/queryExplainer.js";
+import type { QueryResult } from "../../shared/queryTypes.js";
 
 /** Returns true if the message is a clear request for data summary (same patterns as data-ops summary intent). */
 function isDataSummaryRequest(message: string): boolean {
@@ -30,6 +34,53 @@ function isDataSummaryRequest(message: string): boolean {
     lower.includes('summary of data') ||
     !!lower.match(/(?:give me|show me|display|view|see)\s+(?:the\s+)?(?:data\s+)?summary/i)
   );
+}
+
+/**
+ * Returns true if the user is asking for a chart/visualization.
+ * When true, we use the legacy path (answerQuestion) so correlation charts, bar plots, etc. are generated.
+ */
+function wantsChartResponse(message: string, recentMessages: Message[]): boolean {
+  const lower = (message || '').toLowerCase().trim();
+  const chartKeywords = /\b(chart|plot|graph|visuali(z|s)e|visualization|bar\s*(chart|plot)?|scatter|correlation\s*(chart|plot|graph)?|create\s*(a\s*)?chart|draw\s*(a\s*)?(chart|plot)|show\s*(me\s*)?(a\s*)?chart|trend\s*line|trendline)\b/i;
+  if (chartKeywords.test(lower)) {
+    return true;
+  }
+  const shortAffirmative = /^(yes|yeah|yep|sure|ok|okay|please|do it|go ahead|create it|show it|draw it)$/i.test(lower.trim());
+  if (shortAffirmative && recentMessages.length > 0) {
+    const lastAssistant = [...recentMessages].reverse().find(m => m.role === 'assistant');
+    const lastContent = (lastAssistant?.content || '').toLowerCase();
+    const assistantOfferedChart = /would you like me to create a chart|create a chart to visualize|chart to visualize|visualize these|create a (bar|scatter|correlation)/i.test(lastContent);
+    if (assistantOfferedChart) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns true if the user is clearly asking to create *all* visualizations/charts,
+ * e.g. "yes create all the visualizations", "create all charts", etc.
+ * We use this to trigger a strong fallback that actually generates charts from the dataset
+ * when the agent returns an answer without any chart specs.
+ */
+function isGlobalVisualizationRequest(message: string): boolean {
+  const lower = (message || "").toLowerCase().trim();
+  if (!lower) return false;
+
+  // Common patterns we want to catch:
+  // - "yes create all the visualization(s)"
+  // - "create all the charts"
+  // - "create all charts/visualizations"
+  // - "generate all visualizations"
+  const patterns: RegExp[] = [
+    /\b(create|generate|build|make)\s+all\s+(the\s+)?visuali(z|s)ations?\b/i,
+    /\b(create|generate|build|make)\s+all\s+(the\s+)?charts?\b/i,
+    /\ball\s+the\s+visuali(z|s)ations?\b/i,
+    /\ball\s+the\s+charts?\b/i,
+  ];
+
+  return patterns.some((re) => re.test(lower));
 }
 
 export interface ProcessStreamChatParams {
@@ -118,12 +169,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    console.log('✅ Chat document found, loading latest data...');
-    
-    // Load the latest data (including any modifications from data operations)
-    // This ensures that data operations performed by any user are reflected in analysis
-    const latestData = await loadLatestData(chatDocument);
-    console.log(`✅ Loaded ${latestData.length} rows of data for analysis`);
+    console.log('✅ Chat document found, preparing analysis context...');
+    const datasetProfile = buildDatasetProfile(chatDocument);
+    const dataSummary = chatDocument.dataSummary;
     
     // Get chat-level insights
     const chatLevelInsights = chatDocument.insights && Array.isArray(chatDocument.insights) && chatDocument.insights.length > 0
@@ -164,15 +212,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         : 'No columns explicitly mentioned',
     });
 
-    // Analyze chat message with AI using extracted columns
-    onThinkingStep({
-      step: 'Analyzing user intent',
-      status: 'active',
-      timestamp: Date.now(),
-    });
-
+    // Analyze chat message with AI using extracted columns (for logging/context only)
     let chatAnalysis;
     try {
+      onThinkingStep({
+        step: 'Analyzing user intent',
+        status: 'active',
+        timestamp: Date.now(),
+      });
+      
       chatAnalysis = await analyzeChatWithColumns(
         message,
         extractedColumns,
@@ -183,7 +231,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       console.log(`   User Intent: ${chatAnalysis.userIntent}`);
       console.log(`   Relevant Columns:`, chatAnalysis.relevantColumns);
       console.log(`   Analysis: ${chatAnalysis.analysis.substring(0, 200)}...`);
-
+      
       onThinkingStep({
         step: 'Analyzing user intent',
         status: 'completed',
@@ -198,7 +246,6 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         timestamp: Date.now(),
         details: `Using extracted columns: ${extractedColumns.length > 0 ? extractedColumns.join(', ') : 'none'}`,
       });
-      // Continue with extracted columns even if AI analysis fails
       chatAnalysis = {
         intent: 'general',
         analysis: '',
@@ -206,8 +253,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         userIntent: message,
       };
     }
-
-    // Log summary of column extraction and analysis
+    
     console.log(`📊 Column Extraction & Analysis Summary:`);
     console.log(`   RegEx Extracted: ${extractedColumns.length > 0 ? extractedColumns.join(', ') : 'none'}`);
     console.log(`   AI Identified: ${chatAnalysis.relevantColumns.length > 0 ? chatAnalysis.relevantColumns.join(', ') : 'none'}`);
@@ -272,21 +318,183 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       ? allMessages // Use full history from database for edits
       : allMessages.slice(-15); // Use last 15 messages for new messages
 
-    // Answer the question with streaming using the latest data
-    const result = await answerQuestion(
-      latestData,
-      message,
-      processingChatHistory,
-      chatDocument.dataSummary,
-      sessionId,
-      chatLevelInsights,
-      onThinkingStep,
-      detectedMode
-    );
+    let result: { answer: string; charts?: any[]; insights?: any[]; preview?: any; summary?: any };
+    
+    const useLegacyPathForCharts = detectedMode === 'analysis' && wantsChartResponse(message, processingChatHistory);
+    
+    if (detectedMode === 'analysis' && !useLegacyPathForCharts) {
+      // New two-stage execution path: planner → executor → explainer
+      onThinkingStep({
+        step: 'Planning query against full dataset',
+        status: 'active',
+        timestamp: Date.now(),
+      });
+      
+      const planResult = await planQueryWithAI({
+        userQuestion: message,
+        chatDocument,
+      });
+      
+      if (!planResult.queryPlan || planResult.error) {
+        console.error('⚠️ Query planner failed, falling back to legacy path:', planResult.error);
+        onThinkingStep({
+          step: 'Planning query against full dataset',
+          status: 'error',
+          timestamp: Date.now(),
+          details: planResult.error?.message || 'Planner failed, using legacy analysis',
+        });
+        
+        // Fallback: legacy path using full data
+        const latestData = await loadLatestData(chatDocument);
+        result = await answerQuestion(
+          latestData,
+          message,
+          processingChatHistory,
+          chatDocument.dataSummary,
+          sessionId,
+          chatLevelInsights,
+          onThinkingStep,
+          detectedMode
+        );
+      } else {
+        onThinkingStep({
+          step: 'Planning query against full dataset',
+          status: 'completed',
+          timestamp: Date.now(),
+          details: `Action: ${planResult.queryPlan.action}, requiresFullScan: ${planResult.queryPlan.requiresFullScan ? 'yes' : 'no'}`,
+        });
+        
+        onThinkingStep({
+          step: 'Executing query plan on full dataset',
+          status: 'active',
+          timestamp: Date.now(),
+        });
+        
+        try {
+          const queryResult: QueryResult = await executeQueryPlan({
+            chatDoc: chatDocument,
+            queryPlan: planResult.queryPlan,
+          });
+          
+          onThinkingStep({
+            step: 'Executing query plan on full dataset',
+            status: 'completed',
+            timestamp: Date.now(),
+            details: `Returned ${queryResult.meta.rowCount} rows (${queryResult.meta.columns.join(', ')})`,
+          });
+          
+          onThinkingStep({
+            step: 'Generating explanation from query result',
+            status: 'active',
+            timestamp: Date.now(),
+          });
+          
+          const explainResult = await explainQueryResultWithAI({
+            userQuestion: message,
+            queryResult,
+            datasetProfile,
+            dataSummary,
+            chatInsights: chatLevelInsights,
+          });
+          
+          onThinkingStep({
+            step: 'Generating explanation from query result',
+            status: 'completed',
+            timestamp: Date.now(),
+          });
+          
+          // Use per-response insights so the user gets insight about what they asked for each analysis question
+          result = {
+            answer: explainResult.explanation,
+            charts: [],
+            insights: explainResult.insights && explainResult.insights.length > 0 ? explainResult.insights : [],
+          };
+        } catch (execError) {
+          console.error('❌ Query execution failed, falling back to legacy path:', execError);
+          onThinkingStep({
+            step: 'Executing query plan on full dataset',
+            status: 'error',
+            timestamp: Date.now(),
+            details: execError instanceof Error ? execError.message : 'Query execution failed',
+          });
+          
+          const latestData = await loadLatestData(chatDocument);
+          result = await answerQuestion(
+            latestData,
+            message,
+            processingChatHistory,
+            chatDocument.dataSummary,
+            sessionId,
+            chatLevelInsights,
+            onThinkingStep,
+            detectedMode
+          );
+        }
+      }
+    } else {
+      // Legacy path: dataOps/modeling modes, or analysis when user asked for charts (correlation, bar plot, or "yes" to chart offer)
+      const latestData = await loadLatestData(chatDocument);
+      console.log(`✅ Loaded ${latestData.length} rows of data for analysis (legacy path${useLegacyPathForCharts ? ', chart requested' : ''})`);
+      
+      result = await answerQuestion(
+        latestData,
+        message,
+        processingChatHistory,
+        chatDocument.dataSummary,
+        sessionId,
+        chatLevelInsights,
+        onThinkingStep,
+        detectedMode
+      );
+    }
 
     // Check connection after processing
     if (!checkConnection()) {
       return;
+    }
+
+    // If user asked for charts/visualizations but the agent returned none, generate charts
+    // from the dataset (same as initial upload analysis) so the UI actually shows visualizations.
+    const userAskedForCharts = wantsChartResponse(message, processingChatHistory);
+    const hasNoCharts = !result.charts || !Array.isArray(result.charts) || result.charts.length === 0;
+    if (hasNoCharts && userAskedForCharts) {
+      try {
+        console.log(
+          "🎨 Chart request with no charts returned – generating charts from dataset (columns:",
+          chatDocument.dataSummary?.columns?.map((c) => c.name).join(", ") || "none",
+          ")"
+        );
+        const latestDataForCharts = await loadLatestData(chatDocument);
+        if (!latestDataForCharts || latestDataForCharts.length === 0) {
+          console.warn("⚠️ No data available for chart fallback – skipping chart generation");
+        } else {
+          const { charts: fallbackCharts, insights: fallbackInsights } = await analyzeUpload(
+            latestDataForCharts,
+            chatDocument.dataSummary,
+            chatDocument.fileName,
+            false
+          );
+
+          result = {
+            ...result,
+            charts: fallbackCharts || [],
+            insights:
+              (result.insights && result.insights.length > 0)
+                ? result.insights
+                : (fallbackInsights && fallbackInsights.length > 0
+                    ? fallbackInsights
+                    : chatLevelInsights || []),
+          };
+          console.log(
+            `🎨 Fallback chart generation created ${fallbackCharts?.length || 0} chart(s) (data rows: ${latestDataForCharts.length})`
+          );
+        }
+      } catch (chartFallbackError) {
+        console.error(
+          "⚠️ Failed to generate fallback charts:",
+          chartFallbackError
+        );
+      }
     }
 
     // Enrich charts
@@ -708,13 +916,13 @@ export async function streamChatMessages(sessionId: string, username: string, re
     }
 
     // Clean up on client disconnect (though connection should already be closed)
-    req.on('close', () => {
+    (req as any).on('close', () => {
       // Connection already closed, just log
       console.log('🚫 Client disconnected from SSE (initial analysis stream)');
     });
 
     // Handle errors - only log unexpected errors
-    req.on('error', (error: any) => {
+    (req as any).on('error', (error: any) => {
       // ECONNRESET is expected when clients disconnect normally
       if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
         console.error('SSE connection error:', error);

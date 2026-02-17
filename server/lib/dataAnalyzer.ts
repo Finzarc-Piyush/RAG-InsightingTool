@@ -2,7 +2,7 @@ import { ChartSpec, Insight, DataSummary, Message } from '../shared/schema.js';
 import { openai, MODEL } from './openai.js';
 import { processChartData } from './chartGenerator.js';
 import { optimizeChartData } from './chartDownsampling.js';
-import { analyzeCorrelations } from './correlationAnalyzer.js';
+import { analyzeCorrelations, type CorrelationResult } from './correlationAnalyzer.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { parseUserQuery } from './queryParser.js';
 import { applyQueryTransformations } from './dataTransform.js';
@@ -884,6 +884,7 @@ export async function answerQuestion(
     const correlationPatterns = [
       /\bcorrelation\s+between\s+(.+?)\s+and\s+(.+)/i,
       /\bcorrelation\s+of\s+(.+?)\s+and\s+(.+)/i,
+      /\bcorrelation\s+of\s+(.+?)\s+with\s+(.+)/i,
       /\bcorrelation\s+between\s+(.+?)\s+with\s+(.+)/i,
     ];
     
@@ -1385,6 +1386,13 @@ export async function answerQuestion(
   const wantsAscending = /\bascending|lowest\s+to\s+highest|low\s+to\s+high|smallest\s+to\s+largest|smallest\s+to\s+biggest\b/i.test(question);
   const sortOrder = wantsDescending ? 'descending' : wantsAscending ? 'ascending' : undefined; // Only set if user explicitly requested
 
+  // Helper: format correlation coefficients as a table for the answer
+  const formatCorrelationTable = (targetCol: string, correlations: CorrelationResult[]): string => {
+    if (!correlations?.length) return '';
+    const rows = correlations.map(c => `| ${c.variable} | ${c.correlation >= 0 ? ' ' : ''}${c.correlation.toFixed(3)} |`).join('\n');
+    return `\n\n**Correlation of ${targetCol} with other variables:**\n\n| Variable | Correlation (r) |\n|----------|------------------|\n${rows}`;
+  };
+
   // CRITICAL: Detect correlation requests even when chart type is specified
   // This handles queries like "bar plot for showing the correlation between X and Y"
   const mentionsCorrelation = /\bcorrelation\s+(between|of|with)\b/i.test(question);
@@ -1455,7 +1463,7 @@ export async function answerQuestion(
       console.log(`   Analyzing correlation: ${targetCol} vs [${comparisonColumns.join(', ')}]`);
       
       // Perform correlation analysis
-      const { charts, insights } = await analyzeCorrelations(
+      const { charts, insights, correlations: correlationValues } = await analyzeCorrelations(
         workingData,
         targetCol,
         comparisonColumns,
@@ -1502,7 +1510,8 @@ export async function answerQuestion(
       
       // Only mention sort order if user explicitly requested it
       const sortOrderNote = sortOrder === 'descending' ? ', sorted in descending order (highest to lowest)' : sortOrder === 'ascending' ? ', sorted in ascending order (lowest to highest)' : '';
-      const answer = `I've analyzed the correlation between ${targetCol} and ${wantsAdstocked ? 'the adstocked variables' : variablesRaw}.${filterNote} The bar chart shows the correlation strength for each variable${sortOrderNote}.`;
+      const tableBlock = formatCorrelationTable(targetCol, correlationValues);
+      const answer = `I've analyzed the correlation between ${targetCol} and ${wantsAdstocked ? 'the adstocked variables' : variablesRaw}.${filterNote} The bar chart shows the correlation strength for each variable${sortOrderNote}.${tableBlock}`;
       
       return withNotes({ answer, charts: enrichedCharts, insights });
     }
@@ -1573,7 +1582,7 @@ export async function answerQuestion(
         const wantsAscending = /\bascending|lowest\s+to\s+highest|low\s+to\s+high\b/i.test(question);
         const sortOrder = wantsDescending ? 'descending' : wantsAscending ? 'ascending' : undefined;
         
-        const { charts, insights } = await analyzeCorrelations(
+        const { charts, insights, correlations: correlationValues } = await analyzeCorrelations(
           workingData,
           yVar,
           [xVar],
@@ -1583,7 +1592,8 @@ export async function answerQuestion(
           undefined // No limit for legacy dataAnalyzer
         );
         const filterNote = correlationFilter === 'positive' ? ' (showing only positive correlations)' : correlationFilter === 'negative' ? ' (showing only negative correlations)' : '';
-        const answer = `I've analyzed the correlation between ${specificCol} and ${targetCol}${filterNote}. The scatter plot is oriented with X = ${xVar} and Y = ${yVar} as requested.`;
+        const rNote = correlationValues?.length ? ` Correlation (r) = ${correlationValues[0].correlation.toFixed(3)}.` : '';
+        const answer = `I've analyzed the correlation between ${specificCol} and ${targetCol}${filterNote}. The scatter plot is oriented with X = ${xVar} and Y = ${yVar} as requested.${rNote}`;
         return withNotes({ answer, charts, insights });
       } else if (targetIsNumeric && !specificIsNumeric) {
         // Categorical vs Numeric: Create bar chart
@@ -1649,7 +1659,7 @@ export async function answerQuestion(
         });
       }
 
-      const { charts, insights } = await analyzeCorrelations(
+      const { charts, insights, correlations: correlationValues } = await analyzeCorrelations(
         workingData,
         targetCol,
         comparisonColumns,
@@ -1701,7 +1711,8 @@ export async function answerQuestion(
         : correlationFilter === 'negative' 
         ? ' I\'ve filtered to show only negative correlations as requested.' 
         : '';
-      const answer = `I've analyzed what affects ${targetCol}.${filterNote} The correlation analysis shows the relationship strength between different variables and ${targetCol}. Scatter plots show the actual relationships, and the bar chart ranks variables by correlation strength.`;
+      const tableBlock = formatCorrelationTable(targetCol, correlationValues);
+      const answer = `I've analyzed what affects ${targetCol}.${filterNote} The correlation analysis shows the relationship strength between different variables and ${targetCol}. Scatter plots show the actual relationships, and the bar chart ranks variables by correlation strength.${tableBlock}`;
 
       return withNotes({ answer, charts: enrichedCharts, insights });
     }
@@ -4157,6 +4168,7 @@ RESPONSE GUIDELINES:
   3. DO NOT just describe "how you would approach it" - EXECUTE and SHOW RESULTS
   4. Present results clearly: list the categories, values, counts, etc. that match the criteria
 - If the question is about the user's data: Analyze it, provide insights with actual values, and generate charts if requested
+- If the user explicitly asks for the correlation of one specific column with another (for example, "correlation of TOTAL with QTY_ORDERED" or "correlation between X and Y"), focus ONLY on that relationship: compute the correlation between those two columns and create a single correlation visualization (a scatter chart of those two variables). Do NOT create additional, unrelated charts or extra analyses for these direct pairwise correlation requests.
 - If the question is general knowledge or conceptual: Answer it comprehensively and helpfully, even if it's not directly about their data
 - If the question requests a chart or visualization: Generate appropriate chart specifications
 - If the question is conversational or exploratory: Engage naturally and provide thoughtful responses

@@ -15,7 +15,7 @@ interface DataPreviewTableProps {
 export function DataPreviewTable({ 
   data, 
   title, 
-  maxRows = 100, 
+  maxRows = 50, 
   sessionId,
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'csv' | 'xlsx' | null>(null);

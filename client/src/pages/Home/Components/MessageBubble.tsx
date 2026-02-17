@@ -461,6 +461,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </>
         )}
 
+        {/* Show Key Insights for every assistant message that has insights (initial analysis + each analysis reply) */}
         {!isUser && message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />

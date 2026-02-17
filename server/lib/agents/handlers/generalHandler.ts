@@ -767,23 +767,41 @@ export class GeneralHandler extends BaseHandler {
     }
     
     if (!targetVariable) {
-      // Try to extract from question patterns like "trends in X", "X over time"
-      const trendMatch = question.match(/\b(?:trends?\s+in|trends?\s+for|analyze\s+trends?\s+in)\s+([a-zA-Z0-9_\s]+?)(?:\s+over\s+time|$)/i);
-      if (trendMatch && trendMatch[1]) {
-        targetVariable = trendMatch[1].trim();
-      } else {
-        // Try "X over time" pattern
-        const overTimeMatch = question.match(/([a-zA-Z0-9_\s]+?)\s+over\s+time/i);
-        if (overTimeMatch && overTimeMatch[1]) {
-          targetVariable = overTimeMatch[1].trim();
+      // Try to extract from question patterns like "trends in X", "X over time", "trendline of X", "plot a trendline of X"
+      const trendlineOfMatch = question.match(/\b(?:plot\s+)?(?:a\s+)?trend\s*line\s+of\s+([a-zA-Z0-9_\s]+?)(?:\s+over\s+time|$)/i);
+      if (trendlineOfMatch && trendlineOfMatch[1]) {
+        targetVariable = trendlineOfMatch[1].trim();
+      }
+      if (!targetVariable) {
+        const trendMatch = question.match(/\b(?:trends?\s+in|trends?\s+for|analyze\s+trends?\s+in)\s+([a-zA-Z0-9_\s]+?)(?:\s+over\s+time|$)/i);
+        if (trendMatch && trendMatch[1]) {
+          targetVariable = trendMatch[1].trim();
+        } else {
+          // Try "X over time" pattern
+          const overTimeMatch = question.match(/([a-zA-Z0-9_\s]+?)\s+over\s+time/i);
+          if (overTimeMatch && overTimeMatch[1]) {
+            targetVariable = overTimeMatch[1].trim();
+          }
         }
       }
     }
     
     // Match target variable to actual column
-    const yColumn = targetVariable 
+    let yColumn = targetVariable 
       ? findMatchingColumn(targetVariable, numericColumns) || findMatchingColumn(targetVariable, allColumns)
       : null;
+    
+    // When user asks for a trendline but variable doesn't match (e.g. "XYZ", placeholder), use a sensible default
+    // so we always return a trendline instead of asking for clarification
+    let usedDefaultYColumn = false;
+    if ((!yColumn || !numericColumns.includes(yColumn)) && numericColumns.length > 0) {
+      const preferred = ['TOTAL', 'total', 'REVENUE', 'revenue', 'VALUE', 'value', 'SALES', 'sales', 'AMOUNT', 'amount'];
+      const defaultY = preferred.find(c => numericColumns.some(n => n.toUpperCase() === c.toUpperCase()))
+        || numericColumns[0];
+      yColumn = defaultY;
+      usedDefaultYColumn = !!targetVariable;
+      console.log(`📈 Trendline: no column matched "${targetVariable || 'variable'}", using default: ${yColumn}`);
+    }
     
     if (!yColumn || !numericColumns.includes(yColumn)) {
       return {
@@ -870,9 +888,14 @@ export class GeneralHandler extends BaseHandler {
     
     const insights = await generateChartInsights(chartSpec, chartData, context.summary, context.chatInsights);
     
-    const answer = y2Column
-      ? `I've created a line chart with ${yColumn} on the left axis and ${y2Column} on the right axis, plotted over ${xColumn}.`
-      : `I've created a trend line showing ${yColumn} over time (${xColumn}).`;
+    let answer: string;
+    if (y2Column) {
+      answer = `I've created a line chart with ${yColumn} on the left axis and ${y2Column} on the right axis, plotted over ${xColumn}.`;
+    } else if (usedDefaultYColumn && targetVariable) {
+      answer = `I've created a trend line showing ${yColumn} over time (${xColumn}). I used **${yColumn}** since "${targetVariable}" isn't a column in your data—ask for another column like ${numericColumns.slice(0, 3).join(', ')} if you'd like.`;
+    } else {
+      answer = `I've created a trend line showing ${yColumn} over time (${xColumn}).`;
+    }
     
     return {
       answer,

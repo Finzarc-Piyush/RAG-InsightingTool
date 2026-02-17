@@ -118,13 +118,14 @@ function filterColumns(
 }
 
 /**
- * Load the latest data for a chat document
- * This function ensures that data operations performed by any user are reflected in analysis
+ * Load the latest data for a chat document.
+ * Data is always stored in blob; Cosmos holds references (blobInfo = original, currentDataBlob = after filter/transform).
+ * Revert clears currentDataBlob so the original blob (blobInfo) is used again.
  * Priority:
  * 1. Chunked storage (if available, with intelligent chunk filtering)
- * 2. currentDataBlob (modified data from data operations)
+ * 2. currentDataBlob (modified data from data operations – filter/transform results)
  * 3. rawData from document (if no blob exists)
- * 4. original blob (if rawData is not available)
+ * 4. blobInfo – original blob (upload or Snowflake import)
  * 5. sampleRows (fallback)
  * 
  * @param chatDocument - The chat document to load data from
@@ -369,4 +370,5 @@ export async function loadDataForColumns(
   
   return loadLatestData(chatDocument, requiredColumns, queryFilters);
 }
+
 

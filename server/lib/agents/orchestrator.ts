@@ -418,6 +418,9 @@ export class AgentOrchestrator {
           this.emitThinkingStep(onThinkingStep, "Checking if I need more details", "active");
           return askClarifyingQuestion(intent, summary);
         }
+      } else if (intent.type === 'chart' && (intent.chartType === 'line' || /\b(?:trend\s*line|trendline|over\s+time)\b/i.test(intent.originalQuestion || intent.customRequest || ''))) {
+        // For trendline/line chart requests, always proceed to handler so we can return a trendline (handler uses default column if variable doesn't match)
+        console.log(`📈 Chart/trendline request detected - proceeding to handler to return trendline`);
       } else if (intent.requiresClarification || intent.confidence < 0.5) {
         console.log(`❓ Low confidence (${intent.confidence.toFixed(2)}) or clarification required, asking for clarification`);
         this.emitThinkingStep(onThinkingStep, "Checking if I need more details", "active");
@@ -425,22 +428,31 @@ export class AgentOrchestrator {
       }
 
       // Step 4: Filter data to only required columns if specified (for efficiency)
-      // This ensures we only work with the columns needed for the query
+      // CRITICAL: Never filter for data ops that modify the dataset (add/create column, etc.) or we will save a subset and drop columns.
+      const isDataOpThatModifiesSchema =
+        /\b(add|create|new)\s+(a\s+)?column\b/i.test(finalQuestion) ||
+        /\b(create|add)\s+column\s+\w+\s+(with|where|=)/i.test(finalQuestion) ||
+        /\b(remove|delete|drop)\s+(the\s+)?column\b/i.test(finalQuestion) ||
+        /\baggregate\s+(by|on)\b/i.test(finalQuestion) ||
+        /\bpivot\b/i.test(finalQuestion) ||
+        /\brename\s+column\b/i.test(finalQuestion) ||
+        /\bnormalize\s+(column|the)\b/i.test(finalQuestion);
+
       let filteredData = data;
-      if (allRequiredColumns.length > 0 && data.length > 0) {
+      if (!isDataOpThatModifiesSchema && allRequiredColumns.length > 0 && data.length > 0) {
         const availableColumns = Object.keys(data[0]);
-        const columnsToKeep = allRequiredColumns.filter(col => 
-          availableColumns.some(availCol => 
+        const columnsToKeep = allRequiredColumns.filter(col =>
+          availableColumns.some(availCol =>
             availCol.toLowerCase().trim() === col.toLowerCase().trim()
           )
         );
-        
+
         if (columnsToKeep.length > 0 && columnsToKeep.length < availableColumns.length) {
           console.log(`📊 Filtering data to ${columnsToKeep.length} required columns: ${columnsToKeep.slice(0, 5).join(', ')}${columnsToKeep.length > 5 ? '...' : ''}`);
           filteredData = data.map(row => {
             const filteredRow: Record<string, any> = {};
             columnsToKeep.forEach(col => {
-              const matchedCol = availableColumns.find(availCol => 
+              const matchedCol = availableColumns.find(availCol =>
                 availCol.toLowerCase().trim() === col.toLowerCase().trim()
               );
               if (matchedCol && row[matchedCol] !== undefined) {
@@ -451,6 +463,8 @@ export class AgentOrchestrator {
           });
           console.log(`✅ Filtered data: ${data.length} rows × ${availableColumns.length} cols → ${filteredData.length} rows × ${columnsToKeep.length} cols`);
         }
+      } else if (isDataOpThatModifiesSchema) {
+        console.log(`📊 Data op that modifies schema: skipping column filter to preserve all columns`);
       }
 
       // Step 5: Retrieve context - RAG removed

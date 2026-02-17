@@ -356,23 +356,24 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     }
   }, [resetTrigger, resetState, loadedSessionData]);
 
-  // Reset initialAnalysisReceived when sessionId changes (new session)
+  // Reset initialAnalysisReceived when sessionId changes (new session) — but NOT when we're loading from list (loadedSessionData), so we don't enable SSE/polling for an already-loaded session and freeze the UI
   useEffect(() => {
-    if (sessionId) {
-      setInitialAnalysisReceived(false); // Allow SSE polling for new session
+    if (sessionId && !loadedSessionData) {
+      setInitialAnalysisReceived(false); // Allow SSE polling for new session (e.g. after upload)
     }
-  }, [sessionId]);
+  }, [sessionId, loadedSessionData]);
 
-  // Check if we already have initial analysis in current messages
+  // When we loaded a session from the list (loadedSessionData), mark initial analysis received immediately so we don't enable SSE/polling and freeze the UI
   useEffect(() => {
-    if (!isLargeFileLoading || initialAnalysisReceived) {
-      return;
+    if (loadedSessionData && sessionId && messages.length > 0) {
+      setInitialAnalysisReceived(true);
     }
+  }, [loadedSessionData, sessionId, messages.length]);
 
-    // Check current messages for initial analysis
+  // Check if we already have initial analysis in current messages (e.g. after upload) — always clear overlay so UI never stays stuck
+  useEffect(() => {
     const hasInitialAnalysis = messages.some(msg => isInitialAnalysisMessage(msg));
-
-    if (hasInitialAnalysis) {
+    if (hasInitialAnalysis && (!initialAnalysisReceived || isLargeFileLoading)) {
       logger.log('✅ Initial analysis found in current messages - clearing loading state');
       setIsLargeFileLoading(false);
       setInitialAnalysisReceived(true);
@@ -392,7 +393,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
 
     logger.log('🔄 Starting polling for initial analysis messages...');
     let pollCount = 0;
-    const MAX_POLLS = 60; // Reduced from 500 to 60 (2 minutes max with exponential backoff)
+    const MAX_POLLS = 500; // Reduced from 500 to 60 (2 minutes max with exponential backoff)
     const INITIAL_POLL_INTERVAL = 2000; // Start with 2 seconds for first 10 attempts
     const BASE_POLL_INTERVAL = 5000; // Then switch to 5 seconds
     const EXPONENTIAL_BACKOFF_MAX = 10000; // Max 10 seconds between polls
@@ -723,6 +724,29 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
           }
         }}
         onOpenDataSummary={() => setShowDataSummaryModal(true)}
+        onAppendMessages={(msgs) => setMessages((prev) => [...prev, ...msgs])}
+        onRunAutomationComplete={async () => {
+          if (!sessionId) return;
+          try {
+            const data = await sessionsApi.getSessionDetails(sessionId);
+            const session = data.session || data;
+            if (session) {
+              if (session.sampleRows?.length) setSampleRows(session.sampleRows);
+              if (session.dataSummary) {
+                setColumns(session.dataSummary.columns?.map((c: any) => c.name) || []);
+                setNumericColumns(session.dataSummary.numericColumns || []);
+                setDateColumns(session.dataSummary.dateColumns || []);
+                setTotalRows(session.dataSummary.rowCount);
+                setTotalColumns(session.dataSummary.columnCount);
+              }
+              if (session.charts) setInitialCharts(session.charts);
+              if (session.insights) setInitialInsights(session.insights);
+              if (session.messages?.length) setMessages(session.messages);
+            }
+          } catch (e) {
+            logger.error('Failed to refresh session after automation', e);
+          }
+        }}
       />
       <ContextModal
         isOpen={showContextModal}

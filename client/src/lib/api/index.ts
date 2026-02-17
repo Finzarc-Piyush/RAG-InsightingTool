@@ -7,6 +7,8 @@ export { sharedAnalysesApi } from "./sharedAnalyses";
 export { sharedDashboardsApi } from "./sharedDashboards";
 export { snowflakeApi } from "./snowflake";
 export type { SnowflakeTableInfo, SnowflakeImportResponse } from "./snowflake";
+export { automationsApi } from "./automations";
+export type { RunAutomationResult } from "./automations";
 export { streamChatRequest, streamDataOpsChatRequest, downloadModifiedDataset } from "./chat";
 export type { StreamChatCallbacks, StreamDataOpsCallbacks, DataOpsResponse } from "./chat";
 

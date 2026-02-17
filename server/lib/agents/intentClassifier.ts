@@ -164,11 +164,12 @@ CLASSIFICATION RULES:
    * Set confidence to 0.8+ for these patterns
    * Set type to "custom" so GeneralHandler processes them
 4. "chart" - User explicitly requests a chart/visualization (line, bar, scatter, pie, area) WITHOUT correlation/impact language
-   * HIGH PRIORITY: Questions about "trends in X over time", "X over time", "show trends for X", "trend line for X" should be classified as "chart" with chartType "line"
+   * HIGH PRIORITY: Questions about "trends in X over time", "X over time", "show trends for X", "trend line for X", "plot a trendline of X", "trendline of X over time" should be classified as "chart" with chartType "line"
    * CRITICAL: Questions about "seasonal patterns", "seasonal trends", "seasonal variations" should be classified as "chart" with chartType "line"
-   * Examples: "Are there seasonal patterns in X?", "seasonal trends in X", "seasonal patterns in X or Y", "monthly patterns", "yearly patterns", "patterns over time"
+   * Examples: "Are there seasonal patterns in X?", "seasonal trends in X", "seasonal patterns in X or Y", "monthly patterns", "yearly patterns", "patterns over time", "plot a trendline of XYZ over time"
    * These are time-series visualization requests, not correlation analysis
-   * Patterns: "trends in X over time", "X over time", "show trends for X", "trend line for X", "analyze trends in X", "seasonal patterns", "seasonal trends", "monthly patterns", "yearly patterns"
+   * Patterns: "trends in X over time", "X over time", "show trends for X", "trend line for X", "plot a trendline of X", "trendline of X over time", "analyze trends in X", "seasonal patterns", "seasonal trends", "monthly patterns", "yearly patterns"
+   * For "trendline of X" or "plot a trendline of X", set requiresClarification: false so we always return a line chart (use default column if X is not a column name)
    * IMPORTANT: If question mentions "chart" BUT also contains correlation language (impacts, affects, influences, correlation), classify as "correlation" instead
    * IMPORTANT: Questions about "seasonal patterns" or "patterns over time" should be classified as "chart" even if they mention multiple columns
    * CRITICAL: For seasonal pattern questions like "Are there seasonal patterns in X or Y?", extract ALL mentioned variables (X, Y, etc.) into the variables array

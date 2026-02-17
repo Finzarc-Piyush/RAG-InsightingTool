@@ -12,6 +12,7 @@ const COSMOS_CONTAINER_ID = process.env.COSMOS_CONTAINER_ID || "chats";
 const COSMOS_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_DASHBOARDS_CONTAINER_ID || "dashboards";
 const COSMOS_SHARED_ANALYSES_CONTAINER_ID = process.env.COSMOS_SHARED_ANALYSES_CONTAINER_ID || "shared-analyses";
 const COSMOS_SHARED_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_SHARED_DASHBOARDS_CONTAINER_ID || "shared-dashboards";
+const COSMOS_AUTOMATIONS_CONTAINER_ID = process.env.COSMOS_AUTOMATIONS_CONTAINER_ID || "automations";
 
 // Lazy CosmosDB client so we don't throw "Invalid URL" at load time when env is not yet loaded or not set
 let clientInstance: CosmosClient | null = null;
@@ -30,6 +31,7 @@ let container: Container;
 let dashboardsContainer: Container;
 let sharedAnalysesContainer: Container;
 let sharedDashboardsContainer: Container;
+let automationsContainer: Container;
 let initializationInProgress = false;
 let initializationPromise: Promise<void> | null = null;
 
@@ -100,7 +102,7 @@ const createContainerSafely = async (
  */
 export const initializeCosmosDB = async (): Promise<void> => {
   // If already initialized, return immediately
-  if (container && dashboardsContainer && sharedAnalysesContainer && sharedDashboardsContainer) {
+  if (container && dashboardsContainer && sharedAnalysesContainer && sharedDashboardsContainer && automationsContainer) {
     return;
   }
 
@@ -159,6 +161,14 @@ export const initializeCosmosDB = async (): Promise<void> => {
         400 // Minimum throughput: 400 RU/s
       );
       console.log(`✅ Shared dashboards container ready: ${COSMOS_SHARED_DASHBOARDS_CONTAINER_ID}`);
+
+      automationsContainer = await createContainerSafely(
+        database,
+        COSMOS_AUTOMATIONS_CONTAINER_ID,
+        "/username",
+        400
+      );
+      console.log(`✅ Automations container ready: ${COSMOS_AUTOMATIONS_CONTAINER_ID}`);
 
       console.log("✅ CosmosDB initialized successfully");
     } catch (error) {
@@ -354,6 +364,38 @@ export const waitForSharedDashboardsContainer = async (
   }
 
   return sharedDashboardsContainer;
+};
+
+/**
+ * Wait for automations container to be initialized
+ */
+export const waitForAutomationsContainer = async (
+  maxRetries: number = 60,
+  retryDelay: number = 500
+): Promise<Container> => {
+  if (!automationsContainer) {
+    try {
+      await initializeCosmosDB();
+    } catch (error) {
+      console.warn("⚠️ Automations container init failed, will retry:", error);
+    }
+  }
+
+  let retries = 0;
+  while (!automationsContainer && retries < maxRetries) {
+    await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    if (retries % 5 === 0 && !automationsContainer) {
+      try {
+        await initializeCosmosDB();
+      } catch (_) {}
+    }
+    retries++;
+  }
+
+  if (!automationsContainer) {
+    throw new Error("CosmosDB automations container not initialized.");
+  }
+  return automationsContainer;
 };
 
 /**

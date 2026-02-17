@@ -4,11 +4,9 @@
  */
 import { Message, DataSummary } from '../../shared/schema.js';
 import { removeNulls, getDataPreview, getDataSummary, convertDataType, createDerivedColumn, trainMLModel, aggregateData, createPivotTable, identifyOutliers, treatOutliers } from './pythonService.js';
-import { saveModifiedData } from './dataPersistence.js';
+import { saveModifiedData, revertToOriginalData } from './dataPersistence.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { openai } from '../openai.js';
-import { getFileFromBlob } from '../blobStorage.js';
-import { parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
 
 /**
  * Identify if a column is an ID column (identifier field)
@@ -3403,8 +3401,8 @@ export async function executeDataOperation(
   preview?: Record<string, any>[];
   summary?: any[];
   saved?: boolean;
-  // For operations like aggregate/pivot that only return a table,
-  // the table will be included in "data" and "saved" will be false.
+  requiresClarification?: boolean;
+  clarificationMessage?: string;
 }> {
   console.log(`🔍 executeDataOperation called with intent:`, {
     operation: intent.operation,
@@ -3932,11 +3930,32 @@ export async function executeDataOperation(
           answer: errorMessage
         };
       }
+      // SAFETY: Never drop existing columns when adding a derived column.
+      // Python often returns only a subset of columns (e.g. expression columns + new column).
+      // Always merge onto the ORIGINAL rows so all original columns stay; only add/overwrite the new column(s).
+      let mergedData: Record<string, any>[];
+      if (Array.isArray(result.data) && result.data.length > 0) {
+        mergedData = data.map((row, idx) => ({
+          ...row,
+          ...(result.data[idx] || {}),
+        }));
+        if (result.data.length !== data.length) {
+          console.warn(
+            'create_derived_column: row count mismatch; merged onto original rows to preserve all columns',
+            { originalRows: data.length, resultRows: result.data.length }
+          );
+        }
+      } else {
+        // No valid result: keep original data and add empty new column to avoid losing columns
+        const newCol = newColumnName!;
+        mergedData = data.map((row) => ({ ...row, [newCol]: null }));
+        console.warn('create_derived_column: Python returned no data; kept all original columns, new column set to null');
+      }
       
-      // Save modified data first
+      // Save modified data first (with all original columns preserved)
       const saveResult = await saveModifiedData(
         sessionId,
-        result.data,
+        mergedData,
         'create_derived_column',
         `Created derived column "${newColumnName}" with expression: ${expression}`,
         sessionDoc
@@ -3958,13 +3977,13 @@ export async function executeDataOperation(
       let answerText = `✅ Successfully created column "${newColumnName}" with expression: ${expression}.`;
       
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, result.data);
+        previewData = await getPreviewFromSavedData(sessionId, mergedData);
         answerText += `\n\nHere's a preview of the updated data:`;
       }
       
       return {
         answer: answerText,
-        data: result.data,
+        data: mergedData,
         preview: previewData,
         saved: true
       };
@@ -5360,8 +5379,9 @@ export async function executeDataOperation(
         sessionDoc
       );
       
-      // Get preview from saved data
+      // Preview for UI only – cap at 50 rows to avoid freezing the client
       const previewData = await getPreviewFromSavedData(sessionId, filteredData);
+      const cappedPreview = Array.isArray(previewData) ? previewData.slice(0, 50) : [];
       
       const answer = `✅ I've filtered the dataset based on your conditions:\n\n` +
         `**Filter conditions:** ${conditionDescriptions}\n` +
@@ -5373,58 +5393,29 @@ export async function executeDataOperation(
       return {
         answer,
         data: filteredData,
-        preview: previewData,
+        preview: cappedPreview,
         saved: saveResult.saved,
       };
     }
 
     case 'revert': {
-      // Load original data from blob
       if (!sessionDoc) {
         return {
           answer: 'Unable to revert: session not found. Please refresh and try again.',
         };
       }
-
       if (!sessionDoc.blobInfo?.blobName) {
         return {
           answer: 'Unable to revert: original data not found. The original file may have been deleted.',
         };
       }
-
       try {
-        // Load original file from blob
-        const blobBuffer = await getFileFromBlob(sessionDoc.blobInfo.blobName);
-        
-        // Parse the file
-        let originalData = await parseFile(blobBuffer, sessionDoc.fileName);
-        
-        if (!originalData || originalData.length === 0) {
-          return {
-            answer: 'Unable to revert: original data file is empty or could not be parsed.',
-          };
-        }
-
-        // Convert "-" to 0 for numeric columns (same as upload processing)
-        const numericColumns = sessionDoc.dataSummary?.numericColumns || [];
-        originalData = convertDashToZeroForNumericColumns(originalData, numericColumns);
-
-        // Save the original data back to session
-        const saveResult = await saveModifiedData(
-          sessionId,
-          originalData,
-          'revert',
-          'Reverted data to original form',
-          sessionDoc
-        );
-
-        // Get preview from saved data
-        const previewData = await getPreviewFromSavedData(sessionId, originalData);
-
+        // Revert by clearing currentDataBlob and refreshing Cosmos metadata; no new blob (original stays in blobInfo)
+        const result = await revertToOriginalData(sessionId, sessionDoc);
         return {
-          answer: `✅ Successfully reverted the data to its original form. The table now has ${originalData.length} rows with the original structure.`,
-          data: originalData,
-          preview: previewData,
+          answer: `✅ Successfully reverted to the original data. The table now has ${result.rowCount} rows with the original structure.`,
+          data: result.preview,
+          preview: result.preview,
           saved: true,
         };
       } catch (error) {

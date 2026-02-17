@@ -1,10 +1,14 @@
 /**
  * Data Persistence Module
- * Handles saving modified data to blob storage and updating CosmosDB
+ *
+ * Data flow (keep in mind):
+ * - Initial data (Snowflake or CSV/Excel upload) is always stored in blob; Cosmos holds blobInfo reference.
+ * - When user filters or transforms data, the result is stored in blob again; Cosmos holds currentDataBlob reference.
+ * - Revert = point "current" back to original: clear currentDataBlob so loadLatestData uses blobInfo (no duplicate blob).
  */
-import { updateProcessedDataBlob } from '../blobStorage.js';
+import { updateProcessedDataBlob, getFileFromBlob } from '../blobStorage.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
-import { createDataSummary } from '../fileParser.js';
+import { createDataSummary, parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
 
 export interface SaveDataResult {
@@ -13,12 +17,111 @@ export interface SaveDataResult {
   rowsAfter: number;
   blobUrl: string;
   blobName: string;
+  saved?: boolean;
 }
 
-// Removed SaveDataOptions - we'll generate preview from rawData instead
+export interface RevertToOriginalResult {
+  reverted: true;
+  rowCount: number;
+  preview: Record<string, any>[];
+}
 
 /**
- * Save modified data to blob storage and update CosmosDB metadata
+ * Revert session to original data without creating a new blob.
+ * Loads original from blobInfo, updates Cosmos only (clear currentDataBlob, refresh summary/sampleRows).
+ * Next loadLatestData will use blobInfo (original blob).
+ */
+export async function revertToOriginalData(
+  sessionId: string,
+  sessionDoc: ChatDocument
+): Promise<RevertToOriginalResult> {
+  if (!sessionDoc.blobInfo?.blobName) {
+    throw new Error('Original data not found. The original file may have been deleted.');
+  }
+
+  const blobBuffer = await getFileFromBlob(sessionDoc.blobInfo.blobName);
+  let originalData: Record<string, any>[];
+
+  try {
+    const parsed = JSON.parse(blobBuffer.toString('utf-8'));
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      originalData = parsed;
+    } else {
+      originalData = await parseFile(blobBuffer, sessionDoc.fileName || 'data.json');
+    }
+  } catch {
+    originalData = await parseFile(blobBuffer, sessionDoc.fileName || 'data.csv');
+  }
+
+  if (!originalData || originalData.length === 0) {
+    throw new Error('Original data file is empty or could not be parsed.');
+  }
+
+  const numericColumns = sessionDoc.dataSummary?.numericColumns || [];
+  originalData = convertDashToZeroForNumericColumns(originalData, numericColumns);
+
+  const doc = { ...sessionDoc };
+  doc.currentDataBlob = undefined;
+  doc.rawData = [];
+  doc.dataSummary = createDataSummary(originalData);
+  doc.dataSummaryStatistics = undefined;
+  doc.columnStatistics = generateColumnStatistics(originalData, doc.dataSummary.numericColumns);
+
+  const SAMPLE_ROWS_CAP = 50;
+  const serializeRow = (row: Record<string, any>): Record<string, any> => {
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (value instanceof Date) {
+        out[key] = value.toISOString();
+      } else if (typeof value === 'string' && value.length > 500) {
+        out[key] = value.slice(0, 500) + (value.length > 500 ? '…' : '');
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  };
+  doc.sampleRows = originalData.slice(0, SAMPLE_ROWS_CAP).map(serializeRow);
+
+  if (!doc.dataVersions) doc.dataVersions = [];
+  doc.dataVersions.push({
+    versionId: `revert_${Date.now()}`,
+    blobName: sessionDoc.blobInfo.blobName,
+    operation: 'revert',
+    description: 'Reverted to original data',
+    timestamp: Date.now(),
+    parameters: { rowCount: originalData.length },
+    rowsAfter: originalData.length,
+  });
+  if (doc.dataVersions.length > 10) {
+    doc.dataVersions = doc.dataVersions.slice(-10);
+  }
+  doc.lastUpdatedAt = Date.now();
+
+  const COSMOS_DOCUMENT_LIMIT_BYTES = 1.9 * 1024 * 1024;
+  let docPayload = JSON.stringify(doc);
+  if (docPayload.length > COSMOS_DOCUMENT_LIMIT_BYTES) {
+    doc.sampleRows = doc.sampleRows.slice(0, 20).map(serializeRow);
+    docPayload = JSON.stringify(doc);
+    if (docPayload.length > COSMOS_DOCUMENT_LIMIT_BYTES) {
+      doc.sampleRows = [];
+    }
+  }
+
+  await updateChatDocument(doc);
+  console.log(`✅ Reverted to original data (${originalData.length} rows). Cosmos updated; no new blob.`);
+
+  const preview = originalData.slice(0, 50).map(serializeRow);
+  return {
+    reverted: true,
+    rowCount: originalData.length,
+    preview,
+  };
+}
+
+/**
+ * Save modified data to blob storage and update CosmosDB metadata.
+ * Filter/transform results are stored in blob; Cosmos holds currentDataBlob reference.
  */
 export async function saveModifiedData(
   sessionId: string,
@@ -73,18 +176,22 @@ export async function saveModifiedData(
     lastUpdated: Date.now(),
   };
 
-  // Update sample rows (first 100)
-  doc.sampleRows = modifiedData.slice(0, 100).map(row => {
-    const serializedRow: Record<string, any> = {};
+  // CosmosDB document limit is 2MB; keep sample small so doc + messages/charts stay under limit
+  const SAMPLE_ROWS_CAP = 50;
+  const serializeRow = (row: Record<string, any>): Record<string, any> => {
+    const out: Record<string, any> = {};
     for (const [key, value] of Object.entries(row)) {
       if (value instanceof Date) {
-        serializedRow[key] = value.toISOString();
+        out[key] = value.toISOString();
+      } else if (typeof value === 'string' && value.length > 500) {
+        out[key] = value.slice(0, 500) + (value.length > 500 ? '…' : '');
       } else {
-        serializedRow[key] = value;
+        out[key] = value;
       }
     }
-    return serializedRow;
-  });
+    return out;
+  };
+  doc.sampleRows = modifiedData.slice(0, SAMPLE_ROWS_CAP).map(serializeRow);
 
   // Validate data before creating summary
   if (!modifiedData || modifiedData.length === 0) {
@@ -101,30 +208,10 @@ export async function saveModifiedData(
   // Update column statistics
   doc.columnStatistics = generateColumnStatistics(modifiedData, doc.dataSummary.numericColumns);
 
-  // Update rawData in document
-  // For large datasets, don't store in CosmosDB (4MB limit)
-  // Only store if dataset is small enough
-  const estimatedSize = JSON.stringify(modifiedData).length;
-  const MAX_DOCUMENT_SIZE = 3 * 1024 * 1024; // 3MB safety margin
-  
-  if (estimatedSize < MAX_DOCUMENT_SIZE && modifiedData.length < 10000) {
-    doc.rawData = modifiedData.map(row => {
-      const serializedRow: Record<string, any> = {};
-      for (const [key, value] of Object.entries(row)) {
-        if (value instanceof Date) {
-          serializedRow[key] = value.toISOString();
-        } else {
-          serializedRow[key] = value;
-        }
-      }
-      return serializedRow;
-    });
-    console.log(`✅ Updated rawData in CosmosDB document (${modifiedData.length} rows)`);
-  } else {
-    // Dataset too large - don't store in CosmosDB, it's already in blob storage
-    console.log(`⚠️ Dataset too large for CosmosDB (${modifiedData.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB). Keeping rawData empty - data is in blob storage.`);
-    doc.rawData = []; // Clear rawData - it's stored in blob
-  }
+  // Never store full rawData in Cosmos when saving from Data Ops: document limit is 2MB
+  // and doc already has messages, charts, etc. Data is in blob; loadLatestData uses blob when rawData is empty.
+  doc.rawData = [];
+  console.log(`📄 Keeping rawData empty in Cosmos (data in blob). Preview from sampleRows (${doc.sampleRows.length} rows).`);
 
   // Add to version history
   if (!doc.dataVersions) {
@@ -159,6 +246,19 @@ export async function saveModifiedData(
   // Update last updated timestamp
   doc.lastUpdatedAt = Date.now();
 
+  // CosmosDB document size limit is 2MB; ensure we don't exceed it
+  const COSMOS_DOCUMENT_LIMIT_BYTES = 1.9 * 1024 * 1024; // 1.9MB to leave headroom
+  let docPayload = JSON.stringify(doc);
+  if (docPayload.length > COSMOS_DOCUMENT_LIMIT_BYTES) {
+    console.warn(`⚠️ Document size ${(docPayload.length / 1024 / 1024).toFixed(2)}MB exceeds limit. Reducing sampleRows.`);
+    doc.sampleRows = doc.sampleRows.slice(0, 20).map(serializeRow);
+    docPayload = JSON.stringify(doc);
+    if (docPayload.length > COSMOS_DOCUMENT_LIMIT_BYTES) {
+      doc.sampleRows = [];
+      console.warn(`⚠️ Document still too large after trimming sampleRows. Saving with empty sampleRows.`);
+    }
+  }
+
   // Update document
   await updateChatDocument(doc);
   console.log(`✅ Updated CosmosDB document with blob reference: version ${newVersion}, blob: ${newBlob.blobName}`);
@@ -169,6 +269,7 @@ export async function saveModifiedData(
     rowsAfter,
     blobUrl: newBlob.blobUrl,
     blobName: newBlob.blobName,
+    saved: true,
   };
 }
 

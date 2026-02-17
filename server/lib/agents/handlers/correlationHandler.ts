@@ -547,6 +547,7 @@ export class CorrelationHandler extends BaseHandler {
       let answer: string = '';
 
       if (isYesNoCorrelationQuestion && filteredComparisonColumns.length === 1) {
+        // Yes/no style question about a specific pair of variables
         const comparedVar = filteredComparisonColumns[0];
         const correlation = correlations.find(c => c.variable === comparedVar);
         
@@ -565,6 +566,38 @@ export class CorrelationHandler extends BaseHandler {
           }
         } else {
           answer = `Yes, we can analyze the correlation between ${comparedVar} and ${targetCol}.`;
+        }
+      } else if (!isYesNoCorrelationQuestion && filteredComparisonColumns.length === 1 && correlations.length > 0 && !wantsAllVariables && !mentionsSistersBrands) {
+        // Direct "correlation between X and Y" style question:
+        // Focus ONLY on that pair, and optionally ask about visualization.
+        const comparedVar = filteredComparisonColumns[0];
+        const correlation = correlations.find(c => c.variable === comparedVar) || correlations[0];
+
+        if (correlation) {
+          const absR = Math.abs(correlation.correlation);
+          let strengthText = 'very weak';
+          if (absR >= 0.6) strengthText = 'strong';
+          else if (absR >= 0.4) strengthText = 'moderate';
+          else if (absR >= 0.2) strengthText = 'weak';
+
+          const direction =
+            correlation.correlation > 0 ? 'positive' : correlation.correlation < 0 ? 'negative' : 'no';
+
+          if (Math.abs(correlation.correlation) < 0.001 || direction === 'no') {
+            answer = `The correlation between ${comparedVar} and ${targetCol} is approximately 0, indicating essentially no linear relationship.`;
+          } else {
+            answer = `The correlation between ${comparedVar} and ${targetCol} is r ≈ ${correlation.correlation.toFixed(2)}, which indicates a ${strengthText} ${direction} relationship.`;
+          }
+
+          if (wantsCharts) {
+            answer += ` I've included a visualization to show this relationship.`;
+          } else {
+            // Default behavior for simple pairwise correlation: only report correlation,
+            // then ASK the user if they want a visualization.
+            answer += ` Would you like me to create a chart to visualize this relationship?`;
+          }
+        } else {
+          answer = `I couldn't compute the correlation between ${comparedVar} and ${targetCol}.`;
         }
       } else {
         // Conversational answer for general correlation questions
@@ -633,11 +666,12 @@ export class CorrelationHandler extends BaseHandler {
         }
       }
 
-      // Only include insights if charts were generated or user explicitly asked
+      // Only include charts/insights if the user explicitly asked for visualizations
       if (!wantsCharts) {
-        insights = []; // Don't show insights if no charts
+        charts = [];
+        insights = [];
       }
-
+      
       return {
         answer,
         charts,
