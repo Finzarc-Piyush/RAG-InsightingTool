@@ -369,6 +369,26 @@ function findMatchingColumn(searchName: string, availableColumns: string[]): str
   return null;
 }
 
+// Preferred numeric column names for "revenue", "sales", "total" etc. (exclude ID-like columns)
+const METRIC_LIKE_PATTERNS = /^(total|revenue|value|sales|amount|qty_ordered|quantity|sum|amount_sum|revenue_sum|total_sum)$/i;
+const ID_LIKE_PATTERNS = /(^|_)(id|order_id|sku|code|key)($|_)/i;
+
+function findMetricColumn(metricHint: string, numericColumns: string[], allColumns: string[]): string | null {
+  const hint = metricHint.toLowerCase().replace(/[\s_-]/g, '');
+  const preferred = numericColumns.filter(col => {
+    const c = col.toLowerCase().replace(/[\s_-]/g, '');
+    if (ID_LIKE_PATTERNS.test(col)) return false;
+    return METRIC_LIKE_PATTERNS.test(col) || c.includes('total') || c.includes('revenue') || c.includes('sales') || c.includes('value') || c.includes('amount');
+  });
+  // Try exact/semantic match first
+  const match = findMatchingColumn(metricHint, allColumns);
+  if (match && numericColumns.includes(match)) return match;
+  // Return first preferred metric column, or first non-ID numeric
+  if (preferred.length > 0) return preferred[0];
+  const nonId = numericColumns.find(col => !ID_LIKE_PATTERNS.test(col));
+  return nonId ?? numericColumns[0] ?? null;
+}
+
 export async function answerQuestion(
   data: Record<string, any>[],
   question: string,
@@ -2509,11 +2529,12 @@ async function handleAggregationWithCategoryDirect(
 function isExplicitChartRequest(question: string): boolean {
   const lower = question.toLowerCase();
   const chartKeywords = [
-    /\b(show|display|create|generate|make|draw|plot|graph)\s+(me\s+)?(a\s+)?(chart|graph|plot|visualization|visual|diagram|figure)/i,
-    /\b(chart|graph|plot|visualization|visual)\s+(of|for|showing|with)/i,
-    /\b(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(bar|line|scatter|pie|area)\s+(chart|graph|plot)/i,
+    /\b(show|display|create|generate|make|draw|plot|graph)\s+(me\s+)?(a\s+)?(chart|graph|plot|visualization|visual|diagram|figure|barplot|barchart|lineplot|piechart|scatterplot|histogram)/i,
+    /\b(chart|graph|plot|visualization|visual|barplot|barchart|lineplot|piechart|scatterplot)\s+(of|for|showing|with)/i,
+    /\b(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(bar|line|scatter|pie|area)\s*(chart|graph|plot)?/i,
     /\b(visualize|visualization|visual)\s+/i,
-    /\b(can you|please)\s+(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(chart|graph|plot)/i,
+    /\b(can you|please)\s+(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(chart|graph|plot|barplot|barchart|lineplot|piechart|scatterplot)/i,
+    /\b(barplot|barchart|lineplot|piechart|scatterplot|histogram)\b/i,
   ];
   
   return chartKeywords.some(pattern => pattern.test(lower));
@@ -2841,11 +2862,11 @@ export async function generateGeneralAnswer(
     return result;
   };
   
-  // Detect simple bar plot requests: "bar plot for status and total" or "bar plot for column status"
+  // Detect simple bar plot requests: "bar plot for status and total", "barplot for Revenue by Category", etc.
   const detectSimpleBarPlot = (q: string): { xColumn: string | null; yColumn: string | null } | null => {
     const ql = q.toLowerCase();
     
-    // Check if user explicitly mentions "bar plot" or "bar chart"
+    // Check if user explicitly mentions "bar plot" or "bar chart" or "barplot"
     const hasBarKeyword = /\b(bar\s+(plot|chart|graph)|barplot|barchart)\b/i.test(q);
     if (!hasBarKeyword) {
       return null;
@@ -2853,8 +2874,8 @@ export async function generateGeneralAnswer(
     
     console.log('🔍 Detecting simple bar plot request...');
     
-    // Pattern 1: "bar plot for [X] and [Y]" or "bar plot for column [X]"
-    const pattern1 = q.match(/\b(?:bar\s+(?:plot|chart|graph))\s+(?:for|of|with)\s+(?:column\s+)?([^\s]+(?:\s+[^\s]+)?)\s+(?:and|with)\s+([^\s]+(?:\s+[^\s]+)?)/i);
+    // Pattern 1: "bar plot for [X] and [Y]" or "bar plot for column [X]" (also barplot/barchart)
+    const pattern1 = q.match(/\b(?:bar\s+(?:plot|chart|graph)|barplot|barchart)\s+(?:for|of|with)\s+(?:column\s+)?([^\s]+(?:\s+[^\s]+)?)\s+(?:and|with)\s+([^\s]+(?:\s+[^\s]+)?)/i);
     if (pattern1) {
       const xRaw = pattern1[1].trim();
       const yRaw = pattern1[2].trim();
@@ -2867,24 +2888,42 @@ export async function generateGeneralAnswer(
       }
     }
     
-    // Pattern 2: "bar plot for [X]" - try to infer Y from context or use a numeric column
-    const pattern2 = q.match(/\b(?:bar\s+(?:plot|chart|graph))\s+(?:for|of|with)\s+(?:column\s+)?([^\s]+(?:\s+[^\s]+)?)/i);
+    // Pattern 2: "barplot for Revenue by Category" => X=Category (grouping), Y=Revenue (metric)
+    const patternBy = q.match(/\b(?:bar\s+(?:plot|chart|graph)|barplot|barchart)\s+(?:for|of|with)\s+(?:column\s+)?([^\s]+(?:\s+[^\s]+)*)\s+by\s+([^\s]+(?:\s+[^\s]+)*)/i);
+    if (patternBy) {
+      const metricRaw = patternBy[1].trim(); // e.g. "Revenue"
+      const categoryRaw = patternBy[2].trim(); // e.g. "Category"
+      const xCol = findMatchingColumn(categoryRaw, availableColumns);
+      const yCol = findMatchingColumn(metricRaw, availableColumns) ?? findMetricColumn(metricRaw, summary.numericColumns, availableColumns);
+      if (xCol && yCol) {
+        console.log(`✅ Detected bar plot (X by Y): X="${xCol}", Y="${yCol}"`);
+        return { xColumn: xCol, yColumn: yCol };
+      }
+    }
+    
+    // Pattern 3: "bar plot for [X]" or "barplot for [X]" - infer Y from context or use a numeric column
+    const pattern2 = q.match(/\b(?:bar\s+(?:plot|chart|graph)|barplot|barchart)\s+(?:for|of|with)\s+(?:column\s+)?([^\s]+(?:\s+[^\s]+)*)/i);
     if (pattern2) {
       const xRaw = pattern2[1].trim();
       const xCol = findMatchingColumn(xRaw, availableColumns);
       
       if (xCol) {
+        // If x is numeric, treat as Y and find a categorical for X (e.g. "barplot for Revenue" with Category in context)
+        if (summary.numericColumns.includes(xCol)) {
+          const yCol = xCol;
+          const categorical = summary.columns.find(c => !summary.numericColumns.includes(c.name))?.name;
+          if (categorical) {
+            console.log(`✅ Detected bar plot: X="${categorical}", Y="${yCol}" (inferred from metric)`);
+            return { xColumn: categorical, yColumn: yCol };
+          }
+        }
         // Try to find a numeric column mentioned in the question or use "total" if it exists
         let yCol: string | null = null;
-        
-        // Check if "total" is mentioned or exists
         if (summary.numericColumns.includes('total')) {
           yCol = 'total';
         } else if (summary.numericColumns.length > 0) {
-          // Use first numeric column as default
           yCol = summary.numericColumns[0];
         }
-        
         if (xCol && yCol) {
           console.log(`✅ Detected bar plot: X="${xCol}", Y="${yCol}" (inferred)`);
           return { xColumn: xCol, yColumn: yCol };
@@ -2892,21 +2931,26 @@ export async function generateGeneralAnswer(
       }
     }
     
-    // Pattern 3: Extract two column names from the question
-    // Look for mentions of "status" and "total" or similar patterns
+    // Pattern 4: Extract column names from the question; prefer metric columns over ID columns for Y
     const columnMentions = availableColumns.filter(col => {
       const colLower = col.toLowerCase();
       return ql.includes(colLower);
     });
     
-    if (columnMentions.length >= 2) {
-      // Find one categorical and one numeric
+    if (columnMentions.length >= 1) {
       const categorical = columnMentions.find(col => !summary.numericColumns.includes(col));
-      const numeric = columnMentions.find(col => summary.numericColumns.includes(col));
-      
+      const numericCandidates = columnMentions.filter(col => summary.numericColumns.includes(col));
+      const numeric = numericCandidates.find(col => !ID_LIKE_PATTERNS.test(col))
+        ?? numericCandidates.find(col => METRIC_LIKE_PATTERNS.test(col))
+        ?? numericCandidates[0];
       if (categorical && numeric) {
         console.log(`✅ Detected bar plot from column mentions: X="${categorical}", Y="${numeric}"`);
         return { xColumn: categorical, yColumn: numeric };
+      }
+      if (categorical && summary.numericColumns.length > 0) {
+        const yCol = findMetricColumn('revenue', summary.numericColumns, availableColumns) ?? summary.numericColumns.find(c => !ID_LIKE_PATTERNS.test(c)) ?? summary.numericColumns[0];
+        console.log(`✅ Detected bar plot (category + inferred metric): X="${categorical}", Y="${yCol}"`);
+        return { xColumn: categorical, yColumn: yCol };
       }
     }
     
@@ -3005,19 +3049,15 @@ export async function generateGeneralAnswer(
       const barData = processChartData(workingData, barSpec);
       console.log(`✅ Bar chart data: ${barData.length} bars`);
       
-      if (barData.length === 0) {
-        return {
-          answer: `I couldn't generate a bar chart. The data might be empty after filtering, or there might be an issue with the columns "${barPlotRequest.xColumn}" and "${barPlotRequest.yColumn}".`
-        };
+      if (barData.length > 0) {
+        const insights = await generateChartInsights(barSpec, barData, summary, chatInsights);
+        return withNotes({
+          answer: `I've created a bar chart showing ${barPlotRequest.yColumn} grouped by ${barPlotRequest.xColumn}.`,
+          charts: [{ ...barSpec, data: barData, keyInsight: insights.keyInsight }],
+          insights: []
+        });
       }
-      
-      const insights = await generateChartInsights(barSpec, barData, summary, chatInsights);
-      
-      return withNotes({
-        answer: `I've created a bar chart showing ${barPlotRequest.yColumn} grouped by ${barPlotRequest.xColumn}.`,
-        charts: [{ ...barSpec, data: barData, keyInsight: insights.keyInsight }],
-        insights: []
-      });
+      console.log('⚠️ Bar chart data empty, falling back to general answer so AI can return correct chart');
     } catch (error) {
       console.error('❌ Error creating bar plot:', error);
       // Fall through to general processing
@@ -4235,11 +4275,18 @@ CRITICAL EXECUTION RULES - EXECUTE IMMEDIATELY, NO CLARIFICATION:
 
 If the question requests a chart or visualization AND NO QUERY RESULTS ARE PROVIDED, generate appropriate chart specifications. Otherwise, provide a helpful answer with ACTUAL RESULTS and VALUES.
 
+🚨 VISUALIZATION REQUESTS - MANDATORY CHART OUTPUT 🚨
+When the user asks for ANY chart, graph, plot, or visualization (e.g. barplot, bar chart, line chart, pie chart, scatter plot, histogram, "revenue by category", "show me a graph of X"), you MUST:
+1. ALWAYS include a non-null "charts" array in your JSON with at least one chart specification.
+2. NEVER respond with only a text breakdown of the data—the system needs chart specs to render the visual. Your "answer" can briefly describe what the chart shows, but "charts" MUST be populated.
+3. Map the request to a chart type: "barplot"/"bar chart"/"revenue by category" → type "bar" with x=categorical column (e.g. Category), y=numeric column (e.g. total/Revenue); "line chart"/"trend" → type "line"; "pie chart" → type "pie"; "scatter" → type "scatter".
+4. Use EXACT column names from AVAILABLE COLUMNS for "x" and "y". For "Revenue by Category": x = category column name, y = revenue/total column name, type = "bar", aggregate = "sum".
+
 CHART GUIDELINES:
 - You can use ANY column (categorical or numeric) for x or y
 - Pie charts: Use categorical column for x, numeric column for y, aggregate "sum" or "count"
   - IMPORTANT: If user explicitly asks for pie chart "across months", "by month", or "for [variable] across [date column]", use the date column for x-axis and set aggregate to "sum"
-- Bar charts: Can use categorical or numeric for x, numeric for y
+- Bar charts: Can use categorical or numeric for x, numeric for y. For "X by Y" (e.g. Revenue by Category): x=Y (category), y=X (metric), aggregate "sum"
 - Line/Area: Typically numeric or date for x, numeric for y
 - Scatter: Numeric for both x and y
 - x and y must be single column names (strings), NOT arrays
@@ -4296,7 +4343,8 @@ CRITICAL CONVERSATION RULES:
 TECHNICAL RULES:
 - Column names (x, y) must be strings, not arrays
 - Never modify correlation values - preserve their original positive/negative signs
-- If the user is just chatting, respond naturally without forcing charts`,
+- If the user is just chatting, respond naturally without forcing charts
+- VISUALIZATION REQUESTS: When the user asks for a chart, graph, plot, barplot, or any visualization (e.g. "create a barplot for Revenue by Category", "show me a graph of X"), you MUST return a non-null "charts" array with at least one object: {"type":"bar"|"line"|"pie"|"scatter"|"area","title":"...","x":"columnName","y":"columnName","aggregate":"sum"|"mean"|"count"|"none"}. Do not respond with only text—always include the chart spec so the UI can render the graph.`,
       },
       {
         role: 'user',

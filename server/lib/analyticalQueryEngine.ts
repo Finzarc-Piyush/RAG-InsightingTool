@@ -102,8 +102,8 @@ export function isAnalyticalQuery(question: string): boolean {
   // Visualization keywords
   const visualizationKeywords = [
     'chart', 'graph', 'plot', 'visualize', 'visualization', 'diagram',
-    'bar chart', 'line chart', 'pie chart', 'scatter plot', 'histogram',
-    'show me a', 'create a chart', 'draw a', 'plot a', 'graph of'
+    'bar chart', 'barplot', 'barchart', 'line chart', 'lineplot', 'pie chart', 'piechart', 'scatter plot', 'scatterplot', 'histogram',
+    'show me a', 'create a chart', 'create a barplot', 'draw a', 'plot a', 'graph of'
   ];
   
   // Check if it's a visualization request

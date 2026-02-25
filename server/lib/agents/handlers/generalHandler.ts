@@ -125,13 +125,14 @@ export class GeneralHandler extends BaseHandler {
   private isExplicitChartRequest(question: string): boolean {
     const lower = question.toLowerCase();
     const chartKeywords = [
-      /\b(show|display|create|generate|make|draw|plot|graph)\s+(me\s+)?(a\s+)?(chart|graph|plot|visualization|visual|diagram|figure)/i,
-      /\b(chart|graph|plot|visualization|visual)\s+(of|for|showing|with)/i,
-      /\b(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(bar|line|scatter|pie|area)\s+(chart|graph|plot)/i,
+      /\b(show|display|create|generate|make|draw|plot|graph)\s+(me\s+)?(a\s+)?(chart|graph|plot|visualization|visual|diagram|figure|barplot|barchart|lineplot|piechart|scatterplot|histogram)/i,
+      /\b(chart|graph|plot|visualization|visual|barplot|barchart|lineplot|piechart|scatterplot)\s+(of|for|showing|with)/i,
+      /\b(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(bar|line|scatter|pie|area)\s*(chart|graph|plot)?/i,
       /\b(visualize|visualization|visual)\s+/i,
-      /\b(can you|please)\s+(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(chart|graph|plot)/i,
+      /\b(can you|please)\s+(show|display|create|generate|make|draw)\s+(me\s+)?(a\s+)?(chart|graph|plot|barplot|barchart|lineplot|piechart|scatterplot)/i,
+      /\b(barplot|barchart|lineplot|piechart|scatterplot|histogram)\b/i,
     ];
-    
+
     return chartKeywords.some(pattern => pattern.test(lower));
   }
 
