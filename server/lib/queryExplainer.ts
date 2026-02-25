@@ -143,3 +143,125 @@ CRITICAL:
   return parseExplanationAndInsights(content);
 }
 
+export interface ExplainStreamCallbacks {
+  onChunk: (token: string) => void;
+  checkConnection?: () => boolean;
+}
+
+/**
+ * Streaming variant: generate explanation token-by-token via Azure OpenAI stream.
+ * Forwards each token via onChunk. Still parses KEY INSIGHTS from accumulated content and returns ExplainResult.
+ */
+export async function explainQueryResultWithAIStream(
+  input: ExplanationModeInput,
+  callbacks: ExplainStreamCallbacks
+): Promise<ExplainResult> {
+  const { userQuestion, queryResult, datasetProfile, dataSummary, chatInsights } =
+    input;
+  const { onChunk, checkConnection } = callbacks;
+
+  const previewRowCount = Math.min(queryResult.rows.length, 50);
+  const previewRows = queryResult.rows.slice(0, previewRowCount);
+
+  const profileSummaryLines: string[] = [];
+  profileSummaryLines.push(
+    `Rows: ${datasetProfile.rowCount}, Columns: ${datasetProfile.columnCount}`
+  );
+  profileSummaryLines.push(
+    `Columns: ${datasetProfile.columns
+      .map((c) => `${c.name} [${c.type}]`)
+      .join(", ")}`
+  );
+  if (datasetProfile.numericColumns.length > 0) {
+    profileSummaryLines.push(
+      `Numeric columns: ${datasetProfile.numericColumns.join(", ")}`
+    );
+  }
+  if (datasetProfile.dateColumns.length > 0) {
+    profileSummaryLines.push(
+      `Date columns: ${datasetProfile.dateColumns.join(", ")}`
+    );
+  }
+
+  const insightsText =
+    chatInsights && chatInsights.length
+      ? chatInsights
+          .slice(0, 5)
+          .map((ins) => `- ${ins.text}`)
+          .join("\n")
+      : "N/A";
+
+  const diagnosticsText = queryResult.meta.diagnostics?.join("\n- ") || "N/A";
+
+  const prompt = `You are a senior data analyst explaining results to a business stakeholder.
+
+USER QUESTION:
+"""
+${userQuestion}
+"""
+
+DATASET PROFILE:
+${profileSummaryLines.join("\n")}
+
+EXISTING INSIGHTS (for context, optional):
+${insightsText}
+
+STRUCTURED QUERY RESULT (compact, aggregated data only):
+- Action: ${queryResult.meta.action}
+- GroupBy: ${queryResult.meta.groupBy?.join(", ") || "none"}
+- Columns: ${queryResult.meta.columns.join(", ")}
+- Row count: ${queryResult.meta.rowCount}
+- Limit: ${queryResult.meta.limit ?? "none"}
+- Diagnostics:
+- ${diagnosticsText}
+
+RESULT ROWS (preview, up to ${previewRowCount} rows):
+${JSON.stringify(previewRows, null, 2)}
+
+TASK:
+1. Provide a clear, concise explanation that directly answers the user's question using ONLY the structured result above.
+2. Do NOT speculate about data that is not present in the result rows.
+3. Highlight the most important numbers, trends, or groups.
+4. If the result is grouped, explain how groups compare.
+5. If thresholds or filters were applied, mention them explicitly if visible from the result.
+6. Keep the explanation focused and business-friendly.
+
+Then, after a blank line, add exactly this line: KEY INSIGHTS:
+Then list 1-3 short, actionable insights (one per line, each starting with "- "). Each insight should be one sentence about what the user asked (e.g. "Top category X accounts for Y% of Z" or "The trend shows a Z% increase over the period").
+
+CRITICAL:
+- Do NOT ask the user questions.
+- Do NOT mention that you only saw partial data – speak confidently based on the result you see.
+- Do NOT output JSON in the main explanation. Only use "KEY INSIGHTS:" and bullet lines for the insights section.`;
+
+  const stream = await openai.chat.completions.create({
+    model: MODEL as string,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a senior analytics copilot. You receive compact aggregated query results and explain them clearly in natural language, then add KEY INSIGHTS: and 1-3 bullet insights.",
+      },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.3,
+    max_tokens: 800,
+    stream: true,
+  });
+
+  let accumulated = "";
+  for await (const chunk of stream) {
+    if (checkConnection && !checkConnection()) {
+      break;
+    }
+    const token = chunk.choices[0]?.delta?.content;
+    if (token) {
+      accumulated += token;
+      onChunk(token);
+    }
+  }
+
+  const content = accumulated.trim();
+  return parseExplanationAndInsights(content);
+}
+

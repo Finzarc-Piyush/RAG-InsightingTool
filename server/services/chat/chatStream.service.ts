@@ -17,14 +17,15 @@ import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.
 import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
+import { getThinkingLabels, streamThinkingIntro } from "../../lib/agents/thinkingNarrator.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
 import { processStreamDataOperation } from "../dataOps/dataOpsStream.service.js";
 import { Response } from "express";
 import { planQueryWithAI, buildDatasetProfile } from "../../lib/queryPlanner.js";
 import { executeQueryPlan } from "../../lib/queryExecutor.js";
-import { explainQueryResultWithAI } from "../../lib/queryExplainer.js";
-import type { QueryResult } from "../../shared/queryTypes.js";
+import { explainQueryResultWithAI, explainQueryResultWithAIStream } from "../../lib/queryExplainer.js";
+import type { QueryResult, QueryPlan } from "../../shared/queryTypes.js";
 
 /** Returns true if the message is a clear request for data summary (same patterns as data-ops summary intent). */
 function isDataSummaryRequest(message: string): boolean {
@@ -56,6 +57,24 @@ function wantsChartResponse(message: string, recentMessages: Message[]): boolean
     }
   }
   return false;
+}
+
+/** Chunk text for simulated streaming (legacy path): small chunks for token-by-token ChatGPT-like appearance. */
+function chunkTextForStreaming(text: string, maxChunkLen = 24): string[] {
+  if (!text || !text.trim()) return [];
+  const words = text.trim().split(/\s+/);
+  const chunks: string[] = [];
+  let current = '';
+  for (const w of words) {
+    if (current.length + w.length + 1 <= maxChunkLen) {
+      current += (current ? ' ' : '') + w;
+    } else {
+      if (current) chunks.push(current);
+      current = w;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 /**
@@ -90,6 +109,36 @@ export interface ProcessStreamChatParams {
   username: string;
   res: Response;
   mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'; // Optional mode override
+}
+
+/** Build human-readable execution plan steps from a QueryPlan for SSE execution_plan event. */
+function buildExecutionPlanSteps(plan: QueryPlan): string[] {
+  const steps: string[] = [];
+  if (plan.filters.length > 0) {
+    steps.push(
+      "Filter: " +
+        plan.filters
+          .map((f) => `${f.column} ${f.operator} ${f.value ?? ""}`)
+          .join(", ")
+    );
+  }
+  if (plan.groupBy.length > 0) {
+    steps.push("Group by " + plan.groupBy.join(", "));
+  }
+  if (plan.aggregations.length > 0) {
+    steps.push(
+      "Aggregate: " +
+        plan.aggregations.map((a) => `${a.type}(${a.column})`).join(", ")
+    );
+  }
+  if (plan.sortBy) {
+    steps.push(`Sort by ${plan.sortBy.column} ${plan.sortBy.direction}`);
+  }
+  if (plan.limit != null && plan.limit > 0) {
+    steps.push(`Limit to ${plan.limit} rows`);
+  }
+  steps.push(`Action: ${plan.action}`);
+  return steps.length > 0 ? steps : ["Execute query plan"];
 }
 
 /**
@@ -180,11 +229,37 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     // Track thinking steps
     const thinkingSteps: ThinkingStep[] = [];
-    
-    // Create callback to emit thinking steps
+
+    // AI-generated thinking labels (no hardcoded step text for known steps)
+    let thinkingLabels: Record<string, { label: string; nextStep?: string }> = {};
+    try {
+      thinkingLabels = await getThinkingLabels(message);
+    } catch (e) {
+      console.warn("Thinking labels failed, using default step names:", e);
+    }
+    // Single tokenized thinking stream: intro first, then steps/code/plan as chunks (one UI block)
+    await streamThinkingIntro(res, message, checkConnection);
+
+    const sendThinkingChunk = (content: string) => {
+      if (content && checkConnection()) sendSSE(res, "thinking_log_chunk", { content });
+    };
+
+    // Emit thinking steps (for compatibility) and append to single thinking log stream
     const onThinkingStep = (step: ThinkingStep) => {
-      thinkingSteps.push(step);
-      sendSSE(res, 'thinking', step);
+      const labelEntry = thinkingLabels[step.step];
+      const stepToSend: ThinkingStep = {
+        ...step,
+        step: labelEntry?.label ?? step.step,
+        details:
+          step.details != null && step.details !== ""
+            ? step.details
+            : labelEntry?.nextStep
+              ? `Next: ${labelEntry.nextStep}`
+              : undefined,
+      };
+      thinkingSteps.push(stepToSend);
+      sendSSE(res, "thinking", stepToSend);
+      sendThinkingChunk("\n\n• " + stepToSend.step + (stepToSend.details ? " — " + stepToSend.details : "") + "\n");
     };
 
     // Check connection before processing
@@ -195,7 +270,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // Extract columns from chat message using RegEx (ONLY place RegEx is used for column extraction)
     const availableColumns = chatDocument.dataSummary.columns.map(c => c.name);
     onThinkingStep({
-      step: 'Extracting columns from message',
+      step: "Extracting columns from message",
       status: 'active',
       timestamp: Date.now(),
     });
@@ -319,9 +394,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       : allMessages.slice(-15); // Use last 15 messages for new messages
 
     let result: { answer: string; charts?: any[]; insights?: any[]; preview?: any; summary?: any };
-    
+    let didEmitMessageStream = false;
+    let didEmitCodeStream = false;
+
     const useLegacyPathForCharts = detectedMode === 'analysis' && wantsChartResponse(message, processingChatHistory);
-    
+
     if (detectedMode === 'analysis' && !useLegacyPathForCharts) {
       // New two-stage execution path: planner → executor → explainer
       onThinkingStep({
@@ -363,47 +440,121 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           timestamp: Date.now(),
           details: `Action: ${planResult.queryPlan.action}, requiresFullScan: ${planResult.queryPlan.requiresFullScan ? 'yes' : 'no'}`,
         });
-        
-        onThinkingStep({
-          step: 'Executing query plan on full dataset',
-          status: 'active',
-          timestamp: Date.now(),
-        });
-        
+
+        if (checkConnection()) {
+          const planSteps = buildExecutionPlanSteps(planResult.queryPlan);
+          sendSSE(res, 'execution_plan', { steps: planSteps });
+          sendThinkingChunk("\n\n**Execution plan:**\n" + planSteps.map((s) => "- " + s).join("\n") + "\n");
+        }
+
+        let lastEmitted = Date.now();
+        const silenceThresholdMs = 2000;
+        let keepAliveSent = false;
+        let keepAliveTimer: NodeJS.Timeout | null = setInterval(() => {
+          if (!checkConnection()) {
+            if (keepAliveTimer) clearInterval(keepAliveTimer);
+            return;
+          }
+          if (!keepAliveSent && Date.now() - lastEmitted > silenceThresholdMs) {
+            sendSSE(res, 'thinking', { step: 'Processing...', status: 'active', timestamp: Date.now() });
+            keepAliveSent = true;
+            lastEmitted = Date.now();
+          }
+        }, 800);
+
         try {
+          onThinkingStep({
+            step: 'Executing query plan on full dataset',
+            status: 'active',
+            timestamp: Date.now(),
+          });
+          lastEmitted = Date.now();
+
+          const execStartMs = Date.now();
           const queryResult: QueryResult = await executeQueryPlan({
             chatDoc: chatDocument,
             queryPlan: planResult.queryPlan,
+            onSqlGenerated: (sql) => {
+              if (!checkConnection()) return;
+              sendSSE(res, 'code_start', { language: 'sql' });
+              sendThinkingChunk("\n\n```sql\n");
+              lastEmitted = Date.now();
+              const lines = sql.split(/\n/);
+              for (const line of lines) {
+                if (!checkConnection()) return;
+                sendSSE(res, 'code_chunk', { content: line + '\n' });
+                sendThinkingChunk(line + '\n');
+              }
+              sendSSE(res, 'code_done', {});
+              sendThinkingChunk("```\n");
+              didEmitCodeStream = true;
+              lastEmitted = Date.now();
+            },
           });
-          
+
+          const executionTimeMs = Date.now() - execStartMs;
+          lastEmitted = Date.now();
+          if (checkConnection()) {
+            sendSSE(res, 'execution_metrics', {
+              rows_returned: queryResult.meta.rowCount,
+              execution_time_ms: executionTimeMs,
+              columns_used: queryResult.meta.columns,
+            });
+            sendThinkingChunk(
+              "\n\n**Metrics:** " +
+                queryResult.meta.rowCount +
+                " rows, " +
+                executionTimeMs +
+                " ms\n"
+            );
+          }
+
           onThinkingStep({
             step: 'Executing query plan on full dataset',
             status: 'completed',
             timestamp: Date.now(),
             details: `Returned ${queryResult.meta.rowCount} rows (${queryResult.meta.columns.join(', ')})`,
           });
-          
+          lastEmitted = Date.now();
+
           onThinkingStep({
             step: 'Generating explanation from query result',
             status: 'active',
             timestamp: Date.now(),
           });
-          
-          const explainResult = await explainQueryResultWithAI({
-            userQuestion: message,
-            queryResult,
-            datasetProfile,
-            dataSummary,
-            chatInsights: chatLevelInsights,
-          });
-          
+          lastEmitted = Date.now();
+
+          const explainResult = await explainQueryResultWithAIStream(
+            {
+              userQuestion: message,
+              queryResult,
+              datasetProfile,
+              dataSummary,
+              chatInsights: chatLevelInsights,
+            },
+            {
+              onChunk: (token) => {
+                if (checkConnection()) {
+                  sendSSE(res, 'message_chunk', { content: token });
+                  lastEmitted = Date.now();
+                }
+              },
+              checkConnection,
+            }
+          );
+
+          if (checkConnection()) {
+            sendSSE(res, 'message_done', {});
+            didEmitMessageStream = true;
+          }
+          lastEmitted = Date.now();
+
           onThinkingStep({
             step: 'Generating explanation from query result',
             status: 'completed',
             timestamp: Date.now(),
           });
-          
-          // Use per-response insights so the user gets insight about what they asked for each analysis question
+
           result = {
             answer: explainResult.explanation,
             charts: [],
@@ -417,7 +568,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             timestamp: Date.now(),
             details: execError instanceof Error ? execError.message : 'Query execution failed',
           });
-          
+
           const latestData = await loadLatestData(chatDocument);
           result = await answerQuestion(
             latestData,
@@ -429,6 +580,18 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             onThinkingStep,
             detectedMode
           );
+        } finally {
+          if (keepAliveTimer) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
+          }
+          // Mark keep-alive "Processing..." as completed so UI doesn't stay in processing state
+          onThinkingStep({
+            step: 'Processing...',
+            status: 'completed',
+            timestamp: Date.now(),
+            details: 'Done',
+          });
         }
       }
     } else {
@@ -617,6 +780,50 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // Check connection before sending response
     if (!checkConnection()) {
       return;
+    }
+
+    // Legacy path: optional "analysis code" snippet (also into single thinking stream)
+    const legacyChartOrCorrelation = (transformedResponse.charts?.length ?? 0) > 0 || /correlation|chart|plot|visuali(z|s)e|graph/i.test(message);
+    if (!didEmitCodeStream && legacyChartOrCorrelation) {
+      if (checkConnection()) {
+        sendSSE(res, 'code_start', { language: 'python' });
+        sendThinkingChunk("\n\n```python\n");
+        const codeLines = [
+          '# Analysis (correlation / charts)',
+          '# Computing correlations and building visualizations',
+          'correlations = df.corr()  # correlation matrix',
+          '# Charts generated from results',
+        ];
+        for (const line of codeLines) {
+          if (!checkConnection()) break;
+          sendSSE(res, 'code_chunk', { content: line + '\n' });
+          sendThinkingChunk(line + '\n');
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        if (checkConnection()) {
+          sendSSE(res, 'code_done', {});
+          sendThinkingChunk("```\n");
+        }
+      }
+    }
+
+    if (checkConnection()) sendSSE(res, "thinking_log_done", {});
+
+    // Legacy path: stream the answer in chunks so the UI shows text appearing like ChatGPT (token-by-token feel)
+    if (!didEmitMessageStream && transformedResponse.answer) {
+      const chunks = chunkTextForStreaming(transformedResponse.answer);
+      const chunkDelayMs = 18;
+      for (let i = 0; i < chunks.length; i++) {
+        if (!checkConnection()) return;
+        const content = i === 0 ? chunks[i] : ' ' + chunks[i];
+        if (!sendSSE(res, 'message_chunk', { content })) return;
+        if (chunkDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, chunkDelayMs));
+        }
+      }
+      if (checkConnection()) {
+        sendSSE(res, 'message_done', {});
+      }
     }
 
     // Send final response with preview/summary for data operations

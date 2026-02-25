@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { dataOpsChatWithAI, dataOpsChatWithAIStream, downloadModifiedDataset } from "../controllers/dataOpsController.js";
+import { dataOpsChatWithAI, dataOpsChatWithAIStream, downloadModifiedDataset, revertDataOps } from "../controllers/dataOpsController.js";
 
 const router = Router();
 

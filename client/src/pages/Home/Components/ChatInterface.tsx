@@ -65,6 +65,15 @@ interface ChatInterfaceProps {
   onOpenDataSummary?: () => void; // Callback to open data summary modal
   onRunAutomationComplete?: () => void; // Callback after running an automation (e.g. refetch session)
   onAppendMessages?: (messages: Message[]) => void; // Append messages (e.g. automation steps) to chat for engagement
+  streamingMessageContent?: string;
+  isStreamingMessage?: boolean;
+  streamingCode?: string;
+  streamingCodeLanguage?: string | null;
+  isStreamingCode?: boolean;
+  executionPlan?: { steps: string[] } | null;
+  executionMetrics?: { rows_scanned?: number; rows_returned: number; execution_time_ms: number; columns_used: string[] } | null;
+  streamingThinkingLog?: string;
+  isStreamingThinkingLog?: boolean;
 }
 
 // Dynamic suggestions based on conversation context
@@ -126,6 +135,15 @@ export function ChatInterface({
   onEditMessage,
   thinkingSteps,
   thinkingTargetTimestamp,
+  streamingMessageContent = '',
+  isStreamingMessage = false,
+  streamingCode = '',
+  streamingCodeLanguage = null,
+  isStreamingCode = false,
+  executionPlan = null,
+  executionMetrics = null,
+  streamingThinkingLog = '',
+  isStreamingThinkingLog = false,
   aiSuggestions,
   collaborators: propCollaborators,
   mode = 'analysis',
@@ -152,6 +170,7 @@ export function ChatInterface({
   const lastMessageRef = useRef<HTMLDivElement | null>(null);
   const previousLastTimestampRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [mentionState, setMentionState] = useState<{
     active: boolean;
     query: string;
@@ -404,25 +423,48 @@ export function ChatInterface({
       return;
     }
 
-    const behavior: ScrollBehavior =
-      previousLastTimestampRef.current === null ? 'auto' : 'smooth';
-
-    lastMessageRef.current.scrollIntoView({
-      behavior,
-      block: lastMessage.role === 'assistant' ? 'start' : 'end'
-    });
-
     previousLastTimestampRef.current = lastMessage.timestamp;
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    // Keep scroll at bottom so "what comes next" appears below; don't scroll back to top of message
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight - container.clientHeight;
+    });
   }, [filteredMessages]);
 
+  // Only scroll to thinking bubble before any tokenized content exists; once streaming starts, use scroll-to-bottom only
   useEffect(() => {
+    const hasStreamingContent = streamingMessageContent.length > 0 || streamingThinkingLog.length > 0;
+    if (hasStreamingContent) return; // let scroll-to-bottom effect handle it so scroll doesn't jump back
     if (isLoading && thinkingSteps && thinkingSteps.length > 0 && lastMessageRef.current) {
       lastMessageRef.current.scrollIntoView({
         behavior: 'smooth',
         block: 'nearest',
       });
     }
-  }, [thinkingSteps, isLoading]);
+  }, [thinkingSteps, isLoading, streamingMessageContent.length, streamingThinkingLog.length]);
+
+  // Keep view pinned to bottom during streaming so new content scrolls down properly
+  useEffect(() => {
+    const isStreaming =
+      isLoading ||
+      isStreamingMessage ||
+      streamingMessageContent.length > 0 ||
+      streamingThinkingLog.length > 0;
+    if (!isStreaming) return;
+
+    const run = () => {
+      const anchor = scrollAnchorRef.current;
+      const container = messagesContainerRef.current;
+      if (anchor) {
+        anchor.scrollIntoView({ behavior: 'auto', block: 'end' });
+      } else if (container) {
+        container.scrollTop = container.scrollHeight - container.clientHeight;
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(run));
+  }, [streamingMessageContent, streamingThinkingLog, isStreamingMessage, isLoading]);
 
   // Handle scroll position tracking
   useEffect(() => {
@@ -796,7 +838,17 @@ export function ChatInterface({
               (idx === filteredMessages.length - 1 || 
                (idx < filteredMessages.length - 1 && filteredMessages[idx + 1].role === 'assistant'));
             const isThinkingTarget = thinkingTargetTimestamp != null && message.timestamp === thinkingTargetTimestamp;
-            const showThinkingSteps = isThinkingTarget && isLoading && thinkingSteps && thinkingSteps.length > 0;
+            const hasThinkingContent = (thinkingSteps && thinkingSteps.length > 0) || executionPlan || executionMetrics || (streamingCode !== undefined && (streamingCode.length > 0 || isStreamingCode));
+            const lastMessageIsAssistant = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].role === 'assistant';
+            // Single "View process": only on assistant. Never show on user when the reply is already there.
+            const showThinkingSteps = isThinkingTarget && hasThinkingContent && !isLoading && !lastMessageIsAssistant;
+            const isLastAssistantMessage = isLastMessage && message.role === 'assistant';
+            // After completion, show "View process" only on the last assistant message (one place only)
+            const showThinkingForCompleted = isLastAssistantMessage && !isLoading && hasThinkingContent;
+            const showThinking = showThinkingSteps || showThinkingForCompleted;
+            const isThinkingComplete = !isLoading;
+            // When showing on completed assistant, keep expanded so user sees what AI processed (Cursor-like)
+            const defaultProcessCollapsed = !showThinkingForCompleted;
             return (
               <MessageBubble
                 key={`${message.timestamp}-${message.role}-${idx}`}
@@ -811,11 +863,38 @@ export function ChatInterface({
                 messageIndex={originalIndex >= 0 ? originalIndex : idx}
                 sessionId={sessionId}
                 isLastUserMessage={isLastUserMessage}
-                thinkingSteps={showThinkingSteps ? thinkingSteps : undefined}
-                ref={isLastMessage ? lastMessageRef : undefined}
+                thinkingSteps={showThinking ? thinkingSteps : undefined}
+                executionPlan={showThinking ? executionPlan ?? undefined : undefined}
+                executionMetrics={showThinking ? executionMetrics ?? undefined : undefined}
+                streamingCode={showThinking ? streamingCode : undefined}
+                streamingCodeLanguage={showThinking ? streamingCodeLanguage ?? undefined : undefined}
+                isStreamingCode={showThinking && isStreamingCode}
+                isThinkingComplete={showThinking ? isThinkingComplete : undefined}
+                defaultProcessCollapsed={defaultProcessCollapsed}
+                ref={isLastMessage && !isStreamingMessage ? lastMessageRef : undefined}
               />
             );
           })}
+          {(isStreamingMessage || isLoading) && (
+            <MessageBubble
+              key="streaming-assistant"
+              message={{ role: 'assistant', content: streamingMessageContent, timestamp: 0 }}
+              isStreaming={isStreamingMessage}
+              ref={lastMessageRef}
+              thinkingSteps={undefined}
+              executionPlan={undefined}
+              executionMetrics={undefined}
+              streamingCode={undefined}
+              streamingCodeLanguage={undefined}
+              isStreamingCode={false}
+              streamingThinkingLog={streamingThinkingLog}
+              isStreamingThinkingLog={isStreamingThinkingLog}
+              isThinkingComplete={isStreamingMessage || !isLoading}
+              defaultProcessCollapsed={true}
+              showThinkingWhenEmpty={isLoading && !streamingMessageContent}
+            />
+          )}
+          <div ref={scrollAnchorRef} className="h-0 w-full shrink-0" aria-hidden />
         </div>
       </div>
 

@@ -61,11 +61,28 @@ export async function downloadModifiedDataset(
   }
 }
 
+export interface ExecutionMetrics {
+  rows_scanned?: number;
+  rows_returned: number;
+  execution_time_ms: number;
+  columns_used: string[];
+}
+
 export interface StreamChatCallbacks {
   onThinkingStep?: (step: ThinkingStep) => void;
+  onThinkingLogChunk?: (payload: { content: string }) => void;
+  onThinkingLogDone?: () => void;
   onResponse?: (response: ChatResponse) => void;
   onError?: (error: Error) => void;
   onDone?: () => void;
+  onMessageChunk?: (payload: { content: string }) => void;
+  onMessageDone?: () => void;
+  onCodeStart?: (payload: { language: string }) => void;
+  onCodeChunk?: (payload: { content: string }) => void;
+  onCodeDone?: () => void;
+  onExecutionPlan?: (payload: { steps: string[] }) => void;
+  onExecutionMetrics?: (payload: ExecutionMetrics) => void;
+  onConfidence?: (payload: { value: number; label?: string }) => void;
 }
 
 export async function streamChatRequest(
@@ -172,6 +189,12 @@ export async function streamChatRequest(
   }
 }
 
+function normalizeMessageChunkPayload(payload: unknown): { content: string } {
+  if (typeof payload === "string") return { content: payload };
+  const p = payload as { content?: string };
+  return { content: p?.content ?? "" };
+}
+
 function dispatchEvent(
   eventType: string,
   payload: unknown,
@@ -180,6 +203,12 @@ function dispatchEvent(
   switch (eventType) {
     case "thinking":
       callbacks.onThinkingStep?.(payload as ThinkingStep);
+      break;
+    case "thinking_log_chunk":
+      callbacks.onThinkingLogChunk?.(normalizeMessageChunkPayload(payload));
+      break;
+    case "thinking_log_done":
+      callbacks.onThinkingLogDone?.();
       break;
     case "response":
       callbacks.onResponse?.(payload as ChatResponse);
@@ -191,6 +220,30 @@ function dispatchEvent(
       break;
     case "done":
       callbacks.onDone?.();
+      break;
+    case "message_chunk":
+      callbacks.onMessageChunk?.(normalizeMessageChunkPayload(payload));
+      break;
+    case "message_done":
+      callbacks.onMessageDone?.();
+      break;
+    case "code_start":
+      callbacks.onCodeStart?.(payload as { language: string });
+      break;
+    case "code_chunk":
+      callbacks.onCodeChunk?.(payload as { content: string });
+      break;
+    case "code_done":
+      callbacks.onCodeDone?.();
+      break;
+    case "execution_plan":
+      callbacks.onExecutionPlan?.(payload as { steps: string[] });
+      break;
+    case "execution_metrics":
+      callbacks.onExecutionMetrics?.(payload as ExecutionMetrics);
+      break;
+    case "confidence":
+      callbacks.onConfidence?.(payload as { value: number; label?: string });
       break;
     default:
       break;
@@ -232,9 +285,19 @@ export interface DataOpsResponse {
 
 export interface StreamDataOpsCallbacks {
   onThinkingStep?: (step: ThinkingStep) => void;
+  onThinkingLogChunk?: (payload: { content: string }) => void;
+  onThinkingLogDone?: () => void;
   onResponse?: (response: DataOpsResponse) => void;
   onError?: (error: Error) => void;
   onDone?: () => void;
+  onMessageChunk?: (payload: { content: string }) => void;
+  onMessageDone?: () => void;
+  onCodeStart?: (payload: { language: string }) => void;
+  onCodeChunk?: (payload: { content: string }) => void;
+  onCodeDone?: () => void;
+  onExecutionPlan?: (payload: { steps: string[] }) => void;
+  onExecutionMetrics?: (payload: ExecutionMetrics) => void;
+  onConfidence?: (payload: { value: number; label?: string }) => void;
 }
 
 export async function streamDataOpsChatRequest(
@@ -350,6 +413,12 @@ function dispatchDataOpsEvent(
     case "thinking":
       callbacks.onThinkingStep?.(payload as ThinkingStep);
       break;
+    case "thinking_log_chunk":
+      callbacks.onThinkingLogChunk?.(normalizeMessageChunkPayload(payload));
+      break;
+    case "thinking_log_done":
+      callbacks.onThinkingLogDone?.();
+      break;
     case "response":
       callbacks.onResponse?.(payload as DataOpsResponse);
       break;
@@ -360,6 +429,30 @@ function dispatchDataOpsEvent(
       break;
     case "done":
       callbacks.onDone?.();
+      break;
+    case "message_chunk":
+      callbacks.onMessageChunk?.(normalizeMessageChunkPayload(payload));
+      break;
+    case "message_done":
+      callbacks.onMessageDone?.();
+      break;
+    case "code_start":
+      callbacks.onCodeStart?.(payload as { language: string });
+      break;
+    case "code_chunk":
+      callbacks.onCodeChunk?.(payload as { content: string });
+      break;
+    case "code_done":
+      callbacks.onCodeDone?.();
+      break;
+    case "execution_plan":
+      callbacks.onExecutionPlan?.(payload as { steps: string[] });
+      break;
+    case "execution_metrics":
+      callbacks.onExecutionMetrics?.(payload as ExecutionMetrics);
+      break;
+    case "confidence":
+      callbacks.onConfidence?.(payload as { value: number; label?: string });
       break;
     default:
       break;

@@ -1,97 +1,75 @@
+/**
+ * Single tokenized thinking display.
+ * Shows one stream of thinking from the AI (intro, steps, code, plan) as it arrives — no separate sections.
+ */
 import { ThinkingStep } from '@/shared/schema';
-import { CheckCircle2, Loader2, AlertCircle, Circle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
-interface ThinkingDisplayProps {
-  steps: ThinkingStep[];
+interface ExecutionMetricsType {
+  rows_scanned?: number;
+  rows_returned: number;
+  execution_time_ms: number;
+  columns_used: string[];
 }
 
-export function ThinkingDisplay({ steps }: ThinkingDisplayProps) {
-  console.log('🎨 ThinkingDisplay rendered with steps:', steps);
-  if (!steps || steps.length === 0) {
-    console.log('⚠️ ThinkingDisplay: No steps to display');
+interface ThinkingDisplayProps {
+  steps?: ThinkingStep[];
+  executionPlan?: { steps: string[] };
+  executionMetrics?: ExecutionMetricsType;
+  streamingCode?: string;
+  streamingCodeLanguage?: string;
+  isStreamingCode?: boolean;
+  /** Single tokenized thinking stream (AI intro + steps + code + plan) */
+  streamingThinkingLog?: string;
+  isStreamingThinkingLog?: boolean;
+  isThinkingComplete?: boolean;
+  defaultCollapsed?: boolean;
+  /** When true, show "Preparing…" when no chunks yet (streaming bubble visible) */
+  showWhenEmpty?: boolean;
+}
+
+export function ThinkingDisplay({
+  streamingThinkingLog,
+  isStreamingThinkingLog,
+  isThinkingComplete = false,
+  showWhenEmpty = false,
+}: ThinkingDisplayProps) {
+  const hasContent = (streamingThinkingLog?.length ?? 0) > 0;
+
+  if (!hasContent && !isStreamingThinkingLog && !showWhenEmpty) {
     return null;
   }
 
-  // Group steps by step name to track status changes
-  const stepMap = new Map<string, ThinkingStep>();
-  const stepOrder: string[] = [];
-
-  for (const step of steps) {
-    if (!stepMap.has(step.step)) {
-      stepMap.set(step.step, step);
-      stepOrder.push(step.step);
-    } else {
-      // Update with latest status
-      const existing = stepMap.get(step.step)!;
-      if (step.timestamp > existing.timestamp) {
-        stepMap.set(step.step, step);
-      }
-    }
-  }
-
-  const getStepIcon = (status: ThinkingStep['status']) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
-      case 'active':
-        return <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />;
-      case 'error':
-        return <AlertCircle className="w-4 h-4 text-red-500" />;
-      case 'pending':
-      default:
-        return <Circle className="w-4 h-4 text-gray-300" />;
-    }
-  };
-
-  const getStepTextColor = (status: ThinkingStep['status']) => {
-    switch (status) {
-      case 'completed':
-        return 'text-gray-600';
-      case 'active':
-        return 'text-blue-600 font-medium';
-      case 'error':
-        return 'text-red-600';
-      case 'pending':
-      default:
-        return 'text-gray-400';
-    }
-  };
-
   return (
-    <div className="mt-3 ml-11 space-y-2">
-      <div className="text-xs font-medium text-gray-500 mb-2">Thinking...</div>
-      <div className="space-y-1.5">
-        {stepOrder.map((stepName) => {
-          const step = stepMap.get(stepName)!;
-          const isActive = step.status === 'active';
-          const isCompleted = step.status === 'completed';
-          const isError = step.status === 'error';
-
-          return (
-            <div
-              key={stepName}
-              className={`flex items-start gap-2 text-xs transition-all duration-200 ${
-                isActive ? 'opacity-100' : isCompleted ? 'opacity-75' : 'opacity-50'
-              }`}
-            >
-              <div className="flex-shrink-0 mt-0.5">
-                {getStepIcon(step.status)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className={getStepTextColor(step.status)}>
-                  {step.step}
-                </div>
-                {step.details && (
-                  <div className="text-xs text-gray-500 mt-0.5 ml-0">
-                    {step.details}
-                  </div>
-                )}
-              </div>
+    <div className="mt-3 ml-11">
+      <div className="rounded-xl border border-gray-200 bg-gradient-to-b from-amber-50/80 to-white shadow-sm overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 bg-amber-50/40">
+          {isStreamingThinkingLog ? (
+            <Loader2 className="w-3.5 h-3.5 text-amber-600 animate-spin flex-shrink-0" aria-hidden />
+          ) : null}
+          <span className="text-xs font-semibold text-amber-800/90">
+            {hasContent ? 'Thinking' : 'Thinking…'}
+          </span>
+        </div>
+        <div className="px-3 py-3 min-h-[2.5rem]">
+          {hasContent ? (
+            <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words font-[inherit] prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-code:bg-gray-100 prose-code:px-1 prose-code:rounded prose-code:text-xs">
+              {streamingThinkingLog}
+              {isStreamingThinkingLog && (
+                <span
+                  className="inline-block w-2 h-4 ml-0.5 bg-amber-500 animate-pulse align-middle rounded-sm"
+                  aria-hidden
+                />
+              )}
             </div>
-          );
-        })}
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" aria-hidden />
+              <span>Preparing…</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
-

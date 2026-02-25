@@ -12,9 +12,11 @@ import {
 } from "./queryPlanner.js";
 import { executeParameterizedQuery } from "./snowflakeService.js";
 
-interface ExecuteQueryPlanParams {
+export interface ExecuteQueryPlanParams {
   chatDoc: ChatDocument;
   queryPlan: QueryPlan;
+  /** Optional: called with generated SQL before execution (Snowflake path only). */
+  onSqlGenerated?: (sql: string) => void;
 }
 
 interface SnowflakeTableRef {
@@ -197,7 +199,8 @@ function buildRowLevelSnowflakeSql(
 
 async function executeSnowflakePlan(
   chatDoc: ChatDocument,
-  plan: QueryPlan
+  plan: QueryPlan,
+  onSqlGenerated?: (sql: string) => void
 ): Promise<QueryResult> {
   if (!isSnowflakeSession(chatDoc)) {
     throw new Error(
@@ -207,6 +210,10 @@ async function executeSnowflakePlan(
 
   const { snowflakeSource } = chatDoc;
   const { sql, params } = buildSnowflakeSqlFromPlan(plan, snowflakeSource);
+
+  if (onSqlGenerated) {
+    onSqlGenerated(sql);
+  }
 
   const rows = await executeParameterizedQuery(sql, params);
 
@@ -560,7 +567,7 @@ async function executeCsvBlobPlan(
 export async function executeQueryPlan(
   params: ExecuteQueryPlanParams
 ): Promise<QueryResult> {
-  const { chatDoc, queryPlan } = params;
+  const { chatDoc, queryPlan, onSqlGenerated } = params;
 
   const profile = buildDatasetProfile(chatDoc);
 
@@ -570,7 +577,7 @@ export async function executeQueryPlan(
   }
 
   if (isSnowflakeSession(chatDoc)) {
-    return executeSnowflakePlan(chatDoc, queryPlan);
+    return executeSnowflakePlan(chatDoc, queryPlan, onSqlGenerated);
   }
 
   // Default: CSV/Excel upload or non-Snowflake session

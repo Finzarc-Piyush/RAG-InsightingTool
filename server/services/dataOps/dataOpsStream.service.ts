@@ -12,6 +12,7 @@ import {
 } from "../../models/chat.model.js";
 import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
+import { getThinkingLabels, streamThinkingIntro } from "../../lib/agents/thinkingNarrator.js";
 import { Response } from "express";
 
 export interface ProcessStreamDataOpsParams {
@@ -105,12 +106,40 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       return;
     }
 
-    // Send thinking step
-    if (!sendSSE(res, 'thinking', {
-      step: 'Processing data operation',
-      status: 'active',
-      timestamp: Date.now(),
-    })) {
+    // AI-generated labels for known data-ops steps (no hardcoded copy)
+    let thinkingLabels: Record<string, { label: string; nextStep?: string }> = {};
+    try {
+      thinkingLabels = await getThinkingLabels(message, [
+        "Processing data operation",
+        "Understanding your request",
+        "Executing data operation",
+      ]);
+    } catch (e) {
+      console.warn("Data Ops thinking labels failed, using default step names:", e);
+    }
+    await streamThinkingIntro(res, message, checkConnection);
+
+    const sendThinkingChunk = (content: string) => {
+      if (content && checkConnection()) sendSSE(res, "thinking_log_chunk", { content });
+    };
+
+    const sendThinkingStep = (opts: { step: string; status: "active" | "completed" | "error"; details?: string }) => {
+      const entry = thinkingLabels[opts.step];
+      const label = entry?.label ?? opts.step;
+      const details =
+        opts.details != null && opts.details !== ""
+          ? opts.details
+          : entry?.nextStep
+            ? `Next: ${entry.nextStep}`
+            : undefined;
+      const payload = { step: label, status: opts.status, timestamp: Date.now(), details };
+      const ok = sendSSE(res, "thinking", payload);
+      sendThinkingChunk("\n\n• " + label + (details ? " — " + details : "") + "\n");
+      return ok;
+    };
+
+    // Initial thinking step
+    if (!sendThinkingStep({ step: "Processing data operation", status: "active" })) {
       return; // Client disconnected
     }
 
@@ -144,11 +173,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     }
 
     // Parse intent
-    if (!sendSSE(res, 'thinking', {
-      step: 'Understanding your request',
-      status: 'active',
-      timestamp: Date.now(),
-    })) {
+    if (!sendThinkingStep({ step: "Understanding your request", status: "active" })) {
       return; // Client disconnected
     }
 
@@ -164,11 +189,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       return;
     }
 
-    if (!sendSSE(res, 'thinking', {
-      step: 'Understanding your request',
-      status: 'completed',
-      timestamp: Date.now(),
-    })) {
+    if (!sendThinkingStep({ step: "Understanding your request", status: "completed" })) {
       return; // Client disconnected
     }
 
@@ -181,11 +202,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     }
 
     // Execute operation
-    if (!sendSSE(res, 'thinking', {
-      step: 'Executing data operation',
-      status: 'active',
-      timestamp: Date.now(),
-    })) {
+    if (!sendThinkingStep({ step: "Executing data operation", status: "active" })) {
       return; // Client disconnected
     }
 
@@ -196,11 +213,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       return;
     }
 
-    if (!sendSSE(res, 'thinking', {
-      step: 'Executing data operation',
-      status: 'completed',
-      timestamp: Date.now(),
-    })) {
+    if (!sendThinkingStep({ step: "Executing data operation", status: "completed" })) {
       return; // Client disconnected
     }
 
@@ -235,6 +248,8 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     if (!checkConnection()) {
       return;
     }
+
+    sendSSE(res, "thinking_log_done", {});
 
     // Send response – cap preview at 50 rows to avoid large payloads and client freeze
     const cappedPreview = Array.isArray(result.preview) ? result.preview.slice(0, 50) : result.preview;

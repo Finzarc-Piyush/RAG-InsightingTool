@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Message, UploadResponse, ChatResponse, ThinkingStep } from '@/shared/schema';
 import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi } from '@/lib/api';
+import type { ExecutionMetrics } from '@/lib/api';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
 import { useToast } from '@/hooks/use-toast';
@@ -51,9 +52,19 @@ export const useHomeMutations = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
   const messagesRef = useRef<Message[]>(messages);
+  const streamingContentRef = useRef('');
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [thinkingTargetTimestamp, setThinkingTargetTimestamp] = useState<number | null>(null);
-  
+  const [streamingMessageContent, setStreamingMessageContent] = useState('');
+  const [isStreamingMessage, setIsStreamingMessage] = useState(false);
+  const [streamingCode, setStreamingCode] = useState('');
+  const [streamingCodeLanguage, setStreamingCodeLanguage] = useState<string | null>(null);
+  const [isStreamingCode, setIsStreamingCode] = useState(false);
+  const [executionPlan, setExecutionPlan] = useState<{ steps: string[] } | null>(null);
+  const [executionMetrics, setExecutionMetrics] = useState<ExecutionMetrics | null>(null);
+  const [streamingThinkingLog, setStreamingThinkingLog] = useState('');
+  const [isStreamingThinkingLog, setIsStreamingThinkingLog] = useState(false);
+
   // Keep messagesRef in sync with messages
   useEffect(() => {
     messagesRef.current = messages;
@@ -291,10 +302,20 @@ export const useHomeMutations = ({
         return [...prev, optimisticUserMessage];
       });
       
-      // Clear previous thinking steps
+      // Clear previous thinking steps and streaming state when starting a new message
       setThinkingSteps([]);
       setThinkingTargetTimestamp(null);
-      
+      setStreamingMessageContent('');
+      setIsStreamingMessage(false);
+      setStreamingCode('');
+      setStreamingCodeLanguage(null);
+      setIsStreamingCode(false);
+      setExecutionPlan(null);
+      setExecutionMetrics(null);
+      setStreamingThinkingLog('');
+      setIsStreamingThinkingLog(false);
+      streamingContentRef.current = '';
+
       logger.log('📤 Sending chat message:', message);
       logger.log('📋 SessionId:', sessionId);
       
@@ -326,6 +347,12 @@ export const useHomeMutations = ({
         return new Promise<ChatResponse>((resolve, reject) => {
           let responseData: DataOpsResponse | null = null;
           
+          const controller = abortControllerRef.current;
+          if (!controller) {
+            reject(new Error('Request controller not initialized'));
+            return;
+          }
+
           streamDataOpsChatRequest(
             sessionId,
             message,
@@ -342,24 +369,55 @@ export const useHomeMutations = ({
                   return [...prev, step];
                 });
               },
+              onThinkingLogChunk: (payload: { content: string }) => {
+                setIsStreamingThinkingLog(true);
+                setStreamingThinkingLog(prev => prev + (payload.content ?? ''));
+              },
+              onThinkingLogDone: () => {
+                setIsStreamingThinkingLog(false);
+              },
               onResponse: (response: DataOpsResponse) => {
                 logger.log('✅ Data Ops API response received:', response);
                 responseData = response;
-                // Store preview/summary in a way that can be accessed by MessageBubble
-                // We'll add these as custom properties to the response
                 (responseData as any).preview = response.preview;
                 (responseData as any).summary = response.summary;
               },
+              onMessageChunk: (payload: { content: string }) => {
+                const token = payload.content ?? '';
+                streamingContentRef.current += token;
+                setStreamingMessageContent((prev) => prev + token);
+                setIsStreamingMessage(true);
+              },
+              onMessageDone: () => {
+                setIsStreamingMessage(false);
+                setThinkingSteps((prev) =>
+                  prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
+                );
+              },
+              onCodeStart: (p: { language: string }) => {
+                setStreamingCodeLanguage(p.language ?? 'sql');
+                setIsStreamingCode(true);
+                setStreamingCode('');
+              },
+              onCodeChunk: (p: { content: string }) => setStreamingCode((prev) => prev + (p.content ?? '')),
+              onCodeDone: () => setIsStreamingCode(false),
+              onExecutionPlan: (p) => setExecutionPlan(p),
+              onExecutionMetrics: (p) => setExecutionMetrics(p),
               onError: (error: Error) => {
                 logger.error('❌ Data Ops API request failed:', error);
                 setThinkingSteps([]);
                 setThinkingTargetTimestamp(null);
+                setStreamingMessageContent('');
+                setIsStreamingMessage(false);
+                setStreamingThinkingLog('');
+                setIsStreamingThinkingLog(false);
                 reject(error);
               },
               onDone: () => {
                 logger.log('✅ Data Ops stream completed');
-                setThinkingSteps([]);
-                setThinkingTargetTimestamp(null);
+                setThinkingSteps((prev) =>
+                  prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
+                );
                 if (responseData) {
                   // Convert DataOpsResponse to ChatResponse format
                   const chatResponse: ChatResponse & { preview?: any[]; summary?: any[] } = {
@@ -376,11 +434,11 @@ export const useHomeMutations = ({
                 }
               },
             },
-            abortControllerRef.current.signal,
+            controller.signal,
             targetTimestamp,
             true // dataOpsMode flag for backward compatibility
           ).catch((error: any) => {
-            if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) {
               logger.log('🚫 Data Ops request was cancelled by user');
               setThinkingSteps([]);
               setThinkingTargetTimestamp(null);
@@ -401,6 +459,12 @@ export const useHomeMutations = ({
         return new Promise<ChatResponse>((resolve, reject) => {
         let responseData: ChatResponse | null = null;
         
+        const controller = abortControllerRef.current;
+        if (!controller) {
+          reject(new Error('Request controller not initialized'));
+          return;
+        }
+
         streamChatRequest(
           sessionId,
           message,
@@ -412,28 +476,73 @@ export const useHomeMutations = ({
                 if (existingIndex >= 0) {
                   const updated = [...prev];
                   updated[existingIndex] = step;
-                  logger.log('🔄 Updated thinking steps:', updated);
                   return updated;
                 }
-                const newSteps = [...prev, step];
-                logger.log('➕ Added thinking step. Total steps:', newSteps.length);
-                return newSteps;
+                return [...prev, step];
               });
+            },
+            onThinkingLogChunk: (payload: { content: string }) => {
+              setIsStreamingThinkingLog(true);
+              setStreamingThinkingLog(prev => prev + (payload.content ?? ''));
+            },
+            onThinkingLogDone: () => {
+              setIsStreamingThinkingLog(false);
             },
             onResponse: (response: ChatResponse) => {
               logger.log('✅ API response received:', response);
               responseData = response;
             },
+            onMessageChunk: (payload: { content: string }) => {
+              const token = payload.content ?? '';
+              streamingContentRef.current += token;
+              setStreamingMessageContent((prev) => prev + token);
+              setIsStreamingMessage(true);
+            },
+            onMessageDone: () => {
+              setIsStreamingMessage(false);
+              // Mark any still-active steps (e.g. "Processing...") as completed for smooth UX
+              setThinkingSteps((prev) =>
+                prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
+              );
+            },
+            onCodeStart: (payload: { language: string }) => {
+              setStreamingCodeLanguage(payload.language ?? 'sql');
+              setIsStreamingCode(true);
+              setStreamingCode('');
+            },
+            onCodeChunk: (payload: { content: string }) => {
+              setStreamingCode((prev) => prev + (payload.content ?? ''));
+            },
+            onCodeDone: () => {
+              setIsStreamingCode(false);
+            },
+            onExecutionPlan: (payload: { steps: string[] }) => {
+              setExecutionPlan(payload);
+            },
+            onExecutionMetrics: (payload: ExecutionMetrics) => {
+              setExecutionMetrics(payload);
+            },
             onError: (error: Error) => {
               logger.error('❌ API request failed:', error);
               setThinkingSteps([]);
               setThinkingTargetTimestamp(null);
+              setStreamingMessageContent('');
+              setIsStreamingMessage(false);
+              setStreamingThinkingLog('');
+              setIsStreamingThinkingLog(false);
+              setStreamingCode('');
+              setIsStreamingCode(false);
+              setExecutionPlan(null);
+              setExecutionMetrics(null);
+              streamingContentRef.current = '';
               reject(error);
             },
             onDone: () => {
               logger.log('✅ Stream completed');
-              setThinkingSteps([]);
-              setThinkingTargetTimestamp(null);
+              // Ensure no step stays "active" after stream ends (smooth transition)
+              setThinkingSteps((prev) =>
+                prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
+              );
               if (responseData) {
                 resolve(responseData);
               } else {
@@ -441,11 +550,11 @@ export const useHomeMutations = ({
               }
             },
           },
-          abortControllerRef.current.signal,
+          controller.signal,
           targetTimestamp,
           modeToSend
         ).catch((error: any) => {
-            if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) {
             logger.log('🚫 Request was cancelled by user');
               setThinkingSteps([]);
               setThinkingTargetTimestamp(null);
@@ -461,15 +570,16 @@ export const useHomeMutations = ({
     },
     onSuccess: (data, variables) => {
       logger.log('✅ Chat response received:', data);
-      logger.log('📝 Answer:', data.answer);
-      logger.log('📊 Charts:', data.charts?.length || 0);
-      logger.log('💡 Insights:', data.insights?.length || 0);
-      logger.log('💬 Suggestions:', data.suggestions?.length || 0);
-      
-      // Clear pending message ref since request completed successfully
+
       pendingUserMessageRef.current = null;
-      
-      if (!data.answer || data.answer.trim().length === 0) {
+
+      const contentFromStream = streamingContentRef.current.trim();
+      const finalContent = contentFromStream || data.answer || '';
+      streamingContentRef.current = '';
+      setStreamingMessageContent('');
+      setIsStreamingMessage(false);
+
+      if (!finalContent) {
         logger.error('❌ Empty answer received from server!');
         toast({
           title: 'Error',
@@ -478,36 +588,21 @@ export const useHomeMutations = ({
         });
         return;
       }
-      
-      // Cap preview at 50 rows so state never holds a huge array (avoids freeze / scroll lock)
+
       const rawPreview = (data as any).preview;
       const cappedPreview = Array.isArray(rawPreview) ? rawPreview.slice(0, 50) : undefined;
       const assistantMessage: Message & { preview?: any[]; summary?: any[] } = {
         role: 'assistant',
-        content: data.answer, // Keep markdown formatting for proper rendering
+        content: finalContent,
         charts: data.charts,
         insights: data.insights,
         timestamp: Date.now(),
         preview: cappedPreview,
         summary: (data as any).summary,
       };
-      
-      console.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
-      console.log('📊 Message includes:', {
-        hasCharts: !!assistantMessage.charts?.length,
-        hasInsights: !!assistantMessage.insights?.length,
-        contentLength: assistantMessage.content?.length || 0
-      });
-      
-      setMessages((prev) => {
-        // Simply append the message - no deduplication, no cleaning
-        // Messages are already saved to CosmosDB by the backend during processing
-        const updated = [...prev, assistantMessage];
-        console.log('📋 Total messages now:', updated.length);
-        return updated;
-      });
 
-      // Update suggestions if provided
+      setMessages((prev) => [...prev, assistantMessage]);
+
       if (data.suggestions && setSuggestions) {
         setSuggestions(data.suggestions);
       }
@@ -556,7 +651,14 @@ export const useHomeMutations = ({
       abortControllerRef.current = null;
       setThinkingSteps([]);
       setThinkingTargetTimestamp(null);
-      
+      setStreamingMessageContent('');
+      setIsStreamingMessage(false);
+      setStreamingThinkingLog('');
+      setIsStreamingThinkingLog(false);
+      setStreamingCode('');
+      setIsStreamingCode(false);
+      streamingContentRef.current = '';
+
       // Remove the user message that was added when the request was sent
       // since the request was cancelled and won't be saved
       setMessages((prev) => {
@@ -615,7 +717,16 @@ export const useHomeMutations = ({
     snowflakeImportMutation,
     chatMutation,
     cancelChatRequest,
-    thinkingSteps, // Export thinking steps for display
+    thinkingSteps,
     thinkingTargetTimestamp,
+    streamingMessageContent,
+    isStreamingMessage,
+    streamingCode,
+    streamingCodeLanguage,
+    isStreamingCode,
+    executionPlan,
+    executionMetrics,
+    streamingThinkingLog,
+    isStreamingThinkingLog,
   };
 };

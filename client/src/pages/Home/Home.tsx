@@ -79,7 +79,23 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     resetState,
   } = useHomeState();
 
-  const { uploadMutation, snowflakeImportMutation, chatMutation, cancelChatRequest, thinkingSteps, thinkingTargetTimestamp } = useHomeMutations({
+  const {
+    uploadMutation,
+    snowflakeImportMutation,
+    chatMutation,
+    cancelChatRequest,
+    thinkingSteps,
+    thinkingTargetTimestamp,
+    streamingMessageContent,
+    isStreamingMessage,
+    streamingCode,
+    streamingCodeLanguage,
+    isStreamingCode,
+    executionPlan,
+    executionMetrics,
+    streamingThinkingLog,
+    isStreamingThinkingLog,
+  } = useHomeMutations({
     sessionId,
     messages,
     mode,
@@ -711,6 +727,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         onEditMessage={handleEditMessage}
         thinkingSteps={thinkingSteps}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
+        streamingMessageContent={streamingMessageContent}
+        isStreamingMessage={isStreamingMessage}
+        streamingCode={streamingCode}
+        streamingCodeLanguage={streamingCodeLanguage}
+        isStreamingCode={isStreamingCode}
+        executionPlan={executionPlan}
+        executionMetrics={executionMetrics}
+        streamingThinkingLog={streamingThinkingLog}
+        isStreamingThinkingLog={isStreamingThinkingLog}
         aiSuggestions={suggestions}
         collaborators={collaborators}
         mode={mode}

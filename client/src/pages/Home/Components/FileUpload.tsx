@@ -23,6 +23,7 @@ export function FileUpload({ onFileSelect, isUploading, autoOpenTrigger = 0, onB
     }
   }, [onFileSelect]);
 
+  // for restricting the file types that can be uploaded
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
     accept: {
@@ -35,7 +36,7 @@ export function FileUpload({ onFileSelect, isUploading, autoOpenTrigger = 0, onB
   });
 
   // Programmatically open the file dialog when trigger changes
-  // Only open when explicitly triggered (autoOpenTrigger > 0), not on initial render
+  // Only open when explicitly triggered (autoOpenTrigger > 0), not on initial render (for now)
   const lastTriggerRef = useRef<number>(0);
   const isInitialMount = useRef<boolean>(true);
   

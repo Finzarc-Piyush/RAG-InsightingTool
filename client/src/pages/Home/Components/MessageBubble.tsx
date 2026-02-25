@@ -85,8 +85,22 @@ interface MessageBubbleProps {
   onEditMessage?: (messageIndex: number, newContent: string) => void;
   messageIndex?: number;
   isLastUserMessage?: boolean;
-  thinkingSteps?: ThinkingStep[]; // Thinking steps to display below user messages
-  sessionId?: string | null; // Session ID for downloading modified datasets
+  thinkingSteps?: ThinkingStep[];
+  sessionId?: string | null;
+  executionPlan?: { steps: string[] };
+  executionMetrics?: { rows_scanned?: number; rows_returned: number; execution_time_ms: number; columns_used: string[] };
+  streamingCode?: string;
+  streamingCodeLanguage?: string;
+  isStreamingCode?: boolean;
+  isThinkingComplete?: boolean;
+  isStreaming?: boolean;
+  /** AI-streamed thinking narration (tokenized intro) */
+  streamingThinkingLog?: string;
+  isStreamingThinkingLog?: boolean;
+  /** Show thinking block with "Preparing…" when no chunks yet (streaming bubble) */
+  showThinkingWhenEmpty?: boolean;
+  /** When false, "View process" starts expanded so user sees what AI processed (Cursor-like) */
+  defaultProcessCollapsed?: boolean;
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -102,6 +116,17 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   isLastUserMessage = false,
   thinkingSteps,
   sessionId,
+  executionPlan,
+  executionMetrics,
+  streamingCode,
+  streamingCodeLanguage,
+  isStreamingCode,
+  isThinkingComplete,
+  isStreaming = false,
+  streamingThinkingLog,
+  isStreamingThinkingLog,
+  showThinkingWhenEmpty,
+  defaultProcessCollapsed = true,
 }, ref) => {
   const isUser = message.role === 'user';
 
@@ -316,9 +341,15 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {/* Display thinking steps below user messages */}
-        {isUser && thinkingSteps && thinkingSteps.length > 0 && (
-          <ThinkingDisplay steps={thinkingSteps} />
+        {/* Display thinking steps, execution plan, metrics, code below user messages */}
+        {/* Assistant: single tokenized thinking block only */}
+        {!isUser && (streamingThinkingLog !== undefined && (streamingThinkingLog.length > 0 || showThinkingWhenEmpty)) && (
+          <ThinkingDisplay
+            streamingThinkingLog={streamingThinkingLog}
+            isStreamingThinkingLog={isStreamingThinkingLog}
+            isThinkingComplete={isThinkingComplete}
+            showWhenEmpty={showThinkingWhenEmpty}
+          />
         )}
 
         {/* Show Filter Applied Message for filter operations */}
@@ -332,13 +363,14 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && message.content && (
+        {!isUser && (message.content || isStreaming) && (
           <div
             className="rounded-xl px-4 py-3 shadow-sm bg-white border border-gray-100"
             data-testid={`message-content-${message.role}`}
           >
             <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
-              <MarkdownRenderer content={message.content} />
+              <MarkdownRenderer content={message.content || ''} />
+              {isStreaming && <span className="inline-block w-2 h-4 ml-0.5 bg-primary animate-pulse align-middle" aria-hidden />}
             </div>
           </div>
         )}
@@ -497,10 +529,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
 
 MessageBubbleComponent.displayName = 'MessageBubble';
 
-// Memoize the component to prevent unnecessary re-renders
-// Only re-render if props actually change
 export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps) => {
-  // Custom comparison function for better performance
   return (
     prevProps.message.timestamp === nextProps.message.timestamp &&
     prevProps.message.content === nextProps.message.content &&
@@ -510,13 +539,18 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     prevProps.messageIndex === nextProps.messageIndex &&
     prevProps.sessionId === nextProps.sessionId &&
     prevProps.onEditMessage === nextProps.onEditMessage &&
-    // Compare thinking steps by length and content
     (prevProps.thinkingSteps?.length ?? 0) === (nextProps.thinkingSteps?.length ?? 0) &&
-    // Compare charts by length
     (prevProps.message.charts?.length ?? 0) === (nextProps.message.charts?.length ?? 0) &&
-    // Compare insights by length
     (prevProps.message.insights?.length ?? 0) === (nextProps.message.insights?.length ?? 0) &&
-    // Sample rows only matter for first message
-    (prevProps.messageIndex !== 0 || prevProps.sampleRows === nextProps.sampleRows)
+    (prevProps.messageIndex !== 0 || prevProps.sampleRows === nextProps.sampleRows) &&
+    prevProps.executionPlan === nextProps.executionPlan &&
+    prevProps.executionMetrics === nextProps.executionMetrics &&
+    prevProps.streamingCode === nextProps.streamingCode &&
+    prevProps.isStreamingCode === nextProps.isStreamingCode &&
+    prevProps.streamingThinkingLog === nextProps.streamingThinkingLog &&
+    prevProps.isStreamingThinkingLog === nextProps.isStreamingThinkingLog &&
+    prevProps.showThinkingWhenEmpty === nextProps.showThinkingWhenEmpty &&
+    prevProps.isThinkingComplete === nextProps.isThinkingComplete &&
+    prevProps.isStreaming === nextProps.isStreaming
   );
 });
