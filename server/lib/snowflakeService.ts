@@ -230,6 +230,57 @@ function connectionConfigKey(config: SnowflakeConnectionConfig): string {
   return `${config.account}|${config.username}|${config.warehouse}`;
 }
 
+function isTerminatedConnectionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as any;
+  const sqlState = anyErr.sqlState || anyErr.sqlstate;
+  const code = anyErr.code;
+  const message: string = anyErr.message || '';
+
+  if (sqlState === '08003') return true; // connection does not exist
+  if (code === 407002) return true; // snowflake-sdk terminated connection client error
+  if (typeof message === 'string' && message.toLowerCase().includes('terminated connection')) {
+    return true;
+  }
+  return false;
+}
+
+async function resetSharedConnection(): Promise<void> {
+  if (sharedConnection) {
+    try {
+      await destroyAsync(sharedConnection);
+    } catch {
+      // ignore destroy errors during reset
+    }
+  }
+  sharedConnection = null;
+  sharedConnectionConfig = null;
+}
+
+async function withReconnect<T>(
+  baseConfig: SnowflakeConnectionConfig,
+  runner: (connection: snowflake.Connection) => Promise<T>
+): Promise<T> {
+  const connectionConfig: SnowflakeConnectionConfig = {
+    ...baseConfig,
+    database: '',
+    schema: '',
+  };
+
+  try {
+    const connection = await getOrCreateConnection(connectionConfig);
+    return await runner(connection);
+  } catch (err) {
+    if (!isTerminatedConnectionError(err)) {
+      throw err;
+    }
+    // Connection was terminated by Snowflake or network; reset and retry once.
+    await resetSharedConnection();
+    const connection = await getOrCreateConnection(connectionConfig);
+    return await runner(connection);
+  }
+}
+
 /**
  * Validate that authentication credentials are provided (either password or key pair).
  */
@@ -288,12 +339,9 @@ export async function executeParameterizedQuery(
 ): Promise<Record<string, any>[]> {
   const fullConfig = getConnectionOptions(undefined);
   validateConnectionConfig(fullConfig);
-  const connection = await getOrCreateConnection({
-    ...fullConfig,
-    database: '',
-    schema: '',
-  });
-  return executeAsync(connection, sqlText, params);
+  return withReconnect(fullConfig, (connection) =>
+    executeAsync(connection, sqlText, params)
+  );
 }
 
 /**
@@ -305,12 +353,9 @@ export async function listDatabases(
 ): Promise<{ name: string; created_on?: string }[]> {
   const fullConfig = getConnectionOptions(config);
   validateConnectionConfig(fullConfig);
-  const connection = await getOrCreateConnection({
-    ...fullConfig,
-    database: '',
-    schema: '',
-  });
-  const rows = await executeAsync(connection, 'SHOW DATABASES');
+  const rows = await withReconnect(fullConfig, (connection) =>
+    executeAsync(connection, 'SHOW DATABASES')
+  );
   return rows.map((r) => {
     const row = r as Record<string, any>;
     const name = row.name ?? row.NAME ?? row.Name ?? '';
@@ -332,13 +377,10 @@ export async function listSchemas(
   if (!database?.trim()) {
     throw new Error('Database name is required to list schemas.');
   }
-  const connection = await getOrCreateConnection({
-    ...fullConfig,
-    database: '',
-    schema: '',
-  });
   const escapedDb = database.replace(/"/g, '""');
-  const rows = await executeAsync(connection, `SHOW SCHEMAS IN DATABASE "${escapedDb}"`);
+  const rows = await withReconnect(fullConfig, (connection) =>
+    executeAsync(connection, `SHOW SCHEMAS IN DATABASE "${escapedDb}"`)
+  );
   return rows.map((r) => {
     const row = r as Record<string, any>;
     const name = row.name ?? row.NAME ?? row.Name ?? '';
@@ -360,18 +402,15 @@ export async function listTablesInSchema(
   if (!database?.trim() || !schema?.trim()) {
     throw new Error('Database and schema are required to list tables.');
   }
-  const connection = await getOrCreateConnection({
-    ...fullConfig,
-    database: '',
-    schema: '',
-  });
   const escapedDb = database.trim().replace(/"/g, '""');
   const schemaEscapedForSql = schema.trim().replace(/'/g, "''");
   const sql = `SELECT TABLE_NAME AS "name", ROW_COUNT AS "row_count", BYTES AS "bytes"
     FROM "${escapedDb}"."INFORMATION_SCHEMA"."TABLES"
     WHERE TABLE_SCHEMA = '${schemaEscapedForSql}' AND TABLE_TYPE = 'BASE TABLE'
     ORDER BY TABLE_NAME`;
-  const rows = await executeAsync(connection, sql);
+  const rows = await withReconnect(fullConfig, (connection) =>
+    executeAsync(connection, sql)
+  );
   return rows.map((r) => {
     const row = r as Record<string, any>;
     const name = row.name ?? row.NAME ?? row.Table_name ?? row.TABLE_NAME ?? '';
@@ -405,18 +444,15 @@ export async function fetchTableData(
   if (!db || !schema) {
     throw new Error('Database and schema are required to fetch table data.');
   }
-  const connection = await getOrCreateConnection({
-    ...fullConfig,
-    database: '',
-    schema: '',
-  });
   const escapedDb = db.replace(/"/g, '""');
   const escapedSchema = schema.replace(/"/g, '""');
   const escapedTable = tableName.trim().replace(/"/g, '""');
   const quotedTable = `"${escapedDb}"."${escapedSchema}"."${escapedTable}"`;
   const sql = `SELECT * FROM ${quotedTable}`;
   // Use streaming so we receive the full result set (no row limit); the default complete() callback may only get the first batch (e.g. 50 rows).
-  return executeStreamAsync(connection, sql);
+  return withReconnect(fullConfig, (connection) =>
+    executeStreamAsync(connection, sql)
+  );
 }
 
 /**

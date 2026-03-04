@@ -7,6 +7,12 @@ import { removeNulls, getDataPreview, getDataSummary, convertDataType, createDer
 import { saveModifiedData, revertToOriginalData } from './dataPersistence.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { openai } from '../openai.js';
+import {
+  HRBusinessConcept,
+  HRConceptOverride,
+  HRConceptResolution,
+  resolveHRConceptFromMessage
+} from '../domain/hrConcepts.js';
 
 /**
  * Identify if a column is an ID column (identifier field)
@@ -261,6 +267,13 @@ export interface DataOpsContext {
   };
   lastQuery?: string;
   lastCreatedColumn?: string; // Track the most recently created column name
+  /**
+   * Session-level HR concept configuration and last resolution.
+   * Used to make manager-style questions (attrition, reassignment, etc.)
+   * more consistent across follow-up questions.
+   */
+  hrConceptOverrides?: HRConceptOverride[];
+  lastHRConceptResolution?: HRConceptResolution;
   timestamp: number;
 }
 
@@ -288,7 +301,10 @@ export async function parseDataOpsIntent(
   sessionDoc?: ChatDocument
 ): Promise<DataOpsIntent> {
   const lowerMessage = message.toLowerCase().trim();
-  const availableColumns = dataSummary.columns.map(c => c.name);
+  const availableColumns = dataSummary.columns.map((c) => c.name);
+  const existingContext = (sessionDoc?.dataOpsContext as DataOpsContext | undefined) || undefined;
+  const existingOverrides = existingContext?.hrConceptOverrides;
+  let lastConceptResolution: HRConceptResolution | undefined = existingContext?.lastHRConceptResolution;
   
   // ---------------------------------------------------------------------------
   // STEP -1: Correlation requests are ANALYSIS, not data ops – never treat as aggregate
@@ -303,7 +319,82 @@ export async function parseDataOpsIntent(
   }
   
   // ---------------------------------------------------------------------------
-  // STEP 0: Use AI as PRIMARY method for ALL operations
+  // STEP 0A: Resolve high-level HR business concepts (attrition, reassignment, etc.)
+  // ---------------------------------------------------------------------------
+  let conceptResolution: HRConceptResolution = resolveHRConceptFromMessage(
+    message,
+    dataSummary,
+    existingOverrides
+  );
+
+  // Persist last concept resolution into context so that follow-up
+  // questions can reuse it or be refined later.
+  if (sessionDoc) {
+    const updatedContext: DataOpsContext = {
+      ...(existingContext || {}),
+      lastHRConceptResolution: conceptResolution,
+      timestamp: Date.now(),
+    };
+    sessionDoc.dataOpsContext = updatedContext as any;
+    lastConceptResolution = conceptResolution;
+  }
+
+  // Simple pattern for \"how many\" style questions which managers
+  // commonly use for attrition / reassignment counts.
+  const looksLikeHowManyQuestion =
+    /\bhow many\b/i.test(message) || /\bnumber of\b/i.test(message);
+
+  if (
+    looksLikeHowManyQuestion &&
+    (conceptResolution.concept === 'attrition' || conceptResolution.concept === 'reassignment') &&
+    conceptResolution.targetColumn &&
+    conceptResolution.positiveValue !== undefined &&
+    (conceptResolution.confidence >= 0.6 || conceptResolution.viaOverride)
+  ) {
+    console.log(
+      `📊 HR concept resolver mapped "${message}" → concept=${conceptResolution.concept}, column="${conceptResolution.targetColumn}", value="${conceptResolution.positiveValue}", confidence=${conceptResolution.confidence.toFixed(
+        2
+      )}`
+    );
+
+    // Save/refresh an override so subsequent questions re-use the same mapping.
+    if (sessionDoc) {
+      const overrides: HRConceptOverride[] = [...(existingOverrides || [])];
+      const idx = overrides.findIndex((o) => o.concept === conceptResolution.concept);
+      const newOverride: HRConceptOverride = {
+        concept: conceptResolution.concept,
+        column: conceptResolution.targetColumn,
+        positiveValue: conceptResolution.positiveValue,
+      };
+      if (idx >= 0) {
+        overrides[idx] = newOverride;
+      } else {
+        overrides.push(newOverride);
+      }
+
+      sessionDoc.dataOpsContext = {
+        ...(sessionDoc.dataOpsContext as DataOpsContext || {}),
+        hrConceptOverrides: overrides,
+        lastHRConceptResolution: conceptResolution,
+        timestamp: Date.now(),
+      } as any;
+    }
+
+    return {
+      operation: 'count_rows',
+      filterConditions: [
+        {
+          column: conceptResolution.targetColumn,
+          operator: '=',
+          value: conceptResolution.positiveValue,
+        },
+      ],
+      requiresClarification: false,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // STEP 0B: Use AI as PRIMARY method for ALL operations
   // AI is more flexible and can handle natural language variations better than regex
   // ---------------------------------------------------------------------------
   
@@ -320,7 +411,13 @@ export async function parseDataOpsIntent(
   // Try AI detection first for ALL operations (using resolved message)
   try {
     console.log(`🤖 Calling AI to detect intent for: "${resolvedMessage}"`);
-    const aiIntent = await detectDataOpsIntentWithAI(resolvedMessage, availableColumns, chatHistory, sessionDoc);
+    const aiIntent = await detectDataOpsIntentWithAI(
+      resolvedMessage,
+      availableColumns,
+      chatHistory,
+      sessionDoc,
+      lastConceptResolution
+    );
     if (aiIntent) {
       console.log(`🤖 AI returned intent:`, {
         operation: aiIntent.operation,
@@ -1788,7 +1885,8 @@ async function detectDataOpsIntentWithAI(
   message: string,
   availableColumns: string[],
   chatHistory?: Message[],
-  sessionDoc?: ChatDocument
+  sessionDoc?: ChatDocument,
+  conceptResolution?: HRConceptResolution
 ): Promise<DataOpsIntent | null> {
   try {
     // Include all columns for better matching (up to 50 to avoid token issues)
@@ -1808,6 +1906,18 @@ async function detectDataOpsIntentWithAI(
           .join('\n')
       : 'No previous messages.';
     
+    const conceptHintText = conceptResolution && conceptResolution.concept !== 'unknown'
+      ? `\n=== HIGH-LEVEL HR CONCEPT HINT (from a separate resolver) ===
+Concept: ${conceptResolution.concept}
+Target column (if any): ${conceptResolution.targetColumn || 'none'}
+Positive value (if any): ${conceptResolution.positiveValue === undefined ? 'none' : JSON.stringify(conceptResolution.positiveValue)}
+Confidence (0-1): ${conceptResolution.confidence}
+IMPORTANT:
+- Prefer using this targetColumn and positiveValue for count_rows style questions like "how many people have resigned" or "how many people have been reassigned", if it makes sense.
+- If the hint does NOT make sense for the user's question, you may ignore it, but you MUST still return a valid intent.
+`
+      : '';
+
     const prompt = `You are an expert data operations assistant. Your job is to accurately infer what data operation the USER wants to perform on their dataset.
 
 CRITICAL: You must match column names EXACTLY as they appear in the available columns list below. Column names can contain ANY characters: spaces, underscores, hyphens, question marks (?), parentheses ( ), dollar signs ($), commas, slashes, ampersands (&), etc. – as commonly found in CSV headers. Preserve the exact spelling and punctuation (e.g. "Resigned?", "Column (Sum)", "Price ($)") when extracting column names.
@@ -1820,6 +1930,8 @@ ${historyText}
 
 === AVAILABLE COLUMNS IN THE DATASET ===
 ${columnsListForMatching}
+
+${conceptHintText}
 
 === COLUMN NAME MATCHING RULES ===
 1. ALWAYS match column names EXACTLY as they appear in the list above (case-sensitive)
@@ -1966,6 +2078,8 @@ Operations:
     - "how many rows are there where XYZ is yes" -> operation: "count_rows", filterConditions: [{"column": "XYZ", "operator": "=", "value": "yes"}]
     - "how many rows where status is active" -> operation: "count_rows", filterConditions: [{"column": "status", "operator": "=", "value": "active"}]
     - "total number of rows where Resigned? is yes" -> operation: "count_rows", filterConditions: [{"column": "Resigned?", "operator": "=", "value": "yes"}] (preserve exact column name including any punctuation/symbols from the columns list)
+    - "how many people have resigned" / "how many employees left the company" / "how many people have attrited" -> operation: "count_rows", filterConditions using the best-matching attrition column (e.g., "Resigned?", "Attrition Flag", "Attrition (Y/N)") with the appropriate "yes"/"true" value, preserving the exact column name from the list
+    - "how many people have been reassigned" / "number of employees who were reassigned" -> operation: "count_rows", filterConditions using the best-matching mobility column (e.g., "Reassigned?", "Reassignment Flag") with the appropriate "yes"/"true" value, preserving the exact column name from the list
     - "how many rows" or "how many records" (no condition) -> operation: "count_rows", filterConditions: null
   * NEVER return "aggregate" with groupByColumn for these – the user wants a count, not a grouped summary table.
 - "describe": User wants general info about data (e.g., "describe the data", "what's in the dataset") – use for full dataset description. For "how many rows [where ...]" use "count_rows" instead.
