@@ -2,8 +2,10 @@
  * Single tokenized thinking display.
  * Shows one stream of thinking from the AI (intro, steps, code, plan) as it arrives — no separate sections.
  */
+import React from 'react';
 import { ThinkingStep } from '@/shared/schema';
 import { Loader2 } from 'lucide-react';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 interface ExecutionMetricsType {
   rows_scanned?: number;
@@ -26,6 +28,56 @@ interface ThinkingDisplayProps {
   defaultCollapsed?: boolean;
   /** When true, show "Preparing…" when no chunks yet (streaming bubble visible) */
   showWhenEmpty?: boolean;
+}
+
+function ThinkingMarkdown({ content }: { content: string }) {
+  const segments: React.ReactNode[] = [];
+  const codeBlockRegex = /```([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      const before = content.slice(lastIndex, match.index);
+      if (before.trim().length > 0) {
+        segments.push(<MarkdownRenderer key={`md-${key++}`} content={before} />);
+      }
+    }
+
+    const rawBlock = match[1] ?? '';
+    const [maybeLang, ...rest] = rawBlock.split('\n');
+    const hasLanguage = rest.length > 0;
+    const language = hasLanguage ? maybeLang.trim() : undefined;
+    const codeText = hasLanguage ? rest.join('\n') : rawBlock;
+
+    segments.push(
+      <div
+        key={`code-${key++}`}
+        className="my-1 rounded-md bg-transparent text-[11px] font-mono overflow-x-auto"
+      >
+        {language && (
+          <div className="mb-0.5 text-[10px] uppercase tracking-wide text-amber-800/80">
+            {language}
+          </div>
+        )}
+        <pre className="whitespace-pre-wrap font-mono leading-snug text-gray-900">
+          <code>{codeText}</code>
+        </pre>
+      </div>
+    );
+
+    lastIndex = codeBlockRegex.lastIndex;
+  }
+
+  if (lastIndex < content.length) {
+    const remaining = content.slice(lastIndex);
+    if (remaining.trim().length > 0) {
+      segments.push(<MarkdownRenderer key={`md-${key++}`} content={remaining} />);
+    }
+  }
+
+  return <>{segments}</>;
 }
 
 export function ThinkingDisplay({
@@ -53,8 +105,8 @@ export function ThinkingDisplay({
         </div>
         <div className="px-3 py-3 min-h-[2.5rem]">
           {hasContent ? (
-            <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap break-words font-[inherit] prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-code:bg-gray-100 prose-code:px-1 prose-code:rounded prose-code:text-xs">
-              {streamingThinkingLog}
+            <div className="text-sm text-gray-800 leading-tight whitespace-pre-wrap break-words font-[inherit] prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0 prose-code:bg-gray-100 prose-code:px-1 prose-code:rounded prose-code:text-xs">
+              {streamingThinkingLog && <ThinkingMarkdown content={streamingThinkingLog} />}
               {isStreamingThinkingLog && (
                 <span
                   className="inline-block w-2 h-4 ml-0.5 bg-amber-500 animate-pulse align-middle rounded-sm"

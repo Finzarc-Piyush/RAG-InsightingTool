@@ -89,6 +89,35 @@ export async function classifyIntent(
   summary: DataSummary,
   maxRetries: number = 2
 ): Promise<AnalysisIntent> {
+  // Normalize question for simple heuristic routing before calling the LLM
+  const normalizedQuestion = (question || '').trim();
+  const lowerQuestion = normalizedQuestion.toLowerCase();
+
+  // Heuristic override: fragment-style "impact/correlation" questions → correlation intent
+  // This specifically handles short prompts like "impacts on total on all variables"
+  // which the LLM sometimes misclassifies.
+  const hasImpactLanguage = /\b(impact|impacts|affect|affects|influence|influences|correlation)\b/i.test(lowerQuestion);
+  const mentionsModelLikeTerms = /\b(model|regression|train|training|build\s+a?\s+model|create\s+a?\s+model|predict|prediction)\b/i.test(lowerQuestion);
+  const mentionsVariablesWord = /\bvariables?\b/i.test(lowerQuestion);
+  const numericColsLower = (summary.numericColumns || []).map((c) => c.toLowerCase());
+  const mentionsAnyNumericColumn = numericColsLower.some((col) => col.length >= 3 && lowerQuestion.includes(col));
+
+  // If the user is clearly talking about "impact/affect/influence" with dataset variables,
+  // and NOT about training a model, treat it as a correlation question directly.
+  if (hasImpactLanguage && !mentionsModelLikeTerms && (mentionsVariablesWord || mentionsAnyNumericColumn)) {
+    return {
+      type: 'correlation',
+      confidence: 0.96,
+      // Let the CorrelationHandler intelligently extract targetVariable and variables
+      // from the question and dataset columns.
+      filters: { correlationSign: 'all' },
+      axisMapping: {},
+      customRequest: undefined,
+      requiresClarification: false,
+      originalQuestion: normalizedQuestion,
+    } as AnalysisIntent;
+  }
+
   // Build context from chat history
   const recentHistory = chatHistory
     .slice(-10)
@@ -141,7 +170,7 @@ CLASSIFICATION RULES:
    * Model types: linear, logistic, ridge, lasso, random forest, decision tree, gradient boosting, elasticnet, svm, knn, polynomial, bayesian, quantile, poisson, gamma, tweedie, xgboost, lightgbm, catboost, mlp, naive bayes, lda, qda, etc.
    * Set confidence to 0.9+ for these patterns (including advice-style questions about models and follow-up responses in modeling context)
 2. "correlation" - User asks about relationships, what affects/influences something, or correlation between variables
-   * HIGH PRIORITY: Questions like "what impacts X?", "what affects X?", "what influences X?", "correlation of X with all other variables" should ALWAYS be classified as "correlation"
+   * HIGH PRIORITY: Questions like "what impacts X?", "what affects X?", "what influences X?", "correlation of X with all other variables" **AND fragment-style prompts like "impacts on TOTAL on all variables" or "impact on TOTAL"** should ALWAYS be classified as "correlation"
    * CRITICAL: Questions that contain correlation language (impacts, affects, influences, correlation) should be classified as "correlation" EVEN IF they also mention charts/visualizations
    * Examples: "show me a chart to visualize does X impact Y", "create a chart showing what affects X", "visualize the correlation between X and Y" → ALL should be "correlation"
    * These are correlation queries even if the target variable (X) is not immediately recognizable

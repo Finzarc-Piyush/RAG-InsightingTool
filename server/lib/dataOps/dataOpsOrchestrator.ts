@@ -182,6 +182,7 @@ export interface DataOpsIntent {
     | 'summary'
     | 'convert_type'
     | 'count_nulls'
+    | 'count_rows'
     | 'describe'
     | 'create_derived_column'
     | 'create_column'
@@ -1809,7 +1810,7 @@ async function detectDataOpsIntentWithAI(
     
     const prompt = `You are an expert data operations assistant. Your job is to accurately infer what data operation the USER wants to perform on their dataset.
 
-CRITICAL: You must match column names EXACTLY as they appear in the available columns list below. Column names are case-sensitive and may contain spaces, underscores, or special characters.
+CRITICAL: You must match column names EXACTLY as they appear in the available columns list below. Column names can contain ANY characters: spaces, underscores, hyphens, question marks (?), parentheses ( ), dollar signs ($), commas, slashes, ampersands (&), etc. – as commonly found in CSV headers. Preserve the exact spelling and punctuation (e.g. "Resigned?", "Column (Sum)", "Price ($)") when extracting column names.
 
 === CHAT HISTORY (most recent messages are last) ===
 ${historyText}
@@ -1824,13 +1825,13 @@ ${columnsListForMatching}
 1. ALWAYS match column names EXACTLY as they appear in the list above (case-sensitive)
 2. If the user mentions a partial column name (e.g., "status" when the column is "order_status"), find the BEST MATCH from the available columns
 3. For aggregation operations, if user says "all the other columns" or "all columns", set aggColumns to null (not an empty array)
-4. Column names may contain:
+4. Column names may contain ANY characters – match EXACTLY as in the list:
    - Spaces: "First Name", "Customer Since"
    - Underscores: "order_id", "qty_ordered"
-   - Special characters: "E Mail", "Discount_Percent"
+   - Punctuation/symbols: "Resigned?", "Column (Sum)", "Price ($)", "A&B", "Date/Time", "E Mail", "Discount_Percent"
    - Mixed case: "Name Prefix", "SSN"
 5. When extracting column names from the user's message:
-   - Look for exact matches first
+   - Extract the column name EXACTLY as it appears in the available columns list (including all punctuation, symbols, spaces)
    - Then look for partial matches (e.g., "status" matches "order_status" or "status")
    - Consider word boundaries (e.g., "id" should match "order_id" or "item_id", not "valid")
    - For multi-word columns, match all words (e.g., "first name" matches "First Name")
@@ -1862,7 +1863,7 @@ When deciding the operation:
 
 Determine the intent and return JSON with this structure:
 {
-  "operation": "remove_nulls" | "preview" | "summary" | "convert_type" | "count_nulls" | "describe" | "create_derived_column" | "create_column" | "modify_column" | "normalize_column" | "remove_column" | "rename_column" | "remove_rows" | "add_row" | "aggregate" | "pivot" | "train_model" | "replace_value" | "identify_outliers" | "treat_outliers" | "filter" | "revert" | "unknown",
+  "operation": "remove_nulls" | "preview" | "summary" | "convert_type" | "count_nulls" | "count_rows" | "describe" | "create_derived_column" | "create_column" | "modify_column" | "normalize_column" | "remove_column" | "rename_column" | "remove_rows" | "add_row" | "aggregate" | "pivot" | "train_model" | "replace_value" | "identify_outliers" | "treat_outliers" | "filter" | "revert" | "unknown",
   "column": "column_name" (if specific column mentioned for single-column operations, null otherwise),
   "oldColumnName": "OldColumnName" (if rename_column operation, the column to rename, null otherwise),
   "method": "delete" | "mean" | "median" | "mode" | "custom" (if operation is remove_nulls and method is specified, null otherwise),
@@ -1956,7 +1957,18 @@ Operations:
   * Extract oldValue: the value to replace (e.g., "-", "N/A", "null", "empty")
   * Extract newValue: the value to replace with (e.g., 0, 134.2, null, "N/A")
   * Extract column: if a specific column is mentioned
-- "describe": User wants general info about data (e.g., "how many rows", "describe the data", "what's in the dataset")
+- "count_rows": User asks for the NUMBER of rows (a single count), optionally with a condition. CRITICAL: This is NOT "aggregate".
+  * Use "count_rows" when the user asks: "how many rows [where column is value]", "how many rows are there where X is Y", "count rows where X is Y", "number of rows where X equals Y"
+  * The answer is a single number – do NOT use "aggregate" (which groups by a column and creates a summary table with sums/avgs).
+  * Extract filterConditions when the user specifies a condition (e.g., "where XYZ is yes" -> filterConditions: [{"column": "XYZ", "operator": "=", "value": "yes"}])
+  * If no condition (e.g., "how many rows"), use count_rows with filterConditions: null (total row count)
+  * Examples:
+    - "how many rows are there where XYZ is yes" -> operation: "count_rows", filterConditions: [{"column": "XYZ", "operator": "=", "value": "yes"}]
+    - "how many rows where status is active" -> operation: "count_rows", filterConditions: [{"column": "status", "operator": "=", "value": "active"}]
+    - "total number of rows where Resigned? is yes" -> operation: "count_rows", filterConditions: [{"column": "Resigned?", "operator": "=", "value": "yes"}] (preserve exact column name including any punctuation/symbols from the columns list)
+    - "how many rows" or "how many records" (no condition) -> operation: "count_rows", filterConditions: null
+  * NEVER return "aggregate" with groupByColumn for these – the user wants a count, not a grouped summary table.
+- "describe": User wants general info about data (e.g., "describe the data", "what's in the dataset") – use for full dataset description. For "how many rows [where ...]" use "count_rows" instead.
 - "preview": User wants to see data WITHOUT modifying the dataset. Handle various modes:
   * "first" mode: "show first 10 rows", "show me only first 5 rows", "display top 20 rows" -> previewMode: "first", limit: 10/5/20
   * "last" mode: "show last 5 rows", "show me the last 10 rows" -> previewMode: "last", limit: 5/10
@@ -1976,6 +1988,7 @@ Operations:
   * If user says "remove null" or "delete null" without specifying fill/impute, default to asking for clarification.
 - "convert_type": User wants to convert column type
 - "aggregate": User wants to group data by a column and summarize other columns (sum/avg/count) to create a summary table
+  * CRITICAL: Do NOT use for "how many rows [where X is Y]" – that is a single count; use "count_rows" with filterConditions instead. Aggregate = group by column and produce a table of sums/averages; count_rows = return one number (optionally filtered).
   * CRITICAL: Do NOT use for correlation requests. "Correlation of X with Y" or "correlation of column X with all variables" = ANALYSIS (return "unknown"), not aggregate. Only use "aggregate" when the user explicitly asks to aggregate/group/sum (e.g. "aggregate by X", "group by category").
   * CRITICAL: Match column names EXACTLY from the available columns list above
   * Patterns: "aggregate by X", "aggregate X by Y using sum", "aggregate X on Y", "aggregate X, group by Y", "aggregate by Month column", "aggregate by Brand", "aggregate over X", "aggregate all columns by X"
@@ -2766,27 +2779,72 @@ function findMentionedColumn(message: string, availableColumns: string[]): strin
 }
 
 /**
- * Find matching column (fuzzy match)
+ * Normalize column name to a "core" form: lowercase, strip all non-alphanumeric characters.
+ * Used to match column names that may have any special characters (?, (), $, commas, etc.).
+ * e.g. "Resigned?" -> "resigned", "Column (Sum)" -> "columnsum", "Price ($)" -> "price"
+ */
+function normalizeColumnNameCore(name: string): string {
+  return name.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Find matching column (fuzzy match).
+ * Handles column names with ANY special characters (?, (), $, /, commas, spaces, etc.)
+ * as commonly found in CSV headers or user questions.
+ * - Exact match (case-insensitive) first
+ * - Light normalize (spaces, _, - only)
+ * - Core normalize (strip all non-alphanumeric) so "Resigned?" and "Resigned" both match "Resigned?"
+ * - Fallback: core form contains (prefer longest/best match)
  */
 function findMatchingColumn(searchName: string, availableColumns: string[]): string | undefined {
-  const normalized = searchName.toLowerCase().replace(/[\s_-]/g, '');
-  
-  // Prefer exact matches first
+  if (!searchName || availableColumns.length === 0) return undefined;
+
+  const searchTrim = searchName.trim();
+  const searchLower = searchTrim.toLowerCase();
+
+  // 1. Exact match (case-insensitive) – any column name with any characters
   for (const col of availableColumns) {
-    const colNormalized = col.toLowerCase().replace(/[\s_-]/g, '');
-    if (colNormalized === normalized) {
-      return col;
-    }
+    if (col.trim().toLowerCase() === searchLower) return col;
   }
-  
-  // Fallback to columns that contain the search term
+
+  const searchLight = searchLower.replace(/[\s_-]/g, '');
+  const searchCore = normalizeColumnNameCore(searchName);
+
+  // 2. Light normalized (spaces, _, - removed; other punctuation kept)
   for (const col of availableColumns) {
-    const colNormalized = col.toLowerCase().replace(/[\s_-]/g, '');
-    if (colNormalized.includes(normalized)) {
-      return col;
-    }
+    const colLight = col.toLowerCase().replace(/[\s_-]/g, '');
+    if (colLight === searchLight) return col;
   }
-  
+
+  // 3. Core normalized – strip all non-alphanumeric so "Resigned?" / "Resigned" / "Column (Sum)" / "Column Sum" match
+  for (const col of availableColumns) {
+    if (normalizeColumnNameCore(col) === searchCore && searchCore.length > 0) return col;
+  }
+
+  // 4. Fallback: column's core form contains search core, or vice versa (prefer exact core match first)
+  for (const col of availableColumns) {
+    const colCore = normalizeColumnNameCore(col);
+    if (colCore.includes(searchCore) || searchCore.includes(colCore)) return col;
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve a column name to the actual key present in a row.
+ * Handles column names with any special characters (?, (), $, commas, etc.) so that
+ * user or AI-provided names (which may differ slightly) map to the real key in the data.
+ */
+function resolveColumnKeyInRow(column: string, row: Record<string, any>): string | undefined {
+  if (row[column] !== undefined) return column;
+  const keys = Object.keys(row);
+  const colLower = column.toLowerCase().trim();
+  const colCore = normalizeColumnNameCore(column);
+  for (const k of keys) {
+    const kLower = k.toLowerCase().trim();
+    if (kLower === colLower) return k;
+    if (normalizeColumnNameCore(k) === colCore && colCore.length > 0) return k;
+  }
   return undefined;
 }
 
@@ -3523,10 +3581,12 @@ export async function executeDataOperation(
       // This is a preview with conditions - filter the data but DON'T save as working dataset
       if (intent.filterConditions && intent.filterConditions.length > 0) {
         const rowsBefore = workingData.length;
+        const previewFirstRow = workingData[0];
         workingData = workingData.filter(row => {
           const results = intent.filterConditions!.map(condition => {
             const { column, operator, value, value2, values } = condition;
-            const cellValue = row[column];
+            const key = previewFirstRow ? resolveColumnKeyInRow(column, row) : column;
+            const cellValue = key != null ? row[key] : row[column];
             
             if (cellValue === null || cellValue === undefined) {
               return false; // Exclude null/undefined values from preview
@@ -3749,6 +3809,60 @@ export async function executeDataOperation(
       return {
         answer
       };
+    }
+
+    case 'count_rows': {
+      // User asked for the number of rows (optionally with a filter). Return only the count – do NOT aggregate or save.
+      let filteredData = data;
+      if (intent.filterConditions && intent.filterConditions.length > 0) {
+        const logicalOp = intent.logicalOperator || 'AND';
+        const firstRow = data[0];
+        filteredData = data.filter(row => {
+          const results = intent.filterConditions!.map(condition => {
+            const { column, operator, value, value2, values } = condition;
+            // Resolve column to actual key in row (handles "Resigned?" etc.)
+            const key = firstRow ? resolveColumnKeyInRow(column, row) : column;
+            const cellValue = key != null ? row[key] : row[column];
+            if (cellValue === null || cellValue === undefined) return false;
+            switch (operator) {
+              case '=':
+                if (typeof cellValue === 'number' && typeof value === 'number') return cellValue === value;
+                return String(cellValue).toLowerCase().trim() === String(value).toLowerCase().trim();
+              case '!=':
+                if (typeof cellValue === 'number' && typeof value === 'number') return cellValue !== value;
+                return String(cellValue).toLowerCase().trim() !== String(value).toLowerCase().trim();
+              case '>': return Number(cellValue) > Number(value);
+              case '>=': return Number(cellValue) >= Number(value);
+              case '<': return Number(cellValue) < Number(value);
+              case '<=': return Number(cellValue) <= Number(value);
+              case 'contains': return String(cellValue).toLowerCase().includes(String(value).toLowerCase());
+              case 'startsWith': return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
+              case 'endsWith': return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
+              case 'between':
+                if (value2 === undefined || value2 === null) return false;
+                const numVal = Number(cellValue);
+                return numVal >= Number(value) && numVal <= Number(value2);
+              case 'in':
+                if (!values || !Array.isArray(values)) return false;
+                return values.some(v => String(cellValue).toLowerCase().trim() === String(v).toLowerCase().trim());
+              default: return true;
+            }
+          });
+          return logicalOp === 'AND' ? results.every(r => r) : results.some(r => r);
+        });
+      }
+      const count = filteredData.length;
+      const conditionDesc = intent.filterConditions?.length
+        ? intent.filterConditions.map(c => {
+            if (c.operator === 'between') return `${c.column} between ${c.value} and ${c.value2}`;
+            if (c.operator === 'in') return `${c.column} in [${c.values?.join(', ')}]`;
+            return `${c.column} ${c.operator} ${c.value}`;
+          }).join(` ${intent.logicalOperator || 'AND'} `)
+        : null;
+      const answer = conditionDesc
+        ? `There are **${count.toLocaleString()}** row${count === 1 ? '' : 's'} where ${conditionDesc}.`
+        : `There are **${count.toLocaleString()}** row${count === 1 ? '' : 's'} in the dataset.`;
+      return { answer };
     }
     
     case 'summary': {
@@ -5257,7 +5371,8 @@ export async function executeDataOperation(
       const logicalOperator = intent.logicalOperator || 'AND';
       let filteredData = [...data];
       
-      // Apply each filter condition
+      // Apply each filter condition (resolve column to actual key – handles "Resigned?" etc.)
+      const filterFirstRow = data[0];
       for (const condition of intent.filterConditions) {
         const { column, operator, value, value2, values } = condition;
         
@@ -5266,8 +5381,8 @@ export async function executeDataOperation(
           continue;
         }
         
-        // Verify column exists
-        if (!data[0] || !(column in data[0])) {
+        const resolvedCol = filterFirstRow ? resolveColumnKeyInRow(column, filterFirstRow) : column;
+        if (!resolvedCol) {
           const availableColumns = Object.keys(data[0] || {}).slice(0, 10).join(', ');
           return {
             answer: `Column "${column}" not found in dataset. Available columns: ${availableColumns}${Object.keys(data[0] || {}).length > 10 ? '...' : ''}`,
@@ -5279,7 +5394,7 @@ export async function executeDataOperation(
         const rowsBeforeFilter = filteredData.length;
         
         filteredData = filteredData.filter(row => {
-          const cellValue = row[column];
+          const cellValue = row[resolvedCol];
           
           switch (operator) {
             case '=':

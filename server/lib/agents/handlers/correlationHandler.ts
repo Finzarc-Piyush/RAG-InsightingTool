@@ -49,15 +49,31 @@ export class CorrelationHandler extends BaseHandler {
     if (!targetVariable) {
       const question = intent.originalQuestion || intent.customRequest || '';
       console.log(`🔍 No targetVariable in intent, trying to extract from question: "${question}"`);
+
+      // Track if this is an explicit "what impacts/affects/influences" style question
+      // We'll use this later to decide to ALWAYS list correlations for all variables
+      const isImpactQuestion =
+        /\bwhat\s+(?:impacts?|affects?|influences?)\b/i.test(question);
       
-      // Pattern 1: "what impacts X" or "what affects X" or "what influences X"
+      // Pattern 1a: "what impacts X on/with other variables" → extract X
+      const impactOnOthersMatch = question.match(
+        /what\s+(?:impacts?|affects?|influences?)\s+(.+?)\s+(?:on|with)\s+(?:all\s+the\s+other\s+)?variables?/i
+      );
+      if (impactOnOthersMatch && impactOnOthersMatch[1]) {
+        targetVariable = impactOnOthersMatch[1].trim().replace(/\?+$/, '').trim();
+        console.log(`📝 Extracted target from "what impacts X on/with other variables" pattern: ${targetVariable}`);
+      }
+      
+      // Pattern 1b: generic "what impacts X" or "what affects X" or "what influences X"
       // Handle both "what impacts X?" and "what impacts X" (with or without question mark)
-      const impactMatch = question.match(/what\s+(?:impacts?|affects?|influences?)\s+(.+?)(?:\s*\?|$)/i);
-      if (impactMatch && impactMatch[1]) {
-        targetVariable = impactMatch[1].trim();
-        // Remove trailing question mark if present
-        targetVariable = targetVariable.replace(/\?+$/, '').trim();
-        console.log(`📝 Extracted target from "what impacts" pattern: ${targetVariable}`);
+      if (!targetVariable) {
+        const impactMatch = question.match(/what\s+(?:impacts?|affects?|influences?)\s+(.+?)(?:\s*\?|$)/i);
+        if (impactMatch && impactMatch[1]) {
+          targetVariable = impactMatch[1].trim();
+          // Remove trailing question mark if present
+          targetVariable = targetVariable.replace(/\?+$/, '').trim();
+          console.log(`📝 Extracted target from "what impacts" pattern: ${targetVariable}`);
+        }
       }
       
       // Pattern 2: "X is my brand", "X is the brand", "X is the main brand"
@@ -602,8 +618,8 @@ export class CorrelationHandler extends BaseHandler {
         }
       } else {
         // Conversational answer for general correlation questions
-        // If user asked for "sisters brands" or "all variables", list them all
-        if ((wantsAllVariables || mentionsSistersBrands) && correlations.length > 0) {
+        // If user asked for "sisters brands", "all variables", or a "what impacts X" style question, list them all
+        if ((wantsAllVariables || mentionsSistersBrands || isImpactQuestion) && correlations.length > 0) {
           // Sort by absolute correlation value (strongest first)
           const sortedCorrelations = [...correlations].sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
           

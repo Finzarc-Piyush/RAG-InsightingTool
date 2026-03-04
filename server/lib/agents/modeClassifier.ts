@@ -55,6 +55,39 @@ export async function classifyMode(
   summary: DataSummary,
   maxRetries: number = 2
 ): Promise<ModeClassification> {
+  const questionLower = (question || '').toLowerCase();
+
+  // ---------------------------------------------------------------------------
+  // HARD ROUTING: Row/column count questions → dataOps
+  //
+  // Users expect queries like:
+  //   - "how many rows where X is Y"
+  //   - "total number of rows where Resigned? is yes"
+  //   - "how many rows", "how many columns"
+  // to use the Data Ops engine (count_rows / describe) even when the
+  // overall chat mode is "general". We therefore short‑circuit here and
+  // force mode="dataOps" for clear row/column count questions.
+  // ---------------------------------------------------------------------------
+  const rowCountPattern =
+    /\b(how many|number of|total number of|row count)\b.*\brows?\b/.test(questionLower) ||
+    /\brows?\b.*\bwhere\b/.test(questionLower);
+  const columnCountPattern =
+    /\b(how many|number of|total number of|column count)\b.*\bcolumns?\b/.test(questionLower) ||
+    /\bcolumns?\b.*\bwhere\b/.test(questionLower);
+
+  if (rowCountPattern || columnCountPattern) {
+    const reason = rowCountPattern
+      ? 'Detected row-count style question (e.g., \"how many/total number of rows\"), routing to dataOps for count_rows/describe.'
+      : 'Detected column-count style question (e.g., \"how many/total number of columns\"), routing to dataOps for describe.';
+    const result: ModeClassification = {
+      mode: 'dataOps',
+      confidence: 0.98,
+      reasoning: reason,
+    };
+    console.log(`📌 Hard-routed mode to dataOps for row/column count question: "${question}"`);
+    return result;
+  }
+
   // Build context from chat history
   const recentHistory = chatHistory
     .slice(-5) // Use fewer messages for mode classification (faster)
@@ -211,8 +244,6 @@ OUTPUT FORMAT (JSON only, no markdown):
 
   // If all retries failed, use fallback logic
   console.error('❌ Mode classification failed after retries, using fallback');
-  
-  const questionLower = question.toLowerCase();
   let fallbackMode: 'analysis' | 'dataOps' | 'modeling' = 'analysis';
   let fallbackConfidence = 0.3;
   
