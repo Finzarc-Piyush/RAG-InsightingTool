@@ -317,6 +317,27 @@ export async function parseDataOpsIntent(
       clarificationMessage: undefined,
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // SPECIAL CASE: Attrition / turnover rate questions are ANALYSIS, not data ops
+  // Route them directly to the general analysis flow instead of trying to treat
+  // them as preview/summary/count operations here.
+  // ---------------------------------------------------------------------------
+  const looksLikeAttritionRateQuestion =
+    /\battrition rate\b/i.test(lowerMessage) ||
+    /\brate of attrition\b/i.test(lowerMessage) ||
+    /\bturnover rate\b/i.test(lowerMessage);
+
+  if (looksLikeAttritionRateQuestion) {
+    console.log(
+      `📊 Detected attrition/turnover rate question in DataOps parser – routing to general analysis instead of data ops.`
+    );
+    return {
+      operation: 'unknown',
+      requiresClarification: false,
+      clarificationMessage: undefined,
+    };
+  }
   
   // ---------------------------------------------------------------------------
   // STEP 0A: Resolve high-level HR business concepts (attrition, reassignment, etc.)
