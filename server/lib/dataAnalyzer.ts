@@ -19,6 +19,19 @@ import {
 } from './analyticalQueryEngine.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
 import { getInitialAnalysis, type ChartSuggestion } from './dataOps/pythonService.js';
+import {
+  resolveHRConceptFromMessage,
+  type HRConceptResolution
+} from './domain/hrConcepts.js';
+import {
+  computeAttritionMetrics,
+  computeReassignmentMetrics
+} from "./domain/hrMetrics.js";
+import {
+  classifyQuestion,
+  type QuestionType
+} from "./questionRouter.js";
+import { answerGeneralQuestion } from "./generalKnowledgeClient.js";
 
 /** Context for divide-and-conquer: each AI call knows which segment of the dataset it is analyzing */
 export interface DivisionContext {
@@ -406,6 +419,93 @@ export async function answerQuestion(
   console.log('🚀 answerQuestion() CALLED with question:', question);
   console.log('📋 SessionId:', sessionId);
   console.log('📊 Data rows:', data?.length);
+  console.log('📊 Columns:', summary?.columns?.map(c => c.name).slice(0, 10) || []);
+  
+  // -----------------------------------------------------------------------
+  // TOP-LEVEL HR METRIC DETECTION (applies in ALL modes, including General)
+  // Handle attrition/reassignment questions BEFORE any routing/engine checks.
+  // -----------------------------------------------------------------------
+  try {
+    const lowerQ = question.toLowerCase();
+    const looksLikeAttritionRate =
+      /\b(attrition rate|turnover rate|resignation rate)\b/i.test(lowerQ);
+    const looksLikeHowManyResigned =
+      /\bhow many\b/i.test(lowerQ) &&
+      (/\bresigned\b/i.test(lowerQ) ||
+        /\bresignations\b/i.test(lowerQ) ||
+        /\bleft\b/i.test(lowerQ));
+    const looksLikeHowManyReassigned =
+      /\bhow many\b/i.test(lowerQ) &&
+      (/\breassigned\b/i.test(lowerQ) || /\breassignment\b/i.test(lowerQ));
+
+    if (looksLikeAttritionRate || looksLikeHowManyResigned || looksLikeHowManyReassigned) {
+      const fullData = loadFullData ? await loadFullData() : data;
+
+      // Attrition: rate or count of resigned
+      if (looksLikeAttritionRate || looksLikeHowManyResigned) {
+        const metrics = computeAttritionMetrics(fullData, summary);
+        if (metrics) {
+          const ratePct = (metrics.rate * 100).toFixed(2);
+          const answer = looksLikeAttritionRate
+            ? `The attrition rate is **${ratePct}%**, based on ${metrics.count} employees marked as ${JSON.stringify(
+                metrics.positiveValue
+              )} in the "${metrics.column}" column out of ${metrics.total} records.`
+            : metrics.count === 0
+              ? `No employees have resigned according to the dataset. The "${metrics.column}" column shows a total count of 0 for the value ${JSON.stringify(
+                  metrics.positiveValue
+                )}.`
+              : `${metrics.count} employees have resigned according to the dataset, based on rows where "${metrics.column}" equals ${JSON.stringify(
+                  metrics.positiveValue
+                )}.`;
+
+          console.log('📊 HR metric handled at top-level (attrition):', {
+            column: metrics.column,
+            positiveValue: metrics.positiveValue,
+            count: metrics.count,
+            total: metrics.total,
+            rate: metrics.rate,
+          });
+
+          return {
+            answer,
+            charts: [],
+            insights: [],
+          };
+        }
+      }
+
+      // Reassignment: count how many reassigned
+      if (looksLikeHowManyReassigned) {
+        const metrics = computeReassignmentMetrics(fullData, summary);
+        if (metrics) {
+          const answer =
+            metrics.count === 0
+              ? `No employees have been reassigned according to the dataset. The "${metrics.column}" column shows a total count of 0 for the value ${JSON.stringify(
+                  metrics.positiveValue
+                )}.`
+              : `${metrics.count} employees have been reassigned according to the dataset, based on rows where "${metrics.column}" equals ${JSON.stringify(
+                  metrics.positiveValue
+                )}.`;
+
+          console.log('📊 HR metric handled at top-level (reassignment):', {
+            column: metrics.column,
+            positiveValue: metrics.positiveValue,
+            count: metrics.count,
+            total: metrics.total,
+            rate: metrics.rate,
+          });
+
+          return {
+            answer,
+            charts: [],
+            insights: [],
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ Top-level HR metric detection failed, falling back to normal routing:', err);
+  }
   
   // PRIORITY CHECK: For information-seeking queries, route directly to query execution
   // This bypasses the agent system to prevent automatic data operations (aggregation, table creation)
@@ -440,6 +540,20 @@ export async function answerQuestion(
       console.error('❌ Error executing information-seeking query:', error);
       // Fall through to agent system as backup
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // QUESTION ROUTER: decide between data, general, or mixed behavior
+  // -----------------------------------------------------------------------
+  const qType: QuestionType = classifyQuestion(question, summary, chatHistory);
+  console.log("🔀 Question type classified as:", qType);
+  if (qType === "general_question") {
+    const general = await answerGeneralQuestion(question, chatHistory);
+    return {
+      answer: general.answer,
+      charts: [],
+      insights: [],
+    };
   }
   
   // Try new agent system first

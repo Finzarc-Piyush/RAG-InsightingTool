@@ -7,6 +7,10 @@ import { processChartData } from '../../chartGenerator.js';
 import { generateChartInsights } from '../../insightGenerator.js';
 import { calculateSmartDomainsForChart } from '../../axisScaling.js';
 import { extractColumnsFromMessage } from '../../columnExtractor.js';
+import {
+  HRConceptResolution,
+  resolveHRConceptFromMessage
+} from '../../domain/hrConcepts.js';
 
 /**
  * General Handler
@@ -37,6 +41,13 @@ export class GeneralHandler extends BaseHandler {
     // Build question from intent
     let question = intent.customRequest || intent.originalQuestion || '';
     
+    // Check if this is a simple HR \"how many\" question that we can
+    // answer directly using the HR concept resolver (attrition, reassignment, etc.)
+    const hrCountResponse = this.tryHandleHRCountQuestion(question, context);
+    if (hrCountResponse) {
+      return hrCountResponse;
+    }
+
     // Check if user explicitly requested charts
     const wantsCharts = this.isExplicitChartRequest(question);
     
@@ -117,6 +128,135 @@ export class GeneralHandler extends BaseHandler {
         this.findSimilarColumns(intent.targetVariable || '', context.summary)
       );
     }
+  }
+
+  /**
+   * Try to handle manager-style HR questions such as
+   * \"How many people have resigned?\" or
+   * \"How many people have been reassigned?\"
+   * directly in the general analysis path.
+   *
+   * Returns a HandlerResponse when handled, or null to let
+   * the normal general analysis flow continue.
+   */
+  private tryHandleHRCountQuestion(
+    question: string,
+    context: HandlerContext
+  ): HandlerResponse | null {
+    if (!question || !context?.summary || !context?.data) {
+      return null;
+    }
+
+    const lower = question.toLowerCase();
+    const looksLikeHowMany =
+      /\bhow many\b/.test(lower) || /\bnumber of\b/.test(lower);
+
+    if (!looksLikeHowMany) {
+      return null;
+    }
+
+    // Use the same HR resolver as data-ops (without overrides here)
+    const resolution: HRConceptResolution = resolveHRConceptFromMessage(
+      question,
+      context.summary
+    );
+
+    if (
+      (resolution.concept !== 'attrition' &&
+        resolution.concept !== 'reassignment') ||
+      !resolution.targetColumn ||
+      resolution.positiveValue === undefined ||
+      resolution.confidence < 0.6
+    ) {
+      return null;
+    }
+
+    const column = resolution.targetColumn;
+    const positiveValue = resolution.positiveValue;
+
+    // Count rows where column matches the positive value
+    let matchCount = 0;
+    for (const row of context.data) {
+      const v = row[column];
+      if (v === null || v === undefined || v === '') continue;
+
+      // Case-insensitive string comparison when either is string-like
+      if (
+        typeof v === 'string' ||
+        typeof positiveValue === 'string'
+      ) {
+        const vStr = String(v).trim().toLowerCase();
+        const posStr = String(positiveValue).trim().toLowerCase();
+        if (vStr === posStr) {
+          matchCount++;
+        }
+        continue;
+      }
+
+      // Numeric / boolean comparison
+      if (
+        (typeof v === 'number' || typeof positiveValue === 'number') &&
+        !Number.isNaN(Number(v)) &&
+        !Number.isNaN(Number(positiveValue))
+      ) {
+        if (Number(v) === Number(positiveValue)) {
+          matchCount++;
+        }
+        continue;
+      }
+
+      if (v === positiveValue) {
+        matchCount++;
+      }
+    }
+
+    const totalEmployees = context.summary.rowCount || context.data.length;
+    const wantsRate =
+      lower.includes('rate') ||
+      lower.includes('attrition rate') ||
+      lower.includes('turnover rate');
+
+    let answer: string;
+    if (wantsRate && totalEmployees > 0) {
+      const rate = (matchCount / totalEmployees) * 100;
+      answer =
+        resolution.concept === 'attrition'
+          ? `The attrition rate is ${rate.toFixed(
+              2
+            )}% based on ${matchCount} employees marked as ${JSON.stringify(
+              positiveValue
+            )} in the "${column}" column out of ${totalEmployees} records.`
+          : `The reassignment rate is ${rate.toFixed(
+              2
+            )}% based on ${matchCount} employees marked as ${JSON.stringify(
+              positiveValue
+            )} in the "${column}" column out of ${totalEmployees} records.`;
+    } else {
+      if (matchCount === 0) {
+        answer =
+          resolution.concept === 'attrition'
+            ? `No employees have resigned according to the dataset. The "${column}" column shows a total count of 0 for the value ${JSON.stringify(
+                positiveValue
+              )}.`
+            : `No employees have been reassigned according to the dataset. The "${column}" column shows a total count of 0 for the value ${JSON.stringify(
+                positiveValue
+              )}.`;
+      } else {
+        answer =
+          resolution.concept === 'attrition'
+            ? `${matchCount} employees have resigned according to the dataset, based on rows where "${column}" equals ${JSON.stringify(
+                positiveValue
+              )}.`
+            : `${matchCount} employees have been reassigned according to the dataset, based on rows where "${column}" equals ${JSON.stringify(
+                positiveValue
+              )}.`;
+      }
+    }
+
+    return {
+      answer,
+      requiresClarification: false,
+    };
   }
 
   /**
