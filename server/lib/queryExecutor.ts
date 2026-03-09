@@ -4,6 +4,8 @@ import {
   QueryResult,
   QueryFilter,
   QueryAggregation,
+  MetricFormulaPlan,
+  MetricFormulaMetric,
 } from "../shared/queryTypes.js";
 import { loadDataForColumns } from "../utils/dataLoader.js";
 import {
@@ -56,12 +58,23 @@ function buildSnowflakeSqlFromPlan(
     const col = escapeIdentifier(filter.column);
     switch (filter.operator) {
       case "=":
-        conditions.push(`${col} = ?`);
-        params.push(filter.value);
+        // Case-insensitive, trim-tolerant equality for string values.
+        if (typeof filter.value === "string") {
+          conditions.push(`LOWER(${col}) = LOWER(?)`);
+          params.push(filter.value.trim());
+        } else {
+          conditions.push(`${col} = ?`);
+          params.push(filter.value);
+        }
         break;
       case "!=":
-        conditions.push(`${col} <> ?`);
-        params.push(filter.value);
+        if (typeof filter.value === "string") {
+          conditions.push(`LOWER(${col}) <> LOWER(?)`);
+          params.push(filter.value.trim());
+        } else {
+          conditions.push(`${col} <> ?`);
+          params.push(filter.value);
+        }
         break;
       case ">":
         conditions.push(`${col} > ?`);
@@ -264,8 +277,25 @@ function passesFilter(row: Record<string, any>, filter: QueryFilter): boolean {
 
   switch (filter.operator) {
     case "=":
+      // Case-insensitive, trim-tolerant equality for strings; type-flexible for numbers.
+      if (
+        (typeof value === "string" || typeof value === "number") &&
+        (typeof filter.value === "string" || typeof filter.value === "number")
+      ) {
+        const left = String(value).trim().toLowerCase();
+        const right = String(filter.value).trim().toLowerCase();
+        return left === right;
+      }
       return value === filter.value;
     case "!=":
+      if (
+        (typeof value === "string" || typeof value === "number") &&
+        (typeof filter.value === "string" || typeof filter.value === "number")
+      ) {
+        const left = String(value).trim().toLowerCase();
+        const right = String(filter.value).trim().toLowerCase();
+        return left !== right;
+      }
       return value !== filter.value;
     case ">":
       return typeof filter.value === "number"
@@ -306,29 +336,41 @@ function updateAggregationState(
   agg: QueryAggregation,
   rawValue: any
 ) {
-  const num =
-    typeof rawValue === "number"
-      ? rawValue
-      : Number(String(rawValue).replace(/[,]/g, ""));
-  if (Number.isNaN(num)) {
-    return;
-  }
-
   switch (agg.type) {
+    case "count":
+      // Count any non-null value, regardless of type. This makes COUNT work
+      // correctly for string/categorical columns like "Region" or "Resigned?".
+      state.count = (state.count ?? 0) + 1;
+      break;
     case "sum":
-    case "avg":
+    case "avg": {
+      const num =
+        typeof rawValue === "number"
+          ? rawValue
+          : Number(String(rawValue).replace(/[,]/g, ""));
+      if (Number.isNaN(num)) {
+        return;
+      }
       state.sum = (state.sum ?? 0) + num;
       state.count = (state.count ?? 0) + 1;
       break;
-    case "count":
-      state.count = (state.count ?? 0) + 1;
-      break;
+    }
     case "min":
-      state.min = state.min == null ? num : Math.min(state.min, num);
+    case "max": {
+      const num =
+        typeof rawValue === "number"
+          ? rawValue
+          : Number(String(rawValue).replace(/[,]/g, ""));
+      if (Number.isNaN(num)) {
+        return;
+      }
+      if (agg.type === "min") {
+        state.min = state.min == null ? num : Math.min(state.min, num);
+      } else {
+        state.max = state.max == null ? num : Math.max(state.max, num);
+      }
       break;
-    case "max":
-      state.max = state.max == null ? num : Math.max(state.max, num);
-      break;
+    }
   }
 }
 
@@ -559,6 +601,151 @@ async function executeCsvBlobPlan(
 }
 
 /**
+ * Execute a MetricFormulaPlan against blob-backed data.
+ * Computes each low-level metric first, then evaluates the formula
+ * over those metric values.
+ */
+async function executeMetricFormulaPlan(
+  chatDoc: ChatDocument,
+  plan: MetricFormulaPlan
+): Promise<QueryResult> {
+  const requiredColumns = new Set<string>();
+  for (const metric of plan.metrics) {
+    requiredColumns.add(metric.column);
+    if (metric.filter) {
+      requiredColumns.add(metric.filter.column);
+    }
+  }
+
+  const requiredColumnsArray = Array.from(requiredColumns);
+  const rows = await loadDataForColumns(chatDoc, requiredColumnsArray);
+
+  const metricResults: Record<string, number> = {};
+
+  const applyMetricFilter = (
+    sourceRows: Record<string, any>[],
+    metric: MetricFormulaMetric
+  ): Record<string, any>[] => {
+    if (!metric.filter) return sourceRows;
+    const { column, operator, value } = metric.filter;
+
+    return sourceRows.filter((row) => {
+      const cell = row[column];
+      if (cell === undefined || cell === null) return false;
+
+      if (operator === "=") {
+        if (
+          typeof cell === "number" &&
+          typeof value === "number" &&
+          Number.isFinite(cell) &&
+          Number.isFinite(value)
+        ) {
+          return cell === value;
+        }
+        return (
+          String(cell).trim().toLowerCase() ===
+          String(value).trim().toLowerCase()
+        );
+      }
+
+      const normalizeNumber = (v: unknown): number | null => {
+        if (typeof v === "number") return Number.isFinite(v) ? v : null;
+        if (typeof v === "string") {
+          const cleaned = v.replace(/[,]/g, "");
+          const num = Number(cleaned);
+          return Number.isFinite(num) ? num : null;
+        }
+        return null;
+      };
+
+      const cellNum = normalizeNumber(cell);
+      const valueNum = normalizeNumber(value);
+      if (cellNum === null || valueNum === null) return false;
+
+      if (operator === ">") return cellNum > valueNum;
+      if (operator === "<") return cellNum < valueNum;
+      return false;
+    });
+  };
+
+  for (const metric of plan.metrics) {
+    const filteredRows = applyMetricFilter(rows, metric);
+
+    if (metric.aggregation === "count") {
+      metricResults[metric.name] = filteredRows.length;
+      continue;
+    }
+
+    const values: number[] = [];
+    for (const row of filteredRows) {
+      const raw = row[metric.column];
+      if (raw === null || raw === undefined) continue;
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        values.push(raw);
+      } else if (typeof raw === "string") {
+        const cleaned = raw.replace(/[,]/g, "");
+        const num = Number(cleaned);
+        if (Number.isFinite(num)) values.push(num);
+      }
+    }
+
+    if (values.length === 0) {
+      metricResults[metric.name] = 0;
+      continue;
+    }
+
+    const sum = values.reduce((acc, v) => acc + v, 0);
+    if (metric.aggregation === "sum") {
+      metricResults[metric.name] = sum;
+    } else if (metric.aggregation === "avg") {
+      metricResults[metric.name] = sum / values.length;
+    } else {
+      metricResults[metric.name] = 0;
+    }
+  }
+
+  const metricNames = Object.keys(metricResults);
+  let formulaValue = NaN;
+  if (metricNames.length > 0) {
+    try {
+      // Formulas come from our own registry, not from user input,
+      // so it is safe to evaluate them with a small function wrapper.
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(
+        ...metricNames,
+        `"use strict"; return ${plan.formula};`
+      );
+      const args = metricNames.map((name) => metricResults[name] ?? 0);
+      const rawResult = fn(...args);
+      if (typeof rawResult === "number" && Number.isFinite(rawResult)) {
+        formulaValue = rawResult;
+      }
+    } catch (error) {
+      console.error("❌ Failed to evaluate metric formula:", error);
+      formulaValue = NaN;
+    }
+  }
+
+  const row: Record<string, string | number | boolean | null> = {};
+  for (const [name, value] of Object.entries(metricResults)) {
+    row[name] = value;
+  }
+  row[plan.metricName || "metric_value"] = formulaValue;
+
+  return {
+    rows: [row],
+    meta: {
+      rowCount: 1,
+      columns: Object.keys(row),
+      action: "metric_formula",
+      diagnostics: [
+        "Executed metric formula plan in-memory over blob-backed dataset.",
+      ],
+    },
+  };
+}
+
+/**
  * Execute a QueryPlan against the full dataset for a session.
  * - Snowflake sessions: push computation down to Snowflake.
  * - CSV/Excel uploads: load data from Azure Blob / columnar storage and aggregate in-memory.
@@ -574,6 +761,13 @@ export async function executeQueryPlan(
   // Metadata-only path: never touch raw rows
   if (queryPlan.requiresFullScan === false) {
     return buildMetadataOnlyResult(queryPlan, profile);
+  }
+
+  // Metric-formula plans are always executed in-memory over blob-backed data,
+  // because they may combine multiple aggregations that are easier to express
+  // at the application layer.
+  if (queryPlan.action === "metric_formula") {
+    return executeMetricFormulaPlan(chatDoc, queryPlan as MetricFormulaPlan);
   }
 
   if (isSnowflakeSession(chatDoc)) {

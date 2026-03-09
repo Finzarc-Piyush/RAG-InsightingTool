@@ -7,7 +7,7 @@ import { createErrorResponse, getFallbackSuggestions } from './utils/errorRecove
 import { askClarifyingQuestion } from './utils/clarification.js';
 import { DataOpsHandler } from './handlers/dataOpsHandler.js';
 import { GeneralHandler } from './handlers/generalHandler.js';
-import { extractRequiredColumns, extractColumnsFromHistory } from './utils/columnExtractor.js';
+import { extractColumnsFromHistory, extractRequiredColumnsWithLLMAssist } from './utils/columnExtractor.js';
 import { detectComplexQuery } from './complexQueryDetector.js';
 import queryCache from '../cache.js';
 
@@ -338,7 +338,7 @@ export class AgentOrchestrator {
       
       // Extract required columns
       // Use finalQuestion (enriched) for column extraction
-      const requiredColumns = extractRequiredColumns(
+      const requiredColumns = await extractRequiredColumnsWithLLMAssist(
         finalQuestion,
         intent,
         parsedQuery,

@@ -597,6 +597,7 @@ export const useHomeMutations = ({
         charts: data.charts,
         insights: data.insights,
         timestamp: Date.now(),
+        thinkingSteps: thinkingSteps && thinkingSteps.length > 0 ? thinkingSteps : undefined,
         preview: cappedPreview,
         summary: (data as any).summary,
       };

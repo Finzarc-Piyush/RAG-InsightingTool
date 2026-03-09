@@ -77,6 +77,9 @@ export interface ChatDocument {
     aiModelUsed: string; // AI model used for analysis
     fileSize: number; // Original file size in bytes
     analysisVersion: string; // Version of analysis algorithm
+    // Optional high-level semantic description of the dataset,
+    // generated once and reused by semantic layers.
+    datasetSemantics?: string;
   };
   dataOpsMode?: boolean; // Whether Data Ops mode is enabled for this session
   permanentContext?: string; // Permanent context provided by user during upload, sent to AI with each message

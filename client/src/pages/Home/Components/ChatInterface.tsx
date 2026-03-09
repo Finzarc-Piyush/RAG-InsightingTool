@@ -838,17 +838,30 @@ export function ChatInterface({
               (idx === filteredMessages.length - 1 || 
                (idx < filteredMessages.length - 1 && filteredMessages[idx + 1].role === 'assistant'));
             const isThinkingTarget = thinkingTargetTimestamp != null && message.timestamp === thinkingTargetTimestamp;
-            const hasThinkingContent = (thinkingSteps && thinkingSteps.length > 0) || executionPlan || executionMetrics || (streamingCode !== undefined && (streamingCode.length > 0 || isStreamingCode));
+            const hasStreamingThinkingContent =
+              (thinkingSteps && thinkingSteps.length > 0) ||
+              executionPlan ||
+              executionMetrics ||
+              (streamingCode !== undefined && (streamingCode.length > 0 || isStreamingCode));
+            const messageThinkingSteps = (message as any).thinkingSteps as ThinkingStep[] | undefined;
+            const hasPersistedThinking = !!(messageThinkingSteps && messageThinkingSteps.length > 0);
             const lastMessageIsAssistant = filteredMessages.length > 0 && filteredMessages[filteredMessages.length - 1].role === 'assistant';
             // Single "View process": only on assistant. Never show on user when the reply is already there.
-            const showThinkingSteps = isThinkingTarget && hasThinkingContent && !isLoading && !lastMessageIsAssistant;
+            const showThinkingSteps = isThinkingTarget && hasStreamingThinkingContent && !isLoading && !lastMessageIsAssistant;
             const isLastAssistantMessage = isLastMessage && message.role === 'assistant';
             // After completion, show "View process" only on the last assistant message (one place only)
-            const showThinkingForCompleted = isLastAssistantMessage && !isLoading && hasThinkingContent;
-            const showThinking = showThinkingSteps || showThinkingForCompleted;
+            const showThinkingForCompleted = isLastAssistantMessage && !isLoading && (hasStreamingThinkingContent || hasPersistedThinking);
+            const showThinking = showThinkingSteps || showThinkingForCompleted || (isLastAssistantMessage && hasPersistedThinking && !isLoading);
             const isThinkingComplete = !isLoading;
             // When showing on completed assistant, keep expanded so user sees what AI processed (Cursor-like)
             const defaultProcessCollapsed = !showThinkingForCompleted;
+            const thinkingStepsForBubble: ThinkingStep[] | undefined = showThinkingSteps
+              ? thinkingSteps
+              : (messageThinkingSteps && messageThinkingSteps.length > 0)
+                  ? messageThinkingSteps
+                  : isLastAssistantMessage
+                    ? thinkingSteps
+                    : undefined;
             return (
               <MessageBubble
                 key={`${message.timestamp}-${message.role}-${idx}`}
@@ -863,7 +876,7 @@ export function ChatInterface({
                 messageIndex={originalIndex >= 0 ? originalIndex : idx}
                 sessionId={sessionId}
                 isLastUserMessage={isLastUserMessage}
-                thinkingSteps={showThinking ? thinkingSteps : undefined}
+                thinkingSteps={showThinking ? thinkingStepsForBubble : undefined}
                 executionPlan={showThinking ? executionPlan ?? undefined : undefined}
                 executionMetrics={showThinking ? executionMetrics ?? undefined : undefined}
                 streamingCode={showThinking ? streamingCode : undefined}

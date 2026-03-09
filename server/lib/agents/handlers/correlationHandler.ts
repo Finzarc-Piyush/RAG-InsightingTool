@@ -50,11 +50,6 @@ export class CorrelationHandler extends BaseHandler {
       const question = intent.originalQuestion || intent.customRequest || '';
       console.log(`🔍 No targetVariable in intent, trying to extract from question: "${question}"`);
 
-      // Track if this is an explicit "what impacts/affects/influences" style question
-      // We'll use this later to decide to ALWAYS list correlations for all variables
-      const isImpactQuestion =
-        /\bwhat\s+(?:impacts?|affects?|influences?)\b/i.test(question);
-      
       // Pattern 1a: "what impacts X on/with other variables" → extract X
       const impactOnOthersMatch = question.match(
         /what\s+(?:impacts?|affects?|influences?)\s+(.+?)\s+(?:on|with)\s+(?:all\s+the\s+other\s+)?variables?/i
@@ -234,7 +229,9 @@ export class CorrelationHandler extends BaseHandler {
     
     // Check if user mentions "sisters brands" or similar terms
     const mentionsSistersBrands = /\b(sisters?\s+brands?|sister\s+brands?)\b/i.test(question);
-    
+    // Check if user asked "what impacts/affects/influences X" (used later to list all variables)
+    const isImpactQuestion = /\bwhat\s+(?:impacts?|affects?|influences?)\b/i.test(question);
+
     // Extract variable lists from permanent context
     let contextVariableList: string[] = [];
     if (permanentContext && mentionsSistersBrands) {

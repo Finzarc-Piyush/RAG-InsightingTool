@@ -18,14 +18,20 @@ import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { getThinkingLabels, streamThinkingIntro } from "../../lib/agents/thinkingNarrator.js";
-import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
 import { processStreamDataOperation } from "../dataOps/dataOpsStream.service.js";
 import { Response } from "express";
 import { planQueryWithAI, buildDatasetProfile } from "../../lib/queryPlanner.js";
 import { executeQueryPlan } from "../../lib/queryExecutor.js";
-import { explainQueryResultWithAI, explainQueryResultWithAIStream } from "../../lib/queryExplainer.js";
+import { explainQueryResultWithAI, explainQueryResultWithAIStream, buildNumericSummarySentence } from "../../lib/queryExplainer.js";
 import type { QueryResult, QueryPlan } from "../../shared/queryTypes.js";
+import { interpretBusinessQuestion } from "../semantic/businessInterpreter.js";
+import { resolveBusinessMetric } from "../semantic/metricResolver.js";
+import { semanticToQueryPlan } from "../queryPlanner/semanticPlanner.js";
+import { generateDatasetSemantics } from "../semantic/datasetSemantics.js";
+import { matchRelevantColumns } from "../semantic/columnMatcher.js";
+import { extractRequiredColumnsWithLLMAssist } from "../../lib/agents/utils/columnExtractor.js";
+import { updateChatDocument } from "../../models/chat.model.js";
 
 /** Returns true if the message is a clear request for data summary (same patterns as data-ops summary intent). */
 function isDataSummaryRequest(message: string): boolean {
@@ -267,24 +273,51 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    // Extract columns from chat message using RegEx (ONLY place RegEx is used for column extraction)
-    const availableColumns = chatDocument.dataSummary.columns.map(c => c.name);
+    // Semantic column matching (LLM-based) to understand which dataset columns
+    // are relevant to the user's question, without relying on regex.
+    const availableColumns = chatDocument.dataSummary.columns.map((c) => c.name);
     onThinkingStep({
-      step: "Extracting columns from message",
-      status: 'active',
+      step: "Matching dataset columns",
+      status: "active",
       timestamp: Date.now(),
     });
 
-    const extractedColumns = extractColumnsFromMessage(message, availableColumns);
-    console.log(`📋 Extracted columns from message using RegEx:`, extractedColumns);
+    let extractedColumns: string[] = [];
+    try {
+      const datasetProfile = buildDatasetProfile(chatDocument);
+      const datasetSemantics =
+        chatDocument.analysisMetadata?.datasetSemantics || null;
+
+      const matchResult = await matchRelevantColumns({
+        question: message,
+        datasetProfile,
+        dataSummary: chatDocument.dataSummary,
+        datasetSemantics,
+      });
+      extractedColumns = matchResult.matchedColumns || [];
+      console.log(
+        "📋 Matched columns from semantic column matcher:",
+        extractedColumns
+      );
+      if (matchResult.reasoning) {
+        console.log("   Column match reasoning:", matchResult.reasoning);
+      }
+    } catch (columnMatchError) {
+      console.error(
+        "⚠️ Semantic column matching failed, continuing without matches:",
+        columnMatchError
+      );
+      extractedColumns = [];
+    }
 
     onThinkingStep({
-      step: 'Extracting columns from message',
-      status: 'completed',
+      step: "Matching dataset columns",
+      status: "completed",
       timestamp: Date.now(),
-      details: extractedColumns.length > 0 
-        ? `Found columns: ${extractedColumns.join(', ')}`
-        : 'No columns explicitly mentioned',
+      details:
+        extractedColumns.length > 0
+          ? `Matched: ${extractedColumns.join(", ")}`
+          : "No strongly matched columns",
     });
 
     // Analyze chat message with AI using extracted columns (for logging/context only)
@@ -393,56 +426,167 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       ? allMessages // Use full history from database for edits
       : allMessages.slice(-15); // Use last 15 messages for new messages
 
-    let result: { answer: string; charts?: any[]; insights?: any[]; preview?: any; summary?: any };
+    let result: {
+      answer: string;
+      charts?: any[];
+      insights?: any[];
+      preview?: any;
+      summary?: any;
+    } = { answer: "" };
     let didEmitMessageStream = false;
     let didEmitCodeStream = false;
 
     const useLegacyPathForCharts = detectedMode === 'analysis' && wantsChartResponse(message, processingChatHistory);
 
     if (detectedMode === 'analysis' && !useLegacyPathForCharts) {
-      // New two-stage execution path: planner → executor → explainer
-      onThinkingStep({
-        step: 'Planning query against full dataset',
-        status: 'active',
-        timestamp: Date.now(),
-      });
-      
-      const planResult = await planQueryWithAI({
-        userQuestion: message,
-        chatDocument,
-      });
-      
-      if (!planResult.queryPlan || planResult.error) {
-        console.error('⚠️ Query planner failed, falling back to legacy path:', planResult.error);
+      // New two-stage execution path: semantic business layer → planner → executor → explainer
+      // Ensure dataset semantics for semantic layers
+      let datasetSemantics = chatDocument.analysisMetadata?.datasetSemantics;
+      if (!datasetSemantics) {
+        try {
+          datasetSemantics = await generateDatasetSemantics(chatDocument);
+          chatDocument.analysisMetadata = {
+            ...chatDocument.analysisMetadata,
+            datasetSemantics,
+          };
+          await updateChatDocument(chatDocument);
+        } catch (semError) {
+          console.warn("⚠️ Failed to generate dataset semantics (stream path); continuing without it:", semError);
+        }
+      }
+
+      // Try semantic business layer first
+      let chosenPlan: QueryPlan | null = null;
+      try {
+        // 1) Interpreting business question
+        onThinkingStep({
+          step: 'Interpreting business question',
+          status: 'active',
+          timestamp: Date.now(),
+        });
+
+        const semanticIntent = await interpretBusinessQuestion({
+          question: message,
+          datasetProfile,
+          dataSummary,
+          datasetSemantics,
+        });
+
+        onThinkingStep({
+          step: 'Interpreting business question',
+          status: 'completed',
+          timestamp: Date.now(),
+          details: semanticIntent
+            ? `Intent: ${semanticIntent.intent}, metric: ${semanticIntent.businessMetric || 'none'}`
+            : 'No clear business intent',
+        });
+
+        if (semanticIntent && semanticIntent.businessMetric) {
+          // 2) Resolving business metric
+          onThinkingStep({
+            step: 'Resolving business metric',
+            status: 'active',
+            timestamp: Date.now(),
+          });
+
+          const metricDefinition = await resolveBusinessMetric({
+            semanticIntent,
+            datasetProfile,
+            dataSummary,
+            datasetSemantics,
+          });
+
+          onThinkingStep({
+            step: 'Resolving business metric',
+            status: 'completed',
+            timestamp: Date.now(),
+            details: metricDefinition
+              ? `Metric type: ${metricDefinition.metricType}`
+              : 'No metric definition found',
+          });
+
+          // 3) Generating query plan from semantic layers
+          if (metricDefinition && metricDefinition.requiredColumns.length > 0) {
+            onThinkingStep({
+              step: 'Generating query plan',
+              status: 'active',
+              timestamp: Date.now(),
+            });
+
+            const semanticPlan = await semanticToQueryPlan({
+              semanticIntent,
+              metricDefinition,
+              datasetProfile,
+            });
+
+            if (semanticPlan) {
+              chosenPlan = semanticPlan;
+              console.log("🧠 Stream: using semantic QueryPlan for business question.");
+            }
+
+            onThinkingStep({
+              step: 'Generating query plan',
+              status: 'completed',
+              timestamp: Date.now(),
+              details: chosenPlan
+                ? `Action: ${chosenPlan.action}`
+                : 'Semantic planner did not return a plan',
+            });
+          }
+        }
+      } catch (semError) {
+        console.warn("⚠️ Semantic planner failed in stream path; falling back to generic planner:", semError);
+      }
+
+      // If semantic planner didn't produce a plan, use existing planner
+      if (!chosenPlan) {
         onThinkingStep({
           step: 'Planning query against full dataset',
-          status: 'error',
+          status: 'active',
           timestamp: Date.now(),
-          details: planResult.error?.message || 'Planner failed, using legacy analysis',
         });
-        
-        // Fallback: legacy path using full data
-        const latestData = await loadLatestData(chatDocument);
-        result = await answerQuestion(
-          latestData,
-          message,
-          processingChatHistory,
-          chatDocument.dataSummary,
-          sessionId,
-          chatLevelInsights,
-          onThinkingStep,
-          detectedMode
-        );
-      } else {
+
+        const planResult = await planQueryWithAI({
+          userQuestion: message,
+          chatDocument,
+        });
+
+        if (!planResult.queryPlan || planResult.error) {
+          console.error('⚠️ Query planner failed, falling back to legacy path:', planResult.error);
+          onThinkingStep({
+            step: 'Planning query against full dataset',
+            status: 'error',
+            timestamp: Date.now(),
+            details: planResult.error?.message || 'Planner failed, using legacy analysis',
+          });
+
+          // Fallback: legacy path using full data
+          const latestData = await loadLatestData(chatDocument);
+          result = await answerQuestion(
+            latestData,
+            message,
+            processingChatHistory,
+            chatDocument.dataSummary,
+            sessionId,
+            chatLevelInsights,
+            onThinkingStep,
+            detectedMode
+          );
+        } else {
+          chosenPlan = planResult.queryPlan;
+        }
+      }
+
+      if (chosenPlan) {
         onThinkingStep({
           step: 'Planning query against full dataset',
           status: 'completed',
           timestamp: Date.now(),
-          details: `Action: ${planResult.queryPlan.action}, requiresFullScan: ${planResult.queryPlan.requiresFullScan ? 'yes' : 'no'}`,
+          details: `Action: ${chosenPlan.action}, requiresFullScan: ${chosenPlan.requiresFullScan ? 'yes' : 'no'}`,
         });
 
         if (checkConnection()) {
-          const planSteps = buildExecutionPlanSteps(planResult.queryPlan);
+          const planSteps = buildExecutionPlanSteps(chosenPlan);
           sendSSE(res, 'execution_plan', { steps: planSteps });
           sendThinkingChunk("\n\n**Execution plan:**\n" + planSteps.map((s) => "- " + s).join("\n") + "\n");
         }
@@ -473,7 +617,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           const execStartMs = Date.now();
           const queryResult: QueryResult = await executeQueryPlan({
             chatDoc: chatDocument,
-            queryPlan: planResult.queryPlan,
+            queryPlan: chosenPlan,
             onSqlGenerated: (sql) => {
               if (!checkConnection()) return;
               sendSSE(res, 'code_start', { language: 'sql' });
@@ -516,6 +660,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             details: `Returned ${queryResult.meta.rowCount} rows (${queryResult.meta.columns.join(', ')})`,
           });
           lastEmitted = Date.now();
+
+          // Stream a deterministic numeric summary first so the user always sees the key numbers.
+          const numericSummarySentence = buildNumericSummarySentence(message, queryResult);
+          if (numericSummarySentence && checkConnection()) {
+            sendSSE(res, 'message_chunk', { content: numericSummarySentence + '\n\n' });
+          }
 
           onThinkingStep({
             step: 'Generating explanation from query result',
@@ -749,6 +899,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     try {
       const userEmail = username?.toLowerCase();
       const userMessageTimestamp = targetTimestamp || Date.now();
+      const thinkingStepsForMessage =
+        thinkingSteps && thinkingSteps.length > 0 ? thinkingSteps : undefined;
       
       // Pass FULL charts with data - addMessagesBySessionId will:
       // 1. Save large charts to blob storage
@@ -769,6 +921,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           insights: transformedResponse.insights,
           preview: transformedResponse.preview || undefined, // Save preview data for data operations
           summary: transformedResponse.summary || undefined, // Save summary data for data operations
+          thinkingSteps: thinkingStepsForMessage,
           timestamp: assistantMessageTimestamp,
         },
       ]);
