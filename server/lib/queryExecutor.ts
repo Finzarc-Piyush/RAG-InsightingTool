@@ -334,29 +334,41 @@ function updateAggregationState(
   agg: QueryAggregation,
   rawValue: any
 ) {
-  const num =
-    typeof rawValue === "number"
-      ? rawValue
-      : Number(String(rawValue).replace(/[,]/g, ""));
-  if (Number.isNaN(num)) {
-    return;
-  }
-
   switch (agg.type) {
+    case "count":
+      // Count any non-null value, regardless of type. This makes COUNT work
+      // correctly for string/categorical columns like "Region" or "Resigned?".
+      state.count = (state.count ?? 0) + 1;
+      break;
     case "sum":
-    case "avg":
+    case "avg": {
+      const num =
+        typeof rawValue === "number"
+          ? rawValue
+          : Number(String(rawValue).replace(/[,]/g, ""));
+      if (Number.isNaN(num)) {
+        return;
+      }
       state.sum = (state.sum ?? 0) + num;
       state.count = (state.count ?? 0) + 1;
       break;
-    case "count":
-      state.count = (state.count ?? 0) + 1;
-      break;
+    }
     case "min":
-      state.min = state.min == null ? num : Math.min(state.min, num);
+    case "max": {
+      const num =
+        typeof rawValue === "number"
+          ? rawValue
+          : Number(String(rawValue).replace(/[,]/g, ""));
+      if (Number.isNaN(num)) {
+        return;
+      }
+      if (agg.type === "min") {
+        state.min = state.min == null ? num : Math.min(state.min, num);
+      } else {
+        state.max = state.max == null ? num : Math.max(state.max, num);
+      }
       break;
-    case "max":
-      state.max = state.max == null ? num : Math.max(state.max, num);
-      break;
+    }
   }
 }
 
