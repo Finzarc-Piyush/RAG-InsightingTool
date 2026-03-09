@@ -410,7 +410,7 @@ export async function answerQuestion(
   sessionId?: string,
   chatInsights?: Insight[],
   onThinkingStep?: (step: { step: string; status: 'pending' | 'active' | 'completed' | 'error'; timestamp: number; details?: string }) => void,
-  mode?: 'analysis' | 'dataOps' | 'modeling',
+  mode?: 'analysis' | 'dataOps' | 'modeling' | 'chartOnFiltered',
   permanentContext?: string,
   columnarStoragePath?: boolean,
   loadFullData?: () => Promise<Record<string, any>[]>

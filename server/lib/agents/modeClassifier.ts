@@ -12,7 +12,7 @@ import { DataSummary, Message } from '../../shared/schema.js';
  * Mode Classification Schema
  */
 export const modeClassificationSchema = z.object({
-  mode: z.enum(['analysis', 'dataOps', 'modeling']),
+  mode: z.enum(['analysis', 'dataOps', 'modeling', 'chartOnFiltered']),
   confidence: z.number().min(0).max(1),
   reasoning: z.string().optional(),
 });
@@ -152,6 +152,23 @@ CLASSIFICATION RULES:
      trend analysis, insights, exploratory data analysis, "what affects", "show me", etc.
    * This is the default mode when the query doesn't clearly fit dataOps or modeling
 
+4. "chartOnFiltered" - User asks for a specific chart type on explicitly filtered data in a single request
+   * Trigger ONLY when BOTH of the following are true:
+     - The user clearly requests a specific chart or visualization type, e.g.:
+       "trend line", "line chart", "bar chart", "pie chart", "scatter plot", "area chart"
+     - AND the user specifies an explicit filter condition in the same question using phrases like:
+       "where", "for", "only for", "with", "filter", "segment", e.g.:
+       "where product is PUREIT", "for category Beverages", "only for region North"
+   * Examples that SHOULD be classified as "chartOnFiltered":
+     - "give me a trend line for sales where my product is PUREIT"
+     - "show a bar chart of revenue for region North"
+     - "line chart of quantity over time where category is Beverages"
+   * Examples that should remain "analysis" instead of "chartOnFiltered":
+     - "give me a trend line for sales" (no explicit filter)
+     - "filter data where product is PUREIT" (no explicit chart request)
+     - "show me sales where product is PUREIT" (no explicit chart type)
+   * When in doubt (chart request but filter is ambiguous), prefer "analysis" over "chartOnFiltered"
+
 IMPORTANT: For short/ambiguous queries, ALWAYS check the conversation history to determine the correct mode.
 
 Examples with context:
@@ -167,7 +184,7 @@ Examples with context:
 
 OUTPUT FORMAT (JSON only, no markdown):
 {
-  "mode": "analysis" | "dataOps" | "modeling",
+  "mode": "analysis" | "dataOps" | "modeling" | "chartOnFiltered",
   "confidence": 0.0-1.0,
   "reasoning": "Brief explanation including context consideration" (optional)
 }`;

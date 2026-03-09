@@ -2983,6 +2983,187 @@ function resolveColumnKeyInRow(column: string, row: Record<string, any>): string
   return undefined;
 }
 
+export type FilterCondition = {
+  column: string;
+  operator:
+    | '='
+    | '!='
+    | '>'
+    | '>='
+    | '<'
+    | '<='
+    | 'contains'
+    | 'startsWith'
+    | 'endsWith'
+    | 'between'
+    | 'in';
+  value?: any;
+  value2?: any;
+  values?: any[];
+};
+
+/**
+ * Apply filter conditions to data in-memory without persisting changes.
+ * Shared helper so other components (e.g. analysis agent) can reuse
+ * the exact same filtering semantics as the data-ops engine.
+ */
+export function applyFilterConditionsInMemory(
+  data: Record<string, any>[],
+  filterConditions: FilterCondition[],
+  logicalOperator: 'AND' | 'OR' = 'AND'
+): {
+  filteredData: Record<string, any>[];
+  rowsBefore: number;
+  rowsAfter: number;
+  rowsRemoved: number;
+  conditionDescription: string;
+  errorMessage?: string;
+} {
+  const rowsBefore = Array.isArray(data) ? data.length : 0;
+
+  if (!data || rowsBefore === 0) {
+    return {
+      filteredData: [],
+      rowsBefore,
+      rowsAfter: 0,
+      rowsRemoved: 0,
+      conditionDescription: '',
+      errorMessage: 'No data available to filter.',
+    };
+  }
+
+  if (!filterConditions || filterConditions.length === 0) {
+    return {
+      filteredData: data,
+      rowsBefore,
+      rowsAfter: rowsBefore,
+      rowsRemoved: 0,
+      conditionDescription: '',
+    };
+  }
+
+  let filteredData = [...data];
+  const firstRow = data[0];
+
+  // Apply each filter condition (resolve column to actual key – handles "Resigned?" etc.)
+  for (const condition of filterConditions) {
+    const { column, operator, value, value2, values } = condition;
+
+    if (!column) {
+      console.warn(`⚠️ Skipping filter condition without column:`, condition);
+      continue;
+    }
+
+    const resolvedCol = firstRow ? resolveColumnKeyInRow(column, firstRow) : column;
+    if (!resolvedCol) {
+      const availableColumns = Object.keys(firstRow || {}).slice(0, 10).join(', ');
+      return {
+        filteredData: data,
+        rowsBefore,
+        rowsAfter: rowsBefore,
+        rowsRemoved: 0,
+        conditionDescription: '',
+        errorMessage: `Column "${column}" not found in dataset. Available columns: ${availableColumns}${Object.keys(firstRow || {}).length > 10 ? '...' : ''}`,
+      };
+    }
+
+    const rowsBeforeFilter = filteredData.length;
+
+    filteredData = filteredData.filter(row => {
+      const cellValue = row[resolvedCol];
+
+      switch (operator) {
+        case '=':
+          // Case-insensitive string comparison for text, exact for numbers
+          if (typeof cellValue === 'number' && typeof value === 'number') {
+            return cellValue === value;
+          }
+          return String(cellValue).toLowerCase().trim() === String(value).toLowerCase().trim();
+        case '!=':
+          if (typeof cellValue === 'number' && typeof value === 'number') {
+            return cellValue !== value;
+          }
+          return String(cellValue).toLowerCase().trim() !== String(value).toLowerCase().trim();
+        case '>':
+          return Number(cellValue) > Number(value);
+        case '>=':
+          return Number(cellValue) >= Number(value);
+        case '<':
+          return Number(cellValue) < Number(value);
+        case '<=':
+          return Number(cellValue) <= Number(value);
+        case 'contains':
+          return String(cellValue).toLowerCase().includes(String(value).toLowerCase());
+        case 'startsWith':
+          return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
+        case 'endsWith':
+          return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
+        case 'between':
+          if (value2 === undefined || value2 === null) {
+            console.warn(`⚠️ Between operator requires value2, skipping condition`);
+            return true;
+          }
+          {
+            const numValue = Number(cellValue);
+            return numValue >= Number(value) && numValue <= Number(value2);
+          }
+        case 'in':
+          if (!values || !Array.isArray(values) || values.length === 0) {
+            console.warn(`⚠️ In operator requires values array, skipping condition`);
+            return true;
+          }
+          {
+            const cellStr = String(cellValue).toLowerCase().trim();
+            return values.some(v => String(v).toLowerCase().trim() === cellStr);
+          }
+        default:
+          console.warn(`⚠️ Unknown filter operator: ${operator}`);
+          return true;
+      }
+    });
+
+    const rowsAfterFilter = filteredData.length;
+    console.log(
+      `  ✅ Applied filter: ${column} ${operator} ${
+        value || (values ? `[${values.join(', ')}]` : '')
+      }${value2 ? ` and ${value2}` : ''} → ${rowsBeforeFilter} → ${rowsAfterFilter} rows`
+    );
+
+    // If using OR operator, we need to combine results differently
+    // For now, AND is the default - all conditions must match
+    if (logicalOperator === 'OR') {
+      // For OR, we'd need to track which rows match each condition
+      // This is a simplified version - you may want to refactor for complex OR logic
+      console.log(`⚠️ OR operator not fully implemented, using AND logic`);
+    }
+  }
+
+  const rowsAfter = filteredData.length;
+  const rowsRemoved = rowsBefore - rowsAfter;
+
+  const conditionDescription = filterConditions
+    .map(c => {
+      if (c.operator === 'between') {
+        return `${c.column} between ${c.value} and ${c.value2}`;
+      } else if (c.operator === 'in') {
+        return `${c.column} in [${(c.values || []).join(', ')}]`;
+      } else {
+        return `${c.column} ${c.operator} ${c.value}`;
+      }
+    })
+    .join(` ${logicalOperator} `);
+
+  console.log(`✅ Filter applied (in-memory): ${rowsBefore} → ${rowsAfter} rows (removed ${rowsRemoved})`);
+
+  return {
+    filteredData,
+    rowsBefore,
+    rowsAfter,
+    rowsRemoved,
+    conditionDescription,
+  };
+}
+
 function normalizeNumericValue(value: any): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') {
@@ -5504,128 +5685,35 @@ export async function executeDataOperation(
       }
 
       const logicalOperator = intent.logicalOperator || 'AND';
-      let filteredData = [...data];
-      
-      // Apply each filter condition (resolve column to actual key – handles "Resigned?" etc.)
-      const filterFirstRow = data[0];
-      for (const condition of intent.filterConditions) {
-        const { column, operator, value, value2, values } = condition;
-        
-        if (!column) {
-          console.warn(`⚠️ Skipping filter condition without column:`, condition);
-          continue;
-        }
-        
-        const resolvedCol = filterFirstRow ? resolveColumnKeyInRow(column, filterFirstRow) : column;
-        if (!resolvedCol) {
-          const availableColumns = Object.keys(data[0] || {}).slice(0, 10).join(', ');
-          return {
-            answer: `Column "${column}" not found in dataset. Available columns: ${availableColumns}${Object.keys(data[0] || {}).length > 10 ? '...' : ''}`,
-            requiresClarification: true,
-          };
-        }
-        
-        // Apply filter based on operator
-        const rowsBeforeFilter = filteredData.length;
-        
-        filteredData = filteredData.filter(row => {
-          const cellValue = row[resolvedCol];
-          
-          switch (operator) {
-            case '=':
-              // Case-insensitive string comparison for text, exact for numbers
-              if (typeof cellValue === 'number' && typeof value === 'number') {
-                return cellValue === value;
-              }
-              return String(cellValue).toLowerCase().trim() === String(value).toLowerCase().trim();
-            case '!=':
-              if (typeof cellValue === 'number' && typeof value === 'number') {
-                return cellValue !== value;
-              }
-              return String(cellValue).toLowerCase().trim() !== String(value).toLowerCase().trim();
-            case '>':
-              return Number(cellValue) > Number(value);
-            case '>=':
-              return Number(cellValue) >= Number(value);
-            case '<':
-              return Number(cellValue) < Number(value);
-            case '<=':
-              return Number(cellValue) <= Number(value);
-            case 'contains':
-              return String(cellValue).toLowerCase().includes(String(value).toLowerCase());
-            case 'startsWith':
-              return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
-            case 'endsWith':
-              return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
-            case 'between':
-              if (value2 === undefined || value2 === null) {
-                console.warn(`⚠️ Between operator requires value2, skipping condition`);
-                return true;
-              }
-              const numValue = Number(cellValue);
-              return numValue >= Number(value) && numValue <= Number(value2);
-            case 'in':
-              if (!values || !Array.isArray(values) || values.length === 0) {
-                console.warn(`⚠️ In operator requires values array, skipping condition`);
-                return true;
-              }
-              const cellStr = String(cellValue).toLowerCase().trim();
-              return values.some(v => String(v).toLowerCase().trim() === cellStr);
-            default:
-              console.warn(`⚠️ Unknown filter operator: ${operator}`);
-              return true;
-          }
-        });
-        
-        const rowsAfterFilter = filteredData.length;
-        console.log(`  ✅ Applied filter: ${column} ${operator} ${value || (values ? `[${values.join(', ')}]` : '')}${value2 ? ` and ${value2}` : ''} → ${rowsBeforeFilter} → ${rowsAfterFilter} rows`);
-        
-        // If using OR operator, we need to combine results differently
-        // For now, AND is the default - all conditions must match
-        if (logicalOperator === 'OR') {
-          // For OR, we'd need to track which rows match each condition
-          // This is a simplified version - you may want to refactor for complex OR logic
-          console.log(`⚠️ OR operator not fully implemented, using AND logic`);
-        }
+      const {
+        filteredData,
+        rowsBefore,
+        rowsAfter,
+        rowsRemoved,
+        conditionDescription,
+        errorMessage,
+      } = applyFilterConditionsInMemory(data, intent.filterConditions, logicalOperator);
+
+      if (errorMessage) {
+        return {
+          answer: errorMessage,
+          requiresClarification: true,
+        };
       }
-      
-      const rowsBefore = data.length;
-      const rowsAfter = filteredData.length;
-      const rowsRemoved = rowsBefore - rowsAfter;
-      
-      console.log(`✅ Filter applied: ${rowsBefore} → ${rowsAfter} rows (removed ${rowsRemoved})`);
       
       if (rowsAfter === 0) {
         return {
-          answer: `⚠️ The filter conditions resulted in an empty dataset (0 rows). Please adjust your filter criteria.\n\n**Filter conditions:** ${intent.filterConditions.map(c => {
-            if (c.operator === 'between') {
-              return `${c.column} between ${c.value} and ${c.value2}`;
-            } else if (c.operator === 'in') {
-              return `${c.column} in [${c.values?.join(', ')}]`;
-            } else {
-              return `${c.column} ${c.operator} ${c.value}`;
-            }
-          }).join(` ${logicalOperator} `)}`,
+          answer: `⚠️ The filter conditions resulted in an empty dataset (0 rows). Please adjust your filter criteria.\n\n**Filter conditions:** ${conditionDescription}`,
         };
       }
       
       // Build description of filter conditions
-      const conditionDescriptions = intent.filterConditions.map(c => {
-        if (c.operator === 'between') {
-          return `${c.column} between ${c.value} and ${c.value2}`;
-        } else if (c.operator === 'in') {
-          return `${c.column} in [${c.values?.join(', ')}]`;
-        } else {
-          return `${c.column} ${c.operator} ${c.value}`;
-        }
-      }).join(` ${logicalOperator} `);
-      
       // Save filtered data as the new working dataset
       const saveResult = await saveModifiedData(
         sessionId,
         filteredData,
         'filter',
-        `Filtered data: ${conditionDescriptions}`,
+        `Filtered data: ${conditionDescription}`,
         sessionDoc
       );
       
@@ -5634,7 +5722,7 @@ export async function executeDataOperation(
       const cappedPreview = Array.isArray(previewData) ? previewData.slice(0, 50) : [];
       
       const answer = `✅ I've filtered the dataset based on your conditions:\n\n` +
-        `**Filter conditions:** ${conditionDescriptions}\n` +
+        `**Filter conditions:** ${conditionDescription}\n` +
         `**Rows before:** ${rowsBefore}\n` +
         `**Rows after:** ${rowsAfter}\n` +
         `**Rows removed:** ${rowsRemoved}\n\n` +

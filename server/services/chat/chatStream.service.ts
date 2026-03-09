@@ -114,7 +114,7 @@ export interface ProcessStreamChatParams {
   targetTimestamp?: number;
   username: string;
   res: Response;
-  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'; // Optional mode override
+  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'; // Optional mode override (UI-visible modes only)
 }
 
 /** Build human-readable execution plan steps from a QueryPlan for SSE execution_plan event. */
@@ -378,7 +378,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // Determine mode: use provided mode (user override) or auto-detect
     // Treat 'general' the same as no mode (auto-detect)
     const shouldAutoDetect = !mode || mode === 'general';
-    let detectedMode: 'analysis' | 'dataOps' | 'modeling' = mode && mode !== 'general' ? mode : 'analysis';
+    let detectedMode: 'analysis' | 'dataOps' | 'modeling' | 'chartOnFiltered' =
+      mode && mode !== 'general' ? mode : 'analysis';
     
     if (shouldAutoDetect) {
       // Auto-detect mode using AI classifier

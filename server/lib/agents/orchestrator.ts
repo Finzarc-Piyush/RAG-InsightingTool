@@ -9,6 +9,8 @@ import { DataOpsHandler } from './handlers/dataOpsHandler.js';
 import { GeneralHandler } from './handlers/generalHandler.js';
 import { extractColumnsFromHistory, extractRequiredColumnsWithLLMAssist } from './utils/columnExtractor.js';
 import { detectComplexQuery } from './complexQueryDetector.js';
+import { applyFilterConditionsInMemory, type FilterCondition } from '../dataOps/dataOpsOrchestrator.js';
+import { parseChartOnFilterRequest } from './chartOnFilterParser.js';
 import queryCache from '../cache.js';
 
 export type ThinkingStepCallback = (step: ThinkingStep) => void;
@@ -97,6 +99,10 @@ export class AgentOrchestrator {
 
       // Reset current active step at the start
       this.currentActiveStep = null;
+      // Working copy of data for analysis/modeling flows (can be pre-filtered)
+      let workingData = data;
+      // Optional human-readable description of filters applied in chartOnFiltered mode
+      let chartOnFilteredDescription: string | undefined;
       
       // ============================================
       // COMPLETE SEPARATE ROUTE FOR DATA OPS MODE
@@ -242,8 +248,7 @@ export class AgentOrchestrator {
       }
       
       // ============================================
-      // ANALYSIS MODE ROUTE (existing logic)
-      // Also handles modeling mode (routes through same flow)
+      // ANALYSIS / CHART-ON-FILTERED / MODELING ROUTE
       // Also handles general questions detected in dataOps mode
       // ============================================
       
@@ -275,6 +280,99 @@ export class AgentOrchestrator {
       
       // Use enriched question for all subsequent processing
       const finalQuestion = enrichedQuestion;
+
+      // Optional pre-filter route for chartOnFiltered mode:
+      // 1) Parse filter conditions + (optional) chartType from the question
+      // 2) Apply filters in-memory using the same semantics as dataOps
+      // 3) Continue with normal analysis flow on the filtered subset
+      if (mode === 'chartOnFiltered') {
+        this.emitThinkingStep(
+          onThinkingStep,
+          'Filtering data for requested chart',
+          'active'
+        );
+        try {
+          const parseResult = await parseChartOnFilterRequest(finalQuestion, summary);
+          const filterConditions: FilterCondition[] =
+            (parseResult.filterConditions as FilterCondition[]) || [];
+
+          if (filterConditions.length === 0) {
+            console.log(
+              'ℹ️ chartOnFiltered mode: no explicit filter conditions extracted, continuing without pre-filtering'
+            );
+            this.emitThinkingStep(
+              onThinkingStep,
+              'Filtering data for requested chart',
+              'completed',
+              'No explicit filter found; using full dataset'
+            );
+          } else {
+            const {
+              filteredData,
+              rowsBefore,
+              rowsAfter,
+              rowsRemoved,
+              conditionDescription,
+              errorMessage,
+            } = applyFilterConditionsInMemory(workingData, filterConditions, 'AND');
+
+            chartOnFilteredDescription = conditionDescription;
+
+            if (errorMessage) {
+              console.log(
+                `⚠️ chartOnFiltered pre-filtering failed due to column issue: ${errorMessage}`
+              );
+              this.emitThinkingStep(
+                onThinkingStep,
+                'Filtering data for requested chart',
+                'error',
+                errorMessage
+              );
+              return {
+                answer: errorMessage,
+              };
+            }
+
+            if (rowsAfter === 0) {
+              const msg = `The filter conditions resulted in no matching rows. Please adjust the filter and try again.\n\n**Filter conditions:** ${conditionDescription}`;
+              console.log('⚠️ chartOnFiltered pre-filtering produced empty dataset');
+              this.emitThinkingStep(
+                onThinkingStep,
+                'Filtering data for requested chart',
+                'completed',
+                'No rows matched the filter'
+              );
+              return {
+                answer: msg,
+              };
+            }
+
+            console.log(
+              `📊 chartOnFiltered mode: data ${rowsBefore} → ${rowsAfter} rows (removed ${rowsRemoved}) for conditions: ${conditionDescription}`
+            );
+            workingData = filteredData;
+            this.emitThinkingStep(
+              onThinkingStep,
+              'Filtering data for requested chart',
+              'completed',
+              `Using ${rowsAfter} matching rows for the chart`
+            );
+          }
+        } catch (filterError) {
+          const msg =
+            filterError instanceof Error ? filterError.message : String(filterError);
+          console.error(
+            '⚠️ chartOnFiltered pre-filtering failed, continuing without pre-filter:',
+            msg
+          );
+          this.emitThinkingStep(
+            onThinkingStep,
+            'Filtering data for requested chart',
+            'error',
+            'Filter extraction failed; using full dataset'
+          );
+        }
+      }
 
       // Step 2: Classify intent (only for analysis mode)
       // Use the enriched/final question for intent classification
@@ -438,9 +536,9 @@ export class AgentOrchestrator {
         /\brename\s+column\b/i.test(finalQuestion) ||
         /\bnormalize\s+(column|the)\b/i.test(finalQuestion);
 
-      let filteredData = data;
-      if (!isDataOpThatModifiesSchema && allRequiredColumns.length > 0 && data.length > 0) {
-        const availableColumns = Object.keys(data[0]);
+      let filteredData = workingData;
+      if (!isDataOpThatModifiesSchema && allRequiredColumns.length > 0 && workingData.length > 0) {
+        const availableColumns = Object.keys(workingData[0]);
         const columnsToKeep = allRequiredColumns.filter(col =>
           availableColumns.some(availCol =>
             availCol.toLowerCase().trim() === col.toLowerCase().trim()
@@ -449,7 +547,7 @@ export class AgentOrchestrator {
 
         if (columnsToKeep.length > 0 && columnsToKeep.length < availableColumns.length) {
           console.log(`📊 Filtering data to ${columnsToKeep.length} required columns: ${columnsToKeep.slice(0, 5).join(', ')}${columnsToKeep.length > 5 ? '...' : ''}`);
-          filteredData = data.map(row => {
+          filteredData = workingData.map(row => {
             const filteredRow: Record<string, any> = {};
             columnsToKeep.forEach(col => {
               const matchedCol = availableColumns.find(availCol =>
@@ -461,7 +559,7 @@ export class AgentOrchestrator {
             });
             return filteredRow;
           });
-          console.log(`✅ Filtered data: ${data.length} rows × ${availableColumns.length} cols → ${filteredData.length} rows × ${columnsToKeep.length} cols`);
+          console.log(`✅ Filtered data: ${workingData.length} rows × ${availableColumns.length} cols → ${filteredData.length} rows × ${columnsToKeep.length} cols`);
         }
       } else if (isDataOpThatModifiesSchema) {
         console.log(`📊 Data op that modifies schema: skipping column filter to preserve all columns`);
@@ -491,7 +589,7 @@ export class AgentOrchestrator {
 
       // Step 6: Build handler context
       const handlerContext: HandlerContext = {
-        data: filteredData, // Use filtered data
+        data: filteredData, // Use filtered (and possibly pre-filtered) data
         summary,
         context,
         chatHistory,
@@ -561,11 +659,29 @@ export class AgentOrchestrator {
         this.emitThinkingStep(onThinkingStep, "Putting everything together", "active");
         this.emitThinkingStep(onThinkingStep, "Putting everything together", "completed");
         
+        // Optionally post-process charts for special modes
+        let processedCharts = response.charts;
+        if (mode === 'chartOnFiltered' && processedCharts && processedCharts.length > 0 && chartOnFilteredDescription) {
+          processedCharts = processedCharts.map((chart) => {
+            if (!chart || !chart.title) return chart;
+            // Avoid duplicating filter suffix if already present
+            const hasFilterSuffix =
+              chart.title.includes('Filtered:') || chart.title.includes('filtered:');
+            const newTitle = hasFilterSuffix
+              ? chart.title
+              : `${chart.title} (Filtered: ${chartOnFilteredDescription})`;
+            return {
+              ...chart,
+              title: newTitle,
+            };
+          });
+        }
+        
         // Return successful response
         console.log(`✅ Handler returned answer (${response.answer.length} chars)`);
         const result = {
           answer: response.answer,
-          charts: response.charts,
+          charts: processedCharts,
           insights: response.insights,
           table: response.table,
           operationResult: response.operationResult,
