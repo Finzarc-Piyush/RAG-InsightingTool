@@ -77,6 +77,7 @@ function createConnection(config: SnowflakeConnectionConfig): snowflake.Connecti
     account: config.account,
     username: config.username,
     warehouse: config.warehouse,
+    clientSessionKeepAlive: true,
   };
 
   // Determine authentication method: key pair (SSO) or password
