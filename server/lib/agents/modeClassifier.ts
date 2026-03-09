@@ -88,6 +88,37 @@ export async function classifyMode(
     return result;
   }
 
+  // ---------------------------------------------------------------------------
+  // HARD ROUTING: Simple attrition/resignation COUNT questions → dataOps
+  //
+  // For questions like:
+  //   - "how many people have resigned"
+  //   - "what many people have resigned" (common typo instead of "how many")
+  //   - "how many employees left the company"
+  // a deterministic row-count over an attrition flag column is both faster
+  // and more reliable than going through the semantic business-metrics
+  // pipeline. These should therefore be handled by the Data Ops engine
+  // (count_rows) just like other row-count questions.
+  // ---------------------------------------------------------------------------
+  const resignationCountPattern =
+    /\b(how|what)\s+many\b.*\b(resign(ed)?|resignations|left the company|left company|attrited|attrition)\b/.test(
+      questionLower
+    ) ||
+    /\b(number of|count of)\b.*\b(resign(ed)?|resignations|left the company|left company|attrited|attrition)\b/.test(
+      questionLower
+    );
+
+  if (resignationCountPattern) {
+    const result: ModeClassification = {
+      mode: 'dataOps',
+      confidence: 0.96,
+      reasoning:
+        'Detected simple attrition/resignation count question (e.g., "how many people have resigned"), routing to dataOps for precise count_rows over the attrition flag.',
+    };
+    console.log(`📌 Hard-routed mode to dataOps for resignation/attrition count question: "${question}"`);
+    return result;
+  }
+
   // Build context from chat history
   const recentHistory = chatHistory
     .slice(-5) // Use fewer messages for mode classification (faster)

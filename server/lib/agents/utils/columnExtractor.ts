@@ -1,6 +1,7 @@
 import { AnalysisIntent } from '../intentClassifier.js';
 import { ChartSpec, DataSummary } from '../../../shared/schema.js';
 import { ParsedQuery } from '../../../shared/queryTypes.js';
+import { openai, MODEL } from '../../openai.js';
 
 /**
  * Extract mentioned column names from question text
@@ -153,4 +154,99 @@ export function extractColumnsFromHistory(
   
   return Array.from(columns);
 }
+
+/**
+ * LLM-assisted variant of extractRequiredColumns.
+ *
+ * It first runs the deterministic extractor above, then asks the LLM to
+ * propose additional dataset columns that semantically match the user's
+ * wording (e.g. "people who left" → columns like "resigned", "termination").
+ *
+ * This keeps the core architecture intact while adding semantic similarity.
+ */
+export async function extractRequiredColumnsWithLLMAssist(
+  question: string,
+  intent: AnalysisIntent,
+  parsedQuery: ParsedQuery | null,
+  chartSpecs: ChartSpec[] | null,
+  summary: DataSummary
+): Promise<string[]> {
+  const baseColumns = extractRequiredColumns(
+    question,
+    intent,
+    parsedQuery,
+    chartSpecs,
+    summary
+  );
+
+  const availableColumns = summary.columns.map((c) => c.name);
+
+  const prompt = `You are helping an analytics engine decide which dataset columns
+should be loaded to answer a user's question.
+
+USER QUESTION:
+"${question}"
+
+AVAILABLE COLUMNS:
+${availableColumns.map((c) => `- ${c}`).join("\n")}
+
+CURRENTLY SELECTED COLUMNS (from heuristic extractor):
+${baseColumns.length > 0 ? baseColumns.join(", ") : "(none)"}
+
+TASK:
+- Identify any additional columns from AVAILABLE COLUMNS that are SEMANTICALLY relevant
+  to the question, even if the column names don't literally appear in the text.
+- Focus especially on synonyms like:
+  - "people who left", "resigned", "attrition", "terminated", "left_company"
+  - "employees", "headcount", "staff"
+  - "department", "team", "business_unit"
+- Do NOT remove any existing columns; only add more when clearly helpful.
+
+OUTPUT STRICT JSON:
+{
+  "additionalColumns": ["col1", "col2", ...],
+  "reasoning": "short explanation of why these columns were added"
+}
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: MODEL as string,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a helper for selecting relevant dataset columns. Respond ONLY with valid JSON.",
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 400,
+      response_format: { type: "json_object" },
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      return baseColumns;
+    }
+
+    const parsed = JSON.parse(content);
+    const additional: string[] = Array.isArray(parsed.additionalColumns)
+      ? parsed.additionalColumns.map((c: any) => String(c)).filter(Boolean)
+      : [];
+
+    const normalizedBase = new Set(baseColumns);
+    for (const col of additional) {
+      if (availableColumns.includes(col) && !normalizedBase.has(col)) {
+        normalizedBase.add(col);
+      }
+    }
+
+    return Array.from(normalizedBase);
+  } catch (error) {
+    console.error("❌ extractRequiredColumnsWithLLMAssist failed:", error);
+    return baseColumns;
+  }
+}
+
 

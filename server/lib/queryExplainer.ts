@@ -149,6 +149,48 @@ export interface ExplainStreamCallbacks {
 }
 
 /**
+ * Build a small deterministic numeric summary from a QueryResult.
+ * This is generic and works for any aggregate:
+ * - For a single-row aggregate result, it will echo numeric columns explicitly.
+ */
+export function buildNumericSummarySentence(
+  userQuestion: string,
+  queryResult: QueryResult
+): string | null {
+  if (!queryResult.rows || queryResult.rows.length === 0) {
+    return null;
+  }
+
+  const firstRow = queryResult.rows[0];
+  if (!firstRow) return null;
+
+  const numericEntries: Array<{ column: string; value: number }> = [];
+  for (const col of queryResult.meta.columns) {
+    const raw = firstRow[col];
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      numericEntries.push({ column: col, value: raw });
+    }
+  }
+
+  if (numericEntries.length === 0) {
+    return null;
+  }
+
+  const howManyPattern = /\b(how many|how much|count|number of)\b/i;
+  if (numericEntries.length === 1) {
+    const { column, value } = numericEntries[0];
+    if (howManyPattern.test(userQuestion)) {
+      return `According to the dataset, the count for "${column}" is ${value}.`;
+    }
+    return `According to the dataset, "${column}" has a value of ${value}.`;
+  }
+
+  // If there are multiple numeric columns, surface the first few.
+  const parts = numericEntries.slice(0, 3).map(({ column, value }) => `"${column}" = ${value}`);
+  return `According to the dataset, key numeric results are: ${parts.join(", ")}.`;
+}
+
+/**
  * Streaming variant: generate explanation token-by-token via Azure OpenAI stream.
  * Forwards each token via onChunk. Still parses KEY INSIGHTS from accumulated content and returns ExplainResult.
  */

@@ -24,8 +24,14 @@ import { processStreamDataOperation } from "../dataOps/dataOpsStream.service.js"
 import { Response } from "express";
 import { planQueryWithAI, buildDatasetProfile } from "../../lib/queryPlanner.js";
 import { executeQueryPlan } from "../../lib/queryExecutor.js";
-import { explainQueryResultWithAI, explainQueryResultWithAIStream } from "../../lib/queryExplainer.js";
+import { explainQueryResultWithAI, explainQueryResultWithAIStream, buildNumericSummarySentence } from "../../lib/queryExplainer.js";
 import type { QueryResult, QueryPlan } from "../../shared/queryTypes.js";
+import { interpretBusinessQuestion } from "../semantic/businessInterpreter.js";
+import { resolveBusinessMetric } from "../semantic/metricResolver.js";
+import { semanticToQueryPlan } from "../queryPlanner/semanticPlanner.js";
+import { generateDatasetSemantics } from "../semantic/datasetSemantics.js";
+import { extractRequiredColumnsWithLLMAssist } from "../../lib/agents/utils/columnExtractor.js";
+import { updateChatDocument } from "../../models/chat.model.js";
 
 /** Returns true if the message is a clear request for data summary (same patterns as data-ops summary intent). */
 function isDataSummaryRequest(message: string): boolean {
@@ -400,49 +406,104 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const useLegacyPathForCharts = detectedMode === 'analysis' && wantsChartResponse(message, processingChatHistory);
 
     if (detectedMode === 'analysis' && !useLegacyPathForCharts) {
-      // New two-stage execution path: planner → executor → explainer
+      // New two-stage execution path: semantic planner (if possible) → planner → executor → explainer
       onThinkingStep({
         step: 'Planning query against full dataset',
         status: 'active',
         timestamp: Date.now(),
       });
-      
-      const planResult = await planQueryWithAI({
-        userQuestion: message,
-        chatDocument,
-      });
-      
-      if (!planResult.queryPlan || planResult.error) {
-        console.error('⚠️ Query planner failed, falling back to legacy path:', planResult.error);
-        onThinkingStep({
-          step: 'Planning query against full dataset',
-          status: 'error',
-          timestamp: Date.now(),
-          details: planResult.error?.message || 'Planner failed, using legacy analysis',
+
+      // Ensure dataset semantics for semantic layers
+      let datasetSemantics = chatDocument.analysisMetadata?.datasetSemantics;
+      if (!datasetSemantics) {
+        try {
+          datasetSemantics = await generateDatasetSemantics(chatDocument);
+          chatDocument.analysisMetadata = {
+            ...chatDocument.analysisMetadata,
+            datasetSemantics,
+          };
+          await updateChatDocument(chatDocument);
+        } catch (semError) {
+          console.warn("⚠️ Failed to generate dataset semantics (stream path); continuing without it:", semError);
+        }
+      }
+
+      // Try semantic business layer first
+      let chosenPlan: QueryPlan | null = null;
+      try {
+        const semanticIntent = await interpretBusinessQuestion({
+          question: message,
+          datasetProfile,
+          dataSummary,
+          datasetSemantics,
         });
-        
-        // Fallback: legacy path using full data
-        const latestData = await loadLatestData(chatDocument);
-        result = await answerQuestion(
-          latestData,
-          message,
-          processingChatHistory,
-          chatDocument.dataSummary,
-          sessionId,
-          chatLevelInsights,
-          onThinkingStep,
-          detectedMode
-        );
-      } else {
+
+        if (semanticIntent && semanticIntent.businessMetric) {
+          const metricDefinition = await resolveBusinessMetric({
+            semanticIntent,
+            datasetProfile,
+            dataSummary,
+            datasetSemantics,
+          });
+
+          if (metricDefinition && metricDefinition.requiredColumns.length > 0) {
+            chosenPlan = await semanticToQueryPlan({
+              semanticIntent,
+              metricDefinition,
+              datasetProfile,
+            });
+            if (chosenPlan) {
+              console.log("🧠 Stream: using semantic QueryPlan for business question.");
+            }
+          }
+        }
+      } catch (semError) {
+        console.warn("⚠️ Semantic planner failed in stream path; falling back to generic planner:", semError);
+      }
+
+      // If semantic planner didn't produce a plan, use existing planner
+      if (!chosenPlan) {
+        const planResult = await planQueryWithAI({
+          userQuestion: message,
+          chatDocument,
+        });
+
+        if (!planResult.queryPlan || planResult.error) {
+          console.error('⚠️ Query planner failed, falling back to legacy path:', planResult.error);
+          onThinkingStep({
+            step: 'Planning query against full dataset',
+            status: 'error',
+            timestamp: Date.now(),
+            details: planResult.error?.message || 'Planner failed, using legacy analysis',
+          });
+
+          // Fallback: legacy path using full data
+          const latestData = await loadLatestData(chatDocument);
+          result = await answerQuestion(
+            latestData,
+            message,
+            processingChatHistory,
+            chatDocument.dataSummary,
+            sessionId,
+            chatLevelInsights,
+            onThinkingStep,
+            detectedMode
+          );
+        } else {
+          chosenPlan = planResult.queryPlan;
+        }
+      }
+
+      if (chosenPlan) {
         onThinkingStep({
           step: 'Planning query against full dataset',
           status: 'completed',
           timestamp: Date.now(),
-          details: `Action: ${planResult.queryPlan.action}, requiresFullScan: ${planResult.queryPlan.requiresFullScan ? 'yes' : 'no'}`,
+          details: `Action: ${chosenPlan.action}, requiresFullScan: ${chosenPlan.requiresFullScan ? 'yes' : 'no'}`,
         });
 
         if (checkConnection()) {
-          const planSteps = buildExecutionPlanSteps(planResult.queryPlan);
+          const planSteps = buildExecutionPlanSteps(chosenPlan);
           sendSSE(res, 'execution_plan', { steps: planSteps });
           sendThinkingChunk("\n\n**Execution plan:**\n" + planSteps.map((s) => "- " + s).join("\n") + "\n");
         }
@@ -473,7 +534,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           const execStartMs = Date.now();
           const queryResult: QueryResult = await executeQueryPlan({
             chatDoc: chatDocument,
-            queryPlan: planResult.queryPlan,
+            queryPlan: chosenPlan,
             onSqlGenerated: (sql) => {
               if (!checkConnection()) return;
               sendSSE(res, 'code_start', { language: 'sql' });
@@ -516,6 +577,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             details: `Returned ${queryResult.meta.rowCount} rows (${queryResult.meta.columns.join(', ')})`,
           });
           lastEmitted = Date.now();
+
+          // Stream a deterministic numeric summary first so the user always sees the key numbers.
+          const numericSummarySentence = buildNumericSummarySentence(message, queryResult);
+          if (numericSummarySentence && checkConnection()) {
+            sendSSE(res, 'message_chunk', { content: numericSummarySentence + '\n\n' });
+          }
 
           onThinkingStep({
             step: 'Generating explanation from query result',

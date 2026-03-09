@@ -13,12 +13,20 @@ import {
 } from "../../models/chat.model.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
 import { loadLatestData, loadDataForColumns } from "../../utils/dataLoader.js";
-import { extractRequiredColumns, extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
+import { extractColumnsFromHistory, extractRequiredColumnsWithLLMAssist } from "../../lib/agents/utils/columnExtractor.js";
 import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
 import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
 import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
+import { planQueryWithAI, buildDatasetProfile } from "../../lib/queryPlanner.js";
+import { executeQueryPlan } from "../../lib/queryExecutor.js";
+import { explainQueryResultWithAI, buildNumericSummarySentence } from "../../lib/queryExplainer.js";
+import { interpretBusinessQuestion } from "../semantic/businessInterpreter.js";
+import { resolveBusinessMetric } from "../semantic/metricResolver.js";
+import { semanticToQueryPlan } from "../queryPlanner/semanticPlanner.js";
+import { generateDatasetSemantics } from "../semantic/datasetSemantics.js";
+import { updateChatDocument } from "../../models/chat.model.js";
 
 export interface ProcessChatMessageParams {
   sessionId: string;
@@ -85,7 +93,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       console.log('📊 Data op that modifies schema detected; loading full data to preserve all columns');
     } else {
       const historyColumns = extractColumnsFromHistory(processingChatHistory || [], chatDocument.dataSummary);
-      requiredColumns = extractRequiredColumns(
+      requiredColumns = await extractRequiredColumnsWithLLMAssist(
         message,
         intent,
         parsedQuery,
@@ -162,22 +170,165 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     ? chatDocument.insights
     : undefined;
 
-  // Answer the question using the latest data
-  // Include permanent context if available
-  // Pass columnarStoragePath and loadFullData for DuckDB plan path (analytical queries on large files)
-  const answerResult = await answerQuestion(
-    latestData,
-    message,
-    processingChatHistory,
-    chatDocument.dataSummary,
-    sessionId,
-    chatLevelInsights,
-    undefined, // onThinkingStep
-    undefined, // mode
-    chatDocument.permanentContext, // permanent context
-    columnarStoragePathOpt,
-    loadFullDataOpt
-  );
+  // First, try the planner → executor → explainer pipeline for analysis-style questions.
+  // This uses an LLM to translate the natural-language question into a structured QueryPlan,
+  // executes it against the full dataset (Snowflake or blob-backed), and then uses the LLM
+  // again to explain the result in manager-friendly language.
+  //
+  // IMPORTANT: We only attempt this for questions that do NOT modify the dataset schema.
+  // Data operations (add/create/remove column, etc.) must still go through the legacy
+  // data-ops engine in answerQuestion so we don't lose transformation capabilities.
+  let answerResult:
+    | {
+        answer: string;
+        charts?: any[];
+        insights?: any[];
+        preview?: any;
+        summary?: any;
+      }
+    | null = null;
+
+  if (!isDataOpThatModifiesSchema) {
+    try {
+      const datasetProfile = buildDatasetProfile(chatDocument);
+
+      // Ensure we have a high-level dataset semantics description for semantic layers.
+      let datasetSemantics = chatDocument.analysisMetadata?.datasetSemantics;
+      if (!datasetSemantics) {
+        try {
+          datasetSemantics = await generateDatasetSemantics(chatDocument);
+          chatDocument.analysisMetadata = {
+            ...chatDocument.analysisMetadata,
+            datasetSemantics,
+          };
+          await updateChatDocument(chatDocument);
+        } catch (semError) {
+          console.warn("⚠️ Failed to generate dataset semantics, continuing without it:", semError);
+        }
+      }
+
+      // Step 1: Business semantic interpretation
+      const semanticIntent = await interpretBusinessQuestion({
+        question: message,
+        datasetProfile,
+        dataSummary: chatDocument.dataSummary,
+        datasetSemantics,
+      });
+
+      if (semanticIntent && semanticIntent.businessMetric) {
+        // Step 2: Metric resolution
+        const metricDefinition = await resolveBusinessMetric({
+          semanticIntent,
+          datasetProfile,
+          dataSummary: chatDocument.dataSummary,
+          datasetSemantics,
+        });
+
+        if (metricDefinition && metricDefinition.requiredColumns.length > 0) {
+          console.log(
+            `🧠 Semantic metric resolved: ${semanticIntent.businessMetric} → columns=${metricDefinition.requiredColumns.join(
+              ", "
+            )}`
+          );
+          // Step 3: Semantic → QueryPlan
+          const semanticPlan = await semanticToQueryPlan({
+            semanticIntent,
+            metricDefinition,
+            datasetProfile,
+          });
+
+          if (semanticPlan) {
+            console.log("🧠 Using semantic QueryPlan path for business question.");
+            const queryResult = await executeQueryPlan({
+              chatDoc: chatDocument,
+              queryPlan: semanticPlan,
+            });
+
+            const explainResult = await explainQueryResultWithAI({
+              userQuestion: message,
+              queryResult,
+              datasetProfile,
+              dataSummary: chatDocument.dataSummary,
+              chatInsights: chatLevelInsights,
+            });
+
+            const numericSummary =
+              buildNumericSummarySentence(message, queryResult) || "";
+
+            answerResult = {
+              answer: numericSummary
+                ? `${numericSummary}\n\n${explainResult.explanation}`
+                : explainResult.explanation,
+              charts: [],
+              insights: explainResult.insights,
+            };
+          }
+        }
+      }
+
+      // Fallback: existing planner path
+      if (!answerResult) {
+        const planResult = await planQueryWithAI({
+          userQuestion: message,
+          chatDocument,
+        });
+
+        if (planResult.queryPlan && !planResult.error) {
+          const queryResult = await executeQueryPlan({
+            chatDoc: chatDocument,
+            queryPlan: planResult.queryPlan,
+          });
+
+          const explainResult = await explainQueryResultWithAI({
+            userQuestion: message,
+            queryResult,
+            datasetProfile,
+            dataSummary: chatDocument.dataSummary,
+            chatInsights: chatLevelInsights,
+          });
+
+          const numericSummary =
+            buildNumericSummarySentence(message, queryResult) || "";
+
+          answerResult = {
+            answer: numericSummary
+              ? `${numericSummary}\n\n${explainResult.explanation}`
+              : explainResult.explanation,
+            charts: [],
+            insights: explainResult.insights,
+          };
+        } else {
+          console.warn(
+            "⚠️ Query planner returned no valid plan in non-stream chat; falling back to legacy answerQuestion.",
+            planResult.error
+          );
+        }
+      }
+    } catch (plannerError) {
+      console.error(
+        "⚠️ Planner/executor/explainer pipeline failed in non-stream chat; falling back to legacy answerQuestion.",
+        plannerError
+      );
+    }
+  }
+
+  // Fallback: legacy path using in-memory data + data-ops engine.
+  // This still benefits from optimized loading (requiredColumns / DuckDB) above.
+  if (!answerResult) {
+    answerResult = await answerQuestion(
+      latestData,
+      message,
+      processingChatHistory,
+      chatDocument.dataSummary,
+      sessionId,
+      chatLevelInsights,
+      undefined, // onThinkingStep
+      undefined, // mode
+      chatDocument.permanentContext, // permanent context
+      columnarStoragePathOpt,
+      loadFullDataOpt
+    );
+  }
 
   // Enrich charts with data and insights
   if (answerResult.charts && Array.isArray(answerResult.charts)) {

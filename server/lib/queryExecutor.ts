@@ -56,12 +56,23 @@ function buildSnowflakeSqlFromPlan(
     const col = escapeIdentifier(filter.column);
     switch (filter.operator) {
       case "=":
-        conditions.push(`${col} = ?`);
-        params.push(filter.value);
+        // Case-insensitive, trim-tolerant equality for string values.
+        if (typeof filter.value === "string") {
+          conditions.push(`LOWER(${col}) = LOWER(?)`);
+          params.push(filter.value.trim());
+        } else {
+          conditions.push(`${col} = ?`);
+          params.push(filter.value);
+        }
         break;
       case "!=":
-        conditions.push(`${col} <> ?`);
-        params.push(filter.value);
+        if (typeof filter.value === "string") {
+          conditions.push(`LOWER(${col}) <> LOWER(?)`);
+          params.push(filter.value.trim());
+        } else {
+          conditions.push(`${col} <> ?`);
+          params.push(filter.value);
+        }
         break;
       case ">":
         conditions.push(`${col} > ?`);
@@ -264,8 +275,25 @@ function passesFilter(row: Record<string, any>, filter: QueryFilter): boolean {
 
   switch (filter.operator) {
     case "=":
+      // Case-insensitive, trim-tolerant equality for strings; type-flexible for numbers.
+      if (
+        (typeof value === "string" || typeof value === "number") &&
+        (typeof filter.value === "string" || typeof filter.value === "number")
+      ) {
+        const left = String(value).trim().toLowerCase();
+        const right = String(filter.value).trim().toLowerCase();
+        return left === right;
+      }
       return value === filter.value;
     case "!=":
+      if (
+        (typeof value === "string" || typeof value === "number") &&
+        (typeof filter.value === "string" || typeof filter.value === "number")
+      ) {
+        const left = String(value).trim().toLowerCase();
+        const right = String(filter.value).trim().toLowerCase();
+        return left !== right;
+      }
       return value !== filter.value;
     case ">":
       return typeof filter.value === "number"
