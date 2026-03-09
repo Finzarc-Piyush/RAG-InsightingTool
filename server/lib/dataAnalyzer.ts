@@ -28,7 +28,7 @@ import {
   computeReassignmentMetrics
 } from "./domain/hrMetrics.js";
 import {
-  classifyQuestion,
+  classifyQuestion as routeQuestion,
   type QuestionType
 } from "./questionRouter.js";
 import { answerGeneralQuestion } from "./generalKnowledgeClient.js";
@@ -545,7 +545,7 @@ export async function answerQuestion(
   // -----------------------------------------------------------------------
   // QUESTION ROUTER: decide between data, general, or mixed behavior
   // -----------------------------------------------------------------------
-  const qType: QuestionType = classifyQuestion(question, summary, chatHistory);
+  const qType: QuestionType = routeQuestion(question, summary, chatHistory);
   console.log("🔀 Question type classified as:", qType);
   if (qType === "general_question") {
     const general = await answerGeneralQuestion(question, chatHistory);
@@ -1651,8 +1651,11 @@ export async function answerQuestion(
     }
   }
 
-  // Classify the question
-  const classification = await classifyQuestion(question, summary.numericColumns);
+  // Classify the question (for correlation-type analysis)
+  const classification = await classifyCorrelationQuestion(
+    question,
+    Array.isArray(summary.numericColumns) ? summary.numericColumns : []
+  );
 
   // If it's a correlation question, use correlation analyzer
   if (classification.type === 'correlation' && classification.targetVariable) {
@@ -2393,7 +2396,7 @@ Output as JSON array:
   }
 }
 
-async function classifyQuestion(
+async function classifyCorrelationQuestion(
   question: string,
   numericColumns: string[]
 ): Promise<{ 
@@ -2401,10 +2404,12 @@ async function classifyQuestion(
   targetVariable: string | null;
   specificVariable?: string | null;
 }> {
+  const safeNumericColumns = Array.isArray(numericColumns) ? numericColumns : [];
+
   const prompt = `Classify this question:
 
 QUESTION: ${question}
-NUMERIC COLUMNS: ${numericColumns.join(', ')}
+NUMERIC COLUMNS: ${safeNumericColumns.join(', ')}
 
 IMPORTANT: Only classify as "correlation" if the question specifically asks about correlations, relationships, or what affects/influences something.
 
