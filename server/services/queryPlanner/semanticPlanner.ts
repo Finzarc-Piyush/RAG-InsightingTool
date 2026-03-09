@@ -6,11 +6,14 @@ import {
   QueryAggregation,
   QueryFilterOperator,
   QueryAggregationType,
+  MetricFormulaPlan,
+  MetricFormulaMetric,
 } from "../../shared/queryTypes.js";
 import type {
   BusinessSemanticIntent,
 } from "../semantic/businessInterpreter.js";
 import type { MetricDefinition } from "../semantic/metricResolver.js";
+import { metricsRegistry } from "../../lib/metricsRegistry.js";
 
 const ALLOWED_OPERATORS: QueryFilterOperator[] = [
   "=",
@@ -176,6 +179,79 @@ function buildPlanFromMetricDefinition(
 }
 
 /**
+ * Build a MetricFormulaPlan from the static registry entry when a known
+ * business metric (e.g. "attrition_rate") is detected.
+ */
+function buildMetricFormulaPlanFromRegistry(
+  semanticIntent: BusinessSemanticIntent,
+  datasetProfile: DatasetProfile
+): MetricFormulaPlan | null {
+  const metricKey = (semanticIntent.businessMetric || "").trim().toLowerCase();
+  if (!metricKey) return null;
+
+  const registered = metricsRegistry[metricKey];
+  if (!registered) {
+    return null;
+  }
+
+  const available = datasetProfile.columns.map((c) => c.name);
+
+  const resolveColumn = (requested: string): string | null => {
+    const target = requested.toLowerCase().trim();
+    return (
+      available.find(
+        (col) => col.toLowerCase().trim() === target
+      ) || null
+    );
+  };
+
+  const mappedMetrics: MetricFormulaMetric[] = [];
+
+  for (const m of registered.metrics) {
+    const resolvedColumn = resolveColumn(m.column);
+    if (!resolvedColumn) {
+      // Column not present in this dataset – bail out and let generic planner handle it.
+      return null;
+    }
+
+    const metric: MetricFormulaMetric = {
+      name: m.name,
+      aggregation: m.aggregation,
+      column: resolvedColumn,
+    };
+
+    if (m.filter) {
+      const resolvedFilterColumn = resolveColumn(m.filter.column);
+      if (!resolvedFilterColumn) {
+        return null;
+      }
+      metric.filter = {
+        column: resolvedFilterColumn,
+        operator: m.filter.operator,
+        value: m.filter.value,
+      };
+    }
+
+    mappedMetrics.push(metric);
+  }
+
+  return {
+    action: "metric_formula",
+    metricName: metricKey,
+    metrics: mappedMetrics,
+    formula: registered.formula,
+    // The remaining fields come from the base QueryPlan contract and
+    // are unused for metric_formula executions.
+    filters: [],
+    aggregations: [],
+    groupBy: [],
+    sortBy: undefined,
+    limit: 1,
+    requiresFullScan: true,
+  };
+}
+
+/**
  * Convert a high-level semantic intent + metric definition into a concrete QueryPlan.
  *
  * This uses an LLM, but we *always* post-validate and clamp the plan
@@ -201,6 +277,20 @@ export async function semanticToQueryPlan(
       JSON.stringify(directPlan)
     );
     return directPlan;
+  }
+
+  // Metric formulas (e.g. attrition_rate) – use registry-backed definition
+  // so the executor can compute the ratio instead of only returning counts.
+  const metricFormulaPlan = buildMetricFormulaPlanFromRegistry(
+    semanticIntent,
+    datasetProfile
+  );
+  if (metricFormulaPlan) {
+    console.log(
+      "🧠 semanticToQueryPlan: using MetricFormulaPlan from registry:",
+      JSON.stringify(metricFormulaPlan)
+    );
+    return metricFormulaPlan;
   }
 
   const allowedColumns = datasetProfile.columns.map((c) => c.name);
