@@ -77,7 +77,8 @@ export type QueryAction =
   | 'filter'
   | 'groupby'
   | 'topk'
-  | 'row_lookup';
+  | 'row_lookup'
+  | 'metric_formula';
 
 export type QueryFilterOperator =
   | '='
@@ -140,4 +141,43 @@ export interface QueryResult {
   rows: Array<Record<string, string | number | boolean | null>>;
   meta: QueryResultMeta;
 }
+
+/**
+ * Metric-formula planning
+ * Used when a business metric is defined as a formula over multiple
+ * lower-level aggregations (e.g. attrition_rate = resigned_count / employee_count).
+ */
+
+export type MetricAggregationType = 'count' | 'sum' | 'avg';
+
+export interface MetricFilter {
+  column: string;
+  operator: '=' | '>' | '<';
+  value: string | number;
+}
+
+export interface MetricFormulaMetric {
+  name: string;
+  aggregation: MetricAggregationType;
+  column: string;
+  filter?: MetricFilter;
+}
+
+export interface MetricFormulaPlan extends QueryPlan {
+  action: 'metric_formula';
+  /**
+   * Human-readable metric name, e.g. "attrition_rate".
+   */
+  metricName?: string;
+  /**
+   * Low-level metrics that should be computed before evaluating the formula.
+   */
+  metrics: MetricFormulaMetric[];
+  /**
+   * A safe arithmetic expression over metric names
+   * (e.g. "resigned_count / employee_count").
+   */
+  formula: string;
+}
+
 

@@ -1838,3 +1838,36 @@
 {"level":"INFO","message":"[4:37:26.146 PM]: No config file path found. Client config will not be used."}
 {"level":"INFO","message":"[4:37:26.147 PM]: Easy Logging is disabled as no config has been found"}
 {"level":"INFO","message":"[4:37:28.282 PM]: Connection[id: 75b4062d-64f9-4778-9721-f14bafdb8372] - connection established successfully after 2155.56 milliseconds"}
+{"level":"INFO","message":"[5:06:13.858 PM]: Creating new connection object"}
+{"level":"INFO","message":"[5:06:13.867 PM]: Creating Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] with host: BGSUHJH-VHB73264.snowflakecomputing.com, account: BGSUHJH-VHB73264, accessUrl: https://BGSUHJH-VHB73264.snowflakecomputing.com, user: SAMEER1234, role: undefined, database: undefined, schema: undefined, warehouse: COMPUTE_WH, proxy was not configured, password is provided, region: undefined, authenticator: SNOWFLAKE, ocsp mode: FAIL_OPEN, os: darwin, os version: 22.6.0"}
+{"level":"INFO","message":"[5:06:13.867 PM]: Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] additional details: passcode in password is provided, passcode is not provided, private key is not provided, application: undefined, client name: snowflake-sdk, client version: 2.3.3, retry timeout: 300, private key path: undefined, private key pass is not provided, client store temporary credential: false, browser response timeout: 120000"}
+{"level":"INFO","message":"[5:06:13.868 PM]: Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] - connection object created successfully."}
+{"level":"INFO","message":"[5:06:13.868 PM]: Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] - connecting. Associated Snowflake domain: GLOBAL"}
+{"level":"INFO","message":"[5:06:13.870 PM]: Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] - authentication successful using: SNOWFLAKE"}
+{"level":"INFO","message":"[5:06:13.870 PM]: Trying to initialize Easy Logging"}
+{"level":"INFO","message":"[5:06:13.888 PM]: No client config detected."}
+{"level":"INFO","message":"[5:06:13.889 PM]: No config file path found. Client config will not be used."}
+{"level":"INFO","message":"[5:06:13.889 PM]: Easy Logging is disabled as no config has been found"}
+{"level":"INFO","message":"[5:06:16.315 PM]: Connection[id: 7d687386-2bd4-4bf9-9d71-5a192d76ccde] - connection established successfully after 2446.62 milliseconds"}
+{"level":"INFO","message":"[5:25:18.770 PM]: Creating new connection object"}
+{"level":"INFO","message":"[5:25:18.778 PM]: Creating Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] with host: BGSUHJH-VHB73264.snowflakecomputing.com, account: BGSUHJH-VHB73264, accessUrl: https://BGSUHJH-VHB73264.snowflakecomputing.com, user: SAMEER1234, role: undefined, database: undefined, schema: undefined, warehouse: COMPUTE_WH, proxy was not configured, password is provided, region: undefined, authenticator: SNOWFLAKE, ocsp mode: FAIL_OPEN, os: darwin, os version: 22.6.0"}
+{"level":"INFO","message":"[5:25:18.778 PM]: Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] additional details: passcode in password is provided, passcode is not provided, private key is not provided, application: undefined, client name: snowflake-sdk, client version: 2.3.3, retry timeout: 300, private key path: undefined, private key pass is not provided, client store temporary credential: false, browser response timeout: 120000"}
+{"level":"INFO","message":"[5:25:18.778 PM]: Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] - connection object created successfully."}
+{"level":"INFO","message":"[5:25:18.778 PM]: Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] - connecting. Associated Snowflake domain: GLOBAL"}
+{"level":"INFO","message":"[5:25:18.779 PM]: Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] - authentication successful using: SNOWFLAKE"}
+{"level":"INFO","message":"[5:25:18.780 PM]: Trying to initialize Easy Logging"}
+{"level":"INFO","message":"[5:25:18.785 PM]: No client config detected."}
+{"level":"INFO","message":"[5:25:18.785 PM]: No config file path found. Client config will not be used."}
+{"level":"INFO","message":"[5:25:18.785 PM]: Easy Logging is disabled as no config has been found"}
+{"level":"INFO","message":"[5:25:21.408 PM]: Connection[id: d8fe55a5-a08c-4928-a82f-d2941640a5a4] - connection established successfully after 2629.9 milliseconds"}
+{"level":"INFO","message":"[5:43:12.374 PM]: Creating new connection object"}
+{"level":"INFO","message":"[5:43:12.383 PM]: Creating Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] with host: BGSUHJH-VHB73264.snowflakecomputing.com, account: BGSUHJH-VHB73264, accessUrl: https://BGSUHJH-VHB73264.snowflakecomputing.com, user: SAMEER1234, role: undefined, database: undefined, schema: undefined, warehouse: COMPUTE_WH, proxy was not configured, password is provided, region: undefined, authenticator: SNOWFLAKE, ocsp mode: FAIL_OPEN, os: darwin, os version: 22.6.0"}
+{"level":"INFO","message":"[5:43:12.384 PM]: Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] additional details: passcode in password is provided, passcode is not provided, private key is not provided, application: undefined, client name: snowflake-sdk, client version: 2.3.3, retry timeout: 300, private key path: undefined, private key pass is not provided, client store temporary credential: false, browser response timeout: 120000"}
+{"level":"INFO","message":"[5:43:12.384 PM]: Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] - connection object created successfully."}
+{"level":"INFO","message":"[5:43:12.384 PM]: Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] - connecting. Associated Snowflake domain: GLOBAL"}
+{"level":"INFO","message":"[5:43:12.385 PM]: Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] - authentication successful using: SNOWFLAKE"}
+{"level":"INFO","message":"[5:43:12.385 PM]: Trying to initialize Easy Logging"}
+{"level":"INFO","message":"[5:43:12.518 PM]: No client config detected."}
+{"level":"INFO","message":"[5:43:12.518 PM]: No config file path found. Client config will not be used."}
+{"level":"INFO","message":"[5:43:12.520 PM]: Easy Logging is disabled as no config has been found"}
+{"level":"INFO","message":"[5:43:15.129 PM]: Connection[id: 54b39163-dd4e-4559-a717-fe450b2782bd] - connection established successfully after 2744.62 milliseconds"}
