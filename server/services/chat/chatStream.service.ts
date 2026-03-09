@@ -899,6 +899,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     try {
       const userEmail = username?.toLowerCase();
       const userMessageTimestamp = targetTimestamp || Date.now();
+      const thinkingStepsForMessage =
+        thinkingSteps && thinkingSteps.length > 0 ? thinkingSteps : undefined;
       
       // Pass FULL charts with data - addMessagesBySessionId will:
       // 1. Save large charts to blob storage
@@ -919,6 +921,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           insights: transformedResponse.insights,
           preview: transformedResponse.preview || undefined, // Save preview data for data operations
           summary: transformedResponse.summary || undefined, // Save summary data for data operations
+          thinkingSteps: thinkingStepsForMessage,
           timestamp: assistantMessageTimestamp,
         },
       ]);

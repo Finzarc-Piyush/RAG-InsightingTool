@@ -341,14 +341,20 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {/* Display thinking steps, execution plan, metrics, code below user messages */}
-        {/* Assistant: single tokenized thinking block only */}
-        {!isUser && (streamingThinkingLog !== undefined && (streamingThinkingLog.length > 0 || showThinkingWhenEmpty)) && (
+        {/* Display thinking (live stream or persisted steps) below assistant messages */}
+        {!isUser && (
           <ThinkingDisplay
+            steps={thinkingSteps ?? (message as any).thinkingSteps}
+            executionPlan={executionPlan}
+            executionMetrics={executionMetrics}
+            streamingCode={streamingCode}
+            streamingCodeLanguage={streamingCodeLanguage}
+            isStreamingCode={isStreamingCode}
             streamingThinkingLog={streamingThinkingLog}
             isStreamingThinkingLog={isStreamingThinkingLog}
             isThinkingComplete={isThinkingComplete}
             showWhenEmpty={showThinkingWhenEmpty}
+            defaultCollapsed={defaultProcessCollapsed}
           />
         )}
 
