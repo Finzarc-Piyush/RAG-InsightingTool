@@ -163,6 +163,7 @@ CLASSIFICATION RULES:
      - "give me a trend line for sales where my product is PUREIT"
      - "show a bar chart of revenue for region North"
      - "line chart of quantity over time where category is Beverages"
+     - Multiple filters: "trendline chart for share of sales where Product = PURITE and Markets = MT VN"
    * Examples that should remain "analysis" instead of "chartOnFiltered":
      - "give me a trend line for sales" (no explicit filter)
      - "filter data where product is PUREIT" (no explicit chart request)

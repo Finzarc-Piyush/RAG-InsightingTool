@@ -963,26 +963,26 @@ export function ChatInterface({
             </div>
           )}
           
-          <form onSubmit={handleSubmit} className="flex items-end gap-2">
-            {/* Mode Selector Dropdown - Inline with input */}
+          <form onSubmit={handleSubmit} className="flex items-end gap-2 w-full">
+            {/* Mode Selector - compact */}
             {onModeChange && (
-              <div className="flex-shrink-0">
+              <div className="flex-shrink-0 w-auto">
                 <Select value={mode} onValueChange={(value: 'general' | 'analysis' | 'dataOps' | 'modeling') => onModeChange(value)}>
-                  <SelectTrigger className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl min-w-[170px]">
-                    <div className="flex items-center gap-2">
-                      {mode === 'general' && <Sparkles className="w-4 h-4 text-gray-600" />}
-                      {mode === 'analysis' && <BarChart3 className="w-4 h-4 text-gray-600" />}
-                      {mode === 'dataOps' && <Database className="w-4 h-4 text-gray-600" />}
-                      {mode === 'modeling' && <Settings className="w-4 h-4 text-gray-600" />}
-                      <span className="font-medium text-gray-900">
+                  <SelectTrigger className="h-10 px-3 text-sm font-medium border border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary rounded-lg w-[130px] max-w-[130px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {mode === 'general' && <Sparkles className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
+                      {mode === 'analysis' && <BarChart3 className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
+                      {mode === 'dataOps' && <Database className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
+                      {mode === 'modeling' && <Settings className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
+                      <span className="font-medium text-gray-900 truncate">
                         {mode === 'general' && 'General'}
                         {mode === 'analysis' && 'Analysis'}
-                        {mode === 'dataOps' && 'Data Operation'}
+                        {mode === 'dataOps' && 'Data Ops'}
                         {mode === 'modeling' && 'Modeling'}
                       </span>
                     </div>
                   </SelectTrigger>
-                  <SelectContent side="top" sideOffset={8} className="min-w-[170px]">
+                  <SelectContent side="top" sideOffset={8} className="min-w-[200px]">
                     <SelectItem value="general">
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4" />
@@ -1020,15 +1020,15 @@ export function ChatInterface({
                       type="button"
                       variant="outline"
                       disabled={runAutomationLoading}
-                      className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl"
+                      className="h-10 px-3 text-sm font-medium border border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary rounded-lg"
                     >
                       {runAutomationLoading ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin text-gray-600" />
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin text-gray-600" />
                       ) : (
-                        <Zap className="w-4 h-4 mr-2 text-gray-600" />
+                        <Zap className="w-3.5 h-3.5 mr-1.5 text-gray-600" />
                       )}
-                      <span>Automations</span>
-                      <ChevronDown className="w-4 h-4 ml-2 text-gray-600" />
+                      <span className="whitespace-nowrap">Automations</span>
+                      <ChevronDown className="w-3.5 h-3.5 ml-1 text-gray-500" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent side="top" align="start" className="w-64">
@@ -1064,19 +1064,19 @@ export function ChatInterface({
                 </DropdownMenu>
               </div>
             )}
-            {/* Filter Data Dropdown - Only show in dataOps mode. modal={false} avoids aria-hidden on #root (a11y). */}
-            {mode === 'dataOps' && columns && columns.length > 0 && (
+            {/* Filter Data Dropdown - Show with General (Auto-detect) and Data Operation. modal={false} avoids aria-hidden on #root (a11y). */}
+            {(mode === 'general' || mode === 'dataOps') && columns && columns.length > 0 && (
               <div className="flex-shrink-0">
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl"
+                      className="h-10 px-3 text-sm font-medium border border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary rounded-lg"
                     >
-                      <Filter className="w-4 h-4 mr-2 text-gray-600" />
-                      <span>Filter Data</span>
-                      <ChevronDown className="w-4 h-4 ml-2 text-gray-600" />
+                      <Filter className="w-3.5 h-3.5 mr-1.5 text-gray-600" />
+                      <span className="whitespace-nowrap">Filter Data</span>
+                      <ChevronDown className="w-3.5 h-3.5 ml-1 text-gray-500" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent side="top" align="start" className="w-56">
@@ -1094,7 +1094,7 @@ export function ChatInterface({
                 <AvailableModelsDialog />
               </div>
             )}
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-[180px] basis-0">
               <Textarea
                 ref={inputRef}
                 value={inputValue}
@@ -1105,7 +1105,7 @@ export function ChatInterface({
                 disabled={isLoading}
                 data-testid="input-message"
                 rows={1}
-                className="flex-1 min-h-[44px] max-h-40 resize-none text-sm rounded-xl bg-white border-2 border-gray-200 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:border-primary shadow-sm pr-8"
+                className="flex-1 min-h-[44px] max-h-40 resize-none text-sm rounded-xl bg-white border-2 border-gray-200 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:border-primary shadow-sm pr-8 w-full"
               />
               {mentionState.active && mentionState.options.length > 0 && (
                 <div className="absolute left-0 right-0 bottom-full z-20 mb-2 max-h-60 overflow-y-auto rounded-xl border border-gray-200 bg-white py-2 shadow-lg">

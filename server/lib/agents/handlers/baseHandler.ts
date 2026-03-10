@@ -14,6 +14,8 @@ export interface HandlerContext {
   sessionId: string;
   chatInsights?: Insight[];
   permanentContext?: string; // Permanent context provided by user during upload
+  /** When mode is chartOnFiltered, parsed measure (Y) and group-by (X) so the handler builds the right chart. */
+  chartOnFilteredSpec?: { measureColumn: string; groupByColumn: string };
 }
 
 /**

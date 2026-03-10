@@ -26,6 +26,10 @@ const filterConditionSchema = z.object({
 const chartOnFilterResultSchema = z.object({
   filterConditions: z.array(filterConditionSchema).optional(),
   chartType: z.enum(['line', 'bar', 'scatter', 'pie', 'area']).optional(),
+  /** Numeric column to chart (Y-axis / measure). Use exact name from AVAILABLE COLUMNS. */
+  measureColumn: z.string().optional(),
+  /** Category/dimension column for X-axis or grouping (e.g. "Products" for "for different products"). */
+  groupByColumn: z.string().optional(),
 });
 
 export type ChartOnFilterParseResult = z.infer<typeof chartOnFilterResultSchema>;
@@ -90,20 +94,39 @@ FILTER CONDITIONS:
   - "where product is PUREIT" → column: "product", operator: "=", value: "PUREIT"
   - "for category Beverages" → column: "category", operator: "=", value: "Beverages"
   - "only for region North" → column: "region", operator: "=", value: "North"
-- ALWAYS use the exact column name from the available columns list when possible.
+  - Multiple filters in one question → output MULTIPLE conditions (one per column), e.g.:
+    "where Product = PURITE and Markets = MT VN" → filterConditions: [
+      { "column": "Products", "operator": "=", "value": "PURITE" },
+      { "column": "Markets", "operator": "=", "value": "MT VN" }
+    ]
+  - "where X = A and Y = B" or "for X = A, Y = B" → always extract every filter; use exact column names from the list.
+- ALWAYS use the exact column name from the available columns list when possible (e.g. if the list has "Products" use "Products", not "Product").
+- When the user specifies multiple filters (e.g. "where Product = X and Markets = Y"), return ALL of them in filterConditions.
+- For filter values, use the value as the user wrote it (e.g. "Off VN", "LASHE"); matching is case-insensitive and tolerant of spacing and minor typos.
 - If you cannot confidently map a phrase to a known column, DO NOT create a filter condition for it.
 
 CHART TYPE:
 - If the user explicitly mentions a chart type, set chartType accordingly:
   - "trend line" or "line chart" → "line"
-  - "bar chart" → "bar"
+  - "bar chart" or "bar plot" → "bar"
   - "scatter" or "scatter plot" → "scatter"
   - "pie chart" → "pie"
   - "area chart" → "area"
 - If the chart type is ambiguous or not mentioned, omit chartType (set to null).
 
+MEASURE AND GROUP-BY (for bar/line/pie charts – use exact column names from AVAILABLE COLUMNS):
+- measureColumn: The numeric column to plot (Y-axis). E.g. "Sales (Volume)", "Sales Value", "Share of Sales Value - Product".
+- groupByColumn: The category/dimension for X-axis or grouping. E.g. "Products" for "for different products", "Markets" for "by market".
+- Examples:
+  - "bar plot for Sales (Volume) for different products where Markets = Off VN" → measureColumn: "Sales (Volume)", groupByColumn: "Products"
+  - "bar chart of revenue by category" → measureColumn: column that holds revenue (exact name), groupByColumn: category column name
+  - "line chart of Sales Value over Month" → measureColumn: "Sales Value", groupByColumn: "Month"
+- If the question does not specify a measure or group-by, omit measureColumn or groupByColumn (null).
+
 OUTPUT STRICT JSON (no markdown, no comments):
 {
+  "measureColumn": "ExactColumnNameFromList or null",
+  "groupByColumn": "ExactColumnNameFromList or null",
   "filterConditions": [
     {
       "column": "ExactColumnNameFromList",
@@ -114,7 +137,8 @@ OUTPUT STRICT JSON (no markdown, no comments):
     }
   ] | [],
   "chartType": "line" | "bar" | "scatter" | "pie" | "area" | null
-}`;
+}
+Use exact column names from AVAILABLE COLUMNS for measureColumn and groupByColumn.`;
 
   let lastError: Error | null = null;
 
@@ -165,12 +189,14 @@ OUTPUT STRICT JSON (no markdown, no comments):
       const normalized: ChartOnFilterParseResult = {
         filterConditions: validated.filterConditions || [],
         chartType: validated.chartType,
+        measureColumn: validated.measureColumn || undefined,
+        groupByColumn: validated.groupByColumn || undefined,
       };
 
       console.log(
         `✅ Parsed chartOnFiltered request: ${normalized.filterConditions?.length || 0} filter conditions${
           normalized.chartType ? `, chartType=${normalized.chartType}` : ''
-        }`
+        }${normalized.measureColumn ? `, measure=${normalized.measureColumn}` : ''}${normalized.groupByColumn ? `, groupBy=${normalized.groupByColumn}` : ''}`
       );
 
       return normalized;

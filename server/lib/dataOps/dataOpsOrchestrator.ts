@@ -2969,6 +2969,7 @@ function findMatchingColumn(searchName: string, availableColumns: string[]): str
  * Resolve a column name to the actual key present in a row.
  * Handles column names with any special characters (?, (), $, commas, etc.) so that
  * user or AI-provided names (which may differ slightly) map to the real key in the data.
+ * Also handles singular/plural (e.g. "Product" → "Products").
  */
 function resolveColumnKeyInRow(column: string, row: Record<string, any>): string | undefined {
   if (row[column] !== undefined) return column;
@@ -2979,6 +2980,13 @@ function resolveColumnKeyInRow(column: string, row: Record<string, any>): string
     const kLower = k.toLowerCase().trim();
     if (kLower === colLower) return k;
     if (normalizeColumnNameCore(k) === colCore && colCore.length > 0) return k;
+  }
+  // Singular/plural: "Product" vs "Products", "Market" vs "Markets"
+  const colCoreBase = colCore.replace(/s$/, '');
+  const colCoreWithS = colCore + (colCore.endsWith('s') ? '' : 's');
+  for (const k of keys) {
+    const kCore = normalizeColumnNameCore(k);
+    if (kCore.length > 0 && (kCore === colCoreBase || kCore === colCoreWithS)) return k;
   }
   return undefined;
 }
@@ -3001,6 +3009,86 @@ export type FilterCondition = {
   value2?: any;
   values?: any[];
 };
+
+/** Normalize a filter value for comparison: trim, lowercase, collapse whitespace. Handles case and spacing differences. */
+function normalizeFilterValue(val: any): string {
+  if (val === null || val === undefined) return '';
+  const s = String(val).trim().toLowerCase().replace(/\s+/g, ' ');
+  return s;
+}
+
+/** Simple Levenshtein distance for fuzzy matching. */
+function levenshtein(a: string, b: string): number {
+  const an = a.length;
+  const bn = b.length;
+  const matrix: number[][] = Array(an + 1).fill(null).map(() => Array(bn + 1).fill(0));
+  for (let i = 0; i <= an; i++) matrix[i][0] = i;
+  for (let j = 0; j <= bn; j++) matrix[0][j] = j;
+  for (let i = 1; i <= an; i++) {
+    for (let j = 1; j <= bn; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[an][bn];
+}
+
+/**
+ * Resolve user-supplied filter value to the best-matching actual value in the column.
+ * Handles case, extra spaces, and minor misspellings so filtering works with any phrasing.
+ */
+function resolveFilterValueToColumn(
+  data: Record<string, any>[],
+  resolvedCol: string,
+  userValue: any
+): any {
+  if (data.length === 0) return userValue;
+  const userStr = String(userValue).trim();
+  if (userStr === '') return userValue;
+
+  const distinctValues = new Set<string>();
+  for (const row of data) {
+    const v = row[resolvedCol];
+    if (v !== null && v !== undefined && v !== '') {
+      distinctValues.add(String(v));
+    }
+  }
+  if (distinctValues.size === 0) return userValue;
+
+  const userNorm = normalizeFilterValue(userValue);
+
+  // 1. Exact normalized match (case and spacing insensitive)
+  for (const actual of distinctValues) {
+    if (normalizeFilterValue(actual) === userNorm) return actual;
+  }
+
+  // 2. One contains the other (e.g. "off vn" vs "OFF VN" or "Off  VN")
+  for (const actual of distinctValues) {
+    const actualNorm = normalizeFilterValue(actual);
+    if (actualNorm.includes(userNorm) || userNorm.includes(actualNorm)) return actual;
+  }
+
+  // 3. Fuzzy: smallest Levenshtein distance (for typos), only if within reasonable edit distance
+  const maxEditRatio = 0.4; // allow up to 40% of length as edits
+  let best: string | null = null;
+  let bestDist = Infinity;
+  for (const actual of distinctValues) {
+    const actualNorm = normalizeFilterValue(actual);
+    const dist = levenshtein(userNorm, actualNorm);
+    const maxAllowed = Math.ceil(Math.max(userNorm.length, actualNorm.length) * maxEditRatio);
+    if (dist <= maxAllowed && dist < bestDist) {
+      bestDist = dist;
+      best = actual;
+    }
+  }
+  if (best !== null) return best;
+
+  return userValue;
+}
 
 /**
  * Apply filter conditions to data in-memory without persisting changes.
@@ -3067,6 +3155,20 @@ export function applyFilterConditionsInMemory(
       };
     }
 
+    // Resolve filter value(s) to best-matching actual values in the column (handles case, spacing, typos)
+    let resolvedValue = value;
+    let resolvedValues: any[] | undefined = values;
+    if (operator === '=' && value !== undefined && value !== null && typeof value !== 'number') {
+      resolvedValue = resolveFilterValueToColumn(filteredData, resolvedCol, value);
+      if (resolvedValue !== value) {
+        console.log(`  📌 Resolved filter value "${String(value)}" → "${String(resolvedValue)}" for column ${column}`);
+      }
+    } else if (operator === 'in' && values && Array.isArray(values) && values.length > 0) {
+      resolvedValues = values.map(v =>
+        typeof v === 'number' ? v : resolveFilterValueToColumn(filteredData, resolvedCol, v)
+      );
+    }
+
     const rowsBeforeFilter = filteredData.length;
 
     filteredData = filteredData.filter(row => {
@@ -3074,30 +3176,30 @@ export function applyFilterConditionsInMemory(
 
       switch (operator) {
         case '=':
-          // Case-insensitive string comparison for text, exact for numbers
-          if (typeof cellValue === 'number' && typeof value === 'number') {
-            return cellValue === value;
+          // Numbers: exact. Text: normalized (case + whitespace insensitive)
+          if (typeof cellValue === 'number' && typeof resolvedValue === 'number') {
+            return cellValue === resolvedValue;
           }
-          return String(cellValue).toLowerCase().trim() === String(value).toLowerCase().trim();
+          return normalizeFilterValue(cellValue) === normalizeFilterValue(resolvedValue);
         case '!=':
-          if (typeof cellValue === 'number' && typeof value === 'number') {
-            return cellValue !== value;
+          if (typeof cellValue === 'number' && typeof resolvedValue === 'number') {
+            return cellValue !== resolvedValue;
           }
-          return String(cellValue).toLowerCase().trim() !== String(value).toLowerCase().trim();
+          return normalizeFilterValue(cellValue) !== normalizeFilterValue(resolvedValue);
         case '>':
-          return Number(cellValue) > Number(value);
+          return Number(cellValue) > Number(resolvedValue);
         case '>=':
-          return Number(cellValue) >= Number(value);
+          return Number(cellValue) >= Number(resolvedValue);
         case '<':
-          return Number(cellValue) < Number(value);
+          return Number(cellValue) < Number(resolvedValue);
         case '<=':
-          return Number(cellValue) <= Number(value);
+          return Number(cellValue) <= Number(resolvedValue);
         case 'contains':
-          return String(cellValue).toLowerCase().includes(String(value).toLowerCase());
+          return normalizeFilterValue(cellValue).includes(normalizeFilterValue(resolvedValue));
         case 'startsWith':
-          return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
+          return normalizeFilterValue(cellValue).startsWith(normalizeFilterValue(resolvedValue));
         case 'endsWith':
-          return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
+          return normalizeFilterValue(cellValue).endsWith(normalizeFilterValue(resolvedValue));
         case 'between':
           if (value2 === undefined || value2 === null) {
             console.warn(`⚠️ Between operator requires value2, skipping condition`);
@@ -3108,13 +3210,13 @@ export function applyFilterConditionsInMemory(
             return numValue >= Number(value) && numValue <= Number(value2);
           }
         case 'in':
-          if (!values || !Array.isArray(values) || values.length === 0) {
+          if (!resolvedValues || resolvedValues.length === 0) {
             console.warn(`⚠️ In operator requires values array, skipping condition`);
             return true;
           }
           {
-            const cellStr = String(cellValue).toLowerCase().trim();
-            return values.some(v => String(v).toLowerCase().trim() === cellStr);
+            const cellNorm = normalizeFilterValue(cellValue);
+            return resolvedValues.some(v => normalizeFilterValue(v) === cellNorm);
           }
         default:
           console.warn(`⚠️ Unknown filter operator: ${operator}`);

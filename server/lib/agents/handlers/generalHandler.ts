@@ -68,6 +68,12 @@ export class GeneralHandler extends BaseHandler {
       console.log('📅 Detected seasonal pattern request, creating seasonal trend chart');
       return this.handleSeasonalPatterns(intent, context, question);
     }
+
+    // Chart-on-filtered: build chart from parsed measure and group-by (smart filter detection)
+    if (intent.type === 'chart' && context.chartOnFilteredSpec) {
+      const specResponse = await this.handleChartOnFilteredWithSpec(intent, context);
+      if (specResponse) return specResponse;
+    }
     
     // Check if this is a trend over time request (should create a line chart)
     if (intent.type === 'chart' && (intent.chartType === 'line' || this.isTrendOverTimeRequest(question))) {
@@ -691,6 +697,76 @@ export class GeneralHandler extends BaseHandler {
   private isSeasonalPatternRequest(question: string): boolean {
     const lower = question.toLowerCase();
     return /\b(seasonal\s+patterns?|seasonal\s+trends?|seasonal\s+variations?|monthly\s+patterns?|yearly\s+patterns?|patterns?\s+over\s+time|are\s+there\s+patterns?)\b/i.test(lower);
+  }
+
+  /**
+   * Build chart from chartOnFilteredSpec (measure + group-by) when filters were already applied.
+   * Ensures bar/line chart uses the requested metric and dimension (e.g. Sales (Volume) by Products).
+   */
+  private async handleChartOnFilteredWithSpec(
+    intent: AnalysisIntent,
+    context: HandlerContext
+  ): Promise<HandlerResponse | null> {
+    const spec = context.chartOnFilteredSpec!;
+    const allColumns = context.summary.columns.map(c => c.name);
+    const numericColumns = context.summary.numericColumns || [];
+    const firstRow = context.data[0];
+    if (!firstRow) return null;
+
+    const resolveCol = (name: string): string | null => {
+      if (firstRow[name] !== undefined) return name;
+      const matched = findMatchingColumn(name, allColumns);
+      return matched && firstRow[matched] !== undefined ? matched : null;
+    };
+
+    const xCol = resolveCol(spec.groupByColumn);
+    const yCol = resolveCol(spec.measureColumn);
+    if (!xCol || !yCol) {
+      console.warn(`📊 chartOnFilteredSpec: could not resolve columns measure="${spec.measureColumn}" groupBy="${spec.groupByColumn}"`);
+      return null;
+    }
+    if (!numericColumns.includes(yCol) && typeof firstRow[yCol] === 'string') {
+      console.warn(`📊 chartOnFilteredSpec: measure column "${yCol}" may not be numeric; using anyway`);
+    }
+
+    const chartType = (intent.chartType === 'line' || intent.chartType === 'bar' || intent.chartType === 'pie')
+      ? intent.chartType
+      : 'bar';
+    const title = chartType === 'bar'
+      ? `Bar Chart: ${yCol} by ${xCol}`
+      : chartType === 'line'
+        ? `Line Chart: ${yCol} by ${xCol}`
+        : chartType === 'pie'
+          ? `Pie Chart: ${yCol} by ${xCol}`
+          : `Chart: ${yCol} by ${xCol}`;
+    const chartSpec: ChartSpec = {
+      type: chartType,
+      title,
+      x: xCol,
+      y: yCol,
+      xLabel: xCol,
+      yLabel: yCol,
+      aggregate: 'sum',
+    };
+
+    try {
+      const chartData = processChartData(context.data, chartSpec);
+      if (chartData.length === 0) {
+        return {
+          answer: `No data points to show for ${yCol} by ${xCol} with the current filter. Try widening the filter or checking the data.`,
+          charts: [],
+        };
+      }
+      const insights = await generateChartInsights(chartSpec, chartData, context.summary, context.chatInsights);
+      return {
+        answer: `I've created a ${chartType} chart showing ${yCol} grouped by ${xCol}.`,
+        charts: [{ ...chartSpec, data: chartData, keyInsight: insights.keyInsight }],
+        insights: [],
+      };
+    } catch (err) {
+      console.error('handleChartOnFilteredWithSpec error:', err);
+      return null;
+    }
   }
 
   /**

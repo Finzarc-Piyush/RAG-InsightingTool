@@ -103,6 +103,11 @@ export class AgentOrchestrator {
       let workingData = data;
       // Optional human-readable description of filters applied in chartOnFiltered mode
       let chartOnFilteredDescription: string | undefined;
+      // Chart type from chartOnFiltered parse (so we route to chart handler and pass correct type)
+      let chartOnFilteredChartType: 'line' | 'bar' | 'scatter' | 'pie' | 'area' | undefined;
+      // Measure and group-by from chartOnFiltered parse (so handler builds the right chart)
+      let chartOnFilteredMeasureColumn: string | undefined;
+      let chartOnFilteredGroupByColumn: string | undefined;
       
       // ============================================
       // COMPLETE SEPARATE ROUTE FOR DATA OPS MODE
@@ -295,6 +300,9 @@ export class AgentOrchestrator {
           const parseResult = await parseChartOnFilterRequest(finalQuestion, summary);
           const filterConditions: FilterCondition[] =
             (parseResult.filterConditions as FilterCondition[]) || [];
+          chartOnFilteredChartType = parseResult.chartType ?? undefined;
+          chartOnFilteredMeasureColumn = parseResult.measureColumn ?? undefined;
+          chartOnFilteredGroupByColumn = parseResult.groupByColumn ?? undefined;
 
           if (filterConditions.length === 0) {
             console.log(
@@ -416,6 +424,17 @@ export class AgentOrchestrator {
         intent.confidence = Math.max(intent.confidence, 0.8);
         intent.customRequest = finalQuestion;
         intent.originalQuestion = finalQuestion;
+      }
+
+      // When mode is chartOnFiltered, we already filtered the data; route to chart handler (GeneralHandler)
+      // so we get a trendline/chart instead of DataOpsHandler (which would treat it as data op and return empty).
+      if (mode === 'chartOnFiltered') {
+        console.log(`📊 chartOnFiltered mode: forcing intent to chart so handler builds visualization (chartType=${chartOnFilteredChartType ?? 'line'})`);
+        intent.type = 'chart';
+        intent.chartType = chartOnFilteredChartType ?? 'line';
+        intent.originalQuestion = finalQuestion;
+        intent.customRequest = finalQuestion;
+        intent.confidence = Math.max(intent.confidence ?? 0, 0.9);
       }
       
       this.emitThinkingStep(onThinkingStep, "Figuring out the best way to answer", "completed");
@@ -596,6 +615,14 @@ export class AgentOrchestrator {
         sessionId,
         chatInsights,
         permanentContext,
+        ...(mode === 'chartOnFiltered' &&
+          chartOnFilteredMeasureColumn &&
+          chartOnFilteredGroupByColumn && {
+            chartOnFilteredSpec: {
+              measureColumn: chartOnFilteredMeasureColumn,
+              groupByColumn: chartOnFilteredGroupByColumn,
+            },
+          }),
       };
 
       // Step 7: Route to appropriate handler
