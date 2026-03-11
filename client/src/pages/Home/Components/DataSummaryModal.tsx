@@ -23,11 +23,8 @@ import {
 import { dataApi } from '@/lib/api/data';
 import { useToast } from '@/hooks/use-toast';
 import {
-  Table,
-  TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from '@/components/ui/table';
 
@@ -237,22 +234,21 @@ export function DataSummaryModal({
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden min-h-0 p-0">
                   <div className="h-full overflow-auto border-t">
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader className="sticky top-0 bg-background z-10">
-                          <TableRow>
-                            <TableHead className="bg-muted/50">Column</TableHead>
-                            <TableHead className="bg-muted/50">Type</TableHead>
-                            <TableHead className="bg-muted/50">Null Values</TableHead>
-                            <TableHead className="bg-muted/50">Mean</TableHead>
-                            <TableHead className="bg-muted/50">Median</TableHead>
-                            <TableHead className="bg-muted/50">Mode</TableHead>
-                            <TableHead className="bg-muted/50">Std Dev</TableHead>
-                            <TableHead className="bg-muted/50">Min</TableHead>
-                            <TableHead className="bg-muted/50">Max</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
+                    <table className="w-full caption-bottom text-sm">
+                      <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm border-b shadow-sm [&_tr]:border-b">
+                        <TableRow>
+                          <TableHead className="bg-muted/50">Column</TableHead>
+                          <TableHead className="bg-muted/50">Type</TableHead>
+                          <TableHead className="bg-muted/50">Null Values</TableHead>
+                          <TableHead className="bg-muted/50">Mean</TableHead>
+                          <TableHead className="bg-muted/50">Median</TableHead>
+                          <TableHead className="bg-muted/50">Mode</TableHead>
+                          <TableHead className="bg-muted/50">Std Dev</TableHead>
+                          <TableHead className="bg-muted/50">Min</TableHead>
+                          <TableHead className="bg-muted/50">Max</TableHead>
+                        </TableRow>
+                      </thead>
+                      <tbody className="[&_tr:last-child]:border-0">
                           {dataSummary.summary.map((col, idx) => (
                             <TableRow key={idx}>
                               <TableCell className="font-medium">{col.variable}</TableCell>
@@ -279,9 +275,8 @@ export function DataSummaryModal({
                               <TableCell>{formatValue(col.max)}</TableCell>
                             </TableRow>
                           ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                      </tbody>
+                    </table>
                   </div>
                 </CardContent>
               </Card>

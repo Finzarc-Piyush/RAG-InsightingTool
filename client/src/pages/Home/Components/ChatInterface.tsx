@@ -32,6 +32,7 @@ import { useToast } from '@/hooks/use-toast';
 import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
 import { FilterDataModal } from '@/components/FilterDataModal';
 import { FilterCondition } from '@/components/ColumnFilterDialog';
+import { cn } from '@/lib/utils';
 import { debounce } from '@/lib/debounce';
 import { useQuery } from '@tanstack/react-query';
 import { automationsApi } from '@/lib/api';
@@ -717,7 +718,7 @@ export function ChatInterface({
     }));
   }, []);
 
-  // Sidebar hover state
+  // Columns sidebar: collapsed by default, expands on hover
   const [isColumnSidebarOpen, setIsColumnSidebarOpen] = useState(false);
 
   // Handle column click - insert column name into input
@@ -964,53 +965,6 @@ export function ChatInterface({
           )}
           
           <form onSubmit={handleSubmit} className="flex items-end gap-2 w-full">
-            {/* Mode Selector - compact */}
-            {onModeChange && (
-              <div className="flex-shrink-0 w-auto">
-                <Select value={mode} onValueChange={(value: 'general' | 'analysis' | 'dataOps' | 'modeling') => onModeChange(value)}>
-                  <SelectTrigger className="h-10 px-3 text-sm font-medium border border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary rounded-lg w-[130px] max-w-[130px]">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {mode === 'general' && <Sparkles className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
-                      {mode === 'analysis' && <BarChart3 className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
-                      {mode === 'dataOps' && <Database className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
-                      {mode === 'modeling' && <Settings className="w-3.5 h-3.5 text-gray-600 flex-shrink-0" />}
-                      <span className="font-medium text-gray-900 truncate">
-                        {mode === 'general' && 'General'}
-                        {mode === 'analysis' && 'Analysis'}
-                        {mode === 'dataOps' && 'Data Ops'}
-                        {mode === 'modeling' && 'Modeling'}
-                      </span>
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent side="top" sideOffset={8} className="min-w-[200px]">
-                    <SelectItem value="general">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="w-4 h-4" />
-                        <span>General (Auto-detect)</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="analysis">
-                      <div className="flex items-center gap-2">
-                        <BarChart3 className="w-4 h-4" />
-                        <span>Analysis</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="dataOps">
-                      <div className="flex items-center gap-2">
-                        <Database className="w-4 h-4" />
-                        <span>Data Operation</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="modeling">
-                      <div className="flex items-center gap-2">
-                        <Settings className="w-4 h-4" />
-                        <span>Modeling</span>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             {/* Run automation / Manage automations - when session has data. modal={false} avoids aria-hidden on #root (a11y). */}
             {sessionId && (
               <div className="flex-shrink-0">
@@ -1161,7 +1115,7 @@ export function ChatInterface({
       {(showScrollToTop || showScrollToBottom) && (
         <div 
           className="fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2"
-          style={{ right: columns && columns.length > 0 && isColumnSidebarOpen ? '280px' : '32px' }}
+          style={{ right: columns && columns.length > 0 && isColumnSidebarOpen ? '320px' : '32px' }}
         >
           {showScrollToTop && (
             <Button
@@ -1186,12 +1140,13 @@ export function ChatInterface({
         </div>
       )}
       
-      {/* Right Sidebar - Column Navigator (hover to expand) */}
+      {/* Right Sidebar - Column Navigator: collapsed by default, expands on hover */}
       {columns && columns.length > 0 && (
         <div
-          className={`h-full flex-shrink-0 transition-[width] duration-200 ease-out border-l border-gray-200 bg-white/80 backdrop-blur-sm ${
-            isColumnSidebarOpen ? 'w-64 shadow-sm' : 'w-3'
-          }`}
+          className={cn(
+            'h-full flex-shrink-0 border-l border-gray-200 bg-white/80 backdrop-blur-sm shadow-sm transition-[width] duration-200 ease-out overflow-hidden',
+            isColumnSidebarOpen ? 'w-80 min-w-[280px]' : 'w-12 min-w-[3rem]'
+          )}
           onMouseEnter={() => setIsColumnSidebarOpen(true)}
           onMouseLeave={() => setIsColumnSidebarOpen(false)}
         >
@@ -1201,13 +1156,13 @@ export function ChatInterface({
             dateColumns={dateColumns}
             onColumnClick={handleColumnClick}
             collapsed={!isColumnSidebarOpen}
-            className="w-full h-full border-0 shadow-none bg-transparent"
+            className="w-full h-full border-0 shadow-none bg-transparent min-w-[280px]"
           />
         </div>
       )}
 
-      {/* Filter Data Modal */}
-      {mode === 'dataOps' && columns && columns.length > 0 && (
+      {/* Filter Data Modal - render when button is visible (general or dataOps) */}
+      {(mode === 'general' || mode === 'dataOps') && columns && columns.length > 0 && (
         <FilterDataModal
           open={filterModalOpen}
           onOpenChange={setFilterModalOpen}

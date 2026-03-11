@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Message, UploadResponse, ChatResponse, ThinkingStep } from '@/shared/schema';
-import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi } from '@/lib/api';
+import { uploadFile, streamChatRequest, snowflakeApi } from '@/lib/api';
 import type { ExecutionMetrics } from '@/lib/api';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
@@ -342,121 +342,8 @@ export const useHomeMutations = ({
         message,
       });
       
-      // Route to Data Ops, Modeling, or regular chat based on mode
-      if (mode === 'dataOps') {
-        return new Promise<ChatResponse>((resolve, reject) => {
-          let responseData: DataOpsResponse | null = null;
-          
-          const controller = abortControllerRef.current;
-          if (!controller) {
-            reject(new Error('Request controller not initialized'));
-            return;
-          }
-
-          streamDataOpsChatRequest(
-            sessionId,
-            message,
-            {
-              onThinkingStep: (step: ThinkingStep) => {
-                logger.log('🧠 Data Ops thinking step received:', step);
-                setThinkingSteps((prev) => {
-                  const existingIndex = prev.findIndex(s => s.step === step.step);
-                  if (existingIndex >= 0) {
-                    const updated = [...prev];
-                    updated[existingIndex] = step;
-                    return updated;
-                  }
-                  return [...prev, step];
-                });
-              },
-              onThinkingLogChunk: (payload: { content: string }) => {
-                setIsStreamingThinkingLog(true);
-                setStreamingThinkingLog(prev => prev + (payload.content ?? ''));
-              },
-              onThinkingLogDone: () => {
-                setIsStreamingThinkingLog(false);
-              },
-              onResponse: (response: DataOpsResponse) => {
-                logger.log('✅ Data Ops API response received:', response);
-                responseData = response;
-                (responseData as any).preview = response.preview;
-                (responseData as any).summary = response.summary;
-              },
-              onMessageChunk: (payload: { content: string }) => {
-                const token = payload.content ?? '';
-                streamingContentRef.current += token;
-                setStreamingMessageContent((prev) => prev + token);
-                setIsStreamingMessage(true);
-              },
-              onMessageDone: () => {
-                setIsStreamingMessage(false);
-                setThinkingSteps((prev) =>
-                  prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
-                );
-              },
-              onCodeStart: (p: { language: string }) => {
-                setStreamingCodeLanguage(p.language ?? 'sql');
-                setIsStreamingCode(true);
-                setStreamingCode('');
-              },
-              onCodeChunk: (p: { content: string }) => setStreamingCode((prev) => prev + (p.content ?? '')),
-              onCodeDone: () => setIsStreamingCode(false),
-              onExecutionPlan: (p) => setExecutionPlan(p),
-              onExecutionMetrics: (p) => setExecutionMetrics(p),
-              onError: (error: Error) => {
-                logger.error('❌ Data Ops API request failed:', error);
-                setThinkingSteps([]);
-                setThinkingTargetTimestamp(null);
-                setStreamingMessageContent('');
-                setIsStreamingMessage(false);
-                setStreamingThinkingLog('');
-                setIsStreamingThinkingLog(false);
-                reject(error);
-              },
-              onDone: () => {
-                logger.log('✅ Data Ops stream completed');
-                setThinkingSteps((prev) =>
-                  prev.map((s) => (s.status === 'active' ? { ...s, status: 'completed' as const, timestamp: Date.now() } : s))
-                );
-                if (responseData) {
-                  // Convert DataOpsResponse to ChatResponse format
-                  const chatResponse: ChatResponse & { preview?: any[]; summary?: any[] } = {
-                    answer: responseData.answer,
-                    charts: [],
-                    insights: [],
-                    suggestions: [],
-                    preview: responseData.preview,
-                    summary: responseData.summary,
-                  };
-                  resolve(chatResponse as ChatResponse);
-                } else {
-                  reject(new Error('No response received'));
-                }
-              },
-            },
-            controller.signal,
-            targetTimestamp,
-            true // dataOpsMode flag for backward compatibility
-          ).catch((error: any) => {
-            if (error?.name === 'AbortError' || controller.signal.aborted) {
-              logger.log('🚫 Data Ops request was cancelled by user');
-              setThinkingSteps([]);
-              setThinkingTargetTimestamp(null);
-              reject(new Error('Request cancelled'));
-            } else {
-              setThinkingSteps([]);
-              setThinkingTargetTimestamp(null);
-              reject(error);
-            }
-          });
-        });
-      } else {
-        // For 'general', 'analysis', and 'modeling' modes, use regular chat endpoint
-        // Only send mode parameter if it's explicitly set (not 'general')
-        // For 'general' (auto-detect), don't send mode to let backend auto-detect
-        const modeToSend = mode === 'general' ? undefined : (mode === 'modeling' || mode === 'analysis' ? mode : undefined);
-        
-        return new Promise<ChatResponse>((resolve, reject) => {
+      // Always use single chat stream endpoint; backend classifies mode (analysis/dataOps/modeling) per message
+      return new Promise<ChatResponse>((resolve, reject) => {
         let responseData: ChatResponse | null = null;
         
         const controller = abortControllerRef.current;
@@ -552,7 +439,7 @@ export const useHomeMutations = ({
           },
           controller.signal,
           targetTimestamp,
-          modeToSend
+          undefined // mode: always let backend classify (analysis/dataOps/modeling)
         ).catch((error: any) => {
             if (error?.name === 'AbortError' || controller.signal.aborted) {
             logger.log('🚫 Request was cancelled by user');
@@ -566,7 +453,6 @@ export const useHomeMutations = ({
           }
         });
       });
-      }
     },
     onSuccess: (data, variables) => {
       logger.log('✅ Chat response received:', data);

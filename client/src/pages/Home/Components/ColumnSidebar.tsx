@@ -143,10 +143,11 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-blue-50 hover:text-blue-700 transition-colors group"
+                        title={column}
+                        className="w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-blue-50 hover:text-blue-700 transition-colors group"
                       >
-                        {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-blue-700">
+                        <span className="flex-shrink-0 mt-0.5">{getColumnIcon(column)}</span>
+                        <span className="flex-1 min-w-0 break-words leading-snug text-gray-700 group-hover:text-blue-700">
                           {column}
                         </span>
                       </button>
@@ -169,10 +170,11 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-green-50 hover:text-green-700 transition-colors group"
+                        title={column}
+                        className="w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-green-50 hover:text-green-700 transition-colors group"
                       >
-                        {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-green-700">
+                        <span className="flex-shrink-0 mt-0.5">{getColumnIcon(column)}</span>
+                        <span className="flex-1 min-w-0 break-words leading-snug text-gray-700 group-hover:text-green-700">
                           {column}
                         </span>
                       </button>
@@ -195,10 +197,11 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-gray-50 hover:text-gray-900 transition-colors group"
+                        title={column}
+                        className="w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-gray-50 hover:text-gray-900 transition-colors group"
                       >
-                        {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-gray-900">
+                        <span className="flex-shrink-0 mt-0.5">{getColumnIcon(column)}</span>
+                        <span className="flex-1 min-w-0 break-words leading-snug text-gray-700 group-hover:text-gray-900">
                           {column}
                         </span>
                       </button>
