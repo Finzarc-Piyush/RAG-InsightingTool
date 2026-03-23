@@ -1,5 +1,5 @@
 import { forwardRef, useState, useMemo, memo, lazy, Suspense } from 'react';
-import { Message, ThinkingStep, ChartSpec } from '@/shared/schema';
+import { Message, ThinkingStep, ChartSpec, TemporalDisplayGrain } from '@/shared/schema';
 import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { InsightCard } from './InsightCard';
 import { DataPreview } from './DataPreview';
@@ -80,6 +80,7 @@ interface MessageBubbleProps {
   columns?: string[];
   numericColumns?: string[];
   dateColumns?: string[];
+  temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
   totalRows?: number;
   totalColumns?: number;
   onEditMessage?: (messageIndex: number, newContent: string) => void;
@@ -87,6 +88,7 @@ interface MessageBubbleProps {
   isLastUserMessage?: boolean;
   thinkingSteps?: ThinkingStep[]; // Thinking steps to display below user messages
   sessionId?: string | null; // Session ID for downloading modified datasets
+  onSuggestedQuestionClick?: (question: string) => void;
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -95,6 +97,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   columns,
   numericColumns,
   dateColumns,
+  temporalDisplayGrainsByColumn,
   totalRows,
   totalColumns,
   onEditMessage,
@@ -102,6 +105,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   isLastUserMessage = false,
   thinkingSteps,
   sessionId,
+  onSuggestedQuestionClick,
 }, ref) => {
   const isUser = message.role === 'user';
 
@@ -340,6 +344,24 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
               <MarkdownRenderer content={message.content} />
             </div>
+            {message.suggestedQuestions &&
+              message.suggestedQuestions.length > 0 &&
+              onSuggestedQuestionClick && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.suggestedQuestions.map((q, i) => (
+                    <Button
+                      key={i}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs rounded-full h-auto py-1.5 px-3"
+                      onClick={() => onSuggestedQuestionClick(q)}
+                    >
+                      {q}
+                    </Button>
+                  ))}
+                </div>
+              )}
           </div>
         )}
 
@@ -350,6 +372,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               columns={columns}
               numericColumns={numericColumns}
               dateColumns={dateColumns}
+              temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
               totalRows={totalRows}
               totalColumns={totalColumns}
               defaultExpanded={true}
@@ -473,6 +496,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             <DataPreviewTable 
               data={(message as any).preview} 
               sessionId={sessionId}
+              dateColumns={dateColumns}
+              temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
             />
           </div>
         )}
@@ -513,8 +538,10 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     (prevProps.thinkingSteps?.length ?? 0) === (nextProps.thinkingSteps?.length ?? 0) &&
     // Compare charts by length
     (prevProps.message.charts?.length ?? 0) === (nextProps.message.charts?.length ?? 0) &&
-    // Compare insights by length
     (prevProps.message.insights?.length ?? 0) === (nextProps.message.insights?.length ?? 0) &&
+    (prevProps.message.suggestedQuestions?.length ?? 0) ===
+      (nextProps.message.suggestedQuestions?.length ?? 0) &&
+    prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
     // Sample rows only matter for first message
     (prevProps.messageIndex !== 0 || prevProps.sampleRows === nextProps.sampleRows)
   );

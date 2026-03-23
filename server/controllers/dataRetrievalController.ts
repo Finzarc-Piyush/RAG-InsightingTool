@@ -4,17 +4,20 @@ import {
   getChatDocument, 
   getChatBySessionIdForUser,
 } from "../models/chat.model.js";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 
 // Get all analysis sessions for a user
 export const getUserAnalysisSessions = async (req: Request, res: Response) => {
   try {
-    const username = req.params.username || req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
+    const authed = requireUsername(req);
+    const pathUser = decodeURIComponent(req.params.username || "")
+      .trim()
+      .toLowerCase();
+    if (!pathUser || pathUser !== authed) {
+      return res.status(403).json({ error: "Forbidden" });
     }
 
-    const chats = await getUserChats(username as string);
+    const chats = await getUserChats(authed);
     
     // Return summary information for each chat (without full raw data)
     const sessions = chats.map(chat => ({
@@ -38,6 +41,10 @@ export const getUserAnalysisSessions = async (req: Request, res: Response) => {
       totalCount: sessions.length
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Error getting user analysis sessions:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
@@ -50,13 +57,9 @@ export const getUserAnalysisSessions = async (req: Request, res: Response) => {
 export const getAnalysisData = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
-    const username = req.query.username || req.headers['x-user-email'];
-    
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
+    const username = requireUsername(req);
 
-    const chatDocument = await getChatDocument(chatId, username as string);
+    const chatDocument = await getChatDocument(chatId, username);
     
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
@@ -83,6 +86,10 @@ export const getAnalysisData = async (req: Request, res: Response) => {
       sessionId: chatDocument.sessionId
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Error getting analysis data:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
@@ -95,13 +102,9 @@ export const getAnalysisData = async (req: Request, res: Response) => {
 export const getAnalysisDataBySession = async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    const username = req.query.username || req.headers['x-user-email'];
-    
-    if (!username) {
-      return res.status(401).json({ error: 'Username is required' });
-    }
+    const username = requireUsername(req);
 
-    const chatDocument = await getChatBySessionIdForUser(sessionId, username as string);
+    const chatDocument = await getChatBySessionIdForUser(sessionId, username);
     
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found for this session' });
@@ -128,6 +131,10 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
       sessionId: chatDocument.sessionId
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Error getting analysis data by session:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
@@ -140,13 +147,9 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
 export const getColumnStatistics = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
-    const username = req.query.username || req.headers['x-user-email'];
-    
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
+    const username = requireUsername(req);
 
-    const chatDocument = await getChatDocument(chatId, username as string);
+    const chatDocument = await getChatDocument(chatId, username);
     
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
@@ -160,6 +163,10 @@ export const getColumnStatistics = async (req: Request, res: Response) => {
       totalNumericColumns: Object.keys(chatDocument.columnStatistics).length
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Error getting column statistics:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
@@ -172,15 +179,11 @@ export const getColumnStatistics = async (req: Request, res: Response) => {
 export const getRawData = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
-    const username = req.query.username || req.headers['x-user-email'];
+    const username = requireUsername(req);
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 100;
-    
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
 
-    const chatDocument = await getChatDocument(chatId, username as string);
+    const chatDocument = await getChatDocument(chatId, username);
     
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
@@ -204,6 +207,10 @@ export const getRawData = async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Error getting raw data:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({

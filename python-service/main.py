@@ -67,6 +67,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def internal_api_key_gate(request: Request, call_next):
+    """Require X-Internal-Api-Key when PYTHON_SERVICE_API_KEY is set (Node must send the same value)."""
+    if config.INTERNAL_API_KEY:
+        if request.headers.get("X-Internal-Api-Key", "") != config.INTERNAL_API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
+
+
 # Request/Response models
 class RemoveNullsRequest(BaseModel):
     data: List[Dict[str, Any]]
@@ -1007,6 +1016,8 @@ if __name__ == "__main__":
         "main:app",
         host=config.HOST,
         port=config.PORT,
-        reload=True
+        reload=True,
+        # Avoid reload loops when pip writes into .venv (watchfiles otherwise retriggers constantly).
+        reload_excludes=[".venv", "**/.venv/**"],
     )
 

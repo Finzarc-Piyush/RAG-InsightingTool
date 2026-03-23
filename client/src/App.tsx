@@ -12,6 +12,7 @@ import AuthCallback from "@/components/AuthCallback";
 import { PublicClientApplication } from '@azure/msal-browser';
 import { MsalProvider } from '@azure/msal-react';
 import { createMsalConfig } from '@/auth/msalConfig';
+import { registerMsalInstance } from '@/auth/msalToken';
 import { logger } from "@/lib/logger";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -193,6 +194,7 @@ function AuthRedirectHandler() {
 
 // Create MSAL instance with dynamic config
 const msalInstance = new PublicClientApplication(createMsalConfig());
+registerMsalInstance(msalInstance);
 
 function App() {
   return (

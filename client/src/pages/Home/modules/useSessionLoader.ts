@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import type { TemporalDisplayGrain } from '@/shared/schema';
+import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
 
 interface UseSessionLoaderProps {
   loadedSessionData?: any;
@@ -10,6 +12,7 @@ interface UseSessionLoaderProps {
   setColumns: (columns: string[]) => void;
   setNumericColumns: (columns: string[]) => void;
   setDateColumns: (columns: string[]) => void;
+  setTemporalDisplayGrainsByColumn: (grains: Record<string, TemporalDisplayGrain>) => void;
   setTotalRows: (rows: number) => void;
   setTotalColumns: (columns: number) => void;
   setMessages: (messages: any[] | ((prev: any[]) => any[])) => void;
@@ -30,6 +33,7 @@ export const useSessionLoader = ({
   setColumns,
   setNumericColumns,
   setDateColumns,
+  setTemporalDisplayGrainsByColumn,
   setTotalRows,
   setTotalColumns,
   setMessages,
@@ -60,28 +64,15 @@ export const useSessionLoader = ({
       setColumns(session.dataSummary.columns?.map((c: any) => c.name) || []);
       setNumericColumns(session.dataSummary.numericColumns || []);
       setDateColumns(session.dataSummary.dateColumns || []);
+      setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(session.dataSummary.columns));
       setTotalRows(session.dataSummary.rowCount || 0);
       setTotalColumns(session.dataSummary.columnCount || 0);
     }
 
-    // Build an initial analysis message so the user immediately sees the original charts/insights
-    const initialAnalysisMessage = {
-      role: 'assistant' as const,
-      content: `Initial analysis for ${session.fileName}.`,
-      charts: session.charts || [],
-      insights: session.insights || [],
-      timestamp: Date.now(),
-    };
-
-    // If backend already has messages, prepend the initial analysis snapshot (unless it already exists)
-    if (Array.isArray(session.messages) && session.messages.length > 0) {
-      const existing = session.messages as any[];
-      const hasChartsInFirst = !!(existing[0]?.charts && existing[0].charts.length);
-      const merged = hasChartsInFirst ? existing : [initialAnalysisMessage, ...existing];
-      setMessages(merged as any);
+    if (Array.isArray(session.messages)) {
+      setMessages(session.messages as any[]);
     } else {
-      // Otherwise show just the initial analysis snapshot
-      setMessages([initialAnalysisMessage] as any);
+      setMessages([]);
     }
   }, [
     loadedSessionData,
@@ -93,6 +84,7 @@ export const useSessionLoader = ({
     setColumns,
     setNumericColumns,
     setDateColumns,
+    setTemporalDisplayGrainsByColumn,
     setTotalRows,
     setTotalColumns,
     setMessages,

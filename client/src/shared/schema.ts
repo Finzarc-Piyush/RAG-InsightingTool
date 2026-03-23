@@ -42,17 +42,70 @@ export const thinkingStepSchema = z.object({
 export type ThinkingStep = z.infer<typeof thinkingStepSchema>;
 
 // Chat Messages
+export const datasetProfileSchema = z.object({
+  shortDescription: z.string(),
+  dateColumns: z.array(z.string()),
+  suggestedQuestions: z.array(z.string()),
+  measureColumns: z.array(z.string()).optional(),
+  idColumns: z.array(z.string()).optional(),
+  grainGuess: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
+
+export const sessionAnalysisColumnRoleSchema = z.object({
+  name: z.string().max(200),
+  role: z.string().max(200),
+  notes: z.string().max(500).optional(),
+});
+
+export const sessionAnalysisFactSchema = z.object({
+  statement: z.string().max(1000),
+  source: z.enum(["user", "assistant", "data"]),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+
+export const sessionAnalysisContextSchema = z.object({
+  version: z.literal(1),
+  dataset: z.object({
+    shortDescription: z.string().max(2000),
+    grainGuess: z.string().max(500).optional(),
+    columnRoles: z.array(sessionAnalysisColumnRoleSchema).max(80),
+    caveats: z.array(z.string().max(500)).max(20),
+  }),
+  userIntent: z.object({
+    verbatimNotes: z.string().max(8000).optional(),
+    interpretedConstraints: z.array(z.string().max(500)).max(30),
+  }),
+  sessionKnowledge: z.object({
+    facts: z.array(sessionAnalysisFactSchema).max(50),
+    analysesDone: z.array(z.string().max(500)).max(30),
+  }),
+  suggestedFollowUps: z.array(z.string().max(300)).max(12),
+  lastUpdated: z.object({
+    reason: z.enum(["seed", "user_context", "assistant_turn"]),
+    at: z.string().max(40),
+  }),
+});
+
+export type SessionAnalysisContext = z.infer<typeof sessionAnalysisContextSchema>;
+
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   charts: z.array(chartSpecSchema).optional(),
   insights: z.array(insightSchema).optional(),
+  suggestedQuestions: z.array(z.string()).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Temporary thinking steps shown during processing
   userEmail: z.string().optional(), // Email of the user who sent the message (for shared analyses)
+  agentTrace: z.record(z.unknown()).optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;
+
+export const temporalDisplayGrainSchema = z.enum(['dayOrWeek', 'monthOrQuarter', 'year']);
 
 // Data Summary
 export const dataSummarySchema = z.object({
@@ -63,6 +116,7 @@ export const dataSummarySchema = z.object({
       name: z.string(),
       type: z.string(),
       sampleValues: z.array(z.union([z.string(), z.number(), z.null()])),
+      temporalDisplayGrain: temporalDisplayGrainSchema.optional(),
     })
   ),
   numericColumns: z.array(z.string()),
@@ -70,6 +124,7 @@ export const dataSummarySchema = z.object({
 });
 
 export type DataSummary = z.infer<typeof dataSummarySchema>;
+export type TemporalDisplayGrain = z.infer<typeof temporalDisplayGrainSchema>;
 
 // Column Statistics Schema
 export const columnStatisticsSchema = z.object({

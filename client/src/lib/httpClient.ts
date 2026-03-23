@@ -2,11 +2,12 @@ import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import { getUserEmail } from "@/utils/userStorage";
 import { API_BASE_URL } from "@/lib/config";
 import { logger } from "@/lib/logger";
+import { getAuthorizationHeader } from "@/auth/msalToken";
 
 // Dedicated axios instance for server communication
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 0,
+  timeout: Number(import.meta.env.VITE_API_TIMEOUT_MS || 120000),
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",
@@ -14,13 +15,13 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(
-  (config) => {
-    logger.log(`Making ${config.method?.toUpperCase()} request to: ${config.url}`);
+  async (config) => {
+    const auth = await getAuthorizationHeader();
+    config.headers = config.headers || {};
+    Object.assign(config.headers, auth);
     const userEmail = getUserEmail();
     if (userEmail) {
-      config.headers = config.headers || {};
       config.headers["X-User-Email"] = userEmail;
-      logger.log(`Adding user email to headers: ${userEmail}`);
     }
     return config;
   },
@@ -35,7 +36,9 @@ apiClient.interceptors.response.use(
       error?.code === "ERR_CANCELED" ||
       error?.name === "AbortError"
     ) {
-      logger.log("🚫 Request was cancelled");
+      if (import.meta.env.DEV) {
+        logger.log("🚫 Request was cancelled");
+      }
       const cancelError = new Error("Request cancelled");
       (cancelError as any).isCancel = true;
       (cancelError as any).code = "ERR_CANCELED";
@@ -48,13 +51,17 @@ apiClient.interceptors.response.use(
       error.message.includes("Network Error") ||
       error.message.includes("Failed to fetch")
     ) {
-      logger.log("CORS/Network error detected, retrying once...");
+      if (import.meta.env.DEV) {
+        logger.log("CORS/Network error detected, retrying once...");
+      }
       try {
         if (error.config) {
           return await apiClient.request(error.config);
         }
       } catch (retryError) {
-        logger.log("Retry failed:", retryError);
+        if (import.meta.env.DEV) {
+          logger.log("Retry failed:", retryError);
+        }
         throw new Error("Network error: CORS issue persists after retry");
       }
     }
@@ -93,7 +100,6 @@ export async function apiRequest<T = any>({
   signal,
 }: ApiRequestOptions): Promise<T> {
   try {
-    logger.log(`🌐 Making ${method} request to ${route}`);
     const response = await apiClient.request({
       method,
       url: route,
@@ -101,8 +107,12 @@ export async function apiRequest<T = any>({
       signal,
       ...config,
     });
-    logger.log(`✅ ${method} ${route} - Status: ${response.status}`);
-    logger.log("📦 Response data:", response.data);
+    if (import.meta.env.DEV) {
+      const rid =
+        (response.headers?.["x-request-id"] as string | undefined) ||
+        (response.headers?.["X-Request-Id"] as string | undefined);
+      logger.log(`← ${method} ${route} ${response.status}${rid ? ` [${rid}]` : ""}`);
+    }
     return response.data;
   } catch (error: any) {
     if (
@@ -112,7 +122,9 @@ export async function apiRequest<T = any>({
       error?.isCancel === true ||
       error?.message === "Request cancelled"
     ) {
-      logger.log(`🚫 ${method} ${route} was cancelled`);
+      if (import.meta.env.DEV) {
+        logger.log(`🚫 ${method} ${route} was cancelled`);
+      }
       throw new Error("Request cancelled");
     }
     logger.error(`❌ ${method} ${route} failed:`, error);
@@ -165,13 +177,14 @@ export async function uploadFile<T = any>(
   }
 
   const userEmail = getUserEmail();
+  const auth = await getAuthorizationHeader();
   const headers: Record<string, string> = {
     "Content-Type": "multipart/form-data",
+    ...auth,
   };
 
   if (userEmail) {
     headers["X-User-Email"] = userEmail;
-    logger.log(`Adding user email to upload headers: ${userEmail}`);
   }
 
   return apiRequest<T>({

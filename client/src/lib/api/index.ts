@@ -8,6 +8,8 @@ export { sharedDashboardsApi } from "./sharedDashboards";
 export { snowflakeApi } from "./snowflake";
 export type { SnowflakeTableInfo, SnowflakeImportResponse } from "./snowflake";
 export { streamChatRequest, streamDataOpsChatRequest, downloadModifiedDataset } from "./chat";
+export { getUploadJobStatus } from "./uploadStatus";
+export type { UploadJobStatusResponse } from "./uploadStatus";
 export type { StreamChatCallbacks, StreamDataOpsCallbacks, DataOpsResponse } from "./chat";
 
 

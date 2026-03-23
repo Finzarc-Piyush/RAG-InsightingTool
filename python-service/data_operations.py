@@ -4,6 +4,7 @@ import numpy as np
 from typing import Any, Dict, List, Optional, Literal, Union
 from datetime import datetime
 import re
+from asteval import Interpreter
 
 
 def round_numeric_values_to_2_decimals(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -918,22 +919,18 @@ def create_derived_column(
                         "errors": errors
                     }
         
-        # Evaluate the expression
-        # Use safe evaluation context with additional numpy/pandas functions
-        safe_dict = {
-            "df": df, 
-            "pd": pd, 
-            "np": np, 
-            "__builtins__": {},
-            # Add common numpy/pandas functions that might be used
-            "mean": lambda x: x.mean() if hasattr(x, 'mean') else np.mean(x),
-            "std": lambda x: x.std() if hasattr(x, 'std') else np.std(x),
-            "sum": lambda x: x.sum() if hasattr(x, 'sum') else np.sum(x),
-            "max": lambda x: x.max() if hasattr(x, 'max') else np.max(x),
-            "min": lambda x: x.min() if hasattr(x, 'min') else np.min(x),
-        }
-        
-        result = eval(python_expr, safe_dict)
+        # Evaluate via asteval (restricted interpreter) — no raw Python eval
+        aeval = Interpreter(
+            symtable={"df": df, "pd": pd, "np": np},
+            use_numpy=True,
+        )
+        result = aeval(python_expr)
+        if aeval.error:
+            errors.append(f"Error evaluating expression: {aeval.error}")
+            return {
+                "data": data,
+                "errors": errors,
+            }
         
         # Handle scalar result (same value for all rows)
         if isinstance(result, (int, float, str, bool)) or (isinstance(result, float) and pd.isna(result)):

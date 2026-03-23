@@ -3,6 +3,8 @@
  * Handles async processing of large file uploads to prevent blocking
  */
 
+import type { ChartSpec, Insight, SessionAnalysisContext } from '../shared/schema.js';
+
 export interface SnowflakeImportConfig {
   tableName: string;
   database?: string;
@@ -23,7 +25,15 @@ interface UploadJob {
   mimeType?: string;
   blobInfo?: { blobUrl: string; blobName: string };
   snowflakeImport?: SnowflakeImportConfig;
-  status: 'pending' | 'uploading' | 'parsing' | 'analyzing' | 'saving' | 'completed' | 'failed';
+  status:
+    | 'pending'
+    | 'uploading'
+    | 'parsing'
+    | 'preview_ready'
+    | 'analyzing'
+    | 'saving'
+    | 'completed'
+    | 'failed';
   progress: number; // 0-100
   error?: string;
   result?: any;
@@ -161,23 +171,34 @@ class UploadQueue {
       job.progress = 5;
 
       // Import processing functions dynamically to avoid circular dependencies
-      const { parseFile, createDataSummary, convertDashToZeroForNumericColumns } = await import('../lib/fileParser.js');
+      const {
+        parseFile,
+        createDataSummary,
+        canonicalizeDateColumnValues,
+        applyUploadPipelineWithProfile,
+        resolveDateColumnsForUpload,
+      } = await import('../lib/fileParser.js');
+      const { inferDatasetProfile, emptyDatasetProfile } = await import('../lib/datasetProfile.js');
       const { processLargeFile, shouldUseLargeFileProcessing, getDataForAnalysis } = await import('../lib/largeFileProcessor.js');
-      const { analyzeUpload, analyzeUploadWithPython } = await import('../lib/dataAnalyzer.js');
-      const { checkPythonServiceHealth } = await import('../lib/dataOps/pythonService.js');
-      const { generateAISuggestions } = await import('../lib/suggestionGenerator.js');
-      const { createChatDocument, generateColumnStatistics, getChatBySessionIdEfficient, updateChatDocument, addMessagesBySessionId } = await import('../models/chat.model.js');
+      const {
+        createChatDocument,
+        generateColumnStatistics,
+        getChatBySessionIdEfficient,
+        updateChatDocument,
+        ensureChatDocumentForUploadJob,
+      } = await import('../models/chat.model.js');
       const { saveChartsToBlob } = await import('../lib/blobStorage.js');
       const queryCache = (await import('../lib/cache.js')).default;
 
       let data: Record<string, any>[];
       let summary: ReturnType<typeof createDataSummary>;
+      let datasetProfile: ReturnType<typeof emptyDatasetProfile>;
       let storagePath: string | undefined;
       let chunkIndexBlob: { blobName: string; totalChunks: number; totalRows: number } | undefined;
       let useLargeFileProcessing = false;
       let useChunking = false;
 
-      // Snowflake import: fetch table data then run same analysis pipeline
+      // Snowflake import: fetch raw rows (enrichment applies profile after preview checkpoint)
       if (job.snowflakeImport) {
         job.status = 'parsing';
         job.progress = 10;
@@ -186,9 +207,6 @@ class UploadQueue {
         if (!data || data.length === 0) {
           throw new Error('No data found in Snowflake table');
         }
-        summary = createDataSummary(data);
-        data = convertDashToZeroForNumericColumns(data, summary.numericColumns);
-        summary = createDataSummary(data);
         job.progress = 40;
       } else if (job.fileBuffer) {
         // File upload path
@@ -210,18 +228,21 @@ class UploadQueue {
             throw new Error('No data found in file');
           }
           
-          summary = createDataSummary(tempData);
-          const tempDataProcessed = convertDashToZeroForNumericColumns(tempData, summary.numericColumns);
-          summary = createDataSummary(tempDataProcessed);
-          
+          const emptyProf = emptyDatasetProfile();
+          const interimChunkSummary = createDataSummary(tempData);
+          const summaryForChunk = {
+            ...interimChunkSummary,
+            dateColumns: resolveDateColumnsForUpload(tempData, emptyProf, interimChunkSummary),
+          };
+
           job.progress = 10;
-          
+
           // Chunk the file
           const chunkIndex = await chunkFile(
             job.fileBuffer,
             job.sessionId,
             job.fileName,
-            summary,
+            summaryForChunk,
             (progress) => {
               job.progress = 10 + Math.floor(progress.progress * 0.3); // Use 30% of progress for chunking
               if (progress.message) {
@@ -284,21 +305,17 @@ class UploadQueue {
             }
           );
           
-          summary = result.summary;
           storagePath = result.storagePath;
-          
-          // Load ALL data for AI analysis (no sampling - full data integrity)
-          console.log(`📊 Loading ALL ${result.rowCount} rows for full data analysis...`);
-          data = await getDataForAnalysis(job.sessionId, undefined, undefined); // undefined = no limit, load all
-          
-          console.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows for analysis`);
+
+          console.log(`📊 Loading ALL ${result.rowCount} rows for enrichment...`);
+          data = await getDataForAnalysis(job.sessionId, undefined, undefined);
+          console.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows in memory`);
         } catch (largeFileError) {
           const errorMsg = largeFileError instanceof Error ? largeFileError.message : String(largeFileError);
           throw new Error(`Failed to process large file: ${errorMsg}`);
         }
-      } else {
-        // Use traditional processing for smaller files
-        // Step 1: Parse file
+      } else if (!useChunking) {
+        // Smaller in-memory parse (skip when chunking already populated `data`)
         job.status = 'parsing';
         job.progress = 15;
         try {
@@ -314,96 +331,103 @@ class UploadQueue {
         if (data.length === 0) {
           throw new Error('No data found in file');
         }
-
-        // Step 2: Create data summary
         job.progress = 25;
-        try {
-          summary = createDataSummary(data);
-          data = convertDashToZeroForNumericColumns(data, summary.numericColumns);
-        } catch (summaryError) {
-          const errorMsg = summaryError instanceof Error ? summaryError.message : String(summaryError);
-          if (errorMsg.includes('memory') || errorMsg.includes('heap')) {
-            throw new Error('File is too large to analyze. Please try with a smaller file or reduce the number of columns.');
-          }
-          throw new Error(`Failed to create data summary: ${errorMsg}`);
-        }
       }
       } // end else if (job.fileBuffer)
 
-      // Step 3: Analyze with AI (this is the slowest part)
+      const skipUploadLlm =
+        process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === 'true' ||
+        process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === '1';
+
+      // Preview checkpoint: heuristic summary + 50 sample rows (no LLM)
+      const previewSummary = createDataSummary(data);
+      const previewSample = data.slice(0, 50).map((row) => {
+        const serializedRow: Record<string, any> = {};
+        for (const [key, value] of Object.entries(row)) {
+          if (value instanceof Date) {
+            serializedRow[key] = value.toISOString();
+          } else {
+            serializedRow[key] = value;
+          }
+        }
+        return serializedRow;
+      });
+      canonicalizeDateColumnValues(previewSample, previewSummary.dateColumns);
+
+      const previewDoc = await ensureChatDocumentForUploadJob({
+        sessionId: job.sessionId,
+        username: job.username,
+        fileName: job.fileName,
+        fileSize: job.fileBuffer?.length ?? 0,
+        blobInfo: job.blobInfo,
+      });
+      await updateChatDocument({
+        ...previewDoc,
+        dataSummary: previewSummary,
+        sampleRows: previewSample,
+        enrichmentStatus: 'in_progress',
+        lastUpdatedAt: Date.now(),
+      });
+      job.status = 'preview_ready';
+      job.progress = Math.max(job.progress, 32);
+
+      let sessionAnalysisContext: SessionAnalysisContext;
+      if (skipUploadLlm) {
+        const { emptySessionAnalysisContext } = await import('../lib/sessionAnalysisContext.js');
+        const { suggestedFollowUpsFromDataSummary } = await import(
+          '../lib/suggestedFollowUpsFromSummary.js'
+        );
+        datasetProfile = emptyDatasetProfile();
+        const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile);
+        data = finalPrep.data;
+        summary = finalPrep.summary;
+        const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
+          fileLabel: job.fileName,
+        });
+        const shortDesc =
+          job.fileName?.trim() ||
+          `${summary.columnCount} columns, ${summary.rowCount.toLocaleString()} rows`;
+        datasetProfile = {
+          ...emptyDatasetProfile(),
+          shortDescription: shortDesc,
+          dateColumns: [...summary.dateColumns],
+          suggestedQuestions: derivedFollowUps.slice(0, 8),
+        };
+        const baseCtx = emptySessionAnalysisContext();
+        sessionAnalysisContext = {
+          ...baseCtx,
+          suggestedFollowUps: derivedFollowUps.slice(0, 12),
+          dataset: {
+            ...baseCtx.dataset,
+            shortDescription: shortDesc,
+          },
+        };
+      } else {
+        const { seedSessionAnalysisContextLLM } = await import('../lib/sessionAnalysisContext.js');
+        datasetProfile = await inferDatasetProfile(data.slice(0, Math.min(100, data.length)), {
+          fileName: job.fileName,
+        });
+        const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile);
+        data = finalPrep.data;
+        summary = finalPrep.summary;
+        sessionAnalysisContext = await seedSessionAnalysisContextLLM({
+          datasetProfile,
+          dataSummary: summary,
+        });
+      }
+
+      // No upload-time chart/insight generation; first assistant turn uses session context + chat only.
       job.status = 'analyzing';
       job.progress = 40;
-      let charts, insights;
-      try {
-        // OPTIMIZATION: For large files, use aggressive optimizations to speed up upload
-        // 1. Skip chart insights generation (saves 4-6 AI calls)
-        // 2. Use sampled data for AI analysis instead of full dataset (much faster)
-        const shouldSkipChartInsights = useChunking || useLargeFileProcessing || data.length > 50000;
-        // For large files, always sample data for AI analysis to reduce latency.
-        // We use a smaller, but still statistically meaningful, sample size to
-        // balance quality and performance.
-        const MAX_SAMPLE_FOR_AI = 20000;
-        const shouldUseSampledDataForAI = data.length > MAX_SAMPLE_FOR_AI;
-        
-        let dataForAI = data;
-        if (shouldUseSampledDataForAI) {
-          // Sample data for AI analysis - 20K rows is statistically sufficient
-          const step = Math.floor(data.length / MAX_SAMPLE_FOR_AI);
-          const sampled: Record<string, any>[] = [];
-          for (let i = 0; i < data.length && sampled.length < MAX_SAMPLE_FOR_AI; i += step) {
-            sampled.push(data[i]);
-          }
-          dataForAI = sampled;
-          console.log(`⚡ Performance optimization: Using ${sampled.length} sampled rows (from ${data.length} total) for AI analysis to speed up processing`);
-        }
-        
-        if (shouldSkipChartInsights) {
-          console.log(`⚡ Performance optimization: Skipping chart insights generation for large file (${data.length} rows). Insights will be generated on-demand.`);
-        }
+      const charts: ChartSpec[] = [];
+      const insights: Insight[] = [];
 
-        const usePythonInitialAnalysis = process.env.USE_PYTHON_INITIAL_ANALYSIS === 'true';
-        const pythonHealthy = usePythonInitialAnalysis && (await checkPythonServiceHealth());
-        if (pythonHealthy) {
-          try {
-            console.log('📊 Using Python + 1 AI initial analysis path');
-            const result = await analyzeUploadWithPython(dataForAI, summary, job.fileName, shouldSkipChartInsights);
-            charts = result.charts;
-            insights = result.insights;
-          } catch (pythonAnalyzeError) {
-            console.warn('⚠️ Python initial analysis failed, falling back to standard analyzeUpload:', pythonAnalyzeError);
-            const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
-            charts = result.charts;
-            insights = result.insights;
-          }
-        } else {
-          const result = await analyzeUpload(dataForAI, summary, job.fileName, shouldSkipChartInsights);
-          charts = result.charts;
-          insights = result.insights;
-        }
-      } catch (analyzeError) {
-        const errorMsg = analyzeError instanceof Error ? analyzeError.message : String(analyzeError);
-        if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
-          throw new Error('AI analysis timed out. The file is too large or complex. Please try with a smaller file or fewer columns.');
-        }
-        if (errorMsg.includes('rate limit') || errorMsg.includes('quota')) {
-          throw new Error('AI service rate limit reached. Please try again in a few minutes.');
-        }
-        throw new Error(`AI analysis failed: ${errorMsg}`);
-      }
-
-      // Step 4: Generate suggestions (skip for large files to speed up upload)
+      // Step 4: Suggestions — rolling session context (LLM seed); no hardcoded lists
       job.progress = 60;
-      let suggestions: string[] = [];
-      const shouldSkipSuggestions = useChunking || useLargeFileProcessing || data.length > 50000;
-      if (!shouldSkipSuggestions) {
-        try {
-          suggestions = await generateAISuggestions([], summary);
-        } catch (suggestionError) {
-          console.error('Failed to generate AI suggestions:', suggestionError);
-        }
-      } else {
-        console.log(`⚡ Performance optimization: Skipping AI suggestions generation for large file. Suggestions can be generated on-demand.`);
-      }
+      const suggestions: string[] =
+        sessionAnalysisContext.suggestedFollowUps.length > 0
+          ? [...sessionAnalysisContext.suggestedFollowUps]
+          : [];
 
       // Step 5: Sanitize charts (with memory optimization for large datasets)
       job.progress = 70;
@@ -544,6 +568,7 @@ class UploadQueue {
           return serializedRow;
         });
       }
+      canonicalizeDateColumnValues(sampleRows, summary.dateColumns);
 
       // Step 9: Save to database
       job.status = 'saving';
@@ -607,49 +632,26 @@ class UploadQueue {
             chartReferences: chartReferences.length > 0 ? chartReferences : undefined,
             rawData: shouldStoreRawData ? data : [],
             sampleRows,
-            // Store columnar storage path for large files
+            datasetProfile,
             columnarStoragePath: useLargeFileProcessing ? storagePath : undefined,
-            // Store chunk index for chunked files
             chunkIndexBlob: chunkIndexBlob,
             columnStatistics,
-            dataSummaryStatistics, // Store pre-computed data summary statistics
+            dataSummaryStatistics,
             insights,
+            sessionAnalysisContext,
+            enrichmentStatus: 'complete',
             analysisMetadata: {
               totalProcessingTime: processingTime,
               aiModelUsed: 'gpt-4o',
               fileSize: job.fileBuffer?.length ?? 0,
               analysisVersion: '1.0.0'
             },
-            // Update blobInfo if it wasn't set in placeholder
             blobInfo: job.blobInfo || existingSession.blobInfo,
+            lastUpdatedAt: Date.now(),
           };
           chatDocument = await updateChatDocument(chatDocument);
           console.log(`✅ Updated session with processed data: ${chatDocument.id}`);
-          
-          // Create initial assistant message with insights and charts
-          // Only add if messages array is empty (placeholder session)
-          if (!chatDocument.messages || chatDocument.messages.length === 0) {
-            // Use charts with data (not the stripped versions)
-            const chartsWithData = sanitizedCharts.filter(chart => chart.data && chart.data.length > 0);
-            
-            const initialMessage = {
-              role: 'assistant' as const,
-              content: `Hi! 👋 I've just finished analyzing your data. Here's what I found:\n\n📊 Your dataset has ${summary.rowCount} rows and ${summary.columnCount} columns\n🔢 ${summary.numericColumns.length} numeric columns to work with\n📅 ${summary.dateColumns.length} date columns for time-based analysis\n\nI've created ${sanitizedCharts.length} visualizations and ${insights.length} key insights to get you started. Feel free to ask me anything about your data - I'm here to help! What would you like to explore first?`,
-              charts: chartsWithData.slice(0, 5), // Include first 5 charts in message (full data)
-              insights: insights,
-              timestamp: Date.now(),
-            };
-            
-            try {
-              await addMessagesBySessionId(job.sessionId, [initialMessage]);
-              console.log(`✅ Added initial assistant message with ${insights.length} insights and ${chartsWithData.length} charts`);
-            } catch (messageError) {
-              console.error('⚠️ Failed to add initial message (non-critical):', messageError);
-              // Non-critical - session is still updated with data
-            }
-          }
         } else {
-          // No placeholder exists, create new session (backward compatibility)
           console.log(`📝 No placeholder found, creating new session: ${job.sessionId}`);
           chatDocument = await createChatDocument(
             job.username,
@@ -668,8 +670,15 @@ class UploadQueue {
               analysisVersion: '1.0.0'
             },
             insights,
-            dataSummaryStatistics // Pass pre-computed data summary statistics
+            dataSummaryStatistics,
+            datasetProfile,
+            sessionAnalysisContext
           );
+          chatDocument = await updateChatDocument({
+            ...chatDocument,
+            enrichmentStatus: 'complete',
+            lastUpdatedAt: Date.now(),
+          });
         }
       } catch (cosmosError) {
         const errorMsg = cosmosError instanceof Error ? cosmosError.message : String(cosmosError);
@@ -686,6 +695,20 @@ class UploadQueue {
         // If it's not a critical error, continue - the document might still be partially saved
       }
 
+      if (chatDocument?.sessionId) {
+        const { postEnrichmentFlush } = await import('../services/chat/chat.service.js');
+        try {
+          await postEnrichmentFlush(job.sessionId, job.username);
+        } catch (flushErr) {
+          console.error('⚠️ postEnrichmentFlush failed:', flushErr);
+        }
+      }
+
+      if (chatDocument?.sessionId) {
+        const { scheduleIndexSessionRag } = await import("../lib/rag/indexSession.js");
+        scheduleIndexSessionRag(job.sessionId);
+      }
+
       // Step 10: Complete
       job.status = 'completed';
       job.progress = 100;
@@ -697,6 +720,7 @@ class UploadQueue {
         insights,
         sampleRows,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
+        sessionAnalysisContext,
         chatId: chatDocument?.id,
         blobInfo: job.blobInfo,
       };
@@ -714,6 +738,19 @@ class UploadQueue {
       job.error = error instanceof Error ? error.message : 'Unknown error occurred';
       job.completedAt = Date.now();
       console.error(`Upload job ${job.jobId} failed:`, error);
+      try {
+        const { getChatBySessionIdEfficient, updateChatDocument } = await import('../models/chat.model.js');
+        const doc = await getChatBySessionIdEfficient(job.sessionId);
+        if (doc) {
+          await updateChatDocument({
+            ...doc,
+            enrichmentStatus: 'failed',
+            lastUpdatedAt: Date.now(),
+          });
+        }
+      } catch {
+        /* ignore */
+      }
       
       // Clear timeout on error
       clearTimeout(timeoutId);
@@ -752,7 +789,9 @@ class UploadQueue {
     return {
       total: jobs.length,
       pending: jobs.filter(j => j.status === 'pending').length,
-      processing: jobs.filter(j => ['uploading', 'parsing', 'analyzing', 'saving'].includes(j.status)).length,
+      processing: jobs.filter(j =>
+        ['uploading', 'parsing', 'preview_ready', 'analyzing', 'saving'].includes(j.status)
+      ).length,
       completed: jobs.filter(j => j.status === 'completed').length,
       failed: jobs.filter(j => j.status === 'failed').length,
       active: this.processing.size,

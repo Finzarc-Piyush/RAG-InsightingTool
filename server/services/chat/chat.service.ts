@@ -9,16 +9,16 @@ import {
   getChatBySessionIdForUser, 
   addMessagesBySessionId, 
   updateMessageAndTruncate,
+  setPendingUserMessageForSession,
   ChatDocument 
 } from "../../models/chat.model.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
-import { loadLatestData, loadDataForColumns } from "../../utils/dataLoader.js";
 import { extractRequiredColumns, extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
-import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
-import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
+import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 
 export interface ProcessChatMessageParams {
   sessionId: string;
@@ -27,12 +27,14 @@ export interface ProcessChatMessageParams {
   username: string;
 }
 
-export interface ProcessChatMessageResult {
-  answer: string;
-  charts?: any[];
-  insights?: any[];
-  suggestions?: string[];
-}
+export type ProcessChatMessageResult =
+  | {
+      answer: string;
+      charts?: any[];
+      insights?: any[];
+      suggestions?: string[];
+    }
+  | { queuedUntilEnrichment: true };
 
 /**
  * Process a chat message and generate response
@@ -46,6 +48,17 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   if (!chatDocument) {
     throw new Error('Session not found. Please upload a file first.');
+  }
+
+  const enrichment = chatDocument.enrichmentStatus;
+  if (enrichment === 'pending' || enrichment === 'in_progress') {
+    await setPendingUserMessageForSession(sessionId, username, message);
+    return { queuedUntilEnrichment: true as const };
+  }
+  if (enrichment === 'failed') {
+    throw new Error(
+      'Data enrichment failed for this session. Please try uploading your file again.'
+    );
   }
 
   console.log('✅ Chat document found, loading latest data...');
@@ -104,42 +117,13 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     console.log(`🔄 Skipping cache for aggregation query (data operation)`);
   }
   
-  // Load the latest data (including any modifications from data operations)
-  // For columnar (DuckDB) sessions and analytical/info-seeking questions, load only a sample
-  // and run the plan in DuckDB to avoid loading full data (faster chat).
-  const queryFilters = parsedQuery
-    ? {
-        timeFilters: parsedQuery.timeFilters || undefined,
-        valueFilters: parsedQuery.valueFilters || undefined,
-        exclusionFilters: parsedQuery.exclusionFilters || undefined,
-      }
-    : undefined;
-
-  const columnarStoragePath = !!(chatDocument as { columnarStoragePath?: string }).columnarStoragePath;
-  const useDuckDBPlan =
-    columnarStoragePath &&
-    (isInformationSeekingQuery(message) || isAnalyticalQuery(message));
-
-  let latestData: Record<string, any>[];
-  let columnarStoragePathOpt: boolean | undefined;
-  let loadFullDataOpt: (() => Promise<Record<string, any>[]>) | undefined;
-
-  if (useDuckDBPlan) {
-    console.log('📊 Columnar session + analytical query: using DuckDB plan path (sample only, no full load)');
-    latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000);
-    columnarStoragePathOpt = true;
-    loadFullDataOpt = () =>
-      requiredColumns.length > 0
-        ? loadDataForColumns(chatDocument, requiredColumns, queryFilters)
-        : loadLatestData(chatDocument, undefined, queryFilters);
-    console.log(`✅ Loaded ${latestData.length} sample rows for plan generation`);
-  } else {
-    latestData =
-      requiredColumns.length > 0
-        ? await loadDataForColumns(chatDocument, requiredColumns, queryFilters)
-        : await loadLatestData(chatDocument, undefined, queryFilters);
-    console.log(`✅ Loaded ${latestData.length} rows of data for analysis`);
-  }
+  const { latestData, columnarStoragePathOpt, loadFullDataOpt, permanentContext, sessionAnalysisContext } =
+    await resolveAnswerQuestionDataLoad({
+      chatDocument,
+      message,
+      processingChatHistory,
+      precomputed: { requiredColumns, parsedQuery },
+    });
   
   // Get chat-level insights from the document
   const chatLevelInsights = chatDocument.insights && Array.isArray(chatDocument.insights) && chatDocument.insights.length > 0
@@ -149,6 +133,13 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
   // Answer the question using the latest data
   // Include permanent context if available
   // Pass columnarStoragePath and loadFullData for DuckDB plan path (analytical queries on large files)
+  const agentOpts = isAgenticLoopEnabled()
+    ? {
+        dataBlobVersion: chatDocument.currentDataBlob?.version,
+        username,
+      }
+    : undefined;
+
   const answerResult = await answerQuestion(
     latestData,
     message,
@@ -158,9 +149,11 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     chatLevelInsights,
     undefined, // onThinkingStep
     undefined, // mode
-    chatDocument.permanentContext, // permanent context
+    permanentContext,
+    sessionAnalysisContext,
     columnarStoragePathOpt,
-    loadFullDataOpt
+    loadFullDataOpt,
+    agentOpts
   );
 
   // Enrich charts with data and insights
@@ -212,6 +205,15 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     console.error('Failed to generate suggestions:', error);
   }
 
+  const enrichmentFollowUps = [
+    ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
+    ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
+  ];
+  const mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(
+    0,
+    12
+  );
+
   // Save messages to database
   // Use targetTimestamp for the user message to match the frontend's timestamp
   // This prevents duplicate messages when the SSE polling picks up the saved messages
@@ -247,10 +249,28 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         insights: validated.insights,
         preview: validated.preview || undefined, // Save preview data for data operations
         summary: validated.summary || undefined, // Save summary data for data operations
+        agentTrace: answerResult.agentTrace,
         timestamp: assistantMessageTimestamp,
+        ...(mergedSuggestedQuestions.length > 0
+          ? { suggestedQuestions: mergedSuggestedQuestions }
+          : {}),
       },
     ]);
     console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+
+    try {
+      const { persistMergeAssistantSessionContext } = await import(
+        "../../lib/sessionAnalysisContext.js"
+      );
+      await persistMergeAssistantSessionContext({
+        sessionId,
+        username,
+        assistantMessage: validated.answer,
+        agentTrace: answerResult.agentTrace,
+      });
+    } catch (ctxErr) {
+      console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
+    }
   } catch (cosmosError) {
     console.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
     // Continue without failing the chat - CosmosDB is optional
@@ -269,3 +289,53 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
   return result;
 }
 
+/**
+ * After upload enrichment completes: answer queued user message, or post suggested questions only.
+ */
+export async function postEnrichmentFlush(sessionId: string, username: string): Promise<void> {
+  const {
+    getChatBySessionIdForUser,
+    clearPendingUserMessage,
+    addMessagesBySessionId,
+  } = await import("../../models/chat.model.js");
+
+  const doc = await getChatBySessionIdForUser(sessionId, username);
+  if (!doc) return;
+
+  const pending = doc.pendingUserMessage;
+  if (pending?.content?.trim()) {
+    await clearPendingUserMessage(sessionId, username);
+    await processChatMessage({
+      sessionId,
+      message: pending.content.trim(),
+      username,
+    });
+    return;
+  }
+
+  const sac = doc.sessionAnalysisContext?.suggestedFollowUps ?? [];
+  const prof = doc.datasetProfile?.suggestedQuestions ?? [];
+  let merged = [...new Set([...sac, ...prof])].slice(0, 12);
+  if (
+    merged.length === 0 &&
+    doc.dataSummary?.rowCount > 0 &&
+    doc.dataSummary.columns?.length
+  ) {
+    const { suggestedFollowUpsFromDataSummary } = await import(
+      "../../lib/suggestedFollowUpsFromSummary.js"
+    );
+    merged = suggestedFollowUpsFromDataSummary(doc.dataSummary, {
+      fileLabel: doc.fileName,
+    });
+  }
+  if (merged.length === 0) return;
+
+  await addMessagesBySessionId(sessionId, [
+    {
+      role: "assistant",
+      content: "Here are some suggested questions you can try:",
+      suggestedQuestions: merged,
+      timestamp: Date.now(),
+    },
+  ]);
+}

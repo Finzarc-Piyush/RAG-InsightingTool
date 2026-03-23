@@ -1,6 +1,9 @@
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { DataSummary } from '../shared/schema.js';
+import { parseFlexibleDate, sanitizeDateStringForParse, isDateColumnName } from './dateUtils.js';
+import type { DatasetProfile } from './datasetProfile.js';
+import { inferTemporalGrainFromDates } from './temporalGrain.js';
 
 // Month name mapping for date detection
 const MONTH_MAP: Record<string, number> = {
@@ -380,6 +383,53 @@ export function convertDashToZeroForNumericColumns(
   });
 }
 
+function isLocalMidnight(d: Date): boolean {
+  return (
+    d.getHours() === 0 &&
+    d.getMinutes() === 0 &&
+    d.getSeconds() === 0 &&
+    d.getMilliseconds() === 0
+  );
+}
+
+function formatLocalYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Prefer YYYY-MM-DD when the source has no explicit time; otherwise full ISO UTC. */
+function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
+  if (raw instanceof Date) {
+    return isLocalMidnight(parsed) ? formatLocalYMD(parsed) : parsed.toISOString();
+  }
+  const t = sanitizeDateStringForParse(String(raw));
+  const hasExplicitTime = /T\d{2}:\d{2}/.test(t) || /\b\d{1,2}:\d{2}:\d{2}\b/.test(t);
+  if (!hasExplicitTime) {
+    return formatLocalYMD(parsed);
+  }
+  return parsed.toISOString();
+}
+
+/**
+ * Normalize values in date columns to ISO (date-only or full instant) for consistent analysis and display.
+ */
+export function canonicalizeDateColumnValues(data: Record<string, any>[], dateColumns: string[]): void {
+  if (data.length === 0 || dateColumns.length === 0) return;
+  for (const row of data) {
+    for (const col of dateColumns) {
+      const v = row[col];
+      if (v === null || v === undefined || v === '') continue;
+      if (v instanceof Date && !isNaN(v.getTime())) {
+        row[col] = toCanonicalDateStorage(v, v);
+        continue;
+      }
+      const parsed = parseFlexibleDate(String(v));
+      if (parsed) {
+        row[col] = toCanonicalDateStorage(v, parsed);
+      }
+    }
+  }
+}
+
 export function createDataSummary(data: Record<string, any>[]): DataSummary {
   if (data.length === 0) {
     throw new Error('No data found in file');
@@ -448,12 +498,18 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     const numericThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.7)); // 70% threshold
     const isNumeric = nonNullValues.length > 0 && numericMatches >= numericThreshold;
     
-    // Use comprehensive date detection
-    // Consider it a date column if at least 50% of non-null values are dates
-    // This handles cases where some rows might have invalid dates or mixed data
-    const dateMatches = nonNullValues.filter((v) => isDateValue(v)).length;
-    const dateThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.5));
-    const isDate = nonNullValues.length > 0 && dateMatches >= dateThreshold;
+    // Date detection: prefer parseFlexibleDate (handles DD/MM/YYYY + ISO mixes); keep legacy isDateValue as signal
+    const flexibleDateMatches = nonNullValues.filter((v) => {
+      if (v === null || v === undefined || v === '') return false;
+      return parseFlexibleDate(v instanceof Date ? v : String(v)) !== null;
+    }).length;
+    const flexThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.5));
+    const flexRate = nonNullValues.length > 0 ? flexibleDateMatches / nonNullValues.length : 0;
+    const baseDate = nonNullValues.length > 0 && flexibleDateMatches >= flexThreshold;
+    // Name boost for borderline columns; do not promote ID-like columns on name alone unless ≥50% parse as dates
+    const nameBoost =
+      isDateColumnName(col) && flexRate >= 0.4 && !(/\bid\b/i.test(col) && flexRate < 0.5);
+    const isDate = baseDate || nameBoost;
 
     if (isNumeric) {
       type = 'number';
@@ -471,10 +527,19 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       return v;
     });
 
+    let temporalDisplayGrain: 'dayOrWeek' | 'monthOrQuarter' | 'year' | undefined;
+    if (isDate && nonNullValues.length > 0) {
+      const parsedDates = nonNullValues
+        .map((v) => parseFlexibleDate(v instanceof Date ? v : String(v)))
+        .filter((d): d is Date => d !== null);
+      temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
+    }
+
     return {
       name: col,
       type,
       sampleValues,
+      ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
     };
   });
 
@@ -485,4 +550,52 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     numericColumns,
     dateColumns,
   };
+}
+
+/** Drop LLM-picked date columns that do not parse as dates on a sample (guards hallucinated names). */
+export function filterDateColumnsByParseability(
+  data: Record<string, any>[],
+  candidateCols: string[],
+  sampleSize = 300
+): string[] {
+  if (!data.length || !candidateCols.length) return [];
+  const keys = new Set(Object.keys(data[0]));
+  return candidateCols.filter((col) => {
+    if (!keys.has(col)) return false;
+    const slice = data.slice(0, sampleSize);
+    return slice.some((row) => {
+      const v = row[col];
+      if (v === null || v === undefined || v === '') return false;
+      return parseFlexibleDate(v instanceof Date ? v : String(v)) !== null;
+    });
+  });
+}
+
+export function resolveDateColumnsForUpload(
+  data: Record<string, any>[],
+  profile: DatasetProfile,
+  fallbackSummary: DataSummary
+): string[] {
+  const keys = new Set(Object.keys(data[0]));
+  let cols = profile.dateColumns.filter((c) => keys.has(c));
+  cols = filterDateColumnsByParseability(data, cols);
+  if (cols.length === 0) return [...fallbackSummary.dateColumns];
+  return cols;
+}
+
+/**
+ * After inferDatasetProfile: dash cleanup, canonicalize dates, final summary.
+ * Returns a new row array (convertDash copies rows).
+ */
+export function applyUploadPipelineWithProfile(
+  data: Record<string, any>[],
+  profile: DatasetProfile
+): { data: Record<string, any>[]; summary: DataSummary } {
+  if (data.length === 0) throw new Error('No data');
+  const interim = createDataSummary(data);
+  const dateCols = resolveDateColumnsForUpload(data, profile, interim);
+  const withDash = convertDashToZeroForNumericColumns(data, interim.numericColumns);
+  canonicalizeDateColumnValues(withDash, dateCols);
+  const summary = createDataSummary(withDash);
+  return { data: withDash, summary };
 }

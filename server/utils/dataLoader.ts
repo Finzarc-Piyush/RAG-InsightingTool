@@ -5,7 +5,7 @@
  */
 import { ChatDocument } from "../models/chat.model.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
-import { parseFile, createDataSummary, convertDashToZeroForNumericColumns } from "../lib/fileParser.js";
+import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";
 import { getDataForAnalysis } from "../lib/largeFileProcessor.js";
 
 /**
@@ -117,6 +117,17 @@ function filterColumns(
   });
 }
 
+function canonicalizeLoadedData(
+  data: Record<string, any>[],
+  chatDocument: ChatDocument
+): Record<string, any>[] {
+  const dateCols = chatDocument.dataSummary?.dateColumns;
+  if (data.length > 0 && dateCols && dateCols.length > 0) {
+    canonicalizeDateColumnValues(data, dateCols);
+  }
+  return data;
+}
+
 /**
  * Load the latest data for a chat document
  * This function ensures that data operations performed by any user are reflected in analysis
@@ -188,7 +199,7 @@ export async function loadLatestData(
         fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
         
         console.log(`✅ Loaded ${fullData.length} rows from ${relevantChunks.length} chunks`);
-        return fullData;
+        return canonicalizeLoadedData(fullData, chatDocument);
       }
     } catch (error) {
       console.error('⚠️ Failed to load from chunked storage, trying other sources:', error);
@@ -213,7 +224,7 @@ export async function loadLatestData(
       fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
       
       console.log(`✅ Loaded ${fullData.length} rows from columnar storage`);
-      return fullData;
+      return canonicalizeLoadedData(fullData, chatDocument);
     } catch (error) {
       console.error('⚠️ Failed to load from columnar storage, trying other sources:', error);
       // Fall through to other methods
@@ -244,7 +255,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return fullData;
+          return canonicalizeLoadedData(fullData, chatDocument);
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
@@ -263,7 +274,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return fullData;
+          return canonicalizeLoadedData(fullData, chatDocument);
         }
       }
     } catch (error) {
@@ -287,7 +298,7 @@ export async function loadLatestData(
       console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
     }
     
-    return fullData;
+    return canonicalizeLoadedData(fullData, chatDocument);
   }
   
   // If rawData is empty in document but we have blob storage, it means the dataset was too large
@@ -316,7 +327,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return fullData;
+          return canonicalizeLoadedData(fullData, chatDocument);
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
@@ -335,7 +346,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return fullData;
+          return canonicalizeLoadedData(fullData, chatDocument);
         }
       }
     } catch (error) {
@@ -347,7 +358,7 @@ export async function loadLatestData(
   if (chatDocument.sampleRows && Array.isArray(chatDocument.sampleRows) && chatDocument.sampleRows.length > 0) {
     fullData = chatDocument.sampleRows;
     console.log(`⚠️ Using sampleRows as fallback: ${fullData.length} rows (limited data)`);
-    return fullData;
+    return canonicalizeLoadedData(fullData, chatDocument);
   }
   
   throw new Error('No data found. Please upload your file again.');

@@ -21,5 +21,8 @@ class Config:
     MAX_ROWS: int = int(os.getenv("MAX_ROWS", "1000000"))  # 1M rows max
     MAX_PREVIEW_ROWS: int = int(os.getenv("MAX_PREVIEW_ROWS", "10000"))  # 10K for preview
 
+    # Shared secret for Node -> Python calls (set on both sides). If unset, key is not enforced.
+    INTERNAL_API_KEY: Optional[str] = os.getenv("PYTHON_SERVICE_API_KEY") or None
+
 config = Config()
 

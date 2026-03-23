@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Message } from '@/shared/schema';
 import { getUserEmail } from '@/utils/userStorage';
 import { logger } from '@/lib/logger';
+import { acquireIdTokenForApi } from '@/auth/msalToken';
+import { API_BASE_URL } from '@/lib/config';
 
 interface UseChatMessagesStreamProps {
   sessionId: string | null;
@@ -37,21 +39,19 @@ export const useChatMessagesStream = ({
       return;
     }
 
-    // Get API base URL
-    const API_BASE_URL = import.meta.env.VITE_API_URL || 
-      (import.meta.env.PROD 
-        ? (typeof window !== 'undefined' ? window.location.origin : 'https://marico-insight-safe.vercel.app')
-        : 'http://localhost:3002');
-
-    const connectSSE = () => {
+    const connectSSE = async () => {
       // Close existing connection if any
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
 
-      // Build SSE URL
-      const sseUrl = `${API_BASE_URL}/api/chat/${sessionId}/stream?username=${encodeURIComponent(userEmail)}`;
-      
+      const token = await acquireIdTokenForApi();
+      const params = new URLSearchParams();
+      if (token) {
+        params.set('access_token', token);
+      }
+      const sseUrl = `${API_BASE_URL}/api/chat/${sessionId}/stream?${params.toString()}`;
+
       const eventSource = new EventSource(sseUrl);
       eventSourceRef.current = eventSource;
 
@@ -131,8 +131,8 @@ export const useChatMessagesStream = ({
           logger.log(`🔄 SSE: Attempting reconnect ${reconnectAttemptsRef.current}/${maxReconnectAttempts} in ${delay}ms`);
           
           reconnectTimeoutRef.current = setTimeout(() => {
-            if (enabled) { // Check again before reconnecting
-              connectSSE();
+            if (enabled) {
+              void connectSSE();
             }
           }, delay);
         } else {
@@ -141,8 +141,7 @@ export const useChatMessagesStream = ({
       };
     };
 
-    // Initial connection
-    connectSSE();
+    void connectSSE();
 
     // Cleanup function
     return () => {

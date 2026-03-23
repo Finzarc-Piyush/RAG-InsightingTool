@@ -5,7 +5,7 @@
 import { Request, Response } from "express";
 import { processDataOperation } from "../services/dataOps/dataOps.service.js";
 import { processStreamDataOperation } from "../services/dataOps/dataOpsStream.service.js";
-import { requireUsername } from "../utils/auth.helper.js";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { sendError, sendValidationError, sendNotFound } from "../utils/responseFormatter.js";
 import { getChatBySessionIdEfficient } from "../models/chat.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
@@ -35,6 +35,9 @@ export const dataOpsChatWithAI = async (req: Request, res: Response) => {
 
     res.json(result);
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Data Ops chat error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process data operation';
     sendError(res, errorMessage);
@@ -64,6 +67,12 @@ export const dataOpsChatWithAIStream = async (req: Request, res: Response) => {
       res,
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      if (!res.headersSent) {
+        res.status(401).json({ error: (error as AuthenticationError).message });
+      }
+      return;
+    }
     console.error('Data Ops stream error:', error);
     // Error handling is done in the service
   }
@@ -161,6 +170,9 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
       res.send(csvBuffer);
     }
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Download modified dataset error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to download dataset';
     sendError(res, errorMessage);

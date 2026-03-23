@@ -2,7 +2,14 @@
  * Chat Model
  * Handles all database operations for chat documents and sessions
  */
-import { ChartSpec, Message, DataSummary, Insight } from "../shared/schema.js";
+import {
+  ChartSpec,
+  Message,
+  DataSummary,
+  Insight,
+  DatasetProfile,
+  SessionAnalysisContext,
+} from "../shared/schema.js";
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
 
@@ -73,11 +80,29 @@ export interface ChatDocument {
   };
   dataOpsMode?: boolean; // Whether Data Ops mode is enabled for this session
   permanentContext?: string; // Permanent context provided by user during upload, sent to AI with each message
+  /** DuckDB/columnar path for large uploads (not in Cosmos payload). */
+  columnarStoragePath?: string;
   chunkIndexBlob?: { // Chunk index for chunked files (faster querying)
     blobName: string;
     totalChunks: number;
     totalRows: number;
   };
+  /** Azure AI Search RAG index status for this session (optional). */
+  ragIndex?: {
+    status: "indexing" | "ready" | "error";
+    indexedAt?: number;
+    chunkCount?: number;
+    dataVersion?: number;
+    lastError?: string;
+  };
+  /** LLM dataset profile from initial upload (columns, suggested questions, etc.). */
+  datasetProfile?: DatasetProfile;
+  /** Rolling structured context: LLM seed + merges (user + each assistant turn). */
+  sessionAnalysisContext?: SessionAnalysisContext;
+  /** Upload pipeline: LLM profile + session context seed. Answers wait until complete (omit = legacy sessions). */
+  enrichmentStatus?: "pending" | "in_progress" | "complete" | "failed";
+  /** User message received while enrichment incomplete; processed after upload job finishes enrichment. */
+  pendingUserMessage?: { content: string; timestamp: number };
 }
 
 // Helper functions
@@ -186,7 +211,9 @@ export const createChatDocument = async (
     }>;
     qualityScore: number;
     computedAt: number;
-  }
+  },
+  datasetProfile?: DatasetProfile,
+  sessionAnalysisContext?: SessionAnalysisContext
 ): Promise<ChatDocument> => {
   const timestamp = Date.now();
   const normalizedUsername = normalizeEmail(username) || username;
@@ -266,7 +293,9 @@ export const createChatDocument = async (
       aiModelUsed: 'gpt-4o',
       fileSize: 0,
       analysisVersion: '1.0.0'
-    }
+    },
+    ...(datasetProfile ? { datasetProfile } : {}),
+    ...(sessionAnalysisContext ? { sessionAnalysisContext } : {}),
   };
 
   try {
@@ -281,7 +310,7 @@ export const createChatDocument = async (
       // Retry without rawData
       const retryDocument = {
         ...chatDocument,
-        rawData: [], // Don't store rawData - it's in blob storage
+        rawData: [] as Record<string, any>[], // Don't store rawData - it's in blob storage
       };
       try {
         const containerInstance = await waitForContainer();
@@ -348,7 +377,8 @@ export const createPlaceholderSession = async (
       aiModelUsed: 'gpt-4o',
       fileSize: fileSize,
       analysisVersion: '1.0.0'
-    }
+    },
+    enrichmentStatus: "pending",
   };
 
   try {
@@ -360,6 +390,44 @@ export const createPlaceholderSession = async (
     console.error("❌ Failed to create placeholder session:", error);
     throw error;
   }
+};
+
+/**
+ * Ensure a Cosmos chat row exists for an upload/Snowflake job before persisting preview.
+ * Handles placeholder creation failure at upload time (enqueue still runs).
+ */
+export const ensureChatDocumentForUploadJob = async (params: {
+  sessionId: string;
+  username: string;
+  fileName: string;
+  fileSize: number;
+  blobInfo?: { blobUrl: string; blobName: string };
+}): Promise<ChatDocument> => {
+  let doc = await getChatBySessionIdEfficient(params.sessionId);
+  if (doc) {
+    return doc;
+  }
+  try {
+    await createPlaceholderSession(
+      params.username,
+      params.fileName,
+      params.sessionId,
+      params.fileSize,
+      params.blobInfo
+    );
+  } catch (e) {
+    console.warn(
+      "⚠️ ensureChatDocumentForUploadJob: createPlaceholderSession failed (may be race); re-fetching:",
+      e instanceof Error ? e.message : e
+    );
+  }
+  doc = await getChatBySessionIdEfficient(params.sessionId);
+  if (!doc) {
+    throw new Error(
+      `Could not create or load chat document for session ${params.sessionId}`
+    );
+  }
+  return doc;
 };
 
 /**
@@ -793,12 +861,18 @@ export const getChatBySessionIdEfficient = async (sessionId: string): Promise<Ch
     try {
       const containerInstance = await waitForContainer();
       
-      const query = "SELECT * FROM c WHERE c.sessionId = @sessionId";
+      const query =
+        "SELECT * FROM c WHERE c.sessionId = @sessionId ORDER BY c.lastUpdatedAt DESC";
       // Enable cross-partition query since sessionId is not the partition key
       const { resources } = await containerInstance.items.query({
         query,
         parameters: [{ name: "@sessionId", value: sessionId }]
       }, { enableCrossPartitionQuery: true }).fetchAll();
+      if (resources && resources.length > 1) {
+        console.warn(
+          `⚠️ Multiple chat documents (${resources.length}) for sessionId ${sessionId}; using latest by lastUpdatedAt`
+        );
+      }
       const doc = (resources && resources.length > 0) ? resources[0] : null;
       if (!doc) {
         console.warn("⚠️ No chat document found for sessionId:", sessionId);
@@ -845,6 +919,32 @@ export const getChatBySessionIdForUser = async (
 
   console.log(`✅ Access granted for session ${sessionId}`);
   return chatDocument;
+};
+
+/** Queue a user message while enrichment is incomplete (single slot; latest wins). */
+export const setPendingUserMessageForSession = async (
+  sessionId: string,
+  requesterEmail: string,
+  content: string
+): Promise<ChatDocument> => {
+  const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+  if (!doc) {
+    throw new Error("Session not found");
+  }
+  doc.pendingUserMessage = { content, timestamp: Date.now() };
+  doc.lastUpdatedAt = Date.now();
+  return updateChatDocument(doc);
+};
+
+export const clearPendingUserMessage = async (
+  sessionId: string,
+  requesterEmail: string
+): Promise<void> => {
+  const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+  if (!doc) return;
+  delete doc.pendingUserMessage;
+  doc.lastUpdatedAt = Date.now();
+  await updateChatDocument(doc);
 };
 
 /**
@@ -919,7 +1019,19 @@ export const updateSessionPermanentContext = async (
     
     // Update the permanent context
     chatDocument.permanentContext = permanentContext.trim();
-    
+
+    try {
+      const { mergeSessionAnalysisContextUserLLM } = await import(
+        "../lib/sessionAnalysisContext.js"
+      );
+      chatDocument.sessionAnalysisContext = await mergeSessionAnalysisContextUserLLM({
+        previous: chatDocument.sessionAnalysisContext,
+        userText: permanentContext.trim(),
+      });
+    } catch (e) {
+      console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+    }
+
     // Update the document
     const updated = await updateChatDocument(chatDocument);
     console.log(`✅ Updated session permanent context: ${sessionId}`);

@@ -1,12 +1,17 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Message, UploadResponse, ChatResponse, ThinkingStep } from '@/shared/schema';
-import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi } from '@/lib/api';
+import { Message, UploadResponse, ChatResponse, ThinkingStep, TemporalDisplayGrain } from '@/shared/schema';
+import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi, getUploadJobStatus } from '@/lib/api';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
 import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
 import { useRef, useEffect, useState } from 'react';
 import { logger } from '@/lib/logger';
+import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
+import {
+  buildSyntheticInitialAssistantContent,
+  suggestedFollowUpsFromSession,
+} from '@/lib/initialAnalysisMessage';
 
 interface UseHomeMutationsProps {
   sessionId: string | null;
@@ -20,11 +25,13 @@ interface UseHomeMutationsProps {
   setColumns: (columns: string[]) => void;
   setNumericColumns: (columns: string[]) => void;
   setDateColumns: (columns: string[]) => void;
+  setTemporalDisplayGrainsByColumn: (grains: Record<string, TemporalDisplayGrain>) => void;
   setTotalRows: (rows: number) => void;
   setTotalColumns: (columns: number) => void;
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setSuggestions?: (suggestions: string[]) => void;
-  setIsLargeFileLoading?: (isLoading: boolean) => void;
+  setIsDatasetPreviewLoading?: (v: boolean) => void;
+  setIsDatasetEnriching?: (v: boolean) => void;
 }
 
 export const useHomeMutations = ({
@@ -39,16 +46,19 @@ export const useHomeMutations = ({
   setColumns,
   setNumericColumns,
   setDateColumns,
+  setTemporalDisplayGrainsByColumn,
   setTotalRows,
   setTotalColumns,
   setMessages,
   setSuggestions,
-  setIsLargeFileLoading,
+  setIsDatasetPreviewLoading,
+  setIsDatasetEnriching,
 }: UseHomeMutationsProps) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const userEmail = getUserEmail();
   const abortControllerRef = useRef<AbortController | null>(null);
+  const uploadPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
   const messagesRef = useRef<Message[]>(messages);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
@@ -58,6 +68,93 @@ export const useHomeMutations = ({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (uploadPollIntervalRef.current) {
+        clearInterval(uploadPollIntervalRef.current);
+        uploadPollIntervalRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearUploadPoll = () => {
+    if (uploadPollIntervalRef.current) {
+      clearInterval(uploadPollIntervalRef.current);
+      uploadPollIntervalRef.current = null;
+    }
+  };
+
+  const applySessionHydration = (session: Record<string, any>) => {
+    if (!session) return;
+    setFileName(session.fileName || null);
+    setInitialCharts(session.charts || []);
+    setInitialInsights(session.insights || []);
+    if (session.dataSummary && session.dataSummary.rowCount > 0) {
+      if (session.sampleRows?.length) setSampleRows(session.sampleRows);
+      setColumns(session.dataSummary.columns?.map((c: { name: string }) => c.name) || []);
+      setNumericColumns(session.dataSummary.numericColumns || []);
+      setDateColumns(session.dataSummary.dateColumns || []);
+      setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(session.dataSummary.columns));
+      setTotalRows(session.dataSummary.rowCount);
+      setTotalColumns(session.dataSummary.columnCount);
+    }
+    if (Array.isArray(session.messages)) {
+      setMessages(session.messages as Message[]);
+    }
+  };
+
+  const startUploadJobPolling = (jobId: string, sessionId: string) => {
+    clearUploadPoll();
+    const tick = async () => {
+      try {
+        const st = await getUploadJobStatus(jobId);
+        if (st.status === 'failed') {
+          clearUploadPoll();
+          setIsDatasetPreviewLoading?.(false);
+          setIsDatasetEnriching?.(false);
+          toast({
+            title: 'Processing failed',
+            description: st.error || 'Upload job failed.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        // previewReady stays true through analyzing/saving/completed (see GET /api/upload/status)
+        if (st.previewReady || st.status === 'preview_ready') {
+          const sessionData = await sessionsApi.getSessionDetails(sessionId);
+          const session = (sessionData.session || sessionData) as Record<string, any>;
+          if (session?.dataSummary?.rowCount > 0) {
+            applySessionHydration(session);
+            setIsDatasetPreviewLoading?.(false);
+            const es = session.enrichmentStatus as string | undefined;
+            const enriching =
+              es === 'pending' ||
+              es === 'in_progress' ||
+              st.enrichmentPhase === 'enriching' ||
+              st.enrichmentPhase === 'waiting';
+            setIsDatasetEnriching?.(enriching);
+          }
+        }
+
+        if (st.enrichmentStatus === 'complete' || st.status === 'completed') {
+          clearUploadPoll();
+          setIsDatasetPreviewLoading?.(false);
+          setIsDatasetEnriching?.(false);
+          const sessionData = await sessionsApi.getSessionDetails(sessionId);
+          const session = (sessionData.session || sessionData) as Record<string, any>;
+          applySessionHydration(session);
+        }
+      } catch (e) {
+        logger.error('Upload job poll error:', e);
+      }
+    };
+    uploadPollIntervalRef.current = setInterval(() => {
+      void tick();
+    }, 1500);
+    void tick();
+  };
 
   // Don't sanitize markdown - we'll render it properly in MessageBubble
   // This preserves formatting like **bold** for headings
@@ -74,47 +171,13 @@ export const useHomeMutations = ({
       // Handle new async format (202 response with jobId and sessionId)
       if (data.jobId && data.sessionId && data.status === 'processing') {
         setSessionId(data.sessionId);
-        
-        // Show loading state for ALL files until initial analysis is received
-        if (setIsLargeFileLoading) {
-          setIsLargeFileLoading(true);
-        }
-        setMessages([]); // Clear messages to show loading state
-        
-        // Fetch session details from placeholder (now it exists!)
-        // We only fetch to set metadata, NOT to show the initial message
-        // The initial message will come from SSE when processing completes
-        try {
-          const sessionData = await sessionsApi.getSessionDetails(data.sessionId);
-          const session = sessionData.session || sessionData;
-          
-          if (session) {
-            setFileName(session.fileName || null);
-            setInitialCharts(session.charts || []);
-            setInitialInsights(session.insights || []);
-            
-            // Only set metadata if full data is available
-            if (session.dataSummary && session.dataSummary.rowCount > 0) {
-              if (session.sampleRows && session.sampleRows.length > 0) {
-                setSampleRows(session.sampleRows);
-              }
-              setColumns(session.dataSummary.columns?.map((c: any) => c.name) || []);
-              setNumericColumns(session.dataSummary.numericColumns || []);
-              setDateColumns(session.dataSummary.dateColumns || []);
-              setTotalRows(session.dataSummary.rowCount);
-              setTotalColumns(session.dataSummary.columnCount);
-            }
-            // Don't set the initial message here - let SSE handle it to avoid duplicates
-          }
-        } catch (sessionError) {
-          logger.error('Failed to fetch session details:', sessionError);
-          // Processing message is already shown above, so user still sees feedback
-          // The SSE stream will pick up the final message when processing completes
-        }
-        
+        setIsDatasetPreviewLoading?.(true);
+        setIsDatasetEnriching?.(false);
+        setMessages([]);
+        startUploadJobPolling(data.jobId, data.sessionId);
         toast({
           title: 'Upload Accepted',
-          description: 'Your file is being processed. Analysis will be available shortly.',
+          description: 'Your file is being processed.',
         });
       } 
       // Handle old synchronous format (backward compatibility)
@@ -129,21 +192,32 @@ export const useHomeMutations = ({
           setColumns(data.summary.columns.map((c: any) => c.name));
           setNumericColumns(data.summary.numericColumns);
           setDateColumns(data.summary.dateColumns);
+          setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(data.summary.columns));
           setTotalRows(data.summary.rowCount);
           setTotalColumns(data.summary.columnCount);
         }
         
+        const sac = (data as { sessionAnalysisContext?: import('@/shared/schema').SessionAnalysisContext })
+          .sessionAnalysisContext;
+        const prof = (data as { datasetProfile?: import('@/shared/schema').DatasetProfile }).datasetProfile;
+        const followUps =
+          suggestedFollowUpsFromSession({ sessionAnalysisContext: sac, datasetProfile: prof }) ??
+          (data.suggestions && data.suggestions.length > 0 ? data.suggestions : undefined);
         const initialMessage: Message = {
           role: 'assistant',
-          content: `Hi! 👋 I've just finished analyzing your data. Here's what I found:\n\n📊 Your dataset has ${data.summary.rowCount} rows and ${data.summary.columnCount} columns\n🔢 ${data.summary.numericColumns.length} numeric columns to work with\n📅 ${data.summary.dateColumns.length} date columns for time-based analysis\n\nI've created ${(data.charts || []).length} visualizations and ${(data.insights || []).length} key insights to get you started. Feel free to ask me anything about your data - I'm here to help! What would you like to explore first?`,
-          charts: data.charts || [],
-          insights: data.insights || [],
+          content: buildSyntheticInitialAssistantContent(data.summary, {
+            sessionAnalysisContext: sac,
+            datasetProfile: prof,
+          }),
+          charts: [],
+          insights: [],
+          suggestedQuestions: followUps,
           timestamp: Date.now(),
         };
         setMessages([initialMessage]);
-        
-        if (data.suggestions && data.suggestions.length > 0 && setSuggestions) {
-          setSuggestions(data.suggestions);
+
+        if (followUps && followUps.length > 0 && setSuggestions) {
+          setSuggestions(followUps);
         }
         
         toast({
@@ -159,10 +233,9 @@ export const useHomeMutations = ({
       }
     },
     onError: (error) => {
-      // Clear large file loading state on error
-      if (setIsLargeFileLoading) {
-        setIsLargeFileLoading(false);
-      }
+      clearUploadPoll();
+      setIsDatasetPreviewLoading?.(false);
+      setIsDatasetEnriching?.(false);
       toast({
         title: 'Upload Failed',
         description: error instanceof Error ? error.message : 'Failed to upload file',
@@ -173,30 +246,13 @@ export const useHomeMutations = ({
 
   const applyImportStarted = async (data: { jobId: string; sessionId: string; fileName: string }) => {
     setSessionId(data.sessionId);
-    if (setIsLargeFileLoading) setIsLargeFileLoading(true);
+    setIsDatasetPreviewLoading?.(true);
+    setIsDatasetEnriching?.(false);
     setMessages([]);
-    try {
-      const sessionData = await sessionsApi.getSessionDetails(data.sessionId);
-      const session = sessionData.session || sessionData;
-      if (session) {
-        setFileName(session.fileName || null);
-        setInitialCharts(session.charts || []);
-        setInitialInsights(session.insights || []);
-        if (session.dataSummary && session.dataSummary.rowCount > 0) {
-          if (session.sampleRows?.length) setSampleRows(session.sampleRows);
-          setColumns(session.dataSummary.columns?.map((c: any) => c.name) || []);
-          setNumericColumns(session.dataSummary.numericColumns || []);
-          setDateColumns(session.dataSummary.dateColumns || []);
-          setTotalRows(session.dataSummary.rowCount);
-          setTotalColumns(session.dataSummary.columnCount);
-        }
-      }
-    } catch (e) {
-      logger.error('Failed to fetch session details', e);
-    }
+    startUploadJobPolling(data.jobId, data.sessionId);
     toast({
       title: 'Import Started',
-      description: 'Your Snowflake table is being processed. Analysis will be available shortly.',
+      description: 'Your Snowflake table is being processed.',
     });
     if (userEmail) {
       queryClient.invalidateQueries({ queryKey: ['sessions', userEmail] });
@@ -215,7 +271,9 @@ export const useHomeMutations = ({
       }
     },
     onError: (error) => {
-      if (setIsLargeFileLoading) setIsLargeFileLoading(false);
+      clearUploadPoll();
+      setIsDatasetPreviewLoading?.(false);
+      setIsDatasetEnriching?.(false);
       toast({
         title: 'Snowflake Import Failed',
         description: error instanceof Error ? error.message : 'Failed to import table',
@@ -400,11 +458,25 @@ export const useHomeMutations = ({
         
         return new Promise<ChatResponse>((resolve, reject) => {
         let responseData: ChatResponse | null = null;
-        
+        let streamResolved = false;
+
         streamChatRequest(
           sessionId,
           message,
           {
+            onQueued: () => {
+              if (streamResolved) return;
+              streamResolved = true;
+              setThinkingSteps([]);
+              setThinkingTargetTimestamp(null);
+              resolve({
+                answer: '',
+                charts: [],
+                insights: [],
+                suggestions: [],
+                queuedUntilEnrichment: true,
+              } as ChatResponse & { queuedUntilEnrichment?: boolean });
+            },
             onThinkingStep: (step: ThinkingStep) => {
               logger.log('🧠 Thinking step received:', step);
               setThinkingSteps((prev) => {
@@ -434,6 +506,7 @@ export const useHomeMutations = ({
               logger.log('✅ Stream completed');
               setThinkingSteps([]);
               setThinkingTargetTimestamp(null);
+              if (streamResolved) return;
               if (responseData) {
                 resolve(responseData);
               } else {
@@ -465,10 +538,20 @@ export const useHomeMutations = ({
       logger.log('📊 Charts:', data.charts?.length || 0);
       logger.log('💡 Insights:', data.insights?.length || 0);
       logger.log('💬 Suggestions:', data.suggestions?.length || 0);
-      
+
+      if ((data as ChatResponse & { queuedUntilEnrichment?: boolean }).queuedUntilEnrichment) {
+        pendingUserMessageRef.current = null;
+        toast({
+          title: 'Message queued',
+          description:
+            'We are enriching our understanding of your data. Your reply will appear when that finishes.',
+        });
+        return;
+      }
+
       // Clear pending message ref since request completed successfully
       pendingUserMessageRef.current = null;
-      
+
       if (!data.answer || data.answer.trim().length === 0) {
         logger.error('❌ Empty answer received from server!');
         toast({

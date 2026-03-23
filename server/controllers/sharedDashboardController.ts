@@ -11,18 +11,10 @@ import {
   listSharedDashboardsForUser,
 } from "../models/sharedDashboard.model.js";
 import type { Dashboard } from "../models/dashboard.model.js";
+import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 
-const getUserEmailFromRequest = (req: Request): string | undefined => {
-  const headerEmail = req.headers["x-user-email"];
-  if (typeof headerEmail === "string" && headerEmail.trim().length > 0) {
-    return headerEmail.toLowerCase();
-  }
-  const queryEmail = req.query.username;
-  if (typeof queryEmail === "string" && queryEmail.trim().length > 0) {
-    return queryEmail.toLowerCase();
-  }
-  return undefined;
-};
+const getUserEmailFromRequest = (req: Request): string | undefined =>
+  getAuthenticatedEmail(req);
 
 const sanitizeEmail = (value: string) => value.trim().toLowerCase();
 

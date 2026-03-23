@@ -1,23 +1,39 @@
-// Main server file - load .env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
+// Main server file - load server.env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
 import './loadEnv.js';
 
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { corsConfig } from "./middleware/index.js";
+import { requireAzureAdAuth } from "./middleware/azureAdAuth.js";
 import { registerRoutes } from "./routes/index.js";
+
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
+
+const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.API_RATE_LIMIT_MAX || 400),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+});
 
 // Factory function to create the Express app
 export function createApp() {
   const app = express();
+  if (process.env.TRUST_PROXY === "true" || process.env.VERCEL) {
+    app.set("trust proxy", 1);
+  }
 
-  // Middleware (increase payload limits for large file uploads and chat history)
-  // Set to 1GB to support large CSV files (50MB+)
-  app.use(express.json({ limit: '1gb' }));
-  app.use(express.urlencoded({ extended: false, limit: '1gb' }));
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
+  app.use(express.urlencoded({ extended: false, limit: JSON_BODY_LIMIT }));
 
   // Handle preflight requests explicitly
   app.options('*', corsConfig);
 
   app.use(corsConfig);
+
+  app.use("/api", apiRateLimiter);
+  app.use("/api", requireAzureAdAuth);
 
   // Health check endpoint
   app.get('/api/health', (req, res) => {
@@ -45,7 +61,7 @@ export function createApp() {
         console.log("✅ Snowflake: connected at startup");
       } else {
         console.warn("⚠️ Snowflake: connection at startup failed:", result.message || "Unknown error");
-        console.warn("   Set SNOWFLAKE_ACCOUNT, SNOWFLAKE_USERNAME, SNOWFLAKE_PASSWORD, SNOWFLAKE_WAREHOUSE in .env to enable Import from Snowflake");
+        console.warn("   Set SNOWFLAKE_ACCOUNT, SNOWFLAKE_USERNAME, SNOWFLAKE_PASSWORD, SNOWFLAKE_WAREHOUSE in server.env to enable Import from Snowflake");
       }
     }).catch((error) => {
       const errorMessage = error instanceof Error ? error.message : String(error);

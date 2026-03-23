@@ -5,6 +5,8 @@
 
 import { ColumnarStorageService, DatasetMetadata } from './columnarStorage.js';
 import { DataSummary } from '../shared/schema.js';
+import { parseFlexibleDate } from './dateUtils.js';
+import { inferTemporalGrainFromDates } from './temporalGrain.js';
 
 export interface CachedMetadata {
   metadata: DatasetMetadata;
@@ -58,10 +60,23 @@ export class MetadataService {
         .map(row => row[col.name])
         .filter(v => v !== null && v !== undefined);
 
+      let temporalDisplayGrain: 'dayOrWeek' | 'monthOrQuarter' | 'year' | undefined;
+      if (type === 'date' && sampleRows.length > 0) {
+        const parsedDates = sampleRows
+          .map((row) => row[col.name])
+          .filter((v) => v !== null && v !== undefined)
+          .map((v) => parseFlexibleDate(v instanceof Date ? v : String(v)))
+          .filter((d): d is Date => d !== null);
+        if (parsedDates.length > 0) {
+          temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
+        }
+      }
+
       return {
         name: col.name,
         type,
         sampleValues,
+        ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
       };
     });
 

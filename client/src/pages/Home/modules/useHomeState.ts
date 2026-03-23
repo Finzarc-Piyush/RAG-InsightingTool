@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Message, UploadResponse } from '@/shared/schema';
+import { Message, UploadResponse, TemporalDisplayGrain } from '@/shared/schema';
 
 export interface HomeState {
   sessionId: string | null;
@@ -11,6 +11,7 @@ export interface HomeState {
   columns: string[];
   numericColumns: string[];
   dateColumns: string[];
+  temporalDisplayGrainsByColumn: Record<string, TemporalDisplayGrain>;
   totalRows: number;
   totalColumns: number;
   mode: 'general' | 'analysis' | 'dataOps' | 'modeling';
@@ -26,6 +27,9 @@ export const useHomeState = () => {
   const [columns, setColumns] = useState<string[]>([]);
   const [numericColumns, setNumericColumns] = useState<string[]>([]);
   const [dateColumns, setDateColumns] = useState<string[]>([]);
+  const [temporalDisplayGrainsByColumn, setTemporalDisplayGrainsByColumn] = useState<
+    Record<string, TemporalDisplayGrain>
+  >({});
   const [totalRows, setTotalRows] = useState<number>(0);
   const [totalColumns, setTotalColumns] = useState<number>(0);
   const [mode, setMode] = useState<'general' | 'analysis' | 'dataOps' | 'modeling'>('general');
@@ -62,6 +66,7 @@ export const useHomeState = () => {
     setColumns([]);
     setNumericColumns([]);
     setDateColumns([]);
+    setTemporalDisplayGrainsByColumn({});
     setTotalRows(0);
     setTotalColumns(0);
     setMode('general');
@@ -78,6 +83,7 @@ export const useHomeState = () => {
     columns,
     numericColumns,
     dateColumns,
+    temporalDisplayGrainsByColumn,
     totalRows,
     totalColumns,
     mode,
@@ -92,6 +98,7 @@ export const useHomeState = () => {
     setColumns,
     setNumericColumns,
     setDateColumns,
+    setTemporalDisplayGrainsByColumn,
     setTotalRows,
     setTotalColumns,
     setMode,

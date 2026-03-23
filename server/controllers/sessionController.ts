@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { 
   getAllSessions, 
   getAllSessionsPaginated, 
@@ -18,16 +19,9 @@ import { generateAISuggestions } from "../lib/suggestionGenerator.js";
 // Get all sessions
 export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
   try {
-    // Get username from headers or query parameters
-    const username = req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ 
-        error: 'Username is required. Please ensure you are logged in.' 
-      });
-    }
+    const username = requireUsername(req);
 
-    const sessions = await getAllSessions(username as string);
+    const sessions = await getAllSessions(username);
     
     // Return simplified session list for better performance
     const sessionList = sessions.map(session => ({
@@ -49,6 +43,9 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
       message: `Retrieved ${sessionList.length} sessions for user: ${username}`
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Get all sessions error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch all sessions';
     
@@ -72,16 +69,9 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
     const pageSize = parseInt(req.query.pageSize as string) || 10;
     const continuationToken = req.query.continuationToken as string;
     
-    // Get username from headers or query parameters
-    const username = req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ 
-        error: 'Username is required. Please ensure you are logged in.' 
-      });
-    }
+    const username = requireUsername(req);
 
-    const result = await getAllSessionsPaginated(pageSize, continuationToken, username as string);
+    const result = await getAllSessionsPaginated(pageSize, continuationToken, username);
     
     // Return simplified session list
     const sessionList = result.sessions.map(session => ({
@@ -106,6 +96,10 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
       message: `Retrieved ${sessionList.length} sessions (page size: ${pageSize}) for user: ${username}`
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get paginated sessions error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch paginated sessions',
@@ -116,8 +110,8 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
 // Get sessions with filters
 export const getSessionsFilteredEndpoint = async (req: Request, res: Response) => {
   try {
+    const authed = requireUsername(req);
     const {
-      username,
       fileName,
       dateFrom,
       dateTo,
@@ -136,7 +130,7 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
       orderDirection?: 'ASC' | 'DESC';
     } = {};
 
-    if (username) options.username = username as string;
+    options.username = authed;
     if (fileName) options.fileName = fileName as string;
     if (dateFrom) options.dateFrom = parseInt(dateFrom as string);
     if (dateTo) options.dateTo = parseInt(dateTo as string);
@@ -167,6 +161,10 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
       message: `Retrieved ${sessionList.length} sessions with filters`
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get filtered sessions error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch filtered sessions',
@@ -177,6 +175,7 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
 // Get session statistics
 export const getSessionStatisticsEndpoint = async (req: Request, res: Response) => {
   try {
+    requireUsername(req);
     const stats = await getSessionStatistics();
     
     res.json({
@@ -184,6 +183,10 @@ export const getSessionStatisticsEndpoint = async (req: Request, res: Response) 
       message: `Generated statistics for ${stats.totalSessions} sessions`
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get session statistics error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch session statistics',
@@ -195,18 +198,11 @@ export const getSessionStatisticsEndpoint = async (req: Request, res: Response) 
 export const getSessionDetailsEndpoint = async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    const requesterEmail = req.headers['x-user-email'] || req.query.username;
+    const normalizedRequesterEmail = requireUsername(req);
     
     if (!sessionId) {
       return res.status(400).json({ error: 'Session ID is required' });
     }
-
-    if (!requesterEmail) {
-      return res.status(401).json({ error: 'Missing authenticated user email' });
-    }
-
-    // Normalize email for consistent comparison
-    const normalizedRequesterEmail = (requesterEmail as string).trim().toLowerCase();
 
     // Get session directly from CosmosDB by session ID with access check
     try {
@@ -300,7 +296,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
     } catch (accessError: any) {
       // Handle authorization errors separately
       if (accessError?.statusCode === 403) {
-        console.warn(`⚠️ Unauthorized access attempt: ${requesterEmail} tried to access session ${sessionId}`);
+        console.warn(`⚠️ Unauthorized access attempt: ${normalizedRequesterEmail} tried to access session ${sessionId}`);
         return res.status(403).json({ 
           error: 'Unauthorized to access this session',
           message: 'You do not have permission to access this session'
@@ -310,6 +306,10 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
       throw accessError;
     }
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get session details error:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
@@ -321,13 +321,18 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
 // Get sessions by user
 export const getSessionsByUserEndpoint = async (req: Request, res: Response) => {
   try {
+    const authed = requireUsername(req);
     const { username } = req.params;
+    const pathUser = decodeURIComponent(username || "").trim().toLowerCase();
     
-    if (!username) {
+    if (!pathUser) {
       return res.status(400).json({ error: 'Username is required' });
     }
+    if (pathUser !== authed) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
 
-    const sessions = await getSessionsWithFilters({ username });
+    const sessions = await getSessionsWithFilters({ username: pathUser });
     
     // Return simplified session list
     const sessionList = sessions.map(session => ({
@@ -350,6 +355,10 @@ export const getSessionsByUserEndpoint = async (req: Request, res: Response) => 
       message: `Retrieved ${sessionList.length} sessions for user ${username}`
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get sessions by user error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch sessions by user',
@@ -371,17 +380,10 @@ export const updateSessionNameEndpoint = async (req: Request, res: Response) => 
       return res.status(400).json({ error: 'File name is required' });
     }
 
-    // Get username from headers or query parameters
-    const username = req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ 
-        error: 'Username is required. Please ensure you are logged in.' 
-      });
-    }
+    const username = requireUsername(req);
 
     // Update the session fileName
-    const updatedSession = await updateSessionFileName(sessionId, username as string, fileName.trim());
+    const updatedSession = await updateSessionFileName(sessionId, username, fileName.trim());
     
     res.json({
       success: true,
@@ -394,6 +396,9 @@ export const updateSessionNameEndpoint = async (req: Request, res: Response) => 
       }
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Update session name error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to update session name';
     
@@ -439,19 +444,12 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Permanent context must be a string or null' });
     }
 
-    // Get username from headers or query parameters
-    const username = req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ 
-        error: 'Username is required. Please ensure you are logged in.' 
-      });
-    }
+    const username = requireUsername(req);
 
     // Update the session permanent context
     const updatedSession = await updateSessionPermanentContext(
       sessionId, 
-      username as string, 
+      username, 
       permanentContext || ''
     );
     
@@ -466,6 +464,9 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
       }
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Update session context error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to update session context';
     
@@ -507,18 +508,14 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     });
     
     const { sessionId } = req.params;
-    const username = req.headers['x-user-email'] || req.query.username;
+    const username = requireUsername(req);
     
     if (!sessionId) {
       return res.status(400).json({ error: 'Session ID is required' });
     }
 
-    if (!username) {
-      return res.status(401).json({ error: 'Username is required' });
-    }
-
     // Get session document
-    const session = await getChatBySessionIdForUser(sessionId, username as string);
+    const session = await getChatBySessionIdForUser(sessionId, username);
     
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
@@ -668,6 +665,9 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       recommendedQuestions,
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Get data summary error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch data summary';
     
@@ -692,17 +692,10 @@ export const deleteSessionEndpoint = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Session ID is required' });
     }
 
-    // Get username from headers or query parameters
-    const username = req.headers['x-user-email'] || req.query.username;
-    
-    if (!username) {
-      return res.status(400).json({ 
-        error: 'Username is required. Please ensure you are logged in.' 
-      });
-    }
+    const username = requireUsername(req);
 
     // Delete the session
-    await deleteSessionBySessionId(sessionId, username as string);
+    await deleteSessionBySessionId(sessionId, username);
     
     res.json({
       success: true,
@@ -710,6 +703,9 @@ export const deleteSessionEndpoint = async (req: Request, res: Response) => {
       sessionId
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
     console.error('Delete session error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to delete session';
     

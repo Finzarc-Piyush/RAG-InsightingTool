@@ -1,15 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Download, Loader2 } from 'lucide-react';
 import { downloadModifiedDataset } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
+import type { TemporalDisplayGrain } from '@/shared/schema';
+import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 
 interface DataPreviewTableProps {
   data: Record<string, any>[];
   title?: string;
   maxRows?: number;
   sessionId?: string | null; // Session ID for downloading the full modified dataset
+  dateColumns?: string[];
+  temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
 }
 
 export function DataPreviewTable({ 
@@ -17,6 +21,8 @@ export function DataPreviewTable({
   title, 
   maxRows = 100, 
   sessionId,
+  dateColumns = [],
+  temporalDisplayGrainsByColumn = {},
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'csv' | 'xlsx' | null>(null);
   const { toast } = useToast();
@@ -25,6 +31,17 @@ export function DataPreviewTable({
     if (!data || data.length === 0) return [];
     return data.slice(0, maxRows);
   }, [data, maxRows]);
+
+  const resolvedGrainsByColumn = useMemo(() => {
+    const out: Record<string, TemporalDisplayGrain> = { ...temporalDisplayGrainsByColumn };
+    for (const col of dateColumns) {
+      if (!out[col]) {
+        const vals = data.slice(0, 500).map((row) => row[col]);
+        out[col] = inferTemporalGrainFromSample(vals);
+      }
+    }
+    return out;
+  }, [data, dateColumns, temporalDisplayGrainsByColumn]);
 
   const handleDownload = async (format: 'csv' | 'xlsx') => {
     if (!sessionId) {
@@ -136,13 +153,25 @@ export function DataPreviewTable({
                 key={idx}
                 className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
               >
-                {columns.map((col) => (
-                  <td key={col} className="px-3 py-2 text-gray-700">
-                    {row[col] !== null && row[col] !== undefined
-                      ? String(row[col])
-                      : <span className="text-gray-400 italic">null</span>}
-                  </td>
-                ))}
+                {columns.map((col) => {
+                  const raw = row[col];
+                  let text: ReactNode;
+                  if (raw === null || raw === undefined) {
+                    text = <span className="text-gray-400 italic">null</span>;
+                  } else if (dateColumns.includes(col)) {
+                    const g = resolvedGrainsByColumn[col];
+                    const formatted =
+                      g !== undefined ? formatDateCellForGrain(raw, g) : null;
+                    text = formatted ?? String(raw);
+                  } else {
+                    text = String(raw);
+                  }
+                  return (
+                    <td key={col} className="px-3 py-2 text-gray-700">
+                      {text}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

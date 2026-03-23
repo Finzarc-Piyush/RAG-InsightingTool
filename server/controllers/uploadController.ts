@@ -3,6 +3,7 @@ import multer from "multer";
 import { uploadFileToBlob } from "../lib/blobStorage.js";
 import { uploadQueue } from "../utils/uploadQueue.js";
 import { createPlaceholderSession } from "../models/chat.model.js";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 
 /**
  * Upload file endpoint - now uses async queue processing
@@ -17,8 +18,15 @@ export const uploadFile = async (
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    // Get username from request body or headers
-    const username = req.body.username || req.headers['x-user-email'] || 'anonymous@example.com';
+    let username: string;
+    try {
+      username = requireUsername(req);
+    } catch (e) {
+      if (e instanceof AuthenticationError) {
+        return res.status(401).json({ error: e.message });
+      }
+      throw e;
+    }
 
     // Generate a unique session ID for this upload
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -84,6 +92,10 @@ export const uploadFile = async (
       message: 'File upload accepted. Processing in background. Use /api/upload/status/:jobId to check progress.',
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Upload error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to process file',
@@ -132,6 +144,34 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       response.result = job.result;
     }
 
+    // Preview rows + summary are persisted at preview_ready; the job then moves through
+    // analyzing/saving before completed. Clients poll this endpoint — treat all post-preview
+    // phases as preview-ready so the UI does not miss the narrow preview_ready window.
+    response.previewReady =
+      job.status === "preview_ready" ||
+      job.status === "analyzing" ||
+      job.status === "saving" ||
+      job.status === "completed";
+
+    try {
+      const { getChatBySessionIdEfficient } = await import("../models/chat.model.js");
+      const session = await getChatBySessionIdEfficient(job.sessionId);
+      if (session?.enrichmentStatus) {
+        response.enrichmentStatus = session.enrichmentStatus;
+      }
+      if (
+        session?.dataSummary &&
+        session.dataSummary.rowCount > 0 &&
+        (session.enrichmentStatus === "pending" ||
+          session.enrichmentStatus === "in_progress")
+      ) {
+        response.enrichmentPhase =
+          session.enrichmentStatus === "in_progress" ? "enriching" : "waiting";
+      }
+    } catch {
+      /* ignore */
+    }
+
     res.json(response);
   } catch (error) {
     console.error('Get upload status error:', error);
@@ -146,9 +186,14 @@ export const getUploadStatus = async (req: Request, res: Response) => {
  */
 export const getQueueStats = async (req: Request, res: Response) => {
   try {
+    requireUsername(req);
     const stats = uploadQueue.getStats();
     res.json(stats);
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Get queue stats error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to get queue stats',

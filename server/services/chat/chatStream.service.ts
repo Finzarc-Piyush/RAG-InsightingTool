@@ -10,12 +10,13 @@ import {
   addMessagesBySessionId, 
   updateMessageAndTruncate,
   getChatBySessionIdEfficient,
+  setPendingUserMessageForSession,
   ChatDocument 
 } from "../../models/chat.model.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
 import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
-import { loadLatestData } from "../../utils/dataLoader.js";
+import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
@@ -93,12 +94,27 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    console.log('✅ Chat document found, loading latest data...');
-    
-    // Load the latest data (including any modifications from data operations)
-    // This ensures that data operations performed by any user are reflected in analysis
-    const latestData = await loadLatestData(chatDocument);
-    console.log(`✅ Loaded ${latestData.length} rows of data for analysis`);
+    console.log('✅ Chat document found');
+
+    const enrichment = chatDocument.enrichmentStatus;
+    if (enrichment === "pending" || enrichment === "in_progress") {
+      await setPendingUserMessageForSession(sessionId, username, message);
+      sendSSE(res, "queued", {
+        reason: "enrichment",
+        message:
+          "Your message is queued until we finish understanding your data. You will see the reply shortly.",
+      });
+      res.end();
+      return;
+    }
+    if (enrichment === "failed") {
+      sendSSE(res, "error", {
+        message:
+          "Data enrichment failed for this session. Please try uploading your file again.",
+      });
+      res.end();
+      return;
+    }
     
     // Get chat-level insights
     const chatLevelInsights = chatDocument.insights && Array.isArray(chatDocument.insights) && chatDocument.insights.length > 0
@@ -247,7 +263,28 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       ? allMessages // Use full history from database for edits
       : allMessages.slice(-15); // Use last 15 messages for new messages
 
-    // Answer the question with streaming using the latest data
+    const { latestData, columnarStoragePathOpt, loadFullDataOpt, permanentContext, sessionAnalysisContext } =
+      await resolveAnswerQuestionDataLoad({
+        chatDocument,
+        message,
+        processingChatHistory,
+      });
+
+    const agentOptions =
+      process.env.AGENTIC_LOOP_ENABLED === "true"
+        ? {
+            onAgentEvent: (event: string, data: unknown) => sendSSE(res, event, data),
+            streamPreAnalysis: {
+              intentLabel: chatAnalysis.intent,
+              analysis: chatAnalysis.analysis,
+              relevantColumns: chatAnalysis.relevantColumns,
+              userIntent: chatAnalysis.userIntent,
+            },
+            username,
+            dataBlobVersion: chatDocument.currentDataBlob?.version,
+          }
+        : undefined;
+
     const result = await answerQuestion(
       latestData,
       message,
@@ -256,7 +293,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       sessionId,
       chatLevelInsights,
       onThinkingStep,
-      detectedMode
+      detectedMode,
+      permanentContext,
+      sessionAnalysisContext,
+      columnarStoragePathOpt,
+      loadFullDataOpt,
+      agentOptions
     );
 
     // Check connection after processing
@@ -290,6 +332,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         console.log(`📋 Transformed operationResult.summary to summary: ${(result as any).operationResult.summary.length} items`);
       }
     }
+    if ((result as any).agentTrace) {
+      transformedResponse.agentTrace = (result as any).agentTrace;
+    }
 
     // Check connection before generating suggestions
     if (!checkConnection()) {
@@ -312,6 +357,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     } catch (error) {
       console.error('Failed to generate suggestions:', error);
     }
+
+    const enrichmentFollowUps = [
+      ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
+      ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
+    ];
+    const mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(
+      0,
+      12
+    );
 
     // Check connection before saving messages
     if (!checkConnection()) {
@@ -373,10 +427,28 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           insights: transformedResponse.insights,
           preview: transformedResponse.preview || undefined, // Save preview data for data operations
           summary: transformedResponse.summary || undefined, // Save summary data for data operations
+          agentTrace: transformedResponse.agentTrace,
           timestamp: assistantMessageTimestamp,
+          ...(mergedSuggestedQuestions.length > 0
+            ? { suggestedQuestions: mergedSuggestedQuestions }
+            : {}),
         },
       ]);
       console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+
+      try {
+        const { persistMergeAssistantSessionContext } = await import(
+          "../../lib/sessionAnalysisContext.js"
+        );
+        await persistMergeAssistantSessionContext({
+          sessionId,
+          username,
+          assistantMessage: transformedResponse.answer,
+          agentTrace: transformedResponse.agentTrace,
+        });
+      } catch (ctxErr) {
+        console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
+      }
     } catch (cosmosError) {
       console.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
     }

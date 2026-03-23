@@ -7,7 +7,7 @@ import type { Request as ExpressRequest } from "express";
 import { processChatMessage } from "../services/chat/chat.service.js";
 import { createErrorResponse } from "../services/chat/chatResponse.service.js";
 import { processStreamChat, streamChatMessages } from "../services/chat/chatStream.service.js";
-import { requireUsername, extractUsername } from "../utils/auth.helper.js";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { sendError, sendValidationError, sendNotFound } from "../utils/responseFormatter.js";
 
 /**
@@ -15,15 +15,11 @@ import { sendError, sendValidationError, sendNotFound } from "../utils/responseF
  */
 export const chatWithAI = async (req: Request, res: Response) => {
   try {
-    console.log('📨 chatWithAI() called');
     const { sessionId, message, targetTimestamp } = req.body;
     const username = requireUsername(req);
 
-    console.log('📥 Request body:', { sessionId, message: message?.substring(0, 50), targetTimestamp });
-
     // Validate required fields
     if (!sessionId || !message) {
-      console.log('❌ Missing required fields');
       return sendValidationError(res, 'Missing required fields');
     }
 
@@ -35,16 +31,20 @@ export const chatWithAI = async (req: Request, res: Response) => {
       username,
     });
 
-    console.log('📨 Sending response to client:', {
-      answerLength: result.answer.length,
-      chartsCount: result.charts?.length || 0,
-      insightsCount: result.insights?.length || 0,
-      suggestionsCount: result.suggestions?.length || 0,
-    });
+    if ("queuedUntilEnrichment" in result && result.queuedUntilEnrichment) {
+      return res.status(202).json({
+        queuedUntilEnrichment: true,
+        message:
+          "Your message is queued until we finish understanding your data. You will see the reply shortly.",
+      });
+    }
 
     res.json(result);
-    console.log('✅ Response sent successfully');
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Chat error:', error);
     const errorResponse = createErrorResponse(error as Error);
     res.status(500).json(errorResponse);
@@ -56,15 +56,11 @@ export const chatWithAI = async (req: Request, res: Response) => {
  */
 export const chatWithAIStream = async (req: Request, res: Response) => {
   try {
-    console.log('📨 chatWithAIStream() called');
     const { sessionId, message, targetTimestamp, mode } = req.body;
     const username = requireUsername(req);
 
-    console.log('📥 Request body:', { sessionId, message: message?.substring(0, 50), targetTimestamp, mode });
-
     // Validate required fields
     if (!sessionId || !message) {
-      console.log('❌ Missing required fields');
       return;
     }
 
@@ -83,6 +79,12 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
       mode: validMode,
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      if (!res.headersSent) {
+        res.status(401).json({ error: (error as AuthenticationError).message });
+      }
+      return;
+    }
     console.error('Chat stream error:', error);
     // Error handling is done in the service
   }
@@ -95,27 +97,21 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
 export const streamChatMessagesController = async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    
-    // Extract username from query or header
-    const queryEmail = req.query.username;
-    const headerEmail = req.headers['x-user-email'];
-    
-    let username: string | undefined;
-    if (typeof queryEmail === "string" && queryEmail.trim().length > 0) {
-      username = queryEmail.trim().toLowerCase();
-    } else if (typeof headerEmail === "string" && headerEmail.trim().length > 0) {
-      username = headerEmail.trim().toLowerCase();
-    }
 
     if (!sessionId) {
       return;
     }
 
-    if (!username) {
+    let username: string;
+    try {
+      username = requireUsername(req);
+    } catch (e) {
+      if (e instanceof AuthenticationError && !res.headersSent) {
+        res.status(401).json({ error: e.message });
+      }
       return;
     }
 
-    // Stream messages
     await streamChatMessages(sessionId, username, req as ExpressRequest, res);
   } catch (error) {
     console.error("streamChatMessagesController error:", error);

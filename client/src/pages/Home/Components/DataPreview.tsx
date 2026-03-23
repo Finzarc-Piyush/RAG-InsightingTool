@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, Table, ArrowUp, ArrowDown, ArrowUpDown } fro
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ColumnsDisplay } from './ColumnsDisplay';
+import type { TemporalDisplayGrain } from '@/shared/schema';
+import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 
 // Helpers for robust date parsing and detection
 const MONTH_MAP: Record<string, number> = {
@@ -40,6 +42,7 @@ interface DataPreviewProps {
   columns: string[];
   numericColumns?: string[];
   dateColumns?: string[];
+  temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
   totalRows?: number;
   totalColumns?: number;
   defaultExpanded?: boolean;
@@ -52,6 +55,7 @@ export function DataPreview({
   columns, 
   numericColumns = [], 
   dateColumns = [], 
+  temporalDisplayGrainsByColumn = {},
   totalRows,
   totalColumns,
   defaultExpanded = false 
@@ -59,6 +63,31 @@ export function DataPreview({
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
+
+  /** Stale sessions: format date-like columns even if server did not list them in dateColumns. */
+  const displayAsDateColumns = useMemo(() => {
+    const set = new Set(dateColumns);
+    for (const col of columns) {
+      if (set.has(col)) continue;
+      const lower = col.toLowerCase();
+      const nameSuggestsDate = /(month|date|week|year|time|period|day|quarter)/.test(lower);
+      const sample = data.slice(0, 12).map((row) => row[col]);
+      const anyParses = sample.some((v) => parseDateLike(v) !== null);
+      if (nameSuggestsDate || anyParses) set.add(col);
+    }
+    return set;
+  }, [columns, dateColumns, data]);
+
+  const resolvedGrainsByColumn = useMemo(() => {
+    const out: Record<string, TemporalDisplayGrain> = { ...temporalDisplayGrainsByColumn };
+    for (const col of displayAsDateColumns) {
+      if (!out[col]) {
+        const vals = data.slice(0, 500).map((row) => row[col]);
+        out[col] = inferTemporalGrainFromSample(vals);
+      }
+    }
+    return out;
+  }, [data, displayAsDateColumns, temporalDisplayGrainsByColumn]);
 
   // Sort data based on current sort column and direction
   const sortedData = useMemo(() => {
@@ -203,9 +232,13 @@ export function DataPreview({
                       const value = row[col];
                       let displayValue = value;
                       
-                      // Format decimal numbers to 2 decimal places
                       if (value !== null && value !== undefined) {
-                        if (typeof value === 'number' && !Number.isInteger(value)) {
+                        if (displayAsDateColumns.has(col)) {
+                          const g = resolvedGrainsByColumn[col];
+                          const formatted =
+                            g !== undefined ? formatDateCellForGrain(value, g) : null;
+                          displayValue = formatted ?? String(value);
+                        } else if (typeof value === 'number' && !Number.isInteger(value)) {
                           displayValue = value.toFixed(2);
                         } else {
                           displayValue = String(value);

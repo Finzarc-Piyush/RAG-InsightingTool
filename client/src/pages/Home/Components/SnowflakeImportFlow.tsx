@@ -54,7 +54,7 @@ export function SnowflakeImportFlow({
       setError(message);
       toast({
         title: 'Failed to load databases',
-        description: 'Snowflake may not be configured. Check server .env (SNOWFLAKE_*).',
+        description: 'Snowflake may not be configured. Check server/server.env (SNOWFLAKE_*).',
         variant: 'destructive',
       });
     } finally {

@@ -1,28 +1,54 @@
 import { DataSummary, Message } from '../../shared/schema.js';
 import { RetrievedContext } from './handlers/baseHandler.js';
+import { isRagEnabled } from '../rag/config.js';
+import { retrieveRagHits, formatHitsForPrompt } from '../rag/retrieve.js';
 
 /**
- * Retrieve context for a query
- * RAG removed - returns basic context from data summary
+ * Retrieve context for a query (summary + optional Azure AI Search RAG).
  */
 export async function retrieveContext(
   question: string,
   data: Record<string, any>[],
   summary: DataSummary,
   chatHistory: Message[],
-  sessionId: string
+  sessionId: string,
+  dataVersion?: number
 ): Promise<RetrievedContext> {
-  // RAG removed - return basic context
   const mentionedColumns = extractMentionedColumns(question, summary);
-  
+
+  const baseChunks = [
+    `Dataset has ${summary.rowCount} rows and ${summary.columnCount} columns`,
+    `Numeric columns: ${summary.numericColumns.join(', ')}`,
+    `Date columns: ${summary.dateColumns.join(', ') || 'none'}`,
+  ];
+
+  if (!isRagEnabled()) {
+    return {
+      dataChunks: baseChunks,
+      pastQueries: [],
+      mentionedColumns,
+    };
+  }
+
+  const { hits, suggestedColumns } = await retrieveRagHits({
+    sessionId,
+    question,
+    summary,
+    dataVersion,
+  });
+  const ragText = formatHitsForPrompt(hits);
+  const dataChunks = ragText.trim()
+    ? [...baseChunks, `--- Retrieved passages (semantic search) ---\n${ragText}`]
+    : baseChunks;
+
+  const mergedMentioned = Array.from(
+    new Set([...mentionedColumns, ...suggestedColumns])
+  );
+
   return {
-    dataChunks: [
-      `Dataset has ${summary.rowCount} rows and ${summary.columnCount} columns`,
-      `Numeric columns: ${summary.numericColumns.join(', ')}`,
-      `Date columns: ${summary.dateColumns.join(', ') || 'none'}`,
-    ],
+    dataChunks,
     pastQueries: [],
-    mentionedColumns,
+    mentionedColumns: mergedMentioned,
   };
 }
 

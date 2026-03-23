@@ -32,6 +32,19 @@ const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
+ * Strip trailing locale/timezone noise (e.g. " (India Standard Time)") so values parse cleanly.
+ */
+export function sanitizeDateStringForParse(input: string): string {
+  let s = input.trim();
+  // Trailing parenthetical timezone / region names
+  s = s.replace(/\s*\([^)]*(?:Standard Time|Daylight Time|Summer Time|GMT|UTC)[^)]*\)\s*$/gi, '').trim();
+  // Trailing " GMT+0530" style (keep offset-only forms that are part of ISO elsewhere)
+  s = s.replace(/\s+GMT[+-]\d{2}:?\d{2}\s*$/i, '').trim();
+  s = s.replace(/\s+/g, ' ');
+  return s.trim();
+}
+
+/**
  * Enhanced date parser that handles multiple formats:
  * - "Jan-24", "January 2024", "2024-01-15", "15/01/2024", etc.
  */
@@ -43,7 +56,7 @@ export function parseFlexibleDate(dateStr: string | Date): Date | null {
     return dateStr;
   }
   
-  const str = String(dateStr).trim();
+  const str = sanitizeDateStringForParse(String(dateStr));
   if (!str) return null;
   
   // Try numeric month-year formats: "11-2020", "11/2020", "11 2020" (MM-YYYY)

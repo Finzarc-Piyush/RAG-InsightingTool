@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import {
   addChartToDashboardRequestSchema,
   createDashboardRequestSchema,
@@ -20,11 +21,15 @@ import {
 
 export const createDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const parsed = createDashboardRequestSchema.parse(req.body);
     const dashboard = await createDashboard(username, parsed.name, parsed.charts || []);
     res.status(201).json(dashboard);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     // Check if it's a duplicate name error
     if (error?.message?.includes('already exists')) {
       res.status(409).json({ error: error.message });
@@ -36,7 +41,7 @@ export const createDashboardController = async (req: Request, res: Response) => 
 
 export const listDashboardsController = async (req: Request, res: Response) => {
   try {
-    const username = (req.query.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const dashboards = await getUserDashboards(username);
     
     // Also get shared dashboards that the user has accepted
@@ -50,9 +55,14 @@ export const listDashboardsController = async (req: Request, res: Response) => {
     const sharedDashboards = await Promise.all(
       acceptedInvites.map(async (invite) => {
         try {
+          if (!invite.sourceDashboardId || !invite.ownerEmail) {
+            console.warn("listDashboards: skipping invite with missing sourceDashboardId or ownerEmail", invite?.id);
+            return null;
+          }
           // Get dashboard using owner's username (partition key)
           const dashboardsContainer = await waitForDashboardsContainer();
-          const { resource } = await dashboardsContainer.item(invite.sourceDashboardId, invite.ownerEmail).read();
+          const ownerPk = invite.ownerEmail.trim().toLowerCase();
+          const { resource } = await dashboardsContainer.item(invite.sourceDashboardId, ownerPk).read();
           const dashboard = resource as unknown as typeof dashboards[0];
           
           if (dashboard) {
@@ -78,13 +88,17 @@ export const listDashboardsController = async (req: Request, res: Response) => {
     
     res.json({ dashboards: allDashboards });
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error?.message || 'Failed to fetch dashboards' });
   }
 };
 
 export const getDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.query.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const dashboard = await getDashboardById(dashboardId, username);
     if (!dashboard) {
@@ -92,26 +106,34 @@ export const getDashboardController = async (req: Request, res: Response) => {
     }
     res.json(dashboard);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error?.message || 'Failed to fetch dashboard' });
   }
 };
 
 export const deleteDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const existing = await getDashboardById(dashboardId, username);
     if (!existing) return res.status(404).json({ error: 'Dashboard not found' });
     await deleteDashboard(dashboardId, username);
     res.json({ success: true });
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(500).json({ error: error?.message || 'Failed to delete dashboard' });
   }
 };
 
 export const addChartToDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const parsed = addChartToDashboardRequestSchema.parse(req.body);
     
@@ -120,6 +142,10 @@ export const addChartToDashboardController = async (req: Request, res: Response)
     const updated = await addChartToDashboard(dashboardId, username, parsed.chart, parsed.sheetId);
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error(`[addChartToDashboard] Error:`, error);
     res.status(400).json({ error: error?.message || 'Failed to add chart' });
   }
@@ -127,7 +153,7 @@ export const addChartToDashboardController = async (req: Request, res: Response)
 
 export const addSheetToDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const { name } = req.body;
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -136,6 +162,10 @@ export const addSheetToDashboardController = async (req: Request, res: Response)
     const updated = await addSheetToDashboard(dashboardId, username, name.trim());
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     // Check if it's a duplicate name error
     if (error?.message?.includes('already exists')) {
       res.status(409).json({ error: error.message });
@@ -147,18 +177,22 @@ export const addSheetToDashboardController = async (req: Request, res: Response)
 
 export const removeSheetFromDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId, sheetId } = req.params as { dashboardId: string; sheetId: string };
     const updated = await removeSheetFromDashboard(dashboardId, username, sheetId);
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(400).json({ error: error?.message || 'Failed to remove sheet' });
   }
 };
 
 export const renameSheetController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId, sheetId } = req.params as { dashboardId: string; sheetId: string };
     const { name } = req.body;
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -167,6 +201,10 @@ export const renameSheetController = async (req: Request, res: Response) => {
     const updated = await renameSheet(dashboardId, username, sheetId, name.trim());
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     // Check if it's a duplicate name error
     if (error?.message?.includes('already exists')) {
       res.status(409).json({ error: error.message });
@@ -178,7 +216,7 @@ export const renameSheetController = async (req: Request, res: Response) => {
 
 export const renameDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const { name } = req.body;
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -187,6 +225,10 @@ export const renameDashboardController = async (req: Request, res: Response) => 
     const updated = await renameDashboard(dashboardId, username, name.trim());
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     // Check if it's a duplicate name error
     if (error?.message?.includes('already exists')) {
       res.status(409).json({ error: error.message });
@@ -198,19 +240,23 @@ export const renameDashboardController = async (req: Request, res: Response) => 
 
 export const removeChartFromDashboardController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId } = req.params as { dashboardId: string };
     const parsed = removeChartFromDashboardRequestSchema.parse(req.body);
     const updated = await removeChartFromDashboard(dashboardId, username, parsed);
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(400).json({ error: error?.message || 'Failed to remove chart' });
   }
 };
 
 export const updateChartInsightOrRecommendationController = async (req: Request, res: Response) => {
   try {
-    const username = (req.body.username || req.headers['x-user-email'] || 'anonymous@example.com') as string;
+    const username = requireUsername(req);
     const { dashboardId, chartIndex: chartIndexParam } = req.params as { dashboardId: string; chartIndex: string };
     const { sheetId, keyInsight } = req.body;
     const chartIndex = parseInt(chartIndexParam, 10);
@@ -237,6 +283,10 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
     );
     res.json(updated);
   } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     res.status(400).json({ error: error?.message || 'Failed to update chart insight or recommendation' });
   }
 };

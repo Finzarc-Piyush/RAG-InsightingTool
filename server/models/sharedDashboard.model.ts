@@ -108,16 +108,30 @@ export const createSharedDashboardInvite = async ({
 
 /**
  * List shared dashboards for a user (incoming invites)
+ * Container partition key is /targetEmail — pass it explicitly so the SDK does not require a cross-partition scan.
+ * Sort in-process to avoid composite-index requirements for ORDER BY.
  */
 export const listSharedDashboardsForUser = async (targetEmail: string): Promise<SharedDashboardInvite[]> => {
-  const sharedContainer = await waitForSharedDashboardsContainer();
-  const normalizedTarget = normalizeEmail(targetEmail) || targetEmail;
-  const { resources } = await sharedContainer.items.query({
-    query: "SELECT * FROM c WHERE c.targetEmail = @targetEmail ORDER BY c.createdAt DESC",
-    parameters: [{ name: "@targetEmail", value: normalizedTarget }],
-  }).fetchAll();
+  try {
+    const sharedContainer = await waitForSharedDashboardsContainer();
+    const normalizedTarget = normalizeEmail(targetEmail) || targetEmail;
+    const { resources } = await sharedContainer.items
+      .query(
+        {
+          query: "SELECT * FROM c WHERE c.targetEmail = @targetEmail",
+          parameters: [{ name: "@targetEmail", value: normalizedTarget }],
+        },
+        { partitionKey: normalizedTarget }
+      )
+      .fetchAll();
 
-  return resources as SharedDashboardInvite[];
+    const list = (resources ?? []) as SharedDashboardInvite[];
+    return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("listSharedDashboardsForUser failed:", errorMessage);
+    return [];
+  }
 };
 
 /**

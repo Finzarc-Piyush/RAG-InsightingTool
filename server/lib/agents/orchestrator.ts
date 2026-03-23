@@ -453,14 +453,26 @@ export class AgentOrchestrator {
         }
       }
 
-      // Step 5: Retrieve context - RAG removed
+      // Step 5: Retrieve context (optional RAG, filtered by blob version when enabled)
       this.emitThinkingStep(onThinkingStep, "Analyzing your data", "active");
+      let dataVersion: number | undefined;
+      try {
+        const { isRagEnabled } = await import("../rag/config.js");
+        if (isRagEnabled()) {
+          const { getChatBySessionIdEfficient } = await import("../../models/chat.model.js");
+          const doc = await getChatBySessionIdEfficient(sessionId);
+          dataVersion = doc?.currentDataBlob?.version;
+        }
+      } catch (e) {
+        console.warn("⚠️ RAG: could not load session for dataVersion filter:", e);
+      }
       const context = await retrieveContext(
         finalQuestion,
         filteredData,
         summary,
         chatHistory,
-        sessionId
+        sessionId,
+        dataVersion
       );
       
       // Determine completion message

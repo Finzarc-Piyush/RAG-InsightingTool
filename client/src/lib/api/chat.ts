@@ -2,6 +2,19 @@ import { API_BASE_URL } from "@/lib/config";
 import { getUserEmail } from "@/utils/userStorage";
 import { ChatResponse, ThinkingStep } from "@/shared/schema";
 import { logger } from "@/lib/logger";
+import { getAuthorizationHeader } from "@/auth/msalToken";
+
+async function buildApiHeaders(
+  base: Record<string, string> = {}
+): Promise<Record<string, string>> {
+  const auth = await getAuthorizationHeader();
+  const userEmail = getUserEmail();
+  return {
+    ...base,
+    ...auth,
+    ...(userEmail ? { "X-User-Email": userEmail } : {}),
+  };
+}
 
 /**
  * Download modified dataset from data operations
@@ -10,12 +23,7 @@ export async function downloadModifiedDataset(
   sessionId: string,
   format: 'csv' | 'xlsx' = 'csv'
 ): Promise<void> {
-  const userEmail = getUserEmail();
-  const headers: Record<string, string> = {};
-
-  if (userEmail) {
-    headers["X-User-Email"] = userEmail;
-  }
+  const headers = await buildApiHeaders();
 
   try {
     const url = `${API_BASE_URL}/api/data-ops/download/${sessionId}?format=${format}`;
@@ -66,6 +74,10 @@ export interface StreamChatCallbacks {
   onResponse?: (response: ChatResponse) => void;
   onError?: (error: Error) => void;
   onDone?: () => void;
+  /** Server queued the message until dataset enrichment completes */
+  onQueued?: (payload: { message?: string; reason?: string }) => void;
+  /** plan | tool_call | tool_result | critic_verdict when AGENTIC_LOOP_ENABLED */
+  onAgentEvent?: (event: string, data: unknown) => void;
 }
 
 export async function streamChatRequest(
@@ -76,14 +88,9 @@ export async function streamChatRequest(
   targetTimestamp?: number,
   mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'
 ): Promise<void> {
-  const userEmail = getUserEmail();
-  const headers: Record<string, string> = {
+  const headers = await buildApiHeaders({
     "Content-Type": "application/json",
-  };
-
-  if (userEmail) {
-    headers["X-User-Email"] = userEmail;
-  }
+  });
 
   try {
     logger.log("🌐 Starting SSE stream to:", `${API_BASE_URL}/api/chat/stream`);
@@ -192,6 +199,15 @@ function dispatchEvent(
     case "done":
       callbacks.onDone?.();
       break;
+    case "queued":
+      callbacks.onQueued?.(payload as { message?: string; reason?: string });
+      break;
+    case "plan":
+    case "tool_call":
+    case "tool_result":
+    case "critic_verdict":
+      callbacks.onAgentEvent?.(eventType, payload);
+      break;
     default:
       break;
   }
@@ -245,14 +261,9 @@ export async function streamDataOpsChatRequest(
   targetTimestamp?: number,
   dataOpsMode?: boolean
 ): Promise<void> {
-  const userEmail = getUserEmail();
-  const headers: Record<string, string> = {
+  const headers = await buildApiHeaders({
     "Content-Type": "application/json",
-  };
-
-  if (userEmail) {
-    headers["X-User-Email"] = userEmail;
-  }
+  });
 
   try {
     logger.log("🌐 Starting Data Ops SSE stream to:", `${API_BASE_URL}/api/data-ops/chat/stream`);

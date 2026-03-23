@@ -1,4 +1,18 @@
-import { ChartSpec, Insight, DataSummary, Message } from '../shared/schema.js';
+import {
+  ChartSpec,
+  Insight,
+  DataSummary,
+  Message,
+  SessionAnalysisContext,
+} from '../shared/schema.js';
+import {
+  isAgenticLoopEnabled,
+  isAgenticStrictEnabled,
+  loadAgentConfigFromEnv,
+  buildAgentExecutionContext,
+  runAgentTurn,
+  type StreamPreAnalysis,
+} from './agents/runtime/index.js';
 import { openai, MODEL } from './openai.js';
 import { processChartData } from './chartGenerator.js';
 import { optimizeChartData } from './chartDownsampling.js';
@@ -369,6 +383,14 @@ function findMatchingColumn(searchName: string, availableColumns: string[]): str
   return null;
 }
 
+export interface AnswerQuestionAgentOptions {
+  onAgentEvent?: (event: string, data: unknown) => void;
+  streamPreAnalysis?: StreamPreAnalysis;
+  username?: string;
+  /** For RAG vector filter (session currentDataBlob.version). */
+  dataBlobVersion?: number;
+}
+
 export async function answerQuestion(
   data: Record<string, any>[],
   question: string,
@@ -379,19 +401,86 @@ export async function answerQuestion(
   onThinkingStep?: (step: { step: string; status: 'pending' | 'active' | 'completed' | 'error'; timestamp: number; details?: string }) => void,
   mode?: 'analysis' | 'dataOps' | 'modeling',
   permanentContext?: string,
+  sessionAnalysisContext?: SessionAnalysisContext,
   columnarStoragePath?: boolean,
-  loadFullData?: () => Promise<Record<string, any>[]>
-): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[]; table?: any; operationResult?: any }> {
+  loadFullData?: () => Promise<Record<string, any>[]>,
+  agentOptions?: AnswerQuestionAgentOptions
+): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[]; table?: any; operationResult?: any; agentTrace?: import('./agents/runtime/types.js').AgentTrace }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
   console.log('📋 SessionId:', sessionId);
   console.log('📊 Data rows:', data?.length);
+
+  if (isAgenticLoopEnabled()) {
+    try {
+      const config = loadAgentConfigFromEnv();
+      const execCtx = buildAgentExecutionContext({
+        sessionId: sessionId || 'unknown',
+        username: agentOptions?.username,
+        question,
+        data,
+        summary,
+        chatHistory,
+        chatInsights,
+        mode: mode || 'analysis',
+        permanentContext,
+        sessionAnalysisContext,
+        columnarStoragePath,
+        dataBlobVersion: agentOptions?.dataBlobVersion,
+        loadFullData,
+        streamPreAnalysis: agentOptions?.streamPreAnalysis,
+      });
+      const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
+      if (loopResult?.answer?.trim()) {
+        console.log('✅ Agentic loop returned answer');
+        return {
+          answer: loopResult.answer,
+          charts: loopResult.charts,
+          insights: loopResult.insights,
+          table: loopResult.table,
+          operationResult: loopResult.operationResult,
+          agentTrace: loopResult.agentTrace,
+        };
+      }
+      if (isAgenticStrictEnabled()) {
+        console.warn('⚠️ Agentic loop returned empty (AGENTIC_STRICT: no legacy fallback)');
+        return {
+          answer:
+            "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
+          charts: loopResult?.charts,
+          insights: loopResult?.insights,
+          table: loopResult?.table,
+          operationResult: loopResult?.operationResult,
+          agentTrace: loopResult?.agentTrace,
+        };
+      }
+      console.warn('⚠️ Agentic loop returned empty; falling back to legacy orchestrator');
+    } catch (agenticErr) {
+      if (isAgenticStrictEnabled()) {
+        const detail =
+          agenticErr instanceof Error ? agenticErr.message : String(agenticErr);
+        const safe = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
+        console.error('❌ Agentic loop error (AGENTIC_STRICT: no legacy fallback):', agenticErr);
+        return {
+          answer: `The analysis agent encountered an error (${safe}). Please try again.`,
+        };
+      }
+      console.error('❌ Agentic loop error, falling back:', agenticErr);
+    }
+  }
+
+  if (isAgenticLoopEnabled() && isAgenticStrictEnabled()) {
+    return {
+      answer:
+        "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
+    };
+  }
   
   // PRIORITY CHECK: For information-seeking queries, route directly to query execution
   // This bypasses the agent system to prevent automatic data operations (aggregation, table creation)
   // Only execute queries and return results - don't modify data structure unless explicitly asked
   const { isInformationSeekingQuery } = await import('./analyticalQueryEngine.js');
-  if (isInformationSeekingQuery(question) && mode !== 'dataOps') {
+  if (!isAgenticLoopEnabled() && isInformationSeekingQuery(question) && mode !== 'dataOps') {
     console.log('🔍 Detected information-seeking query - routing directly to query execution (bypassing agent system)');
     try {
       const result = await generateGeneralAnswer(

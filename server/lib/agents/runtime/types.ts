@@ -1,0 +1,174 @@
+import type {
+  ChartSpec,
+  DataSummary,
+  Insight,
+  Message,
+  SessionAnalysisContext,
+} from "../../../shared/schema.js";
+
+export const AGENT_TRACE_MAX_BYTES = 48_000;
+
+export function isAgenticLoopEnabled(): boolean {
+  return process.env.AGENTIC_LOOP_ENABLED === "true";
+}
+
+/** When true with AGENTIC_LOOP_ENABLED, answerQuestion does not fall back to handler orchestrator or legacy dataAnalyzer. */
+export function isAgenticStrictEnabled(): boolean {
+  return process.env.AGENTIC_STRICT === "true";
+}
+
+export interface AgentConfig {
+  maxSteps: number;
+  maxWallTimeMs: number;
+  maxToolCalls: number;
+  maxVerifierRoundsPerStep: number;
+  maxVerifierRoundsFinal: number;
+  maxTotalLlmCallsPerTurn: number;
+  sampleRowsCap: number;
+  observationMaxChars: number;
+}
+
+export function loadAgentConfigFromEnv(): AgentConfig {
+  const num = (v: string | undefined, d: number) => {
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) ? n : d;
+  };
+  return {
+    maxSteps: num(process.env.AGENT_MAX_STEPS, 12),
+    maxWallTimeMs: num(process.env.AGENT_MAX_WALL_MS, 120_000),
+    maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 20),
+    maxVerifierRoundsPerStep: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_STEP, 2),
+    maxVerifierRoundsFinal: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_FINAL, 2),
+    maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 40),
+    sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
+    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 8000),
+  };
+}
+
+export interface StreamPreAnalysis {
+  intentLabel: string;
+  analysis: string;
+  relevantColumns: string[];
+  userIntent: string;
+}
+
+/** One completed tool call in the turn — fed back into the planner on replan / structured context. */
+export interface WorkingMemoryEntry {
+  callId: string;
+  tool: string;
+  ok: boolean;
+  summaryPreview: string;
+  suggestedColumns?: string[];
+  /** Small key/value facts tools attach for chaining (validated downstream only where applicable). */
+  slots?: Record<string, string>;
+}
+
+export interface AgentExecutionContext {
+  sessionId: string;
+  username?: string;
+  question: string;
+  data: Record<string, any>[];
+  summary: DataSummary;
+  chatHistory: Message[];
+  chatInsights?: Insight[];
+  mode: "analysis" | "dataOps" | "modeling";
+  permanentContext?: string;
+  /** Rolling LLM JSON context (seed + user + assistant merges). */
+  sessionAnalysisContext?: SessionAnalysisContext;
+  columnarStoragePath?: boolean;
+  /** Matches indexed vectors after data-ops saves (currentDataBlob.version). */
+  dataBlobVersion?: number;
+  loadFullData?: () => Promise<Record<string, any>[]>;
+  streamPreAnalysis?: StreamPreAnalysis;
+}
+
+export interface PlanStep {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  /** Optional id of another step in the same plan that must run first (outputs inform this step). */
+  dependsOn?: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  name: string;
+  argsSummary: string;
+  ok: boolean;
+  startedAt: number;
+  endedAt: number;
+  error?: string;
+  /** Truncated for trace */
+  resultSummary?: string;
+}
+
+export interface CriticRoundRecord {
+  stepId: string;
+  verdict: string;
+  issueCodes: string[];
+  courseCorrection?: string;
+}
+
+export interface AgentTrace {
+  turnId: string;
+  startedAt: number;
+  endedAt: number;
+  planRationale?: string;
+  steps: PlanStep[];
+  toolCalls: ToolCallRecord[];
+  criticRounds: CriticRoundRecord[];
+  reflectorNotes: string[];
+  budgetHits?: string[];
+  parseFailures?: number;
+}
+
+export interface AgentState {
+  turnId: string;
+  startedAt: number;
+  plan: PlanStep[];
+  planRationale: string;
+  stepIndex: number;
+  observations: string[];
+  toolCallCount: number;
+  llmCallCount: number;
+  lastToolNumericPayload?: string;
+  pendingCharts: ChartSpec[];
+  pendingInsights: Insight[];
+  trace: AgentTrace;
+}
+
+export type VerdictType =
+  | "pass"
+  | "revise_narrative"
+  | "retry_tool"
+  | "replan"
+  | "ask_user"
+  | "abort_partial";
+
+export interface VerifierIssue {
+  code: string;
+  severity: "low" | "medium" | "high";
+  description: string;
+  evidenceRefs: string[];
+}
+
+export interface VerifierResult {
+  verdict: VerdictType;
+  scores?: {
+    goal_alignment?: number;
+    evidence_consistency?: number;
+    completeness?: number;
+  };
+  issues: VerifierIssue[];
+  course_correction: VerdictType;
+  user_visible_note?: string;
+}
+
+export interface AgentLoopResult {
+  answer: string;
+  charts?: ChartSpec[];
+  insights?: Insight[];
+  table?: any;
+  operationResult?: any;
+  agentTrace?: AgentTrace;
+}

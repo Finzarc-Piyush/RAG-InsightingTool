@@ -237,7 +237,7 @@ export function ChartOnlyModal({
         
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <LineChart data={data} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 40 }}>
+            <LineChart data={data} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -246,7 +246,7 @@ export function ChartOnlyModal({
                 textAnchor="end"
                 stroke="hsl(var(--muted-foreground))"
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
-                height={60}
+                height={95}
               />
               {chart.y2 ? (
                 <>
@@ -347,7 +347,7 @@ export function ChartOnlyModal({
       case 'bar':
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <BarChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 80 }}>
+            <BarChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -357,7 +357,7 @@ export function ChartOnlyModal({
                 stroke="hsl(var(--muted-foreground))"
                 interval={0}
                 label={{ value: xLabel || x, position: 'bottom', offset: 5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 14, fontWeight: 600 } }}
-                height={70}
+                height={90}
               />
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
@@ -559,7 +559,7 @@ export function ChartOnlyModal({
       case 'area':
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <AreaChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 40 }}>
+            <AreaChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -568,7 +568,7 @@ export function ChartOnlyModal({
                 textAnchor="end"
                 stroke="hsl(var(--muted-foreground))"
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
-                height={60}
+                height={95}
               />
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
@@ -606,7 +606,7 @@ export function ChartOnlyModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-7xl w-full max-h-[90vh] overflow-hidden [&>button]:hidden">
+      <DialogContent className="max-w-7xl w-full max-h-[90vh] flex flex-col overflow-hidden [&>button]:hidden">
         <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-4 gap-4">
           <div className="flex flex-col gap-1 flex-1 min-w-0">
             <DialogTitle className="text-xl truncate">
@@ -998,8 +998,12 @@ export function ChartOnlyModal({
           </div>
         </DialogHeader>
 
-        <div className="h-[520px] w-full">
-          {renderChart()}
+        <div className="flex flex-1 min-h-0 w-full flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="min-h-[500px] w-full pb-6">
+              {renderChart()}
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

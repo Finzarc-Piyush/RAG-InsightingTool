@@ -9,7 +9,7 @@ export const checkEnvironmentVariables = () => {
 
   if (missingVars.length > 0) {
     console.error('Missing required environment variables:', missingVars);
-    console.error('Please check your .env file and ensure all variables are set.');
+    console.error('Please check client/client.env and ensure all required variables are set.');
     return false;
   }
 

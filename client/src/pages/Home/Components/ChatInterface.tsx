@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Message, ThinkingStep } from '@/shared/schema';
+import { Message, ThinkingStep, TemporalDisplayGrain } from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
@@ -38,6 +38,7 @@ interface ChatInterfaceProps {
   columns?: string[];
   numericColumns?: string[];
   dateColumns?: string[];
+  temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
   totalRows?: number;
   totalColumns?: number;
   onStopGeneration?: () => void;
@@ -50,7 +51,10 @@ interface ChatInterfaceProps {
   onModeChange?: (mode: 'general' | 'analysis' | 'dataOps' | 'modeling') => void; // Callback for mode change
   sessionId?: string | null; // Session ID for downloading modified datasets
   isReplacingAnalysis?: boolean; // Whether we're replacing the current analysis
-  isLargeFileLoading?: boolean; // Whether a large file is being loaded
+  /** Full-screen until first preview rows + summary are available */
+  isDatasetPreviewLoading?: boolean;
+  /** Non-blocking: LLM enrichment running after preview */
+  isDatasetEnriching?: boolean;
   onOpenDataSummary?: () => void; // Callback to open data summary modal
 }
 
@@ -61,7 +65,10 @@ const getSuggestions = (
   numericColumns?: string[],
   aiSuggestions?: string[]
 ) => {
-  // If AI suggestions are provided, use them first (they're contextually relevant)
+  const first = messages[0];
+  if (first?.role === 'assistant' && first.suggestedQuestions && first.suggestedQuestions.length > 0) {
+    return first.suggestedQuestions;
+  }
   if (aiSuggestions && aiSuggestions.length > 0) {
     return aiSuggestions;
   }
@@ -107,6 +114,7 @@ export function ChatInterface({
   columns,
   numericColumns,
   dateColumns,
+  temporalDisplayGrainsByColumn = {},
   totalRows,
   totalColumns,
   onStopGeneration,
@@ -119,7 +127,8 @@ export function ChatInterface({
   onModeChange,
   sessionId,
   isReplacingAnalysis = false,
-  isLargeFileLoading = false,
+  isDatasetPreviewLoading = false,
+  isDatasetEnriching = false,
   onOpenDataSummary,
 }: ChatInterfaceProps) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -558,8 +567,7 @@ export function ChatInterface({
           </div>
         </div>
       )}
-      {/* Loading Overlay for large files */}
-      {isLargeFileLoading && (
+      {isDatasetPreviewLoading && (
         <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="text-center max-w-md px-6">
             <div className="relative mb-4">
@@ -567,13 +575,20 @@ export function ChatInterface({
                 <Loader2 className="w-8 h-8 text-primary animate-spin" />
               </div>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Processing your file</h3>
-            <p className="text-sm text-gray-500 mb-4">Analyzing your data, this may take a moment...</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Preparing your dataset</h3>
+            <p className="text-sm text-gray-500 mb-4">Building preview and column summary…</p>
             <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
               <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '60%' }}></div>
             </div>
-            <p className="text-xs text-gray-400">Estimated time: 30-60 seconds</p>
           </div>
+        </div>
+      )}
+      {isDatasetEnriching && !isDatasetPreviewLoading && (
+        <div className="absolute top-0 left-0 right-0 z-40 border-b border-amber-200 bg-amber-50/95 px-4 py-2 text-sm text-amber-950">
+          <p className="font-medium">Enriching our understanding of your data…</p>
+          <p className="text-amber-900/90">
+            You can type below; we will answer after enrichment. Suggested questions will appear when ready.
+          </p>
         </div>
       )}
       
@@ -628,6 +643,7 @@ export function ChatInterface({
                 columns={originalIndex === 0 ? columns : undefined}
                 numericColumns={originalIndex === 0 ? numericColumns : undefined}
                 dateColumns={originalIndex === 0 ? dateColumns : undefined}
+                temporalDisplayGrainsByColumn={originalIndex === 0 ? temporalDisplayGrainsByColumn : undefined}
                 totalRows={originalIndex === 0 ? totalRows : undefined}
                 totalColumns={originalIndex === 0 ? totalColumns : undefined}
                 onEditMessage={onEditMessage}
@@ -635,6 +651,7 @@ export function ChatInterface({
                 sessionId={sessionId}
                 isLastUserMessage={isLastUserMessage}
                 thinkingSteps={showThinkingSteps ? thinkingSteps : undefined}
+                onSuggestedQuestionClick={onSendMessage}
                 ref={isLastMessage ? lastMessageRef : undefined}
               />
             );

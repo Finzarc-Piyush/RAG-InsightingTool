@@ -9,6 +9,29 @@ import type { ExecutionPlan, ExecutionStep } from './analyticalQueryEngine.js';
 
 const TABLE_NAME = 'data';
 
+/** DuckDB aggregate names allowed in generated SQL (LLM plans must not inject arbitrary SQL). */
+const ALLOWED_AGG_FUNCTIONS = new Set([
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'count',
+  'median',
+  'stddev',
+  'stddev_pop',
+  'stddev_samp',
+  'var_pop',
+  'var_samp',
+  'variance',
+]);
+
+function normalizeAggFunction(raw: string | undefined): string {
+  const s = (raw || 'sum').toLowerCase();
+  if (s === 'mean') return 'avg';
+  if (!ALLOWED_AGG_FUNCTIONS.has(s)) return 'sum';
+  return s;
+}
+
 function escapeCol(name: string): string {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
@@ -98,7 +121,7 @@ export function buildSqlFromPlan(plan: ExecutionPlan): string | null {
       const groupColsEsc = groupCols.map(escapeCol).join(', ');
       const aggExprs = aggCols.map((c) => {
         const esc = escapeCol(c);
-        const fn = aggFunc === 'mean' ? 'avg' : aggFunc;
+        const fn = normalizeAggFunction(aggFunc);
         return `${fn}(${esc}) AS ${esc.replace(/"/g, '_')}_${fn}`;
       });
       selectList = `${groupColsEsc}, ${aggExprs.join(', ')}`;
@@ -128,7 +151,7 @@ export function buildSqlFromPlan(plan: ExecutionPlan): string | null {
       const groupColsEsc = escapeCol(groupByCol);
       const aggExprs = aggCols.map((c) => {
         const esc = escapeCol(c);
-        const fn = aggFunc === 'mean' ? 'avg' : aggFunc;
+        const fn = normalizeAggFunction(aggFunc);
         return `${fn}(${esc}) AS ${c.replace(/"/g, '_')}_${fn}`;
       });
       selectList = `${groupColsEsc}, ${aggExprs.join(', ')}`;

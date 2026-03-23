@@ -55,11 +55,17 @@ export const createDashboard = async (
 export const getUserDashboards = async (username: string): Promise<Dashboard[]> => {
   try {
     const dashboardsContainer = await waitForDashboardsContainer();
-    const { resources } = await dashboardsContainer.items.query({
-      query: "SELECT * FROM c WHERE c.username = @username ORDER BY c.createdAt DESC",
-      parameters: [{ name: "@username", value: username }],
-    }).fetchAll();
-    return resources as unknown as Dashboard[];
+    const { resources } = await dashboardsContainer.items
+      .query(
+        {
+          query: "SELECT * FROM c WHERE c.username = @username",
+          parameters: [{ name: "@username", value: username }],
+        },
+        { partitionKey: username }
+      )
+      .fetchAll();
+    const list = (resources ?? []) as unknown as Dashboard[];
+    return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   } catch (error) {
     console.error("Failed to get user dashboards:", error);
     return [];

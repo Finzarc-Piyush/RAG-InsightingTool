@@ -4,4 +4,6 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+# Stray standard name only; canonical local env is tracked `client.env` (see vite.config).
 .env
+.env.local

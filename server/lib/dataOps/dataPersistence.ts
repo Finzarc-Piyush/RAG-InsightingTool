@@ -4,7 +4,7 @@
  */
 import { updateProcessedDataBlob } from '../blobStorage.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
-import { createDataSummary } from '../fileParser.js';
+import { createDataSummary, canonicalizeDateColumnValues } from '../fileParser.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
 
 export interface SaveDataResult {
@@ -91,7 +91,9 @@ export async function saveModifiedData(
     throw new Error('Cannot save empty dataset. The data operation resulted in no data.');
   }
   
-  // Update data summary
+  // Update data summary (canonicalize dates then refresh typing / grains)
+  const preSummary = createDataSummary(modifiedData);
+  canonicalizeDateColumnValues(modifiedData, preSummary.dateColumns);
   doc.dataSummary = createDataSummary(modifiedData);
   
   // Clear pre-computed data summary statistics since data has changed
@@ -162,6 +164,9 @@ export async function saveModifiedData(
   // Update document
   await updateChatDocument(doc);
   console.log(`✅ Updated CosmosDB document with blob reference: version ${newVersion}, blob: ${newBlob.blobName}`);
+
+  const { scheduleIndexSessionRag } = await import("../rag/indexSession.js");
+  scheduleIndexSessionRag(sessionId);
 
   return {
     version: newVersion,

@@ -6,9 +6,38 @@
 import { Router, Request, Response } from 'express';
 import { ColumnarStorageService } from '../lib/columnarStorage.js';
 import { metadataService } from '../lib/metadataService.js';
+import { getChatBySessionIdForUser } from '../models/chat.model.js';
+import { getAuthenticatedEmail } from '../utils/auth.helper.js';
 import { sendError, sendValidationError } from '../utils/responseFormatter.js';
 
 const router = Router();
+
+async function assertDataApiAccess(
+  req: Request,
+  res: Response,
+  sessionId: string
+): Promise<boolean> {
+  const email = getAuthenticatedEmail(req);
+  if (!email) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  try {
+    const chat = await getChatBySessionIdForUser(sessionId, email);
+    if (!chat) {
+      res.status(404).json({ error: 'Session not found' });
+      return false;
+    }
+    return true;
+  } catch (e: unknown) {
+    const code = (e as { statusCode?: number })?.statusCode;
+    if (code === 403) {
+      res.status(403).json({ error: 'Forbidden' });
+      return false;
+    }
+    throw e;
+  }
+}
 
 /**
  * Get sampled rows from dataset
@@ -22,6 +51,10 @@ router.get('/:sessionId/sample', async (req: Request, res: Response) => {
 
     if (!sessionId) {
       return sendValidationError(res, 'Session ID is required');
+    }
+
+    if (!(await assertDataApiAccess(req, res, sessionId))) {
+      return;
     }
 
     const storage = new ColumnarStorageService({ sessionId });
@@ -55,6 +88,10 @@ router.get('/:sessionId/metadata', async (req: Request, res: Response) => {
 
     if (!sessionId) {
       return sendValidationError(res, 'Session ID is required');
+    }
+
+    if (!(await assertDataApiAccess(req, res, sessionId))) {
+      return;
     }
 
     // Check cache first
@@ -119,6 +156,10 @@ router.post('/:sessionId/query', async (req: Request, res: Response) => {
       return sendValidationError(res, 'Only SELECT queries are allowed');
     }
 
+    if (!(await assertDataApiAccess(req, res, sessionId))) {
+      return;
+    }
+
     const storage = new ColumnarStorageService({ sessionId });
     await storage.initialize();
 
@@ -159,6 +200,10 @@ router.get('/:sessionId/stats', async (req: Request, res: Response) => {
 
     if (columns.length === 0) {
       return sendValidationError(res, 'At least one column must be specified');
+    }
+
+    if (!(await assertDataApiAccess(req, res, sessionId))) {
+      return;
     }
 
     const storage = new ColumnarStorageService({ sessionId });

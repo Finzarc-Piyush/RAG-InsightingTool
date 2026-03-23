@@ -17,6 +17,17 @@ if (typeof fetch !== 'undefined') {
 }
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8001';
 const REQUEST_TIMEOUT = 300000; // 5 minutes
+const PYTHON_SERVICE_API_KEY = process.env.PYTHON_SERVICE_API_KEY?.trim();
+
+function pythonServiceHeaders(
+  base: Record<string, string> = {}
+): Record<string, string> {
+  const h = { ...base };
+  if (PYTHON_SERVICE_API_KEY) {
+    h['X-Internal-Api-Key'] = PYTHON_SERVICE_API_KEY;
+  }
+  return h;
+}
 
 // Import fs for file operations (to handle large responses)
 import * as fs from 'fs';
@@ -219,6 +230,7 @@ export async function checkPythonServiceHealth(): Promise<boolean> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/health`, {
+      headers: pythonServiceHeaders(),
       method: 'GET',
       signal: controller.signal,
     });
@@ -272,9 +284,9 @@ export async function removeNulls(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/remove-nulls`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -309,9 +321,9 @@ export async function getDataPreview(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/preview`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -338,9 +350,9 @@ export async function getDataSummary(data: Record<string, any>[], column?: strin
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/summary`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify({ data, column }),
       signal: controller.signal,
     });
@@ -368,9 +380,9 @@ export async function getInitialAnalysis(data: Record<string, any>[]): Promise<I
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/initial-analysis`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify({ data }),
       signal: controller.signal,
     });
@@ -407,9 +419,9 @@ export async function createDerivedColumn(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/create-derived-column`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -446,9 +458,9 @@ export async function convertDataType(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/convert-type`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -493,9 +505,9 @@ export async function aggregateData(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/aggregate`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -534,9 +546,9 @@ export async function createPivotTable(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/pivot`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -1009,9 +1021,9 @@ export async function trainMLModel(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/train-model`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -1105,9 +1117,9 @@ export async function identifyOutliers(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/identify-outliers`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -1188,9 +1200,9 @@ export async function treatOutliers(
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/treat-outliers`, {
       method: 'POST',
-      headers: {
+      headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(request),
       signal: controller.signal,
     });

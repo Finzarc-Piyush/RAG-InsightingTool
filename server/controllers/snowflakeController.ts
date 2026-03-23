@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { listDatabases, listSchemas, listTablesInSchema } from '../lib/snowflakeService.js';
 import { createPlaceholderSession } from '../models/chat.model.js';
 import { uploadQueue } from '../utils/uploadQueue.js';
+import { requireUsername, AuthenticationError } from '../utils/auth.helper.js';
 
 /**
  * GET /api/snowflake/databases
@@ -9,9 +10,14 @@ import { uploadQueue } from '../utils/uploadQueue.js';
  */
 export const getSnowflakeDatabases = async (req: Request, res: Response) => {
   try {
+    requireUsername(req);
     const databases = await listDatabases(undefined);
     res.json({ databases });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Snowflake list databases error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list databases. Check server Snowflake config (env).',
@@ -25,6 +31,7 @@ export const getSnowflakeDatabases = async (req: Request, res: Response) => {
  */
 export const getSnowflakeSchemas = async (req: Request, res: Response) => {
   try {
+    requireUsername(req);
     const database = (req.query.database as string)?.trim();
     if (!database) {
       return res.status(400).json({ error: 'Query parameter database is required' });
@@ -32,6 +39,10 @@ export const getSnowflakeSchemas = async (req: Request, res: Response) => {
     const schemas = await listSchemas(database, undefined);
     res.json({ schemas });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Snowflake list schemas error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list schemas.',
@@ -45,6 +56,7 @@ export const getSnowflakeSchemas = async (req: Request, res: Response) => {
  */
 export const getSnowflakeTables = async (req: Request, res: Response) => {
   try {
+    requireUsername(req);
     const database = (req.query.database as string)?.trim();
     const schema = (req.query.schema as string)?.trim();
     if (!database || !schema) {
@@ -53,6 +65,10 @@ export const getSnowflakeTables = async (req: Request, res: Response) => {
     const tables = await listTablesInSchema(database, schema, undefined);
     res.json({ tables });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Snowflake list tables error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list tables.',
@@ -66,6 +82,7 @@ export const getSnowflakeTables = async (req: Request, res: Response) => {
  */
 export const importSnowflakeTable = async (req: Request, res: Response) => {
   try {
+    const usernameHeader = requireUsername(req);
     const { database, schema, tableName } = req.body as { database?: string; schema?: string; tableName?: string };
 
     if (!tableName?.trim()) {
@@ -77,8 +94,6 @@ export const importSnowflakeTable = async (req: Request, res: Response) => {
     if (!schema?.trim()) {
       return res.status(400).json({ error: 'schema is required' });
     }
-
-    const usernameHeader = (req.headers['x-user-email'] as string) || 'anonymous@example.com';
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const displayName = `${database}.${schema}.${tableName}`.trim();
@@ -110,6 +125,10 @@ export const importSnowflakeTable = async (req: Request, res: Response) => {
       message: 'Snowflake import started. Use /api/upload/status/:jobId to check progress.',
     });
   } catch (error) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
     console.error('Snowflake import error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to start Snowflake import',

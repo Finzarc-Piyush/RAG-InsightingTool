@@ -18,7 +18,7 @@ let clientInstance: CosmosClient | null = null;
 function getClient(): CosmosClient {
   if (!clientInstance) {
     if (!COSMOS_ENDPOINT || !COSMOS_KEY) {
-      throw new Error("CosmosDB not configured. Set COSMOS_ENDPOINT and COSMOS_KEY in server/.env");
+      throw new Error("CosmosDB not configured. Set COSMOS_ENDPOINT and COSMOS_KEY in server/server.env");
     }
     clientInstance = new CosmosClient({ endpoint: COSMOS_ENDPOINT, key: COSMOS_KEY });
   }

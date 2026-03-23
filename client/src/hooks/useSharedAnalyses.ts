@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { acquireIdTokenForApi } from "@/auth/msalToken";
 import {
   AnalysisSessionSummary,
   SharedAnalysesResponse,
@@ -92,14 +93,28 @@ export const useSharedAnalyses = () => {
     }
   }, [loadSharedAnalyses, userEmail]);
 
-  const sseUrl = useMemo(() => {
+  const [sseUrl, setSseUrl] = useState<string | null>(null);
+
+  useEffect(() => {
     if (!userEmail) {
-      return null;
+      setSseUrl(null);
+      return;
     }
-    const params = new URLSearchParams({
-      username: userEmail,
-    });
-    return `${API_BASE_URL}/api/shared-analyses/incoming/stream?${params.toString()}`;
+    let cancelled = false;
+    void (async () => {
+      const token = await acquireIdTokenForApi();
+      if (cancelled) return;
+      const params = new URLSearchParams();
+      if (token) {
+        params.set("access_token", token);
+      }
+      setSseUrl(
+        `${API_BASE_URL}/api/shared-analyses/incoming/stream?${params.toString()}`
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [userEmail]);
 
   const handleUpdateEvent = useCallback((event: MessageEvent) => {

@@ -1,6 +1,7 @@
 import { ChartSpec } from '../shared/schema.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 import { normalizeDateToPeriod, parseFlexibleDate, DatePeriod, isDateColumnName } from './dateUtils.js';
+import { inferTemporalGrainFromDates, formatDateForChartAxis } from './temporalGrain.js';
 import { optimizeChartData, downsampleChartData } from './chartDownsampling.js';
 
 // Maximum data points for visualization to ensure good performance
@@ -163,6 +164,31 @@ function downsampleSimple(
 // Helper to parse date strings - use the flexible date parser
 function parseDate(dateStr: string): Date | null {
   return parseFlexibleDate(dateStr);
+}
+
+function chartXLooksTemporal(xCol: string, rows: Record<string, any>[]): boolean {
+  if (rows.length === 0) return false;
+  const xColLower = xCol.toLowerCase();
+  const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xColLower);
+  const sampleXValues = rows.slice(0, Math.min(10, rows.length)).map((row) => String(row[xCol] ?? ''));
+  const dateParseCount = sampleXValues.filter((val) => parseDate(val) !== null).length;
+  return nameSuggestsDate || dateParseCount >= Math.min(3, sampleXValues.length * 0.5);
+}
+
+/** After rows are sorted, replace X with dd/MM/yy, MMM-yy, or yyyy for temporal columns. */
+function applyTemporalXAxisLabels(rows: Record<string, any>[], xCol: string): Record<string, any>[] {
+  if (rows.length === 0 || !chartXLooksTemporal(xCol, rows)) return rows;
+  const dates: Date[] = [];
+  for (const row of rows) {
+    const p = parseDate(String(row[xCol]));
+    if (p) dates.push(p);
+  }
+  const grain = inferTemporalGrainFromDates(dates);
+  return rows.map((row) => {
+    const p = parseDate(String(row[xCol]));
+    if (!p) return row;
+    return { ...row, [xCol]: formatDateForChartAxis(p, grain) };
+  });
 }
 
 // Helper to compare values for sorting - handles dates properly
@@ -369,7 +395,7 @@ export function processChartData(
   // This handles whitespace differences, case variations, and other imperfections
   const matchedX = findMatchingColumn(x, availableColumns);
   const matchedY = findMatchingColumn(y, availableColumns);
-  const matchedY2 = y2 ? findMatchingColumn(y2, availableColumns) : null;
+  let matchedY2 = y2 ? findMatchingColumn(y2, availableColumns) : null;
   
   if (!matchedX) {
     console.warn(`❌ Column "${x}" not found in data for chart: ${chartSpec.title}`);
@@ -697,7 +723,7 @@ export function processChartData(
     });
     
     console.log(`   Bar chart result: ${result.length} bars`);
-    return result;
+    return hasDates ? applyTemporalXAxisLabels(result, xCol) : result;
   }
 
   if (type === 'line' || type === 'area') {
@@ -737,7 +763,7 @@ export function processChartData(
       }
       
       console.log(`   ${type} chart result: ${optimized.length} points (sorted chronologically)`);
-      return optimized;
+      return applyTemporalXAxisLabels(optimized, xCol);
     }
 
     let result = data
@@ -797,7 +823,7 @@ export function processChartData(
     }
     
     console.log(`   ${type} chart result: ${optimized.length} points (sorted chronologically)`);
-    return optimized;
+    return applyTemporalXAxisLabels(optimized, xCol);
   }
 
   console.warn(`❌ Unknown chart type: ${type} for chart: ${chartSpec.title}`);
