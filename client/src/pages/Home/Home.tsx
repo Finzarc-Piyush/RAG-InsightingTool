@@ -61,7 +61,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     resetState,
   } = useHomeState();
 
-  const { uploadMutation, snowflakeImportMutation, chatMutation, cancelChatRequest, thinkingSteps, thinkingTargetTimestamp } = useHomeMutations({
+  const {
+    uploadMutation,
+    snowflakeImportMutation,
+    chatMutation,
+    cancelChatRequest,
+    thinkingSteps,
+    agentWorkbenchLive,
+    thinkingTargetTimestamp,
+  } = useHomeMutations({
     sessionId,
     messages,
     mode,
@@ -317,6 +325,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         onStopGeneration={handleStopGeneration}
         onEditMessage={handleEditMessage}
         thinkingSteps={thinkingSteps}
+        agentWorkbenchLive={agentWorkbenchLive}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
         aiSuggestions={suggestions}
         collaborators={collaborators}

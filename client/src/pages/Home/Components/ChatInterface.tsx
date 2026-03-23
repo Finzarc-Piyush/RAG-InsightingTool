@@ -1,5 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Message, ThinkingStep, TemporalDisplayGrain } from '@/shared/schema';
+import {
+  type AgentWorkbenchEntry,
+  Message,
+  ThinkingStep,
+  TemporalDisplayGrain,
+} from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
@@ -43,7 +48,8 @@ interface ChatInterfaceProps {
   totalColumns?: number;
   onStopGeneration?: () => void;
   onEditMessage?: (messageIndex: number, newContent: string) => void;
-  thinkingSteps?: ThinkingStep[]; // Thinking steps to display during loading
+  thinkingSteps?: ThinkingStep[];
+  agentWorkbenchLive?: AgentWorkbenchEntry[];
   thinkingTargetTimestamp?: number | null;
   aiSuggestions?: string[]; // AI-generated suggestions
   collaborators?: string[]; // List of all collaborators in the session
@@ -120,6 +126,7 @@ export function ChatInterface({
   onStopGeneration,
   onEditMessage,
   thinkingSteps,
+  agentWorkbenchLive = [],
   thinkingTargetTimestamp,
   aiSuggestions,
   collaborators: propCollaborators,
@@ -633,8 +640,27 @@ export function ChatInterface({
             const isLastUserMessage = message.role === 'user' && 
               (idx === filteredMessages.length - 1 || 
                (idx < filteredMessages.length - 1 && filteredMessages[idx + 1].role === 'assistant'));
-            const isThinkingTarget = thinkingTargetTimestamp != null && message.timestamp === thinkingTargetTimestamp;
-            const showThinkingSteps = isThinkingTarget && isLoading && thinkingSteps && thinkingSteps.length > 0;
+            const isThinkingTarget =
+              thinkingTargetTimestamp != null && message.timestamp === thinkingTargetTimestamp;
+            const isUserMsg = message.role === 'user';
+            const panelSteps =
+              isUserMsg && isThinkingTarget
+                ? isLoading
+                  ? (thinkingSteps ?? [])
+                  : (message.thinkingSteps ?? [])
+                : [];
+            const panelWorkbench =
+              isUserMsg && isThinkingTarget
+                ? isLoading
+                  ? agentWorkbenchLive
+                  : (message.agentWorkbench ?? [])
+                : [];
+            const showThinkingPanel =
+              isUserMsg &&
+              isThinkingTarget &&
+              (panelSteps.length > 0 || panelWorkbench.length > 0);
+            const showThinkingStepsForCharts =
+              isThinkingTarget && isLoading && thinkingSteps && thinkingSteps.length > 0;
             return (
               <MessageBubble
                 key={`${message.timestamp}-${message.role}-${idx}`}
@@ -650,7 +676,10 @@ export function ChatInterface({
                 messageIndex={originalIndex >= 0 ? originalIndex : idx}
                 sessionId={sessionId}
                 isLastUserMessage={isLastUserMessage}
-                thinkingSteps={showThinkingSteps ? thinkingSteps : undefined}
+                thinkingSteps={showThinkingStepsForCharts ? thinkingSteps : undefined}
+                thinkingPanelSteps={showThinkingPanel ? panelSteps : undefined}
+                thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
+                thinkingPanelStreaming={showThinkingPanel ? isLoading : false}
                 onSuggestedQuestionClick={onSendMessage}
                 ref={isLastMessage ? lastMessageRef : undefined}
               />

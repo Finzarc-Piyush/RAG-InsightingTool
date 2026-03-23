@@ -7,12 +7,13 @@ import {
 } from '../shared/schema.js';
 import {
   isAgenticLoopEnabled,
-  isAgenticStrictEnabled,
   loadAgentConfigFromEnv,
   buildAgentExecutionContext,
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
+
+let agenticStrictDeprecationLogged = false;
 import { openai, MODEL } from './openai.js';
 import { processChartData } from './chartGenerator.js';
 import { optimizeChartData } from './chartDownsampling.js';
@@ -389,6 +390,8 @@ export interface AnswerQuestionAgentOptions {
   username?: string;
   /** For RAG vector filter (session currentDataBlob.version). */
   dataBlobVersion?: number;
+  /** Throttled sessionAnalysisContext merge during the turn (e.g. tool milestones). */
+  onMidTurnSessionContext?: import('./agents/runtime/types.js').AgentExecutionContext['onMidTurnSessionContext'];
 }
 
 export async function answerQuestion(
@@ -405,13 +408,27 @@ export async function answerQuestion(
   columnarStoragePath?: boolean,
   loadFullData?: () => Promise<Record<string, any>[]>,
   agentOptions?: AnswerQuestionAgentOptions
-): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[]; table?: any; operationResult?: any; agentTrace?: import('./agents/runtime/types.js').AgentTrace }> {
+): Promise<{
+  answer: string;
+  charts?: ChartSpec[];
+  insights?: Insight[];
+  table?: any;
+  operationResult?: any;
+  agentTrace?: import('./agents/runtime/types.js').AgentTrace;
+  agentSuggestionHints?: string[];
+}> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
   console.log('📋 SessionId:', sessionId);
   console.log('📊 Data rows:', data?.length);
 
   if (isAgenticLoopEnabled()) {
+    if (!agenticStrictDeprecationLogged && process.env.AGENTIC_STRICT === "false") {
+      console.warn(
+        "AGENTIC_STRICT=false is ignored when AGENTIC_LOOP_ENABLED=true (no legacy orchestrator fallback)."
+      );
+      agenticStrictDeprecationLogged = true;
+    }
     try {
       const config = loadAgentConfigFromEnv();
       const execCtx = buildAgentExecutionContext({
@@ -429,6 +446,7 @@ export async function answerQuestion(
         dataBlobVersion: agentOptions?.dataBlobVersion,
         loadFullData,
         streamPreAnalysis: agentOptions?.streamPreAnalysis,
+        onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
       });
       const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
       if (loopResult?.answer?.trim()) {
@@ -440,40 +458,29 @@ export async function answerQuestion(
           table: loopResult.table,
           operationResult: loopResult.operationResult,
           agentTrace: loopResult.agentTrace,
+          agentSuggestionHints: loopResult.agentSuggestionHints,
         };
       }
-      if (isAgenticStrictEnabled()) {
-        console.warn('⚠️ Agentic loop returned empty (AGENTIC_STRICT: no legacy fallback)');
-        return {
-          answer:
-            "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
-          charts: loopResult?.charts,
-          insights: loopResult?.insights,
-          table: loopResult?.table,
-          operationResult: loopResult?.operationResult,
-          agentTrace: loopResult?.agentTrace,
-        };
-      }
-      console.warn('⚠️ Agentic loop returned empty; falling back to legacy orchestrator');
+      console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
+      return {
+        answer:
+          "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
+        charts: loopResult?.charts,
+        insights: loopResult?.insights,
+        table: loopResult?.table,
+        operationResult: loopResult?.operationResult,
+        agentTrace: loopResult?.agentTrace,
+        agentSuggestionHints: loopResult?.agentSuggestionHints,
+      };
     } catch (agenticErr) {
-      if (isAgenticStrictEnabled()) {
-        const detail =
-          agenticErr instanceof Error ? agenticErr.message : String(agenticErr);
-        const safe = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
-        console.error('❌ Agentic loop error (AGENTIC_STRICT: no legacy fallback):', agenticErr);
-        return {
-          answer: `The analysis agent encountered an error (${safe}). Please try again.`,
-        };
-      }
-      console.error('❌ Agentic loop error, falling back:', agenticErr);
+      const detail =
+        agenticErr instanceof Error ? agenticErr.message : String(agenticErr);
+      const safe = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
+      console.error('❌ Agentic loop error (no legacy fallback):', agenticErr);
+      return {
+        answer: `The analysis agent encountered an error (${safe}). Please try again.`,
+      };
     }
-  }
-
-  if (isAgenticLoopEnabled() && isAgenticStrictEnabled()) {
-    return {
-      answer:
-        "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
-    };
   }
   
   // PRIORITY CHECK: For information-seeking queries, route directly to query execution

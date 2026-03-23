@@ -10,6 +10,7 @@ import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
 import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 
 export interface AnswerQuestionDataLoadResult {
   latestData: Record<string, any>[];
@@ -59,6 +60,12 @@ export async function resolveAnswerQuestionDataLoad(params: {
     } catch (error) {
       console.warn("⚠️ Failed to extract required columns, loading full/latest data:", error);
     }
+  }
+
+  // Agentic loop: always retain full schema columns in memory so follow-ups are not missing dimensions.
+  if (isAgenticLoopEnabled() && chatDocument.dataSummary?.columns?.length) {
+    const allNames = chatDocument.dataSummary.columns.map((c) => c.name);
+    requiredColumns = Array.from(new Set([...requiredColumns, ...allNames]));
   }
 
   const queryFilters = parsedQuery

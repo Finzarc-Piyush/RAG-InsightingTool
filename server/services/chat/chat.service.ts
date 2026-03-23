@@ -103,7 +103,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
                                      /\b(?:aggregated?\s+value|aggregate|total|sum)\s+(?:for|of|in)\s+(?:the\s+)?column\s+category\s+[\w\s]+/i.test(message);
 
   let cachedResult: ProcessChatMessageResult | null = null;
-  if (!isAggregationWithCategory) {
+  if (!isAgenticLoopEnabled() && !isAggregationWithCategory) {
     cachedResult = queryCache.get<ProcessChatMessageResult>(
       sessionId,
       message,
@@ -113,6 +113,8 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       console.log(`✅ Returning cached result`);
       return cachedResult;
     }
+  } else if (isAgenticLoopEnabled()) {
+    console.log(`🔄 Skipping query cache (agentic loop — non-deterministic traces)`);
   } else {
     console.log(`🔄 Skipping cache for aggregation query (data operation)`);
   }
@@ -199,7 +201,8 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     suggestions = await generateAISuggestions(
       updatedChatHistory,
       chatDocument.dataSummary,
-      validated.answer
+      validated.answer,
+      answerResult.agentSuggestionHints
     );
   } catch (error) {
     console.error('Failed to generate suggestions:', error);
@@ -282,10 +285,11 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     insights: validated.insights,
     suggestions,
   };
-  
-  // Cache the result
-  queryCache.set(sessionId, message, requiredColumns, result);
-  
+
+  if (!isAgenticLoopEnabled()) {
+    queryCache.set(sessionId, message, requiredColumns, result);
+  }
+
   return result;
 }
 

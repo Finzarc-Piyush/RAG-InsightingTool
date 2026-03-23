@@ -41,6 +41,30 @@ export const thinkingStepSchema = z.object({
 
 export type ThinkingStep = z.infer<typeof thinkingStepSchema>;
 
+/** One block in the agent “workbench” UI (plan, tool I/O, parsed query). Kept small for Cosmos. */
+export const agentWorkbenchEntryKindSchema = z.enum([
+  "plan",
+  "tool_call",
+  "tool_result",
+  "critic",
+  "query_spec",
+]);
+
+export const agentWorkbenchEntrySchema = z.object({
+  id: z.string().max(200),
+  kind: agentWorkbenchEntryKindSchema,
+  title: z.string().max(500),
+  /** Display text (JSON, pseudo-code, etc.); cap enforced when appending server-side */
+  code: z.string().max(12000),
+  language: z.string().max(32).optional(),
+});
+
+export type AgentWorkbenchEntry = z.infer<typeof agentWorkbenchEntrySchema>;
+
+export const agentWorkbenchSchema = z.array(agentWorkbenchEntrySchema).max(48);
+
+export type AgentWorkbench = z.infer<typeof agentWorkbenchSchema>;
+
 // Chat Messages
 export const datasetProfileSchema = z.object({
   shortDescription: z.string(),
@@ -85,7 +109,7 @@ export const sessionAnalysisContextSchema = z.object({
   }),
   suggestedFollowUps: z.array(z.string().max(300)).max(12),
   lastUpdated: z.object({
-    reason: z.enum(["seed", "user_context", "assistant_turn"]),
+    reason: z.enum(["seed", "user_context", "assistant_turn", "mid_turn"]),
     at: z.string().max(40),
   }),
 });
@@ -100,7 +124,9 @@ export const messageSchema = z.object({
   /** LLM-suggested starter questions (initial upload message). */
   suggestedQuestions: z.array(z.string()).optional(),
   timestamp: z.number(),
-  thinkingSteps: z.array(thinkingStepSchema).optional(), // Temporary thinking steps shown during processing
+  thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
+  /** Normalized agent activity blocks for the workbench UI (capped server-side) */
+  agentWorkbench: agentWorkbenchSchema.optional(),
   userEmail: z.string().optional(), // Email of the user who sent the message (for shared analyses)
   preview: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).optional(), // Preview data for data operations (aggregate, pivot, etc.)
   summary: z.array(z.any()).optional(), // Summary data for data operations
@@ -120,6 +146,15 @@ export const dataSummarySchema = z.object({
     name: z.string(),
     type: z.string(),
     sampleValues: z.array(z.union([z.string(), z.number(), z.null()])),
+    /** Capped frequent values for low-cardinality string columns (optional). */
+    topValues: z
+      .array(
+        z.object({
+          value: z.union([z.string(), z.number()]),
+          count: z.number(),
+        })
+      )
+      .optional(),
     temporalDisplayGrain: temporalDisplayGrainSchema.optional(),
   })),
   numericColumns: z.array(z.string()),

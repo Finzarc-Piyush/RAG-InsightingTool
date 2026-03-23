@@ -30,25 +30,29 @@ export async function runPlanner(
   priorObservationsText?: string,
   workingMemoryBlock?: string
 ): Promise<PlannerOutput | null> {
-  const tools = registry.listToolDescriptions();
+  const tools = registry.formatToolManifestForPlanner();
   const modeNote =
     ctx.mode === "dataOps"
-      ? "Mode is dataOps: you may use delegate_data_ops for mutations; use delegate_general_analysis for analysis-style questions in this mode when appropriate."
-      : "Mode is analysis: do not use delegate_data_ops.";
+      ? "Mode is dataOps: use run_data_ops for data transformations/mutations when appropriate; use analysis tools (run_analytical_query, etc.) for numeric analysis. Do not use run_data_ops for pure analysis questions."
+      : "Mode is analysis: do not use run_data_ops (dataOps-only).";
 
   const system = `You are a planner for a data analysis assistant. Choose a short ordered list of tool calls.
-Available tools: ${tools}.
+
+Tools (read each tool's args carefully — strict schemas; wrong keys fail):
+${tools}
+
 ${modeNote}
 Rules:
 - Prefer get_schema_summary first if the question is broad.
-- Use retrieve_semantic_context when the user asks about themes, wording, or details that may appear in free-text or narrative parts of the dataset; pass a focused query string in args.query.
-- Use run_analytical_query for totals, filters, aggregates (authoritative numbers — prefer over RAG text).
+- retrieve_semantic_context: **required** args.query (string) for narrative/themes/wording — never put "query" on run_analytical_query.
+- run_analytical_query: only optional question_override; **never** use a "query" key here.
+- Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column.
-- Use build_chart only when the user wants a visualization; x and y must be exact column names from the schema.
+- Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends); x and y must be exact column names from the schema. Chain build_chart after run_analytical_query when the analytical result is suitable for plotting.
 - Use clarify_user if critical information is missing.
-- Use delegate_general_analysis as a fallback for complex open-ended analysis not covered by other tools.
+- Compose multiple tools instead of a single catch-all; there is no legacy "delegate" tool.
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
-- If "Prior tool observations" or "Structured working memory" are present, use them for later-step args (columns, filters). Do not ignore successful tool output.
+- If "Prior tool observations" or "Structured working memory" are present, use them for later-step args (columns, filters). Do not ignore successful tool output. If a prior step failed or returned a near–full-table result without useful summary, replan with a clearer question_override or add a follow-up tool.
 - At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan).
 
 Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string}]}`;
@@ -93,6 +97,9 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
 
   for (const step of stepsWithMeta) {
     if (!allowed.has(step.tool)) {
+      return null;
+    }
+    if (!registry.argsValidForTool(step.tool, step.args)) {
       return null;
     }
     if (!validateStepColumnArgs(step, colNames)) {

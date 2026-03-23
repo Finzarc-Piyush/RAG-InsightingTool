@@ -30,6 +30,16 @@ export interface ExclusionFilter {
   values: Array<string | number>;
 }
 
+/** Categorical / string dimension filters (use instead of valueFilters for non-numeric columns). */
+export type DimensionMatchMode = 'exact' | 'case_insensitive' | 'contains';
+
+export interface DimensionFilter {
+  column: string;
+  op: 'in' | 'not_in';
+  values: string[];
+  match?: DimensionMatchMode;
+}
+
 export interface TopBottomRequest {
   type: 'top' | 'bottom';
   column: string;
@@ -58,6 +68,8 @@ export interface ParsedQuery {
   dateAggregationPeriod?: 'day' | 'month' | 'monthOnly' | 'quarter' | 'year' | null;
   timeFilters?: TimeFilter[];
   valueFilters?: ValueFilter[];
+  /** Filter string dimensions (e.g. Category in ["Technology"]). Do not use valueFilters for that. */
+  dimensionFilters?: DimensionFilter[];
   exclusionFilters?: ExclusionFilter[];
   logicalOperator?: LogicalOperator;
   topBottom?: TopBottomRequest;

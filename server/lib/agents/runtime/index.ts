@@ -1,3 +1,4 @@
+export { assertAgenticRagConfiguration } from "./assertAgenticRag.js";
 export {
   isAgenticLoopEnabled,
   isAgenticStrictEnabled,
@@ -5,6 +6,7 @@ export {
   AGENT_TRACE_MAX_BYTES,
   type AgentConfig,
   type AgentExecutionContext,
+  type AgentMidTurnSessionPayload,
   type AgentLoopResult,
   type AgentTrace,
   type StreamPreAnalysis,

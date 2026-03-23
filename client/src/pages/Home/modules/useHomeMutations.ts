@@ -1,5 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Message, UploadResponse, ChatResponse, ThinkingStep, TemporalDisplayGrain } from '@/shared/schema';
+import {
+  AgentWorkbenchEntry,
+  Message,
+  UploadResponse,
+  ChatResponse,
+  ThinkingStep,
+  TemporalDisplayGrain,
+} from '@/shared/schema';
 import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi, getUploadJobStatus } from '@/lib/api';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
@@ -61,7 +68,13 @@ export const useHomeMutations = ({
   const uploadPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
   const messagesRef = useRef<Message[]>(messages);
+  /** Survives onDone state clears so onSuccess can attach trace to the user message. */
+  const turnTraceRef = useRef<{ steps: ThinkingStep[]; workbench: AgentWorkbenchEntry[] }>({
+    steps: [],
+    workbench: [],
+  });
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
+  const [agentWorkbenchLive, setAgentWorkbenchLive] = useState<AgentWorkbenchEntry[]>([]);
   const [thinkingTargetTimestamp, setThinkingTargetTimestamp] = useState<number | null>(null);
   
   // Keep messagesRef in sync with messages
@@ -349,8 +362,10 @@ export const useHomeMutations = ({
         return [...prev, optimisticUserMessage];
       });
       
-      // Clear previous thinking steps
+      // Clear previous thinking / workbench trace
+      turnTraceRef.current = { steps: [], workbench: [] };
       setThinkingSteps([]);
+      setAgentWorkbenchLive([]);
       setThinkingTargetTimestamp(null);
       
       logger.log('📤 Sending chat message:', message);
@@ -392,12 +407,16 @@ export const useHomeMutations = ({
                 logger.log('🧠 Data Ops thinking step received:', step);
                 setThinkingSteps((prev) => {
                   const existingIndex = prev.findIndex(s => s.step === step.step);
-                  if (existingIndex >= 0) {
-                    const updated = [...prev];
-                    updated[existingIndex] = step;
-                    return updated;
-                  }
-                  return [...prev, step];
+                  const next =
+                    existingIndex >= 0
+                      ? (() => {
+                          const updated = [...prev];
+                          updated[existingIndex] = step;
+                          return updated;
+                        })()
+                      : [...prev, step];
+                  turnTraceRef.current = { ...turnTraceRef.current, steps: next };
+                  return next;
                 });
               },
               onResponse: (response: DataOpsResponse) => {
@@ -410,13 +429,16 @@ export const useHomeMutations = ({
               },
               onError: (error: Error) => {
                 logger.error('❌ Data Ops API request failed:', error);
+                turnTraceRef.current = { steps: [], workbench: [] };
                 setThinkingSteps([]);
+                setAgentWorkbenchLive([]);
                 setThinkingTargetTimestamp(null);
                 reject(error);
               },
               onDone: () => {
                 logger.log('✅ Data Ops stream completed');
                 setThinkingSteps([]);
+                setAgentWorkbenchLive([]);
                 setThinkingTargetTimestamp(null);
                 if (responseData) {
                   // Convert DataOpsResponse to ChatResponse format
@@ -440,11 +462,15 @@ export const useHomeMutations = ({
           ).catch((error: any) => {
             if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
               logger.log('🚫 Data Ops request was cancelled by user');
+              turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               reject(new Error('Request cancelled'));
             } else {
+              turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               reject(error);
             }
@@ -467,7 +493,9 @@ export const useHomeMutations = ({
             onQueued: () => {
               if (streamResolved) return;
               streamResolved = true;
+              turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               resolve({
                 answer: '',
@@ -481,15 +509,31 @@ export const useHomeMutations = ({
               logger.log('🧠 Thinking step received:', step);
               setThinkingSteps((prev) => {
                 const existingIndex = prev.findIndex(s => s.step === step.step);
-                if (existingIndex >= 0) {
-                  const updated = [...prev];
-                  updated[existingIndex] = step;
-                  logger.log('🔄 Updated thinking steps:', updated);
-                  return updated;
-                }
-                const newSteps = [...prev, step];
-                logger.log('➕ Added thinking step. Total steps:', newSteps.length);
-                return newSteps;
+                const next =
+                  existingIndex >= 0
+                    ? (() => {
+                        const updated = [...prev];
+                        updated[existingIndex] = step;
+                        logger.log('🔄 Updated thinking steps:', updated);
+                        return updated;
+                      })()
+                    : (() => {
+                        const newSteps = [...prev, step];
+                        logger.log('➕ Added thinking step. Total steps:', newSteps.length);
+                        return newSteps;
+                      })();
+                turnTraceRef.current = { ...turnTraceRef.current, steps: next };
+                return next;
+              });
+            },
+            onAgentEvent: (event: string, data: unknown) => {
+              if (event !== 'workbench') return;
+              const entry = (data as { entry?: AgentWorkbenchEntry }).entry;
+              if (!entry) return;
+              setAgentWorkbenchLive((prev) => {
+                const next = [...prev, entry];
+                turnTraceRef.current = { ...turnTraceRef.current, workbench: next };
+                return next;
               });
             },
             onResponse: (response: ChatResponse) => {
@@ -498,13 +542,16 @@ export const useHomeMutations = ({
             },
             onError: (error: Error) => {
               logger.error('❌ API request failed:', error);
+              turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               reject(error);
             },
             onDone: () => {
               logger.log('✅ Stream completed');
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               if (streamResolved) return;
               if (responseData) {
@@ -520,11 +567,15 @@ export const useHomeMutations = ({
         ).catch((error: any) => {
             if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
             logger.log('🚫 Request was cancelled by user');
+              turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
             reject(new Error('Request cancelled'));
           } else {
+            turnTraceRef.current = { steps: [], workbench: [] };
             setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
             reject(error);
           }
@@ -541,6 +592,7 @@ export const useHomeMutations = ({
 
       if ((data as ChatResponse & { queuedUntilEnrichment?: boolean }).queuedUntilEnrichment) {
         pendingUserMessageRef.current = null;
+        turnTraceRef.current = { steps: [], workbench: [] };
         toast({
           title: 'Message queued',
           description:
@@ -549,11 +601,12 @@ export const useHomeMutations = ({
         return;
       }
 
-      // Clear pending message ref since request completed successfully
+      const pendingTs = pendingUserMessageRef.current?.timestamp;
       pendingUserMessageRef.current = null;
 
       if (!data.answer || data.answer.trim().length === 0) {
         logger.error('❌ Empty answer received from server!');
+        turnTraceRef.current = { steps: [], workbench: [] };
         toast({
           title: 'Error',
           description: 'Received empty response from server. Please try again.',
@@ -579,10 +632,27 @@ export const useHomeMutations = ({
         contentLength: assistantMessage.content?.length || 0
       });
       
+      const traceSnapshot = turnTraceRef.current;
+      turnTraceRef.current = { steps: [], workbench: [] };
+
       setMessages((prev) => {
-        // Simply append the message - no deduplication, no cleaning
-        // Messages are already saved to CosmosDB by the backend during processing
-        const updated = [...prev, assistantMessage];
+        const withTrace =
+          pendingTs != null && (traceSnapshot.steps.length > 0 || traceSnapshot.workbench.length > 0)
+            ? prev.map((m) =>
+                m.role === 'user' && m.timestamp === pendingTs
+                  ? {
+                      ...m,
+                      ...(traceSnapshot.steps.length > 0
+                        ? { thinkingSteps: [...traceSnapshot.steps] }
+                        : {}),
+                      ...(traceSnapshot.workbench.length > 0
+                        ? { agentWorkbench: [...traceSnapshot.workbench] }
+                        : {}),
+                    }
+                  : m
+              )
+            : prev;
+        const updated = [...withTrace, assistantMessage];
         console.log('📋 Total messages now:', updated.length);
         return updated;
       });
@@ -596,7 +666,9 @@ export const useHomeMutations = ({
       // Clear pending message ref
       const pendingMessage = pendingUserMessageRef.current;
       pendingUserMessageRef.current = null;
-      
+      turnTraceRef.current = { steps: [], workbench: [] };
+      setAgentWorkbenchLive([]);
+
       // Don't show toast for cancelled requests
       if (error instanceof Error && error.message === 'Request cancelled') {
         // Remove the user message that was added when the request was sent
@@ -634,7 +706,9 @@ export const useHomeMutations = ({
       
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+      turnTraceRef.current = { steps: [], workbench: [] };
       setThinkingSteps([]);
+      setAgentWorkbenchLive([]);
       setThinkingTargetTimestamp(null);
       
       // Remove the user message that was added when the request was sent
@@ -695,7 +769,8 @@ export const useHomeMutations = ({
     snowflakeImportMutation,
     chatMutation,
     cancelChatRequest,
-    thinkingSteps, // Export thinking steps for display
+    thinkingSteps,
+    agentWorkbenchLive,
     thinkingTargetTimestamp,
   };
 };

@@ -13,7 +13,12 @@ export async function retrieveRagHits(params: {
   question: string;
   summary: DataSummary;
   dataVersion?: number;
-}): Promise<{ hits: RagHit[]; suggestedColumns: string[] }> {
+}): Promise<{
+  hits: RagHit[];
+  suggestedColumns: string[];
+  /** Set when Search/embed API failed (distinct from zero hits). */
+  retrievalError?: string;
+}> {
   if (!isRagEnabled()) {
     return { hits: [], suggestedColumns: [] };
   }
@@ -31,6 +36,7 @@ export async function retrieveRagHits(params: {
     };
   } catch (e) {
     console.error("⚠️ RAG retrieve failed:", e);
-    return { hits: [], suggestedColumns: [] };
+    const msg = e instanceof Error ? e.message : String(e);
+    return { hits: [], suggestedColumns: [], retrievalError: msg };
   }
 }

@@ -10,30 +10,7 @@ import { openai } from '../openai.js';
 import { getFileFromBlob } from '../blobStorage.js';
 import { parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
 
-/**
- * Identify if a column is an ID column (identifier field)
- * ID columns match patterns like: *_id, order_id, item_id, customer_id, etc.
- */
-export function isIdColumn(columnName: string): boolean {
-  const lower = columnName.toLowerCase();
-  // Match patterns: *_id, *_ID, or explicit patterns like order_id, item_id
-  return /_id$|^id$|_id_/i.test(columnName) || 
-         ['order_id', 'item_id', 'customer_id', 'user_id', 'product_id', 'transaction_id'].includes(lower);
-}
-
-/**
- * Generate a meaningful count name for an ID column
- * e.g., "order_id" -> "order_count", "item_id" -> "item_count"
- */
-export function getCountNameForIdColumn(columnName: string): string {
-  const lower = columnName.toLowerCase();
-  // Remove _id suffix and add _count
-  if (lower.endsWith('_id')) {
-    return lower.replace(/_id$/, '_count');
-  }
-  // For "id" or other patterns, use generic count name
-  return `${lower}_count`;
-}
+export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
 
 // Streaming configuration for large datasets
 const LARGE_DATASET_THRESHOLD = 50000; // 50k rows

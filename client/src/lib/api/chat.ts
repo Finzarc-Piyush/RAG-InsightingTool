@@ -1,6 +1,6 @@
 import { API_BASE_URL } from "@/lib/config";
 import { getUserEmail } from "@/utils/userStorage";
-import { ChatResponse, ThinkingStep } from "@/shared/schema";
+import { AgentWorkbenchEntry, ChatResponse, ThinkingStep } from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { getAuthorizationHeader } from "@/auth/msalToken";
 
@@ -207,6 +207,12 @@ function dispatchEvent(
     case "tool_result":
     case "critic_verdict":
       callbacks.onAgentEvent?.(eventType, payload);
+      break;
+    case "workbench":
+      callbacks.onAgentEvent?.(
+        "workbench",
+        payload as { entry?: AgentWorkbenchEntry }
+      );
       break;
     default:
       break;

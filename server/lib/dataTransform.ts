@@ -1,7 +1,17 @@
-import { ParsedQuery, TimeFilter, ValueFilter, ExclusionFilter, AggregationRequest, SortRequest, TopBottomRequest, AggregationOperation } from '../shared/queryTypes.js';
+import {
+  ParsedQuery,
+  TimeFilter,
+  ValueFilter,
+  ExclusionFilter,
+  AggregationRequest,
+  SortRequest,
+  TopBottomRequest,
+  AggregationOperation,
+  DimensionFilter,
+} from '../shared/queryTypes.js';
 import { DataSummary } from '../shared/schema.js';
 import { normalizeDateToPeriod, DatePeriod, parseFlexibleDate } from './dateUtils.js';
-import { isIdColumn, getCountNameForIdColumn } from './dataOps/dataOpsOrchestrator.js';
+import { isIdColumn, getCountNameForIdColumn } from './columnIdHeuristics.js';
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -180,7 +190,63 @@ function applyTimeFilter(
   return { data: result, description };
 }
 
-function applyValueFilter(data: Record<string, any>[], filter: ValueFilter): { data: Record<string, any>[]; description?: string } {
+function normalizeDimensionCell(value: unknown, mode: DimensionFilter['match']): string {
+  const s = value === null || value === undefined ? '' : String(value).trim();
+  if (mode === 'case_insensitive' || mode === 'contains') {
+    return s.toLowerCase();
+  }
+  return s;
+}
+
+function rowMatchesDimensionFilter(row: Record<string, any>, filter: DimensionFilter): boolean {
+  const mode = filter.match || 'exact';
+  const raw = row[filter.column];
+  const cell = normalizeDimensionCell(raw, mode);
+  const targets = filter.values.map((v) =>
+    mode === 'case_insensitive' || mode === 'contains' ? v.trim().toLowerCase() : v.trim()
+  );
+
+  let hit: boolean;
+  if (mode === 'contains') {
+    hit = targets.some((t) => t.length > 0 && cell.includes(t));
+  } else {
+    hit = targets.some((t) => t === cell);
+  }
+
+  return filter.op === 'in' ? hit : !hit;
+}
+
+function applyDimensionFilter(
+  data: Record<string, any>[],
+  filter: DimensionFilter
+): { data: Record<string, any>[]; description?: string } {
+  if (!filter.column || !filter.values?.length) {
+    return { data };
+  }
+  const result = data.filter((row) => rowMatchesDimensionFilter(row, filter));
+  const vals = filter.values.join(', ');
+  const desc =
+    filter.op === 'in'
+      ? `${filter.column} in [${vals}] (${filter.match || 'exact'})`
+      : `${filter.column} not in [${vals}] (${filter.match || 'exact'})`;
+  if (result.length === 0 && data.length > 0) {
+    console.warn(`⚠️ Dimension filter removed ALL rows: ${desc}`);
+  }
+  return { data: result, description: desc };
+}
+
+function applyValueFilter(
+  data: Record<string, any>[],
+  filter: ValueFilter,
+  summary: DataSummary
+): { data: Record<string, any>[]; description?: string } {
+  if (!summary.numericColumns.includes(filter.column)) {
+    console.warn(
+      `⚠️ Skipping valueFilter on non-numeric column "${filter.column}" — use dimensionFilters for categorical filters.`
+    );
+    return { data, description: `(skipped valueFilter on non-numeric column ${filter.column})` };
+  }
+
   // Calculate reference value once if needed (for mean, median, etc.)
   let referenceVal: number | null = null;
   if (filter.reference) {
@@ -756,15 +822,27 @@ function applyFiltersStreaming(
     }
   }
 
+  if (parsed.dimensionFilters) {
+    for (const filter of parsed.dimensionFilters) {
+      const batchResults = processBatches(workingData, batchSize, (batch) => {
+        const { data: filtered } = applyDimensionFilter(batch, filter);
+        return filtered;
+      });
+      workingData = batchResults.flat();
+      const { description } = applyDimensionFilter([], filter);
+      if (description) descriptions.push(description);
+    }
+  }
+
   // Apply value filters in batches
   if (parsed.valueFilters) {
     for (const filter of parsed.valueFilters) {
       const batchResults = processBatches(workingData, batchSize, (batch) => {
-        const { data: filtered } = applyValueFilter(batch, filter);
+        const { data: filtered } = applyValueFilter(batch, filter, summary);
         return filtered;
       });
       workingData = batchResults.flat();
-      const { description } = applyValueFilter([], filter);
+      const { description } = applyValueFilter([], filter, summary);
       if (description) descriptions.push(description);
     }
   }
@@ -898,11 +976,22 @@ export function applyQueryTransformations(
     }
   }
 
+  if (parsed.dimensionFilters) {
+    for (const filter of parsed.dimensionFilters) {
+      console.log(`🔍 Applying dimension filter: ${filter.column} ${filter.op} [${filter.values.join(', ')}]`);
+      console.log(`   Data before filter: ${workingData.length} rows`);
+      const { data: filtered, description } = applyDimensionFilter(workingData, filter);
+      workingData = filtered;
+      console.log(`   Data after filter: ${workingData.length} rows`);
+      if (description) descriptions.push(description);
+    }
+  }
+
   if (parsed.valueFilters) {
     for (const filter of parsed.valueFilters) {
       console.log(`🔍 Applying value filter: ${filter.column} ${filter.operator} ${filter.reference || filter.value}`);
       console.log(`   Data before filter: ${workingData.length} rows`);
-      const { data: filtered, description } = applyValueFilter(workingData, filter);
+      const { data: filtered, description } = applyValueFilter(workingData, filter, summary);
       workingData = filtered;
       console.log(`   Data after filter: ${workingData.length} rows`);
       if (description) descriptions.push(description);

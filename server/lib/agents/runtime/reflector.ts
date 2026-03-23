@@ -9,6 +9,11 @@ export async function runReflector(
     observations: string[];
     lastTool: string;
     lastOk: boolean;
+    lastAnalyticalMeta?: {
+      inputRowCount: number;
+      outputRowCount: number;
+      appliedAggregation: boolean;
+    };
   },
   turnId: string,
   onLlmCall: () => void
@@ -18,10 +23,15 @@ Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify","note":string
 - continue: more planned steps should run
 - finish: we have enough to answer the user
 - replan: the plan is wrong (rare)
-- clarify: need user input (set clarify_message)`;
+- clarify: need user input (set clarify_message)
+Use Last analytical metadata when present: if run_analytical_query failed (ok=false) or appliedAggregation is false with output row count nearly equal to input row count, prefer continue or replan over finish until an aggregated result or a clear row-level answer exists. If outputRows=0 but inputRows is large, prefer replan (retry with dimensionFilters / case_insensitive / fewer dimensions) over finish or clarify — observations often include distinct value samples to fix filters. If a chart would help comparisons and none was produced yet, prefer continue.`;
 
   const appendix = appendixForReflectorPrompt(ctx);
-  const head = `Question: ${ctx.question}${appendix}\nLast tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
+  const metaLine =
+    payload.lastAnalyticalMeta ?
+      `Last analytical metadata: inputRows=${payload.lastAnalyticalMeta.inputRowCount}, outputRows=${payload.lastAnalyticalMeta.outputRowCount}, appliedAggregation=${payload.lastAnalyticalMeta.appliedAggregation}\n`
+      : "";
+  const head = `Question: ${ctx.question}${appendix}\n${metaLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
   const obsMax = Math.max(0, 6000 - head.length);
   const user = `${head}${payload.observations.join("\n---\n").slice(0, obsMax)}`;
 

@@ -41,6 +41,28 @@ export const thinkingStepSchema = z.object({
 
 export type ThinkingStep = z.infer<typeof thinkingStepSchema>;
 
+export const agentWorkbenchEntryKindSchema = z.enum([
+  "plan",
+  "tool_call",
+  "tool_result",
+  "critic",
+  "query_spec",
+]);
+
+export const agentWorkbenchEntrySchema = z.object({
+  id: z.string().max(200),
+  kind: agentWorkbenchEntryKindSchema,
+  title: z.string().max(500),
+  code: z.string().max(12000),
+  language: z.string().max(32).optional(),
+});
+
+export type AgentWorkbenchEntry = z.infer<typeof agentWorkbenchEntrySchema>;
+
+export const agentWorkbenchSchema = z.array(agentWorkbenchEntrySchema).max(48);
+
+export type AgentWorkbench = z.infer<typeof agentWorkbenchSchema>;
+
 // Chat Messages
 export const datasetProfileSchema = z.object({
   shortDescription: z.string(),
@@ -98,7 +120,8 @@ export const messageSchema = z.object({
   insights: z.array(insightSchema).optional(),
   suggestedQuestions: z.array(z.string()).optional(),
   timestamp: z.number(),
-  thinkingSteps: z.array(thinkingStepSchema).optional(), // Temporary thinking steps shown during processing
+  thinkingSteps: z.array(thinkingStepSchema).optional(),
+  agentWorkbench: agentWorkbenchSchema.optional(),
   userEmail: z.string().optional(), // Email of the user who sent the message (for shared analyses)
   agentTrace: z.record(z.unknown()).optional(),
 });
@@ -116,6 +139,14 @@ export const dataSummarySchema = z.object({
       name: z.string(),
       type: z.string(),
       sampleValues: z.array(z.union([z.string(), z.number(), z.null()])),
+      topValues: z
+        .array(
+          z.object({
+            value: z.union([z.string(), z.number()]),
+            count: z.number(),
+          })
+        )
+        .optional(),
       temporalDisplayGrain: temporalDisplayGrainSchema.optional(),
     })
   ),

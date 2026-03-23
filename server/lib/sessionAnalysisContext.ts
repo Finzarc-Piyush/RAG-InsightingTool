@@ -7,6 +7,10 @@ import {
   type SessionAnalysisContext,
 } from "../shared/schema.js";
 import { completeJson } from "./agents/runtime/llmJson.js";
+import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
+import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
+
+export { withImmutableUserIntentFromPrevious };
 
 const ISO = () => new Date().toISOString();
 
@@ -42,9 +46,9 @@ Preserve dataset.* unless the user clearly corrects domain facts. Cap array leng
 Set lastUpdated.reason to "user_context" and lastUpdated.at to current ISO-8601.`;
 
 const MERGE_ASSISTANT_SYSTEM = `You output only a JSON object matching the given schema (version 1).
-You receive PREVIOUS_JSON and ASSISTANT_MESSAGE (and optional TOOL_TRACE_SUMMARY). Update sessionKnowledge.facts and analysesDone with durable takeaways from the assistant reply; refresh suggestedFollowUps if appropriate.
-Do not wipe prior userIntent or dataset unless the message explicitly overrides them.
-Set lastUpdated.reason to "assistant_turn" and lastUpdated.at to current ISO-8601.`;
+You receive PREVIOUS_JSON and ASSISTANT_MESSAGE (and optional TOOL_TRACE_SUMMARY). Update sessionKnowledge.facts and analysesDone with durable takeaways from the assistant reply. You may prune or merge duplicate/stale entries in sessionKnowledge and shorten suggestedFollowUps when the list is noisy; keep only high-value follow-ups.
+Copy dataset.* forward unless the message clearly corrects domain facts. Do NOT modify userIntent in any way (it is merged only from user messages).
+Set lastUpdated.reason to "assistant_turn" for full assistant replies, or "mid_turn" when ASSISTANT_MESSAGE starts with "[mid_turn]", and lastUpdated.at to current ISO-8601.`;
 
 function compactSummaryForPrompt(summary: DataSummary) {
   return {
@@ -117,7 +121,31 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     console.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);
     return prev;
   }
-  return out.data;
+  const merged = out.data;
+  return withImmutableUserIntentFromPrevious(prev, merged);
+}
+
+/** Lightweight rolling merge during the agent turn (throttled by caller). */
+export async function persistMidTurnAssistantSessionContext(params: {
+  sessionId: string;
+  username: string;
+  summary: string;
+  tool?: string;
+  ok?: boolean;
+  phase?: AgentMidTurnSessionPayload["phase"];
+}): Promise<void> {
+  const phase = params.phase ?? (params.tool != null ? "tool" : "plan");
+  const head =
+    params.tool != null
+      ? `[mid_turn] phase=${phase} tool=${params.tool} ok=${params.ok ?? true}`
+      : `[mid_turn] phase=${phase}`;
+  const body = `${head}\n${params.summary.slice(0, 4000)}`;
+  await persistMergeAssistantSessionContext({
+    sessionId: params.sessionId,
+    username: params.username,
+    assistantMessage: body,
+    agentTrace: undefined,
+  });
 }
 
 /** Initial assistant message body: stats from summary + LLM shortDescription only (no hardcoded prompts). */

@@ -3,25 +3,27 @@ name: Agentic analysis architecture
 overview: Replace the single-pass pipeline with a plan–act–observe loop plus a mandatory Verifier/Critic after each substantive output (tool narratives, drafts, final answer) to align with the user goal, check evidence consistency, and course-correct with bounded retries; phased rollout behind a feature flag.
 todos:
   - id: phase0-runtime
-    content: Add agent runtime types (AgentState, PlanStep, ToolDefinition), Zod schemas, AGENTIC_LOOP_ENABLED flag, structured logging hooks
-    status: pending
+    content: "Historical — superseded by rollout in [agentic_only_rag_chat.md](./agentic_only_rag_chat.md) (canonical product/phase todos)"
+    status: cancelled
   - id: phase1-planner
-    content: Implement PlannerService (structured plan only) + shadow logging vs current orchestrator path
-    status: pending
+    content: "Historical — see agentic_only_rag_chat.md (tool-manifest-planner)"
+    status: cancelled
   - id: phase2-tools
-    content: Build tool registry with adapters over analyticalQuery/DuckDB/chart/dataOps; SSE tool_call/tool_result events + client parsing
-    status: pending
+    content: "Historical — see agentic_only_rag_chat.md"
+    status: cancelled
   - id: phase3-loop
-    content: Add reflector + replanning with max_steps/time/tool caps; wire dataAnalyzer/chatStream to full loop
-    status: pending
+    content: "Historical — see agentic_only_rag_chat.md"
+    status: cancelled
   - id: phase3b-verifier
-    content: Implement Verifier/Critic (structured rubric, course-correction actions, max critique rounds) after each substantive output; SSE critic_verdict events; optional deterministic numeric checks
-    status: pending
+    content: "Historical — verifier design remains valid; cutover invariants in agentic_only_rag_chat.md"
+    status: cancelled
   - id: phase4-cutover
-    content: Golden-set evaluation, default route to agent loop, keep legacy orchestrator as fallback; deprecate handler precedence chain
-    status: pending
+    content: "Historical — superseded: no legacy fallback when agentic on (see agentic_only_rag_chat.md Phase 0–2)"
+    status: cancelled
 isProject: false
 ---
+
+> **Canonical rollout (product invariants, phases, RAG mandatory):** [agentic_only_rag_chat.md](./agentic_only_rag_chat.md). This document is **supplemental**: verifier/critic design, SSE taxonomy, diagrams, and Azure RAG file map — not the source for “legacy vs agentic” cutover decisions.
 
 > **In-repo mirror** of the Cursor plan `agentic_analysis_architecture_3e5b532f` (see `~/.cursor/plans/` on your machine). Paths below are relative to this repository root.
 
@@ -280,9 +282,10 @@ Persist optional **`agentTrace`** on the assistant message in Cosmos (extend [`m
 
 - Final-answer verifier, cross-section consistency (text vs charts), critic SSE events, full `agentTrace` recording of critic rounds for evaluation and regressions.
 
-**Phase 4 – Deprecate legacy router**
+**Phase 4 – Deprecate legacy router** *(superseded for agentic analysis)*
 
-- Route traffic through agent loop by default; keep legacy [`AgentOrchestrator.processQuery`](server/lib/agents/orchestrator.ts) as fallback behind flag for regressions.
+- **Original intent:** Route traffic through the agent loop by default; optionally keep legacy orchestrator as fallback for regressions.
+- **Current cutover (when `AGENTIC_LOOP_ENABLED=true` for analysis):** No [`AgentOrchestrator.processQuery`](server/lib/agents/orchestrator.ts) and no legacy monolithic [`dataAnalyzer`](server/lib/dataAnalyzer.ts) fallback — failures are explicit with `agentTrace`. See [`agentic_only_rag_chat.md`](./agentic_only_rag_chat.md) Phases 0–2. Non-agentic chat may still use the orchestrator until separately disabled.
 
 ---
 
@@ -304,6 +307,12 @@ Persist optional **`agentTrace`** on the assistant message in Cosmos (extend [`m
 | Entry | [`dataAnalyzer.ts`](server/lib/dataAnalyzer.ts) `answerQuestion` → branch to agent loop vs [`getOrchestrator`](server/lib/agents/orchestrator.ts) |
 | Stream | [`chatStream.service.ts`](server/services/chat/chatStream.service.ts), [`chat.ts`](client/src/lib/api/chat.ts) (new SSE event types) |
 | Schema | [`server/shared/schema.ts`](server/shared/schema.ts) + mirror in [`client/src/shared/schema.ts`](client/src/shared/schema.ts) if client parses traces |
+
+---
+
+## Cutover (agentic-only + RAG mandatory)
+
+Production analysis chat with **`AGENTIC_LOOP_ENABLED=true`** is defined as **agent-loop only**: no fallback to [`AgentOrchestrator.processQuery`](server/lib/agents/orchestrator.ts) or the legacy monolithic path in [`dataAnalyzer.ts`](server/lib/dataAnalyzer.ts) on empty or error. **RAG** (Azure AI Search + aligned embeddings) is **required** at startup unless `AGENTIC_ALLOW_NO_RAG=true` (tests only). Full phased rollout, env contract, and removal of orchestrator delegate tools are documented in **[`docs/plans/agentic_only_rag_chat.md`](docs/plans/agentic_only_rag_chat.md)**. This document remains the reference for **verifier/critic** behavior and SSE shapes.
 
 ---
 

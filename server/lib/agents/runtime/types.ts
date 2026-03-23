@@ -8,11 +8,29 @@ import type {
 
 export const AGENT_TRACE_MAX_BYTES = 48_000;
 
+/** Total JSON size budget for persisted message.agentWorkbench (aligned with trace cap). */
+export const AGENT_WORKBENCH_MAX_BYTES = 48_000;
+
+/** Max characters per workbench block code field. */
+export const AGENT_WORKBENCH_ENTRY_CODE_MAX = 12_000;
+
+/** Payload for throttled Cosmos merges during runAgentTurn (tool + plan milestones). */
+export type AgentMidTurnSessionPayload = {
+  summary: string;
+  phase?: "tool" | "plan" | "plan_replan" | "pre_synthesis" | "post_visual";
+  tool?: string;
+  ok?: boolean;
+  /** Persist even inside the throttle window (used for pre_synthesis checkpoint). */
+  bypassThrottle?: boolean;
+};
+
 export function isAgenticLoopEnabled(): boolean {
   return process.env.AGENTIC_LOOP_ENABLED === "true";
 }
 
-/** When true with AGENTIC_LOOP_ENABLED, answerQuestion does not fall back to handler orchestrator or legacy dataAnalyzer. */
+/**
+ * @deprecated When AGENTIC_LOOP_ENABLED=true, strict no-legacy behavior is always on; this only reflects env for tests/logging.
+ */
 export function isAgenticStrictEnabled(): boolean {
   return process.env.AGENTIC_STRICT === "true";
 }
@@ -80,6 +98,8 @@ export interface AgentExecutionContext {
   dataBlobVersion?: number;
   loadFullData?: () => Promise<Record<string, any>[]>;
   streamPreAnalysis?: StreamPreAnalysis;
+  /** Throttled merge of milestones into sessionAnalysisContext (optional). */
+  onMidTurnSessionContext?: (payload: AgentMidTurnSessionPayload) => Promise<void>;
 }
 
 export interface PlanStep {
@@ -171,4 +191,6 @@ export interface AgentLoopResult {
   table?: any;
   operationResult?: any;
   agentTrace?: AgentTrace;
+  /** Phrases already surfaced in the answer (CTAs, insight) for suggestion de-duplication. */
+  agentSuggestionHints?: string[];
 }

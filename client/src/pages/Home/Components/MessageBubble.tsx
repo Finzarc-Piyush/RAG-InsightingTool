@@ -1,10 +1,16 @@
 import { forwardRef, useState, useMemo, memo, lazy, Suspense } from 'react';
-import { Message, ThinkingStep, ChartSpec, TemporalDisplayGrain } from '@/shared/schema';
+import {
+  AgentWorkbenchEntry,
+  Message,
+  ThinkingStep,
+  ChartSpec,
+  TemporalDisplayGrain,
+} from '@/shared/schema';
 import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { InsightCard } from './InsightCard';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
-import { ThinkingDisplay } from './ThinkingDisplay';
+import { ThinkingPanel } from './ThinkingPanel';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { getUserEmail } from '@/utils/userStorage';
@@ -86,7 +92,11 @@ interface MessageBubbleProps {
   onEditMessage?: (messageIndex: number, newContent: string) => void;
   messageIndex?: number;
   isLastUserMessage?: boolean;
-  thinkingSteps?: ThinkingStep[]; // Thinking steps to display below user messages
+  thinkingSteps?: ThinkingStep[];
+  /** Collapsible thinking + workbench (user message, active or persisted turn). */
+  thinkingPanelSteps?: ThinkingStep[];
+  thinkingPanelWorkbench?: AgentWorkbenchEntry[];
+  thinkingPanelStreaming?: boolean;
   sessionId?: string | null; // Session ID for downloading modified datasets
   onSuggestedQuestionClick?: (question: string) => void;
 }
@@ -104,6 +114,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   messageIndex,
   isLastUserMessage = false,
   thinkingSteps,
+  thinkingPanelSteps,
+  thinkingPanelWorkbench,
+  thinkingPanelStreaming,
   sessionId,
   onSuggestedQuestionClick,
 }, ref) => {
@@ -320,10 +333,15 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {/* Display thinking steps below user messages */}
-        {isUser && thinkingSteps && thinkingSteps.length > 0 && (
-          <ThinkingDisplay steps={thinkingSteps} />
-        )}
+        {isUser &&
+          ((thinkingPanelSteps?.length ?? 0) > 0 ||
+            (thinkingPanelWorkbench?.length ?? 0) > 0) && (
+            <ThinkingPanel
+              steps={thinkingPanelSteps ?? []}
+              workbench={thinkingPanelWorkbench ?? []}
+              isStreaming={!!thinkingPanelStreaming}
+            />
+          )}
 
         {/* Show Filter Applied Message for filter operations */}
         {!isUser && isFilterResponse && filterCondition && (
@@ -536,6 +554,11 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     prevProps.onEditMessage === nextProps.onEditMessage &&
     // Compare thinking steps by length and content
     (prevProps.thinkingSteps?.length ?? 0) === (nextProps.thinkingSteps?.length ?? 0) &&
+    (prevProps.thinkingPanelSteps?.length ?? 0) ===
+      (nextProps.thinkingPanelSteps?.length ?? 0) &&
+    (prevProps.thinkingPanelWorkbench?.length ?? 0) ===
+      (nextProps.thinkingPanelWorkbench?.length ?? 0) &&
+    prevProps.thinkingPanelStreaming === nextProps.thinkingPanelStreaming &&
     // Compare charts by length
     (prevProps.message.charts?.length ?? 0) === (nextProps.message.charts?.length ?? 0) &&
     (prevProps.message.insights?.length ?? 0) === (nextProps.message.insights?.length ?? 0) &&

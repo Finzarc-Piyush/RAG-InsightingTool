@@ -1,5 +1,14 @@
 import { openai, MODEL } from './openai.js';
-import { ParsedQuery, TimeFilter, ValueFilter, ExclusionFilter, AggregationRequest, SortRequest, TopBottomRequest } from '../shared/queryTypes.js';
+import {
+  ParsedQuery,
+  TimeFilter,
+  ValueFilter,
+  ExclusionFilter,
+  AggregationRequest,
+  SortRequest,
+  TopBottomRequest,
+  DimensionFilter,
+} from '../shared/queryTypes.js';
 import { DataSummary, Message } from '../shared/schema.js';
 import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate } from './dateUtils.js';
 
@@ -144,6 +153,28 @@ function sanitiseExclusionFilters(filters?: Nullable<ExclusionFilter>[]): Exclus
   return cleaned.length ? cleaned : undefined;
 }
 
+function sanitiseDimensionFilters(
+  filters?: Nullable<DimensionFilter>[],
+  summary?: DataSummary
+): DimensionFilter[] | undefined {
+  if (!filters?.length || !summary) return undefined;
+  const allowed = new Set(summary.columns.map((c) => c.name));
+  const cleaned: DimensionFilter[] = [];
+  for (const filter of filters) {
+    if (!filter || !filter.column || !allowed.has(filter.column)) continue;
+    const op = filter.op === 'not_in' ? 'not_in' : 'in';
+    const values = (filter.values || [])
+      .map((v) => (v === null || v === undefined ? '' : String(v).trim()))
+      .filter(Boolean);
+    if (!values.length) continue;
+    const matchRaw = filter.match;
+    const match =
+      matchRaw === 'contains' || matchRaw === 'case_insensitive' ? matchRaw : 'exact';
+    cleaned.push({ column: filter.column, op, values, match });
+  }
+  return cleaned.length ? cleaned : undefined;
+}
+
 function sanitiseAggregations(aggs?: Nullable<AggregationRequest>[]): AggregationRequest[] | undefined {
   if (!aggs) return undefined;
   const cleaned: AggregationRequest[] = [];
@@ -238,6 +269,10 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   
   parsed.timeFilters = sanitiseTimeFilters(raw?.timeFilters as Nullable<TimeFilter>[]);
   parsed.valueFilters = sanitiseValueFilters(raw?.valueFilters as Nullable<ValueFilter>[]);
+  parsed.dimensionFilters = sanitiseDimensionFilters(
+    raw?.dimensionFilters as Nullable<DimensionFilter>[],
+    summary
+  );
   parsed.exclusionFilters = sanitiseExclusionFilters(raw?.exclusionFilters as Nullable<ExclusionFilter>[]);
   parsed.logicalOperator = raw?.logicalOperator === 'OR' ? 'OR' : 'AND';
   parsed.aggregations = sanitiseAggregations(raw?.aggregations as Nullable<AggregationRequest>[]);
@@ -368,6 +403,22 @@ function enhanceTimeFiltersWithExtractedDates(
   return parsed;
 }
 
+function formatColumnGuideForParser(summary: DataSummary): string {
+  return summary.columns
+    .map((c) => {
+      const samples =
+        c.sampleValues?.length ?
+          ` sample_values=${JSON.stringify(c.sampleValues.slice(0, 5))}`
+          : '';
+      const tops =
+        c.topValues?.length ?
+          ` top_values=${JSON.stringify(c.topValues.slice(0, 12).map((t) => t.value))}`
+          : '';
+      return `${c.name} [${c.type}]${samples}${tops}`;
+    })
+    .join('\n');
+}
+
 export async function parseUserQuery(
   question: string,
   summary: DataSummary,
@@ -388,31 +439,26 @@ ${question}
 CONTEXT (recent conversation):
 ${recentHistory || 'N/A'}
 
-AVAILABLE COLUMNS:
-${summary.columns.map((c) => `${c.name} [${c.type}]`).join(', ')}
+AVAILABLE COLUMNS (use exact names; sample_values / top_values are hints for literal strings in the data):
+${formatColumnGuideForParser(summary)}
 
 NUMERIC COLUMNS: ${summary.numericColumns.join(', ') || 'None'}
 DATE COLUMNS: ${summary.dateColumns.join(', ') || 'None'}
 
 YOUR TASK:
-- Extract the user's intent into structured filters.
-- Use ONLY the columns provided.
-- CRITICAL: DO NOT add aggregations, groupBy, or pivots UNLESS the user explicitly requests them using words like:
-  * "aggregate", "aggregated", "aggregation", "sum", "total", "average", "mean", "count", "group by", "grouped by", 
-  * "pivot", "pivoted", "by category", "by month" (when combined with aggregation words), etc.
-- DEFAULT BEHAVIOR: Return raw, unaggregated data. Only apply filters (time, value, exclusion) unless aggregation is explicitly requested.
+- Infer what data shape answers the question from **meaning**, the **available columns**, types, and conversation—not from whether the user said specific words like "sum" or "group by".
+- Use ONLY column names from AVAILABLE COLUMNS (exact spelling).
+- When the question asks for **comparisons, rankings, best/worst, highest/lowest, totals per entity, breakdowns by dimension, share, or typical BI aggregates**, set **groupBy** on the dimension column(s) and **aggregations** on the measure column(s) (e.g. sum of Sales), plus **sort** / **topBottom** / **limit** as appropriate. Match real column names (e.g. "Category", "Sales").
+- When the user only wants **filtered row-level records** (list/show rows matching conditions) without summarizing by dimension, use **timeFilters**, **dimensionFilters** (categorical), **valueFilters** (numeric only), **exclusionFilters**, **limit** only—leave **aggregations** and **groupBy** null.
+- CRITICAL: **valueFilters** are for **numeric** columns only (comparisons on amounts, counts). For **string/category** columns (Region, Category, Segment, Status, etc.) use **dimensionFilters** with op "in" or "not_in" and string values. Align literal values with sample_values/top_values when present (exact spelling). Use match "case_insensitive" when user wording may differ in case.
 - If the user references time (years, months, quarters, ranges), capture it in timeFilters.
 - If the user mentions specific dates like "Apr-24", "March 2022", "2024", "15/01/2024", extract them and create timeFilters.
   * For month-year formats (e.g., "Apr-24", "March 2022"), create a timeFilter with type "month" and include the full month name (e.g., "April", "March").
   * For year-only mentions (e.g., "2024"), create a timeFilter with type "year" and include the year number.
   * For specific dates (e.g., "2024-01-15", "15/01/2024"), create a timeFilter with type "dateRange" using that date as both startDate and endDate.
   * For date ranges (e.g., "from Apr-24 to Jun-24"), create a timeFilter with type "dateRange" with startDate and endDate.
-- ONLY if the user explicitly asks for aggregation with time periods (e.g., "monthly revenue", "yearly sales", "aggregate by month", "aggregated over year"), 
-  set "dateAggregationPeriod" to "month", "monthOnly", "year", "quarter", or "day" accordingly. This indicates that 
-  date columns should be normalized to this period before grouping/aggregation.
-- IMPORTANT: Questions about "month-over-month growth", "consistent month-over-month growth", "seasonal patterns", etc. 
-  should ONLY apply time filters and return raw data. DO NOT automatically add aggregations or groupBy unless the user 
-  explicitly asks to "aggregate", "sum", "group by", etc.
+- When the question clearly needs **time-bucketed metrics** (e.g. revenue by month, yearly trend), set **dateAggregationPeriod** and align **groupBy** with the actual date column name from the schema.
+- For **growth rates, month-over-month, or seasonal pattern** questions where the user needs **series of raw or lightly filtered rows** to compute deltas in a later step, you may use **timeFilters** only and omit aggregations—use judgment from the question.
 - IMPORTANT: Distinguish between:
   * "month" - groups by month-year (e.g., "Jan 2024", "Jan 2022" are separate)
   * "monthOnly" - groups by month name only, combining all years (e.g., all "Jan" values combined regardless of year)
@@ -439,19 +485,13 @@ YOUR TASK:
   * Example: "Which months had total revenue above the yearly monthly average" → valueFilter: {column: "total", operator: ">", reference: "mean"}
   * The column should be the metric being compared - match to available numeric columns
 - If the user wants to exclude categories, use exclusionFilters.
-- ONLY if the user explicitly requests aggregation (using words like "aggregate", "sum", "total", "group by"), then:
-  * Extract the aggregation column if mentioned (e.g., "sum of total" → column: "total", operation: "sum")
-  * Extract the grouping columns if mentioned (e.g., "group by category" → groupBy: ["category"])
-  * Set aggregations and groupBy only when explicitly requested
-  * Patterns that indicate explicit aggregation requests:
-    - "sum of [column] for [category]"
-    - "aggregate [column] by [dimension]"
-    - "total revenue by category"
-    - "group by [dimension]"
-    - "pivot by [dimension]"
-- If the user asks for top/bottom N, populate topBottom.
-- ONLY capture aggregations (sum, mean, count, etc.) and groupings when explicitly requested by the user.
+- If the user asks for **top/bottom N** or superlatives implying a short ranked list, populate **topBottom** and/or **sort** and ensure **groupBy** + **aggregations** match the dimension and measure being ranked.
 - Identify chart type hints (line, bar, scatter, pie, area) if strongly implied.
+
+FEW-SHOT MEANING (do not copy verbatim; apply same logic to the real schema):
+- Q: "Which product categories generate the highest sales?" with columns including Category, Sales → groupBy: ["Category"], aggregations: [{column: "Sales", operation: "sum", alias: null}], sort: [{column: "Sales", direction: "desc"}], topBottom: {type: "top", column: "Sales", count: 10} or similar.
+- Q: "Show every order in 2023 where Region is West" → timeFilters + dimensionFilters: [{column: "Region", op: "in", values: ["West"], match: "exact"}], aggregations null, groupBy null, limit if needed.
+- Q: "Sales by Sub-Category within Technology category" with Category, Sub-Category, Sales → dimensionFilters: [{column: "Category", op: "in", values: ["Technology"], match: "case_insensitive"}], groupBy: ["Sub-Category"], aggregations: [{column: "Sales", operation: "sum", alias: null}], sort: [{column: "Sales", direction: "desc"}].
 - List key variables mentioned.
 - Provide a confidence score between 0 and 1.
 
@@ -479,6 +519,9 @@ Output valid JSON with the following structure:
   "valueFilters": [
     { "column": string, "operator": ">"|">="|"<"|"<="|"="|"between"|"!=", "value": number | null, "value2": number | null, "reference": "mean"|"median"|"p75"|"p25"|"max"|"min"|null }
   ] | null,
+  "dimensionFilters": [
+    { "column": string, "op": "in"|"not_in", "values": string[], "match": "exact"|"case_insensitive"|"contains"|null }
+  ] | null,
   "exclusionFilters": [ { "column": string, "values": (string|number)[] } ] | null,
   "logicalOperator": "AND" | "OR" | null,
   "aggregations": [ { "column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median", "alias": string | null } ] | null,
@@ -496,7 +539,7 @@ Ensure the JSON is strict and contains no comments.`;
       { role: 'user', content: prompt },
     ],
     temperature: 0,
-    max_tokens: 700,
+    max_tokens: 1000,
     response_format: { type: 'json_object' },
   });
 

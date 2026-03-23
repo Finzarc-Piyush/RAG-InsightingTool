@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentWorkbenchEntry } from "../../../shared/schema.js";
 import type { AgentConfig } from "./types.js";
 import type { AgentExecutionContext } from "./types.js";
 import { agentLog } from "./agentLogger.js";
@@ -24,6 +25,16 @@ export interface ToolResult {
   suggestedColumns?: string[];
   /** Short structured facts for working-memory / chained planning */
   memorySlots?: Record<string, string>;
+  /** From retrieve_semantic_context — for observability */
+  ragHitCount?: number;
+  /** From run_analytical_query — for reflector / replan (no keyword parsing) */
+  analyticalMeta?: {
+    inputRowCount: number;
+    outputRowCount: number;
+    appliedAggregation: boolean;
+  };
+  /** Shown in chat workbench (e.g. parsed analytical query JSON). */
+  workbenchArtifact?: AgentWorkbenchEntry;
 }
 
 export type ToolExecutor = (
@@ -31,18 +42,57 @@ export type ToolExecutor = (
   args: Record<string, unknown>
 ) => Promise<ToolResult>;
 
-export class ToolRegistry {
-  private readonly tools = new Map<
-    string,
-    { input: z.ZodType<Record<string, unknown>>; run: ToolExecutor }
-  >();
+export interface ToolManifestEntry {
+  /** One-line purpose for the planner */
+  description: string;
+  /** JSON-shaped hint: allowed keys only (strict schemas reject unknown keys) */
+  argsHelp: string;
+}
 
-  register(name: string, input: z.ZodType<Record<string, unknown>>, run: ToolExecutor) {
-    this.tools.set(name, { input, run });
+type RegisteredTool = {
+  input: z.ZodType<Record<string, unknown>>;
+  run: ToolExecutor;
+  description: string;
+  argsHelp: string;
+};
+
+export class ToolRegistry {
+  private readonly tools = new Map<string, RegisteredTool>();
+
+  register(
+    name: string,
+    input: z.ZodType<Record<string, unknown>>,
+    run: ToolExecutor,
+    meta: ToolManifestEntry
+  ) {
+    this.tools.set(name, { input, run, description: meta.description, argsHelp: meta.argsHelp });
   }
 
   listToolDescriptions(): string {
     return Array.from(this.tools.keys()).join(", ");
+  }
+
+  /** Comma-separated names only (legacy / compact logs). */
+  formatToolManifestForPlanner(maxChars = 14_000): string {
+    const blocks: string[] = [];
+    for (const [name, t] of this.tools) {
+      blocks.push(
+        `- ${name}: ${t.description}\n  args (strict; do not add other keys): ${t.argsHelp}`
+      );
+    }
+    const full = blocks.join("\n\n");
+    if (full.length <= maxChars) return full;
+    return `${full.slice(0, maxChars)}\n\n...(manifest truncated)`;
+  }
+
+  argsValidForTool(name: string, rawArgs: Record<string, unknown>): boolean {
+    const t = this.tools.get(name);
+    if (!t) return false;
+    return t.input.safeParse(rawArgs).success;
+  }
+
+  getArgsHelpForTool(name: string): string | undefined {
+    return this.tools.get(name)?.argsHelp;
   }
 
   async execute(

@@ -6,6 +6,8 @@ import type {
 } from "../../../shared/schema.js";
 import type { AgentExecutionContext, StreamPreAnalysis } from "./types.js";
 
+type MidTurnPersist = AgentExecutionContext["onMidTurnSessionContext"];
+
 export function buildAgentExecutionContext(params: {
   sessionId: string;
   username?: string;
@@ -21,6 +23,7 @@ export function buildAgentExecutionContext(params: {
   dataBlobVersion?: number;
   loadFullData?: () => Promise<Record<string, any>[]>;
   streamPreAnalysis?: StreamPreAnalysis;
+  onMidTurnSessionContext?: MidTurnPersist;
 }): AgentExecutionContext {
   return {
     sessionId: params.sessionId,
@@ -37,6 +40,7 @@ export function buildAgentExecutionContext(params: {
     dataBlobVersion: params.dataBlobVersion,
     loadFullData: params.loadFullData,
     streamPreAnalysis: params.streamPreAnalysis,
+    onMidTurnSessionContext: params.onMidTurnSessionContext,
   };
 }
 

@@ -4,52 +4,6 @@ import { verifierOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 
-function extractNumbers(text: string): number[] {
-  const re = /-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi;
-  const m = text.match(re);
-  if (!m) return [];
-  return m.map((x) => parseFloat(x)).filter((n) => Number.isFinite(n));
-}
-
-function roughlyEqual(a: number, b: number, eps = 1e-3): boolean {
-  if (Math.abs(a - b) < eps) return true;
-  if (Math.abs(a - b) / (Math.abs(a) + Math.abs(b) + 1e-9) < 0.01) return true;
-  return false;
-}
-
-function numericPrecheck(
-  candidate: string,
-  evidence?: string
-): VerifierResult | null {
-  if (!evidence || evidence.length < 4) return null;
-  if (!/\b(total|sum|average|mean|count|median|min|max)\b/i.test(candidate)) {
-    return null;
-  }
-  const cNums = extractNumbers(candidate);
-  const eNums = extractNumbers(evidence);
-  if (cNums.length === 0 || eNums.length === 0) return null;
-  for (const cn of cNums) {
-    if (!Number.isFinite(cn) || Math.abs(cn) < 1e-9) continue;
-    if (cn >= 1900 && cn <= 2100 && Number.isInteger(cn)) continue;
-    const hit = eNums.some((en) => roughlyEqual(cn, en));
-    if (!hit && Math.abs(cn) > 1 && Math.abs(cn) < 1e15) {
-      return {
-        verdict: "revise_narrative",
-        issues: [
-          {
-            code: "NUMERIC_MISMATCH",
-            severity: "high",
-            description: `Candidate number ${cn} not found in evidence`,
-            evidenceRefs: [],
-          },
-        ],
-        course_correction: "revise_narrative",
-      };
-    }
-  }
-  return null;
-}
-
 function chartPrecheck(
   candidate: string,
   ctx: AgentExecutionContext
@@ -95,9 +49,7 @@ export async function runVerifier(
   },
   onLlmCall: () => void
 ): Promise<VerifierResult> {
-  const pre =
-    numericPrecheck(params.candidate, params.evidenceSummary) ||
-    chartPrecheck(params.candidate, ctx);
+  const pre = chartPrecheck(params.candidate, ctx);
   if (pre) {
     return pre;
   }
@@ -109,7 +61,8 @@ issues: array of {code, severity, description, evidence_refs}
 course_correction: same enum as verdict (primary action)
 user_visible_note: optional string
 
-If evidence includes output from run_analytical_query (numeric/tabular results), treat those numbers as authoritative over retrieved RAG text snippets when they conflict. Use code NUMERIC_MISMATCH when the candidate contradicts analytical evidence.`;
+If evidence includes output from run_analytical_query (numeric/tabular results), treat those numbers as authoritative over retrieved RAG text snippets when they conflict. Use code NUMERIC_MISMATCH when the candidate contradicts analytical evidence.
+If evidence states zero rows with diagnostic distinct samples, pass verdict "pass" when the candidate explains that outcome and uses those samples (do not force revise_narrative for grounded empty-result explanations).`;
 
   const user = `User question:\n${ctx.question}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 6000)}\n\nCandidate:\n${params.candidate.slice(0, 4000)}`;
 
@@ -145,21 +98,26 @@ export async function rewriteNarrative(
   ctx: AgentExecutionContext,
   bad: string,
   issues: string,
-  onLlmCall: () => void
+  onLlmCall: () => void,
+  evidenceSummary?: string
 ): Promise<string> {
   onLlmCall();
   const { openai, MODEL } = await import("../../openai.js");
+  const evBlock =
+    evidenceSummary?.trim().length ?
+      `\nEvidence (tool output; cite only facts supported here):\n${evidenceSummary.trim().slice(0, 6000)}\n`
+      : "";
   const res = await openai.chat.completions.create({
     model: MODEL as string,
     messages: [
       {
         role: "system",
         content:
-          "Rewrite the draft to fix the listed issues. Be concise and grounded. No markdown code fences.",
+          "Rewrite the draft to fix the listed issues. Be concise and grounded in evidence when provided; do not invent numbers not in evidence. No markdown code fences.",
       },
       {
         role: "user",
-        content: `Question: ${ctx.question}\nIssues:\n${issues}\n\nDraft:\n${bad}`,
+        content: `Question: ${ctx.question}\nIssues:\n${issues}${evBlock}\nDraft:\n${bad}`,
       },
     ],
     temperature: 0.3,

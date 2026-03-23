@@ -1,10 +1,30 @@
 import { openai, MODEL } from './openai.js';
 import { Message, DataSummary } from '../shared/schema.js';
 
+function normalizeForDedup(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function filterSuggestionsAgainstHints(suggestions: string[], hints: string[]): string[] {
+  if (!hints.length) return suggestions;
+  const hintNorms = hints.map(normalizeForDedup).filter(Boolean);
+  return suggestions.filter((s) => {
+    const n = normalizeForDedup(s);
+    if (!n) return false;
+    return !hintNorms.some((h) => h.length >= 8 && (n.includes(h) || h.includes(n)));
+  });
+}
+
 export async function generateAISuggestions(
   chatHistory: Message[],
   dataSummary: DataSummary,
-  lastAnswer?: string
+  lastAnswer?: string,
+  /** Phrases already used in the reply (CTAs, key insight) — avoid duplicating them in chips. */
+  avoidOverlap?: string[]
 ): Promise<string[]> {
   const lastMessages = chatHistory.slice(-4); // Get last 4 messages for context
   const conversationContext = lastMessages
@@ -20,6 +40,15 @@ export async function generateAISuggestions(
 ${conversationContext ? `CONVERSATION CONTEXT:\n${conversationContext}\n` : 'NO CONVERSATION HISTORY - This is a new dataset upload. Generate initial exploratory questions based on the data structure.\n'}
 
 ${lastAnswer ? `LAST ASSISTANT RESPONSE:\n${lastAnswer.substring(0, 500)}\n` : ''}
+
+${
+  avoidOverlap?.length
+    ? `ALREADY_COVERED_IN_REPLY (do not repeat or lightly rephrase these as suggestions):\n${avoidOverlap
+        .slice(0, 8)
+        .map((t) => `- ${t.slice(0, 120)}`)
+        .join("\n")}\n`
+    : ""
+}
 
 AVAILABLE DATA COLUMNS:
 ${columnTypes}
@@ -71,7 +100,8 @@ Output JSON only:
     const parsed = JSON.parse(content);
     
     if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
-      return parsed.suggestions.slice(0, 4); // Return max 4 suggestions
+      const raw = parsed.suggestions.slice(0, 4);
+      return filterSuggestionsAgainstHints(raw, avoidOverlap ?? []);
     }
   } catch (error) {
     console.error('Failed to generate AI suggestions:', error);

@@ -1,5 +1,5 @@
 import { AnalysisIntent } from '../intentClassifier.js';
-import { ChartSpec, DataSummary } from '../../../shared/schema.js';
+import { ChartSpec, DataSummary, Message } from '../../../shared/schema.js';
 import { ParsedQuery } from '../../../shared/queryTypes.js';
 
 /**
@@ -54,6 +54,10 @@ export function extractRequiredColumns(
     // Value filters
     if (parsedQuery.valueFilters) {
       parsedQuery.valueFilters.forEach(f => columns.add(f.column));
+    }
+
+    if (parsedQuery.dimensionFilters) {
+      parsedQuery.dimensionFilters.forEach(f => columns.add(f.column));
     }
     
     // Time filters
@@ -126,31 +130,69 @@ export function extractRequiredColumns(
   return Array.from(columns);
 }
 
+function addColumnsFromParsedQueryLike(obj: Record<string, unknown>, columns: Set<string>) {
+  const vf = obj.valueFilters as Array<{ column?: string }> | undefined;
+  vf?.forEach((f) => {
+    if (f.column) columns.add(f.column);
+  });
+  const df = obj.dimensionFilters as Array<{ column?: string }> | undefined;
+  df?.forEach((f) => {
+    if (f.column) columns.add(f.column);
+  });
+  const gb = obj.groupBy as string[] | undefined;
+  gb?.forEach((c) => columns.add(c));
+  const ag = obj.aggregations as Array<{ column?: string }> | undefined;
+  ag?.forEach((a) => {
+    if (a.column) columns.add(a.column);
+  });
+  const ef = obj.exclusionFilters as Array<{ column?: string }> | undefined;
+  ef?.forEach((f) => {
+    if (f.column) columns.add(f.column);
+  });
+  const tb = obj.topBottom as { column?: string } | undefined;
+  if (tb?.column) columns.add(tb.column);
+  const st = obj.sort as Array<{ column?: string }> | undefined;
+  st?.forEach((s) => {
+    if (s.column) columns.add(s.column);
+  });
+}
+
 /**
- * Extract required columns from chat history (previous charts)
- * Useful for follow-up queries that reference previous visualizations
+ * Extract required columns from chat history (charts + agent workbench query specs)
  */
 export function extractColumnsFromHistory(
-  chatHistory: Array<{ charts?: ChartSpec[] }>,
+  chatHistory: Message[],
   summary: DataSummary
 ): string[] {
   const columns = new Set<string>();
-  
-  // Look through recent messages for chart specs
-  for (let i = chatHistory.length - 1; i >= 0 && i >= chatHistory.length - 5; i--) {
+  const allowed = new Set(summary.columns.map((c) => c.name));
+
+  for (let i = chatHistory.length - 1; i >= 0 && i >= chatHistory.length - 8; i--) {
     const msg = chatHistory[i];
     if (msg.charts && msg.charts.length > 0) {
-      msg.charts.forEach(spec => {
+      msg.charts.forEach((spec) => {
         if (spec.x) columns.add(spec.x);
         if (spec.y) columns.add(spec.y);
         if (spec.y2) columns.add(spec.y2);
         if (spec.y2Series && spec.y2Series.length > 0) {
-          spec.y2Series.forEach(col => columns.add(col));
+          spec.y2Series.forEach((col) => columns.add(col));
         }
       });
     }
+    const wb = msg.agentWorkbench;
+    if (wb?.length) {
+      for (const entry of wb) {
+        if (entry.kind !== "query_spec" || !entry.code?.trim()) continue;
+        try {
+          const parsed = JSON.parse(entry.code) as Record<string, unknown>;
+          addColumnsFromParsedQueryLike(parsed, columns);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
-  
-  return Array.from(columns);
+
+  return Array.from(columns).filter((c) => allowed.has(c));
 }
 

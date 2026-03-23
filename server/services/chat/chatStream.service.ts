@@ -2,7 +2,7 @@
  * Chat Stream Service
  * Handles streaming chat operations with SSE
  */
-import { Message, ThinkingStep } from "../../shared/schema.js";
+import { AgentWorkbenchEntry, Message, ThinkingStep } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
 import { 
@@ -20,7 +20,13 @@ import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { persistMidTurnAssistantSessionContext } from "../../lib/sessionAnalysisContext.js";
 import { Response } from "express";
+import {
+  agentSseEventToWorkbenchEntries,
+  appendWorkbenchEntry,
+} from "./agentWorkbench.util.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -123,7 +129,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     // Track thinking steps
     const thinkingSteps: ThinkingStep[] = [];
-    
+    const agentWorkbench: AgentWorkbenchEntry[] = [];
+
     // Create callback to emit thinking steps
     const onThinkingStep = (step: ThinkingStep) => {
       thinkingSteps.push(step);
@@ -271,9 +278,24 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       });
 
     const agentOptions =
-      process.env.AGENTIC_LOOP_ENABLED === "true"
+      isAgenticLoopEnabled()
         ? {
-            onAgentEvent: (event: string, data: unknown) => sendSSE(res, event, data),
+            onAgentEvent: (event: string, data: unknown) => {
+              if (!checkConnection()) return;
+              if (event === "workbench") {
+                const payload = data as { entry?: AgentWorkbenchEntry };
+                if (payload.entry) {
+                  const stored = appendWorkbenchEntry(agentWorkbench, payload.entry);
+                  sendSSE(res, "workbench", { entry: stored });
+                }
+                return;
+              }
+              sendSSE(res, event, data);
+              for (const entry of agentSseEventToWorkbenchEntries(event, data)) {
+                const stored = appendWorkbenchEntry(agentWorkbench, entry);
+                sendSSE(res, "workbench", { entry: stored });
+              }
+            },
             streamPreAnalysis: {
               intentLabel: chatAnalysis.intent,
               analysis: chatAnalysis.analysis,
@@ -282,6 +304,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             },
             username,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
+            onMidTurnSessionContext: async (p) => {
+              await persistMidTurnAssistantSessionContext({
+                sessionId,
+                username,
+                summary: p.summary,
+                tool: p.tool,
+                ok: p.ok,
+                phase: p.phase,
+              });
+            },
           }
         : undefined;
 
@@ -352,7 +384,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       suggestions = await generateAISuggestions(
         updatedChatHistory,
         chatDocument.dataSummary,
-        transformedResponse.answer
+        transformedResponse.answer,
+        result.agentSuggestionHints
       );
     } catch (error) {
       console.error('Failed to generate suggestions:', error);
@@ -419,6 +452,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           content: message,
           timestamp: userMessageTimestamp,
           userEmail: userEmail,
+          ...(thinkingSteps.length > 0 ? { thinkingSteps: [...thinkingSteps] } : {}),
+          ...(agentWorkbench.length > 0 ? { agentWorkbench: [...agentWorkbench] } : {}),
         },
         {
           role: 'assistant',

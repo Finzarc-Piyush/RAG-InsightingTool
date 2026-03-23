@@ -430,6 +430,31 @@ export function canonicalizeDateColumnValues(data: Record<string, any>[], dateCo
   }
 }
 
+/** Distinct value counts for low-cardinality string columns (optional metadata). */
+function computeTopStringValues(
+  data: Record<string, any>[],
+  col: string,
+  maxScan: number,
+  maxDistinct: number,
+  maxReturn: number
+): { value: string | number; count: number }[] | undefined {
+  const slice = data.slice(0, Math.min(data.length, maxScan));
+  const counts = new Map<string, number>();
+  for (const row of slice) {
+    const v = row[col];
+    if (v === null || v === undefined || v === '') continue;
+    const key = String(v);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  if (counts.size === 0 || counts.size > maxDistinct) {
+    return undefined;
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxReturn)
+    .map(([value, count]) => ({ value, count }));
+}
+
 export function createDataSummary(data: Record<string, any>[]): DataSummary {
   if (data.length === 0) {
     throw new Error('No data found in file');
@@ -535,10 +560,14 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
     }
 
+    const topValues =
+      type === 'string' ? computeTopStringValues(data, col, 12_000, 48, 24) : undefined;
+
     return {
       name: col,
       type,
       sampleValues,
+      ...(topValues?.length ? { topValues } : {}),
       ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
     };
   });
