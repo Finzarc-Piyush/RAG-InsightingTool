@@ -190,9 +190,11 @@ export function createStatisticalSummary(
     const columnData = data.map(row => row[colName]);
     const nonNullData = columnData.filter(v => v !== null && v !== undefined && v !== '');
 
-    // Determine column type from summary
-    const isNumeric = summary.numericColumns.includes(colName);
-    const isDate = summary.dateColumns.includes(colName);
+    // Determine column type from summary (legacy docs may omit these arrays)
+    const numericCols = summary.numericColumns ?? [];
+    const dateCols = summary.dateColumns ?? [];
+    const isNumeric = numericCols.includes(colName);
+    const isDate = dateCols.includes(colName);
     const isCategorical = !isNumeric && !isDate;
 
     let stats: Partial<ColumnStats>;

@@ -7,6 +7,7 @@ import { processChartData } from '../../chartGenerator.js';
 import { generateChartInsights } from '../../insightGenerator.js';
 import { calculateSmartDomainsForChart } from '../../axisScaling.js';
 import { extractColumnsFromMessage } from '../../columnExtractor.js';
+import { isAgenticLoopEnabled } from '../runtime/types.js';
 
 /**
  * General Handler
@@ -58,9 +59,13 @@ export class GeneralHandler extends BaseHandler {
       return this.handleSeasonalPatterns(intent, context, question);
     }
     
-    // Check if this is a trend over time request (should create a line chart)
-    if (intent.type === 'chart' && (intent.chartType === 'line' || this.isTrendOverTimeRequest(question))) {
-      console.log('📈 Detected trend over time request, creating line chart');
+    // Trend-over-time shortcut: legacy orchestrator only (agentic mode uses tools).
+    if (
+      !isAgenticLoopEnabled() &&
+      intent.type === 'chart' &&
+      (intent.chartType === 'line' || this.isTrendOverTimeRequest(question))
+    ) {
+      console.log('📈 Detected trend over time request, creating line chart (legacy orchestrator)');
       return this.handleTrendOverTime(intent, context, question);
     }
     
@@ -628,7 +633,7 @@ export class GeneralHandler extends BaseHandler {
       };
       
       // Process chart data - this will automatically detect date column and aggregate by month
-      const chartData = processChartData(context.data, chartSpec);
+      const chartData = processChartData(context.data, chartSpec, context.summary.dateColumns);
       
       if (chartData.length === 0) {
         return {
@@ -661,7 +666,7 @@ export class GeneralHandler extends BaseHandler {
           aggregate: 'mean',
         } as any;
         
-        const chartData = processChartData(context.data, chartSpec);
+        const chartData = processChartData(context.data, chartSpec, context.summary.dateColumns);
         
         if (chartData.length > 0) {
           charts.push({
@@ -683,7 +688,7 @@ export class GeneralHandler extends BaseHandler {
             aggregate: 'mean',
           };
           
-          const chartData = processChartData(context.data, chartSpec);
+          const chartData = processChartData(context.data, chartSpec, context.summary.dateColumns);
           
           if (chartData.length > 0) {
             charts.push({
@@ -818,11 +823,24 @@ export class GeneralHandler extends BaseHandler {
         requiresClarification: true,
       };
     }
-    
+
+    const wantsSum = /\b(total|sums?|combined\s+total|aggregate\s+all)\b/i.test(
+      question
+    );
+    const wantsMean = /\b(average|mean|avg)\b/i.test(question);
+    const lineAggregate: 'sum' | 'mean' | 'none' =
+      wantsSum && !wantsMean
+        ? 'sum'
+        : wantsMean && !wantsSum
+          ? 'mean'
+          : wantsSum
+            ? 'sum'
+            : 'none';
+
     // Create chart spec (dual-axis if y2Column exists)
     let chartSpec: ChartSpec;
     if (y2Column) {
-      console.log(`📈 Creating dual-axis trend line chart: X=${xColumn}, Y=${yColumn}, Y2=${y2Column}`);
+      console.log(`📈 Creating dual-axis trend line chart: X=${xColumn}, Y=${yColumn}, Y2=${y2Column}, aggregate=${lineAggregate}`);
       chartSpec = {
         type: 'line',
         title: `${yColumn} and ${y2Column} Trends Over Time`,
@@ -832,10 +850,10 @@ export class GeneralHandler extends BaseHandler {
         xLabel: xColumn,
         yLabel: yColumn,
         y2Label: y2Column,
-        aggregate: 'none',
+        aggregate: lineAggregate,
       } as any;
     } else {
-      console.log(`📈 Creating trend line chart: X=${xColumn}, Y=${yColumn}`);
+      console.log(`📈 Creating trend line chart: X=${xColumn}, Y=${yColumn}, aggregate=${lineAggregate}`);
       chartSpec = {
         type: 'line',
         title: `Trend of ${yColumn} Over Time`,
@@ -843,11 +861,11 @@ export class GeneralHandler extends BaseHandler {
         y: yColumn,
         xLabel: xColumn,
         yLabel: yColumn,
-        aggregate: 'none',
+        aggregate: lineAggregate,
       };
     }
     
-    const chartData = processChartData(context.data, chartSpec);
+    const chartData = processChartData(context.data, chartSpec, context.summary.dateColumns);
     
     if (chartData.length === 0) {
       return {
@@ -1033,7 +1051,7 @@ Respond naturally and conversationally.`;
       };
       
       // Process the data
-      const chartData = processChartData(context.data, updatedChart);
+      const chartData = processChartData(context.data, updatedChart, context.summary.dateColumns);
       console.log(`✅ Dual-axis line data: ${chartData.length} points`);
       
       if (chartData.length === 0) {
@@ -1096,7 +1114,7 @@ Respond naturally and conversationally.`;
         aggregate: 'none',
       };
       
-      const chartData = processChartData(context.data, dualAxisSpec);
+      const chartData = processChartData(context.data, dualAxisSpec, context.summary.dateColumns);
       if (chartData.length > 0) {
         // Calculate smart axis domains
         const smartDomains = calculateSmartDomainsForChart(

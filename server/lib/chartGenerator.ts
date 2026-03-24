@@ -1,8 +1,8 @@
 import { ChartSpec } from '../shared/schema.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
-import { normalizeDateToPeriod, parseFlexibleDate, DatePeriod, isDateColumnName } from './dateUtils.js';
+import { normalizeDateToPeriod, DatePeriod } from './dateUtils.js';
 import { inferTemporalGrainFromDates, formatDateForChartAxis } from './temporalGrain.js';
-import { optimizeChartData, downsampleChartData } from './chartDownsampling.js';
+import { optimizeChartData } from './chartDownsampling.js';
 
 // Maximum data points for visualization to ensure good performance
 // Updated to 5000 as per requirements - all downsampling now handled by chartDownsampling.ts
@@ -161,51 +161,56 @@ function downsampleSimple(
   return data.filter((_, idx) => idx % step === 0).slice(0, threshold);
 }
 
-// Helper to parse date strings - use the flexible date parser
-function parseDate(dateStr: string): Date | null {
-  return parseFlexibleDate(dateStr);
+function parseDate(value: unknown): Date | null {
+  if (value instanceof Date && !isNaN(value.getTime())) return value;
+  return null;
 }
 
-function chartXLooksTemporal(xCol: string, rows: Record<string, any>[]): boolean {
-  if (rows.length === 0) return false;
-  const xColLower = xCol.toLowerCase();
-  const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xColLower);
-  const sampleXValues = rows.slice(0, Math.min(10, rows.length)).map((row) => String(row[xCol] ?? ''));
-  const dateParseCount = sampleXValues.filter((val) => parseDate(val) !== null).length;
-  return nameSuggestsDate || dateParseCount >= Math.min(3, sampleXValues.length * 0.5);
+/** X is temporal only if the dataset profile listed it in dateColumns (declaredDateColumns). */
+function xColumnIsDeclaredDate(
+  xSpec: string,
+  available: string[],
+  declared?: string[]
+): boolean {
+  if (!declared?.length) return false;
+  const mx = findMatchingColumn(xSpec, available) || xSpec;
+  return declared.some((d) => (findMatchingColumn(d, available) || d) === mx);
 }
 
-/** After rows are sorted, replace X with dd/MM/yy, MMM-yy, or yyyy for temporal columns. */
-function applyTemporalXAxisLabels(rows: Record<string, any>[], xCol: string): Record<string, any>[] {
-  if (rows.length === 0 || !chartXLooksTemporal(xCol, rows)) return rows;
+function chartXLooksTemporal(xCol: string, rows: Record<string, any>[], profileSaysDate: boolean): boolean {
+  if (!profileSaysDate || rows.length === 0) return false;
+  return rows.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()));
+}
+
+/** Format X for display when values are real Date instances (no string parsing). */
+function applyTemporalXAxisLabels(
+  rows: Record<string, any>[],
+  xCol: string,
+  profileSaysDate: boolean
+): Record<string, any>[] {
+  if (rows.length === 0 || !chartXLooksTemporal(xCol, rows, profileSaysDate)) return rows;
   const dates: Date[] = [];
   for (const row of rows) {
-    const p = parseDate(String(row[xCol]));
+    const p = parseDate(row[xCol]);
     if (p) dates.push(p);
   }
+  if (dates.length === 0) return rows;
   const grain = inferTemporalGrainFromDates(dates);
   return rows.map((row) => {
-    const p = parseDate(String(row[xCol]));
+    const p = parseDate(row[xCol]);
     if (!p) return row;
     return { ...row, [xCol]: formatDateForChartAxis(p, grain) };
   });
 }
 
-// Helper to compare values for sorting - handles dates properly
-function compareValues(a: any, b: any): number {
+function compareValues(a: any, b: any, xIsDeclaredDate: boolean): number {
   const aStr = String(a);
   const bStr = String(b);
-  
-  // Try to parse as dates
-  const aDate = parseDate(aStr);
-  const bDate = parseDate(bStr);
-  
-  if (aDate && bDate) {
-    // Both are dates, compare chronologically
-    return aDate.getTime() - bDate.getTime();
+  if (xIsDeclaredDate) {
+    const aDate = a instanceof Date && !isNaN(a.getTime()) ? a : null;
+    const bDate = b instanceof Date && !isNaN(b.getTime()) ? b : null;
+    if (aDate && bDate) return aDate.getTime() - bDate.getTime();
   }
-  
-  // Fall back to string comparison
   return aStr.localeCompare(bStr);
 }
 
@@ -315,7 +320,8 @@ function mergeAggregatedResults(
 export async function processChartDataStreaming(
   data: Record<string, any>[],
   chartSpec: ChartSpec,
-  batchSize: number = 10000
+  batchSize: number = 10000,
+  declaredDateColumns?: string[]
 ): Promise<Record<string, any>[]> {
   const { type, aggregate = 'none' } = chartSpec;
   
@@ -330,7 +336,7 @@ export async function processChartDataStreaming(
         // Process each batch as if it were the full dataset
         // We'll merge the results afterward
         const tempSpec = { ...chartSpec };
-        return processChartData(batch, tempSpec);
+        return processChartData(batch, tempSpec, declaredDateColumns);
       }
     );
     
@@ -344,12 +350,13 @@ export async function processChartDataStreaming(
   }
   
   // For non-aggregated or small datasets, use regular processing
-  return processChartData(data, chartSpec);
+  return processChartData(data, chartSpec, declaredDateColumns);
 }
 
 export function processChartData(
   data: Record<string, any>[],
-  chartSpec: ChartSpec
+  chartSpec: ChartSpec,
+  declaredDateColumns?: string[]
 ): Record<string, any>[] {
   const { type, x, y, y2, aggregate = 'none' } = chartSpec;
   
@@ -363,7 +370,10 @@ export function processChartData(
   }
   
   console.log(`   Data rows available: ${data.length}`);
-  
+
+  const availForEarly = Object.keys(data[0] || {});
+  const xIsDateEarly = xColumnIsDeclaredDate(x, availForEarly, declaredDateColumns);
+
   // For large datasets without aggregation, use streaming for line/area charts
   if (data.length > 10000 && (type === 'line' || type === 'area') && aggregate === 'none') {
     console.log(`📊 Large dataset detected (${data.length} rows), processing in batches`);
@@ -372,13 +382,13 @@ export function processChartData(
     const result: Record<string, any>[] = [];
     for (let i = 0; i < data.length; i += batchSize) {
       const batch = data.slice(i, i + batchSize);
-      const batchResult = processChartData(batch, { ...chartSpec });
+      const batchResult = processChartData(batch, { ...chartSpec }, declaredDateColumns);
       result.push(...batchResult);
     }
     // Sort the merged result
     const availableColumns = Object.keys(data[0] || {});
     const matchedX = findMatchingColumn(x, availableColumns) || x;
-    return result.sort((a, b) => compareValues(a[matchedX], b[matchedX]));
+    return result.sort((a, b) => compareValues(a[matchedX], b[matchedX], xIsDateEarly));
   }
   
   // Check if columns exist in data
@@ -446,7 +456,8 @@ export function processChartData(
   const xCol = matchedX;
   const yCol = matchedY;
   const y2Col = matchedY2;
-  
+  const xIsDateCol = xColumnIsDeclaredDate(x, availableColumns, declaredDateColumns);
+
   // Check for valid data in the columns (using matched column names)
   // For bar charts, we'll validate after aggregation since we filter non-numeric values during aggregation
   const shouldValidateAfterAggregation = type === 'bar' && aggregate && aggregate !== 'none';
@@ -528,23 +539,10 @@ export function processChartData(
     
     let allData: Record<string, any>[];
     
-    // Check if x column is a date column and detect period from data or query
-    const isDateCol = isDateColumnName(xCol);
+    const isDateCol = xIsDateCol;
     let detectedPeriod: DatePeriod | null = null;
-    if (isDateCol && data.length > 0) {
-      // Sample a few values to detect format
-      const sample = data.slice(0, Math.min(5, data.length)).map(r => String(r[xCol]));
-      // If all samples look like month-year format, use month period
-      if (sample.every(v => /^[A-Za-z]{3}[-/]?\d{2,4}$/i.test(v.trim()))) {
-        detectedPeriod = 'month';
-      } else {
-        // Try to parse as dates to detect period
-        const parsedDates = sample.map(v => parseFlexibleDate(v)).filter(d => d !== null);
-        if (parsedDates.length > 0) {
-          // If we can parse dates, default to month period for pie charts
-          detectedPeriod = 'month';
-        }
-      }
+    if (isDateCol && data.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()))) {
+      detectedPeriod = 'month';
     }
     
     if (isAlreadyAggregated) {
@@ -600,8 +598,9 @@ export function processChartData(
       }
     } else {
       // Need to aggregate
-      console.log(`   Processing pie chart with aggregation: ${aggregate || 'sum'}`);
-      const aggregated = aggregateData(data, xCol, yCol, aggregate || 'sum', detectedPeriod, isDateCol);
+      const effectiveAggregate = aggregate === 'none' ? 'sum' : aggregate || 'sum';
+      console.log(`   Processing pie chart with aggregation: ${effectiveAggregate}`);
+      const aggregated = aggregateData(data, xCol, yCol, effectiveAggregate, detectedPeriod, isDateCol);
       console.log(`   Aggregated data points: ${aggregated.length}`);
       // Convert Date objects to strings for schema validation and sort
       allData = aggregated
@@ -615,36 +614,9 @@ export function processChartData(
         .sort((a, b) => toNumber(b[yCol]) - toNumber(a[yCol]));
     }
     
-    // Calculate total of all items to ensure percentages add up to 100%
-    const total = allData.reduce((sum, row) => sum + toNumber(row[yCol]), 0);
-    console.log(`   Total value for all categories: ${total}`);
-    
-    // Take top 5 items
-    const top5 = allData.slice(0, 5);
-    const remaining = allData.slice(5);
-    
-    // Calculate sum of remaining items
-    const remainingSum = remaining.reduce((sum, row) => sum + toNumber(row[yCol]), 0);
-    
-    // Build result: top 5 + "Others" category if there are remaining items
-    const result = [...top5];
-    
-    if (remaining.length > 0 && remainingSum > 0) {
-      // Create "Others" category with the sum of remaining items
-      const othersLabel = `Other ${remaining.length > 1 ? `${remaining.length} items` : 'item'}`;
-      result.push({
-        [xCol]: othersLabel,
-        [yCol]: remainingSum,
-      });
-      console.log(`   Added "Others" category with ${remaining.length} items, sum: ${remainingSum}`);
-    }
-    
-    // Verify total (should be 100% of original total)
-    const resultTotal = result.reduce((sum, row) => sum + toNumber(row[yCol]), 0);
-    console.log(`   Pie chart result: ${result.length} segments (top 5 + ${remaining.length > 0 ? 'Others' : 'none'})`);
-    console.log(`   Result total: ${resultTotal}, Original total: ${total}, Match: ${Math.abs(resultTotal - total) < 0.01 ? '✅' : '⚠️'}`);
-    
-    return result;
+    // For pie charts, do not hard-truncate segments.
+    // The chart should reflect the complete distribution implied by the aggregated data.
+    return allData;
   }
 
   if (type === 'bar') {
@@ -670,18 +642,14 @@ export function processChartData(
     
     // Regular bar chart - aggregate and sort appropriately
     console.log(`   Processing bar chart with aggregation: ${aggregate || 'sum'}`);
-    // Check if x column is a date column and detect period from data
-    const isDateCol = isDateColumnName(xCol);
+    const isDateCol = xIsDateCol;
     let detectedPeriod: DatePeriod | null = null;
-    if (isDateCol && data.length > 0) {
-      // Sample a few values to detect format
-      const sample = data.slice(0, Math.min(5, data.length)).map(r => String(r[xCol]));
-      // If all samples look like month-year format, use month period
-      if (sample.every(v => /^[A-Za-z]{3}[-/]?\d{2,4}$/i.test(v.trim()))) {
-        detectedPeriod = 'month';
-      }
+    if (isDateCol && data.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()))) {
+      detectedPeriod = 'month';
     }
-    const aggregated = aggregateData(data, xCol, yCol, aggregate || 'sum', detectedPeriod, isDateCol);
+    const effectiveAggregate = aggregate === 'none' ? 'sum' : aggregate || 'sum';
+    console.log(`   Processing bar chart with aggregation: ${effectiveAggregate}`);
+    const aggregated = aggregateData(data, xCol, yCol, effectiveAggregate, detectedPeriod, isDateCol);
     console.log(`   Aggregated data points: ${aggregated.length}`);
     
     // Validate aggregated results - ensure we have data after aggregation
@@ -690,21 +658,14 @@ export function processChartData(
       return [];
     }
     
-    // Check if X column contains dates by:
-    // 1. Checking if column name suggests it's a date column
-    // 2. Testing a sample of values to see if they parse as dates
-    const xColLower = xCol.toLowerCase();
-    const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xColLower);
-    const sampleXValues = aggregated.slice(0, Math.min(10, aggregated.length)).map(row => String(row[xCol]));
-    const dateParseCount = sampleXValues.filter(val => parseDate(val) !== null).length;
-    const hasDates = nameSuggestsDate || (dateParseCount >= Math.min(3, sampleXValues.length * 0.5));
-    
+    const hasDates =
+      xIsDateCol &&
+      aggregated.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()));
+
     let result: Record<string, any>[];
     if (hasDates) {
-      // X-axis is dates - sort chronologically by date
-      console.log(`   X-axis contains dates (${dateParseCount}/${sampleXValues.length} samples parsed as dates), sorting chronologically`);
-      result = aggregated
-        .sort((a, b) => compareValues(a[xCol], b[xCol]));
+      console.log(`   X-axis is a profile date column with Date values; sorting chronologically`);
+      result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol], xIsDateCol));
       // No limit - show all date-based bars
     } else {
       // X-axis is not dates - sort by Y value (descending)
@@ -723,7 +684,7 @@ export function processChartData(
     });
     
     console.log(`   Bar chart result: ${result.length} bars`);
-    return hasDates ? applyTemporalXAxisLabels(result, xCol) : result;
+    return hasDates ? applyTemporalXAxisLabels(result, xCol, xIsDateCol) : result;
   }
 
   if (type === 'line' || type === 'area') {
@@ -732,21 +693,15 @@ export function processChartData(
     // Sort by x and optionally aggregate
     if (aggregate && aggregate !== 'none') {
       console.log(`   Using aggregation: ${aggregate}`);
-      // Check if x column is a date column and detect period from data
-      const isDateCol = isDateColumnName(xCol);
+      const isDateCol = xIsDateCol;
       let detectedPeriod: DatePeriod | null = null;
-      if (isDateCol && data.length > 0) {
-        // Sample a few values to detect format
-        const sample = data.slice(0, Math.min(5, data.length)).map(r => String(r[xCol]));
-        // If all samples look like month-year format, use month period
-        if (sample.every(v => /^[A-Za-z]{3}[-/]?\d{2,4}$/i.test(v.trim()))) {
-          detectedPeriod = 'month';
-        }
+      if (isDateCol && data.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()))) {
+        detectedPeriod = 'month';
       }
       const aggregated = aggregateData(data, xCol, yCol, aggregate, detectedPeriod, isDateCol);
       console.log(`   Aggregated data points: ${aggregated.length}`);
       // Use date-aware sorting
-      let result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol]));
+      let result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol], xIsDateCol));
       // Convert Date objects to strings for schema validation
       result = result.map(row => {
         const sanitizedRow: Record<string, any> = {};
@@ -763,7 +718,7 @@ export function processChartData(
       }
       
       console.log(`   ${type} chart result: ${optimized.length} points (sorted chronologically)`);
-      return applyTemporalXAxisLabels(optimized, xCol);
+      return applyTemporalXAxisLabels(optimized, xCol, xIsDateCol);
     }
 
     let result = data
@@ -797,8 +752,7 @@ export function processChartData(
         // The y2 field will simply be omitted from the row if it's NaN
         return true;
       })
-      // Use date-aware sorting for chronological order
-      .sort((a, b) => compareValues(a[xCol], b[xCol]));
+      .sort((a, b) => compareValues(a[xCol], b[xCol], xIsDateCol));
     
     // Log y2 data availability
     if (y2Col) {
@@ -823,7 +777,7 @@ export function processChartData(
     }
     
     console.log(`   ${type} chart result: ${optimized.length} points (sorted chronologically)`);
-    return applyTemporalXAxisLabels(optimized, xCol);
+    return applyTemporalXAxisLabels(optimized, xCol, xIsDateCol);
   }
 
   console.warn(`❌ Unknown chart type: ${type} for chart: ${chartSpec.title}`);
@@ -849,7 +803,9 @@ function aggregateData(
     let displayLabel: string | undefined;
     
     if (isDateColumn && datePeriod) {
-      const normalized = normalizeDateToPeriod(String(row[groupBy]), datePeriod);
+      const raw = row[groupBy];
+      const d = raw instanceof Date && !isNaN(raw.getTime()) ? raw : null;
+      const normalized = d ? normalizeDateToPeriod(d, datePeriod) : null;
       if (normalized) {
         key = normalized.normalizedKey;
         displayLabel = normalized.displayLabel;

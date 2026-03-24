@@ -30,6 +30,21 @@ import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
 import { FilterDataModal } from '@/components/FilterDataModal';
 import { FilterCondition } from '@/components/ColumnFilterDialog';
 import { debounce } from '@/lib/debounce';
+import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
+import {
+  isDatasetEnrichmentSystemMessage,
+  isDatasetPreviewSystemMessage,
+} from '@/pages/Home/modules/uploadSystemMessages';
+
+type PreviewSnapshot = {
+  capturedAt: number;
+  rows: Record<string, any>[];
+  columns: string[];
+  numericColumns: string[];
+  dateColumns: string[];
+  totalRows: number;
+  totalColumns: number;
+};
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -61,7 +76,14 @@ interface ChatInterfaceProps {
   isDatasetPreviewLoading?: boolean;
   /** Non-blocking: LLM enrichment running after preview */
   isDatasetEnriching?: boolean;
+  enrichmentPoll?: DatasetEnrichmentPollSnapshot | null;
+  enrichmentStartedAtMs?: number | null;
   onOpenDataSummary?: () => void; // Callback to open data summary modal
+  /** Seed the composer from outside (e.g. Data Summary modal); bump id for each new draft */
+  externalComposerDraft?: { text: string; id: number } | null;
+  onExternalComposerDraftConsumed?: () => void;
+  preEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
+  postEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
 }
 
 // Dynamic suggestions based on conversation context
@@ -136,7 +158,13 @@ export function ChatInterface({
   isReplacingAnalysis = false,
   isDatasetPreviewLoading = false,
   isDatasetEnriching = false,
+  enrichmentPoll = null,
+  enrichmentStartedAtMs = null,
   onOpenDataSummary,
+  externalComposerDraft = null,
+  onExternalComposerDraftConsumed,
+  preEnrichmentPreviewSnapshot = null,
+  postEnrichmentPreviewSnapshot = null,
 }: ChatInterfaceProps) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -145,6 +173,8 @@ export function ChatInterface({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const { toast } = useToast();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingComposerCaretRef = useRef<number | null>(null);
+  const lastExternalComposerDraftIdRef = useRef<number | null>(null);
   const lastMessageRef = useRef<HTMLDivElement | null>(null);
   const previousLastTimestampRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -227,6 +257,16 @@ export function ChatInterface({
     });
     return map;
   }, [messages]);
+
+  const previewAnchorKey = useMemo(() => {
+    const previewMsg = filteredMessages.find(isDatasetPreviewSystemMessage);
+    if (previewMsg) return `${previewMsg.timestamp}-${previewMsg.role}`;
+    const firstAssistant = filteredMessages.find(
+      (m) => m.role === 'assistant' && !isDatasetEnrichmentSystemMessage(m)
+    );
+    if (firstAssistant) return `${firstAssistant.timestamp}-${firstAssistant.role}`;
+    return null;
+  }, [filteredMessages]);
 
   // Memoize suggestions to avoid recalculating on every render
   const suggestions = useMemo(() => {
@@ -434,11 +474,43 @@ export function ChatInterface({
     [inputValue.length, mentionState.start, updateMentionState]
   );
 
-  const handleSuggestionClick = useCallback((suggestion: string) => {
-    if (!isLoading) {
-      onSendMessage(suggestion);
+  const applySuggestionToComposer = useCallback(
+    (suggestion: string) => {
+      const trimmed = suggestion.trim();
+      if (!trimmed) return;
+
+      setInputValue((prev) => {
+        const next = prev.trim() === '' ? trimmed : `${prev}\n\n${trimmed}`;
+        pendingComposerCaretRef.current = next.length;
+        return next;
+      });
+
+      setTimeout(() => {
+        const len = pendingComposerCaretRef.current;
+        pendingComposerCaretRef.current = null;
+        if (len == null) return;
+        const el = inputRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(len, len);
+          updateMentionState(el.value, len);
+        }
+      }, 0);
+    },
+    [updateMentionState]
+  );
+
+  useEffect(() => {
+    const draft = externalComposerDraft;
+    if (!draft) return;
+    if (lastExternalComposerDraftIdRef.current === draft.id) {
+      onExternalComposerDraftConsumed?.();
+      return;
     }
-  }, [isLoading, onSendMessage]);
+    lastExternalComposerDraftIdRef.current = draft.id;
+    applySuggestionToComposer(draft.text);
+    onExternalComposerDraftConsumed?.();
+  }, [externalComposerDraft, applySuggestionToComposer, onExternalComposerDraftConsumed]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionState.active && mentionState.options.length > 0) {
@@ -545,7 +617,9 @@ export function ChatInterface({
     <div className="flex h-[calc(100vh-80px)] relative bg-gradient-to-br from-slate-50 to-white">
       {/* Data Summary Button - Left Side */}
       {sessionId && onOpenDataSummary && (
-        <div className="absolute left-4 top-4 z-30">
+        <div
+          className={`absolute left-4 top-4 ${isDatasetEnriching && !isDatasetPreviewLoading ? 'z-50' : 'z-30'}`}
+        >
           <Button
             onClick={onOpenDataSummary}
             variant="outline"
@@ -575,34 +649,29 @@ export function ChatInterface({
         </div>
       )}
       {isDatasetPreviewLoading && (
-        <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="text-center max-w-md px-6">
-            <div className="relative mb-4">
-              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+        <div className="absolute left-0 right-0 top-0 z-40 px-4 pt-3">
+          <div className="mx-auto max-w-6xl rounded-xl border border-primary/20 bg-white/90 px-4 py-3 shadow-sm backdrop-blur-sm">
+            <div className="flex items-start gap-3">
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900">
+                  {enrichmentPoll?.phase === 'queued' ? 'Upload accepted, waiting to start' : 'Preparing your dataset preview'}
+                </p>
+                <p className="text-xs text-gray-600">
+                  {enrichmentPoll?.phaseMessage || 'Building preview rows and column summary in the background.'}
+                </p>
               </div>
-            </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Preparing your dataset</h3>
-            <p className="text-sm text-gray-500 mb-4">Building preview and column summary…</p>
-            <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-              <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '60%' }}></div>
             </div>
           </div>
         </div>
       )}
-      {isDatasetEnriching && !isDatasetPreviewLoading && (
-        <div className="absolute top-0 left-0 right-0 z-40 border-b border-amber-200 bg-amber-50/95 px-4 py-2 text-sm text-amber-950">
-          <p className="font-medium">Enriching our understanding of your data…</p>
-          <p className="text-amber-900/90">
-            You can type below; we will answer after enrichment. Suggested questions will appear when ready.
-          </p>
-        </div>
-      )}
-      
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Messages Area */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto">
+        <div
+          ref={messagesContainerRef}
+          className="flex-1 overflow-y-auto"
+        >
         <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
           {/* Header with Filter dropdown */}
           {(sessionId || messages.length > 0) && collaborators.length > 0 && (
@@ -661,17 +730,22 @@ export function ChatInterface({
               (panelSteps.length > 0 || panelWorkbench.length > 0);
             const showThinkingStepsForCharts =
               isThinkingTarget && isLoading && thinkingSteps && thinkingSteps.length > 0;
+            const isEnrichmentMessage = isDatasetEnrichmentSystemMessage(message);
+            const carriesDatasetPreview =
+              previewAnchorKey === `${message.timestamp}-${message.role}` &&
+              !!columns &&
+              columns.length > 0;
             return (
               <MessageBubble
                 key={`${message.timestamp}-${message.role}-${idx}`}
                 message={message}
-                sampleRows={originalIndex === 0 ? sampleRows : undefined}
-                columns={originalIndex === 0 ? columns : undefined}
-                numericColumns={originalIndex === 0 ? numericColumns : undefined}
-                dateColumns={originalIndex === 0 ? dateColumns : undefined}
-                temporalDisplayGrainsByColumn={originalIndex === 0 ? temporalDisplayGrainsByColumn : undefined}
-                totalRows={originalIndex === 0 ? totalRows : undefined}
-                totalColumns={originalIndex === 0 ? totalColumns : undefined}
+                sampleRows={carriesDatasetPreview ? sampleRows : undefined}
+                columns={carriesDatasetPreview ? columns : undefined}
+                numericColumns={carriesDatasetPreview ? numericColumns : undefined}
+                dateColumns={carriesDatasetPreview ? dateColumns : undefined}
+                temporalDisplayGrainsByColumn={carriesDatasetPreview ? temporalDisplayGrainsByColumn : undefined}
+                totalRows={carriesDatasetPreview ? totalRows : undefined}
+                totalColumns={carriesDatasetPreview ? totalColumns : undefined}
                 onEditMessage={onEditMessage}
                 messageIndex={originalIndex >= 0 ? originalIndex : idx}
                 sessionId={sessionId}
@@ -680,7 +754,14 @@ export function ChatInterface({
                 thinkingPanelSteps={showThinkingPanel ? panelSteps : undefined}
                 thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
                 thinkingPanelStreaming={showThinkingPanel ? isLoading : false}
-                onSuggestedQuestionClick={onSendMessage}
+                onSuggestedQuestionClick={applySuggestionToComposer}
+                showDatasetEnrichmentLoader={isEnrichmentMessage && !isDatasetPreviewLoading}
+                enrichmentPhase={enrichmentPoll?.enrichmentPhase}
+                enrichmentStep={enrichmentPoll?.enrichmentStep}
+                uploadProgress={enrichmentPoll?.uploadProgress}
+                enrichmentStartedAtMs={enrichmentStartedAtMs}
+                preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
+                postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
                 ref={isLastMessage ? lastMessageRef : undefined}
               />
             );
@@ -708,8 +789,9 @@ export function ChatInterface({
                     key={idx}
                     variant="outline"
                     size="sm"
-                    onClick={() => handleSuggestionClick(suggestion)}
-                    disabled={isLoading}
+                    type="button"
+                    onClick={() => applySuggestionToComposer(suggestion)}
+                    aria-label={`Add to message: ${suggestion}`}
                     data-testid={`suggestion-${idx}`}
                     className="text-xs px-3 py-1.5 rounded-full border-gray-200 hover:border-primary hover:bg-primary/5 transition-colors"
                   >
@@ -721,7 +803,7 @@ export function ChatInterface({
           )}
           
           {/* Show follow-up suggestions after assistant messages (when there are multiple messages) */}
-          {filteredMessages.length > 1 && filteredMessages[filteredMessages.length - 1].role === 'assistant' && !isLoading && (
+          {filteredMessages.length > 1 && filteredMessages[filteredMessages.length - 1].role === 'assistant' && (
             <div className="mb-4 mt-2">
               <div className="flex flex-wrap gap-2 justify-center">
                 {suggestions.slice(0, 3).map((suggestion, idx) => (
@@ -729,8 +811,9 @@ export function ChatInterface({
                     key={idx}
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleSuggestionClick(suggestion)}
-                    disabled={isLoading}
+                    type="button"
+                    onClick={() => applySuggestionToComposer(suggestion)}
+                    aria-label={`Add to message: ${suggestion}`}
                     className="text-xs px-3 py-1.5 rounded-full text-gray-600 hover:text-primary hover:bg-primary/5 transition-colors"
                   >
                     {suggestion}

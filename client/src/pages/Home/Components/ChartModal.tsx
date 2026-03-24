@@ -8,10 +8,11 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
-import { Filter, X, Plus, Settings2 } from 'lucide-react';
+import { Filter, X, Plus, Settings2, Table2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ChartSpec } from '@/shared/schema';
+import { ChartSpec, DashboardTableSpec } from '@/shared/schema';
 import { DashboardModal } from './DashboardModal/DashboardModal';
+import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
 import { ChartFilterDefinition, ActiveChartFilters } from '@/lib/chartFilters';
 import { format as formatDate } from 'date-fns';
 import {
@@ -56,6 +57,8 @@ interface ChartModalProps {
 }
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+
+const TABLE_V1_PREFIX = 'TABLE_V1|';
 
 // Smart number formatter for axis labels
 const formatAxisLabel = (value: number): string => {
@@ -153,6 +156,8 @@ export function ChartModal({
   determineSliderStep = determineSliderStepLocal,
 }: ChartModalProps) {
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
+  const [isDashboardTableModalOpen, setIsDashboardTableModalOpen] = useState(false);
+  const [dashboardTableForModal, setDashboardTableForModal] = useState<DashboardTableSpec | null>(null);
   const [showDots, setShowDots] = useState(true); // Default to showing dots in modal
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
   // Point visibility controls for scatter plots
@@ -161,6 +166,38 @@ export function ChartModal({
   const [pointDensity, setPointDensity] = useState<'low' | 'medium' | 'high' | 'all'>('medium');
   const { type, title, data: chartDataSource = [], x, y, xDomain, yDomain, trendLine, xLabel, yLabel } = chart;
   const chartColor = COLORS[0]; // Use primary color for modal
+
+  const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
+    if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;
+
+    const payloadText = keyInsight.slice(TABLE_V1_PREFIX.length);
+    try {
+      const parsed = JSON.parse(payloadText) as any;
+
+      if (!parsed || !Array.isArray(parsed.columns) || !Array.isArray(parsed.rows)) return null;
+
+      const caption =
+        typeof parsed.caption === 'string' && parsed.caption.trim() ? parsed.caption.trim() : 'Table';
+
+      const columns: string[] = parsed.columns.map((c: any) => String(c));
+
+      const rows: Array<Array<string | number | null>> = parsed.rows.map((row: any) => {
+        if (!Array.isArray(row)) return [];
+        return row.map((cell: any) => {
+          if (cell === null) return null;
+          if (typeof cell === 'number' || typeof cell === 'string') return cell;
+          return String(cell);
+        });
+      });
+
+      if (columns.length === 0) return null;
+      return { caption, columns, rows };
+    } catch {
+      return null;
+    }
+  };
+
+  const isTableInsight = typeof chart.keyInsight === 'string' && chart.keyInsight.startsWith(TABLE_V1_PREFIX);
   
   // Use filtered data if available, otherwise use original data
   const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
@@ -761,15 +798,33 @@ export function ChartModal({
                   </Popover>
                 </>
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1 px-3 text-xs"
-                onClick={() => setIsDashboardModalOpen(true)}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add to Dashboard
-              </Button>
+              <div className="flex flex-wrap gap-2 items-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1 px-3 text-xs"
+                  onClick={() => setIsDashboardModalOpen(true)}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add to Dashboard
+                </Button>
+                {isTableInsight && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1 px-3 text-xs"
+                    onClick={() => {
+                      const parsed = parseTableV1KeyInsight(chart.keyInsight);
+                      if (!parsed) return;
+                      setDashboardTableForModal(parsed);
+                      setIsDashboardTableModalOpen(true);
+                    }}
+                  >
+                    <Table2 className="h-3.5 w-3.5" />
+                    Add Table to Dashboard
+                  </Button>
+                )}
+              </div>
             {enableFilters && filterDefinitions.length > 0 && (
               <Popover>
                 <PopoverTrigger asChild>
@@ -1087,6 +1142,16 @@ export function ChartModal({
       onClose={() => setIsDashboardModalOpen(false)}
       chart={chart}
     />
+    {dashboardTableForModal && (
+      <DashboardTableModal
+        isOpen={isDashboardTableModalOpen}
+        onClose={() => {
+          setIsDashboardTableModalOpen(false);
+          setDashboardTableForModal(null);
+        }}
+        table={dashboardTableForModal}
+      />
+    )}
     </>
   );
 }

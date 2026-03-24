@@ -1,17 +1,11 @@
-import { z } from 'zod';
+import {
+  datasetProfileSchema,
+  type DatasetProfile,
+} from '../shared/schema.js';
 import { completeJson } from './agents/runtime/llmJson.js';
 
-export const datasetProfileSchema = z.object({
-  shortDescription: z.string(),
-  dateColumns: z.array(z.string()),
-  suggestedQuestions: z.array(z.string()).max(8),
-  measureColumns: z.array(z.string()).optional(),
-  idColumns: z.array(z.string()).optional(),
-  grainGuess: z.string().optional(),
-  notes: z.string().optional(),
-});
-
-export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
+export type { DatasetProfile };
+export { datasetProfileSchema };
 
 export const emptyDatasetProfile = (): DatasetProfile => ({
   shortDescription: '',
@@ -46,12 +40,15 @@ const SYSTEM_PROMPT = `You are a data analyst. You receive JSON with "columns" (
 
 Return ONLY a JSON object with these keys:
 - shortDescription: 1–3 sentences describing what the dataset is about.
-- dateColumns: array of column names that hold dates or datetimes (must be a subset of "columns"; empty array if none).
+- dateColumns: every column that holds dates, datetimes, or business period labels that represent time (exact header names from "columns"). Include messy string encodings (e.g. "Q1 27-Feb '25", "H1 Q1", fiscal labels). If none, use []. Do not include identifier columns (row id, order id, etc.).
+- dirtyStringDateColumns: subset of dateColumns where values in the sample are mostly plain strings (or mixed) and are NOT already ISO/standard datetimes or native timestamps in the sample — i.e. the column needs a cleaned parse pass. Columns where every non-null sample value is already an ISO-like datetime string or unambiguous standard format should NOT be listed here. If none need cleaning, use [].
 - suggestedQuestions: 5–8 short, concrete questions the user might ask about this data.
 - measureColumns: names of numeric metric columns (revenue, quantity, etc.), subset of "columns".
 - idColumns: identifier columns (customer id, order id, etc.), subset of "columns".
 - grainGuess: optional short phrase (e.g. "daily orders", "monthly revenue").
-- notes: optional caveats (PII, mixed formats, etc.).
+- notes: optional caveats (PII, mixed formats, fiscal year assumptions, etc.).
+
+For each name in dirtyStringDateColumns, the pipeline will add a new column named Cleaned_<exact original header> with normalized values when possible.
 
 Do not invent column names. Only use names from "columns".`;
 

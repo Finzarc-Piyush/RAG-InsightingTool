@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { 
@@ -14,7 +15,100 @@ import {
 import { loadChartsFromBlob } from "../lib/blobStorage.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { getDataSummary } from "../lib/dataOps/pythonService.js";
-import { generateAISuggestions } from "../lib/suggestionGenerator.js";
+import { generateAISuggestions, getDefaultSuggestions } from "../lib/suggestionGenerator.js";
+import {
+  createStatisticalSummary,
+  type StatisticalSummary,
+} from "../lib/statisticalSummary.js";
+import type { DataSummary } from "../shared/schema.js";
+
+function isTransientPythonSummaryError(e: unknown): boolean {
+  if (e && typeof e === "object" && "code" in e) {
+    const code = (e as { code?: string }).code;
+    if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ECONNRESET") {
+      return true;
+    }
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ECONNREFUSED|ETIMEDOUT|ECONNRESET|fetch failed|socket hang up/i.test(msg);
+}
+
+/** Column stats shape returned to the data-summary API (matches Python /summary). */
+type DataSummaryApiColumn = {
+  variable: string;
+  datatype: string;
+  total_values: number;
+  null_values: number;
+  non_null_values: number;
+  mean?: number | null;
+  median?: number | null;
+  std_dev?: number | null;
+  min?: number | string | null;
+  max?: number | string | null;
+  mode?: any;
+};
+
+function normalizeDataSummaryForLocalStats(ds: DataSummary): DataSummary {
+  return {
+    ...ds,
+    columns: ds.columns ?? [],
+    numericColumns: ds.numericColumns ?? [],
+    dateColumns: ds.dateColumns ?? [],
+  };
+}
+
+function statisticalSummaryToApiColumns(
+  stat: StatisticalSummary
+): DataSummaryApiColumn[] {
+  return stat.columns.map((col) => {
+    const total =
+      col.type === "numeric" ? col.count + col.nullCount : col.count;
+    const nulls = col.nullCount;
+    const base: DataSummaryApiColumn = {
+      variable: col.column,
+      datatype:
+        col.type === "numeric"
+          ? "numeric"
+          : col.type === "date"
+            ? "datetime"
+            : "object",
+      total_values: total,
+      null_values: nulls,
+      non_null_values: Math.max(0, total - nulls),
+    };
+    if (col.type === "numeric") {
+      return {
+        ...base,
+        mean: col.mean ?? null,
+        median: col.median ?? null,
+        std_dev: col.stdDev ?? null,
+        min: col.min ?? null,
+        max: col.max ?? null,
+        mode: null,
+      };
+    }
+    if (col.type === "date") {
+      return {
+        ...base,
+        mean: null,
+        median: null,
+        std_dev: null,
+        min: col.dateRange?.min ?? null,
+        max: col.dateRange?.max ?? null,
+        mode: null,
+      };
+    }
+    return {
+      ...base,
+      mean: null,
+      median: null,
+      std_dev: null,
+      min: null,
+      max: null,
+      mode: col.topValues?.[0]?.value ?? null,
+    };
+  });
+}
 
 // Get all sessions
 export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
@@ -500,8 +594,14 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
 
 // Get data summary for a session
 export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
+  const requestId =
+    (typeof req.headers["x-request-id"] === "string" && req.headers["x-request-id"].trim()) ||
+    randomUUID();
+  res.setHeader("X-Request-Id", requestId);
+
   try {
     console.log('📊 getDataSummaryEndpoint called', { 
+      requestId,
       sessionId: req.params.sessionId,
       path: req.path,
       method: req.method 
@@ -539,27 +639,12 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       try {
         recommendedQuestions = await generateAISuggestions(
           chatHistory,
-          session.dataSummary,
+          normalizeDataSummaryForLocalStats(session.dataSummary),
           lastAnswer
         );
       } catch (error) {
         console.error('Failed to generate AI suggestions:', error);
-        // Fallback to default suggestions
-        if (session.dataSummary.numericColumns.length > 0) {
-          recommendedQuestions = [
-            `What affects ${session.dataSummary.numericColumns[0]}?`,
-            `Show me trends for ${session.dataSummary.numericColumns[0]}`,
-            'What are the top performers?',
-            'Analyze correlations in the data'
-          ];
-        } else {
-          recommendedQuestions = [
-            'Show me trends over time',
-            'What are the top performers?',
-            'Analyze the data',
-            'What patterns do you see?'
-          ];
-        }
+        recommendedQuestions = getDefaultSuggestions(session.dataSummary);
       }
 
       return res.json({
@@ -595,9 +680,35 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       console.log(`✅ Sampled ${data.length} rows for summary calculation`);
     }
 
-    // Get summary statistics from Python service
-    const summaryResponse = await getDataSummary(data);
-    
+    // Prefer Python /summary; fall back to in-process stats if the service is down (e.g. ECONNREFUSED → "fetch failed")
+    let summaryResponse: { summary: DataSummaryApiColumn[] };
+    try {
+      const pySummary = await getDataSummary(data);
+      if (!pySummary?.summary || !Array.isArray(pySummary.summary)) {
+        throw new Error("Invalid summary response from Python service");
+      }
+      summaryResponse = {
+        summary: pySummary.summary as DataSummaryApiColumn[],
+      };
+    } catch (pyError) {
+      console.error(
+        "Python data summary failed; using in-process fallback:",
+        pyError,
+        { requestId, sessionId: req.params.sessionId }
+      );
+      const ds = normalizeDataSummaryForLocalStats(session.dataSummary);
+      const colNames = (ds.columns ?? []).map((c) => c.name).filter(Boolean);
+      const requiredCols =
+        colNames.length > 0 ? colNames : Object.keys(data[0] || {});
+      const stat = createStatisticalSummary(data, ds, requiredCols);
+      summaryResponse = { summary: statisticalSummaryToApiColumns(stat) };
+      if (summaryResponse.summary.length === 0) {
+        const err =
+          pyError instanceof Error ? pyError : new Error(String(pyError));
+        throw err;
+      }
+    }
+
     // Calculate quality score based on null values
     // Scale statistics to full dataset size (if we sampled the data)
     const fullDataRowCount = session.dataSummary?.rowCount || data.length;
@@ -636,27 +747,12 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     try {
       recommendedQuestions = await generateAISuggestions(
         chatHistory,
-        session.dataSummary,
+        normalizeDataSummaryForLocalStats(session.dataSummary),
         lastAnswer
       );
     } catch (error) {
       console.error('Failed to generate AI suggestions:', error);
-      // Fallback to default suggestions
-      if (session.dataSummary.numericColumns.length > 0) {
-        recommendedQuestions = [
-          `What affects ${session.dataSummary.numericColumns[0]}?`,
-          `Show me trends for ${session.dataSummary.numericColumns[0]}`,
-          'What are the top performers?',
-          'Analyze correlations in the data'
-        ];
-      } else {
-        recommendedQuestions = [
-          'Show me trends over time',
-          'What are the top performers?',
-          'Analyze the data',
-          'What patterns do you see?'
-        ];
-      }
+      recommendedQuestions = getDefaultSuggestions(session.dataSummary);
     }
 
     res.json({
@@ -668,8 +764,17 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Get data summary error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch data summary';
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error('Get data summary error:', {
+      requestId,
+      sessionId: req.params.sessionId,
+      hasAuthHeader: Boolean(req.headers.authorization),
+      errorMessage,
+    });
+    if (stack) {
+      console.error(stack);
+    }
     
     if (errorMessage.includes('not found') || errorMessage.includes('Session not found')) {
       return res.status(404).json({ error: errorMessage });
@@ -678,8 +783,16 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     if (errorMessage.includes('Unauthorized')) {
       return res.status(403).json({ error: errorMessage });
     }
+
+    if (isTransientPythonSummaryError(error)) {
+      return res.status(503).json({
+        error: 'Data profiling service is temporarily unavailable. Please try again shortly.',
+        retryAfter: 5,
+        requestId,
+      });
+    }
     
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: errorMessage, requestId });
   }
 };
 

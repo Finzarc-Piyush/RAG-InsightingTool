@@ -7,13 +7,16 @@ interface DashboardContextType {
   setCurrentDashboard: (dashboard: DashboardData | null) => void;
   createDashboard: (name: string) => Promise<DashboardData>;
   addChartToDashboard: (dashboardId: string, chart: any, sheetId?: string) => Promise<DashboardData>;
+  addTableToDashboard: (dashboardId: string, table: any, sheetId?: string) => Promise<DashboardData>;
   removeChartFromDashboard: (dashboardId: string, chartIndex: number, sheetId?: string) => Promise<DashboardData>;
+  removeTableFromDashboard: (dashboardId: string, tableIndex: number, sheetId?: string) => Promise<DashboardData>;
   deleteDashboard: (dashboardId: string) => Promise<void>;
   renameDashboard: (dashboardId: string, name: string) => Promise<DashboardData>;
   renameSheet: (dashboardId: string, sheetId: string, name: string) => Promise<DashboardData>;
   addSheet: (dashboardId: string, name: string) => Promise<DashboardData>;
   removeSheet: (dashboardId: string, sheetId: string) => Promise<DashboardData>;
   updateChartInsightOrRecommendation: (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) => Promise<DashboardData>;
+  updateTableCaption: (dashboardId: string, tableIndex: number, updates: { caption?: string }, sheetId?: string) => Promise<DashboardData>;
   getDashboardById: (dashboardId: string) => DashboardData | undefined;
   fetchDashboardById: (dashboardId: string) => Promise<DashboardData>;
   status: {

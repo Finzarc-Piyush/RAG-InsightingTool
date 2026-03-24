@@ -8,6 +8,7 @@ import {
   TemporalDisplayGrain,
 } from '@/shared/schema';
 import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi, getUploadJobStatus } from '@/lib/api';
+import type { DatasetEnrichmentPollSnapshot, UploadJobStatusResponse, UploadPhase } from '@/lib/api/uploadStatus';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
 import { useToast } from '@/hooks/use-toast';
@@ -19,6 +20,13 @@ import {
   buildSyntheticInitialAssistantContent,
   suggestedFollowUpsFromSession,
 } from '@/lib/initialAnalysisMessage';
+import {
+  DATASET_ENRICHMENT_LOADING_CONTENT,
+  DATASET_PREVIEW_LOADING_CONTENT,
+  isDatasetEnrichmentSystemMessage,
+  isDatasetPreviewSystemMessage,
+  normalizeDatasetSystemMessages,
+} from './uploadSystemMessages';
 
 interface UseHomeMutationsProps {
   sessionId: string | null;
@@ -39,6 +47,9 @@ interface UseHomeMutationsProps {
   setSuggestions?: (suggestions: string[]) => void;
   setIsDatasetPreviewLoading?: (v: boolean) => void;
   setIsDatasetEnriching?: (v: boolean) => void;
+  setEnrichmentPollSnapshot?: (snapshot: DatasetEnrichmentPollSnapshot | null) => void;
+  onUploadProcessingStarted?: () => void;
+  onUploadError?: () => void;
 }
 
 export const useHomeMutations = ({
@@ -60,13 +71,21 @@ export const useHomeMutations = ({
   setSuggestions,
   setIsDatasetPreviewLoading,
   setIsDatasetEnriching,
+  setEnrichmentPollSnapshot,
+  onUploadProcessingStarted,
+  onUploadError,
 }: UseHomeMutationsProps) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const userEmail = getUserEmail();
   const abortControllerRef = useRef<AbortController | null>(null);
   const uploadPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const uploadPollInFlightRef = useRef(false);
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
+  const previewStateRef = useRef<{ rows: Record<string, any>[]; columns: string[] }>({
+    rows: [],
+    columns: [],
+  });
   const messagesRef = useRef<Message[]>(messages);
   /** Survives onDone state clears so onSuccess can attach trace to the user message. */
   const turnTraceRef = useRef<{ steps: ThinkingStep[]; workbench: AgentWorkbenchEntry[] }>({
@@ -96,32 +115,189 @@ export const useHomeMutations = ({
       clearInterval(uploadPollIntervalRef.current);
       uploadPollIntervalRef.current = null;
     }
+    setEnrichmentPollSnapshot?.(null);
   };
 
-  const applySessionHydration = (session: Record<string, any>) => {
+  const upsertPreviewSystemMessage = () => {
+    setMessages((prev) => {
+      const existingIndex = prev.findIndex((m) => isDatasetPreviewSystemMessage(m));
+      if (existingIndex >= 0) return prev;
+      const previewMessage: Message = {
+        role: 'assistant',
+        content: DATASET_PREVIEW_LOADING_CONTENT,
+        charts: [],
+        insights: [],
+        timestamp: Date.now(),
+      };
+      return [previewMessage, ...prev.filter((m) => !isDatasetEnrichmentSystemMessage(m))];
+    });
+  };
+
+  const upsertEnrichmentSystemMessage = () => {
+    setMessages((prev) => {
+      const previewIndex = prev.findIndex((m) => isDatasetPreviewSystemMessage(m));
+      if (previewIndex < 0) return prev;
+      const existingIndex = prev.findIndex((m) => isDatasetEnrichmentSystemMessage(m));
+      const message: Message = {
+        role: 'assistant',
+        content: DATASET_ENRICHMENT_LOADING_CONTENT,
+        charts: [],
+        insights: [],
+        timestamp: prev[existingIndex]?.timestamp ?? Date.now(),
+      };
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = message;
+        return updated;
+      }
+      const next = [...prev];
+      next.splice(previewIndex + 1, 0, message);
+      return next;
+    });
+  };
+
+  const removeEnrichmentSystemMessage = () => {
+    setMessages((prev) => prev.filter((m) => !isDatasetEnrichmentSystemMessage(m)));
+  };
+
+  const applyPreviewState = (payload: {
+    rows?: Record<string, any>[];
+    columns?: string[];
+    numericColumns?: string[];
+    dateColumns?: string[];
+    rowCount?: number;
+    columnCount?: number;
+    summaryColumns?: Array<{ name: string }>;
+    allowEmptyRowsOverwrite?: boolean;
+  }) => {
+    const nextColumns = payload.columns ?? [];
+    const hasColumns = nextColumns.length > 0;
+    const nextRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const hasRows = nextRows.length > 0;
+
+    if (hasColumns) {
+      setColumns(nextColumns);
+      previewStateRef.current.columns = nextColumns;
+    }
+    if (hasRows || payload.allowEmptyRowsOverwrite) {
+      setSampleRows(nextRows);
+      previewStateRef.current.rows = nextRows;
+    }
+    if (payload.numericColumns) setNumericColumns(payload.numericColumns);
+    if (payload.dateColumns) setDateColumns(payload.dateColumns);
+    if (payload.summaryColumns) {
+      setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(payload.summaryColumns));
+    }
+    if (typeof payload.rowCount === 'number') setTotalRows(payload.rowCount);
+    if (typeof payload.columnCount === 'number') setTotalColumns(payload.columnCount);
+
+    return {
+      hasColumns: hasColumns || previewStateRef.current.columns.length > 0,
+      hasRows: hasRows || previewStateRef.current.rows.length > 0,
+    };
+  };
+
+  const applySessionHydration = (
+    session: Record<string, any>,
+    opts: { syncMessages?: boolean; allowEmptyRowsOverwrite?: boolean } = {}
+  ) => {
     if (!session) return;
     setFileName(session.fileName || null);
     setInitialCharts(session.charts || []);
     setInitialInsights(session.insights || []);
-    if (session.dataSummary && session.dataSummary.rowCount > 0) {
-      if (session.sampleRows?.length) setSampleRows(session.sampleRows);
-      setColumns(session.dataSummary.columns?.map((c: { name: string }) => c.name) || []);
-      setNumericColumns(session.dataSummary.numericColumns || []);
-      setDateColumns(session.dataSummary.dateColumns || []);
-      setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(session.dataSummary.columns));
-      setTotalRows(session.dataSummary.rowCount);
-      setTotalColumns(session.dataSummary.columnCount);
+    if (session.dataSummary) {
+      const previewState = applyPreviewState({
+        rows: Array.isArray(session.sampleRows) ? session.sampleRows : [],
+        columns: session.dataSummary.columns?.map((c: { name: string }) => c.name) || [],
+        numericColumns: session.dataSummary.numericColumns || [],
+        dateColumns: session.dataSummary.dateColumns || [],
+        summaryColumns: session.dataSummary.columns,
+        rowCount: session.dataSummary.rowCount || 0,
+        columnCount: session.dataSummary.columnCount || 0,
+        allowEmptyRowsOverwrite: opts.allowEmptyRowsOverwrite,
+      });
+
+      if (opts.syncMessages && Array.isArray(session.messages)) {
+        const enriching =
+          session.enrichmentStatus === 'pending' || session.enrichmentStatus === 'in_progress';
+        setMessages(
+          normalizeDatasetSystemMessages(session.messages as Message[], {
+            hasPreview: previewState.hasColumns,
+            isEnriching: enriching,
+          })
+        );
+      }
     }
-    if (Array.isArray(session.messages)) {
-      setMessages(session.messages as Message[]);
+  };
+
+  const hydrateSessionWithRetry = async (
+    sid: string,
+    opts: { retries?: number; backoffMs?: number; syncMessages?: boolean } = {}
+  ) => {
+    const retries = opts.retries ?? 3;
+    const backoffMs = opts.backoffMs ?? 350;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const sessionData = await sessionsApi.getSessionDetails(sid);
+      const session = (sessionData.session || sessionData) as Record<string, any>;
+      const hasColumns = !!session?.dataSummary?.columns?.length;
+      const rowCount = Number(session?.dataSummary?.rowCount || 0);
+      const hasPreviewLike = hasColumns || rowCount > 0;
+      applySessionHydration(session, {
+        syncMessages: opts.syncMessages,
+        allowEmptyRowsOverwrite: attempt === retries,
+      });
+      if (hasPreviewLike || attempt === retries) return session;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt + 1)));
     }
+  };
+
+  const applyPreviewFromStatus = (
+    status: UploadJobStatusResponse
+  ): 'none' | 'partial' | 'full' => {
+    const summary = status.previewSummary;
+    if (!summary || !Array.isArray(summary.columns) || summary.columns.length === 0) {
+      return 'none';
+    }
+    const rows = Array.isArray(status.previewSampleRows) ? status.previewSampleRows : [];
+    const hasRows = rows.length > 0;
+    applyPreviewState({
+      rows,
+      columns: summary.columns.map((c) => c.name),
+      numericColumns: summary.numericColumns || [],
+      dateColumns: summary.dateColumns || [],
+      summaryColumns: summary.columns as any,
+      rowCount: summary.rowCount || 0,
+      columnCount: summary.columnCount || 0,
+      allowEmptyRowsOverwrite: false,
+    });
+    return hasRows ? 'full' : 'partial';
   };
 
   const startUploadJobPolling = (jobId: string, sessionId: string) => {
     clearUploadPoll();
+    const deriveClientPhase = (st: UploadJobStatusResponse): UploadPhase => {
+      if (st.phase) return st.phase;
+      if (st.status === 'failed') return 'failed';
+      if (st.status === 'completed') return 'completed';
+      if (st.enrichmentStatus === 'pending' || st.enrichmentStatus === 'in_progress') return 'enriching';
+      if (st.previewReady || st.status === 'preview_ready') return 'preparing_preview';
+      if (st.status === 'saving') return 'finalizing';
+      if (st.status === 'parsing') return 'preparing_preview';
+      return 'queued';
+    };
     const tick = async () => {
+      if (uploadPollInFlightRef.current) return;
+      uploadPollInFlightRef.current = true;
       try {
         const st = await getUploadJobStatus(jobId);
+        const phase = deriveClientPhase(st);
+        setEnrichmentPollSnapshot?.({
+          uploadProgress: st.progress,
+          phase,
+          phaseMessage: st.phaseMessage,
+          enrichmentPhase: st.enrichmentPhase,
+          enrichmentStep: st.enrichmentStep,
+        });
         if (st.status === 'failed') {
           clearUploadPoll();
           setIsDatasetPreviewLoading?.(false);
@@ -136,18 +312,25 @@ export const useHomeMutations = ({
 
         // previewReady stays true through analyzing/saving/completed (see GET /api/upload/status)
         if (st.previewReady || st.status === 'preview_ready') {
-          const sessionData = await sessionsApi.getSessionDetails(sessionId);
-          const session = (sessionData.session || sessionData) as Record<string, any>;
-          if (session?.dataSummary?.rowCount > 0) {
-            applySessionHydration(session);
-            setIsDatasetPreviewLoading?.(false);
-            const es = session.enrichmentStatus as string | undefined;
-            const enriching =
-              es === 'pending' ||
-              es === 'in_progress' ||
-              st.enrichmentPhase === 'enriching' ||
-              st.enrichmentPhase === 'waiting';
-            setIsDatasetEnriching?.(enriching);
+          upsertPreviewSystemMessage();
+          const fastPathState = applyPreviewFromStatus(st);
+          if (fastPathState !== 'full') {
+            await hydrateSessionWithRetry(sessionId, {
+              retries: fastPathState === 'partial' ? 1 : 2,
+              syncMessages: true,
+            });
+          }
+          setIsDatasetPreviewLoading?.(false);
+          const enriching =
+            st.enrichmentStatus === 'pending' ||
+            st.enrichmentStatus === 'in_progress' ||
+            st.enrichmentPhase === 'enriching' ||
+            st.enrichmentPhase === 'waiting';
+          setIsDatasetEnriching?.(enriching);
+          if (enriching) {
+            upsertEnrichmentSystemMessage();
+          } else {
+            removeEnrichmentSystemMessage();
           }
         }
 
@@ -155,12 +338,13 @@ export const useHomeMutations = ({
           clearUploadPoll();
           setIsDatasetPreviewLoading?.(false);
           setIsDatasetEnriching?.(false);
-          const sessionData = await sessionsApi.getSessionDetails(sessionId);
-          const session = (sessionData.session || sessionData) as Record<string, any>;
-          applySessionHydration(session);
+          removeEnrichmentSystemMessage();
+          await hydrateSessionWithRetry(sessionId, { retries: 3, syncMessages: true });
         }
       } catch (e) {
         logger.error('Upload job poll error:', e);
+      } finally {
+        uploadPollInFlightRef.current = false;
       }
     };
     uploadPollIntervalRef.current = setInterval(() => {
@@ -183,18 +367,22 @@ export const useHomeMutations = ({
       
       // Handle new async format (202 response with jobId and sessionId)
       if (data.jobId && data.sessionId && data.status === 'processing') {
+        onUploadProcessingStarted?.();
         setSessionId(data.sessionId);
         setIsDatasetPreviewLoading?.(true);
         setIsDatasetEnriching?.(false);
+        previewStateRef.current = { rows: [], columns: [] };
         setMessages([]);
+        upsertPreviewSystemMessage();
         startUploadJobPolling(data.jobId, data.sessionId);
         toast({
-          title: 'Upload Accepted',
-          description: 'Your file is being processed.',
+          title: 'Upload started',
+          description: 'Your dataset is queued and preview will appear shortly.',
         });
       } 
       // Handle old synchronous format (backward compatibility)
       else if (data.sessionId && data.summary) {
+        onUploadProcessingStarted?.();
         setSessionId(data.sessionId);
         setFileName(data.fileName || null);
         setInitialCharts(data.charts || []);
@@ -246,6 +434,7 @@ export const useHomeMutations = ({
       }
     },
     onError: (error) => {
+      onUploadError?.();
       clearUploadPoll();
       setIsDatasetPreviewLoading?.(false);
       setIsDatasetEnriching?.(false);
@@ -261,7 +450,9 @@ export const useHomeMutations = ({
     setSessionId(data.sessionId);
     setIsDatasetPreviewLoading?.(true);
     setIsDatasetEnriching?.(false);
+    previewStateRef.current = { rows: [], columns: [] };
     setMessages([]);
+    upsertPreviewSystemMessage();
     startUploadJobPolling(data.jobId, data.sessionId);
     toast({
       title: 'Import Started',

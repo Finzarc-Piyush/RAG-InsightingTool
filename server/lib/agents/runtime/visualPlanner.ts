@@ -84,7 +84,7 @@ export async function proposeAndBuildExtraCharts(
         x: p.x,
         y: p.y,
       });
-      let processed = processChartData(ctx.data, spec);
+      let processed = processChartData(ctx.data, spec, ctx.summary.dateColumns);
       processed = optimizeChartData(processed, spec);
       const smartDomains = calculateSmartDomainsForChart(
         processed,

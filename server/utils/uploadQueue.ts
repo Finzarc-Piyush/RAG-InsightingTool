@@ -16,6 +16,12 @@ export interface SnowflakeImportConfig {
   role?: string;
 }
 
+type UploadJobEnrichmentStep =
+  | 'inferring_profile'
+  | 'dirty_date_enrichment'
+  | 'building_context'
+  | 'persisting';
+
 interface UploadJob {
   jobId: string;
   sessionId: string;
@@ -40,6 +46,10 @@ interface UploadJob {
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
+  /** Client UX: coarse phase during post-preview enrichment (in-memory only). */
+  enrichmentStep?: UploadJobEnrichmentStep;
+  warnings?: string[];
+  blobPersisted?: boolean;
 }
 
 class UploadQueue {
@@ -173,10 +183,12 @@ class UploadQueue {
       // Import processing functions dynamically to avoid circular dependencies
       const {
         parseFile,
+        getAndClearLastCsvParseDiagnostics,
         createDataSummary,
         canonicalizeDateColumnValues,
         applyUploadPipelineWithProfile,
         resolveDateColumnsForUpload,
+        warnSuspiciousDuplicateRowIdInSample,
       } = await import('../lib/fileParser.js');
       const { inferDatasetProfile, emptyDatasetProfile } = await import('../lib/datasetProfile.js');
       const { processLargeFile, shouldUseLargeFileProcessing, getDataForAnalysis } = await import('../lib/largeFileProcessor.js');
@@ -186,8 +198,9 @@ class UploadQueue {
         getChatBySessionIdEfficient,
         updateChatDocument,
         ensureChatDocumentForUploadJob,
+        createPlaceholderSession,
       } = await import('../models/chat.model.js');
-      const { saveChartsToBlob } = await import('../lib/blobStorage.js');
+      const { saveChartsToBlob, uploadFileToBlob } = await import('../lib/blobStorage.js');
       const queryCache = (await import('../lib/cache.js')).default;
 
       let data: Record<string, any>[];
@@ -197,6 +210,41 @@ class UploadQueue {
       let chunkIndexBlob: { blobName: string; totalChunks: number; totalRows: number } | undefined;
       let useLargeFileProcessing = false;
       let useChunking = false;
+      let skipDateEnrichmentForSuspiciousCsv = false;
+
+      // Keep Blob as best-effort and off the /upload critical path.
+      if (job.fileBuffer && !job.blobInfo) {
+        try {
+          job.blobInfo = await uploadFileToBlob(
+            job.fileBuffer,
+            job.fileName,
+            job.username,
+            job.mimeType
+          );
+          job.blobPersisted = true;
+        } catch (blobError) {
+          job.blobPersisted = false;
+          console.warn("⚠️ Queue blob upload failed; continuing without blobInfo:", blobError);
+        }
+      } else if (job.blobInfo) {
+        job.blobPersisted = true;
+      }
+
+      // Best-effort early placeholder creation for smoother session UX.
+      try {
+        await createPlaceholderSession(
+          job.username,
+          job.fileName,
+          job.sessionId,
+          job.fileBuffer?.length ?? 0,
+          job.blobInfo
+        );
+      } catch (placeholderError: any) {
+        console.warn("⚠️ Queue placeholder creation skipped (will self-heal later):", {
+          sessionId: job.sessionId,
+          error: placeholderError?.message || String(placeholderError),
+        });
+      }
 
       // Snowflake import: fetch raw rows (enrichment applies profile after preview checkpoint)
       if (job.snowflakeImport) {
@@ -232,7 +280,7 @@ class UploadQueue {
           const interimChunkSummary = createDataSummary(tempData);
           const summaryForChunk = {
             ...interimChunkSummary,
-            dateColumns: resolveDateColumnsForUpload(tempData, emptyProf, interimChunkSummary),
+            dateColumns: resolveDateColumnsForUpload(tempData, emptyProf),
           };
 
           job.progress = 10;
@@ -320,6 +368,18 @@ class UploadQueue {
         job.progress = 15;
         try {
           data = await parseFile(job.fileBuffer, job.fileName);
+          const parseDiagnostics = getAndClearLastCsvParseDiagnostics();
+          if (parseDiagnostics) {
+            const mismatchWarnRatio = Number(process.env.CSV_MISMATCH_WARN_RATIO) || 0.015;
+            const warning = `${parseDiagnostics.warning} Sample lines: ${parseDiagnostics.sampleRowNumbers.join(', ') || 'n/a'}`;
+            job.warnings = [...(job.warnings || []), warning];
+            if (parseDiagnostics.mismatchRatio >= mismatchWarnRatio) {
+              skipDateEnrichmentForSuspiciousCsv = true;
+              console.warn(
+                `⚠️ Skipping date enrichment due to suspicious CSV parse quality (${(parseDiagnostics.mismatchRatio * 100).toFixed(2)}% mismatched rows).`
+              );
+            }
+          }
         } catch (parseError) {
           const errorMsg = parseError instanceof Error ? parseError.message : String(parseError);
           if (errorMsg.includes('memory') || errorMsg.includes('heap') || errorMsg.includes('too large')) {
@@ -335,12 +395,18 @@ class UploadQueue {
       }
       } // end else if (job.fileBuffer)
 
+      const columnOrderBeforeClean = Object.keys(data[0] || {});
+
       const skipUploadLlm =
         process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === 'true' ||
         process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === '1';
 
-      // Preview checkpoint: heuristic summary + 50 sample rows (no LLM)
+      // Preview checkpoint: heuristic summary + 50 sample rows (no LLM).
+      // Date columns for enrichment are chosen by the upload LLM; do not canonicalize preview on heuristics.
       const previewSummary = createDataSummary(data);
+      if (!skipUploadLlm) {
+        previewSummary.dateColumns = [];
+      }
       const previewSample = data.slice(0, 50).map((row) => {
         const serializedRow: Record<string, any> = {};
         for (const [key, value] of Object.entries(row)) {
@@ -352,7 +418,11 @@ class UploadQueue {
         }
         return serializedRow;
       });
-      canonicalizeDateColumnValues(previewSample, previewSummary.dateColumns);
+      canonicalizeDateColumnValues(
+        previewSample,
+        skipUploadLlm && !skipDateEnrichmentForSuspiciousCsv ? previewSummary.dateColumns : []
+      );
+      warnSuspiciousDuplicateRowIdInSample(previewSample, `upload_preview:${job.sessionId}`);
 
       const previewDoc = await ensureChatDocumentForUploadJob({
         sessionId: job.sessionId,
@@ -373,14 +443,19 @@ class UploadQueue {
 
       let sessionAnalysisContext: SessionAnalysisContext;
       if (skipUploadLlm) {
+        job.enrichmentStep = 'persisting';
         const { emptySessionAnalysisContext } = await import('../lib/sessionAnalysisContext.js');
         const { suggestedFollowUpsFromDataSummary } = await import(
           '../lib/suggestedFollowUpsFromSummary.js'
         );
         datasetProfile = emptyDatasetProfile();
-        const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile);
-        data = finalPrep.data;
-        summary = finalPrep.summary;
+        if (skipDateEnrichmentForSuspiciousCsv) {
+          summary = createDataSummary(data);
+        } else {
+          const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile);
+          data = finalPrep.data;
+          summary = finalPrep.summary;
+        }
         const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
           fileLabel: job.fileName,
         });
@@ -404,12 +479,30 @@ class UploadQueue {
         };
       } else {
         const { seedSessionAnalysisContextLLM } = await import('../lib/sessionAnalysisContext.js');
-        datasetProfile = await inferDatasetProfile(data.slice(0, Math.min(100, data.length)), {
+        job.enrichmentStep = 'inferring_profile';
+        datasetProfile = await inferDatasetProfile(data, {
           fileName: job.fileName,
         });
-        const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile);
-        data = finalPrep.data;
-        summary = finalPrep.summary;
+        const enableDirtyDateLlm =
+          process.env.ENABLE_DIRTY_DATE_LLM === 'true' ||
+          process.env.ENABLE_DIRTY_DATE_LLM === '1';
+        if (enableDirtyDateLlm) {
+          const { enrichDirtyStringDateColumns } = await import('../lib/dirtyDateEnrichment.js');
+          job.enrichmentStep = 'dirty_date_enrichment';
+          await enrichDirtyStringDateColumns(data, datasetProfile, columnOrderBeforeClean, {
+            fileName: job.fileName,
+          });
+        }
+        job.enrichmentStep = 'building_context';
+        if (skipDateEnrichmentForSuspiciousCsv) {
+          summary = createDataSummary(data);
+        } else {
+          const finalPrep = applyUploadPipelineWithProfile(data, datasetProfile, {
+            columnOrderBeforeClean,
+          });
+          data = finalPrep.data;
+          summary = finalPrep.summary;
+        }
         sessionAnalysisContext = await seedSessionAnalysisContextLLM({
           datasetProfile,
           dataSummary: summary,
@@ -419,6 +512,7 @@ class UploadQueue {
       // No upload-time chart/insight generation; first assistant turn uses session context + chat only.
       job.status = 'analyzing';
       job.progress = 40;
+      job.enrichmentStep = 'persisting';
       const charts: ChartSpec[] = [];
       const insights: Insight[] = [];
 
@@ -569,10 +663,12 @@ class UploadQueue {
         });
       }
       canonicalizeDateColumnValues(sampleRows, summary.dateColumns);
+      warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
       // Step 9: Save to database
       job.status = 'saving';
       job.progress = 90;
+      job.enrichmentStep = 'persisting';
       queryCache.invalidateSession(job.sessionId);
       
       const processingTime = Date.now() - (job.startedAt || Date.now());
@@ -723,6 +819,7 @@ class UploadQueue {
         sessionAnalysisContext,
         chatId: chatDocument?.id,
         blobInfo: job.blobInfo,
+        warnings: job.warnings?.length ? job.warnings : undefined,
       };
 
       // Clean up file buffer from memory after processing (file uploads only)

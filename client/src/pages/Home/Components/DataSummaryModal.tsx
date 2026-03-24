@@ -56,13 +56,16 @@ interface DataSummaryModalProps {
   onClose: () => void;
   sessionId: string | null;
   onSendMessage?: (message: string) => void;
+  /** Puts text in the main chat composer for editing (recommended questions) */
+  onDraftMessage?: (text: string) => void;
 }
 
 export function DataSummaryModal({ 
   isOpen, 
   onClose, 
   sessionId,
-  onSendMessage 
+  onSendMessage,
+  onDraftMessage,
 }: DataSummaryModalProps) {
   const [loading, setLoading] = useState(false);
   const [dataSummary, setDataSummary] = useState<DataSummaryResponse | null>(null);
@@ -124,8 +127,12 @@ export function DataSummaryModal({
   };
 
   const handleQuestionClick = (question: string) => {
+    onClose();
+    if (onDraftMessage) {
+      onDraftMessage(question);
+      return;
+    }
     if (onSendMessage) {
-      onClose();
       onSendMessage(question);
     }
   };
@@ -345,10 +352,12 @@ export function DataSummaryModal({
                     {(dataSummary.recommendedQuestions || []).map((question, idx) => (
                       <Button
                         key={idx}
+                        type="button"
                         variant="outline"
                         className="w-full justify-start text-left h-auto py-3 px-4 hover:bg-primary/5 hover:border-primary/50 transition-colors"
                         onClick={() => handleQuestionClick(question)}
-                        disabled={!onSendMessage}
+                        disabled={!onDraftMessage && !onSendMessage}
+                        aria-label={`Add to message: ${question}`}
                       >
                         <span className="flex-1">{question}</span>
                         <TrendingUp className="h-4 w-4 ml-2 text-muted-foreground" />

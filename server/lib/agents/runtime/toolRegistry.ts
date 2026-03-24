@@ -91,6 +91,16 @@ export class ToolRegistry {
     return t.input.safeParse(rawArgs).success;
   }
 
+  /** Truncated Zod message for logging (no raw arg values). */
+  getArgsParseError(name: string, rawArgs: Record<string, unknown>): string | undefined {
+    const t = this.tools.get(name);
+    if (!t) return undefined;
+    const r = t.input.safeParse(rawArgs);
+    if (r.success) return undefined;
+    const msg = r.error.message;
+    return msg.length > 400 ? `${msg.slice(0, 400)}…` : msg;
+  }
+
   getArgsHelpForTool(name: string): string | undefined {
     return this.tools.get(name)?.argsHelp;
   }

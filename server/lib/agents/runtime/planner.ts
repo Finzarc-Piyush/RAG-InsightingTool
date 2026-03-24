@@ -1,25 +1,81 @@
 import type { AgentExecutionContext } from "./types.js";
 import type { PlanStep } from "./types.js";
-import { plannerOutputSchema, type PlannerOutput } from "./schemas.js";
+import { plannerOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
 import { summarizeContextForPrompt } from "./context.js";
 import type { ToolRegistry } from "./toolRegistry.js";
 import { sortPlanStepsByDependency } from "./workingMemory.js";
+import { agentLog } from "./agentLogger.js";
 
 /** Args whose string values must be real column names from DataSummary. */
-const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "targetVariable"]);
+const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
 
-function validateStepColumnArgs(
+export type PlannerRejectReason =
+  | "llm_json_invalid"
+  | "unknown_tool"
+  | "invalid_tool_args"
+  | "column_not_in_schema"
+  | "bad_depends_on"
+  | "dependency_cycle"
+  | "empty_steps";
+
+export type PlannerRunResult =
+  | { ok: true; rationale: string; steps: PlanStep[] }
+  | {
+      ok: false;
+      reason: PlannerRejectReason;
+      tool?: string;
+      stepId?: string;
+      argKeys?: string;
+      zod_error?: string;
+    };
+
+function firstInvalidQueryPlanColumn(
   step: PlanStep,
   colNames: Set<string>
-): boolean {
+): string | null {
+  if (step.tool !== "execute_query_plan") return null;
+  const plan = step.args.plan as Record<string, unknown> | undefined;
+  if (!plan || typeof plan !== "object") return "plan";
+  const check = (c: string) => colNames.has(c);
+  for (const c of (plan.groupBy as string[] | undefined) ?? []) {
+    if (!check(c)) return c;
+  }
+  for (const a of (plan.aggregations as { column: string }[] | undefined) ?? []) {
+    if (!a?.column || !check(a.column)) return a.column;
+  }
+  for (const d of (plan.dimensionFilters as { column: string }[] | undefined) ?? []) {
+    if (!d?.column || !check(d.column)) return d.column;
+  }
+  for (const s of (plan.sort as { column: string }[] | undefined) ?? []) {
+    if (!s?.column || !check(s.column)) return s.column;
+  }
+  return null;
+}
+
+function firstInvalidBoundColumnArg(
+  step: PlanStep,
+  colNames: Set<string>
+): string | null {
   for (const key of COLUMN_BOUND_ARG_KEYS) {
     const v = step.args[key];
     if (typeof v === "string" && v.length > 0 && !colNames.has(v)) {
-      return false;
+      return key;
     }
   }
-  return true;
+  const q = firstInvalidQueryPlanColumn(step, colNames);
+  return q;
+}
+
+function validateStepColumnArgs(step: PlanStep, colNames: Set<string>): boolean {
+  return firstInvalidBoundColumnArg(step, colNames) === null;
+}
+
+function logReject(
+  fields: Record<string, string | number | boolean | undefined>,
+  turnId: string
+) {
+  agentLog("plan.reject", { turnId, ...fields });
 }
 
 export async function runPlanner(
@@ -29,7 +85,7 @@ export async function runPlanner(
   onLlmCall: () => void,
   priorObservationsText?: string,
   workingMemoryBlock?: string
-): Promise<PlannerOutput | null> {
+): Promise<PlannerRunResult> {
   const tools = registry.formatToolManifestForPlanner();
   const modeNote =
     ctx.mode === "dataOps"
@@ -46,9 +102,10 @@ Rules:
 - Prefer get_schema_summary first if the question is broad.
 - retrieve_semantic_context: **required** args.query (string) for narrative/themes/wording — never put "query" on run_analytical_query.
 - run_analytical_query: only optional question_override; **never** use a "query" key here.
-- Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
+- execute_query_plan: use when you need exact groupBy + aggregations (e.g. SUM revenue by year) with args.plan JSON; column names must match schema exactly. Prefer over NL when totals/sums must be correct.
+- Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column.
-- Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends); x and y must be exact column names from the schema. Chain build_chart after run_analytical_query when the analytical result is suitable for plotting.
+- Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends); x and y must be exact column names from the schema. Set aggregate to sum|mean|count when plotting pre-aggregated metrics. Chain build_chart after run_analytical_query or execute_query_plan when the result rows are suitable for plotting (same column names as the aggregated output).
 - Use clarify_user if critical information is missing.
 - Compose multiple tools instead of a single catch-all; there is no legacy "delegate" tool.
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
@@ -75,7 +132,8 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     onLlmCall,
   });
   if (!out.ok) {
-    return null;
+    logReject({ reason: "llm_json_invalid" }, turnId);
+    return { ok: false, reason: "llm_json_invalid" };
   }
 
   const allowed = new Set(
@@ -95,27 +153,103 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     dependsOn: s.dependsOn,
   }));
 
+  if (stepsWithMeta.length === 0) {
+    logReject({ reason: "empty_steps" }, turnId);
+    return { ok: false, reason: "empty_steps" };
+  }
+
   for (const step of stepsWithMeta) {
+    const argKeys = Object.keys(step.args).join(",");
     if (!allowed.has(step.tool)) {
-      return null;
+      logReject(
+        {
+          reason: "unknown_tool",
+          tool: step.tool,
+          stepId: step.id,
+          argKeys: argKeys.slice(0, 200),
+        },
+        turnId
+      );
+      return {
+        ok: false,
+        reason: "unknown_tool",
+        tool: step.tool,
+        stepId: step.id,
+        argKeys: argKeys.slice(0, 200),
+      };
     }
-    if (!registry.argsValidForTool(step.tool, step.args)) {
-      return null;
+    const zodErr = registry.getArgsParseError(step.tool, step.args);
+    if (zodErr) {
+      logReject(
+        {
+          reason: "invalid_tool_args",
+          tool: step.tool,
+          stepId: step.id,
+          argKeys: argKeys.slice(0, 200),
+          zod_error: zodErr,
+        },
+        turnId
+      );
+      return {
+        ok: false,
+        reason: "invalid_tool_args",
+        tool: step.tool,
+        stepId: step.id,
+        argKeys: argKeys.slice(0, 200),
+        zod_error: zodErr,
+      };
     }
     if (!validateStepColumnArgs(step, colNames)) {
-      return null;
+      const bad = firstInvalidBoundColumnArg(step, colNames);
+      logReject(
+        {
+          reason: "column_not_in_schema",
+          tool: step.tool,
+          stepId: step.id,
+          argKeys: argKeys.slice(0, 200),
+          zod_error: bad ? `invalid_column_ref:${bad}` : undefined,
+        },
+        turnId
+      );
+      return {
+        ok: false,
+        reason: "column_not_in_schema",
+        tool: step.tool,
+        stepId: step.id,
+        argKeys: argKeys.slice(0, 200),
+        zod_error: bad ? `invalid_column_ref:${bad}` : undefined,
+      };
     }
     if (step.dependsOn && !stepIds.has(step.dependsOn)) {
-      return null;
+      logReject(
+        {
+          reason: "bad_depends_on",
+          tool: step.tool,
+          stepId: step.id,
+          argKeys: argKeys.slice(0, 200),
+          zod_error: `dependsOn:${step.dependsOn}`,
+        },
+        turnId
+      );
+      return {
+        ok: false,
+        reason: "bad_depends_on",
+        tool: step.tool,
+        stepId: step.id,
+        argKeys: argKeys.slice(0, 200),
+        zod_error: `dependsOn:${step.dependsOn}`,
+      };
     }
   }
 
   const sorted = sortPlanStepsByDependency(stepsWithMeta);
   if (!sorted) {
-    return null;
+    logReject({ reason: "dependency_cycle" }, turnId);
+    return { ok: false, reason: "dependency_cycle" };
   }
 
   return {
+    ok: true,
     rationale: out.data.rationale,
     steps: sorted,
   };

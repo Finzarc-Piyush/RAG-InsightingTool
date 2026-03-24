@@ -1,6 +1,11 @@
 import { useEffect } from 'react';
 import type { TemporalDisplayGrain } from '@/shared/schema';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
+import {
+  DATASET_ENRICHMENT_LOADING_CONTENT,
+  DATASET_PREVIEW_LOADING_CONTENT,
+  normalizeDatasetSystemMessages,
+} from './uploadSystemMessages';
 
 interface UseSessionLoaderProps {
   loadedSessionData?: any;
@@ -69,10 +74,42 @@ export const useSessionLoader = ({
       setTotalColumns(session.dataSummary.columnCount || 0);
     }
 
-    if (Array.isArray(session.messages)) {
-      setMessages(session.messages as any[]);
+    if (Array.isArray(session.messages) && session.messages.length > 0) {
+      const hasPreview = !!session.dataSummary?.columns?.length || !!session.dataSummary?.rowCount;
+      const isEnriching =
+        session.enrichmentStatus === 'pending' || session.enrichmentStatus === 'in_progress';
+      setMessages(
+        normalizeDatasetSystemMessages(session.messages as any[], {
+          hasPreview,
+          isEnriching,
+        })
+      );
     } else {
-      setMessages([]);
+      if (session.dataSummary) {
+        const previewMsg = {
+          role: 'assistant' as const,
+          content: DATASET_PREVIEW_LOADING_CONTENT,
+          charts: [],
+          insights: [],
+          timestamp: Date.now(),
+        };
+        const enriching =
+          session.enrichmentStatus === 'pending' || session.enrichmentStatus === 'in_progress';
+        const enrichmentMsg = enriching
+          ? [
+              {
+                role: 'assistant' as const,
+                content: DATASET_ENRICHMENT_LOADING_CONTENT,
+                charts: [],
+                insights: [],
+                timestamp: Date.now() + 1,
+              },
+            ]
+          : [];
+        setMessages([previewMsg, ...enrichmentMsg]);
+      } else {
+        setMessages([]);
+      }
     }
   }, [
     loadedSessionData,

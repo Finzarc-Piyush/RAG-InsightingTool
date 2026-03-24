@@ -1,39 +1,63 @@
 import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { DataSummary } from '../shared/schema.js';
-import { parseFlexibleDate, sanitizeDateStringForParse, isDateColumnName } from './dateUtils.js';
+import {
+  isTemporalWhitelistColumnName,
+  parseFlexibleDate,
+  sanitizeDateStringForParse,
+} from './dateUtils.js';
+import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
+import { agentLog } from './agents/runtime/agentLogger.js';
 import type { DatasetProfile } from './datasetProfile.js';
+import { computeCleanedDateColumnNames } from './dirtyDateEnrichment.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
 
-// Month name mapping for date detection
-const MONTH_MAP: Record<string, number> = {
-  january: 0,
-  jan: 0,
-  february: 1,
-  feb: 1,
-  march: 2,
-  mar: 2,
-  april: 3,
-  apr: 3,
-  may: 4,
-  june: 5,
-  jun: 5,
-  july: 6,
-  jul: 6,
-  august: 7,
-  aug: 7,
-  september: 8,
-  sept: 8,
-  sep: 8,
-  october: 9,
-  oct: 9,
-  november: 10,
-  nov: 10,
-  december: 11,
-  dec: 11,
+export type CsvParseDiagnostics = {
+  totalRows: number;
+  mismatchedRows: number;
+  mismatchRatio: number;
+  sampleRowNumbers: number[];
+  warning: string;
 };
 
+let lastCsvParseDiagnostics: CsvParseDiagnostics | undefined;
+
+export function getAndClearLastCsvParseDiagnostics(): CsvParseDiagnostics | undefined {
+  const out = lastCsvParseDiagnostics;
+  lastCsvParseDiagnostics = undefined;
+  return out;
+}
+
+/** Warn when preview sample Row IDs collapse — often misclassified date canonicalization. */
+export function warnSuspiciousDuplicateRowIdInSample(
+  sampleRows: Record<string, any>[],
+  context: string
+): void {
+  if (sampleRows.length < 5) return;
+  const keys = Object.keys(sampleRows[0]);
+  const idCol = keys.find((k) => {
+    const n = k.trim().replace(/\s+/g, " ").replace(/^#\s*/, "").toLowerCase();
+    return n === "row id";
+  });
+  if (!idCol) return;
+  const counts = new Map<string, number>();
+  for (const r of sampleRows) {
+    const v = r[idCol];
+    if (v === null || v === undefined) continue;
+    const s = String(v);
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  let max = 0;
+  for (const c of counts.values()) max = Math.max(max, c);
+  if (max / sampleRows.length >= 0.9) {
+    console.warn(
+      `[${context}] Over 90% of sample rows share the same "${idCol}" value; possible date-column misclassification or enrichment corruption.`
+    );
+  }
+}
+
 export async function parseFile(buffer: Buffer, filename: string): Promise<Record<string, any>[]> {
+  lastCsvParseDiagnostics = undefined;
   const ext = filename.split('.').pop()?.toLowerCase();
 
   if (ext === 'csv') {
@@ -55,13 +79,45 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
     skip_empty_lines: true,
     cast: true,
     cast_date: true,
+    info: true,
     // Optimize memory for large files
     relax_column_count: true,
     relax_quotes: true,
   });
+
+  const withInfo = records as Array<{ record: Record<string, any>; info?: { lines?: number; invalid_field_length?: number } }>;
+  let mismatchedRows = 0;
+  const sampleRowNumbers: number[] = [];
+  const unwrappedRecords: Record<string, any>[] = [];
+  for (let i = 0; i < withInfo.length; i++) {
+    const entry = withInfo[i] as any;
+    const record = entry?.record ?? entry;
+    const info = entry?.info;
+    if ((info?.invalid_field_length ?? 0) > 0) {
+      mismatchedRows += 1;
+      if (sampleRowNumbers.length < 10) {
+        sampleRowNumbers.push(info?.lines ?? i + 1);
+      }
+    }
+    unwrappedRecords.push(record);
+  }
+
+  const mismatchRatio = unwrappedRecords.length > 0 ? mismatchedRows / unwrappedRecords.length : 0;
+  if (mismatchedRows > 0) {
+    lastCsvParseDiagnostics = {
+      totalRows: unwrappedRecords.length,
+      mismatchedRows,
+      mismatchRatio,
+      sampleRowNumbers,
+      warning: `CSV rows with mismatched column counts detected: ${mismatchedRows}/${unwrappedRecords.length} (${(mismatchRatio * 100).toFixed(2)}%).`,
+    };
+    console.warn(
+      `⚠️ ${lastCsvParseDiagnostics.warning} Sample rows: ${sampleRowNumbers.join(', ') || 'n/a'}`
+    );
+  }
   
   // Normalize column names: trim whitespace from all column names
-  const normalized = normalizeColumnNames(records as Record<string, any>[]);
+  const normalized = normalizeColumnNames(unwrappedRecords as Record<string, any>[]);
   
   // Post-process: Convert empty values to null and string numbers to actual numbers
   // This handles cases where CSV parser didn't convert formatted numbers (with %, commas, etc.)
@@ -211,142 +267,6 @@ function normalizeColumnNames(data: Record<string, any>[]): Record<string, any>[
 }
 
 /**
- * Comprehensive date detection function that handles multiple date formats:
- * - Month-Year: "Apr-24", "April 2024", "Jan-2024", "Mar/24", "Apr-23", "Apr 23"
- * - Standard dates: "DD-MM-YYYY", "MM-DD-YYYY", "YYYY-MM-DD", "DD/MM/YYYY"
- * - Dot separators: "DD.MM.YYYY", "MM.DD.YYYY"
- * - Month names with day: "April 15, 2024", "15 April 2024"
- * - Date objects and timestamps
- */
-function isDateValue(value: any): boolean {
-  if (value === null || value === undefined || value === '') return false;
-  
-  // If it's already a Date object, it's a date
-  if (value instanceof Date && !isNaN(value.getTime())) return true;
-  
-  const str = String(value).trim();
-  if (!str) return false;
-  
-  // Check for month-year formats: "Apr-24", "Apr-23", "April 2024", "Jan-2024", "Mar/24", "Apr 23", etc.
-  // Pattern: Month name (3+ letters) followed by separator and 2-4 digit year
-  const mmmYyMatch = str.match(/^([A-Za-z]{3,})[-\s/](\d{2,4})$/i);
-  if (mmmYyMatch) {
-    const monthName = mmmYyMatch[1].toLowerCase().substring(0, 3);
-    if (MONTH_MAP[monthName] !== undefined) {
-      const yearStr = mmmYyMatch[2];
-      let year = parseInt(yearStr, 10);
-      
-      // Handle 2-digit years: assume 20xx if < 50, 19xx if >= 50
-      if (yearStr.length === 2) {
-        year = year < 50 ? 2000 + year : 1900 + year;
-      }
-      
-      // Validate year is reasonable (1900-2100)
-      if (year >= 1900 && year <= 2100) {
-        return true;
-      }
-    }
-  }
-  
-  // Also check for formats like "Apr-23" without separator (though less common)
-  const mmmYyNoSepMatch = str.match(/^([A-Za-z]{3,})(\d{2,4})$/i);
-  if (mmmYyNoSepMatch) {
-    const monthName = mmmYyNoSepMatch[1].toLowerCase().substring(0, 3);
-    if (MONTH_MAP[monthName] !== undefined) {
-      const yearStr = mmmYyNoSepMatch[2];
-      let year = parseInt(yearStr, 10);
-      if (yearStr.length === 2) {
-        year = year < 50 ? 2000 + year : 1900 + year;
-      }
-      if (year >= 1900 && year <= 2100) {
-        return true;
-      }
-    }
-  }
-  
-  // Check for date formats with separators: "DD-MM-YYYY", "MM-DD-YYYY", "YYYY-MM-DD", etc.
-  const dateWithSeparators = str.match(/^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/);
-  if (dateWithSeparators) {
-    const date = new Date(str);
-    if (!isNaN(date.getTime())) {
-      // Additional validation: check if the parsed date components make sense
-      const parts = str.split(/[-/]/);
-      if (parts.length === 3) {
-        const [part1, part2, part3] = parts.map(p => parseInt(p, 10));
-        // Check if month is valid (1-12) and day is valid (1-31)
-        if ((part1 >= 1 && part1 <= 12 && part2 >= 1 && part2 <= 31) ||
-            (part2 >= 1 && part2 <= 12 && part1 >= 1 && part1 <= 31)) {
-          return true;
-        }
-        // Check if it's YYYY-MM-DD format
-        if (part1 >= 1900 && part1 <= 2100 && part2 >= 1 && part2 <= 12 && part3 >= 1 && part3 <= 31) {
-          return true;
-        }
-      }
-    }
-  }
-  
-  // Check for formats like "DD.MM.YYYY" or "MM.DD.YYYY"
-  const dateWithDots = str.match(/^\d{1,2}\.\d{1,2}\.\d{4}$/);
-  if (dateWithDots) {
-    const date = new Date(str.replace(/\./g, '-'));
-    if (!isNaN(date.getTime())) return true;
-  }
-  
-  // Check for month name with day and year: "April 15, 2024", "15 April 2024", "Apr 15 2024", etc.
-  const monthNameWithDay = str.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i);
-  if (monthNameWithDay) {
-    const date = new Date(str);
-    if (!isNaN(date.getTime())) {
-      // Additional check: make sure it actually contains a year
-      if (str.match(/\d{4}/)) {
-        return true;
-      }
-    }
-  }
-  
-  // Check for formats like "YYYYMMDD" (8 digits)
-  const compactDate = str.match(/^\d{8}$/);
-  if (compactDate) {
-    const year = parseInt(str.substring(0, 4), 10);
-    const month = parseInt(str.substring(4, 6), 10);
-    const day = parseInt(str.substring(6, 8), 10);
-    if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return true;
-    }
-  }
-  
-  // Try native Date parsing as fallback
-  const date = new Date(str);
-  if (!isNaN(date.getTime())) {
-    // Additional validation: reject if it's just a number that happens to parse as a date
-    if (str.match(/^\d+$/)) {
-      // If it's just digits, be more strict - only accept if it's a reasonable timestamp
-      const num = parseInt(str, 10);
-      // Accept if it's a reasonable Unix timestamp (between 1970 and 2100)
-      // Milliseconds: 0 to 4102444800000 (Jan 1, 2100)
-      // Seconds: 0 to 4102444800
-      if (num > 0) {
-        // Check if it's milliseconds (13+ digits) or seconds (10 digits)
-        if (str.length >= 13) {
-          return num < 4102444800000; // Max timestamp for year 2100 in milliseconds
-        } else if (str.length === 10) {
-          return num < 4102444800; // Max timestamp for year 2100 in seconds
-        }
-      }
-      return false;
-    }
-    // For non-numeric strings, check if the parsed date is reasonable
-    const year = date.getFullYear();
-    if (year >= 1900 && year <= 2100) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
  * Convert "-" values to 0 for numerical columns
  * This ensures that dash placeholders in numeric columns are treated as 0, not null
  */
@@ -414,19 +334,63 @@ function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
  */
 export function canonicalizeDateColumnValues(data: Record<string, any>[], dateColumns: string[]): void {
   if (data.length === 0 || dateColumns.length === 0) return;
+
+  const verbose =
+    process.env.AGENT_VERBOSE_LOGS === "true" ||
+    process.env.ENRICHMENT_DEBUG_LOGS === "true";
+  const skippedId = dateColumns.filter((c) => isLikelyIdentifierColumnName(c));
+  if (skippedId.length && verbose) {
+    agentLog("canonicalize_skip_identifier_cols", {
+      cols: skippedId.join("|").slice(0, 200),
+    });
+  }
+  for (const col of dateColumns) {
+    if (!isLikelyIdentifierColumnName(col) || !verbose) continue;
+    const slice = data.slice(0, Math.min(50, data.length));
+    const vals = slice.map((r) => r[col]).filter((v) => v != null && v !== "");
+    const uniq = new Set(vals.map((v) => String(v)));
+    agentLog("enrichment_date_col_identifier", {
+      col,
+      distinct: uniq.size,
+      preview: [...uniq].slice(0, 3).join("|").slice(0, 120),
+    });
+  }
+
+  const safeCols = dateColumns.filter((c) => !isLikelyIdentifierColumnName(c));
+  if (safeCols.length === 0) return;
+  const changedByCol = new Map<string, number>();
+
   for (const row of data) {
-    for (const col of dateColumns) {
+    for (const col of safeCols) {
       const v = row[col];
       if (v === null || v === undefined || v === '') continue;
       if (v instanceof Date && !isNaN(v.getTime())) {
-        row[col] = toCanonicalDateStorage(v, v);
+        const out = toCanonicalDateStorage(v, v);
+        if (out !== v) {
+          row[col] = out;
+          changedByCol.set(col, (changedByCol.get(col) || 0) + 1);
+        }
         continue;
       }
-      const parsed = parseFlexibleDate(String(v));
-      if (parsed) {
-        row[col] = toCanonicalDateStorage(v, parsed);
+      if (typeof v === 'string' || typeof v === 'number') {
+        const parsed = parseFlexibleDate(String(v));
+        if (parsed) {
+          const out = toCanonicalDateStorage(v, parsed);
+          if (out !== v) {
+            row[col] = out;
+            changedByCol.set(col, (changedByCol.get(col) || 0) + 1);
+          }
+        }
       }
     }
+  }
+  if (verbose && changedByCol.size > 0) {
+    agentLog("enrichment_mutation_counts", {
+      counts: [...changedByCol.entries()]
+        .map(([k, v]) => `${k}:${v}`)
+        .join("|")
+        .slice(0, 500),
+    });
   }
 }
 
@@ -522,19 +486,13 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     
     const numericThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.7)); // 70% threshold
     const isNumeric = nonNullValues.length > 0 && numericMatches >= numericThreshold;
-    
-    // Date detection: prefer parseFlexibleDate (handles DD/MM/YYYY + ISO mixes); keep legacy isDateValue as signal
-    const flexibleDateMatches = nonNullValues.filter((v) => {
-      if (v === null || v === undefined || v === '') return false;
-      return parseFlexibleDate(v instanceof Date ? v : String(v)) !== null;
-    }).length;
-    const flexThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.5));
-    const flexRate = nonNullValues.length > 0 ? flexibleDateMatches / nonNullValues.length : 0;
-    const baseDate = nonNullValues.length > 0 && flexibleDateMatches >= flexThreshold;
-    // Name boost for borderline columns; do not promote ID-like columns on name alone unless ≥50% parse as dates
-    const nameBoost =
-      isDateColumnName(col) && flexRate >= 0.4 && !(/\bid\b/i.test(col) && flexRate < 0.5);
-    const isDate = baseDate || nameBoost;
+
+    // Date typing is name-whitelist based; value parseability is diagnostics only.
+    const nn = nonNullValues.filter((v) => v !== null && v !== undefined && v !== '');
+    const isDate =
+      !isLikelyIdentifierColumnName(col) &&
+      nn.length > 0 &&
+      isTemporalWhitelistColumnName(col);
 
     if (isNumeric) {
       type = 'number';
@@ -553,11 +511,19 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     });
 
     let temporalDisplayGrain: 'dayOrWeek' | 'monthOrQuarter' | 'year' | undefined;
-    if (isDate && nonNullValues.length > 0) {
-      const parsedDates = nonNullValues
-        .map((v) => parseFlexibleDate(v instanceof Date ? v : String(v)))
-        .filter((d): d is Date => d !== null);
-      temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
+    if (isDate && nn.length > 0) {
+      const parsedDates = nn
+        .map((v) => {
+          if (v instanceof Date && !isNaN(v.getTime())) return v;
+          if (typeof v === 'string' || typeof v === 'number') {
+            return parseFlexibleDate(String(v));
+          }
+          return null;
+        })
+        .filter((d): d is Date => !!d);
+      if (parsedDates.length > 0) {
+        temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
+      }
     }
 
     const topValues =
@@ -581,50 +547,131 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
   };
 }
 
-/** Drop LLM-picked date columns that do not parse as dates on a sample (guards hallucinated names). */
-export function filterDateColumnsByParseability(
-  data: Record<string, any>[],
-  candidateCols: string[],
-  sampleSize = 300
-): string[] {
-  if (!data.length || !candidateCols.length) return [];
-  const keys = new Set(Object.keys(data[0]));
-  return candidateCols.filter((col) => {
-    if (!keys.has(col)) return false;
-    const slice = data.slice(0, sampleSize);
-    return slice.some((row) => {
-      const v = row[col];
-      if (v === null || v === undefined || v === '') return false;
-      return parseFlexibleDate(v instanceof Date ? v : String(v)) !== null;
-    });
-  });
-}
-
+/** Upload LLM lists date columns; we only validate names exist and are not identifier columns. */
 export function resolveDateColumnsForUpload(
   data: Record<string, any>[],
-  profile: DatasetProfile,
-  fallbackSummary: DataSummary
+  profile: DatasetProfile
 ): string[] {
   const keys = new Set(Object.keys(data[0]));
-  let cols = profile.dateColumns.filter((c) => keys.has(c));
-  cols = filterDateColumnsByParseability(data, cols);
-  if (cols.length === 0) return [...fallbackSummary.dateColumns];
-  return cols;
+  return profile.dateColumns.filter((c) => keys.has(c) && !isLikelyIdentifierColumnName(c));
 }
 
 /**
- * After inferDatasetProfile: dash cleanup, canonicalize dates, final summary.
+ * Like resolveDateColumnsForUpload, but swaps dirty string sources for their Cleaned_* column when present.
+ * Pass columnOrderBeforeClean from before dirty-date enrichment so cleaned header names match computeCleanedDateColumnNames.
+ */
+export function resolveEffectiveDateColumns(
+  data: Record<string, any>[],
+  profile: DatasetProfile,
+  columnOrderBeforeClean?: string[]
+): string[] {
+  const keys = new Set(Object.keys(data[0] || {}));
+  const base = profile.dateColumns.filter(
+    (c) => keys.has(c) && !isLikelyIdentifierColumnName(c)
+  );
+  const dirty = new Set(profile.dirtyStringDateColumns ?? []);
+  if (!dirty.size) return base;
+  const order = columnOrderBeforeClean?.length
+    ? columnOrderBeforeClean
+    : Object.keys(data[0] || {});
+  const sourceToCleaned = computeCleanedDateColumnNames(order, profile);
+  return base.map((c) => {
+    if (!dirty.has(c)) return c;
+    const cleaned = sourceToCleaned.get(c);
+    if (cleaned && keys.has(cleaned)) return cleaned;
+    return c;
+  });
+}
+
+function isDateParseableAtThreshold(values: unknown[], thresholdRatio: number): boolean {
+  const nonNull = values.filter((v) => v !== null && v !== undefined && v !== '');
+  if (nonNull.length === 0) return false;
+  const matches = nonNull.filter((v) => {
+    if (v instanceof Date && !isNaN(v.getTime())) return true;
+    if (typeof v === 'string' || typeof v === 'number') {
+      return !!parseFlexibleDate(String(v));
+    }
+    return false;
+  }).length;
+  const threshold = Math.max(1, Math.ceil(nonNull.length * thresholdRatio));
+  return matches >= threshold;
+}
+
+/**
+ * Final approved set for mutation: whitelist columns + LLM columns that parse at threshold,
+ * always excluding likely identifiers.
+ */
+export function resolveApprovedDateColumns(
+  data: Record<string, any>[],
+  profile: DatasetProfile,
+  opts?: ApplyUploadPipelineOptions
+): string[] {
+  if (data.length === 0) return [];
+  const columns = Object.keys(data[0] || {});
+  const llmCols = resolveEffectiveDateColumns(data, profile, opts?.columnOrderBeforeClean);
+  const approved: string[] = [];
+
+  for (const col of columns) {
+    if (isLikelyIdentifierColumnName(col)) continue;
+    if (isTemporalWhitelistColumnName(col)) approved.push(col);
+  }
+
+  const sampleSize = Math.min(data.length, 1000);
+  const llmThresholdRatio = Number(process.env.LLM_DATE_OVERRIDE_PARSE_THRESHOLD) || 0.7;
+  for (const col of llmCols) {
+    if (approved.includes(col)) continue;
+    if (isLikelyIdentifierColumnName(col)) continue;
+    if (!columns.includes(col)) continue;
+    const values = data.slice(0, sampleSize).map((r) => r[col]);
+    if (isDateParseableAtThreshold(values, llmThresholdRatio)) {
+      approved.push(col);
+    }
+  }
+  const debug =
+    process.env.AGENT_VERBOSE_LOGS === "true" ||
+    process.env.ENRICHMENT_DEBUG_LOGS === "true";
+  if (debug) {
+    agentLog("approved_date_columns", { cols: approved.join("|").slice(0, 500) });
+  }
+  return approved;
+}
+
+/** Sync summary.dateColumns and per-column types with the date list used for canonicalization. */
+function applyDateColumnSelectionToSummary(summary: DataSummary, dateCols: string[]): void {
+  const dateSet = new Set(dateCols);
+  summary.dateColumns = [...dateCols];
+  for (const col of summary.columns) {
+    if (dateSet.has(col.name)) {
+      col.type = 'date';
+    } else if (col.type === 'date') {
+      col.type = summary.numericColumns.includes(col.name) ? 'number' : 'string';
+      if ('temporalDisplayGrain' in col) {
+        delete (col as { temporalDisplayGrain?: unknown }).temporalDisplayGrain;
+      }
+    }
+  }
+}
+
+export type ApplyUploadPipelineOptions = {
+  /** Column key order before Cleaned_* columns were inserted; required for correct dirty-date substitution when data keys changed. */
+  columnOrderBeforeClean?: string[];
+};
+
+/**
+ * After inferDatasetProfile + optional dirty-date enrichment: dash cleanup, canonicalize dates, final summary.
  * Returns a new row array (convertDash copies rows).
  */
 export function applyUploadPipelineWithProfile(
   data: Record<string, any>[],
-  profile: DatasetProfile
+  profile: DatasetProfile,
+  opts?: ApplyUploadPipelineOptions
 ): { data: Record<string, any>[]; summary: DataSummary } {
   if (data.length === 0) throw new Error('No data');
   const interim = createDataSummary(data);
-  const dateCols = resolveDateColumnsForUpload(data, profile, interim);
+  const approvedDateCols = resolveApprovedDateColumns(data, profile, opts);
   const withDash = convertDashToZeroForNumericColumns(data, interim.numericColumns);
-  canonicalizeDateColumnValues(withDash, dateCols);
+  canonicalizeDateColumnValues(withDash, approvedDateCols);
   const summary = createDataSummary(withDash);
+  applyDateColumnSelectionToSummary(summary, approvedDateCols);
   return { data: withDash, summary };
 }

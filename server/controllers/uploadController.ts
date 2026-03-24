@@ -1,8 +1,6 @@
 import { Request, Response } from "express";
 import multer from "multer";
-import { uploadFileToBlob } from "../lib/blobStorage.js";
 import { uploadQueue } from "../utils/uploadQueue.js";
-import { createPlaceholderSession } from "../models/chat.model.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 
 /**
@@ -31,54 +29,13 @@ export const uploadFile = async (
     // Generate a unique session ID for this upload
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Upload file to Azure Blob Storage first (this is fast)
-    let blobInfo;
-    try {
-      blobInfo = await uploadFileToBlob(
-        req.file.buffer,
-        req.file.originalname,
-        username,
-        req.file.mimetype
-      );
-      console.log(`✅ File uploaded to blob storage: ${blobInfo.blobName}`);
-    } catch (blobError) {
-      console.error("Failed to upload file to blob storage:", blobError);
-      // Continue without failing the upload - blob storage is optional
-    }
-
-    // Create placeholder session immediately so it exists in the database
-    // This prevents 404 errors when frontend tries to fetch session details
-    try {
-      const placeholder = await createPlaceholderSession(
-        username,
-        req.file.originalname,
-        sessionId,
-        req.file.size,
-        blobInfo
-      );
-      console.log(`✅ Placeholder session created: ${sessionId} (chatId: ${placeholder.id})`);
-    } catch (placeholderError: any) {
-      // Log the full error details for debugging
-      console.error("❌ Failed to create placeholder session:", {
-        error: placeholderError?.message || placeholderError,
-        code: placeholderError?.code,
-        statusCode: placeholderError?.statusCode,
-        sessionId,
-        username
-      });
-      // Don't fail the upload - the session will be created during processing
-      // But log this as a warning since it means the frontend will get 404s initially
-      console.warn("⚠️ Upload will continue, but frontend may get 404 errors until processing completes");
-    }
-
-    // Enqueue the processing job
+    // Enqueue immediately; placeholder/blob best-effort work happens in queue worker
     const jobId = await uploadQueue.enqueue(
       sessionId,
       username,
       req.file.originalname,
       req.file.buffer,
-      req.file.mimetype,
-      blobInfo
+      req.file.mimetype
     );
 
     console.log(`📤 Upload job enqueued: ${jobId} for session ${sessionId}`);
@@ -87,7 +44,7 @@ export const uploadFile = async (
     res.status(202).json({
       jobId,
       sessionId,
-      fileName: req.file.originalname, // Include fileName so frontend can show it immediately
+      fileName: req.file.originalname,
       status: 'processing',
       message: 'File upload accepted. Processing in background. Use /api/upload/status/:jobId to check progress.',
     });
@@ -127,6 +84,19 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       progress: job.progress,
       createdAt: job.createdAt,
     };
+    const phaseByStatus: Record<string, { phase: string; message: string }> = {
+      pending: { phase: "queued", message: "Waiting for a worker slot." },
+      uploading: { phase: "queued", message: "Upload accepted and queued for processing." },
+      parsing: { phase: "preparing_preview", message: "Preparing dataset preview." },
+      preview_ready: { phase: "preparing_preview", message: "Preview is ready." },
+      analyzing: { phase: "enriching", message: "Enriching dataset context." },
+      saving: { phase: "finalizing", message: "Finalizing and saving analysis." },
+      completed: { phase: "completed", message: "Upload processing complete." },
+      failed: { phase: "failed", message: "Upload processing failed." },
+    };
+    const phaseInfo = phaseByStatus[job.status] || { phase: "queued", message: "Processing upload." };
+    response.phase = phaseInfo.phase;
+    response.phaseMessage = phaseInfo.message;
 
     if (job.startedAt) {
       response.startedAt = job.startedAt;
@@ -138,6 +108,13 @@ export const getUploadStatus = async (req: Request, res: Response) => {
 
     if (job.error) {
       response.error = job.error;
+    }
+
+    if (job.enrichmentStep) {
+      response.enrichmentStep = job.enrichmentStep;
+    }
+    if (job.warnings && job.warnings.length > 0) {
+      response.warnings = job.warnings;
     }
 
     if (job.status === 'completed' && job.result) {
@@ -152,6 +129,7 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       job.status === "analyzing" ||
       job.status === "saving" ||
       job.status === "completed";
+    response.previewPayloadState = "none";
 
     try {
       const { getChatBySessionIdEfficient } = await import("../models/chat.model.js");
@@ -168,8 +146,37 @@ export const getUploadStatus = async (req: Request, res: Response) => {
         response.enrichmentPhase =
           session.enrichmentStatus === "in_progress" ? "enriching" : "waiting";
       }
+      if (
+        response.previewReady &&
+        session?.dataSummary?.columns &&
+        Array.isArray(session.dataSummary.columns)
+      ) {
+        response.previewSummary = {
+          rowCount: session.dataSummary.rowCount ?? 0,
+          columnCount: session.dataSummary.columnCount ?? 0,
+          columns: session.dataSummary.columns.map((c: any) => ({
+            name: c.name,
+            type: c.type,
+          })),
+          numericColumns: session.dataSummary.numericColumns || [],
+          dateColumns: session.dataSummary.dateColumns || [],
+        };
+        response.previewSampleRows = Array.isArray(session.sampleRows)
+          ? session.sampleRows.slice(0, 50)
+          : [];
+        response.previewPayloadState =
+          response.previewSampleRows.length > 0 ? "full" : "summary_only";
+      } else if (response.previewReady) {
+        response.previewPayloadState = "none";
+      }
     } catch {
       /* ignore */
+    }
+
+    if (response.previewReady) {
+      console.log(
+        `[uploadStatus] job=${job.jobId} status=${job.status} previewPayloadState=${response.previewPayloadState} rows=${response.previewSampleRows?.length ?? 0}`
+      );
     }
 
     res.json(response);

@@ -29,12 +29,16 @@ interface ThinkingPanelProps {
 function WorkbenchBlock({
   entry,
   animate,
+  codeKind,
 }: {
   entry: AgentWorkbenchEntry;
   animate: boolean;
+  codeKind: "sql" | "json" | "python";
 }) {
   const revealed = useGradualReveal(entry.code, { active: animate });
   const [copied, setCopied] = useState(false);
+
+  const codeKindLabel = codeKind === "sql" ? "SQL" : codeKind === "json" ? "JSON" : "Python";
 
   const copy = () => {
     void navigator.clipboard.writeText(entry.code).then(() => {
@@ -44,31 +48,36 @@ function WorkbenchBlock({
   };
 
   return (
-    <div className="rounded-lg border border-zinc-700/80 bg-zinc-950/95 overflow-hidden shadow-inner">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900/80">
+    <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-zinc-950/75 to-zinc-950/95 overflow-hidden shadow-inner">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-gradient-to-r from-primary/10 via-transparent to-primary/5">
         <div className="min-w-0">
           <div className="text-[11px] font-semibold text-zinc-200 truncate">
             {entry.title}
           </div>
-          <div className="text-[10px] text-zinc-500 font-mono">{entry.kind}</div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-medium text-zinc-200">
+              {codeKindLabel}
+            </span>
+            <span className="text-[10px] text-zinc-500 font-mono truncate">{entry.kind}</span>
+          </div>
         </div>
         <button
           type="button"
           onClick={copy}
-          className="flex-shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+          className="flex-shrink-0 p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 bg-white/0 hover:bg-white/5 transition-colors"
           aria-label="Copy to clipboard"
         >
           <Copy className="w-3.5 h-3.5" />
         </button>
       </div>
       {copied && (
-        <div className="px-3 py-1 text-[10px] text-emerald-400 bg-zinc-900/80 border-b border-zinc-800">
+        <div className="px-4 py-1 text-[10px] text-emerald-300 bg-zinc-900/80 border-b border-white/10">
           Copied
         </div>
       )}
       <pre
         className={cn(
-          "text-[11px] leading-relaxed p-3 overflow-x-auto max-h-64 overflow-y-auto",
+          "text-[11px] leading-relaxed p-4 overflow-x-auto max-h-64 overflow-y-auto",
           "text-zinc-200 font-mono whitespace-pre-wrap break-words"
         )}
       >
@@ -102,18 +111,28 @@ function StepRow({ step }: { step: ThinkingStep }) {
           ? "text-red-600"
           : "text-gray-400";
 
+  const pillClass =
+    step.status === "completed"
+      ? "border-emerald-500/30 bg-emerald-500/5"
+      : step.status === "active"
+        ? "border-primary/30 bg-primary/5"
+        : step.status === "error"
+          ? "border-red-500/30 bg-red-500/5"
+          : "border-white/10 bg-white/5";
+
   return (
     <div
       className={cn(
-        "flex items-start gap-2 text-xs transition-opacity duration-200",
-        step.status === "active" ? "opacity-100" : "opacity-80"
+        "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs transition-all duration-200",
+        pillClass,
+        step.status === "active" ? "opacity-100 shadow-sm" : "opacity-80"
       )}
     >
       <div className="flex-shrink-0 mt-0.5">{icon}</div>
       <div className="flex-1 min-w-0">
         <div className={textColor}>{step.step}</div>
         {step.details && (
-          <div className="text-xs text-gray-500 mt-0.5">{step.details}</div>
+          <div className="text-xs text-muted-foreground mt-0.5">{step.details}</div>
         )}
       </div>
     </div>
@@ -136,33 +155,88 @@ export function ThinkingPanel({ steps, workbench, isStreaming }: ThinkingPanelPr
   const stepMap = new Map<string, ThinkingStep>();
   const stepOrder: string[] = [];
   for (const step of steps) {
-    if (!stepMap.has(step.step)) {
-      stepMap.set(step.step, step);
-      stepOrder.push(step.step);
+    // Normalize to a primitive string to avoid duplicate React keys when
+    // the runtime provides String objects (or values with identical stringification).
+    const stepKey = String(step.step);
+    if (!stepMap.has(stepKey)) {
+      stepMap.set(stepKey, step);
+      stepOrder.push(stepKey);
     } else {
-      const existing = stepMap.get(step.step)!;
+      const existing = stepMap.get(stepKey)!;
       if (step.timestamp > existing.timestamp) {
-        stepMap.set(step.step, step);
+        stepMap.set(stepKey, step);
       }
     }
   }
 
-  const toolRunCount = workbench.filter(
-    (e) => e.kind === "tool_call" || e.kind === "tool_result"
-  ).length;
+  type WorkbenchCodeKind = "sql" | "json" | "python";
+  type VisibleWorkbenchEntry = { entry: AgentWorkbenchEntry; codeKind: WorkbenchCodeKind };
+
+  const classifyWorkbenchCodeKind = (
+    entry: AgentWorkbenchEntry
+  ): WorkbenchCodeKind | null => {
+    const code = (entry.code ?? "").trim();
+    if (!code) return null;
+
+    const lang = entry.language?.toLowerCase().trim();
+    if (lang) {
+      if (lang.includes("sql")) return "sql";
+      if (lang.includes("json")) return "json";
+      if (lang.includes("python") || lang.includes("py")) return "python";
+    }
+
+    const lower = code.toLowerCase();
+    // JSON: parseable object/array payloads.
+    const looksLikeJson =
+      (code.startsWith("{") && code.endsWith("}")) ||
+      (code.startsWith("[") && code.endsWith("]"));
+    if (looksLikeJson) {
+      try {
+        JSON.parse(code);
+        return "json";
+      } catch {
+        // fall through
+      }
+    }
+
+    // SQL: common DML/DDL/DQL tokens.
+    const sqlToken =
+      /\b(select|with|insert|update|delete|create|alter|drop|union|join)\b/i.test(lower);
+    if (sqlToken) return "sql";
+
+    // Python: common defs/imports/control tokens.
+    const pythonToken =
+      /\b(def|class|import|from|print|range|len|for|while|try|except|elif|else)\b/.test(lower);
+    if (pythonToken) return "python";
+
+    return null;
+  };
+
+  const visibleWorkbench: VisibleWorkbenchEntry[] = [];
+  for (const entry of workbench) {
+    const codeKind = classifyWorkbenchCodeKind(entry);
+    if (codeKind) visibleWorkbench.push({ entry, codeKind });
+  }
+
   const summaryParts: string[] = [];
   if (stepOrder.length) summaryParts.push(`${stepOrder.length} steps`);
-  if (workbench.length) summaryParts.push(`${workbench.length} activity blocks`);
-  if (toolRunCount) summaryParts.push(`${Math.ceil(toolRunCount / 2)} tool runs`);
+  if (visibleWorkbench.length) summaryParts.push(`${visibleWorkbench.length} code blocks`);
+  // Keep the summary aligned with what we actually render.
+  const visibleToolRunsCount = visibleWorkbench.filter(
+    (e) => e.entry.kind === "tool_call" || e.entry.kind === "tool_result"
+  ).length;
+  if (visibleToolRunsCount) summaryParts.push(`${Math.ceil(visibleToolRunsCount / 2)} tool runs`);
   const summary = summaryParts.length ? summaryParts.join(" · ") : "Details";
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-3 ml-11">
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 rounded-lg border border-gray-200/80 bg-gray-50/90 px-3 py-2 text-left",
-          "hover:bg-gray-100/90 transition-colors text-xs font-medium text-gray-700",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          "flex w-full items-center gap-2 rounded-2xl border px-4 py-2.5 text-left",
+          "border-white/10 bg-gradient-to-r from-primary/10 via-background to-primary/5",
+          "backdrop-blur supports-[backdrop-filter]:bg-background/60",
+          "hover:border-primary/20 transition-all text-xs font-semibold text-foreground/90",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shadow-sm hover:shadow-md"
         )}
         aria-expanded={open}
       >
@@ -173,16 +247,16 @@ export function ThinkingPanel({ steps, workbench, isStreaming }: ThinkingPanelPr
           )}
         />
         <span className="flex-1 min-w-0">
-          <span className="text-gray-800">Thinking &amp; backend activity</span>
-          <span className="block text-[10px] font-normal text-gray-500 mt-0.5 truncate">
+          <span className="text-foreground">Thinking & backend activity</span>
+          <span className="block text-[10px] font-normal text-muted-foreground mt-0.5 truncate">
             {summary}
           </span>
         </span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 space-y-3 overflow-hidden">
+      <CollapsibleContent className="mt-3 space-y-4 overflow-hidden">
         {stepOrder.length > 0 && (
           <div className="space-y-1.5 pl-0.5">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Steps
             </div>
             {stepOrder.map((name) => (
@@ -190,18 +264,19 @@ export function ThinkingPanel({ steps, workbench, isStreaming }: ThinkingPanelPr
             ))}
           </div>
         )}
-        {workbench.length > 0 && (
+        {visibleWorkbench.length > 0 && (
           <div className="space-y-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-              Workbench
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Workbench (SQL / JSON / Python)
             </div>
             <div className="space-y-2">
-              {workbench.map((entry, idx) => (
+              {visibleWorkbench.map(({ entry, codeKind }, idx) => (
                 <WorkbenchBlock
                   key={entry.id}
                   entry={entry}
+                  codeKind={codeKind}
                   animate={
-                    isStreaming && idx === workbench.length - 1
+                    isStreaming && idx === visibleWorkbench.length - 1
                   }
                 />
               ))}

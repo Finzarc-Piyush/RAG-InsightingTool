@@ -1,8 +1,9 @@
-import { ChartSpec } from '@/shared/schema';
+import { ChartSpec, DashboardTableSpec } from '@/shared/schema';
 
 export type DashboardTile =
   | DashboardChartTile
   | DashboardInsightTile
+  | DashboardTableTile
   | DashboardActionTile;
 
 export interface DashboardChartTile {
@@ -25,6 +26,14 @@ export interface DashboardInsightTile {
   narrative: string;
   confidence?: 'low' | 'medium' | 'high';
   relatedChartId?: string;
+}
+
+export interface DashboardTableTile {
+  kind: 'table';
+  id: string;
+  title: string;
+  table: DashboardTableSpec;
+  index: number;
 }
 
 export interface DashboardActionTile {

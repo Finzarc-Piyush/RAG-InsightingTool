@@ -99,6 +99,7 @@ async function synthesizeFinalAnswerEnvelope(
 - "body": main markdown answer (clear, concise). Do not include a separate "Key insight" or CTA list inside body; keep body focused on the direct answer.
 - "keyInsight": optional one short sentence highlighting the most important takeaway, or null if none adds value.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
+Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
 If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.`;
 
@@ -173,7 +174,7 @@ export async function runAgentTurn(
   ctx: AgentExecutionContext,
   config: AgentConfig,
   emit?: AgentSseEmitter
-): Promise<AgentLoopResult | null> {
+): Promise<AgentLoopResult> {
   const registry = new ToolRegistry();
   registerDefaultTools(registry);
   const toolCtx = { exec: ctx, config };
@@ -279,7 +280,7 @@ export async function runAgentTurn(
           ? observations.join("\n\n---\n\n").slice(0, 12_000)
           : undefined;
       const workingMemoryBlock = formatWorkingMemoryBlock(workingMemory);
-      const plan = await runPlanner(
+      const planResult = await runPlanner(
         ctx,
         registry,
         turnId,
@@ -287,10 +288,39 @@ export async function runAgentTurn(
         priorForPlanner,
         workingMemoryBlock || undefined
       );
-      if (!plan || plan.steps.length === 0) {
+      if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;
-        return null;
+        trace.plannerRejectReason = planResult.reason;
+        trace.plannerRejectDetail = [
+          planResult.tool,
+          planResult.stepId,
+          planResult.argKeys,
+          planResult.zod_error,
+        ]
+          .filter(Boolean)
+          .join("|")
+          .slice(0, 300);
+        trace.endedAt = Date.now();
+        agentLog("turn.abort", {
+          phase: "planner",
+          turnId,
+          reason: planResult.reason,
+          parseFailures: trace.parseFailures ?? 0,
+          questionLength: ctx.question.length,
+          sessionIdLen: ctx.sessionId.length,
+        });
+        return {
+          answer: "",
+          charts: mergedCharts.length ? mergedCharts : undefined,
+          insights: mergedInsights.length ? mergedInsights : undefined,
+          table,
+          operationResult,
+          agentTrace: capAgentTrace(trace),
+          agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+        };
       }
+
+      const plan = planResult;
 
       trace.planRationale = plan.rationale;
       trace.steps = plan.steps;
@@ -485,6 +515,17 @@ export async function runAgentTurn(
 
         mergeToolArtifacts(stepResult);
 
+        if (
+          stepResult.ok &&
+          stepResult.table &&
+          Array.isArray(stepResult.table.rows) &&
+          stepResult.table.rows.length > 0 &&
+          (step.tool === "run_analytical_query" ||
+            step.tool === "execute_query_plan")
+        ) {
+          ctx.data = stepResult.table.rows;
+        }
+
         observations.push(`[${step.tool}] ${finalCandidate}`);
 
         workingMemory.push({
@@ -503,7 +544,8 @@ export async function runAgentTurn(
             lastTool: step.tool,
             lastOk: stepResult.ok,
             lastAnalyticalMeta:
-              step.tool === "run_analytical_query"
+              step.tool === "run_analytical_query" ||
+              step.tool === "execute_query_plan"
                 ? stepResult.analyticalMeta
                 : undefined,
           },
@@ -584,7 +626,25 @@ export async function runAgentTurn(
     }
 
     if (!answer) {
-      return null;
+      trace.endedAt = Date.now();
+      agentLog("turn.abort", {
+        phase: "synthesis",
+        turnId,
+        observationsCount: observations.length,
+        hadDelegateAnswer: Boolean(delegateAnswer?.trim()),
+        toolCallsDone,
+        chartsCount: mergedCharts.length,
+        sessionIdLen: ctx.sessionId.length,
+      });
+      return {
+        answer: "",
+        charts: mergedCharts.length ? mergedCharts : undefined,
+        insights: mergedInsights.length ? mergedInsights : undefined,
+        table,
+        operationResult,
+        agentTrace: capAgentTrace(trace),
+        agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+      };
     }
 
     let finalRound = 0;

@@ -64,7 +64,7 @@ export function Layout({ children, currentPage, onNavigate, onNewChat, onUploadN
         <div className="p-4 rounded-md outline-none">
           <div className="flex items-center justify-between">
             {sidebarOpen && (
-              <h1 className="text-lg font-semibold tracking-tight text-foreground">Marico Insight</h1>
+              <h1 className="text-lg font-semibold tracking-tight text-foreground">Marico RAGAlytics</h1>
             )}
             <Button
               variant="ghost"
@@ -133,7 +133,7 @@ export function Layout({ children, currentPage, onNavigate, onNewChat, onUploadN
         {/* Header */}
         <div className="bg-white px-6 py-3 outline-none border-b">
           <div className="flex items-center justify-between">
-            <h1>Marico Insighting</h1>
+            <h1>Marico RAGAlytics</h1>
             <div className="flex items-center gap-3">
               {/* Only show Share Analysis button when on analysis/chat interface (home page) with an active session */}
               {currentPage === 'home' && sessionId && (

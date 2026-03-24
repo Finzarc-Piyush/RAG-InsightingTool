@@ -6,6 +6,11 @@ import {
   removeChartFromDashboardRequestSchema,
 } from "../shared/schema.js";
 import {
+  addTableToDashboardRequestSchema,
+  removeTableFromDashboardRequestSchema,
+  updateTableCaptionRequestSchema,
+} from "../shared/schema.js";
+import {
   addChartToDashboard,
   addSheetToDashboard,
   createDashboard,
@@ -17,6 +22,9 @@ import {
   renameSheet,
   renameDashboard,
   updateChartInsightOrRecommendation,
+  addTableToDashboard,
+  removeTableFromDashboard,
+  updateTableCaption,
 } from "../models/dashboard.model.js";
 
 export const createDashboardController = async (req: Request, res: Response) => {
@@ -151,6 +159,23 @@ export const addChartToDashboardController = async (req: Request, res: Response)
   }
 };
 
+export const addTableToDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = addTableToDashboardRequestSchema.parse(req.body);
+
+    const updated = await addTableToDashboard(dashboardId, username, parsed.table, parsed.sheetId);
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || 'Failed to add table' });
+  }
+};
+
 export const addSheetToDashboardController = async (req: Request, res: Response) => {
   try {
     const username = requireUsername(req);
@@ -254,6 +279,22 @@ export const removeChartFromDashboardController = async (req: Request, res: Resp
   }
 };
 
+export const removeTableFromDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = removeTableFromDashboardRequestSchema.parse(req.body);
+    const updated = await removeTableFromDashboard(dashboardId, username, parsed);
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || 'Failed to remove table' });
+  }
+};
+
 export const updateChartInsightOrRecommendationController = async (req: Request, res: Response) => {
   try {
     const username = requireUsername(req);
@@ -288,6 +329,28 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
       return;
     }
     res.status(400).json({ error: error?.message || 'Failed to update chart insight or recommendation' });
+  }
+};
+
+export const updateTableCaptionController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId, tableIndex: tableIndexParam } = req.params as { dashboardId: string; tableIndex: string };
+    const { sheetId, caption } = updateTableCaptionRequestSchema.parse(req.body);
+    const tableIndex = parseInt(tableIndexParam, 10);
+
+    if (isNaN(tableIndex) || tableIndex < 0) {
+      return res.status(400).json({ error: 'Valid tableIndex is required' });
+    }
+
+    const updated = await updateTableCaption(dashboardId, username, tableIndex, sheetId, { caption });
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || 'Failed to update table caption' });
   }
 };
 

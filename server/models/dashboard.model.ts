@@ -2,7 +2,7 @@
  * Dashboard Model
  * Handles all database operations for dashboards
  */
-import { ChartSpec, Dashboard } from "../shared/schema.js";
+import { ChartSpec, Dashboard, DashboardTableSpec } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 
 /**
@@ -745,6 +745,200 @@ export const updateChartInsightOrRecommendation = async (
       // If empty string, set to undefined to remove it
       dashboard.charts[mainChartIndex].keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
     }
+  }
+
+  return updateDashboard(dashboard);
+};
+
+/**
+ * Add table to dashboard
+ */
+export const addTableToDashboard = async (
+  id: string,
+  username: string,
+  table: DashboardTableSpec,
+  sheetId?: string
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  // Try to get dashboard - it will handle both owned and shared dashboards
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  // Check if user has edit permission
+  const dashboardOwner = dashboard.username?.toLowerCase();
+
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  // Initialize sheets if not present (backward compatibility)
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    dashboard.sheets = [
+      {
+        id: "default",
+        name: "Overview",
+        charts: [...dashboard.charts],
+        tables: [],
+        order: 0,
+      },
+    ];
+  }
+
+  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+
+  if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
+
+  if (!targetSheet.tables) targetSheet.tables = [];
+  targetSheet.tables.push(table);
+
+  return updateDashboard(dashboard);
+};
+
+/**
+ * Remove table from dashboard
+ */
+export const removeTableFromDashboard = async (
+  id: string,
+  username: string,
+  predicate: { index: number; sheetId?: string }
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const dashboardOwner = dashboard.username?.toLowerCase();
+
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    throw new Error("No sheets found");
+  }
+
+  const targetSheetId = predicate.sheetId || dashboard.sheets[0].id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+  if (!targetSheet) throw new Error(`Sheet with id "${targetSheetId}" not found`);
+
+  if (!targetSheet.tables || targetSheet.tables.length === 0) {
+    throw new Error("No tables found on the selected sheet");
+  }
+
+  if (predicate.index < 0 || predicate.index >= targetSheet.tables.length) {
+    throw new Error(`Table index ${predicate.index} is out of range`);
+  }
+
+  targetSheet.tables.splice(predicate.index, 1);
+  return updateDashboard(dashboard);
+};
+
+/**
+ * Update table caption/title
+ */
+export const updateTableCaption = async (
+  id: string,
+  username: string,
+  tableIndex: number,
+  sheetId: string | undefined,
+  updates: { caption?: string }
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const dashboardOwner = dashboard.username?.toLowerCase();
+
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  // Initialize sheets if not present (backward compatibility)
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    dashboard.sheets = [
+      {
+        id: "default",
+        name: "Overview",
+        charts: [...dashboard.charts],
+        tables: [],
+        order: 0,
+      },
+    ];
+  }
+
+  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+  if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
+
+  if (!targetSheet.tables || targetSheet.tables.length === 0) {
+    throw new Error("No tables found on the selected sheet");
+  }
+
+  if (tableIndex < 0 || tableIndex >= targetSheet.tables.length) {
+    throw new Error(`Table index ${tableIndex} is out of range`);
+  }
+
+  const table = targetSheet.tables[tableIndex];
+
+  if (updates.caption !== undefined) {
+    table.caption = updates.caption;
   }
 
   return updateDashboard(dashboard);

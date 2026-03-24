@@ -32,8 +32,8 @@ export async function generateAISuggestions(
     .join('\n');
 
   // Build column context for better suggestions
-  const allColumnNames = dataSummary.columns.map(c => c.name).slice(0, 20).join(', ');
-  const columnTypes = dataSummary.columns.slice(0, 10).map(c => `- ${c.name} (${c.datatype})`).join('\n');
+  const cols = dataSummary.columns ?? [];
+  const columnTypes = cols.slice(0, 10).map(c => `- ${c.name} (${c.type})`).join('\n');
   
   const prompt = `You are a helpful data analyst assistant. Based on the conversation history and data context, generate 3-4 concise, actionable follow-up questions that would be natural next steps for the user to ask.
 
@@ -52,9 +52,9 @@ ${
 
 AVAILABLE DATA COLUMNS:
 ${columnTypes}
-- Total columns: ${dataSummary.columns.length}
-- Numeric columns: ${dataSummary.numericColumns.slice(0, 10).join(', ')}
-- Date columns: ${dataSummary.dateColumns.slice(0, 5).join(', ')}
+- Total columns: ${cols.length}
+- Numeric columns: ${(dataSummary.numericColumns ?? []).slice(0, 10).join(', ')}
+- Date columns: ${(dataSummary.dateColumns ?? []).slice(0, 5).join(', ')}
 
 ${!conversationContext ? `IMPORTANT: Since this is a new dataset, generate questions that:
 - Are specific to the actual column names in the dataset (use exact column names from the list above)
@@ -67,7 +67,7 @@ ${!conversationContext ? `IMPORTANT: Since this is a new dataset, generate quest
 
 GUIDELINES:
 - Generate questions that are relevant to the current conversation${!conversationContext ? ' and the actual data structure' : ''}
-- Make them specific and actionable (e.g., "What affects ${dataSummary.numericColumns[0] || 'the data'}?" not "Tell me more")
+- Make them specific and actionable (e.g., "What affects ${(dataSummary.numericColumns ?? [])[0] || 'the data'}?" not "Tell me more")
 - Use actual column names from the dataset when possible
 - Vary the question types (correlation, trends, comparisons, etc.)
 - Keep each question under 10 words
@@ -111,11 +111,12 @@ Output JSON only:
   return getDefaultSuggestions(dataSummary);
 }
 
-function getDefaultSuggestions(summary: DataSummary): string[] {
-  if (summary.numericColumns.length > 0) {
+export function getDefaultSuggestions(summary: DataSummary): string[] {
+  const numeric = summary.numericColumns ?? [];
+  if (numeric.length > 0) {
     return [
-      `What affects ${summary.numericColumns[0]}?`,
-      `Show me trends for ${summary.numericColumns[0]}`,
+      `What affects ${numeric[0]}?`,
+      `Show me trends for ${numeric[0]}`,
       `What are the top performers?`,
       'Analyze correlations in the data'
     ];

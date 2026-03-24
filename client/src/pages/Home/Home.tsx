@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
-import { FileUpload } from '@/pages/Home/Components/FileUpload';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
 import { StartAnalysisView } from '@/pages/Home/Components/StartAnalysisView';
 import { SnowflakeImportFlow } from '@/pages/Home/Components/SnowflakeImportFlow';
 import { ChatInterface } from './Components/ChatInterface';
@@ -9,6 +9,17 @@ import { useHomeState, useHomeMutations, useHomeHandlers, useSessionLoader } fro
 import { sessionsApi } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { logger } from '@/lib/logger';
+import { normalizeDatasetSystemMessages } from './modules/uploadSystemMessages';
+
+type PreviewSnapshot = {
+  capturedAt: number;
+  rows: Record<string, any>[];
+  columns: string[];
+  numericColumns: string[];
+  dateColumns: string[];
+  totalRows: number;
+  totalColumns: number;
+};
 
 interface HomeProps {
   resetTrigger?: number;
@@ -24,12 +35,33 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
   const [collaborators, setCollaborators] = useState<string[]>([]);
   const [isDatasetPreviewLoading, setIsDatasetPreviewLoading] = useState(false);
   const [isDatasetEnriching, setIsDatasetEnriching] = useState(false);
+  const [enrichmentPoll, setEnrichmentPoll] = useState<DatasetEnrichmentPollSnapshot | null>(null);
+  const [enrichmentStartedAtMs, setEnrichmentStartedAtMs] = useState<number | null>(null);
   const [showContextModal, setShowContextModal] = useState(false);
   const [contextModalSessionId, setContextModalSessionId] = useState<string | null>(null);
   const [isSavingContext, setIsSavingContext] = useState(false);
   const [showDataSummaryModal, setShowDataSummaryModal] = useState(false);
-  const [startMode, setStartMode] = useState<'choice' | 'upload' | 'snowflake'>('choice');
+  const [preEnrichmentPreviewSnapshot, setPreEnrichmentPreviewSnapshot] =
+    useState<PreviewSnapshot | null>(null);
+  const [postEnrichmentPreviewSnapshot, setPostEnrichmentPreviewSnapshot] =
+    useState<PreviewSnapshot | null>(null);
+  const [externalComposerDraft, setExternalComposerDraft] = useState<{
+    text: string;
+    id: number;
+  } | null>(null);
+  const [isUploadStarting, setIsUploadStarting] = useState(false);
+  const composerDraftIdRef = useRef(0);
+  const [startMode, setStartMode] = useState<'choice' | 'snowflake'>('choice');
   const contextModalShownRef = useRef<Set<string>>(new Set());
+
+  const handleComposerDraftConsumed = useCallback(() => {
+    setExternalComposerDraft(null);
+  }, []);
+
+  const handleDraftMessageFromModal = useCallback((text: string) => {
+    composerDraftIdRef.current += 1;
+    setExternalComposerDraft({ text, id: composerDraftIdRef.current });
+  }, []);
   const { toast } = useToast();
   const {
     sessionId,
@@ -88,6 +120,9 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setSuggestions,
     setIsDatasetPreviewLoading,
     setIsDatasetEnriching,
+    setEnrichmentPollSnapshot: setEnrichmentPoll,
+    onUploadProcessingStarted: () => setIsUploadStarting(false),
+    onUploadError: () => setIsUploadStarting(false),
   });
 
   const { handleFileSelect, handleSendMessage, handleUploadNew, handleEditMessage } = useHomeHandlers({
@@ -98,6 +133,14 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     chatMutation,
     resetState,
   });
+
+  const handleStartUploadFromChoice = useCallback(
+    (file: File) => {
+      setIsUploadStarting(true);
+      handleFileSelect(file);
+    },
+    [handleFileSelect]
+  );
 
   const handleStopGeneration = () => {
     cancelChatRequest();
@@ -112,7 +155,17 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         if (data.session) {
           // Handle response with session object
           if (Array.isArray(data.session.messages)) {
-            setMessages(data.session.messages as any);
+            const hasPreview =
+              !!data.session.dataSummary?.columns?.length || !!data.session.dataSummary?.rowCount;
+            const isEnriching =
+              data.session.enrichmentStatus === 'pending' ||
+              data.session.enrichmentStatus === 'in_progress';
+            setMessages(
+              normalizeDatasetSystemMessages(data.session.messages as any, {
+                hasPreview,
+                isEnriching,
+              }) as any
+            );
           }
           if (data.session.collaborators && Array.isArray(data.session.collaborators)) {
             setCollaborators(data.session.collaborators);
@@ -120,7 +173,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         } else {
           // Handle direct response
           if (Array.isArray(data.messages)) {
-            setMessages(data.messages as any);
+            const hasPreview = !!data.dataSummary?.columns?.length || !!data.dataSummary?.rowCount;
+            const isEnriching =
+              data.enrichmentStatus === 'pending' || data.enrichmentStatus === 'in_progress';
+            setMessages(
+              normalizeDatasetSystemMessages(data.messages as any, {
+                hasPreview,
+                isEnriching,
+              }) as any
+            );
           }
           if (data.collaborators && Array.isArray(data.collaborators)) {
             setCollaborators(data.collaborators);
@@ -133,6 +194,14 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
       setIsLoadingHistory(false);
     }
   };
+
+  useEffect(() => {
+    if (isDatasetEnriching) {
+      setEnrichmentStartedAtMs((prev) => prev ?? Date.now());
+    } else {
+      setEnrichmentStartedAtMs(null);
+    }
+  }, [isDatasetEnriching]);
 
   // Sync mode with initialMode prop (from URL) - only when initialMode changes
   useEffect(() => {
@@ -148,8 +217,54 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
       setSuggestions([]);
       setIsDatasetPreviewLoading(false);
       setIsDatasetEnriching(false);
+      setIsUploadStarting(false);
+      setPreEnrichmentPreviewSnapshot(null);
+      setPostEnrichmentPreviewSnapshot(null);
     }
   }, [resetTrigger, resetState, loadedSessionData]);
+
+  useEffect(() => {
+    if (sessionId) {
+      setIsUploadStarting(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setPreEnrichmentPreviewSnapshot(null);
+      setPostEnrichmentPreviewSnapshot(null);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!columns.length) return;
+    const snapshot: PreviewSnapshot = {
+      capturedAt: Date.now(),
+      rows: sampleRows || [],
+      columns: [...columns],
+      numericColumns: [...numericColumns],
+      dateColumns: [...dateColumns],
+      totalRows: totalRows || 0,
+      totalColumns: totalColumns || 0,
+    };
+    if (isDatasetEnriching && !preEnrichmentPreviewSnapshot) {
+      setPreEnrichmentPreviewSnapshot(snapshot);
+      setPostEnrichmentPreviewSnapshot(null);
+      return;
+    }
+    if (!isDatasetEnriching && preEnrichmentPreviewSnapshot) {
+      setPostEnrichmentPreviewSnapshot(snapshot);
+    }
+  }, [
+    isDatasetEnriching,
+    preEnrichmentPreviewSnapshot,
+    columns,
+    sampleRows,
+    numericColumns,
+    dateColumns,
+    totalRows,
+    totalColumns,
+  ]);
 
   // Load session data when provided (and populate existing chat history)
   useSessionLoader({
@@ -252,10 +367,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setContextModalSessionId(null);
   };
 
-  // When "Upload new" is clicked, show upload view and open file dialog
+  // When "Upload new" is clicked, stay on start view and auto-open the picker.
   useEffect(() => {
     if (resetTrigger > 0 && !sessionId && !loadedSessionData) {
-      setStartMode('upload');
+      setStartMode('choice');
     }
   }, [resetTrigger, sessionId, loadedSessionData]);
 
@@ -265,28 +380,22 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     if (startMode === 'choice') {
       return (
         <StartAnalysisView
-          onSelectUpload={() => setStartMode('upload')}
+          onSelectUpload={handleStartUploadFromChoice}
           onSelectSnowflake={() => setStartMode('snowflake')}
+          uploadDialogTrigger={resetTrigger > 0 ? resetTrigger : 0}
+          isUploadStarting={isUploadStarting}
         />
       );
     }
     if (startMode === 'snowflake') {
       return (
         <SnowflakeImportFlow
-          onBack={() => setStartMode('upload')}
+          onBack={() => setStartMode('choice')}
           onImport={({ database, schema, tableName }) => snowflakeImportMutation.mutate({ database, schema, tableName })}
           isImporting={snowflakeImportMutation.isPending}
         />
       );
     }
-    return (
-      <FileUpload
-        onFileSelect={handleFileSelect}
-        isUploading={uploadMutation.isPending}
-        autoOpenTrigger={resetTrigger > 0 ? resetTrigger : 0}
-        onBack={() => setStartMode('choice')}
-      />
-    );
   }
 
   // If we're loading a session but sessionId isn't set yet, show loading state
@@ -333,6 +442,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         sessionId={sessionId}
         isDatasetPreviewLoading={isDatasetPreviewLoading}
         isDatasetEnriching={isDatasetEnriching}
+        enrichmentPoll={enrichmentPoll}
+        enrichmentStartedAtMs={enrichmentStartedAtMs}
         onModeChange={(newMode) => {
           setMode(newMode);
           // onModeChange will update the URL, which will update initialMode prop
@@ -341,6 +452,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
           }
         }}
         onOpenDataSummary={() => setShowDataSummaryModal(true)}
+        externalComposerDraft={externalComposerDraft}
+        onExternalComposerDraftConsumed={handleComposerDraftConsumed}
+        preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
+        postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
       />
       <ContextModal
         isOpen={showContextModal}
@@ -353,6 +468,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         onClose={() => setShowDataSummaryModal(false)}
         sessionId={sessionId}
         onSendMessage={handleSendMessage}
+        onDraftMessage={handleDraftMessageFromModal}
       />
     </>
   );

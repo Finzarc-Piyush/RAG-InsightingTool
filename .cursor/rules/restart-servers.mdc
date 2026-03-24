@@ -1,0 +1,16 @@
+---
+description: When restarting dev servers, restart Python, Node API, and Vite together
+alwaysApply: true
+---
+
+# Restarting dev servers
+
+When the user asks to **restart servers** (or **restart all servers**, or similar wording that means bringing the stack back up), restart **all three** services in this order:
+
+1. **Python (FastAPI data-ops)** — `python-service/`: activate `.venv` if present, run `python3 main.py` (Uvicorn on port **8001** by default).
+2. **Node API** — `server/`: `npm run dev` (port **3002**).
+3. **Vite client** — `client/`: `npm run dev` (port **3000**).
+
+**Stop** existing listeners first: kill PIDs on ports **8001**, **3002**, and **3000** (e.g. `lsof -ti tcp:<port> | xargs kill -9`), then start the three processes (background is fine).
+
+If the user asks to restart only the **server** (singular) or only one service, follow their literal request; the “all three” behavior applies to **servers** / **all** phrasing.

@@ -17,6 +17,7 @@ export default function Dashboard() {
     setCurrentDashboard, 
     deleteDashboard,
     removeChartFromDashboard,
+    removeTableFromDashboard,
     fetchDashboardById,
     status,
     refetch,
@@ -69,6 +70,14 @@ export default function Dashboard() {
     if (currentDashboard) {
       console.log('Proceeding with chart deletion');
       const updatedDashboard = await removeChartFromDashboard(currentDashboard.id, chartIndex, sheetId);
+      setCurrentDashboard(updatedDashboard);
+      await refetch();
+    }
+  };
+
+  const handleDeleteTable = async (tableIndex: number, sheetId?: string) => {
+    if (currentDashboard) {
+      const updatedDashboard = await removeTableFromDashboard(currentDashboard.id, tableIndex, sheetId);
       setCurrentDashboard(updatedDashboard);
       await refetch();
     }
@@ -141,6 +150,7 @@ export default function Dashboard() {
         dashboard={currentDashboard}
         onBack={handleBackToList}
         onDeleteChart={handleDeleteChart}
+        onDeleteTable={handleDeleteTable}
         isRefreshing={status.refreshing}
         onRefresh={refetch}
       />

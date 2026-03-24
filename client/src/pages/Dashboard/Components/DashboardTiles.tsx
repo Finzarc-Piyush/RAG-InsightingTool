@@ -8,9 +8,11 @@ import { Responsive, WidthProvider, Layout, Layouts } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 import { EditInsightModal } from './EditInsightModal';
+import { EditTableCaptionModal } from './EditTableCaptionModal';
 import { useToast } from '@/hooks/use-toast';
 import { useDashboardContext } from '../context/DashboardContext';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 // Lazy load ChartRenderer to reduce initial bundle size
 const ChartRenderer = lazy(() => import('@/pages/Home/Components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
@@ -22,7 +24,8 @@ import { ActiveChartFilters } from '@/lib/chartFilters';
 interface DashboardTilesProps {
   dashboardId: string;
   tiles: DashboardTile[];
-  onDeleteChart: (chartIndex: number) => void;
+  onDeleteChart?: (chartIndex: number) => void;
+  onDeleteTable?: (tableIndex: number) => void;
   filtersByTile: Record<string, ActiveChartFilters>;
   onTileFiltersChange: (tileId: string, filters: ActiveChartFilters) => void;
   sheetId?: string;
@@ -47,6 +50,7 @@ const TILE_CONFIG: Record<DashboardTile['kind'], TileConfig> = {
   chart: { w: 6, h: 12, minW: 3, minH: 4 },
   insight: { w: 4, h: 7, minW: 2, minH: 2 },
   action: { w: 4, h: 7, minW: 2, minH: 2 }, // Kept for backward compatibility but no longer used
+  table: { w: 4, h: 8, minW: 2, minH: 3 },
 };
 
 const ResponsiveLayoutKeys = Object.keys(COLS) as Array<keyof typeof COLS>;
@@ -187,6 +191,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   dashboardId,
   tiles,
   onDeleteChart,
+  onDeleteTable,
   filtersByTile,
   onTileFiltersChange,
   sheetId,
@@ -195,11 +200,14 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
 }) => {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenTiles(dashboardId));
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<{ type: 'chart' | 'insight'; index: number; title: string; chartIndex?: number } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<
+    { type: 'chart' | 'insight' | 'table'; index: number; title: string; chartIndex?: number } | null
+  >(null);
   const [editingTile, setEditingTile] = useState<{ type: 'insight'; chartIndex: number; text: string } | null>(null);
+  const [editingTable, setEditingTable] = useState<{ tableIndex: number; caption: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
-  const { updateChartInsightOrRecommendation } = useDashboardContext();
+  const { updateChartInsightOrRecommendation, updateTableCaption } = useDashboardContext();
 
   useEffect(() => {
     setHiddenIds(loadHiddenTiles(dashboardId));
@@ -274,6 +282,9 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           setDeleteConfirmOpen(true);
         }
       }
+    } else if (tile.kind === 'table') {
+      setPendingDelete({ type: 'table', index: tile.index, title: tile.title || `Table ${tile.index + 1}` });
+      setDeleteConfirmOpen(true);
     }
   }, [tiles]);
 
@@ -282,6 +293,16 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
 
     if (pendingDelete.type === 'chart') {
       // Delete the entire chart
+      if (!onDeleteChart) {
+        toast({
+          title: 'Error',
+          description: 'Chart deletion is not available for this view.',
+          variant: 'destructive',
+        });
+        setDeleteConfirmOpen(false);
+        setPendingDelete(null);
+        return;
+      }
       onDeleteChart(pendingDelete.index);
       setDeleteConfirmOpen(false);
       setPendingDelete(null);
@@ -328,8 +349,23 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       } finally {
         setIsSaving(false);
       }
+    } else if (pendingDelete.type === 'table') {
+      if (!onDeleteTable) {
+        toast({
+          title: 'Error',
+          description: 'Table deletion is not available for this view.',
+          variant: 'destructive',
+        });
+        setDeleteConfirmOpen(false);
+        setPendingDelete(null);
+        return;
+      }
+
+      onDeleteTable(pendingDelete.index);
+      setDeleteConfirmOpen(false);
+      setPendingDelete(null);
     }
-  }, [pendingDelete, onDeleteChart, updateChartInsightOrRecommendation, dashboardId, sheetId, onUpdate, toast]);
+  }, [pendingDelete, onDeleteChart, onDeleteTable, updateChartInsightOrRecommendation, dashboardId, sheetId, onUpdate, toast]);
 
   useEffect(() => {
     persistHiddenTiles(dashboardId, hiddenIds);
@@ -423,6 +459,71 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           </Card>
         );
       }
+      case 'table': {
+        return (
+          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="table">
+            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
+              <div className="flex items-center justify-between w-full">
+                <CardTitle className="text-sm font-semibold text-primary flex-1 min-w-0">
+                  {tile.title || `Table ${tile.index + 1}`}
+                </CardTitle>
+                {canEdit && (
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-primary hover:text-primary/80"
+                      aria-label="Edit table caption"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTable({ tableIndex: tile.index, caption: tile.title });
+                      }}
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      aria-label="Remove table tile"
+                      onClick={() => handleDeleteClick(tile)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
+              <div className="max-h-[220px] overflow-y-auto rounded-md border bg-background/50">
+                {/* Reuse the existing table primitive for consistent styling */}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {tile.table.columns.map((col, idx) => (
+                        <TableHead key={idx} className="text-xs font-semibold text-muted-foreground">
+                          {col}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {tile.table.rows.map((row, rIdx) => (
+                      <TableRow key={rIdx}>
+                        {tile.table.columns.map((_, cIdx) => (
+                          <TableCell key={cIdx} className="text-sm text-foreground">
+                            {row?.[cIdx] ?? ''}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      }
       default:
         return null;
     }
@@ -445,7 +546,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
         compactType={null}
         preventCollision={false}
-        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button"
+        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button"
       >
         {visibleTiles.map((tile) => (
           <div key={tile.id} className="h-full w-full">
@@ -473,6 +574,9 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
               )}
               {pendingDelete?.type === 'insight' && (
                 <>Are you sure you want to delete the key insight? This will remove only the insight, and the chart will remain. This action cannot be undone.</>
+              )}
+              {pendingDelete?.type === 'table' && (
+                <>Are you sure you want to delete the table "{pendingDelete.title}"? This action cannot be undone.</>
               )}
             </DialogDescription>
           </DialogHeader>
@@ -533,6 +637,39 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           }}
           title="Key Insight"
           initialText={editingTile.text}
+          isLoading={isSaving}
+        />
+      )}
+
+      {/* Edit Table Caption Modal */}
+      {editingTable && (
+        <EditTableCaptionModal
+          isOpen={!!editingTable}
+          onClose={() => setEditingTable(null)}
+          onSave={async (caption) => {
+            setIsSaving(true);
+            try {
+              await updateTableCaption(dashboardId, editingTable.tableIndex, { caption }, sheetId);
+              setEditingTable(null);
+              toast({
+                title: 'Success',
+                description: 'Table caption updated successfully.',
+              });
+              if (onUpdate) {
+                await onUpdate();
+              }
+            } catch (error: any) {
+              toast({
+                title: 'Error',
+                description: error?.message || 'Failed to update table caption',
+                variant: 'destructive',
+              });
+            } finally {
+              setIsSaving(false);
+            }
+          }}
+          title="Table Caption"
+          initialCaption={editingTable.caption}
           isLoading={isSaving}
         />
       )}

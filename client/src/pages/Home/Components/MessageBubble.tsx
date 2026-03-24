@@ -18,6 +18,13 @@ import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { FilterAppliedMessage } from '@/components/FilterAppliedMessage';
 import { FilterCondition } from '@/components/ColumnFilterDialog';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DatasetEnrichmentLoader } from './DatasetEnrichmentLoader';
+import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
+import {
+  DATASET_PREVIEW_MESSAGE_KEY,
+  isDatasetEnrichmentSystemMessage,
+  isDatasetPreviewSystemMessage,
+} from '@/pages/Home/modules/uploadSystemMessages';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
@@ -99,6 +106,29 @@ interface MessageBubbleProps {
   thinkingPanelStreaming?: boolean;
   sessionId?: string | null; // Session ID for downloading modified datasets
   onSuggestedQuestionClick?: (question: string) => void;
+  showDatasetEnrichmentLoader?: boolean;
+  enrichmentPhase?: DatasetEnrichmentPollSnapshot['enrichmentPhase'];
+  enrichmentStep?: DatasetEnrichmentPollSnapshot['enrichmentStep'];
+  uploadProgress?: number;
+  enrichmentStartedAtMs?: number | null;
+  preEnrichmentPreviewSnapshot?: {
+    capturedAt: number;
+    rows: Record<string, any>[];
+    columns: string[];
+    numericColumns: string[];
+    dateColumns: string[];
+    totalRows: number;
+    totalColumns: number;
+  } | null;
+  postEnrichmentPreviewSnapshot?: {
+    capturedAt: number;
+    rows: Record<string, any>[];
+    columns: string[];
+    numericColumns: string[];
+    dateColumns: string[];
+    totalRows: number;
+    totalColumns: number;
+  } | null;
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -119,8 +149,20 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   thinkingPanelStreaming,
   sessionId,
   onSuggestedQuestionClick,
+  showDatasetEnrichmentLoader = false,
+  enrichmentPhase,
+  enrichmentStep,
+  uploadProgress,
+  enrichmentStartedAtMs,
+  preEnrichmentPreviewSnapshot,
+  postEnrichmentPreviewSnapshot,
 }, ref) => {
   const isUser = message.role === 'user';
+  const isPreviewSystemMessage = isDatasetPreviewSystemMessage(message);
+  const isEnrichmentSystemMessage = isDatasetEnrichmentSystemMessage(message);
+  const displayContent = isPreviewSystemMessage
+    ? message.content.replace(`${DATASET_PREVIEW_MESSAGE_KEY} `, '')
+    : message.content;
 
   // Detect if this is a filter operation response
   const isFilterResponse = useMemo(() => {
@@ -354,13 +396,13 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && message.content && (
+        {!isUser && displayContent && !isEnrichmentSystemMessage && (
           <div
             className="rounded-xl px-4 py-3 shadow-sm bg-white border border-gray-100"
             data-testid={`message-content-${message.role}`}
           >
             <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
-              <MarkdownRenderer content={message.content} />
+              <MarkdownRenderer content={displayContent} />
             </div>
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
@@ -373,6 +415,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                       variant="outline"
                       size="sm"
                       className="text-xs rounded-full h-auto py-1.5 px-3"
+                      aria-label={`Add to message: ${q}`}
                       onClick={() => onSuggestedQuestionClick(q)}
                     >
                       {q}
@@ -383,10 +426,10 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && sampleRows && columns && sampleRows.length > 0 && (
+        {!isUser && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
           <div className="mt-3">
             <DataPreview 
-              data={sampleRows} 
+              data={sampleRows || []}
               columns={columns}
               numericColumns={numericColumns}
               dateColumns={dateColumns}
@@ -394,6 +437,22 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               totalRows={totalRows}
               totalColumns={totalColumns}
               defaultExpanded={true}
+              preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
+              postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
+            />
+          </div>
+        )}
+
+        {!isUser && showDatasetEnrichmentLoader && (
+          <div className="mt-3">
+            <DatasetEnrichmentLoader
+              totalRows={totalRows ?? 0}
+              totalColumns={totalColumns ?? 0}
+              enrichmentPhase={enrichmentPhase}
+              enrichmentStep={enrichmentStep}
+              uploadProgress={uploadProgress}
+              startedAtMs={enrichmentStartedAtMs ?? null}
+              inline
             />
           </div>
         )}
@@ -565,7 +624,9 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     (prevProps.message.suggestedQuestions?.length ?? 0) ===
       (nextProps.message.suggestedQuestions?.length ?? 0) &&
     prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
-    // Sample rows only matter for first message
-    (prevProps.messageIndex !== 0 || prevProps.sampleRows === nextProps.sampleRows)
+    prevProps.preEnrichmentPreviewSnapshot === nextProps.preEnrichmentPreviewSnapshot &&
+    prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&
+    prevProps.sampleRows === nextProps.sampleRows &&
+    prevProps.columns === nextProps.columns
   );
 });

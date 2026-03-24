@@ -140,6 +140,10 @@ export interface AgentTrace {
   reflectorNotes: string[];
   budgetHits?: string[];
   parseFailures?: number;
+  /** Set when runPlanner rejects the plan (for client/debug and optional user hints). */
+  plannerRejectReason?: string;
+  /** Non-PII planner rejection detail (e.g. tool name, arg key). */
+  plannerRejectDetail?: string;
 }
 
 export interface AgentState {

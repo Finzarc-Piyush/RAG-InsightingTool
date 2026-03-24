@@ -14,11 +14,14 @@ export {
   deleteDashboardController,
   addChartToDashboardController,
   removeChartFromDashboardController,
+  addTableToDashboardController,
+  removeTableFromDashboardController,
   addSheetToDashboardController,
   removeSheetFromDashboardController,
   renameSheetController,
   renameDashboardController,
   updateChartInsightOrRecommendationController,
+  updateTableCaptionController,
 } from './dashboardController.js';
 export {
   shareAnalysisController,

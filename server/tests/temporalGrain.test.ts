@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeDateStringForParse, parseFlexibleDate } from "../lib/dateUtils.js";
+import { sanitizeDateStringForParse } from "../lib/dateUtils.js";
 import {
   inferTemporalGrainFromDates,
   formatDateForChartAxis,
@@ -8,12 +8,8 @@ import { processChartData } from "../lib/chartGenerator.js";
 import type { ChartSpec } from "../shared/schema.js";
 
 describe("sanitizeDateStringForParse", () => {
-  it("strips trailing India Standard Time parenthetical", () => {
-    const raw = "13/01/2015 (India Standard Time)";
-    expect(sanitizeDateStringForParse(raw)).toBe("13/01/2015");
-    const d = parseFlexibleDate(raw);
-    expect(d).not.toBeNull();
-    expect(d!.getFullYear()).toBe(2015);
+  it("trims whitespace only (no regex date cleanup)", () => {
+    expect(sanitizeDateStringForParse("  2015-01-13  ")).toBe("2015-01-13");
   });
 });
 
@@ -59,7 +55,7 @@ describe("formatDateForChartAxis", () => {
 });
 
 describe("processChartData temporal x labels", () => {
-  it("formats line chart Order Date axis strings after sort", () => {
+  it("formats line chart x when column is in profile dateColumns and values are Date", () => {
     const chartSpec: ChartSpec = {
       type: "line",
       title: "Sales",
@@ -68,10 +64,10 @@ describe("processChartData temporal x labels", () => {
       aggregate: "none",
     };
     const data = [
-      { "Order Date": "2015-01-13", Sales: 10 },
-      { "Order Date": "2015-01-14", Sales: 20 },
+      { "Order Date": new Date(2015, 0, 13), Sales: 10 },
+      { "Order Date": new Date(2015, 0, 14), Sales: 20 },
     ];
-    const out = processChartData(data, chartSpec);
+    const out = processChartData(data, chartSpec, ["Order Date"]);
     expect(out).toHaveLength(2);
     expect(out[0]!["Order Date"]).toMatch(/^\d{2}\/\d{2}\/\d{2}$/);
   });

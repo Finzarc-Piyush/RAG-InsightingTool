@@ -67,7 +67,8 @@ export type AgentWorkbench = z.infer<typeof agentWorkbenchSchema>;
 export const datasetProfileSchema = z.object({
   shortDescription: z.string(),
   dateColumns: z.array(z.string()),
-  suggestedQuestions: z.array(z.string()),
+  dirtyStringDateColumns: z.array(z.string()).max(32).optional(),
+  suggestedQuestions: z.array(z.string()).max(8),
   measureColumns: z.array(z.string()).optional(),
   idColumns: z.array(z.string()).optional(),
   grainGuess: z.string().optional(),
@@ -390,10 +391,20 @@ export interface SessionData {
 }
 
 // Dashboards
+export const dashboardTableSpecSchema = z.object({
+  caption: z.string().min(1),
+  columns: z.array(z.string()).min(1),
+  // A row is an array of cell values aligned to `columns`.
+  rows: z.array(z.array(z.union([z.string(), z.number(), z.null()]))),
+});
+
+export type DashboardTableSpec = z.infer<typeof dashboardTableSpecSchema>;
+
 export const dashboardSheetSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   charts: z.array(chartSpecSchema),
+  tables: z.array(dashboardTableSpecSchema).optional(),
   order: z.number().optional(),
 });
 
@@ -440,3 +451,18 @@ export const removeChartFromDashboardRequestSchema = z.object({
     message: "Provide index or title/type to remove a chart",
   }
 );
+
+export const addTableToDashboardRequestSchema = z.object({
+  table: dashboardTableSpecSchema,
+  sheetId: z.string().optional(),
+});
+
+export const removeTableFromDashboardRequestSchema = z.object({
+  index: z.number().min(0),
+  sheetId: z.string().optional(),
+});
+
+export const updateTableCaptionRequestSchema = z.object({
+  caption: z.string().min(1),
+  sheetId: z.string().optional(),
+});

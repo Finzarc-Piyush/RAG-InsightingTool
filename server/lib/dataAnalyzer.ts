@@ -148,7 +148,7 @@ export async function analyzeUpload(
 
   // Process data for each chart
   const charts = await Promise.all(chartSpecs.map(async (spec) => {
-    let processedData = processChartData(data, spec);
+    let processedData = processChartData(data, spec, summary.dateColumns);
     
     // Apply optimization to ensure max points limit (server-side downsampling)
     processedData = optimizeChartData(processedData, spec);
@@ -292,7 +292,7 @@ Each insight MUST include: (1) A bold headline with the key finding, (2) Specifi
   }
 
   const charts = await Promise.all(chartSpecs.map(async (spec) => {
-    let processedData = processChartData(data, spec);
+    let processedData = processChartData(data, spec, summary.dateColumns);
     processedData = optimizeChartData(processedData, spec);
     const smartDomains = calculateSmartDomainsForChart(
       processedData,
@@ -462,9 +462,29 @@ export async function answerQuestion(
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
+      const detailed = process.env.AGENT_DETAILED_USER_ERRORS === "true";
+      const trace = loopResult?.agentTrace;
+      const pr = trace?.plannerRejectReason;
+      let emptyAnswer =
+        "I couldn't complete this analysis with the agent. Please try again or rephrase your question.";
+      if (detailed && pr === "column_not_in_schema") {
+        emptyAnswer =
+          "The agent's plan used column names that don't match your dataset. Check spelling against your headers and try again.";
+      } else if (detailed && (pr === "dependency_cycle" || pr === "bad_depends_on")) {
+        emptyAnswer =
+          "The agent could not build a valid step order for this question. Try a simpler question or rephrase.";
+      } else if (detailed && (pr === "invalid_tool_args" || pr === "unknown_tool")) {
+        emptyAnswer =
+          "The agent produced a plan that could not be run. Please try again or narrow your question.";
+      } else if (detailed && (pr === "llm_json_invalid" || pr === "empty_steps")) {
+        emptyAnswer =
+          "The planner could not produce a valid plan for this turn. Please try again.";
+      } else if (detailed && (trace?.parseFailures ?? 0) > 0 && !pr) {
+        emptyAnswer =
+          "Some tool steps failed validation during this turn. Check column names and filters, then try again.";
+      }
       return {
-        answer:
-          "I couldn't complete this analysis with the agent. Please try again or rephrase your question.",
+        answer: emptyAnswer,
         charts: loopResult?.charts,
         insights: loopResult?.insights,
         table: loopResult?.table,
@@ -1066,7 +1086,7 @@ export async function answerQuestion(
     };
     
     console.log('🔄 Processing correlation scatter plot data...');
-    const scatterData = processChartData(workingData, scatterSpec);
+    const scatterData = processChartData(workingData, scatterSpec, summary.dateColumns);
     console.log(`✅ Scatter data: ${scatterData.length} points`);
     
     if (scatterData.length === 0) {
@@ -1127,7 +1147,7 @@ export async function answerQuestion(
     };
     
     console.log('🔄 Processing scatter plot data...');
-    const scatterData = processChartData(workingData, scatterSpec);
+    const scatterData = processChartData(workingData, scatterSpec, summary.dateColumns);
     console.log(`✅ Scatter data: ${scatterData.length} points`);
     
     if (scatterData.length === 0) {
@@ -1186,7 +1206,7 @@ export async function answerQuestion(
     } as any;
     
     console.log('🔄 Processing dual-axis line chart data...');
-    const processed = processChartData(workingData, spec);
+    const processed = processChartData(workingData, spec, summary.dateColumns);
     console.log(`✅ Dual-axis line data: ${processed.length} points`);
     
     if (processed.length === 0) {
@@ -1238,7 +1258,7 @@ export async function answerQuestion(
         y2Label: against.xVar,
         aggregate: 'none',
       } as any;
-      const dataProcessed = processChartData(workingData, spec);
+      const dataProcessed = processChartData(workingData, spec, summary.dateColumns);
       if (dataProcessed.length === 0) {
         return { answer: `No valid data points found for line chart using ${xTime}.` };
       }
@@ -1259,7 +1279,7 @@ export async function answerQuestion(
       yLabel: against.yVar,
       aggregate: 'none',
     };
-    const scatterData = processChartData(workingData, scatter);
+    const scatterData = processChartData(workingData, scatter, summary.dateColumns);
     if (scatterData.length === 0) {
       return { answer: `No valid data points found for scatter plot with X=${against.xVar}, Y=${against.yVar}.` };
     }
@@ -1325,7 +1345,7 @@ export async function answerQuestion(
       };
       
       console.log('🔄 Processing dual-axis line chart data...');
-      const dualAxisLineData = processChartData(workingData, dualAxisLineSpec);
+      const dualAxisLineData = processChartData(workingData, dualAxisLineSpec, summary.dateColumns);
       console.log(`✅ Dual-axis line data: ${dualAxisLineData.length} points`);
       
       if (dualAxisLineData.length === 0) {
@@ -1394,15 +1414,15 @@ export async function answerQuestion(
     
     // Process all charts
     console.log('🔄 Processing scatter chart data...');
-    const scatterData = processChartData(workingData, scatterSpec);
+    const scatterData = processChartData(workingData, scatterSpec, summary.dateColumns);
     console.log(`✅ Scatter data: ${scatterData.length} points`);
     
     console.log('🔄 Processing line chart 1 data...');
-    const lineData1 = processChartData(workingData, lineSpec1);
+    const lineData1 = processChartData(workingData, lineSpec1, summary.dateColumns);
     console.log(`✅ Line chart 1 data: ${lineData1.length} points`);
     
     console.log('🔄 Processing line chart 2 data...');
-    const lineData2 = processChartData(workingData, lineSpec2);
+    const lineData2 = processChartData(workingData, lineSpec2, summary.dateColumns);
     console.log(`✅ Line chart 2 data: ${lineData2.length} points`);
     
     if (scatterData.length === 0 && lineData1.length === 0 && lineData2.length === 0) {
@@ -1692,7 +1712,7 @@ export async function answerQuestion(
         };
         const charts = [{
           ...chartSpec,
-          data: processChartData(workingData, chartSpec),
+          data: processChartData(workingData, chartSpec, summary.dateColumns),
         }];
         const answer = `I've created a bar chart showing how ${chartSpec.y} varies across ${chartSpec.x} categories (X=${chartSpec.x}, Y=${chartSpec.y}).`;
         return withNotes({ answer, charts });
@@ -1707,7 +1727,7 @@ export async function answerQuestion(
         };
         const charts = [{
           ...chartSpec,
-          data: processChartData(workingData, chartSpec),
+          data: processChartData(workingData, chartSpec, summary.dateColumns),
         }];
         const answer = `I've created a bar chart showing how ${chartSpec.y} varies across ${chartSpec.x} categories (X=${chartSpec.x}, Y=${chartSpec.y}).`;
         return withNotes({ answer, charts });
@@ -2276,26 +2296,43 @@ ${Object.entries(stats)
   })
   .join('\n\n')}
 
-Each insight MUST include:
+Each insight MUST be either SENTENCE FORM or TABLE FORM.
+
+Representation decision is up to the model:
+- Choose SENTENCE FORM when prose explanation is clearer (why it matters + what to do next).
+- Choose TABLE FORM when ranking/comparing multiple items is clearer as a table than a paragraph.
+- Prefer using both forms within the same response when it improves clarity, but do not hard-limit the number of tables.
+
+SENTENCE FORM (default; required when the answer is best explained in prose):
 1. A bold headline with the key finding (e.g., **High Marketing Efficiency:**)
 2. Specific numbers, percentages, or metrics from the statistics above (use actual percentiles, averages, top/bottom values)
 3. Explanation of WHY this matters to the business
 4. Actionable suggestion starting with "**Actionable Suggestion:**" that includes:
-   - Explicit numeric targets or thresholds (e.g., "target ${summary.numericColumns[0]} above ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)}", "maintain between ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p25 || 0)}-${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)}")
-   - Specific improvement goals (e.g., "increase by X%", "reduce by Y units", "achieve ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p90 || 0)}")
-   - Quantified benchmarks (e.g., "reach top 10% performance of ${topBottomStats[summary.numericColumns[0]]?.top[0]?.value.toFixed(2) || 'target'}")
-   - Measurable action items with specific numbers
+  - Explicit numeric targets or thresholds
+  - Specific improvement goals
+  - Quantified benchmarks
+  - Measurable action items with specific numbers
 
-Format each insight as a complete paragraph with the structure:
+Format each sentence-form insight as a complete paragraph with the structure:
 **[Insight Title]:** [Finding with specific metrics from statistics]. **Why it matters:** [Business impact]. **Actionable Suggestion:** [Quantified suggestion with specific targets, thresholds, and improvement goals].
 
-CRITICAL REQUIREMENTS:
+TABLE FORM (use when ranking/comparing multiple items is clearer as a table than a paragraph):
+- The value of text MUST start exactly with TABLE_V1|
+- Immediately after TABLE_V1|, include a single-line JSON object with this exact shape:
+  {"caption":"...","columns":["...","..."],"rows":[[...],[...],...]}
+- caption must be a short description of what the table is ranking and why it matters.
+- The table must be self-sufficient: include the numeric values the user would need to act on (top/bottom, ranks, deltas), even if a supporting chart is also shown.
+- columns and rows must contain concrete, numeric values (no vague placeholders).
+- If the insight would normally include actionable targets, include them either in caption or as one of the columns/values.
+- Do not include markdown tables; this is a JSON payload embedded in the text field.
+
+CRITICAL REQUIREMENTS (applies to BOTH forms):
 - Use ACTUAL numbers from the statistics above (percentiles, averages, top/bottom values)
 - Suggestions must be measurable and quantifiable with specific targets
 - Include specific improvement percentages or absolute values
 - NEVER use percentile labels like "P75", "P90", "P25", "P50", "P75 level", "P90 level", "P75 value", "P90 value" in your output
-- ONLY use the numeric values themselves (e.g., "increase to ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)}" NOT "increase to P75 level (${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)})")
-- No vague language - use specific numbers like "increase to ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)}" or "maintain between ${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p25 || 0)}-${formatValue(summary.numericColumns[0] || '', stats[summary.numericColumns[0] || '']?.p75 || 0)}"
+- ONLY use the numeric values themselves
+- No vague language - use specific numbers from the statistics above
 
 Example:
 **Revenue Concentration Risk:** The top 3 products account for 78% of total revenue ($2.4M out of $3.1M), indicating high dependency. Average revenue per product is $X, with top performer at $Y. **Why it matters:** Over-reliance on few products creates vulnerability to market shifts or competitive pressure. **Actionable Suggestion:** Diversify revenue streams by investing in product development for the remaining portfolio. Target: Increase bottom 50% products' revenue by 25% to reach ${stats.revenue?.median.toFixed(2) || 'target'} within 12 months, aiming for 60/40 split between top and bottom performers.
@@ -3087,7 +3124,7 @@ export async function generateGeneralAnswer(
       };
       
       console.log('🔄 Processing bar chart data...');
-      const barData = processChartData(workingData, barSpec);
+      const barData = processChartData(workingData, barSpec, summary.dateColumns);
       console.log(`✅ Bar chart data: ${barData.length} bars`);
       
       if (barData.length === 0) {
@@ -3147,7 +3184,7 @@ export async function generateGeneralAnswer(
       };
       
       console.log('🔄 Processing pie chart data...');
-      const pieData = processChartData(workingData, pieSpec);
+      const pieData = processChartData(workingData, pieSpec, summary.dateColumns);
       console.log(`✅ Pie chart data: ${pieData.length} segments`);
       
       if (pieData.length === 0) {
@@ -3200,7 +3237,7 @@ export async function generateGeneralAnswer(
       };
       
       // Process the data
-      const chartData = processChartData(workingData, updatedChart);
+      const chartData = processChartData(workingData, updatedChart, summary.dateColumns);
       console.log(`✅ Dual-axis line data: ${chartData.length} points`);
       
       if (chartData.length === 0) {
@@ -3244,7 +3281,7 @@ export async function generateGeneralAnswer(
           aggregate: 'none',
         };
         
-        const chartData = processChartData(workingData, dualAxisSpec);
+        const chartData = processChartData(workingData, dualAxisSpec, summary.dateColumns);
         if (chartData.length > 0) {
           const insights = await generateChartInsights(dualAxisSpec, chartData, summary, chatInsights);
           return withNotes({
@@ -3396,7 +3433,7 @@ export async function generateGeneralAnswer(
     };
     
     console.log('🔄 Processing trend chart data...');
-    const trendData = processChartData(workingData, trendSpec);
+    const trendData = processChartData(workingData, trendSpec, summary.dateColumns);
     console.log(`✅ Trend chart data: ${trendData.length} points`);
     
     if (trendData.length === 0) {
@@ -3476,7 +3513,7 @@ export async function generateGeneralAnswer(
     console.log('🔄 Processing dual-axis line chart data with multiple variables...');
     
     // First, process with y2 to get the data structure
-    const processed = processChartData(workingData, spec);
+    const processed = processChartData(workingData, spec, summary.dateColumns);
     console.log(`✅ Dual-axis line data: ${processed.length} points`);
     
     if (processed.length === 0) {
@@ -3678,7 +3715,7 @@ export async function generateGeneralAnswer(
     } as any;
     
     console.log('🔄 Processing dual-axis line chart data...');
-    const processed = processChartData(workingData, spec);
+    const processed = processChartData(workingData, spec, summary.dateColumns);
     console.log(`✅ Dual-axis line data: ${processed.length} points`);
     
     if (processed.length === 0) {
@@ -3828,7 +3865,7 @@ export async function generateGeneralAnswer(
     };
     
     console.log('🔄 Processing dual-axis line chart data...');
-    const lineData = processChartData(workingData, lineSpec);
+    const lineData = processChartData(workingData, lineSpec, summary.dateColumns);
     console.log(`✅ Dual-axis line data: ${lineData.length} points`);
     
     if (lineData.length === 0) {
@@ -3917,11 +3954,11 @@ export async function generateGeneralAnswer(
     
     // Process both charts
     console.log('🔄 Processing scatter chart data...');
-    const scatterData = processChartData(workingData, scatterSpec);
+    const scatterData = processChartData(workingData, scatterSpec, summary.dateColumns);
     console.log(`✅ Scatter data: ${scatterData.length} points`);
     
     console.log('🔄 Processing line chart data...');
-    const lineData = processChartData(workingData, lineSpec);
+    const lineData = processChartData(workingData, lineSpec, summary.dateColumns);
     console.log(`✅ Line data: ${lineData.length} points`);
     
     if (scatterData.length === 0) {
@@ -4617,7 +4654,7 @@ TECHNICAL RULES:
         }
         
         console.log(`   Final chart spec: x="${spec.x}", y="${spec.y}", aggregate="${spec.aggregate}"`);
-        const processedData = processChartData(workingData, spec);
+        const processedData = processChartData(workingData, spec, summary.dateColumns);
         console.log(`   Processed data rows: ${processedData.length}`);
         
         // If no data was processed, provide a helpful error message

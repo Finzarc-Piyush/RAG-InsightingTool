@@ -1,15 +1,18 @@
 import { Router } from "express";
 import {
   addChartToDashboardController,
+  addTableToDashboardController,
   addSheetToDashboardController,
   createDashboardController,
   deleteDashboardController,
   getDashboardController,
   listDashboardsController,
   removeChartFromDashboardController,
+  removeTableFromDashboardController,
   removeSheetFromDashboardController,
   renameSheetController,
   renameDashboardController,
+  updateTableCaptionController,
   updateChartInsightOrRecommendationController,
 } from "../controllers/index.js";
 
@@ -26,6 +29,11 @@ router.delete('/dashboards/:dashboardId', deleteDashboardController);
 router.post('/dashboards/:dashboardId/charts', addChartToDashboardController);
 router.delete('/dashboards/:dashboardId/charts', removeChartFromDashboardController);
 router.patch('/dashboards/:dashboardId/charts/:chartIndex', updateChartInsightOrRecommendationController);
+
+// Tables in a dashboard
+router.post('/dashboards/:dashboardId/tables', addTableToDashboardController);
+router.delete('/dashboards/:dashboardId/tables', removeTableFromDashboardController);
+router.patch('/dashboards/:dashboardId/tables/:tableIndex', updateTableCaptionController);
 
 // Sheets in a dashboard
 router.post('/dashboards/:dashboardId/sheets', addSheetToDashboardController);

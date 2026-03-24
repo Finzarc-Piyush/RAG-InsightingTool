@@ -22,6 +22,7 @@ interface DashboardViewProps {
   dashboard: DashboardData;
   onBack: () => void;
   onDeleteChart: (chartIndex: number, sheetId?: string) => void;
+  onDeleteTable: (tableIndex: number, sheetId?: string) => void;
   isRefreshing?: boolean;
   onRefresh?: () => Promise<any>;
   permission?: "view" | "edit"; // Optional permission, defaults to checking ownership
@@ -29,7 +30,7 @@ interface DashboardViewProps {
 
 const PPT_LAYOUT = 'LAYOUT_16x9';
 
-export function DashboardView({ dashboard, onBack, onDeleteChart, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
+export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null);
   const [isSheetSidebarOpen, setIsSheetSidebarOpen] = useState(true);
@@ -80,6 +81,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, isRefreshing =
       id: 'default',
       name: 'Overview',
       charts: dashboard.charts,
+      tables: [],
       order: 0,
     }];
   }, [dashboard.sheets, dashboard.charts]);
@@ -127,13 +129,21 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, isRefreshing =
       return tiles;
     });
 
+    const tableTiles: DashboardTile[] = (activeSheet.tables ?? []).map((table, index) => ({
+      kind: 'table',
+      id: `table-${index}`,
+      title: table.caption || `Table ${index + 1}`,
+      table,
+      index,
+    }));
+
     // Always return a section, even if there are no tiles (empty sheet)
     return [
       {
         id: activeSheet.id,
         title: activeSheet.name,
         description: `Charts and insights for ${activeSheet.name}`,
-        tiles: baseTiles,
+        tiles: [...baseTiles, ...tableTiles],
       },
     ];
   }, [activeSheet, dashboard.updatedAt]);
@@ -673,6 +683,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, isRefreshing =
                     const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
                     console.log('Deleting chart:', { chartIndex, sheetId: sheetIdToUse, activeSheetId, sheets });
                     onDeleteChart(chartIndex, sheetIdToUse || undefined);
+                  } : undefined}
+                  onDeleteTable={canEdit ? (tableIndex) => {
+                    const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
+                    onDeleteTable(tableIndex, sheetIdToUse || undefined);
                   } : undefined}
                   filtersByTile={tileFilters}
                   onTileFiltersChange={handleTileFiltersChange}

@@ -7,7 +7,7 @@
         "build": "esbuild index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist --sourcemap",
         "start": "NODE_ENV=production NODE_OPTIONS='--max-old-space-size=4096' node dist/index.js",
         "preview": "npm run build && npm run start",
-        "test": "node --import tsx --test tests/duckdbPlanExecutor.test.ts tests/agentRuntimeSchemas.test.ts tests/toolManifest.test.ts tests/ragRetrieve.test.ts tests/workingMemory.test.ts tests/chunking.test.ts tests/sessionAnalysisContextAssistantMerge.test.ts tests/dimensionFiltersTransform.test.ts",
+        "test": "node --import tsx --test tests/duckdbPlanExecutor.test.ts tests/agentRuntimeSchemas.test.ts tests/toolManifest.test.ts tests/ragRetrieve.test.ts tests/workingMemory.test.ts tests/chunking.test.ts tests/sessionAnalysisContextAssistantMerge.test.ts tests/dimensionFiltersTransform.test.ts tests/uploadDateEnrichment.test.ts tests/dirtyDateEnrichment.test.ts",
         "create-rag-index": "node --import tsx scripts/create-rag-search-index.ts",
         "rag-smoke": "node --import tsx scripts/rag-smoke.ts"
     },

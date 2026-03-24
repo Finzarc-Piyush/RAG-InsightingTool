@@ -31,7 +31,7 @@ export async function enrichCharts(
       try {
         let dataForChart = c.data && Array.isArray(c.data)
           ? c.data
-          : processChartData(chatDocument.rawData, c);
+          : processChartData(chatDocument.rawData, c, chatDocument.dataSummary?.dateColumns);
 
         // Limit data size for memory efficiency.
         // For general charts, cap at MAX_CHART_DATA_POINTS.

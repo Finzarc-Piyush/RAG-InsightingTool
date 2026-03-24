@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChartSpec, Dashboard as ServerDashboard, DashboardSheet } from '@/shared/schema';
+import { ChartSpec, Dashboard as ServerDashboard, DashboardSheet, DashboardTableSpec } from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api';
 
 export interface DashboardData {
@@ -95,9 +95,45 @@ export const useDashboardState = () => {
     },
   });
 
+  const addTableMutation = useMutation({
+    mutationFn: async ({
+      dashboardId,
+      table,
+      sheetId,
+    }: {
+      dashboardId: string;
+      table: DashboardTableSpec;
+      sheetId?: string;
+    }) => {
+      const updated = await dashboardsApi.addTable(dashboardId, table, sheetId);
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+  });
+
   const removeChartMutation = useMutation({
     mutationFn: async ({ dashboardId, chartIndex, sheetId }: { dashboardId: string; chartIndex: number; sheetId?: string }) => {
       const updated = await dashboardsApi.removeChart(dashboardId, { index: chartIndex, sheetId });
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+  });
+
+  const removeTableMutation = useMutation({
+    mutationFn: async ({ dashboardId, tableIndex, sheetId }: { dashboardId: string; tableIndex: number; sheetId?: string }) => {
+      const updated = await dashboardsApi.removeTable(dashboardId, { index: tableIndex, sheetId });
       return normalizeDashboard(updated);
     },
     onSuccess: (updatedDashboard) => {
@@ -150,10 +186,22 @@ export const useDashboardState = () => {
     [addChartMutation]
   );
 
+  const addTableToDashboard = useCallback(
+    (dashboardId: string, table: DashboardTableSpec, sheetId?: string) =>
+      addTableMutation.mutateAsync({ dashboardId, table, sheetId }),
+    [addTableMutation]
+  );
+
   const removeChartFromDashboard = useCallback(
     (dashboardId: string, chartIndex: number, sheetId?: string) =>
       removeChartMutation.mutateAsync({ dashboardId, chartIndex, sheetId }),
     [removeChartMutation]
+  );
+
+  const removeTableFromDashboard = useCallback(
+    (dashboardId: string, tableIndex: number, sheetId?: string) =>
+      removeTableMutation.mutateAsync({ dashboardId, tableIndex, sheetId }),
+    [removeTableMutation]
   );
 
   const deleteDashboard = useCallback(
@@ -269,10 +317,45 @@ export const useDashboardState = () => {
     },
   });
 
+  const updateTableCaptionMutation = useMutation({
+    mutationFn: async ({
+      dashboardId,
+      tableIndex,
+      caption,
+      sheetId,
+    }: {
+      dashboardId: string;
+      tableIndex: number;
+      caption: string;
+      sheetId?: string;
+    }) => {
+      const updated = await dashboardsApi.updateTableCaption(dashboardId, tableIndex, { caption }, sheetId);
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+  });
+
   const updateChartInsightOrRecommendation = useCallback(
     (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) =>
       updateChartInsightOrRecommendationMutation.mutateAsync({ dashboardId, chartIndex, updates, sheetId }),
     [updateChartInsightOrRecommendationMutation]
+  );
+
+  const updateTableCaption = useCallback(
+    (dashboardId: string, tableIndex: number, updates: { caption?: string }, sheetId?: string) =>
+      updateTableCaptionMutation.mutateAsync({
+        dashboardId,
+        tableIndex,
+        caption: updates.caption ?? '',
+        sheetId,
+      }),
+    [updateTableCaptionMutation]
   );
 
   const status = useMemo(
@@ -291,13 +374,16 @@ export const useDashboardState = () => {
     setCurrentDashboard,
     createDashboard,
     addChartToDashboard,
+    addTableToDashboard,
     removeChartFromDashboard,
+    removeTableFromDashboard,
     deleteDashboard,
     renameDashboard,
     renameSheet,
     addSheet,
     removeSheet,
     updateChartInsightOrRecommendation,
+    updateTableCaption,
     getDashboardById,
     fetchDashboardById,
     status,

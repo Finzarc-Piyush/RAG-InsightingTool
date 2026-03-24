@@ -1,7 +1,9 @@
 import { ChartSpec, DataSummary, Insight } from '../shared/schema.js';
 import { openai, MODEL } from './openai.js';
 
-const KEY_INSIGHT_MAX_CHARS = 220;
+// Chart keyInsight is intentionally short, but must still carry actionable specifics
+// (top category/value + improvement target).
+const KEY_INSIGHT_MAX_CHARS = 520;
 
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
 const enforceInsightLimit = (value: string) => {
@@ -253,6 +255,61 @@ export async function generateChartInsights(
     return roundSmart(val);
   };
 
+  const truncateInsight = (value: string): string => {
+    const v = value ?? '';
+    if (v.length <= KEY_INSIGHT_MAX_CHARS) return v;
+    return (v.slice(0, Math.max(0, KEY_INSIGHT_MAX_CHARS - 3)).trimEnd() + '...');
+  };
+
+  const stripMarkdownToPlainOneLine = (text: string): string => {
+    return (text || '')
+      .replace(/\*\*/g, '') // remove bold markers
+      .replace(/\r?\n+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+:\s+/g, ': ') // normalize colon spacing
+      .trim();
+  };
+
+  // If we already have a high-quality "basic analysis" insight set, reuse the most aligned one.
+  // This keeps chart keyInsight consistent with the text that produced good results elsewhere.
+  if (chatInsights && Array.isArray(chatInsights) && chatInsights.length > 0) {
+    const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
+    const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
+    const topXStr = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
+    const topYStr =
+      typeof topY === 'number' && !isNaN(topY) ? formatY(topY).toLowerCase() : '';
+
+    const ranked = chatInsights
+      .filter((ins: Insight | undefined) => !!ins?.text)
+      .map((ins: Insight) => {
+        const plain = stripMarkdownToPlainOneLine(ins.text);
+        const lower = plain.toLowerCase();
+
+        let score = 0;
+        if (topXStr && isCategoricalX && lower.includes(topXStr)) score += 5;
+        if (topYStr && lower.includes(topYStr)) score += 3;
+        if (chartSpec.y && lower.includes(String(chartSpec.y).toLowerCase())) score += 1;
+        if (chartSpec.x && lower.includes(String(chartSpec.x).toLowerCase())) score += 1;
+        if (lower.includes('actionable suggestion') || lower.includes('actionable suggestion:')) score += 1;
+
+        return { score, plain };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked[0];
+    if (best && best.score >= 4) {
+      const candidate = truncateInsight(best.plain);
+
+      const mentionsTopX = isCategoricalX ? (topXStr ? candidate.toLowerCase().includes(topXStr) : true) : true;
+      const mentionsTopY = topYStr ? candidate.toLowerCase().includes(topYStr) : true;
+
+      // For categorical charts, require both top X and its top Y to avoid mismatches.
+      if ((!isCategoricalX || (mentionsTopX && mentionsTopY))) {
+        return { keyInsight: enforceInsightLimit(candidate) };
+      }
+    }
+  }
+
   // Fallback to model for non-numeric cases; request quantified insights explicitly
   const correlationContext = isCorrelationChart ? `
 CRITICAL: This is a CORRELATION/IMPACT ANALYSIS chart.
@@ -284,7 +341,13 @@ ${chatInsights.map((insight, idx) => `${idx + 1}. ${insight.text}`).join('\n')}
 IMPORTANT: The keyInsight should be a concise summary (exactly one sentence, ≤${KEY_INSIGHT_MAX_CHARS} chars) that relates this specific chart to the relevant chat-level insights above. Focus on insights that mention variables in this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}).`
     : '';
 
-  const prompt = `Return JSON with exactly one short field for this chart: keyInsight. It must be one line (a single sentence, ≤${KEY_INSIGHT_MAX_CHARS} chars), chart-specific, and include concrete numbers. No bullets or line breaks.
+  const dataFactsContext = `
+DATA FACTS (ground truth from the chart data; use these explicitly in the output):
+- Top ${chartSpec.y} performer(s) by ${chartSpec.x}: ${topPerformerStr}
+- Bottom ${chartSpec.y} performer(s) by ${chartSpec.x}: ${bottomPerformerStr}
+${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${y2Label} performer(s): ${bottomPerformerStrY2}` : ''}`.trim();
+
+  const prompt = `Return JSON with exactly one short field for this chart: keyInsight. It must be one line (no line breaks), chart-specific, include concrete numbers, and explicitly name the top ${chartSpec.x} from DATA FACTS along with its ${chartSpec.y} value. No bullets.
 
 CHART CONTEXT
 - Type: ${chartSpec.type}
@@ -294,11 +357,12 @@ CHART CONTEXT
 - Points: ${chartData.length}
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
+${dataFactsContext}
 ${correlationContext}${chatInsightsContext}
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "One sentence, chart-specific with numbers${chatInsights && chatInsights.length > 0 ? ' that summarizes relevant chat insights' : ''}. NEVER use percentile labels like P75, P90, P25 - only use numeric values. Do not exceed ${KEY_INSIGHT_MAX_CHARS} characters."
+  "keyInsight": "Chart-specific, actionable, one line (no line breaks). Explicitly include the top ${chartSpec.x} and its ${chartSpec.y} value from DATA FACTS. NEVER use percentile labels like P75, P90, P25 - only use numeric values. Do not exceed ${KEY_INSIGHT_MAX_CHARS} characters."
 }`;
 
   try {
@@ -307,130 +371,66 @@ OUTPUT JSON (exact keys only):
       messages: [
         {
           role: 'system',
-          content: `You are a precise data analyst. Output JSON with exactly one short field: keyInsight. It must be a single sentence (≤${KEY_INSIGHT_MAX_CHARS} chars), chart-specific, include numbers, and be actionable. NEVER use percentile labels like P75, P90, P25, P75 level, P90 level - only use numeric values. No bullets or line breaks.`
+          content: `You are a precise data analyst. Output JSON with exactly one short field: keyInsight. It must be one line (no line breaks), chart-specific, include numbers, name the top ${chartSpec.x} and its ${chartSpec.y} value, and be actionable. NEVER use percentile labels like P75, P90, P25, P75 level, P90 level - only use numeric values. No bullets or line breaks.`
         },
         { role: 'user', content: prompt },
       ],
       response_format: { type: 'json_object' },
       temperature: 0.35,
-      max_tokens: 220,
+      max_tokens: 650,
     });
 
     const content = response.choices[0].message.content || '{}';
     const result = JSON.parse(content);
 
-    // Format multiple insights into a single string for keyInsight
+    // Model might return either { keyInsight } or an { insights: [...] } shape.
+    let modelKeyInsight: string | undefined;
+
     if (result.insights && Array.isArray(result.insights) && result.insights.length > 0) {
-      // For dual-axis charts, validate that both variables are covered
-      if (isDualAxis) {
-        const insightsText = result.insights.map((i: any) => 
-          `${i.title || ''} ${i.observation || ''} ${i.text || ''}`.toLowerCase()
-        ).join(' ');
-        
-        const mentionsY = insightsText.includes(chartSpec.y.toLowerCase());
-        const mentionsY2 = insightsText.includes(y2Label.toLowerCase()) || insightsText.includes(y2Variable.toLowerCase());
-        
-        // If only one variable is mentioned, add a fallback insight for the missing one
-        if (mentionsY && !mentionsY2) {
-          console.warn(`⚠️ Dual-axis chart insights only mention ${chartSpec.y}, missing ${y2Label}. Adding fallback insight.`);
-          
-          // Generate comprehensive fallback insight for y2 using all calculated statistics
-          const y2TopPerformer = topPerformersY2.length > 0 ? topPerformersY2[0] : null;
-          const y2BottomPerformer = bottomPerformersY2.length > 0 ? bottomPerformersY2[0] : null;
-          
-          // Build comprehensive observation using all available statistics
-          let observationParts: string[] = [];
-          
-          // Range and central tendency
-          observationParts.push(`${y2Label} ranges from ${formatY2(minY2)} to ${formatY2(maxY2)} (average: ${formatY2(avgY2)}, median: ${formatY2(y2Median)})`);
-          
-          // Variability
-          if (!isNaN(y2CV)) {
-            observationParts.push(`demonstrates ${y2Variability} variability (CV: ${roundSmart(y2CV)}%)`);
-          }
-          
-          // Percentiles
-          if (!isNaN(y2P90) && !isNaN(y2P25)) {
-            observationParts.push(`with 90th percentile at ${formatY2(y2P90)} and 25th percentile at ${formatY2(y2P25)}`);
-          }
-          
-          // Top performers
-          if (y2TopPerformer) {
-            observationParts.push(`Peak performance observed at ${y2TopPerformer.x} (${formatY2(y2TopPerformer.y)})`);
-          }
-          
-          // Bottom performers
-          if (y2BottomPerformer) {
-            observationParts.push(`lowest value recorded at ${y2BottomPerformer.x} (${formatY2(y2BottomPerformer.y)})`);
-          }
-          
-          const fallbackObservation = observationParts.join('. ') + '.';
-          
-          result.insights.push({
-            title: `**${y2Label} Performance Analysis**`,
-            observation: fallbackObservation,
-            whyItMatters: `Monitoring ${y2Label} performance is critical for understanding overall business trends and identifying optimization opportunities. Consistent performance above benchmark levels indicates strong operational efficiency.`
-          });
-        } else if (!mentionsY && mentionsY2) {
-          console.warn(`⚠️ Dual-axis chart insights only mention ${y2Label}, missing ${chartSpec.y}. Adding fallback insight.`);
-          
-          // Generate comprehensive fallback insight for y using all calculated statistics
-          const yTopPerformer = topPerformers.length > 0 ? topPerformers[0] : null;
-          const yBottomPerformer = bottomPerformers.length > 0 ? bottomPerformers[0] : null;
-          
-          // Build comprehensive observation using all available statistics
-          let observationParts: string[] = [];
-          
-          // Range and central tendency
-          observationParts.push(`${chartSpec.y} ranges from ${formatY(minY)} to ${formatY(maxY)} (average: ${formatY(avgY)}, median: ${formatY(yMedian)})`);
-          
-          // Variability
-          if (!isNaN(cv)) {
-            observationParts.push(`demonstrates ${variability} variability (CV: ${roundSmart(cv)}%)`);
-          }
-          
-          // Percentiles
-          if (!isNaN(yP90) && !isNaN(yP25)) {
-            observationParts.push(`with 90th percentile at ${formatY(yP90)} and 25th percentile at ${formatY(yP25)}`);
-          }
-          
-          // Top performers
-          if (yTopPerformer) {
-            observationParts.push(`Peak performance observed at ${yTopPerformer.x} (${formatY(yTopPerformer.y)})`);
-          }
-          
-          // Bottom performers
-          if (yBottomPerformer) {
-            observationParts.push(`lowest value recorded at ${yBottomPerformer.x} (${formatY(yBottomPerformer.y)})`);
-          }
-          
-          const fallbackObservation = observationParts.join('. ') + '.';
-          
-          result.insights.unshift({
-            title: `**${chartSpec.y} Performance Analysis**`,
-            observation: fallbackObservation,
-            whyItMatters: `Monitoring ${chartSpec.y} performance is critical for understanding overall business trends and identifying optimization opportunities. Consistent performance above benchmark levels indicates strong operational efficiency.`
-          });
-        }
-      }
-      
-      // Build ultra-concise per-chart keyInsight (single sentence)
+      // Build per-chart keyInsight from the first returned insight object.
       const first = result.insights[0] || {};
       const title = normalizeInsightText(first.title || 'Insight');
       const observation = normalizeInsightText(first.observation || first.text || '');
       const combined = normalizeInsightText([title, observation].filter(Boolean).join(': '));
-      const conciseInsight = enforceInsightLimit(combined);
-
-      return {
-        keyInsight: conciseInsight,
-      };
+      modelKeyInsight = combined;
+    } else {
+      // Expected output format: { keyInsight }
+      modelKeyInsight = normalizeInsightText(
+        result.keyInsight || "Data shows interesting patterns worth investigating"
+      );
     }
 
-    // Fallback to single insight format if AI didn't return array
-    const normalized = normalizeInsightText(result.keyInsight || "Data shows interesting patterns worth investigating");
-    return {
-      keyInsight: enforceInsightLimit(normalized),
-    };
+    const candidate = truncateInsight(modelKeyInsight);
+
+    // Deterministic verification: ensure the output explicitly names the top category/value.
+    const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
+    const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
+    const topXNorm = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
+    const topYStr = typeof topY === 'number' && !isNaN(topY) ? formatY(topY) : '';
+
+    const candidateLower = candidate.toLowerCase();
+    let passes = true;
+    // Always require the output to include the top Y value to avoid generic wording.
+    if (topYStr) {
+      passes = passes && candidateLower.includes(topYStr.toLowerCase());
+    }
+    // For categorical X, also require the output to include the top X label.
+    if (isCategoricalX && topXNorm) {
+      passes = passes && candidateLower.includes(topXNorm);
+    }
+
+    if (!passes && topX !== undefined && typeof topY === 'number' && !isNaN(topY)) {
+      const bottomThresholdStr =
+        bottomPerformers.length > 0 && typeof bottomPerformers[0]?.y === 'number'
+          ? formatY(bottomPerformers[0].y)
+          : formatY(yP25);
+
+      const fallback = `Top ${chartSpec.x} "${topX}" has the highest ${chartSpec.y} at ${formatY(topY)} (avg ${formatY(avgY)}, p75 ${formatY(yP75)}). To lift ${chartSpec.y}, prioritize ${chartSpec.x} "${topX}" and target moving weaker segments above ${bottomThresholdStr}.`;
+
+      return { keyInsight: truncateInsight(fallback) };
+    }
+
+    return { keyInsight: enforceInsightLimit(candidate) };
   } catch (error) {
     console.error('Error generating chart insights:', error);
     return {

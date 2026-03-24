@@ -10,7 +10,8 @@ import {
   DimensionFilter,
 } from '../shared/queryTypes.js';
 import { DataSummary } from '../shared/schema.js';
-import { normalizeDateToPeriod, DatePeriod, parseFlexibleDate } from './dateUtils.js';
+import { normalizeDateToPeriod, DatePeriod } from './dateUtils.js';
+import { agentLog } from './agents/runtime/agentLogger.js';
 import { isIdColumn, getCountNameForIdColumn } from './columnIdHeuristics.js';
 
 interface TransformationResult {
@@ -52,8 +53,7 @@ function toNumber(value: any): number {
 }
 
 function parseDate(value: any): Date | null {
-  // Use the flexible date parser from dateUtils for consistent parsing
-  return parseFlexibleDate(value);
+  return value instanceof Date && !isNaN(value.getTime()) ? value : null;
 }
 
 function resolveDateColumn(summary: DataSummary, column?: string): string | undefined {
@@ -397,6 +397,19 @@ function applyTopBottom(data: Record<string, any>[], request: TopBottomRequest):
   };
 }
 
+type DateBucketMode = "none" | "schema";
+
+function dateBucketModeForGroupByColumn(
+  col: string,
+  summary: DataSummary,
+  _data: Record<string, any>[],
+  dateAggregationPeriod: DatePeriod | null | undefined
+): DateBucketMode {
+  if (!dateAggregationPeriod) return "none";
+  if (summary.dateColumns.includes(col)) return "schema";
+  return "none";
+}
+
 function applySort(data: Record<string, any>[], sort?: SortRequest[]): Record<string, any>[] {
   if (!sort || !sort.length) return data;
   const sorted = [...data];
@@ -423,23 +436,118 @@ function applyAggregations(
   aggregations: AggregationRequest[] = [],
   dateAggregationPeriod?: DatePeriod | null
 ): { data: Record<string, any>[]; description?: string } {
-  if (!groupBy.length || !aggregations.length) {
+  if (!aggregations.length) {
     return { data };
+  }
+
+  if (!groupBy.length) {
+    const base: Record<string, any> = {};
+    for (const agg of aggregations) {
+      const isIdCol = isIdColumn(agg.column);
+      if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
+        console.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
+        agg.operation = 'count';
+      }
+
+      let resultValue: number | null = null;
+      if (isIdCol) {
+        const distinctValues = new Set<string | number>();
+        for (const row of data) {
+          const val = row[agg.column];
+          if (val !== null && val !== undefined && val !== '') {
+            distinctValues.add(val);
+          }
+        }
+        resultValue = distinctValues.size;
+      } else {
+        const values = data
+          .map((r: Record<string, any>) => toNumber(r[agg.column]))
+          .filter((v: number) => !isNaN(v));
+        const op = agg.operation as Exclude<AggregationOperation, 'percent_change'>;
+        switch (op) {
+          case 'sum':
+            resultValue = values.reduce((sum: number, val: number) => sum + val, 0);
+            break;
+          case 'mean':
+          case 'avg':
+            resultValue = values.reduce((sum: number, val: number) => sum + val, 0) / (values.length || 1);
+            break;
+          case 'count':
+            resultValue = values.length;
+            break;
+          case 'min':
+            if (values.length === 0) {
+              resultValue = null;
+            } else {
+              let min = values[0];
+              for (let i = 1; i < values.length; i++) {
+                if (values[i] < min) min = values[i];
+              }
+              resultValue = min;
+            }
+            break;
+          case 'max':
+            if (values.length === 0) {
+              resultValue = null;
+            } else {
+              let max = values[0];
+              for (let i = 1; i < values.length; i++) {
+                if (values[i] > max) max = values[i];
+              }
+              resultValue = max;
+            }
+            break;
+          case 'median':
+            if (values.length) {
+              const sortedVals = [...values].sort((a, b) => a - b);
+              const mid = Math.floor(sortedVals.length / 2);
+              resultValue =
+                sortedVals.length % 2 === 0
+                  ? (sortedVals[mid - 1] + sortedVals[mid]) / 2
+                  : sortedVals[mid];
+            }
+            break;
+          case 'percent_change':
+            resultValue = null;
+            break;
+        }
+      }
+      const targetName = agg.alias || (isIdCol ? getCountNameForIdColumn(agg.column) : `${agg.column}_${agg.operation}`);
+      base[targetName] = resultValue;
+    }
+
+    return {
+      data: [base],
+      description: `Aggregated with ${aggregations
+        .map((agg) => `${agg.operation}(${agg.column})`)
+        .join(', ')}`,
+    };
   }
 
   // Map to track which columns are date columns and need normalization
   const dateColumnMap = new Map<string, { original: string; period: DatePeriod }>();
   const normalizedGroupBy: string[] = [];
-  
+  const bucketModes: DateBucketMode[] = [];
+
   for (const col of groupBy) {
-    const isDateCol = summary.dateColumns.includes(col);
-    if (isDateCol && dateAggregationPeriod) {
-      // Create a normalized column name for grouping
+    const mode = dateBucketModeForGroupByColumn(col, summary, data, dateAggregationPeriod);
+    bucketModes.push(mode);
+    if (mode !== "none" && dateAggregationPeriod) {
       const normalizedCol = `${col}_${dateAggregationPeriod}`;
       normalizedGroupBy.push(normalizedCol);
       dateColumnMap.set(normalizedCol, { original: col, period: dateAggregationPeriod });
     } else {
       normalizedGroupBy.push(col);
+    }
+  }
+
+  if (dateAggregationPeriod && groupBy.length) {
+    const anySchema = bucketModes.some((m) => m === "schema");
+    if (anySchema || dateColumnMap.size > 0) {
+      agentLog("date_aggregation_schema", {
+        period: dateAggregationPeriod,
+        groupBy: groupBy.join("|").slice(0, 240),
+      });
     }
   }
 
@@ -452,14 +560,14 @@ function applyAggregations(
     return normalizedGroupBy.map((col) => {
       if (dateColumnMap.has(col)) {
         const { original, period } = dateColumnMap.get(col)!;
-        const dateValue = String(row[original]);
-        const normalized = normalizeDateToPeriod(dateValue, period);
+        const raw = row[original];
+        const d = raw instanceof Date && !isNaN(raw.getTime()) ? raw : null;
+        const normalized = d ? normalizeDateToPeriod(d, period) : null;
         if (normalized) {
-          // Store display label for this normalized key
           displayLabelMap.set(normalized.normalizedKey, normalized.displayLabel);
           return normalized.normalizedKey;
         }
-        return dateValue;
+        return String(raw ?? '');
       }
       return String(row[col]);
     }).join('||');
@@ -861,17 +969,29 @@ function applyFiltersStreaming(
   }
 
   // Aggregations need special handling - merge results from batches
-  if (parsed.groupBy && parsed.aggregations && parsed.groupBy.length && parsed.aggregations.length) {
+  if (parsed.aggregations && parsed.aggregations.length) {
     console.log(`📊 Applying aggregations in streaming mode`);
-    const batchResults = processBatches(workingData, batchSize, (batch) => {
-      const { data: aggregated } = applyAggregations(batch, summary, parsed.groupBy!, parsed.aggregations!, parsed.dateAggregationPeriod);
-      return aggregated;
-    });
-    
-    // Merge aggregated results
-    const merged = mergeAggregatedResults(batchResults, parsed.groupBy, parsed.aggregations);
-    workingData = merged;
-    descriptions.push(`Grouped by ${parsed.groupBy.join(', ')} with ${parsed.aggregations.map(a => `${a.operation}(${a.column})`).join(', ')}`);
+    if (parsed.groupBy && parsed.groupBy.length) {
+      const batchResults = processBatches(workingData, batchSize, (batch) => {
+        const { data: aggregated } = applyAggregations(batch, summary, parsed.groupBy!, parsed.aggregations!, parsed.dateAggregationPeriod);
+        return aggregated;
+      });
+
+      // Merge aggregated results
+      const merged = mergeAggregatedResults(batchResults, parsed.groupBy, parsed.aggregations);
+      workingData = merged;
+      descriptions.push(`Grouped by ${parsed.groupBy.join(', ')} with ${parsed.aggregations.map(a => `${a.operation}(${a.column})`).join(', ')}`);
+    } else {
+      const { data: aggregated, description } = applyAggregations(
+        workingData,
+        summary,
+        [],
+        parsed.aggregations,
+        parsed.dateAggregationPeriod
+      );
+      workingData = aggregated;
+      if (description) descriptions.push(description);
+    }
   }
 
   // Top/bottom and sorting can be done on the final result
@@ -1006,14 +1126,20 @@ export function applyQueryTransformations(
     }
   }
 
-  if (parsed.groupBy && parsed.aggregations && parsed.groupBy.length && parsed.aggregations.length) {
-    console.log(`📊 Applying aggregations: groupBy=[${parsed.groupBy.join(', ')}], aggregations=[${parsed.aggregations.map(a => `${a.operation}(${a.column})${a.alias ? ` as ${a.alias}` : ''}`).join(', ')}]`);
+  if (parsed.aggregations && parsed.aggregations.length) {
+    console.log(`📊 Applying aggregations: groupBy=[${(parsed.groupBy || []).join(', ')}], aggregations=[${parsed.aggregations.map(a => `${a.operation}(${a.column})${a.alias ? ` as ${a.alias}` : ''}`).join(', ')}]`);
     console.log(`   Data before aggregation: ${workingData.length} rows`);
     
     if (workingData.length === 0) {
       console.warn(`⚠️ Cannot aggregate: No data available (filter may have removed all rows)`);
     } else {
-      const { data: aggregated, description } = applyAggregations(workingData, summary, parsed.groupBy, parsed.aggregations, parsed.dateAggregationPeriod);
+      const { data: aggregated, description } = applyAggregations(
+        workingData,
+        summary,
+        parsed.groupBy || [],
+        parsed.aggregations,
+        parsed.dateAggregationPeriod
+      );
       workingData = aggregated;
       console.log(`   Data after aggregation: ${workingData.length} rows`);
       if (workingData.length > 0) {
