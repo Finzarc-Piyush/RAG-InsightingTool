@@ -10,6 +10,7 @@ export interface DatasetEnrichmentPollSnapshot {
   phaseMessage?: string;
   enrichmentPhase?: "waiting" | "enriching";
   enrichmentStep?: EnrichmentStep;
+  understandingReady?: boolean;
 }
 
 export interface UploadJobStatusResponse {
@@ -30,6 +31,9 @@ export interface UploadJobStatusResponse {
   enrichmentPhase?: "waiting" | "enriching";
   /** In-memory upload job: coarse step during post-preview enrichment */
   enrichmentStep?: EnrichmentStep;
+  understandingReady?: boolean;
+  understandingReadyAt?: number;
+  suggestedQuestions?: string[];
   /** Optional fast-path payload for immediate preview rendering */
   previewSummary?: {
     rowCount: number;

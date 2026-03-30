@@ -7,6 +7,7 @@ import { ChatDocument } from "../models/chat.model.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
 import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";
 import { getDataForAnalysis } from "../lib/largeFileProcessor.js";
+import { applyTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
 
 /**
  * Normalize data by converting string numbers to actual numbers
@@ -124,6 +125,7 @@ function canonicalizeLoadedData(
   const dateCols = chatDocument.dataSummary?.dateColumns;
   if (data.length > 0 && dateCols && dateCols.length > 0) {
     canonicalizeDateColumnValues(data, dateCols);
+    applyTemporalFacetColumns(data, dateCols);
   }
   return data;
 }
@@ -133,7 +135,7 @@ function canonicalizeLoadedData(
  * This function ensures that data operations performed by any user are reflected in analysis
  * Priority:
  * 1. Chunked storage (if available, with intelligent chunk filtering)
- * 2. currentDataBlob (modified data from data operations)
+ * 2. currentDataBlob — **working copy** after upload enrichment and/or data-ops (canonical dates, derived columns); analysis should prefer this so rows match dataSummary.dateColumns / Cleaned_*.
  * 3. rawData from document (if no blob exists)
  * 4. original blob (if rawData is not available)
  * 5. sampleRows (fallback)
@@ -246,7 +248,9 @@ export async function loadLatestData(
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
           fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-          console.log(`✅ Loaded ${fullData.length} rows from currentDataBlob (modified data)`);
+          console.log(
+            `✅ Loaded ${fullData.length} rows from currentDataBlob (enriched/working copy — matches session summary)`
+          );
           
           // Apply column filtering for large datasets
           if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {

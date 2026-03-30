@@ -6,6 +6,7 @@
 import { ColumnarStorageService, DatasetMetadata } from './columnarStorage.js';
 import { DataSummary } from '../shared/schema.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
+import { temporalFacetMetadataForDateColumns } from './temporalFacetColumns.js';
 
 export interface CachedMetadata {
   metadata: DatasetMetadata;
@@ -83,6 +84,7 @@ export class MetadataService {
       columns,
       numericColumns,
       dateColumns,
+      temporalFacetColumns: temporalFacetMetadataForDateColumns(dateColumns),
     };
   }
 

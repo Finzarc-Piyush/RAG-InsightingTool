@@ -20,6 +20,64 @@ export const complexQuerySchema = z.object({
 export type ComplexQueryDetection = z.infer<typeof complexQuerySchema>;
 
 /**
+ * Cheap heuristic before calling the LLM in {@link detectComplexQuery}.
+ * - If this returns **false**, the question is very unlikely to need the "force GeneralHandler"
+ *   path, so we skip the extra LLM call (large latency win for simple questions).
+ * - If **true**, run the full detector (bias toward safety when unsure).
+ */
+export function quickLikelyComplexQuery(question: string): boolean {
+  const q = question.trim();
+  if (q.length > 480) return true;
+
+  const lower = q.toLowerCase();
+
+  // Orchestrator fallback patterns (multi-condition "which … had …" queries)
+  if (
+    /which\s+(months|categories|skus|items|products).*had.*above/i.test(q) ||
+    /which\s+(months|categories|skus|items|products).*had.*below/i.test(q) ||
+    /which\s+(months|categories|skus|items|products).*compared.*while.*also/i.test(q) ||
+    /which\s+(months|categories|skus|items|products).*above.*but.*only.*from/i.test(q)
+  ) {
+    return true;
+  }
+
+  if (/\bbut\s+only\b/.test(lower) || /\bwhile\s+also\b/.test(lower)) return true;
+
+  if (
+    /\b(above|below)\s+the\s+yearly\s+monthly\s+average\b/.test(lower) ||
+    /\byearly\s+monthly\s+average\b/.test(lower)
+  ) {
+    return true;
+  }
+
+  if (/\bpercentile\b/.test(lower) || /\b(p75|p90|p95|median)\b/i.test(q)) return true;
+
+  if (
+    /\b(compared\s+to|compared\s+with|vs\.?|versus)\b/.test(lower) &&
+    /\b(q[1-4]|quarter|year|month|yoy|qoq|mom)\b/i.test(lower)
+  ) {
+    return true;
+  }
+
+  if (/\byoy\b|\byear[\s-]*over[\s-]*year\b|\bqoq\b|\bmom\b/i.test(lower)) return true;
+
+  if (/\b(category|sku)[\s-]*(month|year)[\s-]*(combinations?|pairs?)\b/i.test(lower)) {
+    return true;
+  }
+
+  // "Which/what X had Y above [reference]" + average/mean in the same question often needs multi-step plans
+  if (
+    /\b(which|what)\s+\w+/.test(lower) &&
+    /\b(above|below|exceeding)\b/.test(lower) &&
+    /\b(average|mean|median)\b/.test(lower)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Recursively remove ALL null values (Zod doesn't accept null for optional fields)
  */
 function removeNulls(obj: any): any {

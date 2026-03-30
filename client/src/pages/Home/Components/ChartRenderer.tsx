@@ -44,6 +44,7 @@ import {
   hasActiveFilters,
   ChartFilterDefinition,
 } from '@/lib/chartFilters';
+import { parseDateLike } from '@/lib/parseDateLike';
 
 interface ChartRendererProps {
   chart: ChartSpec;
@@ -59,8 +60,44 @@ interface ChartRendererProps {
   loadingProgress?: { processed: number; total: number; message?: string }; // Progress info
 }
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+/** Theme-aware series colors (see index.css --chart-1 … --chart-5) */
+const COLORS = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+  'hsl(var(--chart-1) / 0.85)',
+];
 const MAX_COMPACT_X_TICKS = 6;
+const LINE_AREA_MAX_X_TICKS = 12;
+
+function evenlySpacedDataKeys(
+  rows: Record<string, unknown>[],
+  xKey: string,
+  maxTicks: number
+): Array<string | number> | undefined {
+  if (rows.length <= maxTicks) return undefined;
+  const out: Array<string | number> = [];
+  const n = rows.length;
+  const target = Math.min(maxTicks, n);
+  const step = Math.max(1, Math.floor((n - 1) / Math.max(1, target - 1)));
+  for (let i = 0; i < n && out.length < target; i += step) {
+    const v = rows[i]?.[xKey];
+    if (v !== undefined && v !== null) {
+      out.push(typeof v === 'string' || typeof v === 'number' ? v : String(v));
+    }
+  }
+  const lastRow = rows[n - 1];
+  const last = lastRow?.[xKey];
+  if (last !== undefined && last !== null) {
+    const normalized = typeof last === 'string' || typeof last === 'number' ? last : String(last);
+    if (out[out.length - 1] !== normalized) {
+      out.push(normalized);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
 
 type FiltersUpdater = ActiveChartFilters | ((prev: ActiveChartFilters) => ActiveChartFilters);
 
@@ -165,7 +202,21 @@ export function ChartRenderer({
   const [pointSize, setPointSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [pointOpacity, setPointOpacity] = useState<'low' | 'medium' | 'high'>('medium');
   const [pointDensity, setPointDensity] = useState<'low' | 'medium' | 'high' | 'all'>('medium');
-  const { type, title, data: chartDataSource = [], x, y, xDomain, yDomain, trendLine, xLabel, yLabel } = chart;
+  const {
+    type,
+    title,
+    data: chartDataSource = [],
+    x,
+    y,
+    xDomain,
+    yDomain,
+    trendLine,
+    xLabel,
+    yLabel,
+    z: zKey,
+    seriesKeys: specSeriesKeys,
+    barLayout,
+  } = chart;
   const chartColor = COLORS[index % COLORS.length];
 
   // Use IntersectionObserver to lazy load charts (only render when visible)
@@ -192,6 +243,9 @@ export function ChartRenderer({
     const excludeKeys: string[] = [];
     if (typeof y === 'string') {
       excludeKeys.push(y);
+    }
+    if (specSeriesKeys?.length) {
+      excludeKeys.push(...specSeriesKeys);
     }
 
     // Check if X-axis is a date column (for time-based charts)
@@ -230,7 +284,7 @@ export function ChartRenderer({
       forceNumericKeys,
       forceDateKeys,
     });
-  }, [enableFilters, originalData, x, y]);
+  }, [enableFilters, originalData, x, y, specSeriesKeys]);
 
   const isControlled = filters !== undefined;
 
@@ -388,9 +442,44 @@ export function ChartRenderer({
   const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > MAX_COMPACT_X_TICKS;
   const compactBarData = useMemo(() => {
     if (!shouldCompactView) return chartData;
-    return chartData.slice(0, MAX_COMPACT_X_TICKS);
-  }, [chartData, shouldCompactView]);
+    if (typeof x !== 'string') return chartData.slice(0, MAX_COMPACT_X_TICKS);
+    const xLower = x.toLowerCase();
+    const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xLower);
+    const sample = chartData
+      .slice(0, Math.min(5, chartData.length))
+      .map((row) => String((row as Record<string, unknown>)[x] ?? ''));
+    const allLookLikeDates =
+      sample.length > 0 &&
+      sample.every((v) => {
+        if (!v || v.length < 4) return false;
+        if (/^[A-Za-z]{3}[-/]?\d{2,4}$/i.test(v.trim())) return true;
+        return !Number.isNaN(new Date(v).getTime());
+      });
+    const temporal = nameSuggestsDate || allLookLikeDates;
+    if (!temporal) {
+      return chartData.slice(0, MAX_COMPACT_X_TICKS);
+    }
+    const sorted = [...chartData].sort((a, b) => {
+      const av = parseDateLike((a as Record<string, unknown>)[x]);
+      const bv = parseDateLike((b as Record<string, unknown>)[x]);
+      if (av !== null && bv !== null) return av - bv;
+      return String((a as Record<string, unknown>)[x]).localeCompare(
+        String((b as Record<string, unknown>)[x])
+      );
+    });
+    return sorted.slice(0, MAX_COMPACT_X_TICKS);
+  }, [chartData, shouldCompactView, x]);
   const visibleBarData = shouldCompactView ? compactBarData : chartData;
+
+  const lineAreaXTicks = useMemo(() => {
+    if (type !== 'line' && type !== 'area') return undefined;
+    if (typeof x !== 'string') return undefined;
+    return evenlySpacedDataKeys(
+      chartData as Record<string, unknown>[],
+      x,
+      LINE_AREA_MAX_X_TICKS
+    );
+  }, [type, chartData, x]);
 
   const compactXAxisTicks = useMemo(() => {
     if (!shouldCompactView || typeof x !== 'string') {
@@ -664,8 +753,8 @@ export function ChartRenderer({
     switch (type) {
       case 'line':
         // For dual-axis charts, use blue for left axis, red for right axis
-        const leftAxisColor = chart.y2 ? '#3b82f6' : chartColor; // Blue for left when dual-axis
-        const rightAxisColor = '#ef4444'; // Red for right axis
+        const leftAxisColor = chart.y2 ? 'hsl(var(--chart-1))' : chartColor;
+        const rightAxisColor = 'hsl(var(--chart-4))';
         const leftValues = getNumericValues(chartData as Record<string, any>[], y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
         const rightValues = chart.y2 ? getNumericValues(chartData as Record<string, any>[], chart.y2 as string) : [];
@@ -680,6 +769,7 @@ export function ChartRenderer({
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 angle={-45}
                 textAnchor="end"
+                ticks={lineAreaXTicks}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
                 height={50}
               />
@@ -773,7 +863,12 @@ export function ChartRenderer({
           </ResponsiveContainer>
         );
 
-      case 'bar':
+      case 'bar': {
+        const multiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0
+            ? specSeriesKeys
+            : [];
+        const stacked = barLayout !== 'grouped';
         return (
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
             <BarChart data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 120 : isSingleChart ? 100 : 80 }}>
@@ -792,13 +887,136 @@ export function ChartRenderer({
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 width={60}
                 tickFormatter={formatAxisLabel}
-                label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
+                label={{
+                  value: multiKeys.length ? (yLabel || y) : yLabel || y,
+                  angle: -90,
+                  position: 'left',
+                  style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 },
+                }}
               />
               <Tooltip />
-              <Bar dataKey={y} fill={chartColor} radius={[4, 4, 0, 0]} />
+              {multiKeys.length > 0 ? (
+                <>
+                  <Legend wrapperStyle={{ paddingTop: 8 }} />
+                  {multiKeys.map((k, i) => (
+                    <Bar
+                      key={k}
+                      dataKey={k}
+                      stackId={stacked ? 'stack' : undefined}
+                      fill={COLORS[i % COLORS.length]}
+                      radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                    />
+                  ))}
+                </>
+              ) : (
+                <Bar dataKey={y} fill={chartColor} radius={[4, 4, 0, 0]} />
+              )}
             </BarChart>
           </ResponsiveContainer>
         );
+      }
+
+      case 'heatmap': {
+        const vk = zKey || 'value';
+        const rows = chartData as Record<string, unknown>[];
+        const rowSet = new Set<string>();
+        const colSet = new Set<string>();
+        for (const row of rows) {
+          const rv = row[x];
+          const cv = row[y];
+          if (rv !== undefined && rv !== null && String(rv) !== '') rowSet.add(String(rv));
+          if (cv !== undefined && cv !== null && String(cv) !== '') colSet.add(String(cv));
+        }
+        const rowLabels = Array.from(rowSet).sort((a, b) => a.localeCompare(b));
+        const colLabels = Array.from(colSet).sort((a, b) => a.localeCompare(b));
+        const cellMap = new Map<string, number>();
+        let vmin = Infinity;
+        let vmax = -Infinity;
+        for (const row of rows) {
+          const rk = String(row[x] ?? '');
+          const ck = String(row[y] ?? '');
+          const raw = row[vk];
+          const n = typeof raw === 'number' ? raw : Number(raw);
+          if (Number.isFinite(n)) {
+            cellMap.set(`${rk}\u0000${ck}`, n);
+            vmin = Math.min(vmin, n);
+            vmax = Math.max(vmax, n);
+          }
+        }
+        if (!Number.isFinite(vmin) || !Number.isFinite(vmax)) {
+          return (
+            <div className="flex h-full min-h-[200px] w-full items-center justify-center rounded-md border border-dashed border-border/60 bg-muted/30 px-4 text-sm text-muted-foreground">
+              No numeric values for heatmap.
+            </div>
+          );
+        }
+        if (vmin === vmax) {
+          vmax = vmin + 1;
+        }
+        const colorAt = (t: number) => {
+          const a = Math.max(0, Math.min(1, t));
+          const h = 210 - a * 110;
+          const s = 70;
+          const l = 28 + a * 42;
+          return `hsl(${h}, ${s}%, ${l}%)`;
+        };
+        const cw = colLabels.length || 1;
+        return (
+          <div className="w-full overflow-auto" style={{ maxHeight: fillParent ? '100%' : isSingleChart ? 420 : 280 }}>
+            <div
+              className="inline-grid gap-px bg-border p-px text-xs"
+              style={{
+                gridTemplateColumns: `minmax(72px,auto) repeat(${cw}, minmax(48px,1fr))`,
+              }}
+            >
+              <div className="bg-muted/40 p-2 font-medium text-muted-foreground" />
+              {colLabels.map((c) => (
+                <div
+                  key={`h-${c}`}
+                  className="bg-muted/40 p-2 text-center font-medium text-muted-foreground"
+                  title={c}
+                >
+                  <span className="line-clamp-2">{c}</span>
+                </div>
+              ))}
+              {rowLabels.map((r) => (
+                <React.Fragment key={`row-${r}`}>
+                  <div className="bg-muted/30 p-2 font-medium text-foreground" title={r}>
+                    <span className="line-clamp-3">{r}</span>
+                  </div>
+                  {colLabels.map((c) => {
+                    const val = cellMap.get(`${r}\u0000${c}`);
+                    const t =
+                      val !== undefined && Number.isFinite(val)
+                        ? (val - vmin) / (vmax - vmin)
+                        : 0;
+                    const bg =
+                      val !== undefined && Number.isFinite(val) ? colorAt(t) : 'hsl(var(--muted))';
+                    return (
+                      <div
+                        key={`${r}-${c}`}
+                        className="flex min-h-[36px] items-center justify-center p-1 text-[10px] font-medium text-white shadow-sm"
+                        style={{ background: bg }}
+                        title={`${r} × ${c}: ${val !== undefined ? formatAxisLabel(val) : '—'}`}
+                      >
+                        {val !== undefined && Number.isFinite(val) ? formatAxisLabel(val) : '—'}
+                      </div>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+              <span>
+                {xLabel || x} × {yLabel || y}
+              </span>
+              <span>
+                Low {formatAxisLabel(vmin)} → High {formatAxisLabel(vmax)}
+              </span>
+            </div>
+          </div>
+        );
+      }
 
       case 'scatter':
         const getTickCount = (domain: [number, number] | undefined): number => {
@@ -958,7 +1176,7 @@ export function ChartRenderer({
                   type="linear"
                   dataKey={y}
                   data={trendlineData}
-                  stroke="#3b82f6"
+                  stroke="hsl(var(--chart-1))"
                   strokeWidth={2}
                   strokeDasharray="5 5"
                   dot={false}
@@ -1010,6 +1228,7 @@ export function ChartRenderer({
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 angle={-45}
                 textAnchor="end"
+                ticks={lineAreaXTicks}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
                 height={50}
               />

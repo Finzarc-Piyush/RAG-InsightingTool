@@ -30,21 +30,21 @@ const PreviewStats = ({ invite }: { invite: SharedAnalysisInvite }) => {
   if (!invite.preview) return null;
   const { preview } = invite;
   return (
-    <div className="flex items-center gap-4 text-xs text-gray-600">
+    <div className="flex items-center gap-4 text-xs text-muted-foreground">
       <div className="flex items-center gap-1.5">
         <BarChart3 className="h-3.5 w-3.5 text-blue-500" />
         <span className="font-medium">{preview.chartsCount}</span>
-        <span className="text-gray-500">charts</span>
+        <span className="text-muted-foreground">charts</span>
       </div>
       <div className="flex items-center gap-1.5">
         <Lightbulb className="h-3.5 w-3.5 text-amber-500" />
         <span className="font-medium">{preview.insightsCount}</span>
-        <span className="text-gray-500">insights</span>
+        <span className="text-muted-foreground">insights</span>
       </div>
       <div className="flex items-center gap-1.5">
         <MessageSquare className="h-3.5 w-3.5 text-green-500" />
         <span className="font-medium">{preview.messagesCount}</span>
-        <span className="text-gray-500">messages</span>
+        <span className="text-muted-foreground">messages</span>
       </div>
     </div>
   );
@@ -69,47 +69,47 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
   const renderInviteCard = (invite: SharedAnalysisInvite) => (
     <div
       key={invite.id}
-      className="rounded-xl border border-gray-200 bg-gradient-to-br from-white to-gray-50/50 p-5 flex flex-col gap-4 shadow-sm hover:shadow-md transition-all duration-200"
+      className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4 shadow-sm hover:shadow-md transition-all duration-200"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-2">
             <div className="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></div>
-            <p className="text-base font-semibold text-gray-900 truncate">
+            <p className="text-base font-semibold text-foreground truncate">
               {invite.preview?.fileName ?? "Shared analysis"}
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-600">
-            <User className="h-3.5 w-3.5 text-gray-400" />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <User className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="truncate">{invite.ownerEmail}</span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
-            <Clock className="h-3.5 w-3.5 text-gray-400" />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
             <span>{formatTimestamp(invite.createdAt)}</span>
           </div>
         </div>
-        <Badge variant="secondary" className="gap-1.5 text-xs px-2.5 py-1 bg-blue-50 text-blue-700 border-blue-200 flex-shrink-0">
+        <Badge variant="secondary" className="gap-1.5 text-xs px-2.5 py-1 flex-shrink-0">
           <Mail className="h-3 w-3" />
           <span className="hidden sm:inline">{invite.targetEmail}</span>
         </Badge>
       </div>
       
       {invite.note && (
-        <div className="bg-blue-50/50 border-l-4 border-blue-400 rounded-r-md p-3">
-          <p className="text-sm text-gray-700 italic leading-relaxed">
+        <div className="bg-primary/10 border-l-4 border-primary/50 rounded-r-md p-3">
+          <p className="text-sm text-foreground italic leading-relaxed">
             "{invite.note}"
           </p>
         </div>
       )}
       
-      <div className="pt-2 border-t border-gray-100">
+      <div className="pt-2 border-t border-border">
         <PreviewStats invite={invite} />
       </div>
       
       <div className="flex gap-2.5 pt-1">
         <Button
           size="sm"
-          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm"
+          className="flex-1 font-medium shadow-sm"
           disabled={isMutating}
           onClick={async () => {
             const summary = await acceptInvite(invite.id);
@@ -123,7 +123,7 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
         <Button
           size="sm"
           variant="outline"
-          className="border-gray-300 text-gray-700 hover:bg-gray-50 font-medium"
+          className="border-border text-foreground hover:bg-muted/50 font-medium"
           disabled={isMutating}
           onClick={() => declineInvite(invite.id)}
         >
@@ -136,23 +136,23 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
   const renderAcceptedCard = (invite: SharedAnalysisInvite) => (
     <div
       key={`accepted-${invite.id}`}
-      className="rounded-lg border border-gray-200 bg-gradient-to-br from-green-50/50 to-white p-4 hover:shadow-sm transition-shadow duration-200"
+      className="rounded-lg border border-border bg-card p-4 hover:shadow-sm transition-shadow duration-200"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
             <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0" />
-            <p className="font-semibold text-gray-900 text-sm truncate">
+            <p className="font-semibold text-foreground text-sm truncate">
               {invite.preview?.fileName ?? "Shared analysis"}
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-600 ml-6">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground ml-6">
             <span>Accepted {formatTimestamp(invite.acceptedAt)}</span>
-            <span className="text-gray-400">·</span>
+            <span className="text-muted-foreground">·</span>
             <span className="truncate">from {invite.ownerEmail}</span>
           </div>
         </div>
-        <Badge variant="outline" className="text-xs px-2.5 py-1 bg-green-50 text-green-700 border-green-200 flex-shrink-0">
+        <Badge variant="outline" className="text-xs px-2.5 py-1 bg-primary/10 text-primary border-primary/25 flex-shrink-0">
           <Users className="h-3 w-3 mr-1" />
           Active
         </Badge>
@@ -161,16 +161,16 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
   );
 
   return (
-    <Card className="h-full flex flex-col border-gray-200 shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 flex-shrink-0 pb-4 border-b border-gray-100">
+    <Card className="h-full flex flex-col border-border shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 flex-shrink-0 pb-4 border-b border-border">
         <div className="flex-1">
-          <CardTitle className="flex items-center gap-2.5 text-xl font-bold text-gray-900 mb-1.5">
+          <CardTitle className="flex items-center gap-2.5 text-xl font-bold text-foreground mb-1.5">
             <div className="p-1.5 rounded-lg bg-blue-100">
               <Share2 className="h-4 w-4 text-blue-600" />
             </div>
             Shared with you
           </CardTitle>
-          <CardDescription className="text-sm text-gray-600 ml-9">
+          <CardDescription className="text-sm text-muted-foreground ml-9">
             Join live collaborative analyses that teammates shared with you.
           </CardDescription>
         </div>
@@ -179,7 +179,7 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
           size="sm" 
           onClick={refresh} 
           disabled={loading}
-          className="hover:bg-gray-100 text-gray-700"
+          className="hover:bg-muted text-foreground"
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -209,16 +209,16 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
         )}
 
         {!loading && pendingInvites.length === 0 && !error && (
-          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 p-8 text-center">
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gray-100 mb-3">
-              <Users className="h-6 w-6 text-gray-400" />
+          <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-muted mb-3">
+              <Users className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="text-sm font-medium text-gray-700 mb-1">
+            <p className="text-sm font-medium text-foreground mb-1">
               {hasSharedItems
                 ? "You're all caught up!"
                 : "No shared analyses yet"}
             </p>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-muted-foreground">
               {hasSharedItems
                 ? "Invite cards will show here when teammates share analyses."
                 : "Ask a teammate to share an analysis with you."}
@@ -230,7 +230,7 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
           <div className="space-y-4">
             <div className="flex items-center gap-2 pb-2">
               <Clock className="h-4 w-4 text-amber-600" />
-              <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+              <p className="text-xs font-bold text-foreground uppercase tracking-wider">
                 Pending Invites
               </p>
               <Badge variant="secondary" className="ml-auto text-xs px-2 py-0.5 bg-amber-100 text-amber-700 border-amber-200">
@@ -247,7 +247,7 @@ export const SharedAnalysesPanel = ({ onAccepted }: SharedAnalysesPanelProps) =>
           <div className="space-y-4">
             <div className="flex items-center gap-2 pb-2">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+              <p className="text-xs font-bold text-foreground uppercase tracking-wider">
                 Recently Joined Workspaces
               </p>
               <Badge variant="secondary" className="ml-auto text-xs px-2 py-0.5 bg-green-100 text-green-700 border-green-200">

@@ -12,8 +12,11 @@ interface AnalysisLoadingStateProps {
  */
 export const AnalysisLoadingState = ({ onSharedAccepted }: AnalysisLoadingStateProps) => {
   return (
-    <div className="h-[calc(100vh-10vh)] bg-gray-50 flex flex-col" data-analysis-page>
-      <div className="max-w-7xl mx-auto px-6 py-8 flex-1 flex flex-col min-h-0">
+    <div
+      className="flex min-h-0 flex-1 flex-col bg-gradient-to-b from-muted/25 to-background"
+      data-analysis-page
+    >
+      <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-6 sm:px-6">
         {/* Header Skeleton */}
         <div className="flex items-center justify-between mb-6">
           <div className="space-y-2">
@@ -40,7 +43,7 @@ export const AnalysisLoadingState = ({ onSharedAccepted }: AnalysisLoadingStateP
           <div className="flex-1 flex flex-col min-w-0">
             <div className="space-y-4 flex-1 overflow-y-auto">
               {Array.from({ length: 3 }).map((_, index) => (
-                <Card key={`skeleton-${index}`} className="border-gray-200">
+                <Card key={`skeleton-${index}`} className="border-border/80">
                   <CardContent className="p-6">
                     <div className="flex items-start justify-between">
                       <div className="flex-1 space-y-3">

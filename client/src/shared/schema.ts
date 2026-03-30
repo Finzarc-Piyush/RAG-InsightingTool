@@ -1,11 +1,34 @@
 import { z } from "zod";
 
+/** Keep in sync with server/shared/schema.ts */
+export const chartTypeSchema = z.enum([
+  "line",
+  "bar",
+  "scatter",
+  "pie",
+  "area",
+  "heatmap",
+]);
+
 // Chart Specifications
 export const chartSpecSchema = z.object({
-  type: z.enum(["line", "bar", "scatter", "pie", "area"]),
+  type: chartTypeSchema,
   title: z.string(),
+  /** Primary category / line X / heatmap row dimension */
   x: z.string(),
+  /**
+   * Primary measure (bar/line/…) or heatmap **column** dimension when type is `heatmap`.
+   * For stacked/grouped bars with `seriesColumn`, this is the numeric measure column in long format.
+   */
   y: z.string(),
+  /** Heatmap cell value column (required for type `heatmap`). */
+  z: z.string().optional(),
+  /** Long-format second categorical: pivots into multiple bar series (with `bar`). */
+  seriesColumn: z.string().optional(),
+  /** How to render multi-series bars after pivot; default stacked. */
+  barLayout: z.enum(["grouped", "stacked"]).optional(),
+  /** After pivot, explicit series keys (measure columns) for multi-series bars. */
+  seriesKeys: z.array(z.string()).optional(),
   // Optional secondary Y series for dual-axis line charts
   y2: z.string().optional(),
   // Optional array of additional Y series for multi-series charts on right axis
@@ -13,12 +36,14 @@ export const chartSpecSchema = z.object({
   xLabel: z.string().optional(),
   yLabel: z.string().optional(),
   y2Label: z.string().optional(),
+  zLabel: z.string().optional(),
   aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
   data: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).optional(),
   xDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for X-axis
   yDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for Y-axis
   trendLine: z.array(z.record(z.union([z.string(), z.number()]))).optional(), // Two points defining the trend line: [{ [x]: min, [y]: y1 }, { [x]: max, [y]: y2 }]
   keyInsight: z.string().optional(), // Key insight about the chart
+  _useAnalyticalDataOnly: z.boolean().optional(),
 });
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
@@ -114,6 +139,13 @@ export const sessionAnalysisContextSchema = z.object({
 
 export type SessionAnalysisContext = z.infer<typeof sessionAnalysisContextSchema>;
 
+export const thinkingSnapshotSchema = z.object({
+  steps: z.array(thinkingStepSchema),
+  workbench: agentWorkbenchSchema.optional(),
+});
+
+export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
+
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -125,11 +157,34 @@ export const messageSchema = z.object({
   agentWorkbench: agentWorkbenchSchema.optional(),
   userEmail: z.string().optional(), // Email of the user who sent the message (for shared analyses)
   agentTrace: z.record(z.unknown()).optional(),
+  preview: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).optional(),
+  summary: z.array(z.any()).optional(),
+  thinkingBefore: thinkingSnapshotSchema.optional(),
+  isIntermediate: z.boolean().optional(),
+  /** Short client-visible insight shown for preliminary intermediate previews. */
+  intermediateInsight: z.string().optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;
 
 export const temporalDisplayGrainSchema = z.enum(['dayOrWeek', 'monthOrQuarter', 'year']);
+
+export const temporalFacetGrainSchema = z.enum([
+  'date',
+  'week',
+  'month',
+  'quarter',
+  'half_year',
+  'year',
+]);
+
+export const temporalFacetColumnMetaSchema = z.object({
+  name: z.string(),
+  sourceColumn: z.string(),
+  grain: temporalFacetGrainSchema,
+});
+
+export type TemporalFacetColumnMeta = z.infer<typeof temporalFacetColumnMetaSchema>;
 
 // Data Summary
 export const dataSummarySchema = z.object({
@@ -149,10 +204,13 @@ export const dataSummarySchema = z.object({
         )
         .optional(),
       temporalDisplayGrain: temporalDisplayGrainSchema.optional(),
+      temporalFacetGrain: temporalFacetGrainSchema.optional(),
+      temporalFacetSource: z.string().optional(),
     })
   ),
   numericColumns: z.array(z.string()),
   dateColumns: z.array(z.string()),
+  temporalFacetColumns: z.array(temporalFacetColumnMetaSchema).optional(),
 });
 
 export type DataSummary = z.infer<typeof dataSummarySchema>;
@@ -442,7 +500,7 @@ export const addChartToDashboardRequestSchema = z.object({
 export const removeChartFromDashboardRequestSchema = z.object({
   index: z.number().optional(),
   title: z.string().optional(),
-  type: z.enum(["line", "bar", "scatter", "pie", "area"]).optional(),
+  type: chartTypeSchema.optional(),
   sheetId: z.string().optional(), // Optional: specify which sheet to remove from
 }).refine(
   (data) =>

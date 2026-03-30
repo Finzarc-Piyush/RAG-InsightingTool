@@ -6,7 +6,7 @@ export const DATASET_ENRICHMENT_MESSAGE_KEY = '__dataset_enrichment__';
 export const DATASET_PREVIEW_LOADING_CONTENT =
   `${DATASET_PREVIEW_MESSAGE_KEY} Preparing your dataset preview...`;
 export const DATASET_ENRICHMENT_LOADING_CONTENT =
-  `${DATASET_ENRICHMENT_MESSAGE_KEY} Enriching our understanding of your data...`;
+  `${DATASET_ENRICHMENT_MESSAGE_KEY} Enriching data understanding and preparing suggested analysis questions...`;
 
 export function isDatasetPreviewSystemMessage(message: Message): boolean {
   return (

@@ -14,8 +14,9 @@ import { MsalProvider } from '@azure/msal-react';
 import { createMsalConfig } from '@/auth/msalConfig';
 import { registerMsalInstance } from '@/auth/msalToken';
 import { logger } from "@/lib/logger";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ThemeProvider } from "@/components/theme-provider";
+import { AppLoadingScreen } from "@/components/AppLoadingScreen";
 
 // Lazy load route components for code splitting
 const Home = lazy(() => import("@/pages/Home/Home"));
@@ -23,18 +24,11 @@ const Dashboard = lazy(() => import("@/pages/Dashboard/Dashboard"));
 const Analysis = lazy(() => import("@/pages/Analysis/Analysis"));
 const NotFound = lazy(() => import("@/pages/NotFound/not-found"));
 
-// Loading fallback component
 const RouteLoadingFallback = () => (
-  <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
-    <div className="text-center space-y-4">
-      <Skeleton className="h-12 w-12 rounded-full mx-auto" />
-      <Skeleton className="h-4 w-48 mx-auto" />
-    </div>
-  </div>
+  <AppLoadingScreen variant="embedded" message="Loading workspace…" />
 );
 
 type PageType = 'home' | 'dashboard' | 'analysis';
-type ModeType = 'analysis' | 'dataOps' | 'modeling';
 
 function Router() {
   const [location, setLocation] = useLocation();
@@ -89,12 +83,6 @@ function Router() {
     setLocation('/analysis');
   };
 
-  const handleModeChange = (mode: ModeType) => {
-    // Don't change URL - mode is now state-based, not route-based
-    // The URL will always stay as /analysis
-    // Mode is managed by the Home component's internal state
-  };
-
   // Redirect root and old routes to /analysis
   useEffect(() => {
     if (location === '/' || location === '/data-ops' || location === '/modeling') {
@@ -127,30 +115,9 @@ function Router() {
             <Dashboard />
           </Route>
           <Route path="/analysis">
-            <Home 
-              resetTrigger={resetTrigger} 
+            <Home
+              resetTrigger={resetTrigger}
               loadedSessionData={loadedSessionData}
-              initialMode="general"
-              onModeChange={handleModeChange}
-              onSessionChange={handleSessionChange}
-            />
-          </Route>
-          {/* Old routes - will redirect to /analysis via useEffect above */}
-          <Route path="/data-ops">
-            <Home 
-              resetTrigger={resetTrigger} 
-              loadedSessionData={loadedSessionData}
-              initialMode="dataOps"
-              onModeChange={handleModeChange}
-              onSessionChange={handleSessionChange}
-            />
-          </Route>
-          <Route path="/modeling">
-            <Home 
-              resetTrigger={resetTrigger} 
-              loadedSessionData={loadedSessionData}
-              initialMode="modeling"
-              onModeChange={handleModeChange}
               onSessionChange={handleSessionChange}
             />
           </Route>
@@ -199,22 +166,24 @@ registerMsalInstance(msalInstance);
 function App() {
   return (
     <ErrorBoundary>
-      <MsalProvider instance={msalInstance}>
-        <QueryClientProvider client={queryClient}>
-          <TooltipProvider>
-            <AuthProvider>
-              <ProtectedRoute>
-                <DashboardProvider>
-                  <Toaster />
-                  <ErrorBoundary>
-                    <AuthRedirectHandler />
-                  </ErrorBoundary>
-                </DashboardProvider>
-              </ProtectedRoute>
-            </AuthProvider>
-          </TooltipProvider>
-        </QueryClientProvider>
-      </MsalProvider>
+      <ThemeProvider>
+        <MsalProvider instance={msalInstance}>
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <AuthProvider>
+                <ProtectedRoute>
+                  <DashboardProvider>
+                    <Toaster />
+                    <ErrorBoundary>
+                      <AuthRedirectHandler />
+                    </ErrorBoundary>
+                  </DashboardProvider>
+                </ProtectedRoute>
+              </AuthProvider>
+            </TooltipProvider>
+          </QueryClientProvider>
+        </MsalProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

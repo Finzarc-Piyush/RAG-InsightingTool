@@ -1,12 +1,14 @@
-import { forwardRef, useState, useMemo, memo, lazy, Suspense } from 'react';
+import { forwardRef, useState, useMemo, memo, lazy, Suspense, useEffect } from 'react';
 import {
   AgentWorkbenchEntry,
   Message,
   ThinkingStep,
   ChartSpec,
   TemporalDisplayGrain,
+  type TemporalFacetColumnMeta,
 } from '@/shared/schema';
-import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
+import { User, Bot, Edit2, Check, X as XIcon, Lightbulb } from 'lucide-react';
+import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
@@ -94,6 +96,7 @@ interface MessageBubbleProps {
   numericColumns?: string[];
   dateColumns?: string[];
   temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
+  temporalFacetColumns?: TemporalFacetColumnMeta[];
   totalRows?: number;
   totalColumns?: number;
   onEditMessage?: (messageIndex: number, newContent: string) => void;
@@ -138,6 +141,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   numericColumns,
   dateColumns,
   temporalDisplayGrainsByColumn,
+  temporalFacetColumns,
   totalRows,
   totalColumns,
   onEditMessage,
@@ -277,9 +281,40 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
     message.userEmail ? message.userEmail.split('@')[0] : 'You',
     [message.userEmail]
   );
+
+  const hasAggPreview =
+    !isUser &&
+    (message as Message & { preview?: unknown[] }).preview &&
+    Array.isArray((message as Message & { preview?: unknown[] }).preview) &&
+    ((message as Message & { preview?: unknown[] }).preview as unknown[]).length > 0;
+  const hasAggSummary =
+    !isUser &&
+    (message as Message & { summary?: unknown[] }).summary &&
+    Array.isArray((message as Message & { summary?: unknown[] }).summary) &&
+    ((message as Message & { summary?: unknown[] }).summary as unknown[]).length > 0;
+
+  const showMarkdownBlock =
+    !isUser &&
+    !!displayContent &&
+    !isEnrichmentSystemMessage &&
+    !(
+      message.isIntermediate &&
+      (!String(displayContent).trim() || String(displayContent).trim() === "Preliminary results")
+    );
   
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
+  const [showDatasetPreview, setShowDatasetPreview] = useState(false);
+  const [previewManuallyHidden, setPreviewManuallyHidden] = useState(false);
+
+  useEffect(() => {
+    setPreviewManuallyHidden(false);
+  }, [message.timestamp]);
+
+  useEffect(() => {
+    if (isUser || isEnrichmentSystemMessage || !columns?.length || previewManuallyHidden) return;
+    setShowDatasetPreview(true);
+  }, [isUser, isEnrichmentSystemMessage, columns, previewManuallyHidden]);
 
   const handleSaveEdit = () => {
     if (editValue.trim() && onEditMessage && messageIndex !== undefined) {
@@ -312,12 +347,12 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             {(showUserName || (isLastUserMessage && onEditMessage)) && (
               <div className="flex items-center justify-end gap-2 mb-1 mr-2">
                 {showUserName && (
-                  <span className="text-xs text-gray-500">{displayName}</span>
+                  <span className="text-xs text-muted-foreground">{displayName}</span>
                 )}
                 {isLastUserMessage && onEditMessage && !isEditing && (
                   <button
                     onClick={() => setIsEditing(true)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-gray-100 text-gray-600 hover:text-gray-900 text-xs font-medium flex items-center gap-1"
+                    className="flex items-center gap-1 rounded-md p-1.5 text-xs font-medium text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
                     title="Edit message"
                   >
                     <Edit2 className="h-3 w-3" />
@@ -346,7 +381,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   <Button
                     size="sm"
                     onClick={handleSaveEdit}
-                    className="h-7 text-xs bg-white/20 hover:bg-white/30 text-white border border-white/30"
+                    className="h-7 text-xs bg-primary-foreground/20 hover:bg-primary-foreground/30 text-primary-foreground border border-primary-foreground/30"
                   >
                     <Check className="h-3 w-3 mr-1" />
                     Save & Submit
@@ -355,7 +390,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                     size="sm"
                     variant="ghost"
                     onClick={handleCancelEdit}
-                    className="h-7 text-xs text-white/80 hover:text-white hover:bg-white/10"
+                    className="h-7 text-xs text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
                   >
                     <XIcon className="h-3 w-3 mr-1" />
                     Cancel
@@ -379,9 +414,22 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           ((thinkingPanelSteps?.length ?? 0) > 0 ||
             (thinkingPanelWorkbench?.length ?? 0) > 0) && (
             <ThinkingPanel
+              variant="archived"
               steps={thinkingPanelSteps ?? []}
               workbench={thinkingPanelWorkbench ?? []}
               isStreaming={!!thinkingPanelStreaming}
+            />
+          )}
+
+        {!isUser &&
+          message.thinkingBefore &&
+          ((message.thinkingBefore.steps?.length ?? 0) > 0 ||
+            (message.thinkingBefore.workbench?.length ?? 0) > 0) && (
+            <ThinkingPanel
+              variant="archived"
+              steps={message.thinkingBefore.steps}
+              workbench={message.thinkingBefore.workbench ?? []}
+              isStreaming={false}
             />
           )}
 
@@ -396,12 +444,48 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && displayContent && !isEnrichmentSystemMessage && (
+        {!isUser && hasAggPreview && (
+          <>
+            {message.isIntermediate && message.intermediateInsight && (
+              <div className="mb-3">
+                <Card className="p-4 bg-primary/5 border-l-4 border-l-primary shadow-sm">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Lightbulb className="w-4 h-4 text-primary" />
+                    <h4 className="text-sm font-semibold text-foreground">Key insight</h4>
+                  </div>
+                  <div className="text-sm text-foreground">
+                    <MarkdownRenderer content={message.intermediateInsight} />
+                  </div>
+                </Card>
+              </div>
+            )}
+            <div className="mt-1 mb-3">
+              <DataPreviewTable 
+                data={(message as Message & { preview: Record<string, unknown>[] }).preview} 
+                sessionId={sessionId}
+                variant="analysis"
+                columns={columns}
+                numericColumns={numericColumns}
+                dateColumns={dateColumns}
+                temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+                temporalFacetColumns={temporalFacetColumns}
+              />
+            </div>
+          </>
+        )}
+
+        {!isUser && hasAggSummary && (
+          <div className="mb-3">
+            <DataSummaryTable summary={(message as Message & { summary: unknown[] }).summary} />
+          </div>
+        )}
+
+        {showMarkdownBlock && (
           <div
-            className="rounded-xl px-4 py-3 shadow-sm bg-white border border-gray-100"
+            className="rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm"
             data-testid={`message-content-${message.role}`}
           >
-            <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+            <div className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
               <MarkdownRenderer content={displayContent} />
             </div>
             {message.suggestedQuestions &&
@@ -428,18 +512,50 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
 
         {!isUser && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
           <div className="mt-3">
-            <DataPreview 
-              data={sampleRows || []}
-              columns={columns}
-              numericColumns={numericColumns}
-              dateColumns={dateColumns}
-              temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
-              totalRows={totalRows}
-              totalColumns={totalColumns}
-              defaultExpanded={true}
-              preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
-              postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
-            />
+            {!showDatasetPreview ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs px-2"
+                  onClick={() => {
+                    setPreviewManuallyHidden(false);
+                    setShowDatasetPreview(true);
+                  }}
+              >
+                Show data preview
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs px-2"
+                    onClick={() => {
+                      setPreviewManuallyHidden(true);
+                      setShowDatasetPreview(false);
+                    }}
+                  >
+                    Hide data preview
+                  </Button>
+                </div>
+                <DataPreview
+                  data={sampleRows || []}
+                  columns={columns}
+                  numericColumns={numericColumns}
+                  dateColumns={dateColumns}
+                  temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+                  temporalFacetColumns={temporalFacetColumns}
+                  totalRows={totalRows}
+                  totalColumns={totalColumns}
+                  defaultExpanded={!(hasAggPreview || hasAggSummary)}
+                  preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
+                  postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -477,7 +593,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                     <Suspense 
                       key={idx}
                       fallback={
-                        <div className="w-full h-[250px] flex items-center justify-center border rounded-lg bg-gray-50">
+                        <div className="flex h-[250px] w-full items-center justify-center rounded-lg border border-border/80 bg-muted/30">
                           <Skeleton className="h-full w-full" />
                         </div>
                       }
@@ -541,7 +657,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                     <Suspense 
                       key={`loading-${idx}`}
                       fallback={
-                        <div className="w-full h-[250px] flex items-center justify-center border rounded-lg bg-gray-50">
+                        <div className="flex h-[250px] w-full items-center justify-center rounded-lg border border-border/80 bg-muted/30">
                           <Skeleton className="h-full w-full" />
                         </div>
                       }
@@ -564,25 +680,6 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         {!isUser && message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />
-          </div>
-        )}
-
-        {/* Display data preview for Data Ops responses */}
-        {!isUser && (message as any).preview && Array.isArray((message as any).preview) && (message as any).preview.length > 0 && (
-          <div className="mt-3">
-            <DataPreviewTable 
-              data={(message as any).preview} 
-              sessionId={sessionId}
-              dateColumns={dateColumns}
-              temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
-            />
-          </div>
-        )}
-
-        {/* Display data summary for Data Ops responses */}
-        {!isUser && (message as any).summary && Array.isArray((message as any).summary) && (message as any).summary.length > 0 && (
-          <div className="mt-3">
-            <DataSummaryTable summary={(message as any).summary} />
           </div>
         )}
       </div>
@@ -621,12 +718,23 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     // Compare charts by length
     (prevProps.message.charts?.length ?? 0) === (nextProps.message.charts?.length ?? 0) &&
     (prevProps.message.insights?.length ?? 0) === (nextProps.message.insights?.length ?? 0) &&
+    ((prevProps.message as Message & { preview?: unknown[] }).preview?.length ?? 0) ===
+      ((nextProps.message as Message & { preview?: unknown[] }).preview?.length ?? 0) &&
+    ((prevProps.message as Message & { summary?: unknown[] }).summary?.length ?? 0) ===
+      ((nextProps.message as Message & { summary?: unknown[] }).summary?.length ?? 0) &&
+    (prevProps.message.thinkingBefore?.steps?.length ?? 0) ===
+      (nextProps.message.thinkingBefore?.steps?.length ?? 0) &&
+    (prevProps.message.thinkingBefore?.workbench?.length ?? 0) ===
+      (nextProps.message.thinkingBefore?.workbench?.length ?? 0) &&
+    prevProps.message.isIntermediate === nextProps.message.isIntermediate &&
+    prevProps.message.intermediateInsight === nextProps.message.intermediateInsight &&
     (prevProps.message.suggestedQuestions?.length ?? 0) ===
       (nextProps.message.suggestedQuestions?.length ?? 0) &&
     prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
     prevProps.preEnrichmentPreviewSnapshot === nextProps.preEnrichmentPreviewSnapshot &&
     prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&
     prevProps.sampleRows === nextProps.sampleRows &&
-    prevProps.columns === nextProps.columns
+    prevProps.columns === nextProps.columns &&
+    prevProps.temporalFacetColumns === nextProps.temporalFacetColumns
   );
 });

@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
 
 interface ColumnSummary {
   variable: string;
@@ -373,6 +374,9 @@ export function DataSummaryModal({
               No data summary available
             </div>
           )}
+        </div>
+        <div className="mt-4 flex justify-end border-t border-border pt-3">
+          <AvailableModelsDialog triggerLabel="ML model catalog" />
         </div>
       </DialogContent>
     </Dialog>

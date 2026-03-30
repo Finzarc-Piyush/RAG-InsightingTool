@@ -68,11 +68,13 @@ OUTPUT FORMAT (JSON):
 }
 
 IMPORTANT:
-- Only include columns that are actually relevant to the user's question
-- If extracted columns don't match the user's intent, use your understanding to identify the correct columns
-- Be specific about what kind of analysis or visualization would help answer the question
-- Consider the context: if they mention specific column names, prioritize those
-- If the message is conversational or doesn't mention specific columns, infer the intent from the conversation context`;
+- EXTRACTED COLUMNS are names that literally appear in the user message (from deterministic matching). Treat them as authoritative for what the user referenced by name.
+- Your relevantColumns MUST include every extracted column that is relevant to answering the question (metrics, dimensions, filters).
+- Do NOT add extra columns only because they share words with an extracted name (e.g. "Sales", "Volume", "% Chg", "Share", "Price per") unless the user clearly asked for that metric (YoY change, share, index, etc.) or the question cannot be answered without them.
+- You may add a date/time column (from DATE COLUMNS) when the user asks for trends, monthly views, or time series and a period column is needed.
+- Only include columns that are actually relevant; prefer a small, sufficient set over listing every related field in the dataset.
+- If the message is conversational and no columns were extracted, infer intent and choose the minimal relevant columns from AVAILABLE COLUMNS.
+- Every name in relevantColumns must be spelled exactly as in AVAILABLE COLUMNS (case-sensitive).`;
 
   try {
     const response = await openai.chat.completions.create({
@@ -95,10 +97,25 @@ IMPORTANT:
     const content = response.choices[0].message.content || '{}';
     const parsed = JSON.parse(content);
 
+    const byLower = new Map(availableColumns.map((c) => [c.toLowerCase(), c]));
+    const rawRelevant = Array.isArray(parsed.relevantColumns) ? parsed.relevantColumns : [];
+    const resolved = rawRelevant
+      .filter((c: unknown): c is string => typeof c === 'string' && c.trim().length > 0)
+      .map((c: string) => byLower.get(c.trim().toLowerCase()))
+      .filter((c: string | undefined): c is string => c !== undefined);
+    const relevantColumns: string[] = [];
+    const seenRel = new Set<string>();
+    for (const c of resolved) {
+      if (!seenRel.has(c)) {
+        seenRel.add(c);
+        relevantColumns.push(c);
+      }
+    }
+
     return {
       intent: parsed.intent || 'unknown',
       analysis: parsed.analysis || '',
-      relevantColumns: Array.isArray(parsed.relevantColumns) ? parsed.relevantColumns : [],
+      relevantColumns,
       userIntent: parsed.userIntent || '',
     };
   } catch (error) {

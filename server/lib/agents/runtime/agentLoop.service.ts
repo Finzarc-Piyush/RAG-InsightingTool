@@ -12,17 +12,140 @@ import type {
 import { AGENT_TRACE_MAX_BYTES } from "./types.js";
 import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
-import { runPlanner } from "./planner.js";
+import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { formatWorkingMemoryBlock } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
 import { agentLog } from "./agentLogger.js";
 import { openai, MODEL } from "../../openai.js";
+import { getInsightModel, getInsightTemperatureConservative } from "../../insightSynthesis/insightModelConfig.js";
 import { completeJson } from "./llmJson.js";
 import { proposeAndBuildExtraCharts } from "./visualPlanner.js";
-import type { Insight } from "../../../shared/schema.js";
+import { chartSpecSchema, type ChartSpec, type Insight } from "../../../shared/schema.js";
+import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
+import { registerDerivedColumnOnSummary } from "../../deriveDimensionBucket.js";
+import {
+  validateChartProposal,
+  chartRowsForProposal,
+} from "./chartProposalValidation.js";
+import { processChartData } from "../../chartGenerator.js";
+import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
+
+const INTERMEDIATE_TABLE_TOOLS = new Set([
+  "run_analytical_query",
+  "execute_query_plan",
+  "run_readonly_sql",
+  "derive_dimension_bucket",
+]);
+
+function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[] {
+  const t = tr.table;
+  if (!t) return [];
+  if (Array.isArray(t)) return t as Record<string, unknown>[];
+  if (typeof t === "object" && t !== null && Array.isArray((t as { rows?: unknown }).rows)) {
+    return (t as { rows: Record<string, unknown>[] }).rows;
+  }
+  return [];
+}
+import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 
 export type AgentSseEmitter = (event: string, data: unknown) => void;
+
+function lastAnalyticalRowsSnapshot(
+  ctx: AgentExecutionContext
+): Record<string, unknown>[] | undefined {
+  const rows = ctx.lastAnalyticalTable?.rows;
+  return rows?.length ? rows : undefined;
+}
+
+function rowKeysFromFirstRow(rows: Record<string, unknown>[]): string[] {
+  if (!rows.length) return [];
+  return Object.keys(rows[0] as object);
+}
+
+/** Shape needed to rebuild a plan-time build_chart after synthesis (same frame as narrative). */
+type DeferredBuildChartTemplate = Pick<ChartSpec, "type" | "title" | "x" | "y" | "aggregate"> & {
+  y2?: string;
+  y2Series?: string[];
+};
+
+function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplate {
+  return {
+    type: c.type,
+    title: c.title,
+    x: c.x,
+    y: c.y,
+    ...(c.y2 ? { y2: c.y2 } : {}),
+    ...(c.y2Series?.length ? { y2Series: [...c.y2Series] } : {}),
+    ...(c.aggregate != null ? { aggregate: c.aggregate } : {}),
+  };
+}
+
+function rowFrameSupportsDeferredTemplate(
+  first: Record<string, unknown> | undefined,
+  t: DeferredBuildChartTemplate
+): boolean {
+  if (!first) return false;
+  const keys = [t.x, t.y, ...(t.y2 ? [t.y2] : []), ...(t.y2Series ?? [])];
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(first, k));
+}
+
+/**
+ * Plan-time build_chart specs are deferred until after synthesis so series are built from the
+ * same analytical frame the answer used (last execute_query_plan / ctx.data), not mid-plan snapshots.
+ */
+function materializeDeferredBuildCharts(
+  ctx: AgentExecutionContext,
+  deferred: DeferredBuildChartTemplate[],
+  mergedCharts: ChartSpec[]
+): void {
+  if (!deferred.length) return;
+  for (const tmpl of deferred) {
+    try {
+      const p = { type: tmpl.type, x: tmpl.x, y: tmpl.y };
+      if (!validateChartProposal(ctx, p)) continue;
+      const { rows, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
+      const first = rows[0] as Record<string, unknown> | undefined;
+      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) continue;
+      const spec = chartSpecSchema.parse({
+        type: tmpl.type,
+        title: tmpl.title,
+        x: tmpl.x,
+        y: tmpl.y,
+        ...(tmpl.y2 ? { y2: tmpl.y2 } : {}),
+        ...(tmpl.y2Series?.length ? { y2Series: tmpl.y2Series } : {}),
+        aggregate: tmpl.aggregate ?? "none",
+        ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
+      });
+      const processed = processChartData(
+        rows as Record<string, any>[],
+        spec,
+        ctx.summary.dateColumns,
+        { chartQuestion: ctx.question }
+      );
+      const smartDomains = calculateSmartDomainsForChart(
+        processed,
+        spec.x,
+        spec.y,
+        spec.y2 || undefined,
+        {
+          yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+          y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
+        }
+      );
+      mergedCharts.push({
+        ...spec,
+        xLabel: spec.x,
+        yLabel: spec.y,
+        data: processed,
+        ...smartDomains,
+      });
+    } catch {
+      /* skip invalid */
+    }
+  }
+  deferred.length = 0;
+}
 
 function capAgentTrace(trace: AgentTrace): AgentTrace {
   const clone: AgentTrace = {
@@ -95,9 +218,9 @@ async function synthesizeFinalAnswerEnvelope(
     : "";
   const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 12000)}`;
 
-  const system = `You are a data analyst. Using ONLY the observations from tools, produce JSON with:
-- "body": main markdown answer (clear, concise). Do not include a separate "Key insight" or CTA list inside body; keep body focused on the direct answer.
-- "keyInsight": optional one short sentence highlighting the most important takeaway, or null if none adds value.
+  const system = `You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
+- "body": main markdown answer (clear, concise). Do not duplicate the full key insight inside body; keep body focused on the direct answer.
+- "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions: segments, risk, opportunity, or “so what” for the business—using general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
@@ -105,8 +228,9 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
-    maxTokens: 2200,
-    temperature: 0.35,
+    maxTokens: 2600,
+    temperature: getInsightTemperatureConservative(),
+    model: getInsightModel(),
     onLlmCall,
   });
 
@@ -134,8 +258,41 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
   const { body, keyInsight, ctas } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
-  const answer = formatAnswerFromEnvelope(body, ki ?? null, ctaList);
-  const suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
+  let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null, ctaList);
+  let suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
+
+  if (!answer.trim()) {
+    onLlmCall();
+    const res = await openai.chat.completions.create({
+      model: MODEL as string,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
+        },
+        { role: "user", content: user },
+      ],
+      temperature: 0.35,
+      max_tokens: 2000,
+    });
+    const chatFallback =
+      res.choices[0]?.message?.content?.trim() ||
+      "";
+    if (chatFallback) {
+      return { answer: chatFallback, ctas: [], suggestionHints: [] };
+    }
+    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 8000);
+    return {
+      answer:
+        deterministic ?
+          `Summary from tool output:\n\n${deterministic}`
+        : "I could not produce an answer from the available data.",
+      ctas: [],
+      suggestionHints: [],
+    };
+  }
+
   return { answer, keyInsight: ki, ctas: ctaList, suggestionHints };
 }
 
@@ -168,6 +325,58 @@ function appendEnvelopeInsightWhenNoCharts(
   if (duplicate) return;
   const nextId = mergedInsights.reduce((m, i) => Math.max(m, i.id), 0) + 1;
   mergedInsights.push({ id: nextId, text });
+}
+
+const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
+  llm_json_invalid:
+    "IMPORTANT: Fix the previous attempt. Output ONLY valid JSON: an object with \"rationale\" (string) and \"steps\" (non-empty array of objects with id, tool, args, optional dependsOn). Use exact tool names from the Tools list.",
+  empty_steps:
+    "IMPORTANT: The steps array must not be empty. Include at least one step with a valid tool and args.",
+  invalid_tool_args:
+    "IMPORTANT: Tool arguments failed schema validation. For `execute_query_plan`, ensure `plan.dimensionFilters` items include required keys `column`, `op` ('in'|'not_in'), and `values` (string[]). If `plan.sort` is present, every item must include `column` and `direction` ('asc'|'desc') — otherwise omit invalid sort entries. For other tools, use only allowed keys and exact column names from the Dataset columns line.",
+  unknown_tool:
+    "IMPORTANT: Use only tool names exactly as listed in the Tools section (no invented names).",
+  column_not_in_schema:
+    "IMPORTANT: Every column in the plan must match a name from the Dataset columns line exactly (including parentheses and spacing).",
+  bad_depends_on:
+    "IMPORTANT: Each dependsOn must reference another step id from the same plan.",
+  dependency_cycle:
+    "IMPORTANT: Remove circular dependsOn links; order steps as a DAG.",
+};
+
+/** One follow-up planner attempt with a corrective hint (reduces empty-plan user-facing failures). */
+async function runPlannerWithOneRetry(
+  ctx: AgentExecutionContext,
+  registry: ToolRegistry,
+  turnId: string,
+  onLlmCall: () => void,
+  priorObservationsText?: string,
+  workingMemoryBlock?: string
+) {
+  const first = await runPlanner(
+    ctx,
+    registry,
+    turnId,
+    onLlmCall,
+    priorObservationsText,
+    workingMemoryBlock
+  );
+  if (first.ok) return first;
+  const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
+  if (!hint) return first;
+  agentLog("planner.retry", { turnId, reason: first.reason });
+  const ctxRetry: AgentExecutionContext = {
+    ...ctx,
+    question: `${ctx.question}\n\n${hint}`,
+  };
+  return runPlanner(
+    ctxRetry,
+    registry,
+    turnId,
+    onLlmCall,
+    priorObservationsText,
+    workingMemoryBlock
+  );
 }
 
 export async function runAgentTurn(
@@ -211,8 +420,9 @@ export async function runAgentTurn(
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   const workingMemory: WorkingMemoryEntry[] = [];
-  const mergedCharts: import("../../../shared/schema.js").ChartSpec[] = [];
-  const mergedInsights: import("../../../shared/schema.js").Insight[] = [];
+  const mergedCharts: ChartSpec[] = [];
+  const mergedInsights: Insight[] = [];
+  const deferredPlanCharts: DeferredBuildChartTemplate[] = [];
   let table: any;
   let operationResult: any;
   let lastNumeric = "";
@@ -228,7 +438,7 @@ export async function runAgentTurn(
 
   const deadline = Date.now() + config.maxWallTimeMs;
 
-  const mergeToolArtifacts = (result: ToolResult) => {
+  const mergeStepArtifacts = (tool: string, result: ToolResult) => {
     if (result.ragHitCount !== undefined) {
       lastRagHitCount = result.ragHitCount;
     }
@@ -236,7 +446,13 @@ export async function runAgentTurn(
       lastNumeric = result.numericPayload;
     }
     if (result.charts?.length) {
-      mergedCharts.push(...result.charts);
+      if (tool === "build_chart") {
+        for (const c of result.charts) {
+          deferredPlanCharts.push(deferredTemplateFromBuiltChart(c as ChartSpec));
+        }
+      } else {
+        mergedCharts.push(...result.charts);
+      }
     }
     if (result.insights?.length) {
       mergedInsights.push(...result.insights);
@@ -267,6 +483,15 @@ export async function runAgentTurn(
     }).catch(() => {});
   };
 
+  /** Survives catch if a post-synthesis step throws (e.g. visual planner). */
+  let preservedAnswer = "";
+
+  function observationsFallbackAnswer(): string {
+    const body = observations.join("\n\n---\n\n").trim();
+    if (!body) return "";
+    return `Summary from tool output:\n\n${body.slice(0, 8000)}`;
+  }
+
   try {
     let replans = 0;
     while (replans <= 2) {
@@ -280,7 +505,7 @@ export async function runAgentTurn(
           ? observations.join("\n\n---\n\n").slice(0, 12_000)
           : undefined;
       const workingMemoryBlock = formatWorkingMemoryBlock(workingMemory);
-      const planResult = await runPlanner(
+      const planResult = await runPlannerWithOneRetry(
         ctx,
         registry,
         turnId,
@@ -317,6 +542,7 @@ export async function runAgentTurn(
           operationResult,
           agentTrace: capAgentTrace(trace),
           agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+          lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         };
       }
 
@@ -429,7 +655,8 @@ export async function runAgentTurn(
           }
 
           if (result.clarify) {
-            mergeToolArtifacts(result);
+            mergeStepArtifacts(step.tool, result);
+            materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
             trace.endedAt = Date.now();
             return {
               answer: result.clarify,
@@ -438,6 +665,7 @@ export async function runAgentTurn(
               table,
               operationResult,
               agentTrace: capAgentTrace(trace),
+              lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
             };
           }
 
@@ -513,7 +741,22 @@ export async function runAgentTurn(
           break;
         }
 
-        mergeToolArtifacts(stepResult);
+        mergeStepArtifacts(step.tool, stepResult);
+
+        if (
+          stepResult.ok &&
+          ctx.onIntermediateArtifact &&
+          INTERMEDIATE_TABLE_TOOLS.has(step.tool)
+        ) {
+          const intermediateRows = toolTableRowsForIntermediate(stepResult);
+          if (intermediateRows.length > 0) {
+            const insight = buildIntermediateInsight(step.tool, stepResult);
+            ctx.onIntermediateArtifact({
+              preview: intermediateRows.slice(0, 50),
+              insight,
+            });
+          }
+        }
 
         if (
           stepResult.ok &&
@@ -521,12 +764,48 @@ export async function runAgentTurn(
           Array.isArray(stepResult.table.rows) &&
           stepResult.table.rows.length > 0 &&
           (step.tool === "run_analytical_query" ||
-            step.tool === "execute_query_plan")
+            step.tool === "execute_query_plan" ||
+            step.tool === "derive_dimension_bucket" ||
+            step.tool === "run_readonly_sql")
         ) {
-          ctx.data = stepResult.table.rows;
+          const analyticalRows = stepResult.table.rows as Record<string, unknown>[];
+          ctx.data = analyticalRows;
+          ctx.lastAnalyticalTable = {
+            rows: analyticalRows,
+            columns: rowKeysFromFirstRow(analyticalRows),
+            sourceTool: step.tool,
+          };
         }
 
-        observations.push(`[${step.tool}] ${finalCandidate}`);
+        if (stepResult.ok && step.tool === "derive_dimension_bucket") {
+          const neu = step.args.newColumnName;
+          if (typeof neu === "string" && neu.trim()) {
+            registerDerivedColumnOnSummary(ctx.summary, neu, ctx.data);
+          }
+        }
+
+        for (const line of lintAfterAnalyticalTool({
+          tool: step.tool,
+          ok: stepResult.ok,
+          question: ctx.question,
+          parsed: stepResult.queryPlanParsed,
+          outputRowCount:
+            stepResult.table?.rowCount ?? stepResult.analyticalMeta?.outputRowCount,
+          outputColumns: Array.isArray(stepResult.table?.columns)
+            ? (stepResult.table.columns as string[])
+            : undefined,
+        })) {
+          observations.push(line);
+        }
+
+        const finalTrimmed = finalCandidate.trimStart();
+        // If the tool already produced a structured SYSTEM_VALIDATION line, keep it
+        // intact so the reflector can reliably detect it.
+        if (finalTrimmed.startsWith("[SYSTEM_VALIDATION]")) {
+          observations.push(finalTrimmed);
+        } else {
+          observations.push(`[${step.tool}] ${finalCandidate}`);
+        }
 
         workingMemory.push({
           callId: finalCallId,
@@ -564,9 +843,13 @@ export async function runAgentTurn(
           }
         } else if (ref.action === "clarify" && ref.clarify_message) {
           trace.endedAt = Date.now();
+          materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
           return {
             answer: ref.clarify_message,
+            charts: mergedCharts.length ? mergedCharts : undefined,
+            insights: mergedInsights.length ? mergedInsights : undefined,
             agentTrace: capAgentTrace(trace),
+            lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
           };
         } else if (ref.action === "replan") {
           replans++;
@@ -599,13 +882,39 @@ export async function runAgentTurn(
       summary: buildPreSynthesisMidTurnSummary(ctx, trace, observations, mergedCharts),
     });
 
-    const visualExtra = await proposeAndBuildExtraCharts(
-      ctx,
-      observations.join("\n\n---\n\n"),
-      turnId,
-      onLlmCall,
-      mergedCharts
-    );
+    let answer = delegateAnswer || "";
+    if (!answer && observations.length > 0) {
+      try {
+        const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
+        answer = env.answer;
+        agentSuggestionHints = env.suggestionHints;
+        appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
+      } catch (synErr) {
+        const msg = synErr instanceof Error ? synErr.message : String(synErr);
+        agentLog("synthesis_error", { turnId, err: msg.slice(0, 300) });
+        answer = observationsFallbackAnswer();
+      }
+    }
+    preservedAnswer = answer;
+
+    materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
+
+    let visualExtra: Awaited<ReturnType<typeof proposeAndBuildExtraCharts>> = {
+      charts: [],
+    };
+    try {
+      visualExtra = await proposeAndBuildExtraCharts(
+        ctx,
+        observations.join("\n\n---\n\n"),
+        turnId,
+        onLlmCall,
+        mergedCharts,
+        answer.trim().slice(0, 6000)
+      );
+    } catch (visErr) {
+      const msg = visErr instanceof Error ? visErr.message : String(visErr);
+      agentLog("visual_planner_failed", { turnId, err: msg.slice(0, 300) });
+    }
     if (visualExtra.charts.length) {
       mergedCharts.push(...visualExtra.charts);
       if (ctx.mode === "analysis") {
@@ -617,15 +926,20 @@ export async function runAgentTurn(
       }
     }
 
-    let answer = delegateAnswer || "";
-    if (!answer && observations.length > 0) {
-      const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
-      answer = env.answer;
-      agentSuggestionHints = env.suggestionHints;
-      appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
+    if (!answer?.trim()) {
+      const fb = observationsFallbackAnswer();
+      if (fb) {
+        answer = fb;
+        preservedAnswer = fb;
+        agentLog("synthesis_empty_fallback", {
+          turnId,
+          observationsCount: observations.length,
+          toolCallsDone,
+        });
+      }
     }
 
-    if (!answer) {
+    if (!answer?.trim()) {
       trace.endedAt = Date.now();
       agentLog("turn.abort", {
         phase: "synthesis",
@@ -644,6 +958,7 @@ export async function runAgentTurn(
         operationResult,
         agentTrace: capAgentTrace(trace),
         agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+        lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       };
     }
 
@@ -692,6 +1007,7 @@ export async function runAgentTurn(
       break;
     }
 
+    preservedAnswer = answer;
     trace.endedAt = Date.now();
     agentLog("turn_done", {
       turnId,
@@ -710,6 +1026,7 @@ export async function runAgentTurn(
       operationResult,
       agentTrace: capAgentTrace(trace),
       agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+      lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -722,6 +1039,7 @@ export async function runAgentTurn(
         mode: ctx.mode,
         legacyFallback: false,
       });
+      materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
       const partial =
         delegateAnswer ||
         (observations.length > 0
@@ -734,6 +1052,7 @@ export async function runAgentTurn(
         table,
         operationResult,
         agentTrace: capAgentTrace(trace),
+        lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       };
     }
     trace.endedAt = Date.now();
@@ -743,13 +1062,21 @@ export async function runAgentTurn(
       mode: ctx.mode,
       legacyFallback: false,
     });
+    materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
+    const errFallback =
+      preservedAnswer.trim() ||
+      observationsFallbackAnswer() ||
+      "";
     return {
-      answer: "",
+      answer:
+        errFallback ||
+        `The analysis agent encountered an error (${msg.length > 200 ? `${msg.slice(0, 200)}…` : msg}). Please try again.`,
       charts: mergedCharts.length ? mergedCharts : undefined,
       insights: mergedInsights.length ? mergedInsights : undefined,
       table,
       operationResult,
       agentTrace: capAgentTrace(trace),
+      lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
     };
   }
 }

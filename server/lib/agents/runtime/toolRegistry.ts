@@ -33,6 +33,8 @@ export interface ToolResult {
     outputRowCount: number;
     appliedAggregation: boolean;
   };
+  /** Structured query after execute_query_plan (observation lints) */
+  queryPlanParsed?: import("../../../shared/queryTypes.js").ParsedQuery | null;
   /** Shown in chat workbench (e.g. parsed analytical query JSON). */
   workbenchArtifact?: AgentWorkbenchEntry;
 }

@@ -20,7 +20,14 @@ import {
   createStatisticalSummary,
   type StatisticalSummary,
 } from "../lib/statisticalSummary.js";
-import type { DataSummary } from "../shared/schema.js";
+import {
+  chartSpecSchema,
+  type ChartSpec,
+  type DataSummary,
+} from "../shared/schema.js";
+import { processChartData } from "../lib/chartGenerator.js";
+import { calculateSmartDomainsForChart } from "../lib/axisScaling.js";
+import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 
 function isTransientPythonSummaryError(e: unknown): boolean {
   if (e && typeof e === "object" && "code" in e) {
@@ -381,6 +388,13 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
         ...session,
         charts: chartsWithData,
         messages: enrichedMessages,
+        datasetProfile: session.datasetProfile || {
+          shortDescription: "",
+          dateColumns: [],
+          suggestedQuestions: [],
+        },
+        sessionAnalysisContext: session.sessionAnalysisContext || emptySessionAnalysisContext(),
+        permanentContext: typeof session.permanentContext === "string" ? session.permanentContext : "",
       };
 
       res.json({
@@ -793,6 +807,117 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     }
     
     res.status(500).json({ error: errorMessage, requestId });
+  }
+};
+
+/** Build chart data server-side for Chart Builder preview (matches chat chart pipeline). */
+export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    const username = requireUsername(req);
+    const session = await getChatBySessionIdForUser(sessionId, username);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    if (!session.dataSummary) {
+      return res.status(400).json({ error: "No dataset loaded for this session" });
+    }
+
+    const body = (req.body?.chart ?? req.body) as Partial<ChartSpec>;
+    if (!body.type || !body.x || !body.y) {
+      return res.status(400).json({ error: "chart.type, chart.x, and chart.y are required" });
+    }
+
+    const spec = chartSpecSchema.parse({
+      title: body.title || "Chart",
+      type: body.type,
+      x: body.x,
+      y: body.y,
+      z: body.z,
+      seriesColumn: body.seriesColumn,
+      barLayout: body.barLayout,
+      aggregate: body.aggregate ?? "sum",
+      xLabel: body.xLabel,
+      yLabel: body.yLabel,
+      zLabel: body.zLabel,
+      y2: body.y2,
+      y2Series: body.y2Series,
+      y2Label: body.y2Label,
+    });
+
+    let data = await loadLatestData(session);
+    if (!data?.length) {
+      return res.status(400).json({ error: "No rows available for this session" });
+    }
+    const MAX = 50000;
+    if (data.length > MAX) {
+      const step = Math.floor(data.length / MAX);
+      const sampled: Record<string, unknown>[] = [];
+      for (let i = 0; i < data.length && sampled.length < MAX; i += step) {
+        sampled.push(data[i]);
+      }
+      data = sampled as Record<string, any>[];
+    }
+
+    const processed = processChartData(
+      data as Record<string, any>[],
+      { ...spec },
+      session.dataSummary.dateColumns,
+      { chartQuestion: "" }
+    );
+    if (!processed.length) {
+      return res.status(400).json({ error: "No data points produced for this chart configuration" });
+    }
+
+    let extra: Partial<ChartSpec> = {};
+    if (spec.type === "heatmap") {
+      extra = {};
+    } else if (spec.seriesKeys?.length) {
+      const sk = spec.seriesKeys;
+      let maxSum = 0;
+      for (const row of processed) {
+        let s = 0;
+        for (const k of sk) {
+          const v = row[k];
+          const n = typeof v === "number" ? v : Number(v);
+          if (Number.isFinite(n)) s += n;
+        }
+        maxSum = Math.max(maxSum, s);
+      }
+      extra = { yDomain: [0, maxSum * 1.05] as [number, number] };
+    } else {
+      extra = calculateSmartDomainsForChart(
+        processed,
+        spec.x,
+        spec.y,
+        spec.y2 || undefined,
+        {
+          yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+          y2Options: spec.y2
+            ? { useIQR: true, paddingPercent: 5, includeOutliers: true }
+            : undefined,
+        }
+      );
+    }
+
+    const out: ChartSpec = {
+      ...spec,
+      ...extra,
+      data: processed,
+      xLabel: spec.xLabel || spec.x,
+      yLabel: spec.yLabel || spec.y,
+    };
+    return res.json({ chart: out });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    console.error("postChartPreviewEndpoint:", error);
+    const msg = error instanceof Error ? error.message : "Chart preview failed";
+    return res.status(400).json({ error: msg });
   }
 };
 

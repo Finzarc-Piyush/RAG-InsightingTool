@@ -9,7 +9,8 @@ import {
   updateSessionNameEndpoint,
   updateSessionContextEndpoint,
   deleteSessionEndpoint,
-  getDataSummaryEndpoint
+  getDataSummaryEndpoint,
+  postChartPreviewEndpoint
 } from "../controllers/sessionController.js";
 
 const router = Router();
@@ -34,6 +35,7 @@ router.get('/sessions/user/:username', getSessionsByUserEndpoint);
 
 // Get data summary for a session (must come before /sessions/:sessionId routes)
 router.get('/sessions/:sessionId/data-summary', getDataSummaryEndpoint);
+router.post('/sessions/:sessionId/chart-preview', postChartPreviewEndpoint);
 
 // Update session name by session ID
 router.patch('/sessions/:sessionId', updateSessionNameEndpoint);

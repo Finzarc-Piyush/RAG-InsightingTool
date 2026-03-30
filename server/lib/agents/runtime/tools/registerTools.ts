@@ -6,14 +6,26 @@ import { executeAnalyticalQuery } from "../../../analyticalQueryExecutor.js";
 import type { ParsedQuery } from "../../../shared/queryTypes.js";
 import { analyzeCorrelations } from "../../../correlationAnalyzer.js";
 import { processChartData } from "../../../chartGenerator.js";
-import { optimizeChartData } from "../../../chartDownsampling.js";
 import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/schema.js";
 import {
   executeQueryPlan,
   executeQueryPlanArgsSchema,
   questionImpliesSumAggregation,
+  remapQueryPlanGroupByToTemporalFacets,
+  validateCoarseDateAggregationOutput,
 } from "../../../queryPlanExecutor.js";
+import { shouldRejectWideWithoutAgg } from "../../../questionAggregationPolicy.js";
+import { findMatchingColumn } from "../../utils/columnMatcher.js";
 import type { DataSummary } from "../../../../shared/schema.js";
+import {
+  deriveDimensionBucketArgsSchema,
+  applyDeriveDimensionBucket,
+} from "../../../deriveDimensionBucket.js";
+import {
+  executeReadonlySqlOnFrame,
+  READONLY_SQL_MAX_LENGTH,
+  sanitizeReadonlyDatasetSql,
+} from "../../../agentReadonlySql.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -38,9 +50,11 @@ const correlationArgs = z
   .strict();
 const chartArgs = z
   .object({
-    type: z.enum(["line", "bar", "scatter", "pie", "area"]),
+    type: z.enum(["line", "bar", "scatter", "pie", "area", "heatmap"]),
     x: z.string(),
     y: z.string(),
+    z: z.string().optional(),
+    seriesColumn: z.string().optional(),
     y2: z.string().optional(),
     title: z.string().optional(),
     aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
@@ -61,17 +75,55 @@ const retrieveSemanticArgs = z
     query: z.string().min(1).max(2000),
   })
   .strict();
+const readonlySqlArgs = z
+  .object({
+    sql: z.string().min(1).max(READONLY_SQL_MAX_LENGTH),
+  })
+  .strict();
 
 function allowlistedColumns(ctx: ToolRunContext): Set<string> {
   return new Set(ctx.exec.summary.columns.map((c) => c.name));
 }
 
-function assertColumns(ctx: ToolRunContext, names: string[]): string | null {
+/** Schema headers plus keys on the current in-memory frame (e.g. aggregated query output). */
+function allowedColumnNames(ctx: ToolRunContext): Set<string> {
   const allow = allowlistedColumns(ctx);
+  const row0 = ctx.exec.data[0];
+  if (row0 && typeof row0 === "object") {
+    for (const k of Object.keys(row0)) {
+      allow.add(k);
+    }
+  }
+  return allow;
+}
+
+function assertColumns(ctx: ToolRunContext, names: string[]): string | null {
+  const allow = allowedColumnNames(ctx);
   for (const n of names) {
     if (!allow.has(n)) {
       return `Column not in schema: ${n}`;
     }
+  }
+  return null;
+}
+
+/** When the frame looks aggregated, x/y must resolve to keys on the current rows (e.g. Sales_sum). */
+function assertChartColumns(ctx: ToolRunContext, names: string[]): string | null {
+  const row0 = ctx.exec.data[0];
+  const keys =
+    row0 && typeof row0 === "object" ? Object.keys(row0 as object) : [];
+  const hasAggShape = keys.some((k) => /_(sum|mean|avg|count|min|max|median)$/i.test(k));
+
+  for (const n of names) {
+    if (hasAggShape) {
+      const m = findMatchingColumn(n, keys);
+      if (!m || !keys.includes(m)) {
+        return `Column not on current result rows: ${n}. Use keys from the last query output (e.g. Sales_sum). Available: ${keys.slice(0, 40).join(", ")}${keys.length > 40 ? "…" : ""}`;
+      }
+      continue;
+    }
+    const err = assertColumns(ctx, [n]);
+    if (err) return err;
   }
   return null;
 }
@@ -312,16 +364,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
         };
       }
 
-      const wideWithoutAgg =
-        !appliedAggregation &&
-        ((inputRowCount >= 50 && outputRowCount === inputRowCount) ||
-          (inputRowCount >= 500 &&
-            outputRowCount / inputRowCount >= 0.97));
-
-      if (wideWithoutAgg) {
+      if (
+        shouldRejectWideWithoutAgg({
+          question: q,
+          inputRowCount,
+          outputRowCount,
+          appliedAggregation,
+        })
+      ) {
         return {
           ok: false,
-          summary: `Analytical query returned ${outputRowCount} rows (nearly the full ${inputRowCount} rows) without aggregation. Replan: use run_analytical_query with a question_override that asks for the correct metric summarized by the right dimension (e.g. sum of sales by category), using exact column names from the schema.`,
+          summary: `Analytical query returned ${outputRowCount} rows (nearly the full ${inputRowCount} rows) without aggregation. Replan: add an aggregation over the requested metric with an explicit breakdown (e.g. "by <dimension>") using exact column names from the schema.`,
           analyticalMeta,
           memorySlots: {
             analytical_snippet: "wide_result_no_aggregation",
@@ -378,6 +431,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         summary: `${rs}\n${prev}`,
         numericPayload: formattedResults.slice(0, 4000),
         analyticalMeta,
+        queryPlanParsed: res.parsedQuery ?? null,
         table: {
           rows: resultRows,
           columns: outCols,
@@ -402,7 +456,14 @@ export function registerDefaultTools(registry: ToolRegistry) {
     executeQueryPlanArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx, args) => {
       const plan = (args as z.infer<typeof executeQueryPlanArgsSchema>).plan;
-      const exec = executeQueryPlan(ctx.exec.data, ctx.exec.summary, plan);
+      const keys = new Set(Object.keys(ctx.exec.data[0] ?? {}));
+      const effectivePlan = remapQueryPlanGroupByToTemporalFacets(
+        plan,
+        ctx.exec.summary,
+        keys,
+        ctx.exec.question
+      );
+      const exec = executeQueryPlan(ctx.exec.data, ctx.exec.summary, effectivePlan);
       if (!exec.ok) {
         return { ok: false, summary: exec.error };
       }
@@ -416,16 +477,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
         appliedAggregation,
       };
 
-      const wideWithoutAgg =
-        !appliedAggregation &&
-        ((inputRowCount >= 50 && outputRowCount === inputRowCount) ||
-          (inputRowCount >= 500 &&
-            outputRowCount / inputRowCount >= 0.97));
-
-      if (wideWithoutAgg) {
+      if (
+        shouldRejectWideWithoutAgg({
+          question: ctx.exec.question,
+          inputRowCount,
+          outputRowCount,
+          appliedAggregation,
+        })
+      ) {
         return {
           ok: false,
-          summary: `execute_query_plan returned ${outputRowCount} rows (nearly full ${inputRowCount}) without aggregation. Replan: add groupBy + aggregations (e.g. sum of sales by year).`,
+          summary: `execute_query_plan returned ${outputRowCount} rows (nearly full ${inputRowCount}) without aggregation. Replan: add groupBy + aggregations with an explicit breakdown (e.g. "by <dimension>") using exact column names from the schema.`,
           analyticalMeta,
           memorySlots: { analytical_snippet: "query_plan_wide_no_agg" },
         };
@@ -454,6 +516,26 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
       }
 
+      const coarseValidation = validateCoarseDateAggregationOutput(
+        parsed,
+        inputRowCount,
+        outputRowCount
+      );
+      if (coarseValidation) {
+        agentLog("tool_verifier_reject", {
+          tool: "execute_query_plan",
+          reason: "coarse_period_too_many_groups",
+          outputRowCount,
+        });
+        return {
+          ok: false,
+          summary: coarseValidation,
+          analyticalMeta,
+          queryPlanParsed: parsed,
+          memorySlots: { analytical_snippet: "coarse_period_row_count_mismatch" },
+        };
+      }
+
       const cols =
         resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
       const formattedResults = JSON.stringify(resultRows.slice(0, 200), null, 2);
@@ -475,6 +557,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}\nSample:\n${formattedResults.length > 3500 ? formattedResults.slice(0, 3500) + "…" : formattedResults}`,
         numericPayload: formattedResults.slice(0, 4000),
         analyticalMeta,
+        queryPlanParsed: parsed,
         table: { rows: resultRows, columns: cols, rowCount: outputRowCount },
         memorySlots: {
           analytical_snippet: formattedResults.replace(/\s+/g, " ").slice(0, 320),
@@ -484,9 +567,98 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Run a structured query plan (groupBy, aggregations, optional dimensionFilters/limit/sort). Prefer for precise SUM/COUNT/AVG by dimension when NL parsing is ambiguous. Args.plan uses exact schema column names.",
+        "Structured query plan: time series (trend) OR dimension breakdowns. For explicit time grain questions (year/month/quarter/etc.), groupBy the matching date bucket (prefer derived __tf_* facets when present) and set dateAggregationPeriod as needed, then use aggregations e.g. sum(Sales). For vague 'over time' without an explicit grain, you can omit groupBy/aggregations and instead sort by a date column (and use limit) to return an ordered time series without forcing yearly sums. For breakdowns: groupBy dimension(s) + aggregations. Exact schema column names required.",
       argsHelp:
-        '{"plan": {"groupBy"?: string[], "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dateAggregationPeriod"?: "day"|"month"|"monthOnly"|"quarter"|"year"|null, "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
+        'Time-series example: {"plan":{"groupBy":["Order Date"],"dateAggregationPeriod":"month","aggregations":[{"column":"Sales","operation":"sum"}]}}. Full shape: {"plan": {"groupBy"?: string[], "dateAggregationPeriod"?: "day"|"week"|"half_year"|"month"|"monthOnly"|"quarter"|"year"|null, "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
+    }
+  );
+
+  registry.register(
+    "derive_dimension_bucket",
+    deriveDimensionBucketArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
+    async (ctx, args) => {
+      if (ctx.exec.mode !== "analysis") {
+        return {
+          ok: false,
+          summary: "derive_dimension_bucket is only available in analysis mode.",
+        };
+      }
+      const parsed = deriveDimensionBucketArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          summary: `Invalid args for derive_dimension_bucket: ${parsed.error.message}`,
+        };
+      }
+      const allow = allowlistedColumns(ctx);
+      if (!allow.has(parsed.data.sourceColumn)) {
+        return {
+          ok: false,
+          summary: `Column not in schema: ${parsed.data.sourceColumn}`,
+        };
+      }
+      const out = applyDeriveDimensionBucket(ctx.exec.data, ctx.exec.summary, parsed.data);
+      if (!out.ok) {
+        return { ok: false, summary: out.error };
+      }
+      const cols = out.rows.length > 0 ? Object.keys(out.rows[0]!) : [];
+      const sample = JSON.stringify(out.rows.slice(0, 15), null, 2);
+      return {
+        ok: true,
+        summary: `derive_dimension_bucket: added "${parsed.data.newColumnName}" from "${parsed.data.sourceColumn}". Rows: ${out.rows.length}. Columns: ${cols.join(", ")}\nSample:\n${sample.slice(0, 3500)}`,
+        table: {
+          rows: out.rows,
+          columns: cols,
+          rowCount: out.rows.length,
+        },
+        memorySlots: {
+          derived_column: parsed.data.newColumnName,
+        },
+      };
+    },
+    {
+      description:
+        "Add a string bucket column by mapping source dimension values into labels (custom groups). Use before execute_query_plan when the user merges categories/regions. Chain with dependsOn if needed.",
+      argsHelp:
+        '{"sourceColumn": string, "newColumnName": string, "buckets": [{"label": string, "values": string[]}], "matchMode"?: "exact"|"case_insensitive", "defaultLabel"?: string}',
+    }
+  );
+
+  registry.register(
+    "run_readonly_sql",
+    readonlySqlArgs,
+    async (ctx, args) => {
+      if (ctx.exec.mode !== "analysis") {
+        return {
+          ok: false,
+          summary: "run_readonly_sql is only available in analysis mode.",
+        };
+      }
+      const sql = (args as z.infer<typeof readonlySqlArgs>).sql;
+      const pre = sanitizeReadonlyDatasetSql(sql);
+      if (!pre.ok) {
+        return { ok: false, summary: pre.error };
+      }
+      const exec = await executeReadonlySqlOnFrame(ctx.exec.data, sql);
+      if (!exec.ok) {
+        return { ok: false, summary: exec.error };
+      }
+      const formatted = JSON.stringify(exec.rows.slice(0, 100), null, 2);
+      return {
+        ok: true,
+        summary: `run_readonly_sql: ${exec.rows.length} rows, columns: ${exec.columns.join(", ")}. Sample:\n${formatted.slice(0, 4000)}`,
+        table: {
+          rows: exec.rows,
+          columns: exec.columns,
+          rowCount: exec.rows.length,
+        },
+        memorySlots: { readonly_sql: "1" },
+      };
+    },
+    {
+      description:
+        "Advanced: single SELECT only against ephemeral table \"dataset\" (current frame, row-capped). No DDL/DML. Prefer execute_query_plan when possible.",
+      argsHelp: '{"sql": string} — e.g. SELECT bucket, SUM(CAST("Sales" AS DOUBLE)) FROM dataset GROUP BY 1',
     }
   );
 
@@ -533,7 +705,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     chartArgs,
     async (ctx, args) => {
       const names = [args.x, args.y, ...(args.y2 ? [args.y2] : [])];
-      const colErr = assertColumns(ctx, names);
+      const colErr = assertChartColumns(ctx, names);
       if (colErr) return { ok: false, summary: colErr };
       const spec = chartSpecSchema.parse({
         type: args.type,
@@ -546,10 +718,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
       let processed = processChartData(
         ctx.exec.data,
         spec,
-        ctx.exec.summary?.dateColumns
+        ctx.exec.summary?.dateColumns,
+        { chartQuestion: ctx.exec.question }
       );
-      processed = optimizeChartData(processed, spec);
-      const full = { ...spec, data: processed };
+      const useAnalyticalOnly =
+        Boolean(ctx.exec.lastAnalyticalTable?.rows?.length) &&
+        ctx.exec.data === ctx.exec.lastAnalyticalTable!.rows;
+      const full = {
+        ...spec,
+        data: processed,
+        ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
+      };
       return {
         ok: true,
         summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${args.y2 ? `, y2=${args.y2}` : ""}, aggregate=${spec.aggregate ?? "none"}), ${processed.length} points.`,
@@ -559,9 +738,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). x and y are exact schema column names. Set aggregate sum|mean|count when plotting grouped metrics.",
+        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). aggregate none only when one row per x already.",
       argsHelp:
-        '{"type": "line"|"bar"|"scatter"|"pie"|"area", "x": string, "y": string, "y2"?: string, "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none"}',
+        '{"type": "line"|"bar"|"scatter"|"pie"|"area", "x": string, "y": string, "y2"?: string, "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none"} — after execute_query_plan sum(Sales), use y: Sales_sum (or alias); aggregate none when pre-bucketed.',
     }
   );
 

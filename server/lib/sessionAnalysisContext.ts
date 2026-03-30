@@ -85,9 +85,15 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
   userText: string;
 }): Promise<SessionAnalysisContext> {
   const prev = params.previous ?? emptySessionAnalysisContext();
+  const nextUserText = params.userText.trim();
+  if (!nextUserText) return prev;
+  const existingNotes = prev.userIntent?.verbatimNotes?.trim();
+  if (existingNotes && existingNotes.includes(nextUserText)) {
+    return prev;
+  }
   const user = JSON.stringify({
     PREVIOUS_JSON: prev,
-    USER_NOTES: params.userText.slice(0, 8000),
+    USER_NOTES: nextUserText.slice(0, 8000),
   });
   const out = await completeJson(MERGE_USER_SYSTEM, user, sessionAnalysisContextSchema, {
     turnId: "session_ctx_user",

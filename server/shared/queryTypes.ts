@@ -65,7 +65,15 @@ export interface ParsedQuery {
   variables?: string[];
   secondaryVariables?: string[];
   groupBy?: string[];
-  dateAggregationPeriod?: 'day' | 'month' | 'monthOnly' | 'quarter' | 'year' | null;
+  dateAggregationPeriod?:
+    | 'day'
+    | 'week'
+    | 'half_year'
+    | 'month'
+    | 'monthOnly'
+    | 'quarter'
+    | 'year'
+    | null;
   timeFilters?: TimeFilter[];
   valueFilters?: ValueFilter[];
   /** Filter string dimensions (e.g. Category in ["Technology"]). Do not use valueFilters for that. */

@@ -4,10 +4,10 @@ import { Sparkles } from 'lucide-react';
 import type { EnrichmentStep } from '@/lib/api/uploadStatus';
 
 const ROTATING_GENERIC = [
-  'Synthesizing a mental model of your columns…',
-  'Finding the questions worth asking first…',
+  'Improving understanding of your columns and relationships…',
+  'Preparing meaningful analysis questions for you to start with…',
   'Mapping types, grains, and what the numbers might mean…',
-  'Composing suggested prompts tailored to your fields…',
+  'Composing suggested analysis questions tailored to your fields…',
   'Almost there — polish beats haste.',
 ];
 
@@ -23,9 +23,9 @@ const ROTATING_BY_STEP: Record<EnrichmentStep, string[]> = {
     'Normalizing calendar values for reliable trends…',
   ],
   building_context: [
-    'Seeding session context so answers stay grounded…',
+    'Seeding durable context so future answers stay grounded…',
     'Teaching the assistant your domain, one structured pass…',
-    'Weaving profile and summary into durable context…',
+    'Weaving profile, summary, and question hints into durable context…',
   ],
   persisting: [
     'Writing insights to your session…',
@@ -167,7 +167,7 @@ export function DatasetEnrichmentLoader({
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <h3 className="font-serif text-base font-semibold tracking-tight text-slate-900 sm:text-lg">
-                  Enriching our understanding of your data
+                  Enriching your data understanding
                 </h3>
                 {enrichmentPhase === 'waiting' && (
                   <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Queued</span>
@@ -190,7 +190,7 @@ export function DatasetEnrichmentLoader({
               </div>
 
               <p className="text-xs leading-relaxed text-slate-500">
-                You can type below; we will answer after enrichment. Suggested questions will appear when ready.
+                We are improving dataset understanding and preparing suggested analysis questions. You can type below; we will answer after enrichment.
               </p>
             </div>
 

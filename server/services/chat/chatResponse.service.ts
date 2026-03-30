@@ -2,10 +2,16 @@
  * Chat Response Service
  * Handles response validation, enrichment, and formatting
  */
-import { chatResponseSchema, ThinkingStep } from "../../shared/schema.js";
-import { processChartData } from "../../lib/chartGenerator.js";
+import { chatResponseSchema, ThinkingStep, SessionAnalysisContext } from "../../shared/schema.js";
+import { resolveChartDataRowsForEnrichment } from "../../lib/chartEnrichmentRows.js";
 import { generateChartInsights } from "../../lib/insightGenerator.js";
 import { ChatDocument } from "../../models/chat.model.js";
+
+export type ChartEnrichmentContext = {
+  userQuestion?: string;
+  sessionAnalysisContext?: SessionAnalysisContext;
+  permanentContext?: string;
+};
 
 /**
  * Enrich charts with data and insights
@@ -14,7 +20,9 @@ import { ChatDocument } from "../../models/chat.model.js";
 export async function enrichCharts(
   charts: any[],
   chatDocument: ChatDocument,
-  chatLevelInsights?: any[]
+  chatLevelInsights?: any[],
+  analyticalFallbackRows?: Record<string, unknown>[],
+  enrichmentContext?: ChartEnrichmentContext
 ): Promise<any[]> {
   if (!charts || !Array.isArray(charts)) {
     return [];
@@ -29,9 +37,12 @@ export async function enrichCharts(
     
     for (const c of charts) {
       try {
-        let dataForChart = c.data && Array.isArray(c.data)
-          ? c.data
-          : processChartData(chatDocument.rawData, c, chatDocument.dataSummary?.dateColumns);
+        let dataForChart = resolveChartDataRowsForEnrichment(
+          c,
+          chatDocument.rawData,
+          chatDocument.dataSummary?.dateColumns,
+          analyticalFallbackRows
+        );
 
         // Limit data size for memory efficiency.
         // For general charts, cap at MAX_CHART_DATA_POINTS.
@@ -56,7 +67,12 @@ export async function enrichCharts(
         }
         
         const insights = !('keyInsight' in c)
-          ? await generateChartInsights(c, dataForChart, chatDocument.dataSummary, chatLevelInsights)
+          ? await generateChartInsights(c, dataForChart, chatDocument.dataSummary, chatLevelInsights, {
+              userQuestion: enrichmentContext?.userQuestion,
+              sessionAnalysisContext:
+                enrichmentContext?.sessionAnalysisContext ?? chatDocument.sessionAnalysisContext,
+              permanentContext: enrichmentContext?.permanentContext,
+            })
           : null;
         
         enrichedCharts.push({

@@ -5,6 +5,7 @@
 import { updateProcessedDataBlob } from '../blobStorage.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { createDataSummary, canonicalizeDateColumnValues } from '../fileParser.js';
+import { applyTemporalFacetColumns } from '../temporalFacetColumns.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
 
 export interface SaveDataResult {
@@ -94,6 +95,7 @@ export async function saveModifiedData(
   // Update data summary (canonicalize dates then refresh typing / grains)
   const preSummary = createDataSummary(modifiedData);
   canonicalizeDateColumnValues(modifiedData, preSummary.dateColumns);
+  applyTemporalFacetColumns(modifiedData, preSummary.dateColumns);
   doc.dataSummary = createDataSummary(modifiedData);
   
   // Clear pre-computed data summary statistics since data has changed

@@ -1,11 +1,14 @@
 /**
  * Time bucketing / resampling helpers used when charts request explicit aggregation.
- * `optimizeChartData` is an identity function — charts are not decimated server-side.
- * Date handling uses only real `Date` cell values; date columns are those in `declaredDateColumns`.
+ * `optimizeChartData` applies `downsampleChartData` (time bucketing + point caps).
  */
 
 import { ChartSpec } from '../shared/schema.js';
-import { normalizeDateToPeriod, DatePeriod } from './dateUtils.js';
+import {
+  normalizeDateToPeriod,
+  DatePeriod,
+  parseFlexibleDate,
+} from './dateUtils.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 
 const MAX_CHART_POINTS = 5000;
@@ -17,8 +20,14 @@ function toNumber(value: any): number {
   return Number(cleaned);
 }
 
-function cellAsDate(value: unknown): Date | null {
-  return value instanceof Date && !isNaN(value.getTime()) ? value : null;
+/** Date instance or parseable date string (ISO / common numeric formats). */
+export function chartCellAsDateLoose(value: unknown): Date | null {
+  if (value instanceof Date && !isNaN(value.getTime())) return value;
+  if (typeof value === 'string') {
+    const d = parseFlexibleDate(value);
+    return d && !isNaN(d.getTime()) ? d : null;
+  }
+  return null;
 }
 
 function xIsDeclaredDate(
@@ -43,7 +52,7 @@ export function resampleTimeSeries(
   const grouped = new Map<string, { values: number[]; date: Date | null }>();
 
   for (const row of data) {
-    const date = cellAsDate(row[xColumn]);
+    const date = chartCellAsDateLoose(row[xColumn]);
     const yValue = toNumber(row[yColumn]);
 
     if (isNaN(yValue)) continue;
@@ -90,18 +99,25 @@ export function resampleTimeSeries(
   }
 
   return result.sort((a, b) => {
-    const dateA = cellAsDate(a[xColumn]);
-    const dateB = cellAsDate(b[xColumn]);
+    const dateA = chartCellAsDateLoose(a[xColumn]);
+    const dateB = chartCellAsDateLoose(b[xColumn]);
     if (dateA && dateB) return dateA.getTime() - dateB.getTime();
     return String(a[xColumn]).localeCompare(String(b[xColumn]));
   });
+}
+
+export function inferOptimalPeriodForChartColumn(
+  data: Record<string, any>[],
+  xColumn: string
+): DatePeriod | null {
+  return determineOptimalPeriod(data, xColumn);
 }
 
 function determineOptimalPeriod(data: Record<string, any>[], xColumn: string): DatePeriod | null {
   if (data.length < 2) return null;
 
   const dates = data
-    .map((row) => cellAsDate(row[xColumn]))
+    .map((row) => chartCellAsDateLoose(row[xColumn]))
     .filter((d): d is Date => d !== null);
 
   if (dates.length < 2) return null;
@@ -233,9 +249,10 @@ export function downsampleChartData(
   data: Record<string, any>[],
   chartSpec: ChartSpec,
   maxPoints: number = MAX_CHART_POINTS,
-  declaredDateColumns?: string[]
+  declaredDateColumns?: string[],
+  datePeriodHint?: DatePeriod | null
 ): Record<string, any>[] {
-  if (data.length <= maxPoints) return data;
+  if (data.length === 0) return data;
 
   const { type, x, y, aggregate = 'none' } = chartSpec;
   const availableColumns = Object.keys(data[0] || {});
@@ -244,13 +261,40 @@ export function downsampleChartData(
 
   const isDateCol = xIsDeclaredDate(x, availableColumns, declaredDateColumns);
   const hasDates =
-    isDateCol && data.some((row) => cellAsDate(row[matchedX]) !== null);
+    isDateCol &&
+    data.some((row) => chartCellAsDateLoose(row[matchedX]) !== null);
 
-  if ((type === 'line' || type === 'area') && hasDates && aggregate === 'none') {
-    const period = determineOptimalPeriod(data, matchedX);
+  let working = data;
+
+  if (
+    (type === 'line' || type === 'area') &&
+    hasDates &&
+    aggregate === 'none' &&
+    working.length > 1
+  ) {
+    const period =
+      datePeriodHint ?? determineOptimalPeriod(working, matchedX);
     if (period) {
-      console.log(`📊 Time series detected: Resampling to ${period} periods (${data.length} → ~${Math.ceil(data.length / (period === 'day' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365))} points)`);
-      const resampled = resampleTimeSeries(data, matchedX, matchedY, period, 'mean');
+      console.log(
+        `📊 Time series: bucketing to ${period} (rows=${working.length})`
+      );
+      working = resampleTimeSeries(working, matchedX, matchedY, period, 'sum');
+    }
+  }
+
+  if (working.length <= maxPoints) return working;
+
+  const { aggregate: agg = 'none' } = chartSpec;
+
+  const hasDatesAfter =
+    isDateCol &&
+    working.some((row) => chartCellAsDateLoose(row[matchedX]) !== null);
+
+  if ((type === 'line' || type === 'area') && hasDatesAfter && agg === 'none') {
+    const period = datePeriodHint ?? determineOptimalPeriod(working, matchedX);
+    if (period) {
+      console.log(`📊 Time series detected: Resampling to ${period} periods (${working.length} → ~${Math.ceil(working.length / (period === 'day' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365))} points)`);
+      const resampled = resampleTimeSeries(working, matchedX, matchedY, period, 'sum');
       if (resampled.length > maxPoints) {
         return downsampleLTTB(resampled, matchedX, matchedY, maxPoints);
       }
@@ -258,32 +302,40 @@ export function downsampleChartData(
     }
   }
 
-  if (aggregate !== 'none') {
-    console.log(`📊 Using aggregation-based downsampling (${data.length} → ${maxPoints} points)`);
-    return aggregateDownsample(data, matchedX, matchedY, maxPoints, aggregate as 'sum' | 'mean' | 'count');
+  if (agg !== 'none') {
+    console.log(`📊 Using aggregation-based downsampling (${working.length} → ${maxPoints} points)`);
+    return aggregateDownsample(working, matchedX, matchedY, maxPoints, agg as 'sum' | 'mean' | 'count');
   }
 
-  if ((type === 'line' || type === 'area') && !hasDates) {
-    const firstX = toNumber(data[0]?.[matchedX]);
+  if ((type === 'line' || type === 'area') && !hasDatesAfter) {
+    const firstX = toNumber(working[0]?.[matchedX]);
     if (!isNaN(firstX)) {
-      console.log(`📊 Using LTTB downsampling for line chart (${data.length} → ${maxPoints} points)`);
-      return downsampleLTTB(data, matchedX, matchedY, maxPoints);
+      console.log(`📊 Using LTTB downsampling for line chart (${working.length} → ${maxPoints} points)`);
+      return downsampleLTTB(working, matchedX, matchedY, maxPoints);
     }
   }
 
   if (type === 'scatter') {
-    console.log(`📊 Using stratified sampling for scatter plot (${data.length} → ${maxPoints} points)`);
-    return aggregateDownsample(data, matchedX, matchedY, maxPoints, 'mean');
+    console.log(`📊 Using stratified sampling for scatter plot (${working.length} → ${maxPoints} points)`);
+    return aggregateDownsample(working, matchedX, matchedY, maxPoints, 'mean');
   }
 
-  console.log(`📊 Using simple decimation (${data.length} → ${maxPoints} points)`);
-  const step = Math.floor(data.length / maxPoints);
-  return data.filter((_, idx) => idx % step === 0).slice(0, maxPoints);
+  console.log(`📊 Using simple decimation (${working.length} → ${maxPoints} points)`);
+  const step = Math.floor(working.length / maxPoints);
+  return working.filter((_, idx) => idx % step === 0).slice(0, maxPoints);
 }
 
 export function optimizeChartData(
   data: Record<string, any>[],
-  _chartSpec: ChartSpec
+  chartSpec: ChartSpec,
+  declaredDateColumns?: string[],
+  datePeriodHint?: DatePeriod | null
 ): Record<string, any>[] {
-  return data;
+  return downsampleChartData(
+    data,
+    chartSpec,
+    MAX_CHART_POINTS,
+    declaredDateColumns,
+    datePeriodHint
+  );
 }

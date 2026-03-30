@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { BarChart3, Calendar, Trash2, Eye, Share2, Users, Edit, EyeOff } from 'lucide-react';
+import { BarChart3, Calendar, Trash2, Eye, Share2, Users, Edit, EyeOff, Lightbulb } from 'lucide-react';
 import { DashboardData } from '../modules/useDashboardState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShareDashboardDialog } from './ShareDashboardDialog';
@@ -85,8 +85,9 @@ export function DashboardList({
           Create your first dashboard by adding charts from your data analysis. 
           Click the plus button on any chart to get started.
         </p>
-        <div className="text-sm text-muted-foreground">
-          💡 Tip: Upload a file and analyze your data to create charts that can be saved to dashboards
+        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Lightbulb className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+          <span>Upload and analyze data first, then add charts to a dashboard from the chat.</span>
         </div>
       </div>
     );

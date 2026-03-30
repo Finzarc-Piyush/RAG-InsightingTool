@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import type { TemporalDisplayGrain } from '@/shared/schema';
+import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
+import { suggestedFollowUpsFromSession } from '@/lib/initialAnalysisMessage';
 import {
   DATASET_ENRICHMENT_LOADING_CONTENT,
   DATASET_PREVIEW_LOADING_CONTENT,
@@ -18,9 +19,11 @@ interface UseSessionLoaderProps {
   setNumericColumns: (columns: string[]) => void;
   setDateColumns: (columns: string[]) => void;
   setTemporalDisplayGrainsByColumn: (grains: Record<string, TemporalDisplayGrain>) => void;
+  setTemporalFacetColumns: (cols: TemporalFacetColumnMeta[]) => void;
   setTotalRows: (rows: number) => void;
   setTotalColumns: (columns: number) => void;
   setMessages: (messages: any[] | ((prev: any[]) => any[])) => void;
+  setSuggestions?: (suggestions: string[]) => void;
   setCollaborators?: (collaborators: string[]) => void;
 }
 
@@ -39,9 +42,11 @@ export const useSessionLoader = ({
   setNumericColumns,
   setDateColumns,
   setTemporalDisplayGrainsByColumn,
+  setTemporalFacetColumns,
   setTotalRows,
   setTotalColumns,
   setMessages,
+  setSuggestions,
   setCollaborators,
 }: UseSessionLoaderProps) => {
   useEffect(() => {
@@ -62,6 +67,13 @@ export const useSessionLoader = ({
     // Set initial charts and insights for the first assistant message context
     setInitialCharts(session.charts || []);
     setInitialInsights(session.insights || []);
+    const persistedFollowUps = suggestedFollowUpsFromSession({
+      sessionAnalysisContext: session.sessionAnalysisContext,
+      datasetProfile: session.datasetProfile,
+    });
+    if (setSuggestions) {
+      setSuggestions(persistedFollowUps ?? []);
+    }
 
     // Set data summary information
     if (session.dataSummary) {
@@ -70,6 +82,7 @@ export const useSessionLoader = ({
       setNumericColumns(session.dataSummary.numericColumns || []);
       setDateColumns(session.dataSummary.dateColumns || []);
       setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(session.dataSummary.columns));
+      setTemporalFacetColumns(session.dataSummary.temporalFacetColumns ?? []);
       setTotalRows(session.dataSummary.rowCount || 0);
       setTotalColumns(session.dataSummary.columnCount || 0);
     }
@@ -122,9 +135,11 @@ export const useSessionLoader = ({
     setNumericColumns,
     setDateColumns,
     setTemporalDisplayGrainsByColumn,
+    setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
     setMessages,
+    setSuggestions,
     setCollaborators,
   ]);
 };

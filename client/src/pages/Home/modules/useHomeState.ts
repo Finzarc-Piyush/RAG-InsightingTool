@@ -1,5 +1,10 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Message, UploadResponse, TemporalDisplayGrain } from '@/shared/schema';
+import { useState, useCallback } from 'react';
+import {
+  Message,
+  UploadResponse,
+  TemporalDisplayGrain,
+  type TemporalFacetColumnMeta,
+} from '@/shared/schema';
 
 export interface HomeState {
   sessionId: string | null;
@@ -12,9 +17,9 @@ export interface HomeState {
   numericColumns: string[];
   dateColumns: string[];
   temporalDisplayGrainsByColumn: Record<string, TemporalDisplayGrain>;
+  temporalFacetColumns: TemporalFacetColumnMeta[];
   totalRows: number;
   totalColumns: number;
-  mode: 'general' | 'analysis' | 'dataOps' | 'modeling';
 }
 
 export const useHomeState = () => {
@@ -30,31 +35,9 @@ export const useHomeState = () => {
   const [temporalDisplayGrainsByColumn, setTemporalDisplayGrainsByColumn] = useState<
     Record<string, TemporalDisplayGrain>
   >({});
+  const [temporalFacetColumns, setTemporalFacetColumns] = useState<TemporalFacetColumnMeta[]>([]);
   const [totalRows, setTotalRows] = useState<number>(0);
   const [totalColumns, setTotalColumns] = useState<number>(0);
-  const [mode, setMode] = useState<'general' | 'analysis' | 'dataOps' | 'modeling'>('general');
-
-  // Load mode from localStorage when sessionId changes
-  useEffect(() => {
-    if (sessionId) {
-      const stored = localStorage.getItem(`mode_${sessionId}`);
-      if (stored && (stored === 'general' || stored === 'analysis' || stored === 'dataOps' || stored === 'modeling')) {
-        setMode(stored as 'general' | 'analysis' | 'dataOps' | 'modeling');
-      } else {
-        // Default to 'general' if no stored mode or invalid value
-        setMode('general');
-      }
-    } else {
-      setMode('general');
-    }
-  }, [sessionId]);
-
-  // Save mode to localStorage when it changes
-  useEffect(() => {
-    if (sessionId) {
-      localStorage.setItem(`mode_${sessionId}`, mode);
-    }
-  }, [mode, sessionId]);
 
   const resetState = useCallback(() => {
     setSessionId(null);
@@ -67,13 +50,12 @@ export const useHomeState = () => {
     setNumericColumns([]);
     setDateColumns([]);
     setTemporalDisplayGrainsByColumn({});
+    setTemporalFacetColumns([]);
     setTotalRows(0);
     setTotalColumns(0);
-    setMode('general');
   }, []);
 
   return {
-    // State values
     sessionId,
     fileName,
     messages,
@@ -84,11 +66,10 @@ export const useHomeState = () => {
     numericColumns,
     dateColumns,
     temporalDisplayGrainsByColumn,
+    temporalFacetColumns,
     totalRows,
     totalColumns,
-    mode,
-    
-    // State setters
+
     setSessionId,
     setFileName,
     setMessages,
@@ -99,11 +80,10 @@ export const useHomeState = () => {
     setNumericColumns,
     setDateColumns,
     setTemporalDisplayGrainsByColumn,
+    setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
-    setMode,
-    
-    // Helper functions
+
     resetState,
   };
 };

@@ -50,11 +50,11 @@ export function ColumnSidebar({
     return (
       <div
         className={cn(
-          'flex h-full items-center justify-center bg-white/70 border-l border-gray-200 shadow-sm',
+          'flex h-full items-center justify-center bg-card/80 border-l border-border shadow-sm',
           className
         )}
       >
-        <span className="text-[10px] font-medium tracking-[0.18em] text-gray-500 [writing-mode:vertical-rl] rotate-180">
+        <span className="text-[10px] font-medium tracking-[0.18em] text-muted-foreground [writing-mode:vertical-rl] rotate-180">
           COLUMNS
         </span>
       </div>
@@ -68,7 +68,7 @@ export function ColumnSidebar({
     if (dateColumns.includes(column)) {
       return <Calendar className="w-3.5 h-3.5 text-green-500" />;
     }
-    return <Type className="w-3.5 h-3.5 text-gray-500" />;
+    return <Type className="w-3.5 h-3.5 text-muted-foreground" />;
   };
 
   const handleColumnClick = (column: string) => {
@@ -80,14 +80,14 @@ export function ColumnSidebar({
   return (
     <div
       className={cn(
-        'flex flex-col h-full bg-white border-l border-gray-200 shadow-sm',
+        'flex flex-col h-full bg-card border-l border-border shadow-sm',
         className
       )}
     >
       {/* Header */}
-      <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white">
+      <div className="p-4 border-b border-border bg-muted/30">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-900">Columns</h2>
+          <h2 className="text-sm font-semibold text-foreground">Columns</h2>
           <Badge variant="secondary" className="text-xs">
             {columns.length}
           </Badge>
@@ -95,18 +95,18 @@ export function ColumnSidebar({
         
         {/* Search Input */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
           <Input
             type="text"
             placeholder="Search columns..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-8 h-9 text-sm border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary"
+            className="pl-9 pr-8 h-9 text-sm border-border focus:border-primary focus:ring-1 focus:ring-primary"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -118,11 +118,11 @@ export function ColumnSidebar({
       <ScrollArea className="flex-1">
         <div className="p-2">
           {filteredColumns.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <Search className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+            <div className="text-center py-8 text-muted-foreground">
+              <Search className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
               <p className="text-sm">No columns found</p>
               {searchQuery && (
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-muted-foreground/80 mt-1">
                   Try a different search term
                 </p>
               )}
@@ -134,7 +134,7 @@ export function ColumnSidebar({
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2 px-2">
                     <Hash className="w-3.5 h-3.5 text-blue-500" />
-                    <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">
                       Numeric ({categorizedColumns.numeric.length})
                     </h3>
                   </div>
@@ -143,10 +143,10 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-blue-50 hover:text-blue-700 transition-colors group"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-primary/10 hover:text-primary transition-colors group"
                       >
                         {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-blue-700">
+                        <span className="flex-1 truncate text-foreground group-hover:text-primary">
                           {column}
                         </span>
                       </button>
@@ -160,7 +160,7 @@ export function ColumnSidebar({
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2 px-2">
                     <Calendar className="w-3.5 h-3.5 text-green-500" />
-                    <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">
                       Date ({categorizedColumns.date.length})
                     </h3>
                   </div>
@@ -169,10 +169,10 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-green-50 hover:text-green-700 transition-colors group"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-primary/10 hover:text-primary transition-colors group"
                       >
                         {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-green-700">
+                        <span className="flex-1 truncate text-foreground group-hover:text-primary">
                           {column}
                         </span>
                       </button>
@@ -185,8 +185,8 @@ export function ColumnSidebar({
               {categorizedColumns.other.length > 0 && (
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2 px-2">
-                    <Type className="w-3.5 h-3.5 text-gray-500" />
-                    <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                    <Type className="w-3.5 h-3.5 text-muted-foreground" />
+                    <h3 className="text-xs font-semibold text-foreground uppercase tracking-wide">
                       Other ({categorizedColumns.other.length})
                     </h3>
                   </div>
@@ -195,10 +195,10 @@ export function ColumnSidebar({
                       <button
                         key={column}
                         onClick={() => handleColumnClick(column)}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-gray-50 hover:text-gray-900 transition-colors group"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left hover:bg-muted/50 hover:text-foreground transition-colors group"
                       >
                         {getColumnIcon(column)}
-                        <span className="flex-1 truncate text-gray-700 group-hover:text-gray-900">
+                        <span className="flex-1 truncate text-foreground group-hover:text-foreground">
                           {column}
                         </span>
                       </button>
@@ -213,8 +213,8 @@ export function ColumnSidebar({
 
       {/* Footer Info */}
       {columns.length > 0 && (
-        <div className="p-3 border-t border-gray-200 bg-gray-50">
-          <p className="text-xs text-gray-500 text-center">
+        <div className="p-3 border-t border-border bg-muted/30">
+          <p className="text-xs text-muted-foreground text-center">
             {filteredColumns.length === columns.length
               ? `Showing all ${columns.length} columns`
               : `Showing ${filteredColumns.length} of ${columns.length} columns`}

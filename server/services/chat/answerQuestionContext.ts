@@ -1,6 +1,10 @@
 /**
  * Shared preparation for answerQuestion: column-aware loading, DuckDB sample path,
  * and permanentContext — used by both streaming and non-streaming chat.
+ *
+ * **Enriched working dataset:** Agent analysis must be seeded from the same persisted
+ * table the session summary describes (see `loadLatestData` → `currentDataBlob` priority).
+ * Avoid answering from a raw slice while `dataSummary.dateColumns` reflects enriched/Cleaned_* columns.
  */
 import type { Message } from "../../shared/schema.js";
 import type { ChatDocument } from "../../models/chat.model.js";

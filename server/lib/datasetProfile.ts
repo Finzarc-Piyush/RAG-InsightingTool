@@ -13,7 +13,8 @@ export const emptyDatasetProfile = (): DatasetProfile => ({
   suggestedQuestions: [],
 });
 
-const MAX_SAMPLE_ROWS = 100;
+/** Smaller sample = faster profile LLM; 60 rows usually enough for header/date inference */
+const MAX_SAMPLE_ROWS = 60;
 const MAX_CELL_CHARS = 200;
 
 function buildLlmPayload(data: Record<string, any>[]) {

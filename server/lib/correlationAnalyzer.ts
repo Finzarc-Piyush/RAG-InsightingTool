@@ -1,6 +1,7 @@
 import { ChartSpec, Insight, DataSummary } from '../shared/schema.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
-import { openai, MODEL } from './openai.js';
+import { openai } from './openai.js';
+import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { generateStreamingCorrelationChart } from './streamingCorrelationAnalyzer.js';
 
@@ -455,53 +456,21 @@ VALUES (variable: r, nPairs):
 ${correlations.map((c) => `- ${c.variable}: ${c.correlation.toFixed(3)}, n=${c.nPairs ?? 'NA'}`).join('\n')}
 ${quantifiedStats}
 
-CRITICAL CONTEXT:
-- ${targetVariable} is the TARGET VARIABLE we want to IMPROVE (Y-axis)
-- The listed variables are FACTOR VARIABLES we can CHANGE (X-axis)
-- Suggestions MUST explain: "How to change [FACTOR] to improve [TARGET]"
+CONTEXT:
+- ${targetVariable} is the outcome (Y). Listed variables are factors (X).
+- For each factor, explain what the sign and strength of r suggest in plain language, tie in numbers from QUANTIFIED STATISTICS when present, and give a practical “what to try next” or “what to validate” that respects that correlation ≠ causation.
+- Vary prose structure across insights; avoid repeating the same bullet template every time.
 
-Write exactly ${insightCount} insights (one for each variable listed above). Each must include:
-1. **Bold headline** with the key finding
-2. Exact r and nPairs values
-3. Interpretation of the relationship
-4. **Actionable suggestions** formatted as separate bullet points:
-   - First bullet: **Current suggestion:** [explain the relationship and how it affects the target variable]
-   - Second bullet: **Quantified Action:** To improve ${targetVariable} to [target value], adjust [factor variable] from current average ([current]) to optimal range ([optimal range]) or target value ([target value])
-   - Use specific numbers from the quantified statistics above (optimal ranges, percentiles, averages)
-   - NEVER use percentile labels like "P75", "P90", "P25", "P75 level", "P90 level", "P75 value", "P90 value" - ONLY use the numeric values themselves
-   - Example format:
-     * **Current suggestion:** [explain relationship]
-     * **Quantified Action:** To improve ${targetVariable} to [target value], adjust [factor] from current average ([current]) to optimal range ([optimal range]) or target value ([target value])
-5. End with: "Reminder: Correlation does not imply causation."
+Write exactly ${insightCount} insights (one per variable, strongest correlation first). End each insight with a short line: "Reminder: Correlation does not imply causation."
 
-IMPORTANT: Generate exactly ${insightCount} insights - one for each of the ${insightCount} variables listed above, in order of correlation strength (strongest first).
-
-CRITICAL OUTPUT FORMAT REQUIREMENTS:
-- You MUST return valid JSON with this EXACT structure: {"insights": [{"text": "..."}, {"text": "..."}, ...]}
-- Each insight MUST be an object with a "text" field containing the full insight text
-- DO NOT return boolean values, numbers, or strings directly - only objects with "text" fields
-- The "text" field must contain the complete insight including headline, interpretation, suggestions, and reminder
-- Return exactly ${insightCount} insight objects in the array
-
-Output JSON only: {"insights":[{"text":"..."}]}`;
+Return JSON only: {"insights":[{"text":"..."}, ...]} with exactly ${insightCount} items.`;
 
   const response = await openai.chat.completions.create({
-    model: MODEL || "gpt-4o",
+    model: getInsightModel(),
     messages: [
       {
         role: 'system',
-        content: `You are a senior data analyst providing detailed correlation insights. Be specific, use correlation values, and provide actionable suggestions. Format "Current suggestion" and "Quantified Action" as separate bullet points (using * or -). Always end correlation insights with exactly: "Reminder: Correlation does not imply causation." (never use "correlation != causation" or variations).
-
-CRITICAL: You MUST return valid JSON with this EXACT structure:
-{
-  "insights": [
-    {"text": "Full insight text here for variable 1"},
-    {"text": "Full insight text here for variable 2"},
-    ...
-  ]
-}
-
-Each item in the insights array MUST be an object with a "text" field. DO NOT return boolean values, numbers, or strings directly. The "text" field must contain the complete insight text including all bullet points and the reminder.`,
+        content: `You are a senior data analyst. Return valid JSON: {"insights":[{"text":"..."}]}. Each text must include r and n, interpretation grounded in the provided stats, and end with "Reminder: Correlation does not imply causation." Do not use P75/P90 shorthand—use numeric values from the prompt.`,
       },
       {
         role: 'user',
@@ -509,9 +478,7 @@ Each item in the insights array MUST be an object with a "text" field. DO NOT re
       },
     ],
     response_format: { type: 'json_object' },
-    temperature: 0.7,
-    // Scale tokens dynamically with insight count: base 2000 + ~200 per additional insight beyond 7
-    // Cap at 10,000 to allow for many insights, but scales down for fewer insights
+    temperature: getBatchInsightTemperature(),
     max_tokens: Math.min(2000 + Math.max(0, (insightCount - 7) * 200), 10000),
   });
 

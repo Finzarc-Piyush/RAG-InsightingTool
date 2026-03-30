@@ -172,7 +172,7 @@ export function SnowflakeImportFlow({
         : `Database: ${selectedDatabase} · Schema: ${selectedSchema} — select a table to import`;
 
   return (
-    <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center p-4 overflow-auto">
+    <div className="h-[calc(100vh-80px)] bg-background flex items-center justify-center p-4 overflow-auto">
       <div className="w-full max-w-2xl">
         <Button
           variant="ghost"
@@ -185,14 +185,14 @@ export function SnowflakeImportFlow({
           Back
         </Button>
 
-        <Card className="p-6 rounded-2xl border-2 bg-white shadow-sm">
+        <Card className="p-6 rounded-2xl border-2 border-border bg-card shadow-sm">
           <div className="flex items-center gap-2 mb-6">
             <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
               <Database className="w-5 h-5 text-sky-600" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Import from Snowflake</h2>
-              <p className="text-sm text-gray-500">{breadcrumb}</p>
+              <h2 className="text-lg font-semibold text-foreground">Import from Snowflake</h2>
+              <p className="text-sm text-muted-foreground">{breadcrumb}</p>
             </div>
           </div>
 
@@ -217,7 +217,7 @@ export function SnowflakeImportFlow({
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="w-10 h-10 text-sky-600 animate-spin mb-4" />
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 {step === 'database' && 'Loading databases…'}
                 {step === 'schema' && 'Loading schemas…'}
                 {step === 'table' && 'Loading tables…'}
@@ -239,19 +239,19 @@ export function SnowflakeImportFlow({
             </div>
           ) : step === 'database' ? (
             <>
-              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
-                <ul className="divide-y divide-gray-100">
+              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border">
+                <ul className="divide-y divide-border">
                   {databases.map((db) => (
                     <li key={db.name}>
                       <button
                         type="button"
                         onClick={() => handleSelectDatabase(db.name)}
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-sky-50"
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
                       >
-                        <Database className="w-4 h-4 text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-900">{db.name}</span>
+                        <Database className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-foreground">{db.name}</span>
                         {db.created_on != null && (
-                          <span className="text-xs text-gray-500 ml-auto">{db.created_on}</span>
+                          <span className="text-xs text-muted-foreground ml-auto">{db.created_on}</span>
                         )}
                       </button>
                     </li>
@@ -259,35 +259,35 @@ export function SnowflakeImportFlow({
                 </ul>
               </div>
               {databases.length === 0 && (
-                <p className="py-6 text-center text-sm text-gray-500">No databases found.</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">No databases found.</p>
               )}
             </>
           ) : step === 'schema' ? (
             <>
-              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
-                <ul className="divide-y divide-gray-100">
+              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border">
+                <ul className="divide-y divide-border">
                   {schemas.map((s) => (
                     <li key={s.name}>
                       <button
                         type="button"
                         onClick={() => handleSelectSchema(s.name)}
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-sky-50"
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
                       >
-                        <FolderOpen className="w-4 h-4 text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-900">{s.name}</span>
+                        <FolderOpen className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-foreground">{s.name}</span>
                       </button>
                     </li>
                   ))}
                 </ul>
               </div>
               {schemas.length === 0 && (
-                <p className="py-6 text-center text-sm text-gray-500">No schemas found.</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">No schemas found.</p>
               )}
             </>
           ) : (
             <>
-              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200">
-                <ul className="divide-y divide-gray-100">
+              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border">
+                <ul className="divide-y divide-border">
                   {tables.map((t) => (
                     <li key={`${t.database}.${t.schema}.${t.name}`}>
                       <button
@@ -295,13 +295,13 @@ export function SnowflakeImportFlow({
                         onClick={() => handleSelectTable(t)}
                         className={`
                           w-full flex items-center gap-3 px-4 py-3 text-left transition-colors
-                          hover:bg-sky-50
-                          ${selectedTable?.database === t.database && selectedTable?.schema === t.schema && selectedTable?.name === t.name ? 'bg-sky-100 border-l-4 border-l-sky-600' : ''}
+                          hover:bg-muted/40
+                          ${selectedTable?.database === t.database && selectedTable?.schema === t.schema && selectedTable?.name === t.name ? 'bg-primary/10 border-l-4 border-l-primary' : ''}
                         `}
                       >
-                        <Table2 className="w-4 h-4 text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-900">{t.name}</span>
-                        <span className="text-xs text-gray-500 truncate ml-auto">
+                        <Table2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-foreground">{t.name}</span>
+                        <span className="text-xs text-muted-foreground truncate ml-auto">
                           {t.row_count != null && `${t.row_count} rows`}
                           {t.row_count != null && t.bytes != null && ' · '}
                           {t.bytes != null && `${(t.bytes / 1024).toFixed(1)} KB`}
@@ -312,7 +312,7 @@ export function SnowflakeImportFlow({
                 </ul>
               </div>
               {tables.length === 0 && (
-                <p className="py-6 text-center text-sm text-gray-500">No tables found.</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">No tables found.</p>
               )}
               <Button
                 className="mt-6 w-full"

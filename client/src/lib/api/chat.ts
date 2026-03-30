@@ -69,9 +69,21 @@ export async function downloadModifiedDataset(
   }
 }
 
+export interface StreamIntermediatePayload {
+  preview: Record<string, unknown>[];
+  thinkingSteps: ThinkingStep[];
+  workbench: AgentWorkbenchEntry[];
+  assistantTimestamp: number;
+  insight?: string;
+}
+
 export interface StreamChatCallbacks {
   onThinkingStep?: (step: ThinkingStep) => void;
   onResponse?: (response: ChatResponse) => void;
+  /** Second-phase charts after `response` when agentic streaming splits payload. */
+  onResponseCharts?: (payload: { charts: ChatResponse["charts"] }) => void;
+  /** Preliminary table + frozen thinking segment (agent analytical tools). */
+  onIntermediate?: (payload: StreamIntermediatePayload) => void;
   onError?: (error: Error) => void;
   onDone?: () => void;
   /** Server queued the message until dataset enrichment completes */
@@ -191,6 +203,12 @@ function dispatchEvent(
     case "response":
       callbacks.onResponse?.(payload as ChatResponse);
       break;
+    case "intermediate":
+      callbacks.onIntermediate?.(payload as StreamIntermediatePayload);
+      break;
+    case "response_charts":
+      callbacks.onResponseCharts?.(payload as { charts: ChatResponse["charts"] });
+      break;
     case "error":
       callbacks.onError?.(
         new Error((payload as { message?: string })?.message || "Unknown error")
@@ -259,6 +277,7 @@ export interface StreamDataOpsCallbacks {
   onDone?: () => void;
 }
 
+/** @deprecated Prefer {@link streamChatRequest}; server classifies data-ops vs analysis. Kept for external callers. */
 export async function streamDataOpsChatRequest(
   sessionId: string,
   message: string,

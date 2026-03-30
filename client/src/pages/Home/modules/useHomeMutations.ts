@@ -6,8 +6,9 @@ import {
   ChatResponse,
   ThinkingStep,
   TemporalDisplayGrain,
+  type TemporalFacetColumnMeta,
 } from '@/shared/schema';
-import { uploadFile, streamChatRequest, streamDataOpsChatRequest, DataOpsResponse, snowflakeApi, getUploadJobStatus } from '@/lib/api';
+import { uploadFile, streamChatRequest, snowflakeApi, getUploadJobStatus, type StreamIntermediatePayload } from '@/lib/api';
 import type { DatasetEnrichmentPollSnapshot, UploadJobStatusResponse, UploadPhase } from '@/lib/api/uploadStatus';
 import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
@@ -31,7 +32,6 @@ import {
 interface UseHomeMutationsProps {
   sessionId: string | null;
   messages: Message[];
-  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
   setSessionId: (id: string | null) => void;
   setFileName: (fileName: string | null) => void;
   setInitialCharts: (charts: UploadResponse['charts']) => void;
@@ -41,6 +41,7 @@ interface UseHomeMutationsProps {
   setNumericColumns: (columns: string[]) => void;
   setDateColumns: (columns: string[]) => void;
   setTemporalDisplayGrainsByColumn: (grains: Record<string, TemporalDisplayGrain>) => void;
+  setTemporalFacetColumns: (cols: TemporalFacetColumnMeta[]) => void;
   setTotalRows: (rows: number) => void;
   setTotalColumns: (columns: number) => void;
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
@@ -49,13 +50,12 @@ interface UseHomeMutationsProps {
   setIsDatasetEnriching?: (v: boolean) => void;
   setEnrichmentPollSnapshot?: (snapshot: DatasetEnrichmentPollSnapshot | null) => void;
   onUploadProcessingStarted?: () => void;
-  onUploadError?: () => void;
+  onUploadError?: (message?: string) => void;
 }
 
 export const useHomeMutations = ({
   sessionId,
   messages,
-  mode = 'general',
   setSessionId,
   setFileName,
   setInitialCharts,
@@ -65,6 +65,7 @@ export const useHomeMutations = ({
   setNumericColumns,
   setDateColumns,
   setTemporalDisplayGrainsByColumn,
+  setTemporalFacetColumns,
   setTotalRows,
   setTotalColumns,
   setMessages,
@@ -92,9 +93,13 @@ export const useHomeMutations = ({
     steps: [],
     workbench: [],
   });
+  /** When SSE sends text before charts (agentic split), we append the assistant bubble early with this timestamp. */
+  const earlyAssistantReplyTsRef = useRef<number | null>(null);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [agentWorkbenchLive, setAgentWorkbenchLive] = useState<AgentWorkbenchEntry[]>([]);
   const [thinkingTargetTimestamp, setThinkingTargetTimestamp] = useState<number | null>(null);
+  const [thinkingLiveAnchorTimestamp, setThinkingLiveAnchorTimestamp] = useState<number | null>(null);
+  const hadIntermediateSegmentsRef = useRef(false);
   
   // Keep messagesRef in sync with messages
   useEffect(() => {
@@ -168,6 +173,7 @@ export const useHomeMutations = ({
     rowCount?: number;
     columnCount?: number;
     summaryColumns?: Array<{ name: string }>;
+    temporalFacetColumns?: TemporalFacetColumnMeta[];
     allowEmptyRowsOverwrite?: boolean;
   }) => {
     const nextColumns = payload.columns ?? [];
@@ -187,6 +193,9 @@ export const useHomeMutations = ({
     if (payload.dateColumns) setDateColumns(payload.dateColumns);
     if (payload.summaryColumns) {
       setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(payload.summaryColumns));
+    }
+    if (payload.temporalFacetColumns !== undefined) {
+      setTemporalFacetColumns(payload.temporalFacetColumns);
     }
     if (typeof payload.rowCount === 'number') setTotalRows(payload.rowCount);
     if (typeof payload.columnCount === 'number') setTotalColumns(payload.columnCount);
@@ -212,6 +221,7 @@ export const useHomeMutations = ({
         numericColumns: session.dataSummary.numericColumns || [],
         dateColumns: session.dataSummary.dateColumns || [],
         summaryColumns: session.dataSummary.columns,
+        temporalFacetColumns: session.dataSummary.temporalFacetColumns ?? [],
         rowCount: session.dataSummary.rowCount || 0,
         columnCount: session.dataSummary.columnCount || 0,
         allowEmptyRowsOverwrite: opts.allowEmptyRowsOverwrite,
@@ -297,7 +307,11 @@ export const useHomeMutations = ({
           phaseMessage: st.phaseMessage,
           enrichmentPhase: st.enrichmentPhase,
           enrichmentStep: st.enrichmentStep,
+          understandingReady: !!st.understandingReady,
         });
+        if (Array.isArray(st.suggestedQuestions) && st.suggestedQuestions.length > 0 && setSuggestions) {
+          setSuggestions(st.suggestedQuestions);
+        }
         if (st.status === 'failed') {
           clearUploadPoll();
           setIsDatasetPreviewLoading?.(false);
@@ -322,10 +336,11 @@ export const useHomeMutations = ({
           }
           setIsDatasetPreviewLoading?.(false);
           const enriching =
+            !st.understandingReady &&
             st.enrichmentStatus === 'pending' ||
-            st.enrichmentStatus === 'in_progress' ||
-            st.enrichmentPhase === 'enriching' ||
-            st.enrichmentPhase === 'waiting';
+            (!st.understandingReady && st.enrichmentStatus === 'in_progress') ||
+            (!st.understandingReady && st.enrichmentPhase === 'enriching') ||
+            (!st.understandingReady && st.enrichmentPhase === 'waiting');
           setIsDatasetEnriching?.(enriching);
           if (enriching) {
             upsertEnrichmentSystemMessage();
@@ -394,6 +409,7 @@ export const useHomeMutations = ({
           setNumericColumns(data.summary.numericColumns);
           setDateColumns(data.summary.dateColumns);
           setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(data.summary.columns));
+          setTemporalFacetColumns(data.summary.temporalFacetColumns ?? []);
           setTotalRows(data.summary.rowCount);
           setTotalColumns(data.summary.columnCount);
         }
@@ -434,7 +450,7 @@ export const useHomeMutations = ({
       }
     },
     onError: (error) => {
-      onUploadError?.();
+      onUploadError?.(error instanceof Error ? error.message : 'Failed to upload file');
       clearUploadPoll();
       setIsDatasetPreviewLoading?.(false);
       setIsDatasetEnriching?.(false);
@@ -555,9 +571,11 @@ export const useHomeMutations = ({
       
       // Clear previous thinking / workbench trace
       turnTraceRef.current = { steps: [], workbench: [] };
+      hadIntermediateSegmentsRef.current = false;
       setThinkingSteps([]);
       setAgentWorkbenchLive([]);
       setThinkingTargetTimestamp(null);
+      setThinkingLiveAnchorTimestamp(null);
       
       logger.log('📤 Sending chat message:', message);
       logger.log('📋 SessionId:', sessionId);
@@ -575,8 +593,10 @@ export const useHomeMutations = ({
         : [...currentMessages].reverse().find(msg => msg.role === 'user');
       if (lastUserMessage) {
         setThinkingTargetTimestamp(lastUserMessage.timestamp);
+        setThinkingLiveAnchorTimestamp(lastUserMessage.timestamp);
       } else {
         setThinkingTargetTimestamp(null);
+        setThinkingLiveAnchorTimestamp(null);
       }
       
       // Backend will fetch last 15 messages from Cosmos DB
@@ -585,96 +605,10 @@ export const useHomeMutations = ({
         message,
       });
       
-      // Route to Data Ops, Modeling, or regular chat based on mode
-      if (mode === 'dataOps') {
-        return new Promise<ChatResponse>((resolve, reject) => {
-          let responseData: DataOpsResponse | null = null;
-          
-          streamDataOpsChatRequest(
-            sessionId,
-            message,
-            {
-              onThinkingStep: (step: ThinkingStep) => {
-                logger.log('🧠 Data Ops thinking step received:', step);
-                setThinkingSteps((prev) => {
-                  const existingIndex = prev.findIndex(s => s.step === step.step);
-                  const next =
-                    existingIndex >= 0
-                      ? (() => {
-                          const updated = [...prev];
-                          updated[existingIndex] = step;
-                          return updated;
-                        })()
-                      : [...prev, step];
-                  turnTraceRef.current = { ...turnTraceRef.current, steps: next };
-                  return next;
-                });
-              },
-              onResponse: (response: DataOpsResponse) => {
-                logger.log('✅ Data Ops API response received:', response);
-                responseData = response;
-                // Store preview/summary in a way that can be accessed by MessageBubble
-                // We'll add these as custom properties to the response
-                (responseData as any).preview = response.preview;
-                (responseData as any).summary = response.summary;
-              },
-              onError: (error: Error) => {
-                logger.error('❌ Data Ops API request failed:', error);
-                turnTraceRef.current = { steps: [], workbench: [] };
-                setThinkingSteps([]);
-                setAgentWorkbenchLive([]);
-                setThinkingTargetTimestamp(null);
-                reject(error);
-              },
-              onDone: () => {
-                logger.log('✅ Data Ops stream completed');
-                setThinkingSteps([]);
-                setAgentWorkbenchLive([]);
-                setThinkingTargetTimestamp(null);
-                if (responseData) {
-                  // Convert DataOpsResponse to ChatResponse format
-                  const chatResponse: ChatResponse & { preview?: any[]; summary?: any[] } = {
-                    answer: responseData.answer,
-                    charts: [],
-                    insights: [],
-                    suggestions: [],
-                    preview: responseData.preview,
-                    summary: responseData.summary,
-                  };
-                  resolve(chatResponse as ChatResponse);
-                } else {
-                  reject(new Error('No response received'));
-                }
-              },
-            },
-            abortControllerRef.current.signal,
-            targetTimestamp,
-            true // dataOpsMode flag for backward compatibility
-          ).catch((error: any) => {
-            if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
-              logger.log('🚫 Data Ops request was cancelled by user');
-              turnTraceRef.current = { steps: [], workbench: [] };
-              setThinkingSteps([]);
-              setAgentWorkbenchLive([]);
-              setThinkingTargetTimestamp(null);
-              reject(new Error('Request cancelled'));
-            } else {
-              turnTraceRef.current = { steps: [], workbench: [] };
-              setThinkingSteps([]);
-              setAgentWorkbenchLive([]);
-              setThinkingTargetTimestamp(null);
-              reject(error);
-            }
-          });
-        });
-      } else {
-        // For 'general', 'analysis', and 'modeling' modes, use regular chat endpoint
-        // Only send mode parameter if it's explicitly set (not 'general')
-        // For 'general' (auto-detect), don't send mode to let backend auto-detect
-        const modeToSend = mode === 'general' ? undefined : (mode === 'modeling' || mode === 'analysis' ? mode : undefined);
-        
-        return new Promise<ChatResponse>((resolve, reject) => {
+      // Routing is server-side (classifyMode); do not send client mode override.
+      return new Promise<ChatResponse>((resolve, reject) => {
         let responseData: ChatResponse | null = null;
+        let pendingCharts: ChatResponse["charts"] | undefined;
         let streamResolved = false;
 
         streamChatRequest(
@@ -685,9 +619,11 @@ export const useHomeMutations = ({
               if (streamResolved) return;
               streamResolved = true;
               turnTraceRef.current = { steps: [], workbench: [] };
+              hadIntermediateSegmentsRef.current = false;
               setThinkingSteps([]);
               setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
+              setThinkingLiveAnchorTimestamp(null);
               resolve({
                 answer: '',
                 charts: [],
@@ -727,16 +663,109 @@ export const useHomeMutations = ({
                 return next;
               });
             },
+            onIntermediate: (payload: StreamIntermediatePayload) => {
+              hadIntermediateSegmentsRef.current = true;
+              setThinkingLiveAnchorTimestamp(payload.assistantTimestamp);
+              turnTraceRef.current = { steps: [], workbench: [] };
+              setThinkingSteps([]);
+              setAgentWorkbenchLive([]);
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'assistant' as const,
+                  content: '',
+                  timestamp: payload.assistantTimestamp,
+                  preview: payload.preview as Message['preview'],
+                  isIntermediate: true,
+                  intermediateInsight: payload.insight,
+                  thinkingBefore: {
+                    steps: payload.thinkingSteps ?? [],
+                    workbench: payload.workbench ?? [],
+                  },
+                },
+              ]);
+            },
             onResponse: (response: ChatResponse) => {
               logger.log('✅ API response received:', response);
               responseData = response;
+              if (pendingCharts !== undefined && responseData) {
+                responseData = { ...responseData, charts: pendingCharts };
+                pendingCharts = undefined;
+              }
+              // Agentic split: show answer text immediately; charts arrive in response_charts.
+              const textFirst =
+                Boolean(response.answer?.trim()) &&
+                Array.isArray(response.charts) &&
+                response.charts.length === 0;
+              if (textFirst) {
+                const ts = Date.now();
+                earlyAssistantReplyTsRef.current = ts;
+                const pendingTs = pendingUserMessageRef.current?.timestamp;
+                const traceSnapshot = turnTraceRef.current;
+                const skipUserThinkingAttach = hadIntermediateSegmentsRef.current;
+                setMessages((prev) => {
+                  const withTrace =
+                    !skipUserThinkingAttach &&
+                    pendingTs != null &&
+                    (traceSnapshot.steps.length > 0 || traceSnapshot.workbench.length > 0)
+                      ? prev.map((m) =>
+                          m.role === 'user' && m.timestamp === pendingTs
+                            ? {
+                                ...m,
+                                ...(traceSnapshot.steps.length > 0
+                                  ? { thinkingSteps: [...traceSnapshot.steps] }
+                                  : {}),
+                                ...(traceSnapshot.workbench.length > 0
+                                  ? { agentWorkbench: [...traceSnapshot.workbench] }
+                                  : {}),
+                              }
+                            : m
+                        )
+                      : prev;
+                  return [
+                    ...withTrace,
+                    {
+                      role: 'assistant' as const,
+                      content: response.answer,
+                      charts: [],
+                      insights: response.insights ?? [],
+                      timestamp: ts,
+                      agentTrace: (response as { agentTrace?: Message['agentTrace'] }).agentTrace,
+                      preview: (response as Message & { preview?: Message['preview'] }).preview,
+                      summary: (response as Message & { summary?: Message['summary'] }).summary,
+                      thinkingBefore: (response as Message & { thinkingBefore?: Message['thinkingBefore'] })
+                        .thinkingBefore,
+                    },
+                  ];
+                });
+              }
+            },
+            onResponseCharts: (payload) => {
+              if (responseData) {
+                responseData = { ...responseData, charts: payload.charts };
+              } else {
+                pendingCharts = payload.charts;
+              }
+              const earlyTs = earlyAssistantReplyTsRef.current;
+              if (earlyTs != null && payload.charts?.length) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.role === 'assistant' && m.timestamp === earlyTs
+                      ? { ...m, charts: payload.charts }
+                      : m
+                  )
+                );
+              }
             },
             onError: (error: Error) => {
               logger.error('❌ API request failed:', error);
+              earlyAssistantReplyTsRef.current = null;
+              hadIntermediateSegmentsRef.current = false;
               turnTraceRef.current = { steps: [], workbench: [] };
               setThinkingSteps([]);
               setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
+              setThinkingLiveAnchorTimestamp(null);
               reject(error);
             },
             onDone: () => {
@@ -744,6 +773,7 @@ export const useHomeMutations = ({
               setThinkingSteps([]);
               setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
+              setThinkingLiveAnchorTimestamp(null);
               if (streamResolved) return;
               if (responseData) {
                 resolve(responseData);
@@ -753,9 +783,11 @@ export const useHomeMutations = ({
             },
           },
           abortControllerRef.current.signal,
-          targetTimestamp,
-          modeToSend
+          targetTimestamp
         ).catch((error: any) => {
+            earlyAssistantReplyTsRef.current = null;
+            hadIntermediateSegmentsRef.current = false;
+            setThinkingLiveAnchorTimestamp(null);
             if (error?.name === 'AbortError' || abortControllerRef.current?.signal.aborted) {
             logger.log('🚫 Request was cancelled by user');
               turnTraceRef.current = { steps: [], workbench: [] };
@@ -772,7 +804,6 @@ export const useHomeMutations = ({
           }
         });
       });
-      }
     },
     onSuccess: (data, variables) => {
       logger.log('✅ Chat response received:', data);
@@ -787,16 +818,20 @@ export const useHomeMutations = ({
         toast({
           title: 'Message queued',
           description:
-            'We are enriching our understanding of your data. Your reply will appear when that finishes.',
+            'We are enriching data understanding and preparing suggested analysis questions. Your reply will appear when that finishes.',
         });
         return;
       }
 
       const pendingTs = pendingUserMessageRef.current?.timestamp;
       pendingUserMessageRef.current = null;
+      const segmentedTurn = hadIntermediateSegmentsRef.current;
+      hadIntermediateSegmentsRef.current = false;
+      setThinkingLiveAnchorTimestamp(null);
 
       if (!data.answer || data.answer.trim().length === 0) {
         logger.error('❌ Empty answer received from server!');
+        earlyAssistantReplyTsRef.current = null;
         turnTraceRef.current = { steps: [], workbench: [] };
         toast({
           title: 'Error',
@@ -814,6 +849,7 @@ export const useHomeMutations = ({
         timestamp: Date.now(),
         preview: (data as any).preview,
         summary: (data as any).summary,
+        thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
       };
       
       console.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
@@ -826,9 +862,53 @@ export const useHomeMutations = ({
       const traceSnapshot = turnTraceRef.current;
       turnTraceRef.current = { steps: [], workbench: [] };
 
+      const earlyTs = earlyAssistantReplyTsRef.current;
+      earlyAssistantReplyTsRef.current = null;
+
       setMessages((prev) => {
+        if (earlyTs != null) {
+          const aiIdx = prev.findIndex(
+            (m) => m.role === 'assistant' && m.timestamp === earlyTs
+          );
+          if (aiIdx >= 0) {
+            const next = [...prev];
+            next[aiIdx] = {
+              ...next[aiIdx],
+              content: data.answer,
+              charts: data.charts,
+              insights: data.insights,
+              preview: (data as any).preview,
+              summary: (data as any).summary,
+              agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
+              thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+            };
+            const withFinalTrace =
+              !segmentedTurn &&
+              pendingTs != null &&
+              (traceSnapshot.steps.length > 0 || traceSnapshot.workbench.length > 0)
+                ? next.map((m) =>
+                    m.role === 'user' && m.timestamp === pendingTs
+                      ? {
+                          ...m,
+                          ...(traceSnapshot.steps.length > 0
+                            ? { thinkingSteps: [...traceSnapshot.steps] }
+                            : {}),
+                          ...(traceSnapshot.workbench.length > 0
+                            ? { agentWorkbench: [...traceSnapshot.workbench] }
+                            : {}),
+                        }
+                      : m
+                  )
+                : next;
+            console.log('📋 Total messages now (text-first merge):', withFinalTrace.length);
+            return withFinalTrace;
+          }
+        }
+
         const withTrace =
-          pendingTs != null && (traceSnapshot.steps.length > 0 || traceSnapshot.workbench.length > 0)
+          !segmentedTurn &&
+          pendingTs != null &&
+          (traceSnapshot.steps.length > 0 || traceSnapshot.workbench.length > 0)
             ? prev.map((m) =>
                 m.role === 'user' && m.timestamp === pendingTs
                   ? {
@@ -857,8 +937,13 @@ export const useHomeMutations = ({
       // Clear pending message ref
       const pendingMessage = pendingUserMessageRef.current;
       pendingUserMessageRef.current = null;
+      earlyAssistantReplyTsRef.current = null;
+      hadIntermediateSegmentsRef.current = false;
       turnTraceRef.current = { steps: [], workbench: [] };
+      setThinkingSteps([]);
       setAgentWorkbenchLive([]);
+      setThinkingTargetTimestamp(null);
+      setThinkingLiveAnchorTimestamp(null);
 
       // Don't show toast for cancelled requests
       if (error instanceof Error && error.message === 'Request cancelled') {
@@ -898,9 +983,11 @@ export const useHomeMutations = ({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       turnTraceRef.current = { steps: [], workbench: [] };
+      hadIntermediateSegmentsRef.current = false;
       setThinkingSteps([]);
       setAgentWorkbenchLive([]);
       setThinkingTargetTimestamp(null);
+      setThinkingLiveAnchorTimestamp(null);
       
       // Remove the user message that was added when the request was sent
       // since the request was cancelled and won't be saved
@@ -963,5 +1050,6 @@ export const useHomeMutations = ({
     thinkingSteps,
     agentWorkbenchLive,
     thinkingTargetTimestamp,
+    thinkingLiveAnchorTimestamp,
   };
 };

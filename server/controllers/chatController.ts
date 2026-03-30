@@ -64,19 +64,17 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
       return;
     }
 
-    // Validate mode if provided (treat 'general' as undefined for auto-detection)
-    const validMode = mode && ['general', 'analysis', 'dataOps', 'modeling'].includes(mode) 
-      ? (mode === 'general' ? undefined : mode)
-      : undefined;
+    // `mode` is accepted for backward compatibility but ignored for routing (classifyMode always runs).
+    const _legacyMode =
+      mode && ['general', 'analysis', 'dataOps', 'modeling'].includes(mode) ? mode : undefined;
 
-    // Process streaming chat (chatHistory will be fetched from Cosmos DB in the service)
     await processStreamChat({
       sessionId,
       message,
       targetTimestamp,
       username,
       res,
-      mode: validMode,
+      mode: _legacyMode,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {

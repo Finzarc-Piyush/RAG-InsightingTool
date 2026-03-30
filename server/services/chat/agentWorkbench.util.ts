@@ -116,6 +116,13 @@ export function agentSseEventToWorkbenchEntries(
 
   if (event === "critic_verdict" && data && typeof data === "object") {
     const c = data as CriticSse;
+    // Per-step critic still runs server-side; workbench shows only final synthesis review by default.
+    const showAllCritics =
+      process.env.AGENT_SSE_CRITIC_FINAL_ONLY === "0" ||
+      process.env.AGENT_SSE_CRITIC_FINAL_ONLY === "false";
+    if (!showAllCritics && c.stepId !== "final") {
+      return out;
+    }
     const parts = [
       `Verdict: ${c.verdict || "?"}`,
       c.stepId ? `Step: ${c.stepId}` : "",
@@ -123,7 +130,7 @@ export function agentSseEventToWorkbenchEntries(
       c.course_correction ? `Course correction:\n${c.course_correction}` : "",
     ].filter(Boolean);
     out.push({
-      id: `critic-${c.stepId || ts}`,
+      id: `critic-${c.stepId || "step"}-${ts}-${Math.random().toString(36).slice(2, 10)}`,
       kind: "critic",
       title: "Critic",
       code: truncateCode(parts.join("\n")),

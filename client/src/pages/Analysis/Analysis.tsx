@@ -144,38 +144,37 @@ const Analysis: React.FC<AnalysisProps> = ({ onNavigate, onNewChat, onLoadSessio
   }
 
   return (
-    <div className="h-[calc(100vh-10vh)] bg-gray-50 flex flex-col" data-analysis-page>
-      <div className="max-w-7xl mx-auto px-6 py-8 flex-1 flex flex-col min-h-0">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Your Analysis History</h1>
-            <p className="text-gray-600 mt-2">
-              {sessionsData?.count || 0} analysis sessions{userEmail ? ` for ${userEmail}` : ''}
-            </p>
-          </div>
-          <Button onClick={handleNewChat} className="bg-black text-white hover:bg-gray-800">
-            <Plus className="h-4 w-4 mr-2" />
-            New Analysis
+    <div
+      className="flex min-h-0 flex-1 flex-col bg-gradient-to-b from-muted/25 to-background"
+      data-analysis-page
+    >
+      <div className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 py-6 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm text-muted-foreground">
+            {sessionsData?.count ?? 0} session{(sessionsData?.count ?? 0) === 1 ? '' : 's'}
+            {userEmail ? ` · ${userEmail}` : ''}
+          </p>
+          <Button onClick={handleNewChat} className="rounded-lg">
+            <Plus className="mr-2 h-4 w-4" />
+            New analysis
           </Button>
         </div>
 
-        {/* Search Bar and Sort */}
-        <div className="flex gap-4 mb-6">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:gap-4">
+          <div className="relative min-w-0 flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              type="text"
-              placeholder="Search your analyses..."
+              type="search"
+              placeholder="Search analyses…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 h-12 text-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              className="h-12 border-border/80 pl-10 text-base focus-visible:border-primary focus-visible:ring-primary/30"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <ArrowUpDown className="h-4 w-4 text-gray-500" />
+          <div className="flex shrink-0 items-center gap-2">
+            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
             <Select value={sortOrder} onValueChange={(value: 'newest' | 'oldest') => setSortOrder(value)}>
-              <SelectTrigger className="w-[180px] h-12 border-gray-300">
+              <SelectTrigger className="h-12 w-full min-w-[11rem] border-border/80 sm:w-[180px]">
                 <SelectValue placeholder="Sort by" />
               </SelectTrigger>
               <SelectContent>
@@ -197,22 +196,21 @@ const Analysis: React.FC<AnalysisProps> = ({ onNavigate, onNewChat, onLoadSessio
           <div className="flex-1 flex flex-col min-w-0">
             <div className="space-y-4 flex-1 overflow-y-auto">
               {filteredSessions.length === 0 ? (
-                <Card className="text-center py-12">
+                <Card className="border-dashed border-border/80 py-12 text-center">
                   <CardContent>
-                    <FileText className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      {searchQuery ? 'No matching analyses found' : 'No analysis sessions yet'}
+                    <FileText className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+                    <h3 className="mb-2 text-lg font-semibold text-foreground">
+                      {searchQuery ? 'No matching analyses' : 'No sessions yet'}
                     </h3>
-                    <p className="text-gray-600 mb-4">
+                    <p className="mb-4 text-muted-foreground">
                       {searchQuery
-                        ? 'Try adjusting your search terms'
-                        : `Welcome! Upload your first file to start analyzing data${userEmail ? ` as ${userEmail}` : ''}`
-                      }
+                        ? 'Try different keywords'
+                        : `Upload a file to start${userEmail ? ` (${userEmail})` : ''}`}
                     </p>
                     {!searchQuery && (
-                      <Button onClick={handleNewChat} className="bg-blue-600 hover:bg-blue-700">
-                        <Plus className="h-4 w-4 mr-2" />
-                        Start Your First Analysis
+                      <Button onClick={handleNewChat} className="rounded-lg">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Start first analysis
                       </Button>
                     )}
                   </CardContent>

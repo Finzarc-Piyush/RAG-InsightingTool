@@ -81,6 +81,13 @@ export interface WorkingMemoryEntry {
   slots?: Record<string, string>;
 }
 
+/** Last successful analytical tool row frame (execute_query_plan, run_analytical_query, etc.). */
+export type LastAnalyticalTable = {
+  rows: Record<string, unknown>[];
+  columns: string[];
+  sourceTool?: string;
+};
+
 export interface AgentExecutionContext {
   sessionId: string;
   username?: string;
@@ -100,6 +107,13 @@ export interface AgentExecutionContext {
   streamPreAnalysis?: StreamPreAnalysis;
   /** Throttled merge of milestones into sessionAnalysisContext (optional). */
   onMidTurnSessionContext?: (payload: AgentMidTurnSessionPayload) => Promise<void>;
+  /** Set when analytical tools replace ctx.data; used for chart validation and enrichment fallbacks. */
+  lastAnalyticalTable?: LastAnalyticalTable;
+  /** Emit a preliminary table to the chat stream (segmented thinking UX). */
+  onIntermediateArtifact?: (payload: {
+    preview: Record<string, unknown>[];
+    insight?: string;
+  }) => void;
 }
 
 export interface PlanStep {
@@ -197,4 +211,6 @@ export interface AgentLoopResult {
   agentTrace?: AgentTrace;
   /** Phrases already surfaced in the answer (CTAs, insight) for suggestion de-duplication. */
   agentSuggestionHints?: string[];
+  /** Rows from last analytical frame; passed to enrichCharts when chart data was stripped. */
+  lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
 }

@@ -160,7 +160,17 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   // Enrich charts with data and insights
   if (answerResult.charts && Array.isArray(answerResult.charts)) {
-    answerResult.charts = await enrichCharts(answerResult.charts, chatDocument, chatLevelInsights);
+    answerResult.charts = await enrichCharts(
+      answerResult.charts,
+      chatDocument,
+      chatLevelInsights,
+      answerResult.lastAnalyticalRowsForEnrichment,
+      {
+        userQuestion: message,
+        sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+        permanentContext,
+      }
+    );
   }
 
   // Validate and enrich response
@@ -297,11 +307,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
  * After upload enrichment completes: answer queued user message, or post suggested questions only.
  */
 export async function postEnrichmentFlush(sessionId: string, username: string): Promise<void> {
-  const {
-    getChatBySessionIdForUser,
-    clearPendingUserMessage,
-    addMessagesBySessionId,
-  } = await import("../../models/chat.model.js");
+  const { getChatBySessionIdForUser, clearPendingUserMessage } = await import(
+    "../../models/chat.model.js"
+  );
 
   const doc = await getChatBySessionIdForUser(sessionId, username);
   if (!doc) return;
@@ -317,29 +325,6 @@ export async function postEnrichmentFlush(sessionId: string, username: string): 
     return;
   }
 
-  const sac = doc.sessionAnalysisContext?.suggestedFollowUps ?? [];
-  const prof = doc.datasetProfile?.suggestedQuestions ?? [];
-  let merged = [...new Set([...sac, ...prof])].slice(0, 12);
-  if (
-    merged.length === 0 &&
-    doc.dataSummary?.rowCount > 0 &&
-    doc.dataSummary.columns?.length
-  ) {
-    const { suggestedFollowUpsFromDataSummary } = await import(
-      "../../lib/suggestedFollowUpsFromSummary.js"
-    );
-    merged = suggestedFollowUpsFromDataSummary(doc.dataSummary, {
-      fileLabel: doc.fileName,
-    });
-  }
-  if (merged.length === 0) return;
-
-  await addMessagesBySessionId(sessionId, [
-    {
-      role: "assistant",
-      content: "Here are some suggested questions you can try:",
-      suggestedQuestions: merged,
-      timestamp: Date.now(),
-    },
-  ]);
+  // No pending user turn: starter questions are exposed through session/poll state.
+  // We intentionally avoid adding an assistant-only suggestion message here.
 }

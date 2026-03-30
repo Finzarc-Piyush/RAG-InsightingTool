@@ -1,40 +1,14 @@
 import { useState, useMemo } from 'react';
-import { ChevronDown, ChevronRight, Table, ArrowUp, ArrowDown, ArrowUpDown, GitCompareArrows } from 'lucide-react';
+import { ChevronDown, ChevronRight, Table, GitCompareArrows } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { ColumnsDisplay } from './ColumnsDisplay';
-import type { TemporalDisplayGrain } from '@/shared/schema';
+import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
-
-// Helpers for robust date parsing and detection
-const MONTH_MAP: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
-};
-
-function parseDateLike(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date && !isNaN(value.getTime())) return value.getTime();
-  const str = String(value).trim();
-  if (!str) return null;
-
-  // Match formats like "Apr-24", "Apr 24", "Apr-2024", "August 2024"
-  const mmmYyMatch = str.match(/^([A-Za-z]{3,})[-\s/]?(\d{2,4})$/i);
-  if (mmmYyMatch) {
-    const monthName = mmmYyMatch[1].toLowerCase().substring(0, 3);
-    const month = MONTH_MAP[monthName];
-    if (month !== undefined) {
-      let year = parseInt(mmmYyMatch[2], 10);
-      if (year < 100) {
-        year = year <= 30 ? 2000 + year : 1900 + year;
-      }
-      return new Date(year, month, 1).getTime();
-    }
-  }
-
-  const native = new Date(str);
-  if (!isNaN(native.getTime())) return native.getTime();
-  return null;
-}
+import { facetColumnHeaderLabel } from '@/lib/temporalFacetDisplay';
+import { parseDateLike } from '@/lib/parseDateLike';
+import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 
 function formatDdMmmYy(value: unknown): string | null {
   const ts = parseDateLike(value);
@@ -53,6 +27,8 @@ interface DataPreviewProps {
   numericColumns?: string[];
   dateColumns?: string[];
   temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
+  /** When provided, `__tf_*` column headers use grain + source (e.g. Month · Order Date). */
+  temporalFacetColumns?: TemporalFacetColumnMeta[];
   totalRows?: number;
   totalColumns?: number;
   defaultExpanded?: boolean;
@@ -76,14 +52,13 @@ interface DataPreviewProps {
   } | null;
 }
 
-type SortDirection = 'asc' | 'desc' | null;
-
 export function DataPreview({ 
   data, 
   columns, 
   numericColumns = [], 
   dateColumns = [], 
   temporalDisplayGrainsByColumn = {},
+  temporalFacetColumns = [],
   totalRows,
   totalColumns,
   defaultExpanded = false,
@@ -91,23 +66,32 @@ export function DataPreview({
   postEnrichmentSnapshot = null,
 }: DataPreviewProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
   const [compareMode, setCompareMode] = useState(false);
+  const [showDerivedTimeColumns, setShowDerivedTimeColumns] = useState(false);
 
-  /** Stale sessions: format date-like columns even if server did not list them in dateColumns. */
-  const displayAsDateColumns = useMemo(() => {
-    const set = new Set(dateColumns);
-    for (const col of columns) {
-      if (set.has(col)) continue;
-      const lower = col.toLowerCase();
-      const nameSuggestsDate = /(month|date|week|year|time|period|day|quarter)/.test(lower);
-      const sample = data.slice(0, 12).map((row) => row[col]);
-      const anyParses = sample.some((v) => parseDateLike(v) !== null);
-      if (nameSuggestsDate || anyParses) set.add(col);
+  const hasTfColumns = useMemo(
+    () => (columns ?? []).some((c) => String(c).startsWith('__tf_')),
+    [columns]
+  );
+
+  const facetLabelByColumn = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const meta of temporalFacetColumns) {
+      m[meta.name] = facetColumnHeaderLabel(meta);
     }
-    return set;
-  }, [columns, dateColumns, data]);
+    return m;
+  }, [temporalFacetColumns]);
+
+  const visibleColumns = useMemo(() => {
+    const cols = columns ?? [];
+    if (showDerivedTimeColumns) return cols;
+    return cols.filter((c) => !String(c).startsWith('__tf_'));
+  }, [columns, showDerivedTimeColumns]);
+
+  const displayAsDateColumns = useMemo(() => {
+    // Strict preview behavior: only format dates from authoritative dateColumns metadata.
+    return new Set(dateColumns);
+  }, [dateColumns]);
 
   const resolvedGrainsByColumn = useMemo(() => {
     const out: Record<string, TemporalDisplayGrain> = { ...temporalDisplayGrainsByColumn };
@@ -120,114 +104,31 @@ export function DataPreview({
     return out;
   }, [data, displayAsDateColumns, temporalDisplayGrainsByColumn]);
 
-  // Sort data based on current sort column and direction
-  const sortedData = useMemo(() => {
-    if (!sortColumn || !sortDirection) {
-      return data;
-    }
-
-    const isNumeric = numericColumns.includes(sortColumn);
-    // Consider date if declared OR column name suggests a date OR values parse as dates
-    const columnNameLower = sortColumn.toLowerCase();
-    const nameSuggestsDate = /(month|date|week|year)/.test(columnNameLower);
-    const valuesSample = data.slice(0, 12).map(row => row[sortColumn]);
-    const anyValueParsesAsDate = valuesSample.some(v => parseDateLike(v) !== null);
-    const isDate = dateColumns.includes(sortColumn) || nameSuggestsDate || anyValueParsesAsDate;
-
-    return [...data].sort((a, b) => {
-      let aVal = a[sortColumn];
-      let bVal = b[sortColumn];
-
-      // Handle null/undefined values
-      if (aVal === null || aVal === undefined) return 1;
-      if (bVal === null || bVal === undefined) return -1;
-
-      let comparison = 0;
-
-      if (isDate) {
-        // Sort dates (robust parsing including "Apr-24" style)
-        const aTs = parseDateLike(aVal);
-        const bTs = parseDateLike(bVal);
-        if (aTs === null && bTs === null) {
-          comparison = 0;
-        } else if (aTs === null) {
-          comparison = 1;
-        } else if (bTs === null) {
-          comparison = -1;
-        } else {
-          comparison = aTs - bTs;
-        }
-      } else if (isNumeric) {
-        // Sort numbers
-        const aNum = typeof aVal === 'number' ? aVal : parseFloat(String(aVal));
-        const bNum = typeof bVal === 'number' ? bVal : parseFloat(String(bVal));
-        comparison = (isNaN(aNum) ? 0 : aNum) - (isNaN(bNum) ? 0 : bNum);
-      } else {
-        // Sort strings
-        comparison = String(aVal).localeCompare(String(bVal));
-      }
-
-      return sortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [data, sortColumn, sortDirection, numericColumns, dateColumns]);
-
-  const handleSort = (column: string) => {
-    if (sortColumn === column) {
-      // Cycle through: asc -> desc -> null
-      if (sortDirection === 'asc') {
-        setSortDirection('desc');
-      } else if (sortDirection === 'desc') {
-        setSortColumn(null);
-        setSortDirection(null);
-      }
-    } else {
-      setSortColumn(column);
-      setSortDirection('asc');
-    }
-  };
-
-  const getSortIcon = (column: string) => {
-    if (sortColumn !== column) {
-      return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
-    }
-    if (sortDirection === 'asc') {
-      return <ArrowUp className="h-3 w-3 ml-1" />;
-    }
-    if (sortDirection === 'desc') {
-      return <ArrowDown className="h-3 w-3 ml-1" />;
-    }
-    return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
-  };
-
-  if (!columns || columns.length === 0) return null;
+  const { sortedData, handleSort, getSortIcon } = usePreviewTableSort({
+    data,
+    columns: visibleColumns,
+    numericColumns,
+    dateColumns,
+    variant: 'dataset',
+  });
 
   const compareColumns = useMemo(() => {
     if (!preEnrichmentSnapshot || !postEnrichmentSnapshot) return [];
+    const hideTf = (c: string) => !String(c).startsWith('__tf_');
     const set = new Set<string>([
-      ...preEnrichmentSnapshot.columns,
-      ...postEnrichmentSnapshot.columns,
+      ...preEnrichmentSnapshot.columns.filter(hideTf),
+      ...postEnrichmentSnapshot.columns.filter(hideTf),
     ]);
     return Array.from(set);
   }, [preEnrichmentSnapshot, postEnrichmentSnapshot]);
 
   const compareDateColumns = useMemo(() => {
     if (!preEnrichmentSnapshot || !postEnrichmentSnapshot) return new Set<string>();
-    const set = new Set<string>([
+    return new Set<string>([
       ...(preEnrichmentSnapshot.dateColumns || []),
       ...(postEnrichmentSnapshot.dateColumns || []),
     ]);
-    for (const col of compareColumns) {
-      if (set.has(col)) continue;
-      const sample = [
-        ...preEnrichmentSnapshot.rows.slice(0, 8).map((r) => r[col]),
-        ...postEnrichmentSnapshot.rows.slice(0, 8).map((r) => r[col]),
-      ];
-      if (sample.some((v) => parseDateLike(v) !== null)) {
-        set.add(col);
-      }
-    }
-    return set;
-  }, [preEnrichmentSnapshot, postEnrichmentSnapshot, compareColumns]);
+  }, [preEnrichmentSnapshot, postEnrichmentSnapshot]);
 
   const changedCellKeys = useMemo(() => {
     const changed = new Set<string>();
@@ -260,11 +161,13 @@ export function DataPreview({
   const hasVisibleChanges = changedCellKeys.size > 0;
   const changedValuesCount = changedCellKeys.size;
 
+  if (!columns?.length) return null;
+
   return (
     <div className="mt-4" data-testid="data-preview-container">
       {/* Columns Display */}
       <ColumnsDisplay 
-        columns={columns}
+        columns={visibleColumns}
         numericColumns={numericColumns}
         dateColumns={dateColumns}
         totalRows={totalRows}
@@ -272,7 +175,7 @@ export function DataPreview({
       />
       
       {/* Data Preview Table */}
-      <div className="border rounded-md">
+      <div className="border border-border rounded-md bg-card">
         <Button
           variant="ghost"
           onClick={() => setIsExpanded(!isExpanded)}
@@ -292,25 +195,42 @@ export function DataPreview({
         </Button>
 
         {isExpanded && (
-          <div className="h-80 overflow-auto relative" data-testid="preview-table-scroll">
+          <>
+            {hasTfColumns && (
+              <div className="flex items-center justify-end gap-2 px-3 py-2 border-b border-border bg-muted/20">
+                <Label
+                  htmlFor="show-derived-tf-cols"
+                  className="text-xs text-muted-foreground cursor-pointer"
+                >
+                  Show derived time columns
+                </Label>
+                <Switch
+                  id="show-derived-tf-cols"
+                  checked={showDerivedTimeColumns}
+                  onCheckedChange={setShowDerivedTimeColumns}
+                  data-testid="toggle-derived-time-columns"
+                />
+              </div>
+            )}
+            <div className="h-80 overflow-auto relative" data-testid="preview-table-scroll">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-20">
-                <tr className="border-b bg-gray-100 shadow-sm">
+                <tr className="border-b border-border bg-muted/60 shadow-sm">
                   <th
-                    className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap bg-gray-100 w-10"
+                    className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap bg-muted/60 w-10"
                     scope="col"
                   >
                     #
                   </th>
-                  {columns.map((col, idx) => (
+                  {visibleColumns.map((col, idx) => (
                     <th
                       key={idx}
-                      className="px-4 py-2 text-left font-medium text-gray-700 whitespace-nowrap bg-gray-100 cursor-pointer hover:bg-gray-200 select-none transition-colors"
+                      className="px-4 py-2 text-left font-medium text-foreground whitespace-nowrap bg-muted/60 cursor-pointer hover:bg-muted/90 select-none transition-colors"
                       onClick={() => handleSort(col)}
                       data-testid={`header-${col}`}
                     >
                       <div className="flex items-center">
-                        {col}
+                        {facetLabelByColumn[col] ?? col}
                         {getSortIcon(col)}
                       </div>
                     </th>
@@ -318,26 +238,37 @@ export function DataPreview({
                 </tr>
               </thead>
               <tbody>
-                {sortedData.length === 0 && (
+                {!visibleColumns.length && hasTfColumns && !showDerivedTimeColumns && (
                   <tr>
                     <td
                       className="px-4 py-6 text-center text-sm text-muted-foreground"
-                      colSpan={columns.length + 1}
+                      colSpan={2}
+                    >
+                      Derived time columns are hidden. Turn on &quot;Show derived time columns&quot; above.
+                    </td>
+                  </tr>
+                )}
+                {sortedData.length === 0 && visibleColumns.length > 0 && (
+                  <tr>
+                    <td
+                      className="px-4 py-6 text-center text-sm text-muted-foreground"
+                      colSpan={visibleColumns.length + 1}
                     >
                       No sample rows available yet. Columns are ready.
                     </td>
                   </tr>
                 )}
-                {sortedData.map((row, rowIdx) => (
+                {visibleColumns.length > 0 &&
+                  sortedData.map((row, rowIdx) => (
                   <tr
                     key={rowIdx}
-                    className="border-b last:border-b-0 hover:bg-gray-50"
+                    className="border-b border-border last:border-b-0 hover:bg-muted/30"
                     data-testid={`row-${rowIdx}`}
                   >
                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground tabular-nums w-10">
                       {rowIdx + 1}
                     </td>
-                    {columns.map((col, colIdx) => {
+                    {visibleColumns.map((col, colIdx) => {
                       const value = row[col];
                       let displayValue = value;
                       
@@ -370,55 +301,56 @@ export function DataPreview({
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </div>
 
       {hasCompareData && (
-        <div className="mt-3 rounded-md border border-emerald-200/80 bg-emerald-50/40">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-emerald-200/70">
-            <div className="text-sm font-medium text-emerald-800 flex items-center gap-2">
+        <div className="mt-3 rounded-md border border-border bg-card">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+            <div className="text-sm font-medium text-foreground flex items-center gap-2">
               <GitCompareArrows className="h-4 w-4" />
               Compare pre/post enrichment
             </div>
             <Button
               variant="outline"
               size="sm"
-              className="h-8 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+              className="h-8"
               onClick={() => setCompareMode((prev) => !prev)}
             >
               {compareMode ? 'Hide comparison' : 'Show comparison'}
             </Button>
           </div>
           <div className="px-3 py-2 flex flex-wrap gap-2 text-xs">
-            <span className="inline-flex items-center rounded-full bg-white border border-emerald-200 px-2 py-0.5 text-emerald-900">
+            <span className="inline-flex items-center rounded-full bg-muted/30 border border-border px-2 py-0.5 text-foreground">
               Pre rows: {preEnrichmentSnapshot?.rows.length ?? 0}
             </span>
-            <span className="inline-flex items-center rounded-full bg-white border border-emerald-200 px-2 py-0.5 text-emerald-900">
+            <span className="inline-flex items-center rounded-full bg-muted/30 border border-border px-2 py-0.5 text-foreground">
               Post rows: {postEnrichmentSnapshot?.rows.length ?? 0}
             </span>
-            <span className="inline-flex items-center rounded-full bg-white border border-emerald-200 px-2 py-0.5 text-emerald-900">
+            <span className="inline-flex items-center rounded-full bg-muted/30 border border-border px-2 py-0.5 text-foreground">
               Changed columns: {changedColumns.size}
             </span>
-            <span className="inline-flex items-center rounded-full bg-white border border-emerald-200 px-2 py-0.5 text-emerald-900">
+            <span className="inline-flex items-center rounded-full bg-muted/30 border border-border px-2 py-0.5 text-foreground">
               Values changed: {changedValuesCount}
             </span>
-            <span className="inline-flex items-center rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-emerald-900">
+            <span className="inline-flex items-center rounded-full bg-primary/10 border border-primary/25 px-2 py-0.5 text-primary">
               Green = updated after enrichment
             </span>
           </div>
           {compareMode && (
             <div className="px-3 pb-3">
               {!hasVisibleChanges && (
-                <div className="text-xs text-emerald-900/80 pb-2">
+                <div className="text-xs text-muted-foreground pb-2">
                   No visible preview differences after enrichment.
                 </div>
               )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                <div className="rounded-md border bg-white overflow-auto max-h-[28rem]">
-                  <div className="px-3 py-2 text-xs font-semibold border-b">Pre-enrichment snapshot</div>
+                <div className="rounded-md border border-border bg-card overflow-auto max-h-[28rem]">
+                  <div className="px-3 py-2 text-xs font-semibold border-b border-border">Pre-enrichment snapshot</div>
                   <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-gray-100">
+                    <thead className="sticky top-0 bg-muted/60">
                       <tr>
                         <th className="px-2 py-1 text-left">#</th>
                         {compareColumns.map((c) => (
@@ -428,7 +360,7 @@ export function DataPreview({
                     </thead>
                     <tbody>
                       {(preEnrichmentSnapshot?.rows || []).map((row, rowIdx) => (
-                        <tr key={`pre-r-${rowIdx}`} className="border-b">
+                        <tr key={`pre-r-${rowIdx}`} className="border-b border-border">
                           <td className="px-2 py-1 text-muted-foreground">{rowIdx + 1}</td>
                           {compareColumns.map((c) => (
                             <td key={`pre-c-${rowIdx}-${c}`} className="px-2 py-1 whitespace-nowrap">
@@ -444,17 +376,17 @@ export function DataPreview({
                     </tbody>
                   </table>
                 </div>
-                <div className="rounded-md border bg-white overflow-auto max-h-[28rem]">
-                  <div className="px-3 py-2 text-xs font-semibold border-b text-emerald-800">Post-enrichment snapshot</div>
+                <div className="rounded-md border border-border bg-card overflow-auto max-h-[28rem]">
+                  <div className="px-3 py-2 text-xs font-semibold border-b border-border text-foreground">Post-enrichment snapshot</div>
                   <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-gray-100">
+                    <thead className="sticky top-0 bg-muted/60">
                       <tr>
                         <th className="px-2 py-1 text-left">#</th>
                         {compareColumns.map((c) => (
                           <th
                             key={`post-h-${c}`}
                             className={`px-2 py-1 text-left whitespace-nowrap ${
-                              changedColumns.has(c) ? 'bg-emerald-100 text-emerald-900' : ''
+                              changedColumns.has(c) ? 'bg-primary/10 text-primary' : ''
                             }`}
                           >
                             {c}
@@ -465,7 +397,7 @@ export function DataPreview({
                     </thead>
                     <tbody>
                       {(postEnrichmentSnapshot?.rows || []).map((row, rowIdx) => (
-                        <tr key={`post-r-${rowIdx}`} className="border-b">
+                        <tr key={`post-r-${rowIdx}`} className="border-b border-border">
                           <td className="px-2 py-1 text-muted-foreground">{rowIdx + 1}</td>
                           {compareColumns.map((c) => {
                             const changed = changedCellKeys.has(`${rowIdx}::${c}`);
@@ -474,7 +406,7 @@ export function DataPreview({
                                 key={`post-c-${rowIdx}-${c}`}
                                 className={`px-2 py-1 whitespace-nowrap ${
                                   changed
-                                    ? 'bg-emerald-100/80 border border-emerald-300 text-emerald-900 font-medium'
+                                    ? 'bg-primary/10 border border-primary/25 text-primary font-medium'
                                     : ''
                                 }`}
                                 title={changed ? 'Updated after enrichment' : undefined}
@@ -493,7 +425,7 @@ export function DataPreview({
                   </table>
                 </div>
               </div>
-              <div className="text-[11px] text-emerald-900/70 mt-2">
+              <div className="text-[11px] text-muted-foreground mt-2">
                 Rows are compared by visible order in preview. If row order changes, differences may reflect reordered records.
               </div>
             </div>

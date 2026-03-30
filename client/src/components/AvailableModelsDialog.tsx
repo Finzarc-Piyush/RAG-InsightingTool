@@ -109,7 +109,16 @@ const CATEGORY_COLORS: Record<string, string> = {
   survival: 'bg-indigo-100 text-indigo-800',
 };
 
-export function AvailableModelsDialog() {
+interface AvailableModelsDialogProps {
+  /** Button label (default: Available Models). */
+  triggerLabel?: string;
+  triggerClassName?: string;
+}
+
+export function AvailableModelsDialog({
+  triggerLabel = 'Available Models',
+  triggerClassName,
+}: AvailableModelsDialogProps = {}) {
   const modelsByCategory = AVAILABLE_MODELS.reduce((acc, model) => {
     if (!acc[model.category]) {
       acc[model.category] = [];
@@ -121,9 +130,9 @@ export function AvailableModelsDialog() {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
+        <Button variant="outline" size="sm" className={`gap-2 ${triggerClassName ?? ''}`}>
           <Info className="w-4 h-4" />
-          Available Models
+          {triggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-4xl max-h-[80vh]">

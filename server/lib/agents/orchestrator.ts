@@ -8,7 +8,7 @@ import { askClarifyingQuestion } from './utils/clarification.js';
 import { DataOpsHandler } from './handlers/dataOpsHandler.js';
 import { GeneralHandler } from './handlers/generalHandler.js';
 import { extractRequiredColumns, extractColumnsFromHistory } from './utils/columnExtractor.js';
-import { detectComplexQuery } from './complexQueryDetector.js';
+import { detectComplexQuery, quickLikelyComplexQuery } from './complexQueryDetector.js';
 import queryCache from '../cache.js';
 
 export type ThinkingStepCallback = (step: ThinkingStep) => void;
@@ -282,36 +282,70 @@ export class AgentOrchestrator {
       console.log(`🎯 Classifying intent for: "${finalQuestion}"`);
       const intent = await classifyIntent(finalQuestion, chatHistory, summary);
       console.log(`🎯 Intent: ${intent.type} (confidence: ${intent.confidence.toFixed(2)})`);
-      
-      // CRITICAL: For complex multi-condition queries, force route to GeneralHandler
-      // These queries need the full data and complex processing
-      // Use AI-based detection instead of regex patterns for better accuracy
+
+      let parsedQuery: any = null;
       let isComplexQuery = false;
-      if (finalQuestion && mode !== 'dataOps') {
+
+      const loadParsedQuery = async () => {
         try {
-          this.emitThinkingStep(onThinkingStep, "Analyzing query complexity", "active");
-          const complexityDetection = await detectComplexQuery(finalQuestion, chatHistory, summary);
-          isComplexQuery = complexityDetection.isComplex && complexityDetection.confidence >= 0.7;
-          
-          if (isComplexQuery) {
-            console.log(`🔄 AI detected complex query (confidence: ${complexityDetection.confidence.toFixed(2)})`);
-            if (complexityDetection.complexityReasons && complexityDetection.complexityReasons.length > 0) {
-              console.log(`   Reasons: ${complexityDetection.complexityReasons.join(', ')}`);
-            }
-          }
-          this.emitThinkingStep(onThinkingStep, "Analyzing query complexity", "completed", 
-            isComplexQuery ? 'Complex query detected' : 'Simple query');
+          const { parseUserQuery } = await import('../queryParser.js');
+          return await parseUserQuery(finalQuestion, summary, chatHistory);
         } catch (error) {
-          console.error('⚠️ Error detecting complex query, falling back to simple check:', error);
-          // Fallback: Use simple pattern check if AI detection fails
-          isComplexQuery = !!(finalQuestion && (
-            /which\s+(months|categories|skus|items|products).*had.*above|which\s+(months|categories|skus|items|products).*had.*below/i.test(finalQuestion) ||
-            /which\s+(months|categories|skus|items|products).*compared.*while.*also/i.test(finalQuestion) ||
-            /which\s+(months|categories|skus|items|products).*above.*but.*only.*from/i.test(finalQuestion)
-          ));
+          console.warn('⚠️ Query parsing failed, continuing without structured filters:', error);
+          return null;
         }
+      };
+
+      if (intent.type === 'conversational') {
+        console.log(`⚡ Skipping structured query parse (conversational intent — faster path)`);
+      } else if (finalQuestion && mode !== 'dataOps') {
+        const runComplexityLlm = quickLikelyComplexQuery(finalQuestion);
+        const [pq, complexityDetection] = await Promise.all([
+          loadParsedQuery(),
+          (async () => {
+            if (!runComplexityLlm) {
+              console.log(`⚡ Skipping AI complexity detection (quick heuristic: likely simple)`);
+              return { isComplex: false as const, confidence: 0.95 };
+            }
+            try {
+              this.emitThinkingStep(onThinkingStep, "Analyzing query complexity", "active");
+              const detection = await detectComplexQuery(finalQuestion, chatHistory, summary);
+              const isCx = detection.isComplex && detection.confidence >= 0.7;
+              if (isCx) {
+                console.log(`🔄 AI detected complex query (confidence: ${detection.confidence.toFixed(2)})`);
+                if (detection.complexityReasons && detection.complexityReasons.length > 0) {
+                  console.log(`   Reasons: ${detection.complexityReasons.join(', ')}`);
+                }
+              }
+              this.emitThinkingStep(
+                onThinkingStep,
+                "Analyzing query complexity",
+                "completed",
+                isCx ? "Complex query detected" : "Simple query"
+              );
+              return detection;
+            } catch (error) {
+              console.error('⚠️ Error detecting complex query, falling back to simple check:', error);
+              this.emitThinkingStep(onThinkingStep, "Analyzing query complexity", "completed", "Pattern fallback");
+              const isCx = !!(
+                finalQuestion &&
+                (/which\s+(months|categories|skus|items|products).*had.*above|which\s+(months|categories|skus|items|products).*had.*below/i.test(
+                  finalQuestion
+                ) ||
+                  /which\s+(months|categories|skus|items|products).*compared.*while.*also/i.test(finalQuestion) ||
+                  /which\s+(months|categories|skus|items|products).*above.*but.*only.*from/i.test(finalQuestion))
+              );
+              return { isComplex: isCx, confidence: isCx ? 0.7 : 0.3 };
+            }
+          })(),
+        ]);
+        parsedQuery = pq;
+        isComplexQuery =
+          complexityDetection.isComplex && (complexityDetection.confidence ?? 0) >= 0.7;
+      } else {
+        parsedQuery = await loadParsedQuery();
       }
-      
+
       if (isComplexQuery && intent.type !== 'custom') {
         console.log(`🔄 Detected complex multi-condition query, routing to GeneralHandler (custom type)`);
         intent.type = 'custom';
@@ -319,19 +353,10 @@ export class AgentOrchestrator {
         intent.customRequest = finalQuestion;
         intent.originalQuestion = finalQuestion;
       }
-      
+
       this.emitThinkingStep(onThinkingStep, "Figuring out the best way to answer", "completed");
 
       // Step 2.5: Extract required columns for optimized data loading
-      // Parse query to get columns from filters, aggregations, etc.
-      // Use the final question (enriched) for parsing
-      let parsedQuery: any = null;
-      try {
-        const { parseUserQuery } = await import('../queryParser.js');
-        parsedQuery = await parseUserQuery(finalQuestion, summary, chatHistory);
-      } catch (error) {
-        console.warn('⚠️ Query parsing failed, continuing without structured filters:', error);
-      }
       
       // Extract columns from history (previous charts)
       const historyColumns = extractColumnsFromHistory(chatHistory, summary);

@@ -12,7 +12,7 @@ export const analysisIntentSchema = z.object({
   confidence: z.number().min(0).max(1),
   targetVariable: z.string().optional(),
   variables: z.array(z.string()).optional(),
-  chartType: z.enum(['line', 'bar', 'scatter', 'pie', 'area']).optional(),
+  chartType: z.enum(['line', 'bar', 'scatter', 'pie', 'area', 'heatmap']).optional(),
   filters: z.object({
     correlationSign: z.enum(['positive', 'negative', 'all']).optional(),
     excludeVariables: z.array(z.string()).optional(),

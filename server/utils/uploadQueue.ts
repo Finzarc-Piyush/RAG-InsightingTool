@@ -4,6 +4,7 @@
  */
 
 import type { ChartSpec, Insight, SessionAnalysisContext } from '../shared/schema.js';
+import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -48,6 +49,10 @@ interface UploadJob {
   completedAt?: number;
   /** Client UX: coarse phase during post-preview enrichment (in-memory only). */
   enrichmentStep?: UploadJobEnrichmentStep;
+  /** Understanding checkpoint: dataset profile/context is ready for UX suggestions. */
+  understandingReady?: boolean;
+  understandingReadyAt?: number;
+  suggestedQuestions?: string[];
   warnings?: string[];
   blobPersisted?: boolean;
 }
@@ -418,10 +423,13 @@ class UploadQueue {
         }
         return serializedRow;
       });
-      canonicalizeDateColumnValues(
-        previewSample,
-        skipUploadLlm && !skipDateEnrichmentForSuspiciousCsv ? previewSummary.dateColumns : []
-      );
+      const previewDateCols =
+        skipUploadLlm && !skipDateEnrichmentForSuspiciousCsv ? previewSummary.dateColumns : [];
+      canonicalizeDateColumnValues(previewSample, previewDateCols);
+      if (previewDateCols.length > 0) {
+        const { applyTemporalFacetColumns } = await import('../lib/temporalFacetColumns.js');
+        applyTemporalFacetColumns(previewSample, previewDateCols);
+      }
       warnSuspiciousDuplicateRowIdInSample(previewSample, `upload_preview:${job.sessionId}`);
 
       const previewDoc = await ensureChatDocumentForUploadJob({
@@ -478,7 +486,6 @@ class UploadQueue {
           },
         };
       } else {
-        const { seedSessionAnalysisContextLLM } = await import('../lib/sessionAnalysisContext.js');
         job.enrichmentStep = 'inferring_profile';
         datasetProfile = await inferDatasetProfile(data, {
           fileName: job.fileName,
@@ -503,10 +510,69 @@ class UploadQueue {
           data = finalPrep.data;
           summary = finalPrep.summary;
         }
-        sessionAnalysisContext = await seedSessionAnalysisContextLLM({
-          datasetProfile,
+        const fastUploadCtx =
+          process.env.FAST_UPLOAD_SESSION_CONTEXT === 'true' ||
+          process.env.FAST_UPLOAD_SESSION_CONTEXT === '1';
+        if (fastUploadCtx) {
+          const { emptySessionAnalysisContext } = await import('../lib/sessionAnalysisContext.js');
+          const { suggestedFollowUpsFromDataSummary } = await import(
+            '../lib/suggestedFollowUpsFromSummary.js'
+          );
+          const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
+            fileLabel: job.fileName,
+          });
+          const mergedFollowUps = mergeSuggestedQuestions(
+            derivedFollowUps,
+            datasetProfile.suggestedQuestions
+          );
+          const baseCtx = emptySessionAnalysisContext();
+          const caveats: string[] = [];
+          if (datasetProfile.notes?.trim()) {
+            caveats.push(datasetProfile.notes.trim().slice(0, 500));
+          }
+          sessionAnalysisContext = {
+            ...baseCtx,
+            suggestedFollowUps: mergedFollowUps.slice(0, 12),
+            dataset: {
+              ...baseCtx.dataset,
+              shortDescription: datasetProfile.shortDescription || '',
+              grainGuess: datasetProfile.grainGuess,
+              columnRoles: [],
+              caveats,
+            },
+            lastUpdated: { reason: 'seed', at: new Date().toISOString() },
+          };
+        } else {
+          const { seedSessionAnalysisContextLLM } = await import('../lib/sessionAnalysisContext.js');
+          sessionAnalysisContext = await seedSessionAnalysisContextLLM({
+            datasetProfile,
+            dataSummary: summary,
+          });
+        }
+      }
+
+      const mergedSuggestedQuestions = mergeSuggestedQuestions(
+        sessionAnalysisContext.suggestedFollowUps,
+        datasetProfile.suggestedQuestions
+      );
+
+      // Understanding checkpoint: make summary/context available immediately for UX,
+      // while non-critical finalization work continues in this job.
+      try {
+        const existingDoc = (await getChatBySessionIdEfficient(job.sessionId)) || previewDoc;
+        await updateChatDocument({
+          ...existingDoc,
           dataSummary: summary,
+          datasetProfile,
+          sessionAnalysisContext,
+          enrichmentStatus: "complete",
+          lastUpdatedAt: Date.now(),
         });
+        job.understandingReady = true;
+        job.understandingReadyAt = Date.now();
+        job.suggestedQuestions = mergedSuggestedQuestions;
+      } catch (understandingPersistError) {
+        console.warn("⚠️ Failed to persist understanding-ready checkpoint:", understandingPersistError);
       }
 
       // No upload-time chart/insight generation; first assistant turn uses session context + chat only.
@@ -518,10 +584,7 @@ class UploadQueue {
 
       // Step 4: Suggestions — rolling session context (LLM seed); no hardcoded lists
       job.progress = 60;
-      const suggestions: string[] =
-        sessionAnalysisContext.suggestedFollowUps.length > 0
-          ? [...sessionAnalysisContext.suggestedFollowUps]
-          : [];
+      const suggestions: string[] = mergedSuggestedQuestions.length > 0 ? [...mergedSuggestedQuestions] : [];
 
       // Step 5: Sanitize charts (with memory optimization for large datasets)
       job.progress = 70;
@@ -663,6 +726,10 @@ class UploadQueue {
         });
       }
       canonicalizeDateColumnValues(sampleRows, summary.dateColumns);
+      if (summary.dateColumns.length > 0) {
+        const { applyTemporalFacetColumns } = await import('../lib/temporalFacetColumns.js');
+        applyTemporalFacetColumns(sampleRows, summary.dateColumns);
+      }
       warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
       // Step 9: Save to database

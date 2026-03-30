@@ -709,7 +709,10 @@ export class GeneralHandler extends BaseHandler {
     }
     
     // Generate insights
-    const insights = await generateChartInsights(charts[0], charts[0].data || [], context.summary, context.chatInsights);
+    const insights = await generateChartInsights(charts[0], charts[0].data || [], context.summary, context.chatInsights, {
+      userQuestion: question,
+      permanentContext: context.permanentContext,
+    });
     
     const answer = variablesToAnalyze.length === 1
       ? `I've analyzed seasonal patterns in ${variablesToAnalyze[0]}. The chart shows trends over time grouped by ${dateColumn}.`
@@ -886,7 +889,10 @@ export class GeneralHandler extends BaseHandler {
       }
     );
     
-    const insights = await generateChartInsights(chartSpec, chartData, context.summary, context.chatInsights);
+    const insights = await generateChartInsights(chartSpec, chartData, context.summary, context.chatInsights, {
+      userQuestion: question,
+      permanentContext: context.permanentContext,
+    });
     
     const answer = y2Column
       ? `I've created a line chart with ${yColumn} on the left axis and ${y2Column} on the right axis, plotted over ${xColumn}.`
@@ -1007,6 +1013,7 @@ Respond naturally and conversationally.`;
     const { findMatchingColumn } = await import('../utils/columnMatcher.js');
     const { processChartData } = await import('../../chartGenerator.js');
     const { generateChartInsights } = await import('../../insightGenerator.js');
+    const userQ = intent.originalQuestion || intent.customRequest || '';
 
     const allColumns = context.summary.columns.map(c => c.name);
     const y2Variable = intent.axisMapping!.y2!;
@@ -1073,7 +1080,10 @@ Respond naturally and conversationally.`;
         }
       );
       
-      const insights = await generateChartInsights(updatedChart, chartData, context.summary, context.chatInsights);
+      const insights = await generateChartInsights(updatedChart, chartData, context.summary, context.chatInsights, {
+        userQuestion: userQ,
+        permanentContext: context.permanentContext,
+      });
       
       return {
         answer: `I've added ${y2Column} on the secondary Y-axis. The chart now shows ${previousChart.y} on the left axis and ${y2Column} on the right axis.`,
@@ -1128,7 +1138,10 @@ Respond naturally and conversationally.`;
           }
         );
         
-        const insights = await generateChartInsights(dualAxisSpec, chartData, context.summary, context.chatInsights);
+        const insights = await generateChartInsights(dualAxisSpec, chartData, context.summary, context.chatInsights, {
+          userQuestion: userQ,
+          permanentContext: context.permanentContext,
+        });
         return {
           answer: `I've created a line chart with ${primaryY} on the left axis and ${y2Column} on the right axis.`,
           charts: [{

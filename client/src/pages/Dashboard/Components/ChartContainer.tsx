@@ -134,7 +134,7 @@ export function ChartContainer({ chart, index, dashboardId, sheetId, onDelete, o
       >
         <div
           ref={containerRef}
-          className="rounded-lg border-2 border-border bg-white shadow-lg hover:shadow-xl transition-shadow"
+          className="rounded-lg border-2 border-border bg-card shadow-lg hover:shadow-xl transition-shadow"
           style={{
             display: 'flex',
             flexDirection: 'column',

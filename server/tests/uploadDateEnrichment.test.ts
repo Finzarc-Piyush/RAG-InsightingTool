@@ -11,6 +11,7 @@ import {
   resolveEffectiveDateColumns,
 } from "../lib/fileParser.js";
 import type { DatasetProfile } from "../lib/datasetProfile.js";
+import { facetColumnKey } from "../lib/temporalFacetColumns.js";
 
 describe("parseFlexibleDate (heuristic + fallback)", () => {
   it("parses common date strings", () => {
@@ -23,9 +24,43 @@ describe("parseFlexibleDate (heuristic + fallback)", () => {
     assert.equal(parseFlexibleDate("1234567890"), null);
   });
 
+  it("rejects ambiguous values that only start with 1..12", () => {
+    assert.equal(parseFlexibleDate("12abc"), null);
+    assert.equal(parseFlexibleDate("1 widgets"), null);
+    assert.equal(parseFlexibleDate("03 growth"), null);
+  });
+
   it("returns the same Date when valid", () => {
     const d = new Date(2015, 0, 13);
     assert.strictEqual(parseFlexibleDate(d), d);
+  });
+
+  it("parses MMM-YY and month name + year (pivot aligned with client)", () => {
+    const sep24 = parseFlexibleDate("Sep-24");
+    assert.ok(sep24);
+    assert.equal(sep24!.getFullYear(), 2024);
+    assert.equal(sep24!.getMonth(), 8);
+    assert.notEqual(sep24!.getFullYear(), 2001);
+
+    const mar23 = parseFlexibleDate("Mar-23");
+    assert.ok(mar23);
+    assert.equal(mar23!.getFullYear(), 2023);
+    assert.equal(mar23!.getMonth(), 2);
+
+    const jan01 = parseFlexibleDate("Jan-01");
+    assert.ok(jan01);
+    assert.equal(jan01!.getFullYear(), 2001);
+    assert.equal(jan01!.getMonth(), 0);
+
+    const janSlash = parseFlexibleDate("Jan/24");
+    assert.ok(janSlash);
+    assert.equal(janSlash!.getFullYear(), 2024);
+    assert.equal(janSlash!.getMonth(), 0);
+
+    const dec2025 = parseFlexibleDate("December 2025");
+    assert.ok(dec2025);
+    assert.equal(dec2025!.getFullYear(), 2025);
+    assert.equal(dec2025!.getMonth(), 11);
   });
 });
 
@@ -172,6 +207,21 @@ describe("upload date enrichment never corrupts identifiers", () => {
     assert.ok(!cols.includes("Cycle"));
   });
 
+  it("resolveApprovedDateColumns rejects month-prefix strings that are not explicit dates", () => {
+    const data = [
+      { Cycle: "1 widgets", Sales: 1 },
+      { Cycle: "12abc", Sales: 2 },
+      { Cycle: "03 growth", Sales: 3 },
+    ];
+    const profile: DatasetProfile = {
+      shortDescription: "",
+      dateColumns: ["Cycle"],
+      suggestedQuestions: [],
+    };
+    const cols = resolveApprovedDateColumns(data, profile);
+    assert.ok(!cols.includes("Cycle"));
+  });
+
   it("resolveApprovedDateColumns excludes identifier number variants", () => {
     const data = [
       { "Order No": "2024-01-01", "Invoice Number": "2024-02-01", "Ship Date": "2024-03-01" },
@@ -185,5 +235,22 @@ describe("upload date enrichment never corrupts identifiers", () => {
     assert.ok(!cols.includes("Order No"));
     assert.ok(!cols.includes("Invoice Number"));
     assert.ok(cols.includes("Ship Date"));
+  });
+
+  it("applyUploadPipelineWithProfile puts temporal facet columns in dataSummary.columns for the agent", () => {
+    const data = [{ "Order Date": "2015-06-15", Sales: 10 }];
+    const profile: DatasetProfile = {
+      shortDescription: "",
+      dateColumns: ["Order Date"],
+      suggestedQuestions: [],
+    };
+    const { summary } = applyUploadPipelineWithProfile(data, profile);
+    const yearKey = facetColumnKey("Order Date", "year");
+    const names = summary.columns.map((c) => c.name);
+    assert.ok(names.includes(yearKey), `expected ${yearKey} in column list`);
+    const yc = summary.columns.find((c) => c.name === yearKey);
+    assert.equal(yc?.temporalFacetGrain, "year");
+    assert.equal(yc?.temporalFacetSource, "Order Date");
+    assert.equal(summary.columnCount, names.length);
   });
 });

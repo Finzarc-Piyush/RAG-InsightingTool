@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useMsal } from '@azure/msal-react';
-import { Loader2 } from 'lucide-react';
+import { AppLoadingScreen } from '@/components/AppLoadingScreen';
 
 const AuthCallback: React.FC = () => {
   const { instance } = useMsal();
@@ -22,14 +22,7 @@ const AuthCallback: React.FC = () => {
     handleRedirect();
   }, [instance]);
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
-        <p className="text-gray-600">Completing authentication...</p>
-      </div>
-    </div>
-  );
+  return <AppLoadingScreen message="Completing sign-in…" />;
 };
 
 export default AuthCallback;

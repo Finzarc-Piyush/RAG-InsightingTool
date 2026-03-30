@@ -221,7 +221,15 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   if (raw?.groupBy) parsed.groupBy = raw.groupBy.filter(Boolean) as string[];
   
   // Sanitize dateAggregationPeriod
-  const validPeriods: DatePeriod[] = ['day', 'month', 'monthOnly', 'quarter', 'year'];
+  const validPeriods: DatePeriod[] = [
+    'day',
+    'week',
+    'half_year',
+    'month',
+    'monthOnly',
+    'quarter',
+    'year',
+  ];
   if (raw?.dateAggregationPeriod && validPeriods.includes(raw.dateAggregationPeriod as DatePeriod)) {
     parsed.dateAggregationPeriod = raw.dateAggregationPeriod as DatePeriod;
   } else if (raw?.rawQuestion) {
@@ -503,7 +511,7 @@ Output valid JSON with the following structure:
   "variables": string[] | null,
   "secondaryVariables": string[] | null,
   "groupBy": string[] | null,
-  "dateAggregationPeriod": "day" | "month" | "monthOnly" | "quarter" | "year" | null,
+  "dateAggregationPeriod": "day" | "week" | "half_year" | "month" | "monthOnly" | "quarter" | "year" | null,
   "timeFilters": [
     {
       "type": "year" | "month" | "quarter" | "dateRange" | "relative",

@@ -1,6 +1,7 @@
 import { AnalysisIntent } from '../intentClassifier.js';
 import { ChartSpec, DataSummary, Message } from '../../../shared/schema.js';
 import { ParsedQuery } from '../../../shared/queryTypes.js';
+import { temporalFacetColumnNamesForDateColumns } from '../../temporalFacetColumns.js';
 
 /**
  * Extract mentioned column names from question text
@@ -119,7 +120,12 @@ export function extractRequiredColumns(
   // 5. Always include date columns (needed for time-based queries and aggregations)
   // This ensures time-based operations work correctly
   summary.dateColumns.forEach(c => columns.add(c));
-  
+  if (summary.dateColumns.length > 0) {
+    temporalFacetColumnNamesForDateColumns(summary.dateColumns).forEach((c) =>
+      columns.add(c)
+    );
+  }
+
   // 6. If no specific columns found, include all numeric columns as fallback
   // This ensures basic analysis can still work
   if (columns.size === 0 && summary.numericColumns.length > 0) {
@@ -166,6 +172,9 @@ export function extractColumnsFromHistory(
 ): string[] {
   const columns = new Set<string>();
   const allowed = new Set(summary.columns.map((c) => c.name));
+  temporalFacetColumnNamesForDateColumns(summary.dateColumns).forEach((n) =>
+    allowed.add(n)
+  );
 
   for (let i = chatHistory.length - 1; i >= 0 && i >= chatHistory.length - 8; i--) {
     const msg = chatHistory[i];

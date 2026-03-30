@@ -5,6 +5,8 @@ import type {
   SessionAnalysisContext,
 } from "../../../shared/schema.js";
 import type { AgentExecutionContext, StreamPreAnalysis } from "./types.js";
+import { detectPeriodFromQuery } from "../../dateUtils.js";
+import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
 
 type MidTurnPersist = AgentExecutionContext["onMidTurnSessionContext"];
 
@@ -24,6 +26,7 @@ export function buildAgentExecutionContext(params: {
   loadFullData?: () => Promise<Record<string, any>[]>;
   streamPreAnalysis?: StreamPreAnalysis;
   onMidTurnSessionContext?: MidTurnPersist;
+  onIntermediateArtifact?: AgentExecutionContext["onIntermediateArtifact"];
 }): AgentExecutionContext {
   return {
     sessionId: params.sessionId,
@@ -41,6 +44,7 @@ export function buildAgentExecutionContext(params: {
     loadFullData: params.loadFullData,
     streamPreAnalysis: params.streamPreAnalysis,
     onMidTurnSessionContext: params.onMidTurnSessionContext,
+    onIntermediateArtifact: params.onIntermediateArtifact,
   };
 }
 
@@ -67,9 +71,29 @@ export function appendixForReflectorPrompt(ctx: AgentExecutionContext): string {
   });
 }
 
+function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
+  const meta =
+    summary.temporalFacetColumns?.length ?
+      summary.temporalFacetColumns
+    : temporalFacetMetadataForDateColumns(summary.dateColumns);
+  if (!meta.length) return "";
+  const lines = meta.map(
+    (m) => `${m.name} (${m.grain} of "${m.sourceColumn}")`
+  );
+  const cap = 80;
+  const shown = lines.slice(0, cap);
+  const more = lines.length > cap ? `\n... +${lines.length - cap} more` : "";
+  return `\nDerived time-bucket columns (precomputed from dateColumns; use the matching __tf_* facet column when the question requests that grain):\n${shown.join("\n")}${more}`;
+}
+
 export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const cols = ctx.summary.columns.map((c) => c.name).join(", ");
+  const dates = ctx.summary.dateColumns.join(", ") || "(none)";
+  const numerics = ctx.summary.numericColumns.join(", ") || "(none)";
   const pre = ctx.streamPreAnalysis;
+  const atMentionNote = ctx.question.includes("@")
+    ? "\nThe user may prefix column names with @ (e.g. @Sales (Volume)); treat those as references to the exact schema column names listed above."
+    : "";
   const hints = pre
     ? `\nUpstream analysis intent: ${pre.intentLabel}\nPreferred columns: ${pre.relevantColumns.join(", ") || "(none)"}\nUser intent summary: ${pre.userIntent}`
     : "";
@@ -77,5 +101,13 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
     maxUserChars: 6000,
     maxJsonChars: 12000,
   });
-  return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.${hints}\nMode: ${ctx.mode}${blocks}`;
+  const temporal = detectPeriodFromQuery(ctx.question);
+  const temporalLine = temporal
+    ? `\nTemporal intent from question: use dateAggregationPeriod=${temporal} when bucketing a raw date column, or groupBy the matching precomputed __tf_* facet column and omit date bucketing in the plan. For vague temporal questions (no explicit grain), prefer sorting on the raw date column over forcing yearly buckets.`
+    : "";
+  const facetBlock = formatDerivedTemporalFacetsBlock(ctx.summary);
+  return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.
+dateColumns: ${dates}
+numericColumns: ${numerics}${facetBlock}${hints}${atMentionNote}${temporalLine}
+Mode: ${ctx.mode}${blocks}`;
 }

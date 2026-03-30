@@ -2,8 +2,14 @@ import React, { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { LogOut, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-const LogoutButton: React.FC = () => {
+interface LogoutButtonProps {
+  /** Icon-only for narrow / collapsed layouts */
+  iconOnly?: boolean;
+}
+
+const LogoutButton: React.FC<LogoutButtonProps> = ({ iconOnly = false }) => {
   const { logout, isLoading } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -19,23 +25,47 @@ const LogoutButton: React.FC = () => {
 
   const isProcessing = isLoading || isLoggingOut;
 
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        onClick={handleLogout}
+        variant="ghost"
+        size="icon"
+        disabled={isProcessing}
+        className={cn(
+          'h-10 w-10 rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',
+          'disabled:opacity-50'
+        )}
+        aria-label={isProcessing ? 'Signing out' : 'Sign out'}
+      >
+        {isProcessing ? (
+          <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+        ) : (
+          <LogOut className="h-4 w-4" />
+        )}
+      </Button>
+    );
+  }
+
   return (
     <Button
+      type="button"
       onClick={handleLogout}
       variant="ghost"
       size="sm"
       disabled={isProcessing}
-      className="w-full flex items-center gap-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-50"
+      className="w-full justify-start gap-2 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground disabled:opacity-50"
     >
       {isProcessing ? (
         <>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Signing out...</span>
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" />
+          <span>Signing out…</span>
         </>
       ) : (
         <>
-          <LogOut className="h-4 w-4" />
-          <span>Sign Out</span>
+          <LogOut className="h-4 w-4 shrink-0" />
+          <span>Sign out</span>
         </>
       )}
     </Button>

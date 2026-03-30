@@ -15,6 +15,7 @@ import {
 
 let agenticStrictDeprecationLogged = false;
 import { openai, MODEL } from './openai.js';
+import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { processChartData } from './chartGenerator.js';
 import { optimizeChartData } from './chartDownsampling.js';
 import { analyzeCorrelations } from './correlationAnalyzer.js';
@@ -22,7 +23,8 @@ import { generateChartInsights } from './insightGenerator.js';
 import { parseUserQuery } from './queryParser.js';
 import { applyQueryTransformations } from './dataTransform.js';
 import type { ParsedQuery } from '../shared/queryTypes.js';
-import { executeAnalyticalQuery, generateQueryContextForAI } from './analyticalQueryExecutor.js';
+import { executeAnalyticalQuery, generateQueryContextForAI, type AnalyticalQueryResult } from './analyticalQueryExecutor.js';
+import { mergeDeterministicAnalyticalCharts } from './analyticalChartSpec.js';
 import { 
   isAnalyticalQuery,
   isInformationSeekingQuery,
@@ -231,7 +233,7 @@ export async function analyzeUploadWithPython(
       x = alt;
     }
     const aggregate = ['sum', 'mean', 'count', 'none'].includes(spec.aggregate) ? spec.aggregate : 'none';
-    const type = ['line', 'bar', 'scatter', 'pie', 'area'].includes(spec.type) ? spec.type : 'bar';
+    const type = ['line', 'bar', 'scatter', 'pie', 'area', 'heatmap'].includes(spec.type) ? spec.type : 'bar';
     if (type === 'pie' && dateColumns.includes(x)) return null;
     return { type, title: spec.title || 'Untitled Chart', x, y, aggregate };
   };
@@ -251,7 +253,7 @@ export async function analyzeUploadWithPython(
 
   const chartsList = chartSpecs.map(s => `- ${s.type}: "${s.title}" (x=${s.x}, y=${s.y})`).join('\n');
 
-  const insightPrompt = `Analyze this dataset and provide 3-5 specific, actionable business insights with QUANTIFIED suggestions.
+  const insightPrompt = `From the statistics and chart list below, produce 3-5 insights. Each insight should tie specific numbers to business meaning (risk, opportunity, concentration, volatility) and, when appropriate, a measurable next step. Vary wording; avoid repeating the same template. Use only numbers from the data.
 
 DATA SUMMARY:
 - ${summary.rowCount} rows, ${summary.columnCount} columns
@@ -264,18 +266,21 @@ ${statsBlock}
 CHARTS BEING SHOWN (for context):
 ${chartsList}
 
-Each insight MUST include: (1) A bold headline with the key finding, (2) Specific numbers from the statistics above, (3) Why it matters to the business, (4) Actionable suggestion with "**Actionable Suggestion:**" and specific targets. Use actual numbers; no vague language. Output valid JSON only:
-{"insights":[{"id":1,"text":"**Title:** ... **Why it matters:** ... **Actionable Suggestion:** ..."}, ...]}`;
+Output valid JSON only: {"insights":[{"id":1,"text":"..."}, ...]}. Do not use P75/P90 shorthand—use numeric values from the stats.`;
 
   const insightResponse = await openai.chat.completions.create({
-    model: (useFastModel ? 'gpt-4o-mini' : MODEL) as string,
+    model: (useFastModel ? 'gpt-4o-mini' : getInsightModel()) as string,
     messages: [
-      { role: 'system', content: 'You are a senior business analyst. Output only valid JSON with an "insights" array. Each item: { "id": number, "text": "string" }. Use specific numbers and actionable suggestions.' },
+      {
+        role: 'system',
+        content:
+          'You are a senior business analyst. Output only valid JSON with an "insights" array. Each item: { "id": number, "text": "string" }. Ground every figure in the user statistics.',
+      },
       { role: 'user', content: insightPrompt },
     ],
     response_format: { type: 'json_object' as const },
-    temperature: 0.6,
-    max_tokens: 2500,
+    temperature: getBatchInsightTemperature(),
+    max_tokens: 2600,
   });
 
   const insightContent = insightResponse.choices[0]?.message?.content || '{}';
@@ -392,6 +397,8 @@ export interface AnswerQuestionAgentOptions {
   dataBlobVersion?: number;
   /** Throttled sessionAnalysisContext merge during the turn (e.g. tool milestones). */
   onMidTurnSessionContext?: import('./agents/runtime/types.js').AgentExecutionContext['onMidTurnSessionContext'];
+  /** Preliminary analytical table rows (segmented streaming UX). */
+  onIntermediateArtifact?: import('./agents/runtime/types.js').AgentExecutionContext['onIntermediateArtifact'];
 }
 
 export async function answerQuestion(
@@ -416,6 +423,7 @@ export async function answerQuestion(
   operationResult?: any;
   agentTrace?: import('./agents/runtime/types.js').AgentTrace;
   agentSuggestionHints?: string[];
+  lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -429,6 +437,7 @@ export async function answerQuestion(
       );
       agenticStrictDeprecationLogged = true;
     }
+
     try {
       const config = loadAgentConfigFromEnv();
       const execCtx = buildAgentExecutionContext({
@@ -447,6 +456,7 @@ export async function answerQuestion(
         loadFullData,
         streamPreAnalysis: agentOptions?.streamPreAnalysis,
         onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
+        onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
       });
       const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
       if (loopResult?.answer?.trim()) {
@@ -459,27 +469,27 @@ export async function answerQuestion(
           operationResult: loopResult.operationResult,
           agentTrace: loopResult.agentTrace,
           agentSuggestionHints: loopResult.agentSuggestionHints,
+          lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
-      const detailed = process.env.AGENT_DETAILED_USER_ERRORS === "true";
       const trace = loopResult?.agentTrace;
       const pr = trace?.plannerRejectReason;
       let emptyAnswer =
         "I couldn't complete this analysis with the agent. Please try again or rephrase your question.";
-      if (detailed && pr === "column_not_in_schema") {
+      if (pr === "column_not_in_schema") {
         emptyAnswer =
           "The agent's plan used column names that don't match your dataset. Check spelling against your headers and try again.";
-      } else if (detailed && (pr === "dependency_cycle" || pr === "bad_depends_on")) {
+      } else if (pr === "dependency_cycle" || pr === "bad_depends_on") {
         emptyAnswer =
           "The agent could not build a valid step order for this question. Try a simpler question or rephrase.";
-      } else if (detailed && (pr === "invalid_tool_args" || pr === "unknown_tool")) {
+      } else if (pr === "invalid_tool_args" || pr === "unknown_tool") {
         emptyAnswer =
           "The agent produced a plan that could not be run. Please try again or narrow your question.";
-      } else if (detailed && (pr === "llm_json_invalid" || pr === "empty_steps")) {
+      } else if (pr === "llm_json_invalid" || pr === "empty_steps") {
         emptyAnswer =
           "The planner could not produce a valid plan for this turn. Please try again.";
-      } else if (detailed && (trace?.parseFailures ?? 0) > 0 && !pr) {
+      } else if ((trace?.parseFailures ?? 0) > 0 && !pr) {
         emptyAnswer =
           "Some tool steps failed validation during this turn. Check column names and filters, then try again.";
       }
@@ -491,6 +501,7 @@ export async function answerQuestion(
         operationResult: loopResult?.operationResult,
         agentTrace: loopResult?.agentTrace,
         agentSuggestionHints: loopResult?.agentSuggestionHints,
+        lastAnalyticalRowsForEnrichment: loopResult?.lastAnalyticalRowsForEnrichment,
       };
     } catch (agenticErr) {
       const detail =
@@ -2073,7 +2084,7 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
       };
     }).filter((spec: any) => {
       if (!spec || !spec.type || !spec.x || !spec.y) return false;
-      if (!['line', 'bar', 'scatter', 'pie', 'area'].includes(spec.type)) return false;
+      if (!['line', 'bar', 'scatter', 'pie', 'area', 'heatmap'].includes(spec.type)) return false;
       
       // Filter out pie charts with date columns (unless explicitly requested in generateGeneralAnswer)
       // This function is for auto-generated charts, so we don't allow date columns for pie charts here
@@ -2268,9 +2279,11 @@ export async function generateInsights(
     : '';
 
   const insightCountInstruction = divisionContext
-    ? 'Provide 2-3 specific, actionable business insights for **this segment only** (they will be combined with insights from other segments).'
-    : 'Provide 5-7 specific, actionable business insights with QUANTIFIED suggestions.';
-  const prompt = `${divisionNote}Analyze this dataset and ${insightCountInstruction}
+    ? 'Provide 2-3 insights for **this segment only** (combined later with other segments).'
+    : 'Provide 5-7 insights.';
+  const prompt = `${divisionNote}You are synthesizing insights from the statistics below. Each insight should combine (1) grounded numbers from the data, (2) what that pattern could mean for a real business (concentration, volatility, upside, risk), and (3) a concrete next step or metric to watch—only when the data supports it. Vary structure: some insights can be short paragraphs; others can use TABLE_V1|{"caption":...,"columns":...,"rows":...} on one line when a table is clearer than prose. Skip trite filler; if a finding is obvious, say so briefly or pick a different angle.
+
+${insightCountInstruction}
 
 DATA SUMMARY:
 - ${divisionContext ? `${data.length} rows in this segment` : `${summary.rowCount} rows`}, ${summary.columnCount} columns
@@ -2296,64 +2309,20 @@ ${Object.entries(stats)
   })
   .join('\n\n')}
 
-Each insight MUST be either SENTENCE FORM or TABLE FORM.
+Rules:
+- Every numeric claim must match the statistics above. Do not invent columns or rows.
+- Never output percentile shorthand like "P75" or "P90"—use the actual numbers from the stats.
+- Output valid JSON: { "insights": [ { "text": "..." }, ... ] }`;
 
-Representation decision is up to the model:
-- Choose SENTENCE FORM when prose explanation is clearer (why it matters + what to do next).
-- Choose TABLE FORM when ranking/comparing multiple items is clearer as a table than a paragraph.
-- Prefer using both forms within the same response when it improves clarity, but do not hard-limit the number of tables.
+  const aiModel = useFastModel ? 'gpt-4o-mini' : getInsightModel();
 
-SENTENCE FORM (default; required when the answer is best explained in prose):
-1. A bold headline with the key finding (e.g., **High Marketing Efficiency:**)
-2. Specific numbers, percentages, or metrics from the statistics above (use actual percentiles, averages, top/bottom values)
-3. Explanation of WHY this matters to the business
-4. Actionable suggestion starting with "**Actionable Suggestion:**" that includes:
-  - Explicit numeric targets or thresholds
-  - Specific improvement goals
-  - Quantified benchmarks
-  - Measurable action items with specific numbers
-
-Format each sentence-form insight as a complete paragraph with the structure:
-**[Insight Title]:** [Finding with specific metrics from statistics]. **Why it matters:** [Business impact]. **Actionable Suggestion:** [Quantified suggestion with specific targets, thresholds, and improvement goals].
-
-TABLE FORM (use when ranking/comparing multiple items is clearer as a table than a paragraph):
-- The value of text MUST start exactly with TABLE_V1|
-- Immediately after TABLE_V1|, include a single-line JSON object with this exact shape:
-  {"caption":"...","columns":["...","..."],"rows":[[...],[...],...]}
-- caption must be a short description of what the table is ranking and why it matters.
-- The table must be self-sufficient: include the numeric values the user would need to act on (top/bottom, ranks, deltas), even if a supporting chart is also shown.
-- columns and rows must contain concrete, numeric values (no vague placeholders).
-- If the insight would normally include actionable targets, include them either in caption or as one of the columns/values.
-- Do not include markdown tables; this is a JSON payload embedded in the text field.
-
-CRITICAL REQUIREMENTS (applies to BOTH forms):
-- Use ACTUAL numbers from the statistics above (percentiles, averages, top/bottom values)
-- Suggestions must be measurable and quantifiable with specific targets
-- Include specific improvement percentages or absolute values
-- NEVER use percentile labels like "P75", "P90", "P25", "P50", "P75 level", "P90 level", "P75 value", "P90 value" in your output
-- ONLY use the numeric values themselves
-- No vague language - use specific numbers from the statistics above
-
-Example:
-**Revenue Concentration Risk:** The top 3 products account for 78% of total revenue ($2.4M out of $3.1M), indicating high dependency. Average revenue per product is $X, with top performer at $Y. **Why it matters:** Over-reliance on few products creates vulnerability to market shifts or competitive pressure. **Actionable Suggestion:** Diversify revenue streams by investing in product development for the remaining portfolio. Target: Increase bottom 50% products' revenue by 25% to reach ${stats.revenue?.median.toFixed(2) || 'target'} within 12 months, aiming for 60/40 split between top and bottom performers.
-
-Output as JSON array:
-{
-  "insights": [
-    { "text": "**Insight Title:** Full insight text here with quantified suggestion..." },
-    ...
-  ]
-}`;
-
-  // OPTIMIZATION: Use faster model for large files (2-3x faster, much cheaper)
-  const aiModel = useFastModel ? 'gpt-4o-mini' : MODEL;
-  
   const response = await openai.chat.completions.create({
     model: aiModel as string,
     messages: [
       {
         role: 'system',
-        content: 'You are a senior business analyst. Provide detailed, quantitative insights with specific metrics and actionable suggestions. NEVER use percentile labels like P75, P90, P25, P75 level, P90 level, P75 value, P90 value - only use numeric values. Output valid JSON.',
+        content:
+          'You are a senior business analyst. Output valid JSON with an "insights" array. Each item: { "text": "string" }. Ground claims in provided statistics; interpret business meaning where justified.',
       },
       {
         role: 'user',
@@ -2361,8 +2330,8 @@ Output as JSON array:
       },
     ],
     response_format: { type: 'json_object' },
-    temperature: 0.6,
-    max_tokens: 2500,
+    temperature: getBatchInsightTemperature(),
+    max_tokens: 2800,
   });
 
   const content = response.choices[0].message.content || '{}';
@@ -2942,8 +2911,10 @@ export async function generateGeneralAnswer(
   // This runs queries on CSV data and provides results to Azure AI
   // Reuse already parsed query to avoid duplicate parsing
   let analyticalQueryContext = '';
+  let analyticalResultSnapshot: AnalyticalQueryResult | null = null;
   try {
     const analyticalResult = await executeAnalyticalQuery(question, data, summary, chatHistory, parsedQuery);
+    analyticalResultSnapshot = analyticalResult.isAnalytical ? analyticalResult : null;
     if (analyticalResult.isAnalytical && analyticalResult.queryResults) {
       console.log('✅ Analytical query executed, injecting results into AI prompt');
       analyticalQueryContext = generateQueryContextForAI(analyticalResult);
@@ -4347,14 +4318,13 @@ CRITICAL EXECUTION RULES - EXECUTE IMMEDIATELY, NO CLARIFICATION:
 - NEVER say "I encountered an issue" or "Could you rephrase" - if data is available, use it to answer the question
 
 🚨 CRITICAL: IF QUERY RESULTS ARE PROVIDED ABOVE (marked with "QUERY RESULTS FOR ANALYTICAL QUESTION"):
-- DO NOT generate a chart - answer the question directly using the query results
+- ANSWER DIRECTLY with the actual values from the query results — your narrative must match those numbers exactly
 - DO NOT say "No valid data points found" - the query has been executed and results are above
-- DO NOT try to create a trend chart or any visualization - use the provided query results
-- ANSWER DIRECTLY with the actual values from the query results
+- You MAY include chart specifications in JSON when the user asks for a chart/visualization, as long as the answer text still uses the query results for all numbers
 - If the user asks "which region/category generated more than X", list the regions/categories from the query results
 - Format your answer clearly: "The regions that meet the criteria are: [list with values from query results]"
 
-If the question requests a chart or visualization AND NO QUERY RESULTS ARE PROVIDED, generate appropriate chart specifications. Otherwise, provide a helpful answer with ACTUAL RESULTS and VALUES.
+If the question requests a chart or visualization, you may generate chart specifications (types include line, bar, area, scatter, pie, heatmap for two dimensions + a measure). Otherwise focus on ACTUAL RESULTS AND VALUES in prose.
 
 CHART GUIDELINES:
 - You can use ANY column (categorical or numeric) for x or y
@@ -4495,7 +4465,7 @@ TECHNICAL RULES:
         };
       }).filter((spec: any) => 
         spec.type && spec.x && spec.y &&
-        ['line', 'bar', 'scatter', 'pie', 'area'].includes(spec.type)
+        ['line', 'bar', 'scatter', 'pie', 'area', 'heatmap'].includes(spec.type)
       );
 
       const chartsResult = await Promise.all(sanitized.map(async (spec: ChartSpec) => {
@@ -4759,6 +4729,16 @@ TECHNICAL RULES:
         }
       }
     }
+
+    processedCharts = await mergeDeterministicAnalyticalCharts(
+      processedCharts,
+      workingData,
+      summary,
+      parsedQuery,
+      question,
+      analyticalResultSnapshot,
+      chatInsights
+    );
 
     // Always provide chat-level insights: prefer model's, else derive from charts
     let overallInsights = Array.isArray(result.insights) ? result.insights : undefined;

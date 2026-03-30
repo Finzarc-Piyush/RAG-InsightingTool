@@ -4,10 +4,118 @@
  * This is the ONLY place RegEx should be used for column extraction
  */
 
+type SpanHit = { column: string; start: number; end: number };
+
+/**
+ * @ColumnName tokens from the composer (mention picker / sidebar insert). Longest match first
+ * so @Sales (Volume) % Chg YA matches before @Sales (Volume).
+ */
+function extractAtMentionColumns(message: string, availableColumns: string[]): string[] {
+  const sorted = [...availableColumns].sort((a, b) => b.length - a.length);
+  const found: string[] = [];
+  for (const col of sorted) {
+    const escaped = col.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('@' + escaped + '(?=\\s|$|[,;:!?.])', 'i');
+    if (re.test(message)) {
+      found.push(col);
+    }
+  }
+  return found;
+}
+
+function spanLen(s: SpanHit): number {
+  return s.end - s.start;
+}
+
+/**
+ * Drop hits whose span lies entirely inside another hit's span (e.g. "Volume" inside "Sales (Volume)").
+ * Longer spans win; ties keep both unless identical span (same column deduped later).
+ */
+function dropSpansContainedInLonger(hits: SpanHit[]): SpanHit[] {
+  if (hits.length <= 1) {
+    return hits;
+  }
+  const sorted = [...hits].sort((a, b) => spanLen(b) - spanLen(a));
+  const kept: SpanHit[] = [];
+  for (const h of sorted) {
+    const insideKept = kept.some(
+      (k) => h.start >= k.start && h.end <= k.end && spanLen(k) >= spanLen(h)
+    );
+    if (!insideKept) {
+      kept.push(h);
+    }
+  }
+  return kept;
+}
+
+function uniqueColumnsByFirstAppearance(hits: SpanHit[]): string[] {
+  hits.sort((a, b) => a.start - b.start);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const h of hits) {
+    if (!seen.has(h.column)) {
+      seen.add(h.column);
+      out.push(h.column);
+    }
+  }
+  return out;
+}
+
+function collectQuotedHits(message: string, columnMap: Map<string, string>): SpanHit[] {
+  const hits: SpanHit[] = [];
+  const quotedPattern = /["'`]([^"'`]+)["'`]/g;
+  let match: RegExpExecArray | null;
+  while ((match = quotedPattern.exec(message)) !== null) {
+    const rawInner = match[1];
+    const trimmed = rawInner.trim();
+    const normalized = trimmed.toLowerCase();
+    if (!columnMap.has(normalized)) {
+      continue;
+    }
+    const column = columnMap.get(normalized)!;
+    const rel = rawInner.indexOf(trimmed);
+    const start = match.index + 1 + (rel >= 0 ? rel : 0);
+    const end = start + trimmed.length;
+    hits.push({ column, start, end });
+  }
+  return hits;
+}
+
+function collectPhraseHits(message: string, col: string): SpanHit[] {
+  const normalizedCol = col.toLowerCase().trim();
+  const escapedCol = normalizedCol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const phrasePattern = new RegExp(`(?:^|[^\\w])${escapedCol}(?=[^\\w]|$)`, 'gi');
+  const hits: SpanHit[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = phrasePattern.exec(message)) !== null) {
+    hits.push({ column: col, start: m.index, end: m.index + m[0].length });
+  }
+  return hits;
+}
+
+function collectFlexibleHits(message: string, col: string): SpanHit[] {
+  const normalizedCol = col.toLowerCase().trim();
+  if (!normalizedCol.includes(' ') && !normalizedCol.includes('_') && !normalizedCol.includes('-')) {
+    return [];
+  }
+  const flexiblePattern = normalizedCol
+    .replace(/\s+/g, '\\s+')
+    .replace(/_/g, '[\\s_]+')
+    .replace(/-/g, '[\\s-]+');
+  const escapedPattern = flexiblePattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const phrasePattern = new RegExp(escapedPattern, 'gi');
+  const hits: SpanHit[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = phrasePattern.exec(message)) !== null) {
+    hits.push({ column: col, start: m.index, end: m.index + m[0].length });
+  }
+  return hits;
+}
+
 /**
  * Extracts column names from a chat message using RegEx patterns
  * Matches against available columns from the dataset
- * 
+ *
  * @param message - The chat message to extract columns from
  * @param availableColumns - Array of available column names from the dataset
  * @returns Array of extracted column names that match available columns
@@ -20,108 +128,54 @@ export function extractColumnsFromMessage(
     return [];
   }
 
-  const extractedColumns: string[] = [];
-  const normalizedMessage = message.toLowerCase();
-
-  // Create a map of normalized column names to original column names
   const columnMap = new Map<string, string>();
   for (const col of availableColumns) {
     const normalized = col.toLowerCase().trim();
     columnMap.set(normalized, col);
   }
 
-  // RegEx patterns to match column names in the message
-  // Pattern 1: Match quoted column names (e.g., "PA TOM", 'Revenue', `Sales`)
-  const quotedPattern = /["'`]([^"'`]+)["'`]/g;
-  let match;
-  while ((match = quotedPattern.exec(message)) !== null) {
-    const quotedText = match[1].trim();
-    const normalized = quotedText.toLowerCase();
-    
-    // Check if it matches any available column
-    if (columnMap.has(normalized)) {
-      const originalColumn = columnMap.get(normalized)!;
-      if (!extractedColumns.includes(originalColumn)) {
-        extractedColumns.push(originalColumn);
-      }
-    }
+  const atMentionColumns = extractAtMentionColumns(message, availableColumns);
+  if (atMentionColumns.length > 0) {
+    return dedupeSubsumedColumnNames(atMentionColumns);
   }
 
-  // Pattern 2: Match column names that appear as standalone words
-  // Look for words that match column names (case-insensitive, word boundaries)
+  const allHits: SpanHit[] = [];
+  allHits.push(...collectQuotedHits(message, columnMap));
+
   for (const col of availableColumns) {
-    const normalizedCol = col.toLowerCase().trim();
-    
-    // Escape special regex characters in column name
-    const escapedCol = normalizedCol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    
-    // Create regex pattern with word boundaries
-    // This matches the column name as a complete word or phrase
-    const wordBoundaryPattern = new RegExp(`\\b${escapedCol}\\b`, 'gi');
-    
-    if (wordBoundaryPattern.test(message)) {
-      if (!extractedColumns.includes(col)) {
-        extractedColumns.push(col);
-      }
-    }
+    allHits.push(...collectPhraseHits(message, col));
   }
 
-  // Pattern 3: Match column names that contain spaces or special characters
-  // Some column names might be referenced without quotes but with specific formatting
-  // Match multi-word column names that appear in the message
   for (const col of availableColumns) {
-    // Skip if already extracted
-    if (extractedColumns.includes(col)) {
-      continue;
-    }
-
-    const normalizedCol = col.toLowerCase().trim();
-    
-    // For multi-word columns, try to match them as phrases
-    if (normalizedCol.includes(' ') || normalizedCol.includes('_') || normalizedCol.includes('-')) {
-      // Replace spaces, underscores, hyphens with optional whitespace pattern
-      const flexiblePattern = normalizedCol
-        .replace(/\s+/g, '\\s+')
-        .replace(/_/g, '[\\s_]+')
-        .replace(/-/g, '[\\s-]+');
-      
-      // Escape special regex characters
-      const escapedPattern = flexiblePattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      
-      const phrasePattern = new RegExp(escapedPattern, 'gi');
-      if (phrasePattern.test(message)) {
-        if (!extractedColumns.includes(col)) {
-          extractedColumns.push(col);
-        }
-      }
-    }
+    allHits.push(...collectFlexibleHits(message, col));
   }
 
-  // Pattern 4: Match partial column names (for abbreviations or partial references)
-  // Only match if the partial name is at least 3 characters and appears as a word
-  for (const col of availableColumns) {
-    if (extractedColumns.includes(col)) {
-      continue;
-    }
+  const survived = dropSpansContainedInLonger(allHits);
+  const extractedColumns = uniqueColumnsByFirstAppearance(survived);
 
-    const normalizedCol = col.toLowerCase().trim();
-    
-    // Try matching first word or abbreviation
-    const firstWord = normalizedCol.split(/[\s_-]+/)[0];
-    if (firstWord.length >= 3) {
-      const abbreviationPattern = new RegExp(`\\b${firstWord}\\b`, 'gi');
-      if (abbreviationPattern.test(message)) {
-        // Additional check: make sure it's not a common word
-        const commonWords = ['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'way', 'use', 'her', 'she', 'him', 'has', 'had', 'did', 'get', 'may', 'new', 'now', 'old', 'see', 'two', 'who', 'way', 'use'];
-        if (!commonWords.includes(firstWord.toLowerCase())) {
-          if (!extractedColumns.includes(col)) {
-            extractedColumns.push(col);
-          }
-        }
-      }
-    }
-  }
-
-  return extractedColumns;
+  return dedupeSubsumedColumnNames(extractedColumns);
 }
 
+/**
+ * If both "Sales" and "Sales (Volume)" match, keep only the more specific name.
+ * Uses prefix checks so shorter tokens don't duplicate longer column matches.
+ */
+function dedupeSubsumedColumnNames(columns: string[]): string[] {
+  if (columns.length <= 1) {
+    return columns;
+  }
+  const sorted = [...columns].sort((a, b) => b.length - a.length);
+  const out: string[] = [];
+  for (const c of sorted) {
+    const lower = c.toLowerCase();
+    const subsumedByLonger = out.some((o) => {
+      if (o.length <= c.length) return false;
+      const ol = o.toLowerCase();
+      return ol.startsWith(lower + ' ') || ol.startsWith(lower + '(');
+    });
+    if (!subsumedByLonger) {
+      out.push(c);
+    }
+  }
+  return out;
+}

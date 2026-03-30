@@ -8,6 +8,7 @@ import { ColumnarStorageService, DatasetMetadata, isDuckDBAvailable } from './co
 import { metadataService } from './metadataService.js';
 import { DataSummary } from '../shared/schema.js';
 import { convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from './fileParser.js';
+import { applyTemporalFacetColumns } from './temporalFacetColumns.js';
 
 export interface LargeFileProcessResult {
   rowCount: number;
@@ -58,6 +59,9 @@ export async function processLargeFile(
     let summary = metadataService.convertToDataSummary(metadata, sampleRows);
     const sampleRowsProcessed = convertDashToZeroForNumericColumns(sampleRows, summary.numericColumns);
     canonicalizeDateColumnValues(sampleRowsProcessed, summary.dateColumns);
+    if (summary.dateColumns.length > 0) {
+      applyTemporalFacetColumns(sampleRowsProcessed, summary.dateColumns);
+    }
     summary = metadataService.convertToDataSummary(metadata, sampleRowsProcessed);
 
     metadataService.cacheMetadata(sessionId, metadata, summary);

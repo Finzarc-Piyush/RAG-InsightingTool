@@ -9,18 +9,21 @@ export async function completeJson<T>(
   options: {
     maxTokens?: number;
     temperature?: number;
+    /** Defaults to main chat deployment; set INSIGHT_MODEL for a dedicated insights deployment. */
+    model?: string;
     turnId?: string;
     onLlmCall?: () => void;
   }
 ): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const maxTokens = options.maxTokens ?? 2048;
   const temperature = options.temperature ?? 0.2;
+  const model = options.model ?? MODEL;
   const mark = () => options.onLlmCall?.();
 
   const runOnce = async (sys: string, usr: string) => {
     mark();
     const res = await openai.chat.completions.create({
-      model: MODEL as string,
+      model: model as string,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: usr },

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import multer from "multer";
 import { uploadQueue } from "../utils/uploadQueue.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
 
 /**
  * Upload file endpoint - now uses async queue processing
@@ -89,7 +90,7 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       uploading: { phase: "queued", message: "Upload accepted and queued for processing." },
       parsing: { phase: "preparing_preview", message: "Preparing dataset preview." },
       preview_ready: { phase: "preparing_preview", message: "Preview is ready." },
-      analyzing: { phase: "enriching", message: "Enriching dataset context." },
+      analyzing: { phase: "enriching", message: "Enriching data understanding and preparing suggested analysis questions." },
       saving: { phase: "finalizing", message: "Finalizing and saving analysis." },
       completed: { phase: "completed", message: "Upload processing complete." },
       failed: { phase: "failed", message: "Upload processing failed." },
@@ -112,6 +113,13 @@ export const getUploadStatus = async (req: Request, res: Response) => {
 
     if (job.enrichmentStep) {
       response.enrichmentStep = job.enrichmentStep;
+    }
+    if (job.understandingReady) {
+      response.understandingReady = true;
+      response.understandingReadyAt = job.understandingReadyAt;
+      if (Array.isArray(job.suggestedQuestions) && job.suggestedQuestions.length > 0) {
+        response.suggestedQuestions = job.suggestedQuestions;
+      }
     }
     if (job.warnings && job.warnings.length > 0) {
       response.warnings = job.warnings;
@@ -136,6 +144,13 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       const session = await getChatBySessionIdEfficient(job.sessionId);
       if (session?.enrichmentStatus) {
         response.enrichmentStatus = session.enrichmentStatus;
+      }
+      const mergedSuggestedQuestions = mergeSuggestedQuestions(
+        session?.sessionAnalysisContext?.suggestedFollowUps,
+        session?.datasetProfile?.suggestedQuestions
+      );
+      if (mergedSuggestedQuestions.length > 0) {
+        response.suggestedQuestions = mergedSuggestedQuestions;
       }
       if (
         session?.dataSummary &&
@@ -168,6 +183,9 @@ export const getUploadStatus = async (req: Request, res: Response) => {
           response.previewSampleRows.length > 0 ? "full" : "summary_only";
       } else if (response.previewReady) {
         response.previewPayloadState = "none";
+      }
+      if (session?.enrichmentStatus === "complete") {
+        response.understandingReady = true;
       }
     } catch {
       /* ignore */

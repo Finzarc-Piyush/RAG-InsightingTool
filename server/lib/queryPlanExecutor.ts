@@ -7,6 +7,7 @@ import { z } from "zod";
 import { applyQueryTransformations } from "./dataTransform.js";
 import type { ParsedQuery } from "../shared/queryTypes.js";
 import type { DataSummary } from "../shared/schema.js";
+import { remapGroupByToTemporalFacet } from "./temporalFacetColumns.js";
 
 const aggOpSchema = z.enum([
   "sum",
@@ -23,7 +24,7 @@ export const queryPlanBodySchema = z
   .object({
     groupBy: z.array(z.string().min(1)).optional(),
     dateAggregationPeriod: z
-      .enum(["day", "month", "monthOnly", "quarter", "year"])
+      .enum(["day", "week", "half_year", "month", "monthOnly", "quarter", "year"])
       .nullable()
       .optional(),
     aggregations: z
@@ -66,6 +67,40 @@ export const executeQueryPlanArgsSchema = z
   .strict();
 
 export type QueryPlanBody = z.infer<typeof queryPlanBodySchema>;
+
+/**
+ * Aligns raw date groupBy entries with precomputed `__tf_*` facet columns when the user
+ * question implies a coarse period (month/year/…) and those keys exist on rows — same
+ * idea as data-ops `remapGroupByToTemporalFacet`. Clears `dateAggregationPeriod` when
+ * any groupBy remap occurs so the executor does not double-bucket.
+ */
+export function remapQueryPlanGroupByToTemporalFacets(
+  plan: QueryPlanBody,
+  summary: DataSummary,
+  availableKeys: Set<string>,
+  originalMessage: string | undefined
+): QueryPlanBody {
+  const groupBy = plan.groupBy;
+  if (!groupBy?.length) return plan;
+  const dateColumns = summary.dateColumns ?? [];
+  let anyRemapped = false;
+  const nextGroupBy = groupBy.map((g) => {
+    const { groupBy: ng, remapped } = remapGroupByToTemporalFacet({
+      groupByColumn: g,
+      dateColumns,
+      originalMessage,
+      availableKeys,
+    });
+    if (remapped) anyRemapped = true;
+    return ng;
+  });
+  if (!anyRemapped) return plan;
+  return {
+    ...plan,
+    groupBy: nextGroupBy,
+    dateAggregationPeriod: undefined,
+  };
+}
 
 export function queryPlanToParsedQuery(plan: QueryPlanBody): ParsedQuery {
   return {
@@ -146,6 +181,77 @@ export function executeQueryPlan(
   );
 
   return { ok: true, data: out, descriptions, parsed };
+}
+
+/** Upper bounds for group count when calendar bucketing is expected to collapse rows. */
+const COARSE_DATE_PERIOD_MAX_GROUPS: Record<string, number> = {
+  year: 96,
+  half_year: 192,
+  quarter: 384,
+  month: 960,
+  monthOnly: 960,
+};
+
+/**
+ * When dateAggregationPeriod is coarse but output still has many groups, bucketing likely failed
+ * (e.g. groupBy column not treated as a date). Returns a SYSTEM_VALIDATION line for observations.
+ */
+export function validateCoarseDateAggregationOutput(
+  parsed: ParsedQuery,
+  inputRowCount: number,
+  outputRowCount: number
+): string | null {
+  const period = parsed.dateAggregationPeriod;
+  if (
+    !period ||
+    !parsed.groupBy?.length ||
+    !parsed.aggregations?.length ||
+    inputRowCount < 80
+  ) {
+    return null;
+  }
+
+  // This heuristic is meant to catch cases where the model *didn't* apply calendar
+  // bucketing for the requested coarse grain. When `groupBy` is already a temporal
+  // facet column like `__tf_month__<DateColumn>`, bucketing is already correct, and
+  // rejecting purely on row count can become a false negative for long ranges.
+  //
+  // Also, the cap below assumes a single date bucket dimension; if there are
+  // additional `groupBy` dimensions, group counts can exceed the cap even when
+  // bucketing is correct.
+  if (parsed.groupBy.length !== 1) {
+    return null;
+  }
+
+  const gb0 = parsed.groupBy[0] ?? "";
+  const facetGrain =
+    period === "year"
+      ? "year"
+      : period === "quarter"
+        ? "quarter"
+        : period === "half_year"
+          ? "half_year"
+          : period === "month" || period === "monthOnly"
+            ? "month"
+            : null;
+  if (facetGrain) {
+    const facetPrefix = `__tf_${facetGrain}__`;
+    if (gb0.startsWith(facetPrefix)) {
+      return null;
+    }
+  }
+
+  const cap = COARSE_DATE_PERIOD_MAX_GROUPS[period];
+  if (cap == null) {
+    return null;
+  }
+  if (outputRowCount <= cap) {
+    return null;
+  }
+  return (
+    `[SYSTEM_VALIDATION] dateAggregationPeriod=${period} produced ${outputRowCount} groups from ${inputRowCount} rows (expected at most ~${cap} for this period). ` +
+    `Calendar bucketing likely did not apply. Replan: use a column listed in dateColumns (or Cleaned_*) in groupBy, or fix dataSummary.dateColumns to match loaded data.`
+  );
 }
 
 /** True if question implies totals/sums (for verifier). */

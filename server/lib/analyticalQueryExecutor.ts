@@ -239,7 +239,7 @@ export function generateQueryContextForAI(
   context += `QUERY SUMMARY:\n${summary}\n\n`;
   context += `QUERY RESULTS (use these EXACT values in your answer):\n${formattedResults}\n\n`;
   context += `🚨 ABSOLUTE REQUIREMENTS - READ CAREFULLY:\n`;
-  context += `1. DO NOT generate a chart - this is an analytical question that needs a direct answer\n`;
+  context += `1. Your TEXT ANSWER must use ONLY the query results above — do not invent numbers. The app may add charts separately; do not refuse to discuss the results.\n`;
   context += `2. DO NOT say "No valid data points found" - the query has been executed above\n`;
   context += `3. DO NOT ask for clarification - use the query results provided above\n`;
   context += `4. DO NOT describe "how you would calculate it" - use the calculated results from above\n`;

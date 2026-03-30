@@ -6,14 +6,18 @@ import type { AgentExecutionContext } from "./types.js";
 import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
-import { optimizeChartData } from "../../chartDownsampling.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 import type { ChartSpec } from "../../../shared/schema.js";
+import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
+
+export { validateChartProposal } from "./chartProposalValidation.js";
 
 const chartProposalSchema = z.object({
-  type: z.enum(["line", "bar", "scatter", "pie", "area"]),
+  type: z.enum(["line", "bar", "scatter", "pie", "area", "heatmap"]),
   x: z.string(),
   y: z.string(),
+  z: z.string().optional(),
+  seriesColumn: z.string().optional(),
   title: z.string().optional(),
   rationale: z.string().optional(),
 });
@@ -25,21 +29,23 @@ const visualPlannerOutputSchema = z.object({
 
 export type VisualPlannerOutput = z.infer<typeof visualPlannerOutputSchema>;
 
-function validateProposal(ctx: AgentExecutionContext, p: z.infer<typeof chartProposalSchema>): boolean {
-  const names = new Set(ctx.summary.columns.map((c) => c.name));
-  if (!names.has(p.x) || !names.has(p.y)) return false;
-  if (!ctx.summary.numericColumns.includes(p.y)) return false;
-  return true;
-}
+const SYSTEM = `You are a visualization advisor. Given the user question, column list, analytical snippet, and (when present) the final answer draft, propose at most 2 charts that support that answer.
 
-const SYSTEM = `You are a visualization advisor. Given the user question, column list, and a short analytical snippet, propose at most 2 charts that would most help understanding (comparison, magnitude, trend, or share). Use ONLY exact column names from AVAILABLE_COLUMNS. Prefer bar for category vs numeric sum, line for time on x if a date column exists. If no useful pair exists, return {"addCharts":[]}. Output JSON only matching the schema.`;
+Rules:
+- Use ONLY exact column names from AVAILABLE_COLUMNS and/or ANALYTICAL_RESULT_COLUMNS when the latter is present.
+- If ANALYTICAL_RESULT_COLUMNS is present, prefer charting those columns (aggregated metrics, bucket labels). Do not revert to raw grain metrics (e.g. per-order Sales) when the analytical frame already has sums or aliases unless necessary.
+- Prefer **bar** for categorical X vs numeric sum. Prefer **line** or **area** when X is a date column or temporal bucket labels—**never** propose **bar** for “distribution across dates” or long date sequences (many distinct dates): bar sorts by magnitude by default and misreads as a ranking, not a time trend.
+- If dateColumns contains the proposed X and the analytical table has **more than ~50 rows**, do **not** add a second **bar** on that date X; use **line/area** or skip the extra chart if it duplicates the primary trend.
+- If no useful pair exists, return {"addCharts":[]}.
+Output JSON only matching the schema.`;
 
 export async function proposeAndBuildExtraCharts(
   ctx: AgentExecutionContext,
   observationsText: string,
   turnId: string,
   onLlmCall: () => void,
-  existingCharts: ChartSpec[]
+  existingCharts: ChartSpec[],
+  synthesizedAnswerPreview?: string
 ): Promise<{ charts: ChartSpec[]; note?: string }> {
   const maxExtra = Math.max(
     0,
@@ -49,15 +55,135 @@ export async function proposeAndBuildExtraCharts(
     return { charts: [] };
   }
 
+  // Deterministic fallback: for simple breakdown frames (one categorical-ish dimension + one numeric measure),
+  // always build a chart when no charts were already produced.
+  // This prevents a UX failure mode where the LLM returns {"addCharts": []}.
+  if (existingCharts.length === 0 && ctx.lastAnalyticalTable?.rows?.length) {
+    const rows = ctx.lastAnalyticalTable.rows as Record<string, any>[];
+    const columns = ctx.lastAnalyticalTable.columns ?? [];
+
+    // Only run on small enough frames so the chart remains readable.
+    if (rows.length > 0 && rows.length <= 200 && columns.length >= 2) {
+      const sample = rows.slice(0, 80);
+
+      const isNumericishOnSample = (col: string): boolean => {
+        const cap = Math.min(20, sample.length);
+        for (let i = 0; i < cap; i++) {
+          const v = sample[i]?.[col];
+          if (v == null || v === "") continue;
+          if (typeof v === "number" && Number.isFinite(v)) return true;
+          if (typeof v === "string") {
+            const cleaned = v.replace(/[%,]/g, "").trim();
+            if (cleaned && Number.isFinite(Number(cleaned))) return true;
+          }
+        }
+        return false;
+      };
+
+      const numericCols = columns.filter((c) => isNumericishOnSample(c));
+      const dimCols = columns.filter((c) => !isNumericishOnSample(c));
+
+      if (numericCols.length >= 1 && dimCols.length >= 1) {
+        const x = dimCols[0]!;
+        const scoreMeasure = (col: string): number => {
+          const n = col.toLowerCase();
+          return (
+            (/_sum\b/.test(n) ? 5 : 0) +
+            (/_avg\b/.test(n) || /_mean\b/.test(n) ? 4 : 0) +
+            (/_count\b/.test(n) ? 3 : 0) +
+            (/_min\b/.test(n) || /_max\b/.test(n) ? 2 : 0) +
+            (/_total\b/.test(n) ? 1 : 0)
+          );
+        };
+        const y = numericCols.slice().sort((a, b) => scoreMeasure(b) - scoreMeasure(a))[0]!;
+
+        const xTemporal =
+          ctx.summary.dateColumns.includes(x) ||
+          x.startsWith("__tf_") ||
+          /__(?:tf_)?(day|week|month|quarter|half_year|year)__/.test(x);
+
+        // Avoid building a bar chart with too many distinct X labels.
+        const xUnique = new Set(sample.map((r) => String(r?.[x] ?? ""))).size;
+        if (xUnique <= 60) {
+          const chartType = xTemporal ? "line" : "bar";
+
+          const spec = chartSpecSchema.parse({
+            type: chartType,
+            title: `${y} by ${x}`,
+            x,
+            y,
+            aggregate: "none" as const,
+          });
+
+          if (validateChartProposal(ctx, { x, y, type: chartType }) && !existingCharts.length) {
+            const processed = processChartData(
+              rows,
+              spec,
+              ctx.summary.dateColumns,
+              { chartQuestion: ctx.question }
+            );
+
+            const smartDomains =
+              spec.type === "heatmap"
+                ? {}
+                : calculateSmartDomainsForChart(
+                    processed,
+                    spec.x,
+                    spec.y,
+                    spec.y2 || undefined,
+                    {
+                      yOptions: {
+                        useIQR: true,
+                        paddingPercent: 5,
+                        includeOutliers: true,
+                      },
+                      y2Options: spec.y2
+                        ? {
+                            useIQR: true,
+                            paddingPercent: 5,
+                            includeOutliers: true,
+                          }
+                        : undefined,
+                    }
+                  );
+
+            return {
+              charts: [
+                {
+                  ...spec,
+                  xLabel: spec.x,
+                  yLabel: spec.y,
+                  data: processed,
+                  ...smartDomains,
+                },
+              ],
+              note: `Deterministic chart fallback for breakdown: ${spec.title}`,
+            };
+          }
+        }
+      }
+    }
+  }
+
   const cols = ctx.summary.columns.map((c) => `${c.name} (${c.type})`).join(", ");
   const existing = existingCharts.map((c) => `${c.type}:${c.x}/${c.y}`).join("; ") || "(none)";
+  const analyticalCols = ctx.lastAnalyticalTable?.columns?.length
+    ? ctx.lastAnalyticalTable.columns.join(", ")
+    : undefined;
+  const analyticalSample =
+    ctx.lastAnalyticalTable?.rows?.length ?
+      JSON.stringify(ctx.lastAnalyticalTable.rows.slice(0, 5)).slice(0, 4000)
+    : undefined;
 
   const user = JSON.stringify({
     question: ctx.question,
     AVAILABLE_COLUMNS: cols,
+    ANALYTICAL_RESULT_COLUMNS: analyticalCols,
+    ANALYTICAL_RESULT_ROW_SAMPLE: analyticalSample,
     numericColumns: ctx.summary.numericColumns,
     dateColumns: ctx.summary.dateColumns,
     analyticalSnippet: observationsText.slice(0, 6000),
+    finalAnswerPreview: (synthesizedAnswerPreview || "").slice(0, 4000),
     alreadyHaveCharts: existing,
     maxCharts: maxExtra,
   });
@@ -75,27 +201,45 @@ export async function proposeAndBuildExtraCharts(
 
   const built: ChartSpec[] = [];
   for (const p of out.data.addCharts.slice(0, maxExtra)) {
-    if (!validateProposal(ctx, p)) continue;
+    if (!validateChartProposal(ctx, p)) continue;
     if (existingCharts.some((c) => c.x === p.x && c.y === p.y && c.type === p.type)) continue;
+    const { rows: rowSource, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
+    const xIsDate = ctx.summary.dateColumns.some((d) => d === p.x);
+    if (p.type === "bar" && xIsDate && rowSource.length > 50) {
+      continue;
+    }
     try {
+      const manyRows = rowSource.length > 50;
+      const aggregateTimeSeries =
+        (p.type === "line" || p.type === "area") && xIsDate && manyRows ?
+          ("sum" as const)
+        : undefined;
       const spec = chartSpecSchema.parse({
         type: p.type,
         title: p.title || `${p.y} by ${p.x}`,
         x: p.x,
         y: p.y,
+        ...(p.z ? { z: p.z } : {}),
+        ...(p.seriesColumn ? { seriesColumn: p.seriesColumn, barLayout: "stacked" as const, aggregate: "sum" as const } : {}),
+        ...(aggregateTimeSeries ? { aggregate: aggregateTimeSeries } : {}),
+        ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
-      let processed = processChartData(ctx.data, spec, ctx.summary.dateColumns);
-      processed = optimizeChartData(processed, spec);
-      const smartDomains = calculateSmartDomainsForChart(
-        processed,
-        spec.x,
-        spec.y,
-        spec.y2 || undefined,
-        {
-          yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-          y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
-        }
-      );
+      let processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
+        chartQuestion: ctx.question,
+      });
+      const smartDomains =
+        spec.type === "heatmap"
+          ? {}
+          : calculateSmartDomainsForChart(
+              processed,
+              spec.x,
+              spec.y,
+              spec.y2 || undefined,
+              {
+                yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+                y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
+              }
+            );
       built.push({
         ...spec,
         xLabel: spec.x,

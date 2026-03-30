@@ -10,6 +10,9 @@ import { sessionsApi } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { logger } from '@/lib/logger';
 import { normalizeDatasetSystemMessages } from './modules/uploadSystemMessages';
+import { parseLocalPreview, type LocalPreviewResult } from '@/lib/localPreviewParser';
+import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages';
+import type { ChartSpec } from '@/shared/schema';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -21,15 +24,15 @@ type PreviewSnapshot = {
   totalColumns: number;
 };
 
+type PreviewSource = 'none' | 'local' | 'server';
+
 interface HomeProps {
   resetTrigger?: number;
   loadedSessionData?: any;
-  initialMode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
-  onModeChange?: (mode: 'general' | 'analysis' | 'dataOps' | 'modeling') => void;
   onSessionChange?: (sessionId: string | null, fileName: string | null) => void;
 }
 
-export default function Home({ resetTrigger = 0, loadedSessionData, initialMode, onModeChange, onSessionChange }: HomeProps) {
+export default function Home({ resetTrigger = 0, loadedSessionData, onSessionChange }: HomeProps) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [collaborators, setCollaborators] = useState<string[]>([]);
@@ -50,6 +53,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     id: number;
   } | null>(null);
   const [isUploadStarting, setIsUploadStarting] = useState(false);
+  const [previewSource, setPreviewSource] = useState<PreviewSource>('none');
+  const [localPreview, setLocalPreview] = useState<LocalPreviewResult | null>(null);
+  const [uploadStartError, setUploadStartError] = useState<string | null>(null);
+  const localPreviewRequestIdRef = useRef(0);
   const composerDraftIdRef = useRef(0);
   const [startMode, setStartMode] = useState<'choice' | 'snowflake'>('choice');
   const contextModalShownRef = useRef<Set<string>>(new Set());
@@ -74,9 +81,9 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     numericColumns,
     dateColumns,
     temporalDisplayGrainsByColumn,
+    temporalFacetColumns,
     totalRows,
     totalColumns,
-    mode,
     setSessionId,
     setFileName,
     setMessages,
@@ -87,9 +94,9 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setNumericColumns,
     setDateColumns,
     setTemporalDisplayGrainsByColumn,
+    setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
-    setMode,
     resetState,
   } = useHomeState();
 
@@ -101,10 +108,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     thinkingSteps,
     agentWorkbenchLive,
     thinkingTargetTimestamp,
+    thinkingLiveAnchorTimestamp,
   } = useHomeMutations({
     sessionId,
     messages,
-    mode,
     setSessionId,
     setFileName,
     setInitialCharts,
@@ -114,6 +121,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setNumericColumns,
     setDateColumns,
     setTemporalDisplayGrainsByColumn,
+    setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
     setMessages,
@@ -121,8 +129,14 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setIsDatasetPreviewLoading,
     setIsDatasetEnriching,
     setEnrichmentPollSnapshot: setEnrichmentPoll,
-    onUploadProcessingStarted: () => setIsUploadStarting(false),
-    onUploadError: () => setIsUploadStarting(false),
+    onUploadProcessingStarted: () => {
+      setIsUploadStarting(false);
+      setUploadStartError(null);
+    },
+    onUploadError: (message) => {
+      setIsUploadStarting(false);
+      setUploadStartError(message || 'Upload failed before server preview became available.');
+    },
   });
 
   const { handleFileSelect, handleSendMessage, handleUploadNew, handleEditMessage } = useHomeHandlers({
@@ -134,13 +148,84 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     resetState,
   });
 
+  const handleAppendAssistantChart = useCallback(
+    (chart: ChartSpec) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'Chart added from Chart Builder.',
+          charts: [chart],
+          timestamp: Date.now(),
+        },
+      ]);
+    },
+    [setMessages]
+  );
+
   const handleStartUploadFromChoice = useCallback(
-    (file: File) => {
+    async (file: File) => {
+      const requestId = Date.now();
+      localPreviewRequestIdRef.current = requestId;
       setIsUploadStarting(true);
+      setPreviewSource('local');
+      setUploadStartError(null);
+      setIsDatasetPreviewLoading(true);
+      setMessages([
+        {
+          role: 'assistant',
+          content: `${DATASET_PREVIEW_LOADING_CONTENT} (Local preview shown while server prepares authoritative preview.)`,
+          charts: [],
+          insights: [],
+          timestamp: Date.now(),
+        },
+      ]);
+      setFileName(file.name);
+      setSampleRows([]);
+      setColumns([]);
+      setNumericColumns([]);
+      setDateColumns([]);
+      setTemporalFacetColumns([]);
+      setTotalRows(0);
+      setTotalColumns(0);
+      try {
+        const parsed = await parseLocalPreview(file);
+        if (localPreviewRequestIdRef.current !== requestId) return;
+        setLocalPreview(parsed);
+        setSampleRows(parsed.rows);
+        setColumns(parsed.columns);
+        setNumericColumns(parsed.numericColumns);
+        setDateColumns(parsed.dateColumns);
+        setTotalRows(parsed.rowCountEstimate || parsed.rows.length);
+        setTotalColumns(parsed.columns.length);
+      } catch (e) {
+        logger.warn('Local preview parse failed; continuing with upload', e);
+      }
       handleFileSelect(file);
     },
-    [handleFileSelect]
+    [
+      handleFileSelect,
+      setColumns,
+      setDateColumns,
+      setFileName,
+      setMessages,
+      setNumericColumns,
+      setSampleRows,
+      setTemporalFacetColumns,
+      setTotalColumns,
+      setTotalRows,
+    ]
   );
+
+  const handleUploadNewWithLocalReset = useCallback(() => {
+    localPreviewRequestIdRef.current += 1;
+    setPreviewSource('none');
+    setLocalPreview(null);
+    setUploadStartError(null);
+    setIsUploadStarting(false);
+    setStartMode('choice');
+    handleUploadNew();
+  }, [handleUploadNew]);
 
   const handleStopGeneration = () => {
     cancelChatRequest();
@@ -203,13 +288,6 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     }
   }, [isDatasetEnriching]);
 
-  // Sync mode with initialMode prop (from URL) - only when initialMode changes
-  useEffect(() => {
-    if (initialMode && initialMode !== mode && initialMode !== 'general') {
-      setMode(initialMode);
-    }
-  }, [initialMode]);
-
   // Reset state only when resetTrigger changes (upload new file)
   useEffect(() => {
     if (resetTrigger > 0 && !loadedSessionData) {
@@ -230,11 +308,30 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
   }, [sessionId]);
 
   useEffect(() => {
+    if (
+      previewSource === 'local' &&
+      sessionId &&
+      columns.length > 0 &&
+      !isDatasetPreviewLoading &&
+      enrichmentPoll?.phase !== 'failed'
+    ) {
+      setPreviewSource('server');
+      setUploadStartError(null);
+    }
+  }, [previewSource, sessionId, columns.length, isDatasetPreviewLoading, enrichmentPoll?.phase]);
+
+  useEffect(() => {
     if (!sessionId) {
       setPreEnrichmentPreviewSnapshot(null);
       setPostEnrichmentPreviewSnapshot(null);
     }
   }, [sessionId]);
+
+  useEffect(() => {
+    if (previewSource === 'local' && localPreview?.parseStatus === 'failed') {
+      setUploadStartError('Local preview could not be parsed. Upload is continuing; server preview will appear when ready.');
+    }
+  }, [previewSource, localPreview?.parseStatus]);
 
   useEffect(() => {
     if (!columns.length) return;
@@ -278,9 +375,11 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
     setNumericColumns,
     setDateColumns,
     setTemporalDisplayGrainsByColumn,
+    setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
     setMessages,
+    setSuggestions,
     setCollaborators,
   });
 
@@ -371,12 +470,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
   useEffect(() => {
     if (resetTrigger > 0 && !sessionId && !loadedSessionData) {
       setStartMode('choice');
+      setPreviewSource('none');
+      setLocalPreview(null);
+      setUploadStartError(null);
     }
   }, [resetTrigger, sessionId, loadedSessionData]);
 
   // Don't show start/upload/snowflake if we're loading a session (even if sessionId isn't set yet)
   // Only show when there's no session data being loaded AND no sessionId
-  if (!sessionId && !loadedSessionData) {
+  if (!sessionId && !loadedSessionData && previewSource !== 'local') {
     if (startMode === 'choice') {
       return (
         <StartAnalysisView
@@ -419,7 +521,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
       <ChatInterface
         messages={messages}
         onSendMessage={handleSendMessage}
-        onUploadNew={handleUploadNew}
+        onUploadNew={handleUploadNewWithLocalReset}
         isLoading={chatMutation.isPending}
         onLoadHistory={handleLoadHistory}
         canLoadHistory={!!sessionId}
@@ -429,6 +531,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         numericColumns={numericColumns}
         dateColumns={dateColumns}
         temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+        temporalFacetColumns={temporalFacetColumns}
         totalRows={totalRows}
         totalColumns={totalColumns}
         onStopGeneration={handleStopGeneration}
@@ -436,26 +539,23 @@ export default function Home({ resetTrigger = 0, loadedSessionData, initialMode,
         thinkingSteps={thinkingSteps}
         agentWorkbenchLive={agentWorkbenchLive}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
+        thinkingLiveAnchorTimestamp={thinkingLiveAnchorTimestamp}
         aiSuggestions={suggestions}
         collaborators={collaborators}
-        mode={mode}
         sessionId={sessionId}
         isDatasetPreviewLoading={isDatasetPreviewLoading}
         isDatasetEnriching={isDatasetEnriching}
         enrichmentPoll={enrichmentPoll}
         enrichmentStartedAtMs={enrichmentStartedAtMs}
-        onModeChange={(newMode) => {
-          setMode(newMode);
-          // onModeChange will update the URL, which will update initialMode prop
-          if (onModeChange) {
-            onModeChange(newMode);
-          }
-        }}
         onOpenDataSummary={() => setShowDataSummaryModal(true)}
         externalComposerDraft={externalComposerDraft}
         onExternalComposerDraftConsumed={handleComposerDraftConsumed}
         preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
         postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
+        previewSource={previewSource}
+        localPreviewParseStatus={localPreview?.parseStatus}
+        uploadStartError={uploadStartError}
+        onAppendAssistantChart={handleAppendAssistantChart}
       />
       <ContextModal
         isOpen={showContextModal}

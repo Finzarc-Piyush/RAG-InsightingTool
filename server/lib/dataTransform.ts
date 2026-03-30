@@ -10,9 +10,10 @@ import {
   DimensionFilter,
 } from '../shared/queryTypes.js';
 import { DataSummary } from '../shared/schema.js';
-import { normalizeDateToPeriod, DatePeriod } from './dateUtils.js';
+import { normalizeDateToPeriod, DatePeriod, parseFlexibleDate } from './dateUtils.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
 import { isIdColumn, getCountNameForIdColumn } from './columnIdHeuristics.js';
+import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -399,15 +400,95 @@ function applyTopBottom(data: Record<string, any>[], request: TopBottomRequest):
 
 type DateBucketMode = "none" | "schema";
 
-function dateBucketModeForGroupByColumn(
+/** Max rows scanned to decide if a column behaves like dates when not in dateColumns. */
+const DATE_SAMPLE_PROBE_MAX = 400;
+/** Fraction of non-null sample values that must parse as dates to enable bucketing. */
+const DATE_SAMPLE_PARSE_MIN_RATIO = 0.45;
+
+function columnTypeSuggestsDate(summary: DataSummary, col: string): boolean {
+  const meta = summary.columns.find((c) => c.name === col);
+  if (!meta?.type) return false;
+  const t = meta.type.toLowerCase();
+  return (
+    t.includes("date") ||
+    t === "datetime" ||
+    t.includes("timestamp") ||
+    t.includes("time")
+  );
+}
+
+function sampleDateParseableRatio(data: Record<string, any>[], col: string): number {
+  if (!data.length) return 0;
+  const n = Math.min(DATE_SAMPLE_PROBE_MAX, data.length);
+  let nonNull = 0;
+  let ok = 0;
+  for (let i = 0; i < n; i++) {
+    const raw = data[i][col];
+    if (raw === null || raw === undefined || raw === "") continue;
+    nonNull++;
+    if (raw instanceof Date && !isNaN(raw.getTime())) ok++;
+    else if (typeof raw === "string") {
+      const p = parseFlexibleDate(raw);
+      if (p && !isNaN(p.getTime())) ok++;
+    }
+  }
+  return nonNull === 0 ? 0 : ok / nonNull;
+}
+
+export type DateBucketResolution = { mode: DateBucketMode; readColumn: string };
+
+/**
+ * Decide whether to apply calendar bucketing for groupBy + dateAggregationPeriod.
+ * readColumn may differ from plan groupBy name (e.g. read Cleaned_* while output key stays plan column).
+ */
+export function resolveDateBucketForGroupBy(
   col: string,
   summary: DataSummary,
-  _data: Record<string, any>[],
+  data: Record<string, any>[],
   dateAggregationPeriod: DatePeriod | null | undefined
-): DateBucketMode {
-  if (!dateAggregationPeriod) return "none";
-  if (summary.dateColumns.includes(col)) return "schema";
-  return "none";
+): DateBucketResolution {
+  if (!dateAggregationPeriod || !data.length) {
+    return { mode: "none", readColumn: col };
+  }
+
+  const row0 = data[0] as Record<string, any>;
+
+  if (summary.dateColumns.includes(col) && Object.prototype.hasOwnProperty.call(row0, col)) {
+    return { mode: "schema", readColumn: col };
+  }
+
+  const dateColsOnRow = summary.dateColumns.filter((dc) =>
+    Object.prototype.hasOwnProperty.call(row0, dc)
+  );
+  const pool = dateColsOnRow.length ? dateColsOnRow : summary.dateColumns;
+  const fuzzyMatch = findMatchingColumn(col, pool);
+  if (
+    fuzzyMatch &&
+    Object.prototype.hasOwnProperty.call(row0, fuzzyMatch) &&
+    fuzzyMatch !== col
+  ) {
+    agentLog("date_bucket_read_fallback", {
+      planCol: col.slice(0, 120),
+      readColumn: fuzzyMatch.slice(0, 120),
+    });
+    return { mode: "schema", readColumn: fuzzyMatch };
+  }
+
+  const readCol =
+    Object.prototype.hasOwnProperty.call(row0, col) ? col : fuzzyMatch || col;
+  if (!Object.prototype.hasOwnProperty.call(row0, readCol)) {
+    return { mode: "none", readColumn: col };
+  }
+
+  if (summary.dateColumns.includes(col) || columnTypeSuggestsDate(summary, col)) {
+    return { mode: "schema", readColumn: readCol };
+  }
+
+  if (sampleDateParseableRatio(data, readCol) >= DATE_SAMPLE_PARSE_MIN_RATIO) {
+    return { mode: "schema", readColumn: readCol };
+  }
+
+  return { mode: "none", readColumn: col };
 }
 
 function applySort(data: Record<string, any>[], sort?: SortRequest[]): Record<string, any>[] {
@@ -525,17 +606,27 @@ function applyAggregations(
   }
 
   // Map to track which columns are date columns and need normalization
-  const dateColumnMap = new Map<string, { original: string; period: DatePeriod }>();
+  type DateColMapEntry = { original: string; readColumn: string; period: DatePeriod };
+  const dateColumnMap = new Map<string, DateColMapEntry>();
   const normalizedGroupBy: string[] = [];
   const bucketModes: DateBucketMode[] = [];
 
   for (const col of groupBy) {
-    const mode = dateBucketModeForGroupByColumn(col, summary, data, dateAggregationPeriod);
+    const { mode, readColumn } = resolveDateBucketForGroupBy(
+      col,
+      summary,
+      data,
+      dateAggregationPeriod
+    );
     bucketModes.push(mode);
     if (mode !== "none" && dateAggregationPeriod) {
       const normalizedCol = `${col}_${dateAggregationPeriod}`;
       normalizedGroupBy.push(normalizedCol);
-      dateColumnMap.set(normalizedCol, { original: col, period: dateAggregationPeriod });
+      dateColumnMap.set(normalizedCol, {
+        original: col,
+        readColumn,
+        period: dateAggregationPeriod,
+      });
     } else {
       normalizedGroupBy.push(col);
     }
@@ -559,9 +650,14 @@ function applyAggregations(
   const keyForRow = (row: Record<string, any>) => {
     return normalizedGroupBy.map((col) => {
       if (dateColumnMap.has(col)) {
-        const { original, period } = dateColumnMap.get(col)!;
-        const raw = row[original];
-        const d = raw instanceof Date && !isNaN(raw.getTime()) ? raw : null;
+        const { readColumn, period } = dateColumnMap.get(col)!;
+        const raw = row[readColumn];
+        let d =
+          raw instanceof Date && !isNaN(raw.getTime()) ? raw : null;
+        if (!d && typeof raw === 'string') {
+          const p = parseFlexibleDate(raw);
+          if (p && !isNaN(p.getTime())) d = p;
+        }
         const normalized = d ? normalizeDateToPeriod(d, period) : null;
         if (normalized) {
           displayLabelMap.set(normalized.normalizedKey, normalized.displayLabel);

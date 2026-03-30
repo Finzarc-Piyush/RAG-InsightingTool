@@ -5,24 +5,21 @@ interface AnalysisErrorStateProps {
   onRetry: () => void;
 }
 
-/**
- * Error state component for the Analysis page
- * Displays when there's an error loading sessions
- */
 export const AnalysisErrorState = ({ onRetry }: AnalysisErrorStateProps) => {
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="text-center">
-        <div className="text-red-600 mb-4">
-          <FileText className="h-12 w-12 mx-auto mb-2" />
-          <h2 className="text-xl font-semibold">Failed to load sessions</h2>
-          <p className="text-gray-600 mt-2">There was an error loading your analysis history.</p>
+    <div className="flex min-h-[calc(100vh-4.25rem)] items-center justify-center bg-gradient-to-b from-muted/25 to-background px-4">
+      <div className="max-w-md text-center">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/10">
+          <FileText className="h-7 w-7 text-destructive" />
         </div>
-        <Button onClick={onRetry} variant="outline">
-          Try Again
+        <h2 className="text-xl font-semibold text-foreground">Couldn&apos;t load sessions</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Check your connection and try again. Your data on the server is unchanged.
+        </p>
+        <Button onClick={onRetry} variant="default" className="mt-6 rounded-lg">
+          Try again
         </Button>
       </div>
     </div>
   );
 };
-

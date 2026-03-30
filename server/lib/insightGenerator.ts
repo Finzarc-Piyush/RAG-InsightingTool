@@ -1,9 +1,11 @@
 import { ChartSpec, DataSummary, Insight } from '../shared/schema.js';
-import { openai, MODEL } from './openai.js';
+import { openai } from './openai.js';
+import type { ChartInsightSynthesisContext } from './insightSynthesis/types.js';
+import { formatSessionAnalysisContextForInsight } from './insightSynthesis/formatSessionContext.js';
+import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
 
-// Chart keyInsight is intentionally short, but must still carry actionable specifics
-// (top category/value + improvement target).
-const KEY_INSIGHT_MAX_CHARS = 520;
+// keyInsight: grounded numbers + LLM interpretation (1–3 tight sentences typical).
+const KEY_INSIGHT_MAX_CHARS = 1400;
 
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
 const enforceInsightLimit = (value: string) => {
@@ -20,7 +22,8 @@ export async function generateChartInsights(
   chartSpec: ChartSpec,
   chartData: Record<string, any>[],
   summary: DataSummary,
-  chatInsights?: Insight[]
+  chatInsights?: Insight[],
+  synthesisContext?: ChartInsightSynthesisContext
 ): Promise<{ keyInsight: string }> {
   if (!chartData || chartData.length === 0) {
     return {
@@ -144,43 +147,7 @@ export async function generateChartInsights(
   const targetVariable = (chartSpec as any)._targetVariable || chartSpec.y;
   const factorVariable = (chartSpec as any)._factorVariable || chartSpec.x;
 
-  // If both axes are numeric (especially scatter), produce a quantified X-range tied to high Y
-  // BUT: For correlation charts, we need to use the correlation context, not early return
   const bothNumeric = numericX.length > 0 && numericY.length > 0;
-  if (bothNumeric && !isCorrelationChart) {
-    // Identify X range corresponding to top 20% and top 10% of Y outcomes
-    const yP80 = percentile(numericY, 0.8);
-    const yP90 = percentile(numericY, 0.9);
-    const yP75 = percentile(numericY, 0.75);
-    const pairs = chartData
-      .map(r => [Number(String(r[chartSpec.x]).replace(/[%,,]/g, '')), Number(String(r[chartSpec.y]).replace(/[%,,]/g, ''))] as [number, number])
-      .filter(([vx, vy]) => !isNaN(vx) && !isNaN(vy));
-    const top20Pairs = pairs.filter(([, vy]) => vy >= yP80);
-    const top10Pairs = pairs.filter(([, vy]) => vy >= yP90);
-    const xInTop20 = top20Pairs.map(([vx]) => vx);
-    const xInTop10 = top10Pairs.map(([vx]) => vx);
-    
-    // Calculate optimal X ranges for different performance levels
-    const xLow20 = percentile(xInTop20.length ? xInTop20 : numericX, 0.1);
-    const xHigh20 = percentile(xInTop20.length ? xInTop20 : numericX, 0.9);
-    const xLow10 = percentile(xInTop10.length ? xInTop10 : numericX, 0.1);
-    const xHigh10 = percentile(xInTop10.length ? xInTop10 : numericX, 0.9);
-    
-    // Calculate average X for top performers
-    const avgXTop20 = xInTop20.length > 0 ? xInTop20.reduce((a, b) => a + b, 0) / xInTop20.length : NaN;
-    const avgXTop10 = xInTop10.length > 0 ? xInTop10.reduce((a, b) => a + b, 0) / xInTop10.length : NaN;
-
-    const r = pearsonR(numericX, numericY);
-    const trend = isNaN(r) ? '' : r > 0 ? 'positive' : 'negative';
-    const strength = isNaN(r) ? '' : Math.abs(r) > 0.7 ? 'strong' : Math.abs(r) > 0.4 ? 'moderate' : 'weak';
-
-    // Concise insight (single sentence) focused on chart specifics
-    const keyInsight = isNaN(r)
-      ? `${chartSpec.y} spans ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}). Top 20% outcomes are ≥${formatY(yP80)}.`
-      : `${strength} ${trend} correlation (r=${roundSmart(r)}) between ${chartSpec.x} and ${chartSpec.y}. ${chartSpec.y} ranges ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}).`;
-
-    return { keyInsight };
-  }
 
   // Enhanced statistics for all chart types
   const topPerformers = findTopPerformers(chartData, chartSpec.y, 3);
@@ -255,6 +222,38 @@ export async function generateChartInsights(
     return roundSmart(val);
   };
 
+  let scatterNumericFactsBlock = '';
+  if (bothNumeric && !isCorrelationChart && numericX.length > 0 && numericY.length > 0) {
+    const yP80 = percentile(numericY, 0.8);
+    const pairs = chartData
+      .map(
+        (r) =>
+          [
+            Number(String(r[chartSpec.x]).replace(/[%,,]/g, '')),
+            Number(String(r[chartSpec.y]).replace(/[%,,]/g, '')),
+          ] as [number, number]
+      )
+      .filter(([vx, vy]) => !isNaN(vx) && !isNaN(vy));
+    const r = pearsonR(numericX, numericY);
+    const xMin = Math.min(...numericX);
+    const xMax = Math.max(...numericX);
+    const xAvg = numericX.reduce((a, b) => a + b, 0) / numericX.length;
+    const top20 = pairs.filter(([, vy]) => vy >= yP80);
+    const xAvgTopY =
+      top20.length > 0
+        ? top20.map(([vx]) => vx).reduce((a, b) => a + b, 0) / top20.length
+        : NaN;
+    const assoc =
+      isNaN(r) ? '' : `${Math.abs(r) > 0.7 ? 'strong' : Math.abs(r) > 0.4 ? 'moderate' : 'weak'} ${r > 0 ? 'positive' : 'negative'} association`;
+    scatterNumericFactsBlock = `
+NUMERIC XY RELATIONSHIP (ground truth from plotted points):
+- Valid pairs: ${pairs.length}
+- Pearson r: ${isNaN(r) ? 'N/A' : roundSmart(r)}${assoc ? ` (${assoc})` : ''}
+- ${chartSpec.y}: ${formatY(minY)}–${formatY(maxY)}, average ${formatY(avgY)}
+- ${chartSpec.x}: ${formatX(xMin)}–${formatX(xMax)}, average ${formatX(xAvg)}
+- Top ~20% of ${chartSpec.y} are ≥ ${formatY(yP80)}; among those points, average ${chartSpec.x} is ${isNaN(xAvgTopY) ? 'N/A' : formatX(xAvgTopY)}`.trim();
+  }
+
   const truncateInsight = (value: string): string => {
     const v = value ?? '';
     if (v.length <= KEY_INSIGHT_MAX_CHARS) return v;
@@ -270,9 +269,13 @@ export async function generateChartInsights(
       .trim();
   };
 
-  // If we already have a high-quality "basic analysis" insight set, reuse the most aligned one.
-  // This keeps chart keyInsight consistent with the text that produced good results elsewhere.
-  if (chatInsights && Array.isArray(chatInsights) && chatInsights.length > 0) {
+  // Reuse prior chat-level insight only when there is no active user question (enrichment should prefer fresh LLM copy).
+  if (
+    !synthesisContext?.userQuestion?.trim() &&
+    chatInsights &&
+    Array.isArray(chatInsights) &&
+    chatInsights.length > 0
+  ) {
     const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
     const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
     const topXStr = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
@@ -333,12 +336,24 @@ SUGGESTION FORMAT:
 
 ` : '';
 
+  const userQuestionBlock = synthesisContext?.userQuestion?.trim()
+    ? `\n\nUSER QUESTION (prioritize an insight that answers this):\n${synthesisContext.userQuestion.trim().slice(0, 2000)}`
+    : '';
+
+  const sacBlock = formatSessionAnalysisContextForInsight(synthesisContext?.sessionAnalysisContext)
+    ? `\n\nSESSION CONTEXT (dataset understanding; do not contradict):\n${formatSessionAnalysisContextForInsight(synthesisContext?.sessionAnalysisContext)}`
+    : '';
+
+  const permBlock = synthesisContext?.permanentContext?.trim()
+    ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim().slice(0, 3000)}`
+    : '';
+
   // Build chat insights context if available
   const chatInsightsContext = chatInsights && chatInsights.length > 0
-    ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (use these to inform the chart insight):
+    ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
 ${chatInsights.map((insight, idx) => `${idx + 1}. ${insight.text}`).join('\n')}
 
-IMPORTANT: The keyInsight should be a concise summary (exactly one sentence, ≤${KEY_INSIGHT_MAX_CHARS} chars) that relates this specific chart to the relevant chat-level insights above. Focus on insights that mention variables in this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}).`
+The keyInsight should relate this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) to the analysis; 1–3 tight sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters total.`
     : '';
 
   const dataFactsContext = `
@@ -347,7 +362,11 @@ DATA FACTS (ground truth from the chart data; use these explicitly in the output
 - Bottom ${chartSpec.y} performer(s) by ${chartSpec.x}: ${bottomPerformerStr}
 ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${y2Label} performer(s): ${bottomPerformerStrY2}` : ''}`.trim();
 
-  const prompt = `Return JSON with exactly one short field for this chart: keyInsight. It must be one line (no line breaks), chart-specific, include concrete numbers, and explicitly name the top ${chartSpec.x} from DATA FACTS along with its ${chartSpec.y} value. No bullets.
+  const scatterBlock = scatterNumericFactsBlock ? `\n${scatterNumericFactsBlock}\n` : '';
+
+  const prompt = `Return JSON with one field: keyInsight.
+
+TASK: Write 1–3 short sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / blocks below—do not invent metrics. Add "so what" (risk, opportunity, segment story, or next check) using only what the data plausibly supports; use general business sense where it does not contradict the numbers.
 
 CHART CONTEXT
 - Type: ${chartSpec.type}
@@ -358,26 +377,26 @@ CHART CONTEXT
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
 ${dataFactsContext}
-${correlationContext}${chatInsightsContext}
+${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Chart-specific, actionable, one line (no line breaks). Explicitly include the top ${chartSpec.x} and its ${chartSpec.y} value from DATA FACTS. NEVER use percentile labels like P75, P90, P25 - only use numeric values. Do not exceed ${KEY_INSIGHT_MAX_CHARS} characters."
+  "keyInsight": "Plain sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${chartSpec.x} and its ${chartSpec.y} from DATA FACTS."
 }`;
 
   try {
     const response = await openai.chat.completions.create({
-      model: MODEL as string,
+      model: getInsightModel() as string,
       messages: [
         {
           role: 'system',
-          content: `You are a precise data analyst. Output JSON with exactly one short field: keyInsight. It must be one line (no line breaks), chart-specific, include numbers, name the top ${chartSpec.x} and its ${chartSpec.y} value, and be actionable. NEVER use percentile labels like P75, P90, P25, P75 level, P90 level - only use numeric values. No bullets or line breaks.`
+          content: `You are a senior analyst. Output JSON with a single key "keyInsight": 1–3 sentences interpreting the chart using ONLY provided numbers. Connect metrics to implications (segments, concentration, tradeoffs, what to test next) where justified. Never use percentile shorthand like P75 or P90—use numeric values. No markdown bold/headers in the string.`,
         },
         { role: 'user', content: prompt },
       ],
       response_format: { type: 'json_object' },
-      temperature: 0.35,
-      max_tokens: 650,
+      temperature: getInsightTemperature(),
+      max_tokens: 900,
     });
 
     const content = response.choices[0].message.content || '{}';
@@ -410,13 +429,18 @@ OUTPUT JSON (exact keys only):
 
     const candidateLower = candidate.toLowerCase();
     let passes = true;
-    // Always require the output to include the top Y value to avoid generic wording.
+    const rVal = bothNumeric && !isCorrelationChart ? pearsonR(numericX, numericY) : NaN;
+    const rStr = !isNaN(rVal) ? roundSmart(rVal).toLowerCase() : '';
+
     if (topYStr) {
       passes = passes && candidateLower.includes(topYStr.toLowerCase());
     }
-    // For categorical X, also require the output to include the top X label.
     if (isCategoricalX && topXNorm) {
       passes = passes && candidateLower.includes(topXNorm);
+    }
+    // Numeric XY: allow grounding via Pearson r if top-Y string match failed (e.g. formatting).
+    if (!isCategoricalX && bothNumeric && !isCorrelationChart && topYStr && !passes && rStr) {
+      passes = candidateLower.includes(rStr);
     }
 
     if (!passes && topX !== undefined && typeof topY === 'number' && !isNaN(topY)) {

@@ -1,0 +1,4 @@
+
+> marico-insight-server@1.0.0 dev
+> NODE_ENV=development NODE_OPTIONS='--max-old-space-size=4096' tsx index.ts
+

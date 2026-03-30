@@ -34,7 +34,8 @@ export interface ProcessStreamChatParams {
   targetTimestamp?: number;
   username: string;
   res: Response;
-  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'; // Optional mode override
+  /** @deprecated Ignored for routing — classifyMode always runs. Accepted for backward compatibility. */
+  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
 }
 
 /**
@@ -131,6 +132,47 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const thinkingSteps: ThinkingStep[] = [];
     const agentWorkbench: AgentWorkbenchEntry[] = [];
 
+    type PendingIntermediate = {
+      assistantTimestamp: number;
+      preview: Record<string, unknown>[];
+      thinkingSteps: ThinkingStep[];
+      workbench: AgentWorkbenchEntry[];
+      insight?: string;
+    };
+    const pendingIntermediates: PendingIntermediate[] = [];
+    let intermediateSeq = 0;
+
+    const flushIntermediateSegment = (
+      preview: Record<string, unknown>[],
+      insight?: string
+    ) => {
+      if (!preview.length) return;
+      if (!checkConnection()) return;
+      const assistantTimestamp = Date.now() + intermediateSeq++;
+      const snapSteps = [...thinkingSteps];
+      const snapWb = [...agentWorkbench];
+      if (
+        !sendSSE(res, "intermediate", {
+          preview,
+          thinkingSteps: snapSteps,
+          workbench: snapWb,
+          assistantTimestamp,
+          ...(insight ? { insight } : {}),
+        })
+      ) {
+        return;
+      }
+      pendingIntermediates.push({
+        assistantTimestamp,
+        preview,
+        thinkingSteps: snapSteps,
+        workbench: snapWb,
+        insight,
+      });
+      thinkingSteps.length = 0;
+      agentWorkbench.length = 0;
+    };
+
     // Create callback to emit thinking steps
     const onThinkingStep = (step: ThinkingStep) => {
       thinkingSteps.push(step);
@@ -219,48 +261,48 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       ? allMessages // Use full history from database for edits
       : allMessages.slice(-15); // Use last 15 messages for new messages
 
-    // Determine mode: use provided mode (user override) or auto-detect
-    // Treat 'general' the same as no mode (auto-detect)
-    const shouldAutoDetect = !mode || mode === 'general';
-    let detectedMode: 'analysis' | 'dataOps' | 'modeling' = mode && mode !== 'general' ? mode : 'analysis';
-    
-    if (shouldAutoDetect) {
-      // Auto-detect mode using AI classifier
-      try {
-        onThinkingStep({
-          step: 'Detecting query type',
-          status: 'active',
-          timestamp: Date.now(),
-        });
-        
-        const modeClassification = await classifyMode(
-          message,
-          modeDetectionChatHistory,
-          chatDocument.dataSummary
-        );
-        
-        detectedMode = modeClassification.mode;
-        
-        onThinkingStep({
-          step: 'Detecting query type',
-          status: 'completed',
-          timestamp: Date.now(),
-          details: `Detected: ${detectedMode} (confidence: ${(modeClassification.confidence * 100).toFixed(0)}%)`,
-        });
-        
-        console.log(`🎯 Auto-detected mode: ${detectedMode} (confidence: ${modeClassification.confidence.toFixed(2)})`);
-      } catch (error) {
-        console.error('⚠️ Mode classification failed, defaulting to analysis:', error);
-        onThinkingStep({
-          step: 'Detecting query type',
-          status: 'completed',
-          timestamp: Date.now(),
-          details: 'Using default: analysis',
-        });
-        detectedMode = 'analysis';
-      }
-    } else {
-      console.log(`🎯 Using user-specified mode: ${mode}`);
+    // Routing: always classify — client `mode` is ignored (deprecated override removed).
+    if (mode != null && mode !== 'general') {
+      console.debug(
+        `[chat/stream] mode_override_ignored: received ${JSON.stringify(mode)} — using classifyMode only`
+      );
+    }
+
+    let detectedMode: 'analysis' | 'dataOps' | 'modeling' = 'analysis';
+    try {
+      onThinkingStep({
+        step: 'Detecting query type',
+        status: 'active',
+        timestamp: Date.now(),
+      });
+
+      const modeClassification = await classifyMode(
+        message,
+        modeDetectionChatHistory,
+        chatDocument.dataSummary
+      );
+
+      detectedMode = modeClassification.mode;
+
+      onThinkingStep({
+        step: 'Detecting query type',
+        status: 'completed',
+        timestamp: Date.now(),
+        details: `Detected: ${detectedMode} (confidence: ${(modeClassification.confidence * 100).toFixed(0)}%)`,
+      });
+
+      console.log(
+        `🎯 Classified mode: ${detectedMode} (confidence: ${modeClassification.confidence.toFixed(2)})`
+      );
+    } catch (error) {
+      console.error('⚠️ Mode classification failed, defaulting to analysis:', error);
+      onThinkingStep({
+        step: 'Detecting query type',
+        status: 'completed',
+        timestamp: Date.now(),
+        details: 'Using default: analysis',
+      });
+      detectedMode = 'analysis';
     }
 
     // Fetch last 15 messages from Cosmos DB for processing
@@ -290,6 +332,34 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 }
                 return;
               }
+              // High-level thinking lines so the panel shows progress before heavy workbench payloads
+              const now = Date.now();
+              if (event === "plan" && data && typeof data === "object") {
+                const p = data as { rationale?: string };
+                const r = (p.rationale || "").trim();
+                onThinkingStep({
+                  step: "Agent plan",
+                  status: "completed",
+                  timestamp: now,
+                  details: r.length > 160 ? `${r.slice(0, 157)}…` : r || undefined,
+                });
+              } else if (event === "tool_call" && data && typeof data === "object") {
+                const t = data as { name?: string };
+                onThinkingStep({
+                  step: `Running tool: ${t.name || "tool"}`,
+                  status: "completed",
+                  timestamp: now,
+                });
+              } else if (event === "critic_verdict" && data && typeof data === "object") {
+                const c = data as { stepId?: string };
+                if (c.stepId === "final") {
+                  onThinkingStep({
+                    step: "Reviewing answer",
+                    status: "completed",
+                    timestamp: now,
+                  });
+                }
+              }
               sendSSE(res, event, data);
               for (const entry of agentSseEventToWorkbenchEntries(event, data)) {
                 const stored = appendWorkbenchEntry(agentWorkbench, entry);
@@ -313,6 +383,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 ok: p.ok,
                 phase: p.phase,
               });
+            },
+            onIntermediateArtifact: ({ preview, insight }) => {
+              flushIntermediateSegment(
+                preview as Record<string, unknown>[],
+                insight
+              );
             },
           }
         : undefined;
@@ -340,7 +416,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     // Enrich charts
     if (result.charts && Array.isArray(result.charts)) {
-      result.charts = await enrichCharts(result.charts, chatDocument, chatLevelInsights);
+      result.charts = await enrichCharts(
+        result.charts,
+        chatDocument,
+        chatLevelInsights,
+        result.lastAnalyticalRowsForEnrichment,
+        {
+          userQuestion: message,
+          sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+          permanentContext,
+        }
+      );
     }
 
     // Check connection after enriching charts
@@ -366,6 +452,19 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     }
     if ((result as any).agentTrace) {
       transformedResponse.agentTrace = (result as any).agentTrace;
+    }
+
+    if (pendingIntermediates.length > 0) {
+      transformedResponse.preview = undefined;
+      transformedResponse.summary = undefined;
+    }
+    const finalThinkingBefore =
+      pendingIntermediates.length > 0 &&
+      (thinkingSteps.length > 0 || agentWorkbench.length > 0)
+        ? { steps: [...thinkingSteps], workbench: [...agentWorkbench] }
+        : undefined;
+    if (finalThinkingBefore) {
+      transformedResponse.thinkingBefore = finalThinkingBefore;
     }
 
     // Check connection before generating suggestions
@@ -446,28 +545,48 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       // 2. Store charts in top-level session.charts
       // 3. Strip data from message-level charts to prevent CosmosDB size issues
       // 4. Check for duplicates before adding
+      const intermediateCosmosMessages: Message[] = pendingIntermediates.map((pi) => ({
+        role: 'assistant',
+        content: 'Preliminary results',
+        timestamp: pi.assistantTimestamp,
+        preview: pi.preview as Message["preview"],
+        isIntermediate: true,
+        intermediateInsight: pi.insight,
+        thinkingBefore: { steps: pi.thinkingSteps, workbench: pi.workbench },
+      }));
+
+      const userSave: Message = {
+        role: 'user',
+        content: message,
+        timestamp: userMessageTimestamp,
+        userEmail: userEmail,
+        ...(pendingIntermediates.length === 0
+          ? {
+              ...(thinkingSteps.length > 0 ? { thinkingSteps: [...thinkingSteps] } : {}),
+              ...(agentWorkbench.length > 0 ? { agentWorkbench: [...agentWorkbench] } : {}),
+            }
+          : {}),
+      };
+
+      const assistantSave: Message = {
+        role: 'assistant',
+        content: transformedResponse.answer,
+        charts: transformedResponse.charts || [],
+        insights: transformedResponse.insights,
+        preview: transformedResponse.preview || undefined,
+        summary: transformedResponse.summary || undefined,
+        agentTrace: transformedResponse.agentTrace,
+        timestamp: assistantMessageTimestamp,
+        ...(finalThinkingBefore ? { thinkingBefore: finalThinkingBefore } : {}),
+        ...(mergedSuggestedQuestions.length > 0
+          ? { suggestedQuestions: mergedSuggestedQuestions }
+          : {}),
+      };
+
       await addMessagesBySessionId(sessionId, [
-        {
-          role: 'user',
-          content: message,
-          timestamp: userMessageTimestamp,
-          userEmail: userEmail,
-          ...(thinkingSteps.length > 0 ? { thinkingSteps: [...thinkingSteps] } : {}),
-          ...(agentWorkbench.length > 0 ? { agentWorkbench: [...agentWorkbench] } : {}),
-        },
-        {
-          role: 'assistant',
-          content: transformedResponse.answer,
-          charts: transformedResponse.charts || [], // Pass FULL charts with data
-          insights: transformedResponse.insights,
-          preview: transformedResponse.preview || undefined, // Save preview data for data operations
-          summary: transformedResponse.summary || undefined, // Save summary data for data operations
-          agentTrace: transformedResponse.agentTrace,
-          timestamp: assistantMessageTimestamp,
-          ...(mergedSuggestedQuestions.length > 0
-            ? { suggestedQuestions: mergedSuggestedQuestions }
-            : {}),
-        },
+        userSave,
+        ...intermediateCosmosMessages,
+        assistantSave,
       ]);
       console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
 
@@ -493,11 +612,35 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    // Send final response with preview/summary for data operations
-    if (!sendSSE(res, 'response', {
-      ...transformedResponse,
-      suggestions,
-    })) {
+    // Agentic: emit answer first, then charts so the client can render text before heavy chart payloads.
+    const splitCharts =
+      isAgenticLoopEnabled() &&
+      Array.isArray(transformedResponse.charts) &&
+      transformedResponse.charts.length > 0;
+
+    if (splitCharts) {
+      if (
+        !sendSSE(res, "response", {
+          ...transformedResponse,
+          charts: [],
+          suggestions,
+        })
+      ) {
+        return;
+      }
+      if (
+        !sendSSE(res, "response_charts", {
+          charts: transformedResponse.charts,
+        })
+      ) {
+        return;
+      }
+    } else if (
+      !sendSSE(res, "response", {
+        ...transformedResponse,
+        suggestions,
+      })
+    ) {
       return; // Client disconnected
     }
 

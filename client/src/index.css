@@ -2,92 +2,99 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE */
+/* LIGHT MODE — luxury minimal: warm zinc neutrals, restrained blue primary */
 :root {
-  --button-outline: rgba(0,0,0, .10);
+  --button-outline: rgba(0,0,0, .09);
   --badge-outline: rgba(0,0,0, .05);
 
   /* Automatic computation of border around primary / danger buttons */
   --opaque-button-border-intensity: -8; /* In terms of percentages */
 
   /* Backgrounds applied on top of other backgrounds when hovered/active */
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .08);
+  --elevate-1: rgba(0,0,0, .035);
+  --elevate-2: rgba(0,0,0, .085);
+  --surface-hover: hsl(var(--muted) / 0.55);
+  --surface-selected: hsl(var(--primary) / 0.12);
+  --surface-positive: hsl(152 55% 38% / 0.12);
+  --surface-positive-border: hsl(152 55% 38% / 0.28);
 
-  --background: 210 20% 98%;
+  /* Slightly warm paper-like canvas */
+  --background: 40 20% 98%;
 
-  --foreground: 222 47% 11%;
+  --foreground: 240 6% 10%;
 
-  --border: 214 15% 91%;
+  --border: 240 6% 90%;
 
   --card: 0 0% 100%;
 
-  --card-foreground: 222 47% 11%;
+  --card-foreground: 240 6% 10%;
 
-  --card-border: 214 15% 91%;
+  --card-border: 240 5% 91%;
 
-  --sidebar: 210 20% 96%;
+  --sidebar: 40 14% 96%;
 
-  --sidebar-foreground: 222 47% 11%;
+  --sidebar-foreground: 240 6% 12%;
 
-  --sidebar-border: 214 15% 89%;
+  --sidebar-border: 240 5% 89%;
 
-  --sidebar-primary: 217 91% 60%;
+  /* Slightly softer primary for premium feel */
+  --sidebar-primary: 221 83% 53%;
 
   --sidebar-primary-foreground: 0 0% 100%;
 
-  --sidebar-accent: 210 15% 92%;
+  --sidebar-accent: 40 12% 93%;
 
-  --sidebar-accent-foreground: 222 47% 11%;
+  --sidebar-accent-foreground: 240 6% 12%;
 
-  --sidebar-ring: 217 91% 60%;
+  --sidebar-ring: 221 83% 53%;
 
   --popover: 0 0% 100%;
 
-  --popover-foreground: 222 47% 11%;
+  --popover-foreground: 240 6% 10%;
 
-  --popover-border: 214 15% 88%;
+  --popover-border: 240 5% 90%;
 
-  --primary: 217 91% 60%;
+  --primary: 221 83% 53%;
 
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 210 15% 93%;
+  --secondary: 240 5% 93%;
 
-  --secondary-foreground: 222 47% 11%;
+  --secondary-foreground: 240 6% 12%;
 
-  --muted: 210 15% 94%;
+  --muted: 40 10% 94%;
 
-  --muted-foreground: 215 16% 47%;
+  --muted-foreground: 240 4% 42%;
 
-  --accent: 210 15% 95%;
+  --accent: 40 12% 95%;
 
-  --accent-foreground: 217 91% 60%;
+  --accent-foreground: 221 83% 45%;
 
-  --destructive: 0 84% 60%;
+  --destructive: 0 72% 51%;
 
   --destructive-foreground: 0 0% 100%;
 
-  --input: 214 15% 85%;
-  --ring: 217 91% 60%;
-  --chart-1: 217 91% 60%;
-  --chart-2: 142 76% 36%;
-  --chart-3: 38 92% 50%;
-  --chart-4: 0 84% 60%;
-  --chart-5: 262 83% 58%;
+  --input: 240 5% 84%;
+  --ring: 221 83% 53%;
+  /* Chart series: distinct, readable on white + light gray cards */
+  --chart-1: 221 83% 53%;
+  --chart-2: 152 55% 38%;
+  --chart-3: 32 95% 44%;
+  --chart-4: 346 77% 50%;
+  --chart-5: 262 70% 52%;
 
-  --font-sans: Inter, system-ui, -apple-system, sans-serif;
+  --font-sans: "Plus Jakarta Sans", Inter, system-ui, -apple-system, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: JetBrains Mono, Courier New, monospace;
   --radius: .75rem;
-  --shadow-2xs: 0px 1px 2px 0px hsl(214 15% 20% / 0.05);
-  --shadow-xs: 0px 1px 3px 0px hsl(214 15% 20% / 0.08);
-  --shadow-sm: 0px 2px 4px -1px hsl(214 15% 20% / 0.06), 0px 1px 2px -1px hsl(214 15% 20% / 0.04);
-  --shadow: 0px 4px 6px -1px hsl(214 15% 20% / 0.08), 0px 2px 4px -2px hsl(214 15% 20% / 0.05);
-  --shadow-md: 0px 6px 12px -2px hsl(214 15% 20% / 0.10), 0px 3px 6px -3px hsl(214 15% 20% / 0.07);
-  --shadow-lg: 0px 10px 20px -4px hsl(214 15% 20% / 0.12), 0px 4px 8px -4px hsl(214 15% 20% / 0.08);
-  --shadow-xl: 0px 20px 30px -6px hsl(214 15% 20% / 0.15), 0px 8px 12px -6px hsl(214 15% 20% / 0.10);
-  --shadow-2xl: 0px 25px 50px -12px hsl(214 15% 20% / 0.20);
+  --shadow-2xs: 0px 1px 2px 0px hsl(240 6% 10% / 0.04);
+  --shadow-xs: 0px 1px 3px 0px hsl(240 6% 10% / 0.06);
+  --shadow-sm: 0px 2px 4px -1px hsl(240 6% 10% / 0.05), 0px 1px 2px -1px hsl(240 6% 10% / 0.04);
+  --shadow: 0px 4px 6px -1px hsl(240 6% 10% / 0.07), 0px 2px 4px -2px hsl(240 6% 10% / 0.04);
+  --shadow-md: 0px 6px 12px -2px hsl(240 6% 10% / 0.09), 0px 3px 6px -3px hsl(240 6% 10% / 0.06);
+  --shadow-lg: 0px 10px 20px -4px hsl(240 6% 10% / 0.1), 0px 4px 8px -4px hsl(240 6% 10% / 0.07);
+  --shadow-xl: 0px 20px 30px -6px hsl(240 6% 10% / 0.12), 0px 8px 12px -6px hsl(240 6% 10% / 0.08);
+  --shadow-2xl: 0px 25px 50px -12px hsl(240 6% 10% / 0.16);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
 
@@ -129,70 +136,75 @@
   --opaque-button-border-intensity: 9;  /* In terms of percentages */
 
   /* Backgrounds applied on top of other backgrounds when hovered/active */
-  --elevate-1: rgba(255,255,255, .04);
-  --elevate-2: rgba(255,255,255, .09);
+  --elevate-1: rgba(255,255,255, .045);
+  --elevate-2: rgba(255,255,255, .1);
+  --surface-hover: hsl(var(--muted) / 0.75);
+  --surface-selected: hsl(var(--primary) / 0.20);
+  --surface-positive: hsl(152 50% 52% / 0.18);
+  --surface-positive-border: hsl(152 50% 52% / 0.36);
 
-  --background: 222 47% 8%;
+  --background: 240 6% 7%;
 
-  --foreground: 210 20% 98%;
+  --foreground: 40 12% 97%;
 
-  --border: 215 16% 18%;
+  --border: 240 4% 18%;
 
-  --card: 222 47% 11%;
+  --card: 240 5% 10%;
 
-  --card-foreground: 210 20% 98%;
+  --card-foreground: 40 12% 97%;
 
-  --card-border: 215 16% 20%;
+  --card-border: 240 4% 16%;
 
-  --sidebar: 222 47% 13%;
+  --sidebar: 240 5% 9%;
 
-  --sidebar-foreground: 210 20% 98%;
+  --sidebar-foreground: 40 12% 96%;
 
-  --sidebar-border: 215 16% 22%;
+  --sidebar-border: 240 4% 15%;
 
-  --sidebar-primary: 217 91% 60%;
+  --sidebar-primary: 221 83% 58%;
 
   --sidebar-primary-foreground: 0 0% 100%;
 
-  --sidebar-accent: 222 30% 18%;
+  --sidebar-accent: 240 4% 14%;
 
-  --sidebar-accent-foreground: 210 20% 98%;
+  --sidebar-accent-foreground: 40 12% 96%;
 
-  --sidebar-ring: 217 91% 60%;
+  --sidebar-ring: 221 83% 58%;
 
-  --popover: 222 47% 11%;
+  --popover: 240 5% 10%;
 
-  --popover-foreground: 210 20% 98%;
+  --popover-foreground: 40 12% 97%;
 
-  --popover-border: 215 16% 21%;
+  --popover-border: 240 4% 17%;
 
-  --primary: 217 91% 60%;
+  --primary: 221 83% 58%;
 
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 222 30% 20%;
+  --secondary: 240 4% 16%;
 
-  --secondary-foreground: 210 20% 98%;
+  --secondary-foreground: 40 12% 96%;
 
-  --muted: 222 30% 16%;
+  --muted: 240 4% 14%;
 
-  --muted-foreground: 215 16% 65%;
+  --muted-foreground: 240 5% 64%;
 
-  --accent: 222 30% 17%;
+  --accent: 240 4% 13%;
 
-  --accent-foreground: 217 91% 70%;
+  --accent-foreground: 221 83% 68%;
 
-  --destructive: 0 84% 60%;
+  --destructive: 0 72% 55%;
 
   --destructive-foreground: 0 0% 100%;
 
-  --input: 215 16% 28%;
-  --ring: 217 91% 60%;
-  --chart-1: 217 91% 70%;
-  --chart-2: 142 76% 45%;
-  --chart-3: 38 92% 60%;
-  --chart-4: 0 84% 70%;
-  --chart-5: 262 83% 68%;
+  --input: 240 4% 22%;
+  --ring: 221 83% 58%;
+  /* Slightly brighter series for dark surfaces */
+  --chart-1: 221 83% 62%;
+  --chart-2: 152 50% 52%;
+  --chart-3: 32 90% 58%;
+  --chart-4: 346 72% 62%;
+  --chart-5: 262 65% 68%;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.20);
   --shadow-xs: 0px 1px 3px 0px hsl(0 0% 0% / 0.30);
@@ -237,9 +249,31 @@
     @apply border-0;
   }
 
+  html {
+    @apply antialiased;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
   body {
     @apply font-sans antialiased;
     background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: hsl(var(--primary) / 0.2);
     color: hsl(var(--foreground));
   }
 }
@@ -265,6 +299,35 @@
  * need to be distinguished from eachother visually.
  */
 @layer utilities {
+  /* Tokenized semantic surfaces for table/list interactions across themes. */
+  .surface-hover {
+    background-color: var(--surface-hover);
+  }
+
+  .surface-selected {
+    background-color: var(--surface-selected);
+  }
+
+  .surface-positive {
+    background-color: var(--surface-positive);
+    border-color: var(--surface-positive-border);
+  }
+
+  .token-table-frame {
+    @apply rounded-md border border-border bg-card;
+  }
+
+  .token-table-head {
+    @apply bg-muted/50 text-foreground;
+  }
+
+  .token-table-row {
+    @apply border-b border-border transition-colors;
+  }
+
+  .token-table-row:hover {
+    background-color: var(--surface-hover);
+  }
 
   /* Hide ugly search cancel button in Chrome until we can style it properly */
   input[type="search"]::-webkit-search-cancel-button {

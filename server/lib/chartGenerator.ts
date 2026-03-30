@@ -1,8 +1,142 @@
 import { ChartSpec } from '../shared/schema.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
-import { normalizeDateToPeriod, DatePeriod } from './dateUtils.js';
+import {
+  normalizeDateToPeriod,
+  DatePeriod,
+  parseFlexibleDate,
+  detectPeriodFromQuery,
+} from './dateUtils.js';
 import { inferTemporalGrainFromDates, formatDateForChartAxis } from './temporalGrain.js';
-import { optimizeChartData } from './chartDownsampling.js';
+import {
+  optimizeChartData,
+  inferOptimalPeriodForChartColumn,
+} from './chartDownsampling.js';
+
+export type ProcessChartDataOptions = {
+  /** Used to pick date bucket (year/month/...) for aggregated line charts and downsampling. */
+  chartQuestion?: string;
+};
+
+/** Safe object key for pivoted series (Recharts dataKey). */
+export function sanitizeSeriesKey(raw: string): string {
+  const s = String(raw).trim() || "series";
+  return s.replace(/[^\w\u00C0-\u024F]/g, "_").slice(0, 80);
+}
+
+/**
+ * Long-format rows (xCat, seriesCat, measure) → wide rows for grouped/stacked bars.
+ * Mutates chartSpec.seriesKeys with display keys aligned to sanitized keys in rows.
+ */
+export function pivotLongToWideBar(
+  data: Record<string, any>[],
+  xCol: string,
+  seriesCol: string,
+  valueCol: string,
+  aggregate: "sum" | "mean" | "count",
+  chartSpec: ChartSpec
+): { rows: Record<string, any>[]; seriesKeys: string[] } {
+  const pairMap = new Map<string, number[]>();
+  const xOrder: string[] = [];
+  const xSeen = new Set<string>();
+  const rawSeriesOrder: string[] = [];
+  const seriesSeen = new Set<string>();
+
+  for (const row of data) {
+    const xVal = row[xCol];
+    const sVal = row[seriesCol];
+    if (xVal === null || xVal === undefined || xVal === "") continue;
+    if (sVal === null || sVal === undefined || sVal === "") continue;
+    const xv = String(xVal);
+    const sv = String(sVal);
+    if (!xSeen.has(xv)) {
+      xSeen.add(xv);
+      xOrder.push(xv);
+    }
+    if (!seriesSeen.has(sv)) {
+      seriesSeen.add(sv);
+      rawSeriesOrder.push(sv);
+    }
+    const key = `${xv}\u0000${sv}`;
+    const n = toNumber(row[valueCol]);
+    if (isNaN(n)) continue;
+    if (!pairMap.has(key)) pairMap.set(key, []);
+    pairMap.get(key)!.push(n);
+  }
+
+  const displayToSanitized = new Map<string, string>();
+  const usedSan = new Set<string>();
+  for (const raw of rawSeriesOrder) {
+    let san = sanitizeSeriesKey(raw);
+    if (usedSan.has(san)) {
+      let i = 2;
+      while (usedSan.has(`${san}_${i}`)) i++;
+      san = `${san}_${i}`;
+    }
+    usedSan.add(san);
+    displayToSanitized.set(raw, san);
+  }
+
+  const seriesKeys = rawSeriesOrder.map((r) => displayToSanitized.get(r)!);
+
+  const rows: Record<string, any>[] = [];
+  for (const xv of xOrder) {
+    const out: Record<string, any> = { [xCol]: xv };
+    for (const rawS of rawSeriesOrder) {
+      const san = displayToSanitized.get(rawS)!;
+      const key = `${xv}\u0000${rawS}`;
+      const vals = pairMap.get(key);
+      let v = 0;
+      if (vals && vals.length > 0) {
+        if (aggregate === "sum" || aggregate === "count") {
+          v = aggregate === "count" ? vals.length : vals.reduce((a, b) => a + b, 0);
+        } else {
+          v = vals.reduce((a, b) => a + b, 0) / vals.length;
+        }
+      }
+      out[san] = v;
+    }
+    rows.push(out);
+  }
+
+  chartSpec.seriesKeys = seriesKeys;
+  return { rows, seriesKeys };
+}
+
+function processHeatmapLongData(
+  data: Record<string, any>[],
+  rowCol: string,
+  colCol: string,
+  valueCol: string
+): Record<string, any>[] {
+  const cellMap = new Map<string, { row: string; col: string; values: number[] }>();
+
+  for (const row of data) {
+    const rv = row[rowCol];
+    const cv = row[colCol];
+    if (rv === null || rv === undefined || rv === "") continue;
+    if (cv === null || cv === undefined || cv === "") continue;
+    const rk = String(rv);
+    const ck = String(cv);
+    const key = `${rk}\u0000${ck}`;
+    const n = toNumber(row[valueCol]);
+    if (isNaN(n)) continue;
+    if (!cellMap.has(key)) {
+      cellMap.set(key, { row: rk, col: ck, values: [] });
+    }
+    cellMap.get(key)!.values.push(n);
+  }
+
+  const out: Record<string, any>[] = [];
+  for (const { row, col, values } of cellMap.values()) {
+    const v = values.reduce((a, b) => a + b, 0);
+    out.push({
+      [rowCol]: convertValueForSchema(row),
+      [colCol]: convertValueForSchema(col),
+      [valueCol]: v,
+    });
+  }
+  return out;
+}
 
 // Maximum data points for visualization to ensure good performance
 // Updated to 5000 as per requirements - all downsampling now handled by chartDownsampling.ts
@@ -166,6 +300,15 @@ function parseDate(value: unknown): Date | null {
   return null;
 }
 
+function coerceChartDate(raw: unknown): Date | null {
+  if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
+  if (typeof raw === "string") {
+    const d = parseFlexibleDate(raw);
+    return d && !isNaN(d.getTime()) ? d : null;
+  }
+  return null;
+}
+
 /** X is temporal only if the dataset profile listed it in dateColumns (declaredDateColumns). */
 function xColumnIsDeclaredDate(
   xSpec: string,
@@ -179,7 +322,7 @@ function xColumnIsDeclaredDate(
 
 function chartXLooksTemporal(xCol: string, rows: Record<string, any>[], profileSaysDate: boolean): boolean {
   if (!profileSaysDate || rows.length === 0) return false;
-  return rows.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()));
+  return rows.some((r) => coerceChartDate(r[xCol]) !== null);
 }
 
 /** Format X for display when values are real Date instances (no string parsing). */
@@ -191,13 +334,13 @@ function applyTemporalXAxisLabels(
   if (rows.length === 0 || !chartXLooksTemporal(xCol, rows, profileSaysDate)) return rows;
   const dates: Date[] = [];
   for (const row of rows) {
-    const p = parseDate(row[xCol]);
+    const p = coerceChartDate(row[xCol]);
     if (p) dates.push(p);
   }
   if (dates.length === 0) return rows;
   const grain = inferTemporalGrainFromDates(dates);
   return rows.map((row) => {
-    const p = parseDate(row[xCol]);
+    const p = coerceChartDate(row[xCol]);
     if (!p) return row;
     return { ...row, [xCol]: formatDateForChartAxis(p, grain) };
   });
@@ -210,6 +353,11 @@ function compareValues(a: any, b: any, xIsDeclaredDate: boolean): number {
     const aDate = a instanceof Date && !isNaN(a.getTime()) ? a : null;
     const bDate = b instanceof Date && !isNaN(b.getTime()) ? b : null;
     if (aDate && bDate) return aDate.getTime() - bDate.getTime();
+    const aCoerced = aDate ?? coerceChartDate(a);
+    const bCoerced = bDate ?? coerceChartDate(b);
+    if (aCoerced && bCoerced) return aCoerced.getTime() - bCoerced.getTime();
+    if (aCoerced && !bCoerced) return -1;
+    if (!aCoerced && bCoerced) return 1;
   }
   return aStr.localeCompare(bStr);
 }
@@ -350,15 +498,22 @@ export async function processChartDataStreaming(
   }
   
   // For non-aggregated or small datasets, use regular processing
-  return processChartData(data, chartSpec, declaredDateColumns);
+  return processChartData(data, chartSpec, declaredDateColumns, undefined);
+}
+
+function datePeriodHintFromOptions(options?: ProcessChartDataOptions): DatePeriod | null {
+  if (!options?.chartQuestion?.trim()) return null;
+  return detectPeriodFromQuery(options.chartQuestion);
 }
 
 export function processChartData(
   data: Record<string, any>[],
   chartSpec: ChartSpec,
-  declaredDateColumns?: string[]
+  declaredDateColumns?: string[],
+  options?: ProcessChartDataOptions
 ): Record<string, any>[] {
-  const { type, x, y, y2, aggregate = 'none' } = chartSpec;
+  const periodHint = datePeriodHintFromOptions(options);
+  const { type, x, y, y2, aggregate = 'none', z: zColSpec, seriesColumn: seriesColSpec } = chartSpec;
   
   console.log(`🔍 Processing chart: "${chartSpec.title}"`);
   console.log(`   Type: ${type}, X: "${x}", Y: "${y}", Aggregate: ${aggregate}`);
@@ -382,7 +537,12 @@ export function processChartData(
     const result: Record<string, any>[] = [];
     for (let i = 0; i < data.length; i += batchSize) {
       const batch = data.slice(i, i + batchSize);
-      const batchResult = processChartData(batch, { ...chartSpec }, declaredDateColumns);
+      const batchResult = processChartData(
+        batch,
+        { ...chartSpec },
+        declaredDateColumns,
+        options
+      );
       result.push(...batchResult);
     }
     // Sort the merged result
@@ -406,7 +566,11 @@ export function processChartData(
   const matchedX = findMatchingColumn(x, availableColumns);
   const matchedY = findMatchingColumn(y, availableColumns);
   let matchedY2 = y2 ? findMatchingColumn(y2, availableColumns) : null;
-  
+  let matchedZ =
+    type === "heatmap" && zColSpec
+      ? findMatchingColumn(zColSpec, availableColumns)
+      : null;
+
   if (!matchedX) {
     console.warn(`❌ Column "${x}" not found in data for chart: ${chartSpec.title}`);
     console.log(`   Available columns: [${availableColumns.join(', ')}]`);
@@ -417,6 +581,20 @@ export function processChartData(
     console.warn(`❌ Column "${y}" not found in data for chart: ${chartSpec.title}`);
     console.log(`   Available columns: [${availableColumns.join(', ')}]`);
     return [];
+  }
+
+  if (type === "heatmap") {
+    if (!zColSpec) {
+      console.warn(`❌ Heatmap requires "z" value column for chart: ${chartSpec.title}`);
+      return [];
+    }
+    if (!matchedZ) {
+      matchedZ = findMatchingColumn(zColSpec, availableColumns);
+    }
+    if (!matchedZ) {
+      console.warn(`❌ Column "${zColSpec}" (z) not found for heatmap: ${chartSpec.title}`);
+      return [];
+    }
   }
   
   // Optional secondary series existence check (for dual-axis line charts)
@@ -443,6 +621,9 @@ export function processChartData(
   // Update chart spec with matched column names to ensure consistency
   chartSpec.x = matchedX;
   chartSpec.y = matchedY;
+  if (type === "heatmap" && matchedZ) {
+    chartSpec.z = matchedZ;
+  }
   if (y2 && matchedY2) {
     chartSpec.y2 = matchedY2;
   } else if (y2 && !matchedY2) {
@@ -456,6 +637,7 @@ export function processChartData(
   const xCol = matchedX;
   const yCol = matchedY;
   const y2Col = matchedY2;
+  const zCol = matchedZ;
   const xIsDateCol = xColumnIsDeclaredDate(x, availableColumns, declaredDateColumns);
 
   // Check for valid data in the columns (using matched column names)
@@ -480,9 +662,18 @@ export function processChartData(
       return [];
     }
     
-    if (yValues.length === 0) {
+    if (type !== "heatmap" && yValues.length === 0) {
       console.warn(`❌ No valid Y values in column "${yCol}" for chart: ${chartSpec.title}`);
       return [];
+    }
+    if (type === "heatmap" && zCol) {
+      const zVals = data
+        .map((row) => row[zCol])
+        .filter((v) => v !== null && v !== undefined && v !== "");
+      if (zVals.length === 0) {
+        console.warn(`❌ No valid Z values in column "${zCol}" for heatmap: ${chartSpec.title}`);
+        return [];
+      }
     }
   } else {
     // For bar charts with aggregation, just check that columns exist
@@ -525,11 +716,23 @@ export function processChartData(
     console.log(`   Scatter plot: ${scatterData.length} valid numeric points`);
 
     // Apply optimization to ensure max points limit
-    const optimized = optimizeChartData(scatterData, chartSpec);
+    const optimized = optimizeChartData(
+      scatterData,
+      chartSpec,
+      declaredDateColumns,
+      periodHint
+    );
     if (optimized.length < scatterData.length) {
       console.log(`   ✅ Optimized scatter plot from ${scatterData.length} to ${optimized.length} points`);
     }
     return optimized;
+  }
+
+  if (type === "heatmap" && zCol) {
+    console.log(`   Processing heatmap: rows="${xCol}", cols="${yCol}", value="${zCol}"`);
+    const cells = processHeatmapLongData(data, xCol, yCol, zCol);
+    console.log(`   Heatmap cells: ${cells.length}`);
+    return cells;
   }
 
   if (type === 'pie') {
@@ -639,6 +842,41 @@ export function processChartData(
       console.log(`   Correlation bar chart result: ${result.length} bars`);
       return result;
     }
+
+    const matchedSeriesCol = seriesColSpec
+      ? findMatchingColumn(seriesColSpec, availableColumns)
+      : null;
+    if (seriesColSpec && matchedSeriesCol && matchedSeriesCol !== xCol) {
+      const eff =
+        aggregate === "none" || !aggregate ? "sum" : (aggregate as "sum" | "mean" | "count");
+      console.log(
+        `   Multi-series bar: x="${xCol}", series="${matchedSeriesCol}", measure="${yCol}", layout=${chartSpec.barLayout || "stacked"}`
+      );
+      chartSpec.seriesColumn = matchedSeriesCol;
+      const { rows: wideRows } = pivotLongToWideBar(
+        data,
+        xCol,
+        matchedSeriesCol,
+        yCol,
+        eff,
+        chartSpec
+      );
+      let result = wideRows;
+      if (xIsDateCol) {
+        result = [...wideRows].sort((a, b) =>
+          compareValues(a[xCol], b[xCol], true)
+        );
+        result = applyTemporalXAxisLabels(result, xCol, xIsDateCol);
+      } else {
+        const sk = chartSpec.seriesKeys || [];
+        const sortKey = sk[0] || yCol;
+        result = [...wideRows].sort(
+          (a, b) => toNumber(b[sortKey]) - toNumber(a[sortKey])
+        );
+      }
+      console.log(`   Multi-series bar result: ${result.length} groups`);
+      return result;
+    }
     
     // Regular bar chart - aggregate and sort appropriately
     console.log(`   Processing bar chart with aggregation: ${aggregate || 'sum'}`);
@@ -658,44 +896,84 @@ export function processChartData(
       return [];
     }
     
-    const hasDates =
-      xIsDateCol &&
-      aggregated.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()));
-
     let result: Record<string, any>[];
-    if (hasDates) {
-      console.log(`   X-axis is a profile date column with Date values; sorting chronologically`);
-      result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol], xIsDateCol));
-      // No limit - show all date-based bars
+    if (xIsDateCol) {
+      console.log(`   X-axis is a profile date column; sorting chronologically (including string dates)`);
+      result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol], true));
     } else {
-      // X-axis is not dates - sort by Y value (descending)
-      result = aggregated
-        .sort((a, b) => toNumber(b[yCol]) - toNumber(a[yCol]));
-      // No limit - show all bars
+      result = aggregated.sort((a, b) => toNumber(b[yCol]) - toNumber(a[yCol]));
     }
-    
+
     // Convert Date objects to strings for schema validation
-    result = result.map(row => {
+    result = result.map((row) => {
       const sanitizedRow: Record<string, any> = {};
       for (const [key, value] of Object.entries(row)) {
         sanitizedRow[key] = convertValueForSchema(value);
       }
       return sanitizedRow;
     });
-    
+
     console.log(`   Bar chart result: ${result.length} bars`);
-    return hasDates ? applyTemporalXAxisLabels(result, xCol, xIsDateCol) : result;
+    return xIsDateCol ? applyTemporalXAxisLabels(result, xCol, xIsDateCol) : result;
   }
 
   if (type === 'line' || type === 'area') {
     console.log(`   Processing ${type} chart`);
-    
+
+    const CHART_REPAIR_MIN_ROWS = 64;
+    if (
+      (!aggregate || aggregate === "none") &&
+      data.length > CHART_REPAIR_MIN_ROWS &&
+      periodHint &&
+      periodHint !== "monthOnly" &&
+      data
+        .slice(0, Math.min(120, data.length))
+        .some((r) => coerceChartDate(r[xCol]) !== null)
+    ) {
+      console.warn(
+        `[chart_time_bucket_repair] ${type} "${chartSpec.title}": ${data.length} rows, questionPeriod=${periodHint} — applying sum bucket`
+      );
+      const aggregated = aggregateData(data, xCol, yCol, "sum", periodHint, true);
+      let repaired = aggregated.sort((a, b) =>
+        compareValues(a[xCol], b[xCol], xIsDateCol)
+      );
+      repaired = repaired.map((row) => {
+        const sanitizedRow: Record<string, any> = {};
+        for (const [key, value] of Object.entries(row)) {
+          sanitizedRow[key] = convertValueForSchema(value);
+        }
+        return sanitizedRow;
+      });
+      const optimized = optimizeChartData(
+        repaired,
+        chartSpec,
+        declaredDateColumns,
+        periodHint
+      );
+      if (optimized.length < repaired.length) {
+        console.log(
+          `   ✅ Optimized from ${repaired.length} to ${optimized.length} points after repair aggregation`
+        );
+      }
+      console.log(
+        `   ${type} chart result (repaired): ${optimized.length} points (sorted chronologically)`
+      );
+      return applyTemporalXAxisLabels(optimized, xCol, xIsDateCol);
+    }
+
     // Sort by x and optionally aggregate
     if (aggregate && aggregate !== 'none') {
       console.log(`   Using aggregation: ${aggregate}`);
       const isDateCol = xIsDateCol;
-      let detectedPeriod: DatePeriod | null = null;
-      if (isDateCol && data.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()))) {
+      let detectedPeriod: DatePeriod | null = periodHint;
+      if (!detectedPeriod && isDateCol) {
+        detectedPeriod = inferOptimalPeriodForChartColumn(data, xCol);
+      }
+      if (
+        !detectedPeriod &&
+        isDateCol &&
+        data.some((r) => coerceChartDate(r[xCol]) !== null)
+      ) {
         detectedPeriod = 'month';
       }
       const aggregated = aggregateData(data, xCol, yCol, aggregate, detectedPeriod, isDateCol);
@@ -712,7 +990,12 @@ export function processChartData(
       });
       
       // Apply optimization to ensure max points limit
-      const optimized = optimizeChartData(result, chartSpec);
+      const optimized = optimizeChartData(
+        result,
+        chartSpec,
+        declaredDateColumns,
+        periodHint
+      );
       if (optimized.length < result.length) {
         console.log(`   ✅ Optimized from ${result.length} to ${optimized.length} points after aggregation`);
       }
@@ -771,7 +1054,12 @@ export function processChartData(
     }
     
     // Apply optimization to ensure max points limit
-    const optimized = optimizeChartData(result, chartSpec);
+    const optimized = optimizeChartData(
+      result,
+      chartSpec,
+      declaredDateColumns,
+      periodHint
+    );
     if (optimized.length < result.length) {
       console.log(`   ✅ Optimized from ${result.length} to ${optimized.length} points`);
     }
@@ -804,7 +1092,7 @@ function aggregateData(
     
     if (isDateColumn && datePeriod) {
       const raw = row[groupBy];
-      const d = raw instanceof Date && !isNaN(raw.getTime()) ? raw : null;
+      const d = coerceChartDate(raw);
       const normalized = d ? normalizeDateToPeriod(d, datePeriod) : null;
       if (normalized) {
         key = normalized.normalizedKey;

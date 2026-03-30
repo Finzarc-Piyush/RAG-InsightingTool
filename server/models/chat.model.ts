@@ -1017,19 +1017,32 @@ export const updateSessionPermanentContext = async (
       throw new Error('Unauthorized: Session does not belong to this user');
     }
     
-    // Update the permanent context
-    chatDocument.permanentContext = permanentContext.trim();
+    // Keep permanent context additive and idempotent so user-provided details
+    // are retained across future updates/resumes.
+    const incoming = permanentContext.trim();
+    const existing = (chatDocument.permanentContext || "").trim();
+    const combined =
+      incoming.length === 0
+        ? existing
+        : existing.length === 0
+          ? incoming
+          : existing.includes(incoming)
+            ? existing
+            : `${existing}\n\n${incoming}`;
+    chatDocument.permanentContext = combined;
 
-    try {
-      const { mergeSessionAnalysisContextUserLLM } = await import(
-        "../lib/sessionAnalysisContext.js"
-      );
-      chatDocument.sessionAnalysisContext = await mergeSessionAnalysisContextUserLLM({
-        previous: chatDocument.sessionAnalysisContext,
-        userText: permanentContext.trim(),
-      });
-    } catch (e) {
-      console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+    if (incoming.length > 0) {
+      try {
+        const { mergeSessionAnalysisContextUserLLM } = await import(
+          "../lib/sessionAnalysisContext.js"
+        );
+        chatDocument.sessionAnalysisContext = await mergeSessionAnalysisContextUserLLM({
+          previous: chatDocument.sessionAnalysisContext,
+          userText: incoming,
+        });
+      } catch (e) {
+        console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+      }
     }
 
     // Update the document

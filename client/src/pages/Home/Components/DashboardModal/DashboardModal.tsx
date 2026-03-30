@@ -183,12 +183,12 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
                     />
                     
                     {showDropdown && searchQuery && (
-                      <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border-0 rounded-md shadow-none max-h-48 overflow-y-auto">
+                      <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-popover border border-border rounded-md shadow-md max-h-48 overflow-y-auto">
                         {filteredDashboards.length > 0 ? (
                           filteredDashboards.map((dashboard) => (
                             <button
                               key={dashboard.id}
-                              className="w-full px-3 py-2 text-left hover:bg-gray-100 flex items-center gap-2"
+                              className="w-full px-3 py-2 text-left hover:bg-muted flex items-center gap-2 text-popover-foreground"
                               onClick={() => {
                                 setSelectedDashboard(dashboard.id);
                                 setSearchQuery(dashboard.name);
@@ -236,7 +236,7 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
                     {recentDashboards.map((dashboard) => (
                       <button
                         key={dashboard.id}
-                        className="w-full px-3 py-2 text-left hover:bg-gray-50 rounded-md border flex items-center gap-3 transition-colors border-gray-200"
+                        className="w-full px-3 py-2 text-left hover:bg-muted/40 rounded-md border flex items-center gap-3 transition-colors border-border"
                         onClick={() => {
                           setSelectedDashboard(dashboard.id);
                           setSearchQuery(dashboard.name);
@@ -325,7 +325,7 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
             <>
               {/* Confirmation View */}
               <div className="space-y-4">
-                <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="p-4 bg-muted/40 rounded-lg border border-border/60">
                   <h4 className="font-medium text-sm mb-2">Selected Dashboard:</h4>
                   <div className="flex items-center gap-3">
                     <div className="p-1.5 bg-primary/10 rounded-md">

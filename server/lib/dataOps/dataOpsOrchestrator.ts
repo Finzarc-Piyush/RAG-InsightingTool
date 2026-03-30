@@ -9,6 +9,10 @@ import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '.
 import { openai } from '../openai.js';
 import { getFileFromBlob } from '../blobStorage.js';
 import { parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
+import {
+  applyTemporalFacetColumns,
+  remapGroupByToTemporalFacet,
+} from '../temporalFacetColumns.js';
 
 export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
 
@@ -1743,6 +1747,18 @@ ${historyText}
 
 === AVAILABLE COLUMNS IN THE DATASET ===
 ${columnsListForMatching}
+${sessionDoc?.dataSummary?.temporalFacetColumns?.length
+  ? `
+=== CALENDAR BUCKET COLUMNS (hidden in the data table UI; exist on each row for grouping) ===
+${sessionDoc.dataSummary.temporalFacetColumns
+  .map(
+    (t, i) =>
+      `${i + 1}. "${t.name}" → ${t.grain} derived from date column "${t.sourceColumn}"`
+  )
+  .join('\n')}
+When the user asks to aggregate **by year / quarter / month / week / day** over a **date** column, set **groupByColumn** to the matching row above (same sourceColumn, matching grain: year|quarter|month|week|date). Do not group by the raw date column for those requests.
+`
+  : ''}
 
 === COLUMN NAME MATCHING RULES ===
 1. ALWAYS match column names EXACTLY as they appear in the list above (case-sensitive)
@@ -1901,7 +1917,7 @@ Operations:
 - "convert_type": User wants to convert column type
 - "aggregate": User wants to group data by a column and summarize other columns (sum/avg/count) to create a summary table
   * CRITICAL: Do NOT use for correlation requests. "Correlation of X with Y" or "correlation of column X with all variables" = ANALYSIS (return "unknown"), not aggregate. Only use "aggregate" when the user explicitly asks to aggregate/group/sum (e.g. "aggregate by X", "group by category").
-  * CRITICAL: Match column names EXACTLY from the available columns list above
+  * CRITICAL: Match column names EXACTLY from the available columns list above (and from CALENDAR BUCKET COLUMNS when grouping by calendar year/month/quarter/week/day)
   * Patterns: "aggregate by X", "aggregate X by Y using sum", "aggregate X on Y", "aggregate X, group by Y", "aggregate by Month column", "aggregate by Brand", "aggregate over X", "aggregate all columns by X"
   * Extract groupByColumn: the column to group by - MUST match exactly from available columns (e.g., if available columns have "status", use "status", not "s" or "Status")
   * Extract aggColumns: 
@@ -4034,6 +4050,11 @@ export async function executeDataOperation(
         };
       }
 
+      const dateColsForFacets = sessionDoc?.dataSummary?.dateColumns ?? [];
+      if (data.length > 0 && dateColsForFacets.length > 0) {
+        applyTemporalFacetColumns(data, dateColsForFacets);
+      }
+
       if (data.length > 0 && !(groupBy in data[0])) {
         return {
           answer: `Column "${groupBy}" was not found. Available columns: ${Object.keys(
@@ -4043,16 +4064,31 @@ export async function executeDataOperation(
       }
 
       try {
+        const keys = new Set(Object.keys(data[0] || {}));
+        const { groupBy: remappedGroupBy, remapped } = remapGroupByToTemporalFacet({
+          groupByColumn: groupBy,
+          dateColumns: dateColsForFacets,
+          originalMessage,
+          availableKeys: keys,
+        });
+        const effectiveGroupBy =
+          remapped && keys.has(remappedGroupBy) ? remappedGroupBy : groupBy;
+        if (remapped && effectiveGroupBy !== groupBy) {
+          console.log(
+            `📅 Remapped aggregate groupBy "${groupBy}" → "${effectiveGroupBy}" (coarse calendar bucket)`
+          );
+        }
+
         // If aggColumns is empty array or undefined, pass undefined to Python service for auto-detection
         const aggColumnsForPython = (intent.aggColumns && intent.aggColumns.length > 0) ? intent.aggColumns : undefined;
         
-        console.log(`📊 Aggregating by "${groupBy}". aggColumns: ${aggColumnsForPython ? JSON.stringify(aggColumnsForPython) : 'undefined (auto-detect all numeric columns)'}`);
+        console.log(`📊 Aggregating by "${effectiveGroupBy}". aggColumns: ${aggColumnsForPython ? JSON.stringify(aggColumnsForPython) : 'undefined (auto-detect all numeric columns)'}`);
         
         // Call Python service for aggregation
         // Pass original message for semantic intent detection (average, median, highest, etc.)
         const result = await aggregateData(
           data,
-          groupBy,
+          effectiveGroupBy,
           aggColumnsForPython,
           intent.aggFuncs,
           intent.orderByColumn,
@@ -4067,9 +4103,13 @@ export async function executeDataOperation(
         // Build description
         const allAggColumns = intent.aggColumns || [];
         const funcDesc = intent.aggFunc || 'sum';
-        const aggColCount = aggregatedData.length > 0 ? Object.keys(aggregatedData[0]).filter(k => k !== groupBy && !k.includes('(Sum)') && !k.includes('(Avg)') && !k.includes('(Min)') && !k.includes('(Max)') && !k.includes('(Count)') && !k.endsWith('_count')).length : 0;
+        const aggColCount = aggregatedData.length > 0 ? Object.keys(aggregatedData[0]).filter(k => k !== effectiveGroupBy && !k.includes('(Sum)') && !k.includes('(Avg)') && !k.includes('(Min)') && !k.includes('(Max)') && !k.includes('(Count)') && !k.endsWith('_count')).length : 0;
         const numericColCount = Object.keys(aggregatedData[0] || {}).filter(k => k.includes('(Sum)') || k.includes('(Avg)') || k.includes('(Min)') || k.includes('(Max)') || k.includes('(Count)')).length;
-        let description = `Aggregated data by "${groupBy}" using ${funcDesc} for ${numericColCount} numeric column${numericColCount === 1 ? '' : 's'} (excluding ID and string columns)`;
+        const groupLabel =
+          effectiveGroupBy !== groupBy
+            ? `${effectiveGroupBy} (calendar bucket from "${groupBy}")`
+            : effectiveGroupBy;
+        let description = `Aggregated data by "${groupLabel}" using ${funcDesc} for ${numericColCount} numeric column${numericColCount === 1 ? '' : 's'} (excluding ID and string columns)`;
 
         // Save aggregated data to session (this changes the data structure permanently)
         // This saves the transformed data to blob storage in JSON format and updates the session document
@@ -4082,7 +4122,10 @@ export async function executeDataOperation(
           sessionDoc
         );
 
-        let answer = `✅ I've created a new aggregated table grouped by "${groupBy}".`;
+        let answer =
+          effectiveGroupBy !== groupBy
+            ? `✅ I've created a new aggregated table grouped by calendar bucket column "${effectiveGroupBy}" (from date column "${groupBy}").`
+            : `✅ I've created a new aggregated table grouped by "${effectiveGroupBy}".`;
         answer += ` Aggregated ${numericColCount} numeric column${numericColCount === 1 ? '' : 's'} (excluding ID columns and string columns).`;
         answer += ` The new table has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}) and has been saved to blob storage.`;
         if (intent.orderByColumn) {

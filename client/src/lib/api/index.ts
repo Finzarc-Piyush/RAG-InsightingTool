@@ -14,6 +14,11 @@ export type {
   EnrichmentStep,
   DatasetEnrichmentPollSnapshot,
 } from "./uploadStatus";
-export type { StreamChatCallbacks, StreamDataOpsCallbacks, DataOpsResponse } from "./chat";
+export type {
+  StreamChatCallbacks,
+  StreamDataOpsCallbacks,
+  DataOpsResponse,
+  StreamIntermediatePayload,
+} from "./chat";
 
 

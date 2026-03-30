@@ -4,12 +4,14 @@ import {
   Message,
   ThinkingStep,
   TemporalDisplayGrain,
+  type TemporalFacetColumnMeta,
 } from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
+import { ThinkingPanel } from '@/pages/Home/Components/ThinkingPanel';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Database, BarChart3, Settings, Info, Sparkles, Loader2, ChevronUp, ChevronDown, FileText } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -26,7 +28,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { getUserEmail } from '@/utils/userStorage';
 import { useToast } from '@/hooks/use-toast';
-import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
+import { ChartBuilderDialog } from '@/components/ChartBuilderDialog';
+import type { ChartSpec } from '@/shared/schema';
 import { FilterDataModal } from '@/components/FilterDataModal';
 import { FilterCondition } from '@/components/ColumnFilterDialog';
 import { debounce } from '@/lib/debounce';
@@ -59,6 +62,7 @@ interface ChatInterfaceProps {
   numericColumns?: string[];
   dateColumns?: string[];
   temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
+  temporalFacetColumns?: TemporalFacetColumnMeta[];
   totalRows?: number;
   totalColumns?: number;
   onStopGeneration?: () => void;
@@ -66,10 +70,10 @@ interface ChatInterfaceProps {
   thinkingSteps?: ThinkingStep[];
   agentWorkbenchLive?: AgentWorkbenchEntry[];
   thinkingTargetTimestamp?: number | null;
+  /** Message timestamp after which the live thinking strip is rendered while streaming. */
+  thinkingLiveAnchorTimestamp?: number | null;
   aiSuggestions?: string[]; // AI-generated suggestions
   collaborators?: string[]; // List of all collaborators in the session
-  mode?: 'general' | 'analysis' | 'dataOps' | 'modeling'; // Current mode
-  onModeChange?: (mode: 'general' | 'analysis' | 'dataOps' | 'modeling') => void; // Callback for mode change
   sessionId?: string | null; // Session ID for downloading modified datasets
   isReplacingAnalysis?: boolean; // Whether we're replacing the current analysis
   /** Full-screen until first preview rows + summary are available */
@@ -84,15 +88,15 @@ interface ChatInterfaceProps {
   onExternalComposerDraftConsumed?: () => void;
   preEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
   postEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
+  previewSource?: 'none' | 'local' | 'server';
+  localPreviewParseStatus?: 'full' | 'headers_only' | 'failed';
+  uploadStartError?: string | null;
+  /** Append an assistant message that only adds a chart (Chart Builder). */
+  onAppendAssistantChart?: (chart: ChartSpec) => void;
 }
 
-// Dynamic suggestions based on conversation context
-const getSuggestions = (
-  messages: Message[], 
-  columns?: string[], 
-  numericColumns?: string[],
-  aiSuggestions?: string[]
-) => {
+// Suggested questions are server-derived only (no hardcoded fallbacks).
+const getSuggestions = (messages: Message[], aiSuggestions?: string[]) => {
   const first = messages[0];
   if (first?.role === 'assistant' && first.suggestedQuestions && first.suggestedQuestions.length > 0) {
     return first.suggestedQuestions;
@@ -100,34 +104,7 @@ const getSuggestions = (
   if (aiSuggestions && aiSuggestions.length > 0) {
     return aiSuggestions;
   }
-
-  // If there's conversation history, suggest follow-ups
-  if (messages.length > 1) {
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.role === 'assistant' && lastMessage.content) {
-      // Extract mentioned columns from last response
-      const mentionedCols = (columns || []).filter(col => 
-        lastMessage.content.toLowerCase().includes(col.toLowerCase())
-      );
-      
-      if (mentionedCols.length > 0) {
-        return [
-          `Tell me more about ${mentionedCols[0]}`,
-          `What affects ${mentionedCols[0]}?`,
-          `Show me trends for ${mentionedCols[0]}`,
-          "What else can you show me?"
-        ];
-      }
-    }
-  }
-  
-  // Default suggestions
-  return [
-    "What affects revenue?",
-    "Show me trends over time",
-    "What are the top performers?",
-    "Analyze correlations in the data"
-  ];
+  return [];
 };
 
 export function ChatInterface({ 
@@ -143,6 +120,7 @@ export function ChatInterface({
   numericColumns,
   dateColumns,
   temporalDisplayGrainsByColumn = {},
+  temporalFacetColumns = [],
   totalRows,
   totalColumns,
   onStopGeneration,
@@ -150,10 +128,9 @@ export function ChatInterface({
   thinkingSteps,
   agentWorkbenchLive = [],
   thinkingTargetTimestamp,
+  thinkingLiveAnchorTimestamp = null,
   aiSuggestions,
   collaborators: propCollaborators,
-  mode = 'analysis',
-  onModeChange,
   sessionId,
   isReplacingAnalysis = false,
   isDatasetPreviewLoading = false,
@@ -165,6 +142,10 @@ export function ChatInterface({
   onExternalComposerDraftConsumed,
   preEnrichmentPreviewSnapshot = null,
   postEnrichmentPreviewSnapshot = null,
+  previewSource = 'none',
+  localPreviewParseStatus = 'full',
+  uploadStartError = null,
+  onAppendAssistantChart,
 }: ChatInterfaceProps) {
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -270,8 +251,13 @@ export function ChatInterface({
 
   // Memoize suggestions to avoid recalculating on every render
   const suggestions = useMemo(() => {
-    return getSuggestions(messages, columns, numericColumns, aiSuggestions);
-  }, [messages, columns, numericColumns, aiSuggestions]);
+    return getSuggestions(messages, aiSuggestions);
+  }, [messages, aiSuggestions]);
+  const canShowStarterSuggestions =
+    !isDatasetPreviewLoading &&
+    !isDatasetEnriching &&
+    suggestions.length > 0 &&
+    (messages.length === 0 || (messages.length === 1 && messages[0].role === 'assistant'));
 
   useEffect(() => {
     if (!filteredMessages.length || !lastMessageRef.current) return;
@@ -391,7 +377,7 @@ export function ChatInterface({
       }
 
       const textUntilCaret = value.slice(0, selectionStart);
-      const mentionMatch = textUntilCaret.match(/@([A-Za-z0-9 _-]*)$/);
+      const mentionMatch = textUntilCaret.match(/@([A-Za-z0-9 _().%-]*)$/);
       const availableColumns = columns ?? [];
 
       if (mentionMatch && availableColumns.length > 0) {
@@ -451,7 +437,8 @@ export function ChatInterface({
       const currentValue = textarea.value;
       const before = currentValue.slice(0, mentionStart);
       const after = currentValue.slice(selectionEnd);
-      const insertion = `${column} `;
+      // Keep @ prefix so the server treats composer mentions as explicit column picks.
+      const insertion = `@${column} `;
       const nextValue = `${before}${insertion}${after}`;
       const nextCaretPosition = before.length + insertion.length;
 
@@ -599,7 +586,7 @@ export function ChatInterface({
       
       const before = currentValue.slice(0, selectionStart);
       const after = currentValue.slice(selectionEnd);
-      const insertion = `${column} `;
+      const insertion = `@${column} `;
       const nextValue = `${before}${insertion}${after}`;
       const nextCaretPosition = before.length + insertion.length;
 
@@ -614,7 +601,7 @@ export function ChatInterface({
   }, []);
 
   return (
-    <div className="flex h-[calc(100vh-80px)] relative bg-gradient-to-br from-slate-50 to-white">
+    <div className="relative flex h-[calc(100vh-4.25rem)] bg-gradient-to-b from-muted/30 via-background to-background">
       {/* Data Summary Button - Left Side */}
       {sessionId && onOpenDataSummary && (
         <div
@@ -624,7 +611,7 @@ export function ChatInterface({
             onClick={onOpenDataSummary}
             variant="outline"
             size="sm"
-            className="bg-white/95 backdrop-blur-sm shadow-md hover:shadow-lg transition-all border-gray-200 hover:border-primary"
+            className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm transition-all hover:border-primary hover:shadow-lg"
             title="View Data Summary"
           >
             <FileText className="h-4 w-4 mr-2" />
@@ -635,33 +622,52 @@ export function ChatInterface({
       
       {/* Loading Overlay when replacing analysis */}
       {isReplacingAnalysis && (
-        <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm">
           <div className="text-center">
             <div className="relative mb-4">
-              <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                <Loader2 className="h-8 w-8 animate-spin text-primary motion-reduce:animate-none" />
               </div>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-1">Replacing analysis...</h3>
-            <p className="text-sm text-gray-500">Uploading and analyzing your new data file</p>
-            <p className="text-xs text-gray-400 mt-2">This may take a moment</p>
+            <h3 className="mb-1 text-lg font-semibold text-foreground">Replacing analysis…</h3>
+            <p className="text-sm text-muted-foreground">Uploading and analyzing your new data file</p>
+            <p className="mt-2 text-xs text-muted-foreground">This may take a moment</p>
           </div>
         </div>
       )}
       {isDatasetPreviewLoading && (
         <div className="absolute left-0 right-0 top-0 z-40 px-4 pt-3">
-          <div className="mx-auto max-w-6xl rounded-xl border border-primary/20 bg-white/90 px-4 py-3 shadow-sm backdrop-blur-sm">
+          <div className="mx-auto max-w-6xl rounded-xl border border-primary/25 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-sm">
             <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
               <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900">
+                <p className="text-sm font-medium text-foreground">
                   {enrichmentPoll?.phase === 'queued' ? 'Upload accepted, waiting to start' : 'Preparing your dataset preview'}
                 </p>
-                <p className="text-xs text-gray-600">
-                  {enrichmentPoll?.phaseMessage || 'Building preview rows and column summary in the background.'}
+                <p className="text-xs text-muted-foreground">
+                  {previewSource === 'local'
+                    ? 'Showing local preview now. Server-backed preview will replace it automatically.'
+                    : enrichmentPoll?.phaseMessage || 'Building preview rows and column summary in the background.'}
                 </p>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {previewSource === 'local' && (
+        <div className="absolute left-0 right-0 top-16 z-30 px-4">
+          <div className="mx-auto max-w-6xl rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-foreground">
+            Local preview ({localPreviewParseStatus === 'full' ? 'first 100 rows' : 'headers only'}) is shown for speed. It will be replaced by server preview once ready.
+          </div>
+        </div>
+      )}
+      {uploadStartError && (
+        <div className="absolute left-0 right-0 top-24 z-30 px-4">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            <span>{uploadStartError}</span>
+            <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={onUploadNew}>
+              Retry upload
+            </Button>
           </div>
         </div>
       )}
@@ -677,11 +683,11 @@ export function ChatInterface({
           {(sessionId || messages.length > 0) && collaborators.length > 0 && (
             <div className="flex justify-end items-center mb-2">
               {/* Filter Messages Dropdown - Right side */}
-              <div className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 shadow-sm hover:shadow-md transition-all duration-200">
-                <Filter className="w-3.5 h-3.5 text-gray-600" />
-                <span className="text-xs font-medium text-gray-700">Filter messages</span>
+              <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-card px-3 py-1.5 shadow-sm transition-all duration-200 hover:shadow-md">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-foreground">Filter messages</span>
                 <Select value={selectedCollaborator} onValueChange={handleFilterChange}>
-                  <SelectTrigger className="h-6 px-2 text-xs font-semibold border-none bg-transparent shadow-none focus:ring-0 focus:ring-offset-0 hover:bg-transparent text-gray-900 min-w-[120px]">
+                  <SelectTrigger className="h-6 min-w-[120px] border-none bg-transparent px-2 text-xs font-semibold text-foreground shadow-none hover:bg-transparent focus:ring-0 focus:ring-offset-0">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -712,77 +718,89 @@ export function ChatInterface({
             const isThinkingTarget =
               thinkingTargetTimestamp != null && message.timestamp === thinkingTargetTimestamp;
             const isUserMsg = message.role === 'user';
-            const panelSteps =
-              isUserMsg && isThinkingTarget
-                ? isLoading
-                  ? (thinkingSteps ?? [])
-                  : (message.thinkingSteps ?? [])
-                : [];
-            const panelWorkbench =
-              isUserMsg && isThinkingTarget
-                ? isLoading
-                  ? agentWorkbenchLive
-                  : (message.agentWorkbench ?? [])
-                : [];
-            const showThinkingPanel =
+            /** Persisted thinking on the user message (survives after stream ends). Do not gate on isThinkingTarget — onDone clears thinkingTargetTimestamp before onSuccess merges trace onto the message. */
+            const userHasPersistedThinking =
               isUserMsg &&
-              isThinkingTarget &&
-              (panelSteps.length > 0 || panelWorkbench.length > 0);
+              !isLoading &&
+              ((message.thinkingSteps?.length ?? 0) > 0 ||
+                (message.agentWorkbench?.length ?? 0) > 0);
+            const panelSteps = userHasPersistedThinking ? (message.thinkingSteps ?? []) : [];
+            const panelWorkbench = userHasPersistedThinking
+              ? (message.agentWorkbench ?? [])
+              : [];
+            const showThinkingPanel = userHasPersistedThinking;
             const showThinkingStepsForCharts =
               isThinkingTarget && isLoading && thinkingSteps && thinkingSteps.length > 0;
+            const showLiveThinkingStrip =
+              isLoading &&
+              thinkingLiveAnchorTimestamp != null &&
+              message.timestamp === thinkingLiveAnchorTimestamp &&
+              ((thinkingSteps?.length ?? 0) > 0 || (agentWorkbenchLive?.length ?? 0) > 0);
             const isEnrichmentMessage = isDatasetEnrichmentSystemMessage(message);
+            const hasDatasetSchema = !!columns && columns.length > 0;
             const carriesDatasetPreview =
               previewAnchorKey === `${message.timestamp}-${message.role}` &&
-              !!columns &&
-              columns.length > 0;
+              hasDatasetSchema;
             return (
-              <MessageBubble
-                key={`${message.timestamp}-${message.role}-${idx}`}
-                message={message}
-                sampleRows={carriesDatasetPreview ? sampleRows : undefined}
-                columns={carriesDatasetPreview ? columns : undefined}
-                numericColumns={carriesDatasetPreview ? numericColumns : undefined}
-                dateColumns={carriesDatasetPreview ? dateColumns : undefined}
-                temporalDisplayGrainsByColumn={carriesDatasetPreview ? temporalDisplayGrainsByColumn : undefined}
-                totalRows={carriesDatasetPreview ? totalRows : undefined}
-                totalColumns={carriesDatasetPreview ? totalColumns : undefined}
-                onEditMessage={onEditMessage}
-                messageIndex={originalIndex >= 0 ? originalIndex : idx}
-                sessionId={sessionId}
-                isLastUserMessage={isLastUserMessage}
-                thinkingSteps={showThinkingStepsForCharts ? thinkingSteps : undefined}
-                thinkingPanelSteps={showThinkingPanel ? panelSteps : undefined}
-                thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
-                thinkingPanelStreaming={showThinkingPanel ? isLoading : false}
-                onSuggestedQuestionClick={applySuggestionToComposer}
-                showDatasetEnrichmentLoader={isEnrichmentMessage && !isDatasetPreviewLoading}
-                enrichmentPhase={enrichmentPoll?.enrichmentPhase}
-                enrichmentStep={enrichmentPoll?.enrichmentStep}
-                uploadProgress={enrichmentPoll?.uploadProgress}
-                enrichmentStartedAtMs={enrichmentStartedAtMs}
-                preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
-                postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
-                ref={isLastMessage ? lastMessageRef : undefined}
-              />
+              <div key={`${message.timestamp}-${message.role}-${idx}-wrap`}>
+                <MessageBubble
+                  message={message}
+                  sampleRows={carriesDatasetPreview ? sampleRows : undefined}
+                  columns={hasDatasetSchema ? columns : undefined}
+                  numericColumns={hasDatasetSchema ? numericColumns : undefined}
+                  dateColumns={hasDatasetSchema ? dateColumns : undefined}
+                  temporalDisplayGrainsByColumn={hasDatasetSchema ? temporalDisplayGrainsByColumn : undefined}
+                  temporalFacetColumns={hasDatasetSchema ? temporalFacetColumns : undefined}
+                  totalRows={carriesDatasetPreview ? totalRows : undefined}
+                  totalColumns={carriesDatasetPreview ? totalColumns : undefined}
+                  onEditMessage={onEditMessage}
+                  messageIndex={originalIndex >= 0 ? originalIndex : idx}
+                  sessionId={sessionId}
+                  isLastUserMessage={isLastUserMessage}
+                  thinkingSteps={showThinkingStepsForCharts ? thinkingSteps : undefined}
+                  thinkingPanelSteps={showThinkingPanel ? panelSteps : undefined}
+                  thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
+                  thinkingPanelStreaming={false}
+                  onSuggestedQuestionClick={applySuggestionToComposer}
+                  showDatasetEnrichmentLoader={isEnrichmentMessage && !isDatasetPreviewLoading}
+                  enrichmentPhase={enrichmentPoll?.enrichmentPhase}
+                  enrichmentStep={enrichmentPoll?.enrichmentStep}
+                  uploadProgress={enrichmentPoll?.uploadProgress}
+                  enrichmentStartedAtMs={enrichmentStartedAtMs}
+                  preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
+                  postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
+                  ref={isLastMessage ? lastMessageRef : undefined}
+                />
+                {showLiveThinkingStrip && (
+                  <div className="max-w-[90%] mr-auto ml-11 mt-1 mb-1">
+                    <ThinkingPanel
+                      variant="live"
+                      steps={thinkingSteps ?? []}
+                      workbench={agentWorkbenchLive}
+                      isStreaming
+                    />
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
       </div>
 
       {/* Input Area */}
-      <div className="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-gray-100">
+      <div className="sticky bottom-0 border-t border-border/80 bg-card/95 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 py-4">
           {filteredMessages.length === 0 && messages.length > 0 && (
             <div className="mb-4">
-              <h3 className="text-base font-semibold text-gray-900 mb-3 text-center">
+              <h3 className="mb-3 text-center text-base font-semibold text-foreground">
                 No messages from selected collaborator
               </h3>
             </div>
           )}
           {/* Show suggestions when no messages OR when there's only the initial assistant message from upload */}
-          {(messages.length === 0 || (messages.length === 1 && messages[0].role === 'assistant')) && (
+          {canShowStarterSuggestions && (
             <div className="mb-4">
-              <h3 className="text-base font-semibold text-gray-900 mb-3 text-center">Try asking:</h3>
+              <h3 className="mb-3 text-center text-base font-semibold text-foreground">Try asking:</h3>
               <div className="flex flex-wrap gap-2 justify-center" data-testid="suggestion-chips">
                 {suggestions.map((suggestion, idx) => (
                   <Button
@@ -793,7 +811,7 @@ export function ChatInterface({
                     onClick={() => applySuggestionToComposer(suggestion)}
                     aria-label={`Add to message: ${suggestion}`}
                     data-testid={`suggestion-${idx}`}
-                    className="text-xs px-3 py-1.5 rounded-full border-gray-200 hover:border-primary hover:bg-primary/5 transition-colors"
+                    className="rounded-full border-border/80 px-3 py-1.5 text-xs transition-colors hover:border-primary hover:bg-primary/5"
                   >
                     {suggestion}
                   </Button>
@@ -803,7 +821,9 @@ export function ChatInterface({
           )}
           
           {/* Show follow-up suggestions after assistant messages (when there are multiple messages) */}
-          {filteredMessages.length > 1 && filteredMessages[filteredMessages.length - 1].role === 'assistant' && (
+          {suggestions.length > 0 &&
+            filteredMessages.length > 1 &&
+            filteredMessages[filteredMessages.length - 1].role === 'assistant' && (
             <div className="mb-4 mt-2">
               <div className="flex flex-wrap gap-2 justify-center">
                 {suggestions.slice(0, 3).map((suggestion, idx) => (
@@ -814,7 +834,7 @@ export function ChatInterface({
                     type="button"
                     onClick={() => applySuggestionToComposer(suggestion)}
                     aria-label={`Add to message: ${suggestion}`}
-                    className="text-xs px-3 py-1.5 rounded-full text-gray-600 hover:text-primary hover:bg-primary/5 transition-colors"
+                    className="rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-primary/5 hover:text-primary"
                   >
                     {suggestion}
                   </Button>
@@ -824,66 +844,18 @@ export function ChatInterface({
           )}
           
           <form onSubmit={handleSubmit} className="flex items-end gap-2">
-            {/* Mode Selector Dropdown - Inline with input */}
-            {onModeChange && (
-              <div className="flex-shrink-0">
-                <Select value={mode} onValueChange={(value: 'general' | 'analysis' | 'dataOps' | 'modeling') => onModeChange(value)}>
-                  <SelectTrigger className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl min-w-[170px]">
-                    <div className="flex items-center gap-2">
-                      {mode === 'general' && <Sparkles className="w-4 h-4 text-gray-600" />}
-                      {mode === 'analysis' && <BarChart3 className="w-4 h-4 text-gray-600" />}
-                      {mode === 'dataOps' && <Database className="w-4 h-4 text-gray-600" />}
-                      {mode === 'modeling' && <Settings className="w-4 h-4 text-gray-600" />}
-                      <span className="font-medium text-gray-900">
-                        {mode === 'general' && 'General'}
-                        {mode === 'analysis' && 'Analysis'}
-                        {mode === 'dataOps' && 'Data Operation'}
-                        {mode === 'modeling' && 'Modeling'}
-                      </span>
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent side="top" sideOffset={8} className="min-w-[170px]">
-                    <SelectItem value="general">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="w-4 h-4" />
-                        <span>General (Auto-detect)</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="analysis">
-                      <div className="flex items-center gap-2">
-                        <BarChart3 className="w-4 h-4" />
-                        <span>Analysis</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="dataOps">
-                      <div className="flex items-center gap-2">
-                        <Database className="w-4 h-4" />
-                        <span>Data Operation</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="modeling">
-                      <div className="flex items-center gap-2">
-                        <Settings className="w-4 h-4" />
-                        <span>Modeling</span>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {/* Filter Data Dropdown - Only show in dataOps mode */}
-            {mode === 'dataOps' && columns && columns.length > 0 && (
+            {columns && columns.length > 0 && (
               <div className="flex-shrink-0">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-11 px-4 text-sm font-medium border-2 border-gray-200 bg-white hover:bg-gray-50 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl"
+                      className="h-11 rounded-xl border-2 border-border/80 bg-card px-4 text-sm font-medium shadow-sm hover:bg-muted/50 focus:border-primary focus:ring-2 focus:ring-primary/40"
                     >
-                      <Filter className="w-4 h-4 mr-2 text-gray-600" />
+                      <Filter className="mr-2 h-4 w-4 text-muted-foreground" />
                       <span>Filter Data</span>
-                      <ChevronDown className="w-4 h-4 ml-2 text-gray-600" />
+                      <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent side="top" align="start" className="w-56">
@@ -895,12 +867,17 @@ export function ChatInterface({
                 </DropdownMenu>
               </div>
             )}
-            {/* Show Available Models button when in modeling mode */}
-            {mode === 'modeling' && (
-              <div className="flex-shrink-0">
-                <AvailableModelsDialog />
-              </div>
-            )}
+            <div className="flex-shrink-0">
+              {columns && columns.length > 0 && onAppendAssistantChart ? (
+                <ChartBuilderDialog
+                  sessionId={sessionId}
+                  columns={columns}
+                  numericColumns={numericColumns ?? []}
+                  dateColumns={dateColumns ?? []}
+                  onChartAdded={onAppendAssistantChart}
+                />
+              ) : null}
+            </div>
             <div className="relative flex-1">
               <Textarea
                 ref={inputRef}
@@ -912,10 +889,10 @@ export function ChatInterface({
                 disabled={isLoading}
                 data-testid="input-message"
                 rows={1}
-                className="flex-1 min-h-[44px] max-h-40 resize-none text-sm rounded-xl bg-white border-2 border-gray-200 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:border-primary shadow-sm pr-8"
+                className="min-h-[44px] max-h-40 flex-1 resize-none rounded-xl border-2 border-border/80 bg-card pr-8 text-sm shadow-sm focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40"
               />
               {mentionState.active && mentionState.options.length > 0 && (
-                <div className="absolute left-0 right-0 bottom-full z-20 mb-2 max-h-60 overflow-y-auto rounded-xl border border-gray-200 bg-white py-2 shadow-lg">
+                <div className="absolute bottom-full left-0 right-0 z-20 mb-2 max-h-60 overflow-y-auto rounded-xl border border-border/80 bg-popover py-2 shadow-lg">
                   {mentionState.options.map((column, idx) => {
                     const isActive = idx === mentionState.selectedIndex;
                     return (
@@ -923,7 +900,7 @@ export function ChatInterface({
                         type="button"
                         key={column}
                         className={`flex w-full items-center justify-between px-3 py-2 text-sm transition-colors ${
-                          isActive ? 'bg-primary/10 text-primary' : 'text-gray-700 hover:bg-gray-100'
+                          isActive ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
                         }`}
                         onMouseDown={(event) => {
                           event.preventDefault();
@@ -943,7 +920,7 @@ export function ChatInterface({
                 onClick={onStopGeneration}
                 data-testid="button-stop"
                 size="icon"
-                className="h-10 w-10 rounded-xl shadow-sm hover:shadow-md transition-all bg-red-500 hover:bg-red-600 text-white"
+                className="h-10 w-10 rounded-xl bg-destructive text-destructive-foreground shadow-sm transition-all hover:bg-destructive/90 hover:shadow-md"
                 title="Stop generating"
               >
                 <Square className="w-4 h-4 fill-current" />
@@ -974,20 +951,20 @@ export function ChatInterface({
             <Button
               onClick={scrollToTop}
               size="icon"
-              className="h-10 w-10 rounded-full shadow-lg hover:shadow-xl transition-all bg-white hover:bg-gray-50 border border-gray-200"
+              className="h-10 w-10 rounded-full border border-border/80 bg-card shadow-lg transition-all hover:bg-muted hover:shadow-xl"
               title="Scroll to top"
             >
-              <ChevronUp className="w-5 h-5 text-gray-700" />
+              <ChevronUp className="h-5 w-5 text-foreground" />
             </Button>
           )}
           {showScrollToBottom && (
             <Button
               onClick={scrollToBottom}
               size="icon"
-              className="h-10 w-10 rounded-full shadow-lg hover:shadow-xl transition-all bg-white hover:bg-gray-50 border border-gray-200"
+              className="h-10 w-10 rounded-full border border-border/80 bg-card shadow-lg transition-all hover:bg-muted hover:shadow-xl"
               title="Scroll to bottom"
             >
-              <ChevronDown className="w-5 h-5 text-gray-700" />
+              <ChevronDown className="h-5 w-5 text-foreground" />
             </Button>
           )}
         </div>
@@ -996,7 +973,7 @@ export function ChatInterface({
       {/* Right Sidebar - Column Navigator (hover to expand) */}
       {columns && columns.length > 0 && (
         <div
-          className={`h-full flex-shrink-0 transition-[width] duration-200 ease-out border-l border-gray-200 bg-white/80 backdrop-blur-sm ${
+          className={`h-full flex-shrink-0 border-l border-border/80 bg-card/80 backdrop-blur-sm transition-[width] duration-200 ease-out ${
             isColumnSidebarOpen ? 'w-64 shadow-sm' : 'w-3'
           }`}
           onMouseEnter={() => setIsColumnSidebarOpen(true)}
@@ -1014,7 +991,7 @@ export function ChatInterface({
       )}
 
       {/* Filter Data Modal */}
-      {mode === 'dataOps' && columns && columns.length > 0 && (
+      {columns && columns.length > 0 && (
         <FilterDataModal
           open={filterModalOpen}
           onOpenChange={setFilterModalOpen}

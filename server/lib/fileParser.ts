@@ -11,6 +11,11 @@ import { agentLog } from './agents/runtime/agentLogger.js';
 import type { DatasetProfile } from './datasetProfile.js';
 import { computeCleanedDateColumnNames } from './dirtyDateEnrichment.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
+import {
+  applyTemporalFacetColumns,
+  isTemporalFacetColumnKey,
+  temporalFacetMetadataForDateColumns,
+} from './temporalFacetColumns.js';
 
 export type CsvParseDiagnostics = {
   totalRows: number;
@@ -424,11 +429,11 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     throw new Error('No data found in file');
   }
 
-  const columns = Object.keys(data[0]);
+  const userColumns = Object.keys(data[0]).filter((k) => !isTemporalFacetColumnKey(k));
   const numericColumns: string[] = [];
   const dateColumns: string[] = [];
 
-  const columnInfo = columns.map((col) => {
+  const columnInfo = userColumns.map((col) => {
     // Check more rows for better date detection (up to 1000 rows or all rows if less)
     // This ensures we catch date columns even if they're not in the first 100 rows
     const sampleSize = Math.min(data.length, 1000);
@@ -538,12 +543,32 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     };
   });
 
+  const row0 = data[0] || {};
+  const facetMetaList = temporalFacetMetadataForDateColumns(dateColumns);
+  const facetColumnInfos = facetMetaList
+    .filter((m) => Object.prototype.hasOwnProperty.call(row0, m.name))
+    .map((m) => {
+      const sampleValues = data.slice(0, 3).map((row) => {
+        const v = row[m.name];
+        if (v instanceof Date) return v.toISOString();
+        return v ?? null;
+      });
+      return {
+        name: m.name,
+        type: "string" as const,
+        sampleValues,
+        temporalFacetGrain: m.grain,
+        temporalFacetSource: m.sourceColumn,
+      };
+    });
+
   return {
     rowCount: data.length,
-    columnCount: columns.length,
-    columns: columnInfo,
+    columnCount: userColumns.length + facetColumnInfos.length,
+    columns: [...columnInfo, ...facetColumnInfos],
     numericColumns,
     dateColumns,
+    temporalFacetColumns: facetMetaList,
   };
 }
 
@@ -640,6 +665,7 @@ export function resolveApprovedDateColumns(
 function applyDateColumnSelectionToSummary(summary: DataSummary, dateCols: string[]): void {
   const dateSet = new Set(dateCols);
   summary.dateColumns = [...dateCols];
+  summary.temporalFacetColumns = temporalFacetMetadataForDateColumns(dateCols);
   for (const col of summary.columns) {
     if (dateSet.has(col.name)) {
       col.type = 'date';
@@ -671,6 +697,7 @@ export function applyUploadPipelineWithProfile(
   const approvedDateCols = resolveApprovedDateColumns(data, profile, opts);
   const withDash = convertDashToZeroForNumericColumns(data, interim.numericColumns);
   canonicalizeDateColumnValues(withDash, approvedDateCols);
+  applyTemporalFacetColumns(withDash, approvedDateCols);
   const summary = createDataSummary(withDash);
   applyDateColumnSelectionToSummary(summary, approvedDateCols);
   return { data: withDash, summary };

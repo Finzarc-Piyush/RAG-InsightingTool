@@ -452,6 +452,12 @@ def get_summary(data: List[Dict[str, Any]], column: Optional[str] = None) -> Dic
                 str_value = str(value).strip()
                 if not str_value:
                     return pd.NaT
+
+                starts_with_month_prefix = bool(re.match(r'^(?:[1-9]|1[0-2])(?:\D|$)', str_value))
+
+                explicit_ymd = bool(re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', str_value))
+                explicit_mdy = bool(re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}$', str_value))
+                explicit_iso_datetime = bool(re.match(r'^\d{4}-\d{2}-\d{2}T', str_value))
                 
                 # Try month-year formats: "Apr-22", "Apr-2022", "April 2022", "Apr/22", etc.
                 # Pattern: 3+ letter month name, separator, 2-4 digit year
@@ -478,6 +484,9 @@ def get_summary(data: List[Dict[str, Any]], column: Optional[str] = None) -> Dic
                             return pd.Timestamp(year=year, month=month_map[month_name], day=1)
                         except:
                             return pd.NaT
+
+                if starts_with_month_prefix and not (explicit_ymd or explicit_mdy or explicit_iso_datetime):
+                    return pd.NaT
                 
                 # Try pandas to_datetime for other formats
                 try:
