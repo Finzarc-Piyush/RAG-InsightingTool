@@ -50,6 +50,136 @@ function userExplicitlyAskedForColumnsOrPreview(text: string): boolean {
   );
 }
 
+function derivePivotDefaultsHint(params: {
+  parsedQuery: Record<string, unknown> | null;
+  requiredColumns: string[];
+  dataSummary: ChatDocument["dataSummary"];
+}): Message["pivotDefaults"] | undefined {
+  const { parsedQuery, requiredColumns, dataSummary } = params;
+  const allowed = new Set((dataSummary.columns || []).map((c) => c.name));
+  const numeric = new Set(dataSummary.numericColumns || []);
+  const dateColumns = new Set(dataSummary.dateColumns || []);
+
+  const rows: string[] = [];
+  const values: string[] = [];
+  const seenRows = new Set<string>();
+  const seenValues = new Set<string>();
+
+  const addRow = (col: string) => {
+    if (!allowed.has(col) || numeric.has(col) || seenRows.has(col)) return;
+    seenRows.add(col);
+    rows.push(col);
+  };
+  const addValue = (col: string) => {
+    if (!allowed.has(col) || !numeric.has(col) || seenValues.has(col)) return;
+    seenValues.add(col);
+    values.push(col);
+  };
+
+  const groupBy = Array.isArray(parsedQuery?.groupBy)
+    ? (parsedQuery!.groupBy as unknown[]).filter((v): v is string => typeof v === "string")
+    : [];
+  for (const col of groupBy) addRow(col);
+
+  const aggregations = Array.isArray(parsedQuery?.aggregations)
+    ? (parsedQuery!.aggregations as Array<{ column?: unknown }>)
+    : [];
+  for (const agg of aggregations) {
+    if (typeof agg?.column === "string") addValue(agg.column);
+  }
+
+  const requiredDimensionColumns = requiredColumns.filter(
+    (col) => allowed.has(col) && !numeric.has(col)
+  );
+  const requiredDateDims = requiredDimensionColumns.filter((col) => dateColumns.has(col));
+  // Only backfill row dimensions from required columns when parsed groupBy didn't
+  // provide valid row hints. This keeps intent-derived dimensions in the first slot.
+  if (rows.length === 0) {
+    for (const col of [...requiredDateDims, ...requiredDimensionColumns]) addRow(col);
+  }
+  for (const col of requiredColumns) addValue(col);
+
+  if (rows.length === 0 && values.length === 0) return undefined;
+  const hint = {
+    rows: rows.slice(0, 2),
+    values: values.slice(0, 2),
+  };
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[chatStream] pivotDefaults hint", {
+      groupBy,
+      requiredColumns: requiredColumns.slice(0, 8),
+      rows: hint.rows,
+      values: hint.values,
+    });
+  }
+  return hint;
+}
+
+function derivePivotDefaultsFromExecution(params: {
+  agentTrace?: Record<string, unknown>;
+  table?: unknown;
+  dataSummary: ChatDocument["dataSummary"];
+}): Message["pivotDefaults"] | undefined {
+  const { agentTrace, table, dataSummary } = params;
+  const allowed = new Set((dataSummary.columns || []).map((c) => c.name));
+  const numeric = new Set(dataSummary.numericColumns || []);
+  const rows: string[] = [];
+  const values: string[] = [];
+  const seenRows = new Set<string>();
+  const seenValues = new Set<string>();
+
+  const addRow = (col: string) => {
+    if (!allowed.has(col) || numeric.has(col) || seenRows.has(col)) return;
+    seenRows.add(col);
+    rows.push(col);
+  };
+  const addValue = (col: string) => {
+    if (!allowed.has(col) || !numeric.has(col) || seenValues.has(col)) return;
+    seenValues.add(col);
+    values.push(col);
+  };
+
+  const steps = Array.isArray((agentTrace as any)?.steps)
+    ? ((agentTrace as any).steps as Array<Record<string, unknown>>)
+    : [];
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const step = steps[i];
+    if (step?.tool !== "execute_query_plan") continue;
+    const plan = (step?.args as Record<string, unknown> | undefined)?.plan as
+      | Record<string, unknown>
+      | undefined;
+    const groupBy = Array.isArray(plan?.groupBy)
+      ? (plan?.groupBy as unknown[]).filter((v): v is string => typeof v === "string")
+      : [];
+    for (const col of groupBy) addRow(col);
+    const aggregations = Array.isArray(plan?.aggregations)
+      ? (plan?.aggregations as Array<{ column?: unknown }>)
+      : [];
+    for (const agg of aggregations) {
+      if (typeof agg?.column === "string") addValue(agg.column);
+    }
+    if (rows.length > 0 || values.length > 0) break;
+  }
+
+  const tableColumns: string[] = Array.isArray((table as any)?.columns)
+    ? ((table as any).columns as unknown[]).filter(
+        (v): v is string => typeof v === "string"
+      )
+    : [];
+  if (rows.length === 0) {
+    for (const col of tableColumns) addRow(col);
+  }
+  if (values.length === 0) {
+    for (const col of tableColumns) addValue(col);
+  }
+
+  if (rows.length === 0 && values.length === 0) return undefined;
+  return {
+    rows: rows.slice(0, 2),
+    values: values.slice(0, 2),
+  };
+}
+
 /**
  * Process a streaming chat message
  */
@@ -149,10 +279,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       preview: Record<string, unknown>[];
       thinkingSteps: ThinkingStep[];
       workbench: AgentWorkbenchEntry[];
+      pivotDefaults?: Message["pivotDefaults"];
       insight?: string;
     };
     const pendingIntermediates: PendingIntermediate[] = [];
     let intermediateSeq = 0;
+    let provisionalPivotDefaults: Message["pivotDefaults"] | undefined;
 
     const flushIntermediateSegment = (
       preview: Record<string, unknown>[],
@@ -169,6 +301,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           thinkingSteps: snapSteps,
           workbench: snapWb,
           assistantTimestamp,
+          ...(provisionalPivotDefaults ? { pivotDefaults: provisionalPivotDefaults } : {}),
           ...(insight ? { insight } : {}),
         })
       ) {
@@ -179,6 +312,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         preview,
         thinkingSteps: snapSteps,
         workbench: snapWb,
+        pivotDefaults: provisionalPivotDefaults,
         insight,
       });
       thinkingSteps.length = 0;
@@ -313,6 +447,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         ...historyColumns,
       ])
     );
+    provisionalPivotDefaults = derivePivotDefaultsHint({
+      parsedQuery: parsedQueryForLoad,
+      requiredColumns: schemaBinding.canonicalColumns,
+      dataSummary: chatDocument.dataSummary,
+    });
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[chatStream] pivot pre-fallback inputs", {
+        parserGroupBy: Array.isArray((parsedQueryForLoad as any)?.groupBy)
+          ? (parsedQueryForLoad as any).groupBy
+          : [],
+        canonicalColumns: schemaBinding.canonicalColumns.slice(0, 8),
+        mapping: schemaBinding.columnMapping,
+        provisionalPivotDefaults,
+      });
+    }
 
     // Routing: always classify — client `mode` is ignored (deprecated override removed).
     if (mode != null && mode !== 'general') {
@@ -510,6 +659,23 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       ((result as any).table && Array.isArray((result as any).table) && (result as any).table.length > 0) ||
       pendingIntermediates.some((p) => Array.isArray(p.preview) && p.preview.length > 0)
     );
+    const parserPivotDefaults = derivePivotDefaultsHint({
+      parsedQuery: parsedQueryForLoad,
+      requiredColumns: schemaBinding.canonicalColumns,
+      dataSummary: chatDocument.dataSummary,
+    });
+    const executionPivotDefaults = derivePivotDefaultsFromExecution({
+      agentTrace: (result as any).agentTrace,
+      table: (result as any).table,
+      dataSummary: chatDocument.dataSummary,
+    });
+    transformedResponse.pivotDefaults = executionPivotDefaults ?? parserPivotDefaults;
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[chatStream] pivotDefaults source", {
+        source: executionPivotDefaults ? "execution" : parserPivotDefaults ? "parser" : "none",
+        value: transformedResponse.pivotDefaults,
+      });
+    }
 
     const allowPreviewInAnswer = userExplicitlyAskedForColumnsOrPreview(message);
     if (allowPreviewInAnswer) {
@@ -611,6 +777,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         content: 'Preliminary results',
         timestamp: pi.assistantTimestamp,
         preview: pi.preview as Message["preview"],
+        pivotDefaults: pi.pivotDefaults,
         isIntermediate: true,
         intermediateInsight: pi.insight,
         thinkingBefore: { steps: pi.thinkingSteps, workbench: pi.workbench },
@@ -637,6 +804,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         preview: transformedResponse.preview || undefined,
         summary: transformedResponse.summary || undefined,
         agentTrace: transformedResponse.agentTrace,
+        pivotDefaults: transformedResponse.pivotDefaults,
         timestamp: assistantMessageTimestamp,
         ...(finalThinkingBefore ? { thinkingBefore: finalThinkingBefore } : {}),
         ...(mergedSuggestedQuestions.length > 0

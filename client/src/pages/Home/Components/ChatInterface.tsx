@@ -769,6 +769,12 @@ export function ChatInterface({
               if (isDatasetPreviewSystemMessage(message) || isDatasetEnrichmentSystemMessage(message)) {
                 return false;
               }
+              if (message.isIntermediate) {
+                const hasIntermediatePivotDefaults =
+                  Boolean(message.pivotDefaults?.rows?.length) ||
+                  Boolean(message.pivotDefaults?.values?.length);
+                return hasIntermediatePivotDefaults;
+              }
               const serverHint = Boolean((message as Message & { pivotAutoShow?: boolean }).pivotAutoShow);
               // Smart auto-show: aggregated intermediate/final tabular payloads.
               const hasPreviewRows =
@@ -813,6 +819,7 @@ export function ChatInterface({
                   postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
                   allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
                   allowPivotAutoShow={allowPivotAutoShow}
+                  onAppendAssistantChart={onAppendAssistantChart}
                   ref={isLastMessage ? lastMessageRef : undefined}
                 />
                 {showLiveThinkingStrip && (

@@ -16,6 +16,7 @@ import type {
   TemporalFacetColumnMeta,
   PivotModel as PivotModelContract,
   PivotQueryRequest,
+  ChartSpec,
 } from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import { facetColumnHeaderLabelForColumn, formatTemporalFacetValue } from '@/lib/temporalFacetDisplay';
@@ -29,8 +30,11 @@ import {
 import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotUiConfig } from '@/lib/pivot/types';
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
+import { api } from '@/lib/httpClient';
+import { recommendPivotChart, type PivotChartKind } from '@/lib/pivot/chartRecommendation';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
+import { ChartRenderer } from './ChartRenderer';
 
 interface DataPreviewTableProps {
   data: Record<string, any>[];
@@ -48,6 +52,11 @@ interface DataPreviewTableProps {
   temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   variant?: "dataset" | "analysis";
+  onChartAdded?: (chart: ChartSpec) => void;
+  pivotDefaults?: {
+    rows?: string[];
+    values?: string[];
+  };
 }
 
 function inferNumericColumns(
@@ -96,6 +105,8 @@ export function DataPreviewTable({
   temporalDisplayGrainsByColumn = {},
   temporalFacetColumns = [],
   variant = "dataset",
+  onChartAdded,
+  pivotDefaults,
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
   const { toast } = useToast();
@@ -111,6 +122,20 @@ export function DataPreviewTable({
   );
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
   const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('pivot');
+  const [chartType, setChartType] = useState<PivotChartKind>('bar');
+  const [chartTitle, setChartTitle] = useState('Pivot chart');
+  const [chartXCol, setChartXCol] = useState('');
+  const [chartYCol, setChartYCol] = useState('');
+  const [chartZCol, setChartZCol] = useState('');
+  const [chartSeriesCol, setChartSeriesCol] = useState('');
+  const [chartBarLayout, setChartBarLayout] = useState<'stacked' | 'grouped'>('stacked');
+  const [chartRecommendationReason, setChartRecommendationReason] = useState<string | null>(
+    null
+  );
+  const [chartPreview, setChartPreview] = useState<ChartSpec | null>(null);
+  const [chartPreviewLoading, setChartPreviewLoading] = useState(false);
+  const [chartPreviewError, setChartPreviewError] = useState<string | null>(null);
+  const chartPreviewRequestSeqRef = useRef(0);
   const [pivotTopN, setPivotTopN] = useState<number | null>(null);
   const [showValuesAs, setShowValuesAs] = useState<PivotShowValuesAsMode>('raw');
   const [showSubtotals, setShowSubtotals] = useState(true);
@@ -156,10 +181,11 @@ export function DataPreviewTable({
     };
   }, [variant, sessionId]);
 
-  /** Strict mode: analysis pivot uses only session sample rows from DuckDB-backed endpoint. */
+  /** Analysis pivot defaults prefer message-local preview rows before global session sample rows. */
   const pivotRows = useMemo((): Record<string, unknown>[] => {
     const base = data ?? [];
     if (variant !== 'analysis') return base;
+    if (base.length > 0) return base;
     return sessionSampleRows ?? [];
   }, [variant, data, sessionSampleRows]);
 
@@ -293,15 +319,36 @@ export function DataPreviewTable({
   }, [pivotRows, schemaColumnKeys, numericColumnsSet]);
 
   const { defaultRowDim, defaultValueMeasures } = useMemo(() => {
+    const hintedRows = Array.isArray(pivotDefaults?.rows) ? pivotDefaults.rows : [];
+    const hintedValues = Array.isArray(pivotDefaults?.values) ? pivotDefaults.values : [];
+
+    const hintedRowDim =
+      hintedRows.find((c) => dimensionCandidatesInPreview.includes(c)) ??
+      hintedRows.find((c) => schemaColumnKeys.includes(c) && !numericColumnsSet.has(c)) ??
+      null;
+    const hintedValueMeasure =
+      hintedValues.find((c) => numericCandidatesInPreview.includes(c)) ??
+      hintedValues.find((c) => numericColumns.includes(c) && schemaColumnKeys.includes(c)) ??
+      null;
+
     if (!pivotRows?.length) {
-      return { defaultRowDim: null as string | null, defaultValueMeasures: [] as string[] };
+      return {
+        defaultRowDim: hintedRowDim,
+        defaultValueMeasures: hintedValueMeasure ? [hintedValueMeasure] : [],
+      };
     }
 
     // Pick best default dimension:
     // - non-numeric
     // - has non-blank values
     // - avoid ID-like columns (they aren't useful as row labels)
-    let bestRow: { col: string; nonBlank: number; unique: number; schemaIndex: number } | null = null;
+    let bestRow: {
+      col: string;
+      nonBlank: number;
+      unique: number;
+      schemaIndex: number;
+      score: number;
+    } | null = null;
     for (const col of dimensionCandidatesInPreview) {
       if (isIdLikeColumn(col)) continue;
       const schemaIndex = schemaColumnKeys.indexOf(col);
@@ -319,14 +366,15 @@ export function DataPreviewTable({
 
       if (nonBlank === 0) continue;
       const unique = uniques.size;
-      const score = nonBlank + unique * 0.01;
+      const cardinalityRatio = nonBlank > 0 ? unique / nonBlank : 1;
+      // Favor broadly-populated business dimensions while avoiding high-cardinality
+      // fields (e.g. product names/near-identifiers) as default pivot rows.
+      const score = nonBlank - cardinalityRatio * 4 + Math.min(unique, 20) * 0.02;
 
-      const bestScore = bestRow
-        ? bestRow.nonBlank + bestRow.unique * 0.01
-        : -Infinity;
+      const bestScore = bestRow ? bestRow.score : -Infinity;
 
       if (!bestRow || score > bestScore || (score === bestScore && schemaIndex < bestRow.schemaIndex)) {
-        bestRow = { col, nonBlank, unique, schemaIndex };
+        bestRow = { col, nonBlank, unique, schemaIndex, score };
       }
     }
 
@@ -369,14 +417,43 @@ export function DataPreviewTable({
     const defaultValueMeasuresResolved = bestMeasure ? [bestMeasure.col] : [];
 
     return {
-      defaultRowDim: defaultRowDimResolved,
-      defaultValueMeasures: defaultValueMeasuresResolved,
+      defaultRowDim: hintedRowDim ?? defaultRowDimResolved,
+      defaultValueMeasures:
+        hintedValueMeasure != null ? [hintedValueMeasure] : defaultValueMeasuresResolved,
     };
   }, [
+    pivotDefaults,
     pivotRows,
     dimensionCandidatesInPreview,
     numericCandidatesInPreview,
     schemaColumnKeys,
+    numericColumnsSet,
+    numericColumns,
+  ]);
+
+  useEffect(() => {
+    if (variant !== 'analysis') return;
+    if (process.env.NODE_ENV === 'production') return;
+    if (pivotDefaults?.rows?.length || pivotDefaults?.values?.length) {
+      logger.debug('[DataPreviewTable] Using pivotDefaults hint', {
+        rows: pivotDefaults?.rows ?? [],
+        values: pivotDefaults?.values ?? [],
+        chosenRow: defaultRowDim,
+        chosenValues: defaultValueMeasures,
+      });
+      return;
+    }
+    logger.debug('[DataPreviewTable] Pivot default fallback path', {
+      chosenRow: defaultRowDim,
+      chosenValues: defaultValueMeasures,
+      dimensionCandidates: dimensionCandidatesInPreview.slice(0, 10),
+    });
+  }, [
+    variant,
+    pivotDefaults,
+    defaultRowDim,
+    defaultValueMeasures,
+    dimensionCandidatesInPreview,
   ]);
 
   const pivotDataSignature = useMemo(() => {
@@ -407,6 +484,45 @@ export function DataPreviewTable({
     () => normalizePivotConfig(schemaColumnKeys, pivotConfig),
     [schemaColumnKeys, pivotConfig]
   );
+
+  const chartDimensionOptions = useMemo(() => {
+    return schemaColumnKeys.filter((c) => !numericColumnsSet.has(c));
+  }, [schemaColumnKeys, numericColumnsSet]);
+
+  const chartMeasureOptions = useMemo(() => {
+    return numericColumns.filter((c) => schemaColumnKeys.includes(c));
+  }, [numericColumns, schemaColumnKeys]);
+
+  const recommendedPivotChart = useMemo(() => {
+    if (variant !== 'analysis' || !canPivot) return null;
+    return recommendPivotChart({
+      pivotConfig: normalizedPivotConfig,
+      numericColumns,
+      dateColumns,
+      rowCount: serverPivotMeta?.rowCount ?? pivotRows.length,
+      colKeyCount: serverPivotMeta?.colKeyCount ?? 0,
+    });
+  }, [
+    variant,
+    canPivot,
+    normalizedPivotConfig,
+    numericColumns,
+    dateColumns,
+    serverPivotMeta?.rowCount,
+    serverPivotMeta?.colKeyCount,
+    pivotRows.length,
+  ]);
+
+  const chartXOptions = useMemo(() => {
+    if (chartType === 'scatter') return chartMeasureOptions;
+    return chartDimensionOptions;
+  }, [chartType, chartMeasureOptions, chartDimensionOptions]);
+
+  const chartYOptions = useMemo(() => {
+    if (chartType === 'scatter') return chartMeasureOptions;
+    if (chartType === 'heatmap') return chartDimensionOptions;
+    return chartMeasureOptions;
+  }, [chartType, chartMeasureOptions, chartDimensionOptions]);
 
   const pivotQueryRequest = useMemo((): PivotQueryRequest | null => {
     if (variant !== "analysis") return null;
@@ -483,6 +599,17 @@ export function DataPreviewTable({
     setServerPivotLoading(false);
     setDrillthrough(null);
     setSessionSampleError(null);
+    setChartType('bar');
+    setChartTitle('Pivot chart');
+    setChartXCol('');
+    setChartYCol('');
+    setChartZCol('');
+    setChartSeriesCol('');
+    setChartBarLayout('stacked');
+    setChartRecommendationReason(null);
+    setChartPreview(null);
+    setChartPreviewError(null);
+    setChartPreviewLoading(false);
   }, [variant, pivotDataSignature]);
 
   // Backend pivot query (Excel-like interaction loop)
@@ -531,6 +658,47 @@ export function DataPreviewTable({
       )
     );
   }, [variant, pivotRows, pivotConfig.filters, pivotDataSignature]);
+
+  useEffect(() => {
+    if (variant !== 'analysis') return;
+    if (analysisView !== 'chart') return;
+    if (!recommendedPivotChart) return;
+    setChartType(recommendedPivotChart.chartType);
+    setChartTitle('Pivot chart');
+    setChartXCol(recommendedPivotChart.x ?? '');
+    setChartYCol(recommendedPivotChart.y ?? '');
+    setChartZCol(recommendedPivotChart.z ?? '');
+    setChartSeriesCol(recommendedPivotChart.seriesColumn ?? '');
+    setChartBarLayout(recommendedPivotChart.barLayout);
+    setChartRecommendationReason(recommendedPivotChart.reason);
+    setChartPreview(null);
+    setChartPreviewError(null);
+  }, [variant, analysisView, recommendedPivotChart, pivotDataSignature]);
+
+  useEffect(() => {
+    if (analysisView !== 'chart') return;
+    setChartPreview(null);
+    setChartPreviewError(null);
+  }, [analysisView, chartType, chartXCol, chartYCol, chartZCol, chartSeriesCol, chartBarLayout]);
+
+  useEffect(() => {
+    if (analysisView !== 'chart') return;
+    if (chartXCol && chartXOptions.includes(chartXCol)) return;
+    setChartXCol(chartXOptions[0] ?? '');
+  }, [analysisView, chartXCol, chartXOptions]);
+
+  useEffect(() => {
+    if (analysisView !== 'chart') return;
+    if (chartYCol && chartYOptions.includes(chartYCol)) return;
+    setChartYCol(chartYOptions[0] ?? '');
+  }, [analysisView, chartYCol, chartYOptions]);
+
+  useEffect(() => {
+    if (analysisView !== 'chart') return;
+    if (chartType !== 'heatmap') return;
+    if (chartZCol && chartMeasureOptions.includes(chartZCol)) return;
+    setChartZCol(chartMeasureOptions[0] ?? '');
+  }, [analysisView, chartType, chartZCol, chartMeasureOptions]);
 
   // Help debug: pivot fields present in schema but missing from preview row keys won't show data until rows include them.
   useEffect(() => {
@@ -776,6 +944,90 @@ export function DataPreviewTable({
     }
   };
 
+  const chartConfigValidationError = useMemo(() => {
+    if (analysisView !== 'chart') return null;
+    if (!sessionId) return 'Session is required to preview chart data.';
+    if (!chartXCol || !chartYCol) return 'Choose X and Y columns.';
+    if (chartType !== 'heatmap' && !chartMeasureOptions.includes(chartYCol)) {
+      return 'Y axis must be numeric for this chart type.';
+    }
+    if (chartType === 'scatter' && !chartMeasureOptions.includes(chartXCol)) {
+      return 'Scatter chart requires numeric X and Y columns.';
+    }
+    if (chartType === 'heatmap' && !chartZCol) return 'Heatmap requires a numeric Z value.';
+    if (serverPivotMeta?.rowCount === 0) return 'No rows match current filters.';
+    return null;
+  }, [
+    analysisView,
+    sessionId,
+    chartXCol,
+    chartYCol,
+    chartType,
+    chartZCol,
+    chartMeasureOptions,
+    serverPivotMeta?.rowCount,
+  ]);
+
+  const runChartPreview = useCallback(async () => {
+    if (chartConfigValidationError) {
+      setChartPreviewError(chartConfigValidationError);
+      setChartPreview(null);
+      return;
+    }
+    if (!sessionId) return;
+    const seq = ++chartPreviewRequestSeqRef.current;
+    setChartPreviewLoading(true);
+    setChartPreviewError(null);
+    try {
+      const body: Record<string, unknown> = {
+        title: chartTitle.trim() || 'Pivot chart',
+        type: chartType,
+        x: chartXCol,
+        y: chartType === 'heatmap' ? chartYCol : chartYCol,
+        aggregate: chartType === 'scatter' ? 'none' : 'sum',
+      };
+      if (chartType === 'heatmap') {
+        body.z = chartZCol;
+      }
+      if (chartType === 'bar' && chartSeriesCol) {
+        body.seriesColumn = chartSeriesCol;
+        body.barLayout = chartBarLayout;
+      }
+      const res = await api.post<{ chart: ChartSpec }>(
+        `/api/sessions/${sessionId}/chart-preview`,
+        { chart: body }
+      );
+      if (seq !== chartPreviewRequestSeqRef.current) return;
+      setChartPreview(res.chart);
+    } catch (e) {
+      if (seq !== chartPreviewRequestSeqRef.current) return;
+      setChartPreview(null);
+      setChartPreviewError(e instanceof Error ? e.message : 'Chart preview failed');
+    } finally {
+      if (seq !== chartPreviewRequestSeqRef.current) return;
+      setChartPreviewLoading(false);
+    }
+  }, [
+    chartConfigValidationError,
+    sessionId,
+    chartTitle,
+    chartType,
+    chartXCol,
+    chartYCol,
+    chartZCol,
+    chartSeriesCol,
+    chartBarLayout,
+  ]);
+
+  const addChartToChat = useCallback(() => {
+    if (!chartPreview || !onChartAdded) return;
+    onChartAdded(chartPreview);
+    toast({
+      title: 'Chart added',
+      description: 'Chart was added to this chat.',
+    });
+  }, [chartPreview, onChartAdded, toast]);
+
   const renderFlatAnalysisCell = (col: string, raw: unknown): ReactNode => {
     if (raw === null || raw === undefined) {
       return <span className="text-muted-foreground italic">null</span>;
@@ -907,11 +1159,165 @@ export function DataPreviewTable({
           }
         >
             {analysisView === 'chart' ? (
-              <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 px-4 py-8 text-center">
-                <p className="text-sm font-medium text-foreground">Chart generation</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Choose this option to generate a chart from your pivot configuration.
-                </p>
+              <div className="rounded-lg border border-border/60 bg-muted/10 p-3 space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">Chart type</label>
+                    <select
+                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                      value={chartType}
+                      onChange={(e) => setChartType(e.target.value as PivotChartKind)}
+                    >
+                      <option value="bar">Bar</option>
+                      <option value="line">Line</option>
+                      <option value="area">Area</option>
+                      <option value="scatter">Scatter</option>
+                      <option value="pie">Pie</option>
+                      <option value="heatmap">Heatmap</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">Title</label>
+                    <input
+                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                      value={chartTitle}
+                      onChange={(e) => setChartTitle(e.target.value)}
+                      placeholder="Pivot chart"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">X axis</label>
+                    <select
+                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                      value={chartXCol || ''}
+                      onChange={(e) => setChartXCol(e.target.value)}
+                    >
+                      <option value="">Select column</option>
+                      {chartXOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-muted-foreground">
+                      {chartType === 'heatmap' ? 'Columns (Y)' : 'Y axis'}
+                    </label>
+                    <select
+                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                      value={chartYCol || ''}
+                      onChange={(e) => setChartYCol(e.target.value)}
+                    >
+                      <option value="">Select column</option>
+                      {chartYOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {chartType === 'heatmap' && (
+                    <div className="space-y-1.5 md:col-span-2">
+                      <label className="text-xs text-muted-foreground">Value (Z)</label>
+                      <select
+                        className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                        value={chartZCol || ''}
+                        onChange={(e) => setChartZCol(e.target.value)}
+                      >
+                        <option value="">Select numeric column</option>
+                        {chartMeasureOptions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {chartType === 'bar' && (
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Series column (optional)</label>
+                        <select
+                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                          value={chartSeriesCol || ''}
+                          onChange={(e) => setChartSeriesCol(e.target.value)}
+                        >
+                          <option value="">None</option>
+                          {chartDimensionOptions
+                            .filter((c) => c !== chartXCol && c !== chartYCol)
+                            .map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      {chartSeriesCol ? (
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-muted-foreground">Bar layout</label>
+                          <select
+                            className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                            value={chartBarLayout}
+                            onChange={(e) =>
+                              setChartBarLayout(e.target.value as 'stacked' | 'grouped')
+                            }
+                          >
+                            <option value="stacked">Stacked</option>
+                            <option value="grouped">Grouped</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="text-xs"
+                    onClick={() => void runChartPreview()}
+                    disabled={chartPreviewLoading || Boolean(chartConfigValidationError)}
+                  >
+                    {chartPreviewLoading ? (
+                      <>
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        Updating preview...
+                      </>
+                    ) : (
+                      'Update preview'
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="text-xs"
+                    onClick={addChartToChat}
+                    disabled={!chartPreview || !onChartAdded}
+                  >
+                    Add to chat
+                  </Button>
+                  {chartRecommendationReason ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      Recommended: {chartRecommendationReason}
+                    </span>
+                  ) : null}
+                </div>
+                {(chartConfigValidationError || chartPreviewError) && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {chartConfigValidationError ?? chartPreviewError}
+                  </p>
+                )}
+                <div className="rounded-lg border border-border/60 bg-background p-2 min-h-[220px]">
+                  {chartPreview ? (
+                    <ChartRenderer chart={chartPreview} index={0} isSingleChart showAddButton={false} />
+                  ) : (
+                    <div className="h-[220px] flex items-center justify-center text-xs text-muted-foreground">
+                      Configure chart options and click Update preview.
+                    </div>
+                  )}
+                </div>
               </div>
             ) : showPivotChrome && effectivePivotModel ? (
               normalizedPivotConfig.values.length === 0 ? (

@@ -74,6 +74,10 @@ export interface StreamIntermediatePayload {
   thinkingSteps: ThinkingStep[];
   workbench: AgentWorkbenchEntry[];
   assistantTimestamp: number;
+  pivotDefaults?: {
+    rows?: string[];
+    values?: string[];
+  };
   insight?: string;
 }
 

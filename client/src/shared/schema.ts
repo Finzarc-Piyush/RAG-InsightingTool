@@ -146,6 +146,11 @@ export const thinkingSnapshotSchema = z.object({
 
 export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
 
+export const pivotDefaultsSchema = z.object({
+  rows: z.array(z.string()).max(4).optional(),
+  values: z.array(z.string()).max(4).optional(),
+});
+
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -163,6 +168,8 @@ export const messageSchema = z.object({
   isIntermediate: z.boolean().optional(),
   /** Short client-visible insight shown for preliminary intermediate previews. */
   intermediateInsight: z.string().optional(),
+  /** Query-derived default pivot fields for auto-shown analysis tables. */
+  pivotDefaults: pivotDefaultsSchema.optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;

@@ -155,6 +155,7 @@ interface MessageBubbleProps {
   allowDatasetPreviewInAnswer?: boolean;
   /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
   allowPivotAutoShow?: boolean;
+  onAppendAssistantChart?: (chart: ChartSpec) => void;
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -185,6 +186,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   postEnrichmentPreviewSnapshot,
   allowDatasetPreviewInAnswer = false,
   allowPivotAutoShow = false,
+  onAppendAssistantChart,
 }, ref) => {
   const isUser = message.role === 'user';
   const isPreviewSystemMessage = isDatasetPreviewSystemMessage(message);
@@ -494,6 +496,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 dateColumns={dateColumns}
                 temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
                 temporalFacetColumns={temporalFacetColumns}
+                pivotDefaults={message.pivotDefaults}
+                onChartAdded={onAppendAssistantChart}
               />
             </div>
           </>
@@ -755,6 +759,8 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
       tablePayloadSignature(
         (nextProps.message as Message & { summary?: unknown[] }).summary
       ) &&
+    JSON.stringify(prevProps.message.pivotDefaults ?? null) ===
+      JSON.stringify(nextProps.message.pivotDefaults ?? null) &&
     (prevProps.message.thinkingBefore?.steps?.length ?? 0) ===
       (nextProps.message.thinkingBefore?.steps?.length ?? 0) &&
     (prevProps.message.thinkingBefore?.workbench?.length ?? 0) ===
@@ -768,6 +774,7 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&
     prevProps.sampleRows === nextProps.sampleRows &&
     prevProps.columns === nextProps.columns &&
-    prevProps.temporalFacetColumns === nextProps.temporalFacetColumns
+    prevProps.temporalFacetColumns === nextProps.temporalFacetColumns &&
+    prevProps.onAppendAssistantChart === nextProps.onAppendAssistantChart
   );
 });

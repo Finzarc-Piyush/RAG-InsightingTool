@@ -693,6 +693,7 @@ export const useHomeMutations = ({
                   content: '',
                   timestamp: payload.assistantTimestamp,
                   preview: payload.preview as Message['preview'],
+                  pivotDefaults: payload.pivotDefaults,
                   isIntermediate: true,
                   intermediateInsight: payload.insight,
                   thinkingBefore: {
@@ -750,6 +751,9 @@ export const useHomeMutations = ({
                       agentTrace: (response as { agentTrace?: Message['agentTrace'] }).agentTrace,
                       preview: (response as Message & { preview?: Message['preview'] }).preview,
                       summary: (response as Message & { summary?: Message['summary'] }).summary,
+                      pivotDefaults:
+                        (response as Message & { pivotDefaults?: Message['pivotDefaults'] })
+                          .pivotDefaults,
                       thinkingBefore: (response as Message & { thinkingBefore?: Message['thinkingBefore'] })
                         .thinkingBefore,
                     },
@@ -866,6 +870,7 @@ export const useHomeMutations = ({
         timestamp: Date.now(),
         preview: (data as any).preview,
         summary: (data as any).summary,
+        pivotDefaults: (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
         thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
       };
       
@@ -874,6 +879,13 @@ export const useHomeMutations = ({
         hasCharts: !!assistantMessage.charts?.length,
         hasInsights: !!assistantMessage.insights?.length,
         contentLength: assistantMessage.content?.length || 0
+      });
+      logger.log('📌 Pivot defaults in stream payload:', {
+        hasPivotDefaults: Boolean(
+          (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults
+        ),
+        pivotDefaults:
+          (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
       });
       
       const traceSnapshot = turnTraceRef.current;
@@ -896,6 +908,8 @@ export const useHomeMutations = ({
               insights: data.insights,
               preview: (data as any).preview,
               summary: (data as any).summary,
+              pivotDefaults:
+                (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
               agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
               thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
             };
