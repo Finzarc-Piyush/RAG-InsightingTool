@@ -151,6 +151,10 @@ interface MessageBubbleProps {
     totalRows: number;
     totalColumns: number;
   } | null;
+  /** Show dataset columns/preview only when explicitly requested by the user. */
+  allowDatasetPreviewInAnswer?: boolean;
+  /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
+  allowPivotAutoShow?: boolean;
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -179,6 +183,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   enrichmentStartedAtMs,
   preEnrichmentPreviewSnapshot,
   postEnrichmentPreviewSnapshot,
+  allowDatasetPreviewInAnswer = false,
+  allowPivotAutoShow = false,
 }, ref) => {
   const isUser = message.role === 'user';
   const isPreviewSystemMessage = isDatasetPreviewSystemMessage(message);
@@ -463,7 +469,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && hasAggPreview && (
+        {!isUser && allowPivotAutoShow && hasAggPreview && (
           <>
             {message.isIntermediate && message.intermediateInsight && (
               <div className="mb-3">
@@ -493,7 +499,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </>
         )}
 
-        {!isUser && hasAggSummary && (
+        {!isUser && allowPivotAutoShow && hasAggSummary && (
           <div className="mb-3">
             <DataSummaryTable summary={(message as Message & { summary: unknown[] }).summary} />
           </div>
@@ -529,7 +535,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
+        {!isUser && allowDatasetPreviewInAnswer && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
           <div className="mt-3">
             {!showDatasetPreview ? (
               <Button

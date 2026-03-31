@@ -263,7 +263,9 @@ export async function loadLatestData(
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
-        const parsedData = await parseFile(blobBuffer, chatDocument.fileName);
+        const parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
+          sheetName: chatDocument.selectedSheetName,
+        });
         if (parsedData && parsedData.length > 0) {
           fullData = normalizeNumericColumns(parsedData);
           // Convert "-" to 0 for numeric columns
@@ -335,7 +337,9 @@ export async function loadLatestData(
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
-        const parsedData = await parseFile(blobBuffer, chatDocument.fileName);
+        const parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
+          sheetName: chatDocument.selectedSheetName,
+        });
         if (parsedData && parsedData.length > 0) {
           fullData = normalizeNumericColumns(parsedData);
           // Convert "-" to 0 for numeric columns

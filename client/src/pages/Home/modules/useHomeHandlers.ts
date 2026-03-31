@@ -5,7 +5,7 @@ interface UseHomeHandlersProps {
   messages: Message[];
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   uploadMutation: {
-    mutate: (payload: { file: File; fileSize: number }) => void;
+    mutate: (payload: { file: File; fileSize: number; sheetName?: string }) => void;
   };
   chatMutation: {
     mutate: (payload: { message: string; targetTimestamp?: number }) => void;
@@ -21,8 +21,8 @@ export const useHomeHandlers = ({
   chatMutation,
   resetState,
 }: UseHomeHandlersProps) => {
-  const handleFileSelect = (file: File) => {
-    uploadMutation.mutate({ file, fileSize: file.size });
+  const handleFileSelect = (file: File, opts?: { sheetName?: string }) => {
+    uploadMutation.mutate({ file, fileSize: file.size, sheetName: opts?.sheetName });
   };
 
   const handleSendMessage = (message: string) => {

@@ -5232,7 +5232,9 @@ export async function executeDataOperation(
         const blobBuffer = await getFileFromBlob(sessionDoc.blobInfo.blobName);
         
         // Parse the file
-        let originalData = await parseFile(blobBuffer, sessionDoc.fileName);
+        let originalData = await parseFile(blobBuffer, sessionDoc.fileName, {
+          sheetName: sessionDoc.selectedSheetName,
+        });
         
         if (!originalData || originalData.length === 0) {
           return {

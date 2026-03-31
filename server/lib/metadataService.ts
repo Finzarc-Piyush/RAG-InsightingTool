@@ -142,7 +142,9 @@ export class MetadataService {
 export const metadataService = new MetadataService();
 
 // Cleanup expired cache every hour
-setInterval(() => {
+const interval = setInterval(() => {
   metadataService.cleanupExpiredCache();
 }, 60 * 60 * 1000);
+// Allow Node process (and test runner) to exit even if the interval is still pending.
+interval.unref?.();
 

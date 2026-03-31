@@ -42,6 +42,14 @@ export interface ProcessStreamChatParams {
   mode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
 }
 
+function userExplicitlyAskedForColumnsOrPreview(text: string): boolean {
+  const q = String(text || "").toLowerCase();
+  return (
+    /\b(columns?|column names?|schema|field list|show fields)\b/.test(q) ||
+    /\b(preview|sample rows?|show rows?|show data|data preview)\b/.test(q)
+  );
+}
+
 /**
  * Process a streaming chat message
  */
@@ -497,8 +505,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if ((result as any).agentTrace) {
       transformedResponse.agentTrace = (result as any).agentTrace;
     }
+    // Lightweight client hint for smart pivot/table visibility.
+    transformedResponse.pivotAutoShow = Boolean(
+      ((result as any).table && Array.isArray((result as any).table) && (result as any).table.length > 0) ||
+      pendingIntermediates.some((p) => Array.isArray(p.preview) && p.preview.length > 0)
+    );
 
-    preserveFinalPreview(transformedResponse, pendingIntermediates);
+    const allowPreviewInAnswer = userExplicitlyAskedForColumnsOrPreview(message);
+    if (allowPreviewInAnswer) {
+      preserveFinalPreview(transformedResponse, pendingIntermediates);
+    } else {
+      // Suppress preview payloads unless user explicitly asks for columns/preview.
+      delete transformedResponse.preview;
+      delete transformedResponse.summary;
+    }
     const finalThinkingBefore =
       pendingIntermediates.length > 0 &&
       (thinkingSteps.length > 0 || agentWorkbench.length > 0)

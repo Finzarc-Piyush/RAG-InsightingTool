@@ -25,20 +25,54 @@ const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
 function normalizeExecuteQueryPlanStepArgs(
   step: PlanStep,
   columns: readonly { name: string }[],
-  preferredNumeric: readonly string[] = []
+  preferredNumeric: readonly string[] = [],
+  streamPreAnalysis?: AgentExecutionContext["streamPreAnalysis"]
 ): void {
   if (step.tool !== "execute_query_plan") return;
   const plan = step.args.plan as Record<string, unknown> | undefined;
   if (!plan || typeof plan !== "object") return;
+  const schemaSet = new Set(columns.map((c) => c.name));
+  const canonical = (streamPreAnalysis?.canonicalColumns || []).filter((c) =>
+    schemaSet.has(c)
+  );
+  const canonicalSet = new Set(canonical);
+  const canonicalCols = canonical.map((name) => ({ name }));
+  const mapping = streamPreAnalysis?.columnMapping || {};
+  const normKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const mappingLookup = new Map<string, string>();
+  for (const [k, v] of Object.entries(mapping)) {
+    if (!schemaSet.has(v)) continue;
+    mappingLookup.set(normKey(k), v);
+    mappingLookup.set(normKey(v), v);
+  }
+  const aggOutputName = (a: { column?: string; operation?: string; alias?: string }) => {
+    if (a.alias && a.alias.trim()) return a.alias.trim();
+    if (a.column && a.operation) return `${a.column}_${a.operation}`;
+    return null;
+  };
+  const resolveAuthoritative = (raw: string): string => {
+    if (!raw?.trim()) return raw;
+    if (schemaSet.has(raw)) return raw;
+    const mapped = mappingLookup.get(normKey(raw));
+    if (mapped && schemaSet.has(mapped)) return mapped;
+    const resolved = resolveToSchemaColumn(raw, columns);
+    if (schemaSet.has(resolved)) return resolved;
+    if (canonicalCols.length > 0) {
+      const canonResolved = resolveToSchemaColumn(raw, canonicalCols);
+      if (canonicalSet.has(canonResolved)) return canonResolved;
+    }
+    return resolved;
+  };
+
   if (Array.isArray(plan.groupBy)) {
     plan.groupBy = (plan.groupBy as string[]).map((c) =>
-      resolveToSchemaColumn(String(c), columns)
+      resolveAuthoritative(String(c))
     );
   }
   if (Array.isArray(plan.aggregations)) {
     for (const a of plan.aggregations as { column?: string }[]) {
       if (!a?.column) continue;
-      const resolved = resolveToSchemaColumn(a.column, columns);
+      const resolved = resolveAuthoritative(a.column);
       a.column = columns.some((c) => c.name === resolved)
         ? resolved
         : resolveMetricAliasToSchemaColumn(a.column, columns, preferredNumeric);
@@ -46,12 +80,22 @@ function normalizeExecuteQueryPlanStepArgs(
   }
   if (Array.isArray(plan.dimensionFilters)) {
     for (const d of plan.dimensionFilters as { column?: string }[]) {
-      if (d?.column) d.column = resolveToSchemaColumn(d.column, columns);
+      if (d?.column) d.column = resolveAuthoritative(d.column);
     }
   }
   if (Array.isArray(plan.sort)) {
+    const allowedSort = new Set<string>(schemaSet);
+    for (const a of (plan.aggregations as
+      | { column?: string; operation?: string; alias?: string }[]
+      | undefined) ?? []) {
+      const out = aggOutputName(a);
+      if (out) allowedSort.add(out);
+    }
     for (const s of plan.sort as { column?: string }[]) {
-      if (s?.column) s.column = resolveToSchemaColumn(s.column, columns);
+      if (!s?.column) continue;
+      if (allowedSort.has(s.column)) continue;
+      const resolved = resolveAuthoritative(s.column);
+      if (allowedSort.has(resolved)) s.column = resolved;
     }
   }
 }
@@ -96,6 +140,8 @@ export type PlannerRejectReason =
   | "unknown_tool"
   | "invalid_tool_args"
   | "column_not_in_schema"
+  | "invalid_aggregation_alias"
+  | "ambiguous_column_resolution"
   | "bad_depends_on"
   | "dependency_cycle"
   | "empty_steps";
@@ -125,14 +171,23 @@ function firstInvalidQueryPlanColumn(
   for (const a of (plan.aggregations as { column: string; alias?: string }[] | undefined) ?? []) {
     if (!a?.column || !check(a.column)) return a.column;
     if (a.alias && a.alias === a.column) {
-      return `aggregation_alias_conflicts_with_column:${a.alias}`;
+      return `invalid_aggregation_alias:${a.alias}`;
     }
   }
   for (const d of (plan.dimensionFilters as { column: string }[] | undefined) ?? []) {
     if (!d?.column || !check(d.column)) return d.column;
   }
+  const allowedSort = new Set(colNames);
+  for (const a of (plan.aggregations as
+    | { column?: string; operation?: string; alias?: string }[]
+    | undefined) ?? []) {
+    if (a?.alias) allowedSort.add(a.alias);
+    if (a?.column && a?.operation) {
+      allowedSort.add(`${a.column}_${a.operation}`);
+    }
+  }
   for (const s of (plan.sort as { column: string }[] | undefined) ?? []) {
-    if (!s?.column || !check(s.column)) return s.column;
+    if (!s?.column || !allowedSort.has(s.column)) return s.column;
   }
   return null;
 }
@@ -206,7 +261,7 @@ Rules:
 - retrieve_semantic_context: **required** args.query (string) for narrative/themes/wording — never put "query" on run_analytical_query.
 - run_analytical_query: only optional question_override; **never** use a "query" key here.
 - execute_query_plan: use when you need exact groupBy + aggregations (e.g. SUM revenue by year) with args.plan JSON; column names must match schema exactly. Prefer over NL when totals/sums must be correct.
-- For execute_query_plan aggregations, `aggregations[].column` MUST be a real schema metric column (for example `Sales`). Labels like `Total_Revenue` may appear only in `aggregations[].alias`, never in `aggregations[].column`.
+- For execute_query_plan aggregations, \`aggregations[].column\` MUST be a real schema metric column (for example \`Sales\`). Labels like \`Total_Revenue\` may appear only in \`aggregations[].alias\`, never in \`aggregations[].column\`.
 - **Trends / over time** (trend, evolution, “how X changed”, time series): the dataset lists **Derived time-bucket columns** (\`__tf_date__*\`, \`__tf_week__*\`, \`__tf_month__*\`, \`__tf_quarter__*\`, \`__tf_half_year__*\`, \`__tf_year__*\`) precomputed from each date column. Prefer **coarse grain** (month or year via matching \`__tf_*\` **or** \`dateAggregationPeriod\` on the raw date column)—**not** raw daily \`groupBy\` on the date column when that would yield very many points. If the question specifies an **explicit grain** (daily/weekly/monthly/yearly), match it. For the **primary** trend visualization, **build_chart** must use \`type: "line"\` or \`"area"\`, not \`bar\`, when X is temporal (bar reads as a category ranking, not a trend). \`aggregate\` \`none\` when the query already returns one row per bucket.
 - **derive_dimension_bucket**: when the user groups categories into custom buckets (e.g. map A,B,C → "East"), run it **before** \`execute_query_plan\` with \`dependsOn\` chaining; **groupBy** the new column name. Args: \`sourceColumn\`, \`newColumnName\`, \`buckets\`: [\`{ "label", "values": [...] }\`], optional \`matchMode\` \`exact\`|\`case_insensitive\`, optional \`defaultLabel\`.
 - **run_readonly_sql** (analysis only): last-resort SELECT-only query over table \`dataset\` (current in-memory frame, capped rows). Single statement; no DDL/DML.
@@ -271,7 +326,8 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     normalizeExecuteQueryPlanStepArgs(
       step,
       ctx.summary.columns,
-      preferredNumeric
+      preferredNumeric,
+      ctx.streamPreAnalysis
     );
     normalizeCorrelationStepArgs(step, ctx.summary.columns);
     normalizeDeriveDimensionBucketStepArgs(step, ctx.summary.columns);
@@ -366,9 +422,16 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     const argKeys = Object.keys(step.args).join(",");
     const bad = firstInvalidColumnReference(step, cumulative);
     if (bad) {
+      const hasCanonical = (ctx.streamPreAnalysis?.canonicalColumns?.length ?? 0) > 0;
+      const reason: PlannerRejectReason =
+        bad.startsWith("invalid_aggregation_alias:")
+          ? "invalid_aggregation_alias"
+          : bad.startsWith("ambiguous_column_resolution:") || hasCanonical
+            ? "ambiguous_column_resolution"
+            : "column_not_in_schema";
       logReject(
         {
-          reason: "column_not_in_schema",
+          reason,
           tool: step.tool,
           stepId: step.id,
           argKeys: argKeys.slice(0, 200),
@@ -378,7 +441,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       );
       return {
         ok: false,
-        reason: "column_not_in_schema",
+        reason,
         tool: step.tool,
         stepId: step.id,
         argKeys: argKeys.slice(0, 200),

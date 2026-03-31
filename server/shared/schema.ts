@@ -521,3 +521,97 @@ export const updateTableCaptionRequestSchema = z.object({
   sheetId: z.string().optional(),
 });
 
+// ---------------------------
+// Pivot (Excel-like) contracts
+// ---------------------------
+
+export const pivotAggSchema = z.enum(["sum", "mean", "count", "min", "max"]);
+export type PivotAgg = z.infer<typeof pivotAggSchema>;
+
+export const pivotValueSpecSchema = z.object({
+  id: z.string().max(200),
+  field: z.string().max(200),
+  agg: pivotAggSchema,
+});
+export type PivotValueSpec = z.infer<typeof pivotValueSpecSchema>;
+
+export const pivotAggRowSchema = z.object({
+  flatValues: z.record(z.number()).nullable(),
+  matrixValues: z.record(z.record(z.number())).nullable(),
+});
+export type PivotAggRow = z.infer<typeof pivotAggRowSchema>;
+
+// Recursive pivot tree nodes (group/leaf).
+export const pivotLeafNodeSchema = z.lazy(() =>
+  z.object({
+    type: z.literal("leaf"),
+    depth: z.number(),
+    label: z.string(),
+    pathKey: z.string(),
+    values: pivotAggRowSchema,
+  })
+);
+
+export const pivotGroupNodeSchema = z.lazy(() =>
+  z.object({
+    type: z.literal("group"),
+    depth: z.number(),
+    label: z.string(),
+    pathKey: z.string(),
+    children: z.array(pivotTreeNodeSchema),
+    subtotal: pivotAggRowSchema,
+  })
+);
+
+export const pivotTreeNodeSchema = z.union([pivotLeafNodeSchema, pivotGroupNodeSchema]);
+
+export const pivotTreeSchema = z.object({
+  nodes: z.array(pivotTreeNodeSchema),
+  grandTotal: pivotAggRowSchema,
+});
+export type PivotTree = z.infer<typeof pivotTreeSchema>;
+
+export const pivotModelSchema = z.object({
+  rowFields: z.array(z.string()),
+  colField: z.string().nullable(),
+  columnFields: z.array(z.string()),
+  colKeys: z.array(z.string()),
+  valueSpecs: z.array(pivotValueSpecSchema),
+  tree: pivotTreeSchema,
+  columnFieldTruncated: z.boolean(),
+});
+export type PivotModel = z.infer<typeof pivotModelSchema>;
+
+export const pivotRowSortSchema = z.object({
+  byValueSpecId: z.string().max(200),
+  direction: z.enum(["asc", "desc"]),
+});
+export type PivotRowSort = z.infer<typeof pivotRowSortSchema>;
+
+export const pivotQueryRequestSchema = z.object({
+  rowFields: z.array(z.string()),
+  colFields: z.array(z.string()),
+  filterFields: z.array(z.string()),
+  // JSON-friendly representation of FilterSelections: field -> selected values
+  filterSelections: z.record(z.array(z.string())).optional(),
+  valueSpecs: z.array(pivotValueSpecSchema),
+  rowSort: pivotRowSortSchema.optional(),
+});
+export type PivotQueryRequest = z.infer<typeof pivotQueryRequestSchema>;
+
+export const pivotQueryResponseSchema = z.object({
+  model: pivotModelSchema,
+  meta: z
+    .object({
+      source: z.enum(["duckdb", "sample"]),
+      rowCount: z.number().optional(),
+      colKeyCount: z.number().optional(),
+      truncated: z.boolean().optional(),
+      cached: z.boolean().optional(),
+      cacheHit: z.boolean().optional(),
+      durationMs: z.number().optional(),
+    })
+    .optional(),
+});
+export type PivotQueryResponse = z.infer<typeof pivotQueryResponseSchema>;
+

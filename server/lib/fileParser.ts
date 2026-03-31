@@ -61,17 +61,30 @@ export function warnSuspiciousDuplicateRowIdInSample(
   }
 }
 
-export async function parseFile(buffer: Buffer, filename: string): Promise<Record<string, any>[]> {
+export type ParseFileOptions = {
+  sheetName?: string;
+};
+
+export async function parseFile(
+  buffer: Buffer,
+  filename: string,
+  opts: ParseFileOptions = {}
+): Promise<Record<string, any>[]> {
   lastCsvParseDiagnostics = undefined;
   const ext = filename.split('.').pop()?.toLowerCase();
 
   if (ext === 'csv') {
     return parseCsv(buffer);
   } else if (ext === 'xlsx' || ext === 'xls') {
-    return parseExcel(buffer);
+    return parseExcel(buffer, opts);
   } else {
     throw new Error('Unsupported file format. Please upload CSV or Excel files.');
   }
+}
+
+export function getExcelSheetNames(buffer: Buffer): string[] {
+  const workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
+  return workbook.SheetNames || [];
 }
 
 function parseCsv(buffer: Buffer): Record<string, any>[] {
@@ -183,9 +196,16 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
   return result;
 }
 
-function parseExcel(buffer: Buffer): Record<string, any>[] {
+function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string, any>[] {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const sheetName = workbook.SheetNames[0];
+  const availableSheets = workbook.SheetNames || [];
+  const sheetName = opts.sheetName || availableSheets[0];
+  if (!sheetName) {
+    throw new Error('No sheet found in workbook');
+  }
+  if (!availableSheets.includes(sheetName)) {
+    throw new Error(`Selected sheet "${sheetName}" was not found in workbook`);
+  }
   const worksheet = workbook.Sheets[sheetName];
   const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: null });
   

@@ -66,6 +66,17 @@ export interface DatasetMetadata {
   }>;
 }
 
+export class SessionDataNotMaterializedError extends Error {
+  readonly code = 'SESSION_DATA_NOT_MATERIALIZED';
+  readonly statusCode = 409;
+  constructor(sessionId: string, tableName: string = 'data') {
+    super(
+      `Session ${sessionId} is missing required DuckDB table "${tableName}". Upload processing must materialize authoritative session data before pivot/sample queries.`
+    );
+    this.name = 'SessionDataNotMaterializedError';
+  }
+}
+
 export class ColumnarStorageService {
   private db: Database | null = null;
   private sessionId: string;
@@ -76,6 +87,70 @@ export class ColumnarStorageService {
     this.sessionId = options.sessionId;
     this.tempDir = options.tempDir || path.join(os.tmpdir(), 'marico-columnar');
     this.dbPath = path.join(this.tempDir, `${options.sessionId}.duckdb`);
+  }
+
+  private quoteIdent(identifier: string): string {
+    return `"${identifier.replace(/"/g, '""')}"`;
+  }
+
+  private async runStatement(sql: string): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not initialized. Call initialize() first.');
+    }
+    await new Promise<void>((resolve, reject) => {
+      const conn = this.db!.connect();
+      conn.run(sql, (err: Error | null) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  private csvCell(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    if (value instanceof Date) return value.toISOString();
+    const s = String(value);
+    if (/[",\n\r]/.test(s)) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  }
+
+  private rowsToCsvBuffer(rows: Record<string, unknown>[]): Buffer {
+    if (!rows.length) return Buffer.from('', 'utf8');
+    const columns = Object.keys(rows[0] ?? {});
+    const header = columns.map((c) => this.csvCell(c)).join(',');
+    const body = rows
+      .map((row) =>
+        columns
+          .map((col) => this.csvCell((row as Record<string, unknown>)[col]))
+          .join(',')
+      )
+      .join('\n');
+    return Buffer.from(`${header}\n${body}\n`, 'utf8');
+  }
+
+  private normalizeDuckValue(value: unknown): unknown {
+    if (typeof value === 'bigint') {
+      const n = Number(value);
+      if (Number.isSafeInteger(n)) return n;
+      return value.toString();
+    }
+    if (Array.isArray(value)) {
+      return value.map((v) => this.normalizeDuckValue(v));
+    }
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        out[k] = this.normalizeDuckValue(v);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  private normalizeDuckRows<T = any>(rows: any[]): T[] {
+    return rows.map((row) => this.normalizeDuckValue(row) as T);
   }
 
   /**
@@ -146,6 +221,77 @@ export class ColumnarStorageService {
         reject(error);
       }
     });
+  }
+
+  async tableExists(tableName: string = 'data'): Promise<boolean> {
+    if (!this.db) {
+      throw new Error('Database not initialized. Call initialize() first.');
+    }
+    const escapedName = tableName.replace(/'/g, "''");
+    const rows = await this.executeQuery<{ exists_count: number }>(
+      `SELECT COUNT(*) as exists_count
+       FROM information_schema.tables
+       WHERE table_schema = 'main' AND table_name = '${escapedName}'`
+    );
+    return Number(rows[0]?.exists_count ?? 0) > 0;
+  }
+
+  async assertTableExists(tableName: string = 'data'): Promise<void> {
+    const exists = await this.tableExists(tableName);
+    if (!exists) {
+      throw new SessionDataNotMaterializedError(this.sessionId, tableName);
+    }
+  }
+
+  async materializeAuthoritativeDataTable(
+    rows: Record<string, unknown>[],
+    opts?: { tableName?: string }
+  ): Promise<void> {
+    if (!rows || rows.length === 0) {
+      throw new Error('Cannot materialize authoritative table from empty dataset.');
+    }
+    const tableName = opts?.tableName ?? 'data';
+    const tempTableName = `${tableName}__incoming`;
+    const backupTableName = `${tableName}__old`;
+
+    // Ensure stable column order and keys for all rows.
+    const columns = Object.keys(rows[0] ?? {});
+    const normalizedRows = rows.map((row) => {
+      const out: Record<string, unknown> = {};
+      for (const col of columns) out[col] = row[col];
+      return out;
+    });
+    const csv = this.rowsToCsvBuffer(normalizedRows);
+    const tempCsvPath = path.join(this.tempDir, `${this.sessionId}_${Date.now()}_materialize.csv`);
+    await fs.writeFile(tempCsvPath, csv);
+    const escapedPath = tempCsvPath.replace(/\\/g, '/').replace(/'/g, "''");
+
+    try {
+      await this.runStatement(`DROP TABLE IF EXISTS ${this.quoteIdent(tempTableName)}`);
+      await this.runStatement(
+        `CREATE TABLE ${this.quoteIdent(tempTableName)} AS SELECT * FROM read_csv_auto('${escapedPath}')`
+      );
+      const hasExisting = await this.tableExists(tableName);
+      await this.runStatement(`DROP TABLE IF EXISTS ${this.quoteIdent(backupTableName)}`);
+      if (hasExisting) {
+        await this.runStatement(
+          `ALTER TABLE ${this.quoteIdent(tableName)} RENAME TO ${this.quoteIdent(backupTableName)}`
+        );
+      }
+      await this.runStatement(
+        `ALTER TABLE ${this.quoteIdent(tempTableName)} RENAME TO ${this.quoteIdent(tableName)}`
+      );
+      await this.runStatement(`DROP TABLE IF EXISTS ${this.quoteIdent(backupTableName)}`);
+    } catch (error) {
+      throw error;
+    } finally {
+      await fs.unlink(tempCsvPath).catch(() => {
+        // ignore cleanup errors
+      });
+      await this.runStatement(`DROP TABLE IF EXISTS ${this.quoteIdent(tempTableName)}`).catch(() => {
+        // ignore cleanup errors
+      });
+    }
   }
 
   /**
@@ -272,13 +418,13 @@ export class ColumnarStorageService {
       const conn = this.db!.connect();
       
       // Get row count
-      conn.all(`SELECT COUNT(*) as count FROM ${tableName}`, (err: Error | null, rows: any[]) => {
+        conn.all(`SELECT COUNT(*) as count FROM ${tableName}`, (err: Error | null, rows: any[]) => {
         if (err) {
           reject(err);
           return;
         }
 
-        const rowCount = rows[0]?.count || 0;
+        const rowCount = Number(rows[0]?.count ?? 0);
 
         // Get column information
         conn.all(`DESCRIBE ${tableName}`, (err: Error | null, columns: any[]) => {
@@ -309,9 +455,16 @@ export class ColumnarStorageService {
                   }
 
                   const stat = stats[0];
-                  const nullCount = stat.total - stat.non_null;
-                  const nullPercentage = stat.total > 0 ? (nullCount / stat.total) * 100 : 0;
-                  const cardinality = stat.distinct_count;
+
+                  // DuckDB may return COUNT values as BigInt; normalize to Number
+                  // before doing any arithmetic with regular JS numbers.
+                  const total = Number(stat.total ?? 0);
+                  const nonNull = Number(stat.non_null ?? 0);
+                  const distinctCount = Number(stat.distinct_count ?? 0);
+
+                  const nullCount = total - nonNull;
+                  const nullPercentage = total > 0 ? (nullCount / total) * 100 : 0;
+                  const cardinality = distinctCount;
 
                   // Try to get numeric stats if column is numeric
                   conn.all(
@@ -387,7 +540,7 @@ export class ColumnarStorageService {
           if (err) {
             reject(err);
           } else {
-            resolve(rows as Record<string, any>[]);
+            resolve(this.normalizeDuckRows<Record<string, any>>(rows));
           }
         }
       );
@@ -419,7 +572,7 @@ export class ColumnarStorageService {
           if (err) {
             reject(err);
           } else {
-            resolve(rows as Record<string, any>[]);
+            resolve(this.normalizeDuckRows<Record<string, any>>(rows));
           }
         }
       );
@@ -443,7 +596,7 @@ export class ColumnarStorageService {
           if (err) {
             reject(err);
           } else {
-            resolve(rows[0]?.count || 0);
+            resolve(Number(rows[0]?.count ?? 0));
           }
         }
       );
@@ -499,7 +652,7 @@ export class ColumnarStorageService {
         if (err) {
           reject(err);
         } else {
-          resolve(rows as T[]);
+          resolve(this.normalizeDuckRows<T>(rows));
         }
       });
     });

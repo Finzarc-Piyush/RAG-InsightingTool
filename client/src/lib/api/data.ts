@@ -4,6 +4,8 @@ import {
   CompleteAnalysisData,
   RawDataResponse,
   UserAnalysisSessionsResponse,
+  type PivotQueryRequest,
+  type PivotQueryResponse,
 } from "@/shared/schema";
 
 /** Response from GET /api/data/:sessionId/sample */
@@ -73,5 +75,42 @@ export const dataApi = {
       recommendedQuestions: string[];
     }>(`/api/sessions/${sessionId}/data-summary`),
 };
+
+export async function pivotQuery(
+  sessionId: string,
+  request: PivotQueryRequest
+): Promise<PivotQueryResponse> {
+  return api.post<PivotQueryResponse>(
+    `/api/data/${encodeURIComponent(sessionId)}/pivot/query`,
+    request
+  );
+}
+
+export interface PivotDrillthroughRequest {
+  rowFields: string[];
+  rowValues: string[];
+  colField: string | null;
+  colKey: string | null;
+  filterFields: string[];
+  filterSelections?: Record<string, string[]>;
+  valueFields: string[];
+  limit?: number;
+}
+
+export interface PivotDrillthroughResponse {
+  sessionId: string;
+  count: number;
+  rows: Record<string, unknown>[];
+}
+
+export async function pivotDrillthrough(
+  sessionId: string,
+  request: PivotDrillthroughRequest
+): Promise<PivotDrillthroughResponse> {
+  return api.post<PivotDrillthroughResponse>(
+    `/api/data/${encodeURIComponent(sessionId)}/pivot/drillthrough`,
+    request
+  );
+}
 
 

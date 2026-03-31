@@ -381,10 +381,18 @@ export const useHomeMutations = ({
   // This preserves formatting like **bold** for headings
 
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, fileSize }: { file: File; fileSize: number }) => {
+    mutationFn: async ({
+      file,
+      fileSize,
+      sheetName,
+    }: {
+      file: File;
+      fileSize: number;
+      sheetName?: string;
+    }) => {
       // Store fileSize in a way we can access it in onSuccess
       (file as any)._fileSize = fileSize;
-      return await uploadFile<any>('/api/upload', file);
+      return await uploadFile<any>('/api/upload', file, sheetName ? { sheetName } : undefined);
     },
     onSuccess: async (data, variables) => {
       logger.log("upload response from the backend", data);

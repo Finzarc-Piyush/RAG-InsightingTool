@@ -135,9 +135,15 @@ function assertPlanColumnsAllowed(
     const e = check(d.column);
     if (e) return e;
   }
+  const allowedSort = new Set(allowed);
+  for (const a of plan.aggregations ?? []) {
+    if (a.alias) allowedSort.add(a.alias);
+    allowedSort.add(`${a.column}_${a.operation}`);
+  }
   for (const s of plan.sort ?? []) {
-    const e = check(s.column);
-    if (e) return e;
+    if (!allowedSort.has(s.column)) {
+      return `Column not in schema: ${s.column}`;
+    }
   }
   return null;
 }

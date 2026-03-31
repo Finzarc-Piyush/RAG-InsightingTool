@@ -4,9 +4,19 @@ import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { downloadModifiedDataset, fetchSessionSampleRows } from '@/lib/api';
+import {
+  downloadModifiedDataset,
+  fetchSessionSampleRows,
+  pivotQuery,
+  pivotDrillthrough,
+} from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
-import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
+import type {
+  TemporalDisplayGrain,
+  TemporalFacetColumnMeta,
+  PivotModel as PivotModelContract,
+  PivotQueryRequest,
+} from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import { facetColumnHeaderLabelForColumn, formatTemporalFacetValue } from '@/lib/temporalFacetDisplay';
 import {
@@ -20,7 +30,7 @@ import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotUiConfig } from '@/lib/pivot/types';
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
-import { PivotGrid } from './pivot/PivotGrid';
+import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
 
 interface DataPreviewTableProps {
   data: Record<string, any>[];
@@ -100,26 +110,45 @@ export function DataPreviewTable({
     () => new Set()
   );
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
-  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat'>('pivot');
+  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('pivot');
+  const [pivotTopN, setPivotTopN] = useState<number | null>(null);
+  const [showValuesAs, setShowValuesAs] = useState<PivotShowValuesAsMode>('raw');
+  const [showSubtotals, setShowSubtotals] = useState(true);
+  const [showGrandTotal, setShowGrandTotal] = useState(true);
+  const [drillthrough, setDrillthrough] = useState<{
+    loading: boolean;
+    error: string | null;
+    count: number | null;
+    rows: Record<string, unknown>[];
+  } | null>(null);
   /** Row-level rows from columnar store when sessionId is set (defense in depth vs aggregated-only preview). */
   const [sessionSampleRows, setSessionSampleRows] = useState<
     Record<string, unknown>[] | null
   >(null);
+  const [sessionSampleError, setSessionSampleError] = useState<string | null>(null);
 
   useEffect(() => {
     if (variant !== 'analysis' || !sessionId) {
       setSessionSampleRows(null);
+      setSessionSampleError(null);
       return;
     }
     let cancelled = false;
+    setSessionSampleError(null);
     void (async () => {
       try {
         const res = await fetchSessionSampleRows(sessionId, 2000);
         if (!cancelled && Array.isArray(res.rows)) {
           setSessionSampleRows(res.rows as Record<string, unknown>[]);
+          setSessionSampleError(null);
         }
-      } catch {
-        if (!cancelled) setSessionSampleRows(null);
+      } catch (e) {
+        if (!cancelled) {
+          setSessionSampleRows(null);
+          setSessionSampleError(
+            e instanceof Error ? e.message : 'Failed to fetch session sample rows'
+          );
+        }
       }
     })();
     return () => {
@@ -127,12 +156,11 @@ export function DataPreviewTable({
     };
   }, [variant, sessionId]);
 
-  /** Prefer session sample for pivot when available; otherwise message preview rows. */
+  /** Strict mode: analysis pivot uses only session sample rows from DuckDB-backed endpoint. */
   const pivotRows = useMemo((): Record<string, unknown>[] => {
     const base = data ?? [];
     if (variant !== 'analysis') return base;
-    if (sessionSampleRows && sessionSampleRows.length > 0) return sessionSampleRows;
-    return base;
+    return sessionSampleRows ?? [];
   }, [variant, data, sessionSampleRows]);
 
   // Schema-driven keys: used only for pivot config + “choose fields” UI.
@@ -357,6 +385,81 @@ export function DataPreviewTable({
     }\0${defaultValueMeasures.join('\0')}`;
   }, [schemaColumnKeys, numericColumns, defaultRowDim, defaultValueMeasures]);
 
+  const [serverPivotModel, setServerPivotModel] = useState<PivotModelContract | null>(
+    null
+  );
+  const [serverPivotMeta, setServerPivotMeta] = useState<{
+    source?: "duckdb" | "sample";
+    rowCount?: number;
+    colKeyCount?: number;
+    truncated?: boolean;
+  } | null>(null);
+  const [serverPivotLoading, setServerPivotLoading] = useState(false);
+  const [serverPivotError, setServerPivotError] = useState<string | null>(null);
+  const serverPivotRequestSeqRef = useRef(0);
+
+  const canPivot = useMemo(() => {
+    if (variant !== 'analysis') return false;
+    return Boolean(defaultRowDim && defaultValueMeasures.length > 0);
+  }, [variant, defaultRowDim, defaultValueMeasures.length]);
+
+  const normalizedPivotConfig = useMemo(
+    () => normalizePivotConfig(schemaColumnKeys, pivotConfig),
+    [schemaColumnKeys, pivotConfig]
+  );
+
+  const pivotQueryRequest = useMemo((): PivotQueryRequest | null => {
+    if (variant !== "analysis") return null;
+    if (!sessionId) return null;
+    if (!canPivot) return null;
+    if (analysisView !== "pivot") return null;
+    if (!normalizedPivotConfig) return null;
+
+    const rowFields = normalizedPivotConfig.rows;
+    const colFields = normalizedPivotConfig.columns;
+    const filterFields = normalizedPivotConfig.filters;
+
+    // Payload guard: don't send full "all values" selections to the backend.
+    // Only include selections that represent an explicit user exclusion.
+    const filterSelectionsObj: Record<string, string[]> = {};
+    for (const f of filterFields) {
+      const sel = filterSelections[f];
+      if (!sel) continue;
+      const snap = filterDistinctSnapshotRef.current[f];
+
+      const selArr = Array.from(sel);
+      if (snap) {
+        // If selection equals the last known "all distinct values" snapshot, omit it.
+        const isAll =
+          sel.size === snap.size && selArr.every((v) => snap.has(v));
+        if (isAll) continue;
+      }
+
+      filterSelectionsObj[f] = selArr;
+    }
+
+    const filterSelections =
+      Object.keys(filterSelectionsObj).length > 0
+        ? filterSelectionsObj
+        : undefined;
+
+    return {
+      rowFields,
+      colFields,
+      filterFields,
+      filterSelections,
+      valueSpecs: normalizedPivotConfig.values,
+      rowSort: normalizedPivotConfig.rowSort,
+    };
+  }, [
+    variant,
+    sessionId,
+    canPivot,
+    analysisView,
+    normalizedPivotConfig,
+    filterSelections,
+  ]);
+
   useEffect(() => {
     if (variant !== 'analysis') return;
     setPivotConfig(
@@ -374,7 +477,48 @@ export function DataPreviewTable({
     filterDistinctSnapshotRef.current = {};
     setCollapsedPivotGroups(new Set());
     setAnalysisView('pivot');
+    setServerPivotModel(null);
+    setServerPivotMeta(null);
+    setServerPivotError(null);
+    setServerPivotLoading(false);
+    setDrillthrough(null);
+    setSessionSampleError(null);
   }, [variant, pivotDataSignature]);
+
+  // Backend pivot query (Excel-like interaction loop)
+  useEffect(() => {
+    if (!pivotQueryRequest) return;
+    if (!sessionId) return;
+
+    const seq = ++serverPivotRequestSeqRef.current;
+    setServerPivotLoading(true);
+    setServerPivotError(null);
+
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const resp = await pivotQuery(sessionId, pivotQueryRequest);
+          if (seq !== serverPivotRequestSeqRef.current) return; // stale response
+          setServerPivotModel(resp.model);
+          setServerPivotMeta(resp.meta ?? null);
+        } catch (e) {
+          if (seq !== serverPivotRequestSeqRef.current) return; // stale response
+          const msg =
+            e instanceof Error ? e.message : "Failed to fetch pivot result";
+          setServerPivotError(msg);
+          setServerPivotModel(null);
+          setServerPivotMeta(null);
+        } finally {
+          if (seq !== serverPivotRequestSeqRef.current) return;
+          setServerPivotLoading(false);
+        }
+      })();
+    }, 180);
+
+    return () => {
+      clearTimeout(t);
+    };
+  }, [pivotQueryRequest, sessionId]);
 
   useEffect(() => {
     if (variant !== 'analysis') return;
@@ -387,16 +531,6 @@ export function DataPreviewTable({
       )
     );
   }, [variant, pivotRows, pivotConfig.filters, pivotDataSignature]);
-
-  const canPivot = useMemo(() => {
-    if (variant !== 'analysis') return false;
-    return Boolean(defaultRowDim && defaultValueMeasures.length > 0);
-  }, [variant, defaultRowDim, defaultValueMeasures.length]);
-
-  const normalizedPivotConfig = useMemo(
-    () => normalizePivotConfig(schemaColumnKeys, pivotConfig),
-    [schemaColumnKeys, pivotConfig]
-  );
 
   // Help debug: pivot fields present in schema but missing from preview row keys won't show data until rows include them.
   useEffect(() => {
@@ -439,10 +573,35 @@ export function DataPreviewTable({
     filterSelections,
   ]);
 
+  const effectivePivotModel = serverPivotModel ?? pivotModel;
+
+  const pivotModelForRender = useMemo(() => {
+    if (!effectivePivotModel) return null;
+    if (pivotTopN == null || pivotTopN <= 0) return effectivePivotModel;
+
+    // Limit the first row hierarchy level (Excel-like Top N on rows).
+    const limitedNodes = (effectivePivotModel as any).tree.nodes.slice(
+      0,
+      pivotTopN
+    );
+    return {
+      ...(effectivePivotModel as any),
+      tree: {
+        ...(effectivePivotModel as any).tree,
+        nodes: limitedNodes,
+      },
+    };
+  }, [effectivePivotModel, pivotTopN]);
+
   const pivotFlatRows = useMemo(() => {
-    if (!pivotModel) return [];
-    return flattenPivotTree(pivotModel.tree, collapsedPivotGroups);
-  }, [pivotModel, collapsedPivotGroups]);
+    if (!pivotModelForRender) return [];
+    const all = flattenPivotTree((pivotModelForRender as any).tree, collapsedPivotGroups);
+    return all.filter((r) => {
+      if (!showSubtotals && r.kind === "subtotal") return false;
+      if (!showGrandTotal && r.kind === "grand") return false;
+      return true;
+    });
+  }, [pivotModelForRender, collapsedPivotGroups, showSubtotals, showGrandTotal]);
 
   const togglePivotCollapse = useCallback((pathKey: string) => {
     setCollapsedPivotGroups((prev) => {
@@ -452,6 +611,86 @@ export function DataPreviewTable({
       return next;
     });
   }, []);
+
+  const handleDrillthroughCell = useCallback(
+    async ({
+      rowPathKey,
+      colKey,
+      // valueSpecId isn't needed for the raw row query; it just helps the user locate the cell.
+    }: {
+      rowPathKey: string;
+      colKey: string | null;
+      valueSpecId: string;
+    }) => {
+      if (!sessionId) return;
+      if (variant !== "analysis") return;
+
+      const rowFields = normalizedPivotConfig.rows;
+      const rowValues = rowPathKey.split("\x1f");
+      if (rowValues.length !== rowFields.length) return;
+
+      const filterFields = normalizedPivotConfig.filters;
+      const filterSelectionsObj: Record<string, string[]> = {};
+      for (const f of filterFields) {
+        const sel = filterSelections[f];
+        if (!sel) continue;
+        const snap = filterDistinctSnapshotRef.current[f];
+        const selArr = Array.from(sel);
+        if (snap) {
+          const isAll = sel.size === snap.size && selArr.every((v) => snap.has(v));
+          if (isAll) continue;
+        }
+        filterSelectionsObj[f] = selArr;
+      }
+
+      const colField = normalizedPivotConfig.columns[0] ?? null;
+      const valueFields = normalizedPivotConfig.values.map((v) => v.field);
+
+      setDrillthrough({
+        loading: true,
+        error: null,
+        count: null,
+        rows: [],
+      });
+
+      try {
+        const resp = await pivotDrillthrough(sessionId, {
+          rowFields,
+          rowValues,
+          colField,
+          colKey,
+          filterFields,
+          filterSelections: Object.keys(filterSelectionsObj).length
+            ? filterSelectionsObj
+            : undefined,
+          valueFields,
+          limit: 200,
+        });
+        setDrillthrough({
+          loading: false,
+          error: null,
+          count: resp.count,
+          rows: resp.rows,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Drillthrough failed";
+        setDrillthrough({
+          loading: false,
+          error: msg,
+          count: null,
+          rows: [],
+        });
+      }
+    },
+    [
+      sessionId,
+      variant,
+      normalizedPivotConfig,
+      filterSelections,
+      filterDistinctSnapshotRef,
+      pivotDrillthrough,
+    ]
+  );
 
   const handlePivotConfigChange = useCallback(
     (next: PivotUiConfig) =>
@@ -583,7 +822,7 @@ export function DataPreviewTable({
   const columns = flatColumnKeys;
 
   const showPivotChrome =
-    variant === 'analysis' && canPivot && analysisView === 'pivot' && pivotModel;
+    variant === 'analysis' && canPivot && analysisView === 'pivot' && effectivePivotModel;
 
   return (
     <Card className="p-4 mt-2 overflow-hidden border-border/60 shadow-sm bg-gradient-to-br from-card to-card/95">
@@ -614,6 +853,15 @@ export function DataPreviewTable({
                   onClick={() => setAnalysisView('flat')}
                 >
                   Flat table
+                </Button>
+                <Button
+                  type="button"
+                  variant={analysisView === 'chart' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="text-xs h-8 px-3"
+                  onClick={() => setAnalysisView('chart')}
+                >
+                  Generate chart
                 </Button>
               </div>
             )}
@@ -658,22 +906,166 @@ export function DataPreviewTable({
               : undefined
           }
         >
-          {showPivotChrome && pivotModel ? (
-            normalizedPivotConfig.values.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-6 text-center border rounded-lg border-dashed">
-                Add at least one field to <strong>Values</strong> in Pivot fields.
-              </p>
-            ) : (
-              <PivotGrid
-                model={pivotModel}
-                flatRows={pivotFlatRows}
-                onToggleCollapse={togglePivotCollapse}
-                temporalFacetColumns={temporalFacetColumns}
+            {analysisView === 'chart' ? (
+              <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 px-4 py-8 text-center">
+                <p className="text-sm font-medium text-foreground">Chart generation</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Choose this option to generate a chart from your pivot configuration.
+                </p>
+              </div>
+            ) : showPivotChrome && effectivePivotModel ? (
+              normalizedPivotConfig.values.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center border rounded-lg border-dashed">
+                  Add at least one field to <strong>Values</strong> in Pivot fields.
+                </p>
+              ) : sessionSampleError && !effectivePivotModel ? (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-6 text-sm text-destructive text-center">
+                  Pivot unavailable: {sessionSampleError}
+                </div>
+              ) : serverPivotLoading ? (
+                <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-6 text-sm text-muted-foreground text-center">
+                  Computing pivot…
+                </div>
+              ) : serverPivotError ? (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-6 text-sm text-destructive text-center">
+                  Pivot failed: {serverPivotError}
+                </div>
+              ) : serverPivotMeta?.rowCount === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center border rounded-lg border-dashed">
+                  No rows match current filters (<code>no_rows_after_filters</code>).
+                </p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Top N</span>
+                      <input
+                        type="number"
+                        min={1}
+                        className="w-20 rounded border border-border/60 bg-background px-2 py-1 text-xs"
+                        value={pivotTopN ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value.trim();
+                          if (!v) {
+                            setPivotTopN(null);
+                            return;
+                          }
+                          const n = Number(v);
+                          setPivotTopN(Number.isFinite(n) && n > 0 ? n : null);
+                        }}
+                        placeholder="(off)"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Show</span>
+                      <select
+                        className="rounded border border-border/60 bg-background px-2 py-1 text-xs"
+                        value={showValuesAs}
+                        onChange={(e) => setShowValuesAs(e.target.value as PivotShowValuesAsMode)}
+                      >
+                        <option value="raw">Raw</option>
+                        <option value="percentOfColumnTotal">% of column total</option>
+                      </select>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={showSubtotals}
+                        onChange={(e) => setShowSubtotals(e.target.checked)}
+                      />
+                      Subtotals
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={showGrandTotal}
+                        onChange={(e) => setShowGrandTotal(e.target.checked)}
+                      />
+                      Grand total
+                    </label>
+                  </div>
+
+                  <PivotGrid
+                    model={pivotModelForRender as any}
+                    flatRows={pivotFlatRows}
+                    onToggleCollapse={togglePivotCollapse}
+                    temporalFacetColumns={temporalFacetColumns}
                     rowSort={normalizedPivotConfig.rowSort}
                     onRowSortChange={handleRowSortChange}
-              />
-            )
-          ) : (
+                    showValuesAs={showValuesAs}
+                    onDrillthroughCell={handleDrillthroughCell}
+                  />
+
+                  {drillthrough && (
+                    <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div>
+                          <div className="text-xs text-muted-foreground">
+                            Drillthrough rows
+                          </div>
+                          <div className="text-sm font-semibold">
+                            {drillthrough.loading
+                              ? 'Loading...'
+                              : `${drillthrough.count ?? 0} rows`}
+                          </div>
+                          {drillthrough.error && (
+                            <div className="text-xs text-destructive mt-1">
+                              {drillthrough.error}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="text-xs rounded border border-border/60 px-2 py-1 hover:bg-muted"
+                          onClick={() => setDrillthrough(null)}
+                        >
+                          Close
+                        </button>
+                      </div>
+
+                      {drillthrough.loading ? null : (
+                        <div className="overflow-x-auto max-h-[260px]">
+                          <table className="w-full border-collapse text-xs">
+                            <thead className="sticky top-0 bg-muted/30 z-10">
+                              <tr>
+                                {drillthrough.rows[0]
+                                  ? Object.keys(drillthrough.rows[0]!).map((c) => (
+                                      <th
+                                        key={c}
+                                        className="text-left px-2 py-1 border-b border-border/60 whitespace-nowrap"
+                                      >
+                                        {c}
+                                      </th>
+                                    ))
+                                  : null}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {drillthrough.rows.slice(0, 50).map((r, idx) => (
+                                <tr key={idx} className="border-b border-border/40">
+                                  {drillthrough.rows[0]
+                                    ? Object.keys(drillthrough.rows[0]!).map((c) => (
+                                        <td key={c} className="px-2 py-1 whitespace-nowrap">
+                                          {String(
+                                            (r as any)[c] ?? ''
+                                          )}
+                                        </td>
+                                      ))
+                                    : null}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )
+            ) : (
             <div
               className={
                 variant === 'analysis' && canPivot
@@ -793,7 +1185,7 @@ export function DataPreviewTable({
                         onConfigChange={handlePivotConfigChange}
                         filterSelections={filterSelections}
                         onFilterSelectionsChange={setFilterSelections}
-                        data={data as Record<string, unknown>[]}
+                        data={pivotRows as Record<string, unknown>[]}
                         numericColumns={numericColumns}
                         temporalFacetColumns={temporalFacetColumns}
                       />
@@ -806,7 +1198,8 @@ export function DataPreviewTable({
         </AnimatePresence>
       </div>
 
-      {data.length > maxRows && !(variant === 'analysis' && canPivot && analysisView === 'pivot') && (
+      {data.length > maxRows &&
+        !(variant === 'analysis' && canPivot && analysisView !== 'flat') && (
         <p className="text-xs text-muted-foreground mt-2">
           Showing {maxRows} of {data.length} rows
         </p>

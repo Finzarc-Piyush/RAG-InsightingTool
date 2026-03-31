@@ -338,6 +338,10 @@ const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
     "IMPORTANT: Use only tool names exactly as listed in the Tools section (no invented names).",
   column_not_in_schema:
     "IMPORTANT: Every column in the plan must match a name from the Dataset columns line exactly (including parentheses and spacing).",
+  invalid_aggregation_alias:
+    "IMPORTANT: For execute_query_plan aggregations, alias must differ from source column. Keep schema column in aggregations[].column and use a distinct human-readable aggregations[].alias if needed.",
+  ambiguous_column_resolution:
+    "IMPORTANT: Use the AUTHORITATIVE columns for this question exactly. Do not invent near-miss names; use only exact schema/canonical names in groupBy/aggregations/filters/sort.",
   bad_depends_on:
     "IMPORTANT: Each dependsOn must reference another step id from the same plan.",
   dependency_cycle:

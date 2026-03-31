@@ -10,9 +10,15 @@ import { sessionsApi } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { logger } from '@/lib/logger';
 import { normalizeDatasetSystemMessages } from './modules/uploadSystemMessages';
-import { parseLocalPreview, type LocalPreviewResult } from '@/lib/localPreviewParser';
+import {
+  inspectLocalWorkbookSheets,
+  parseLocalPreview,
+  type LocalPreviewResult,
+} from '@/lib/localPreviewParser';
 import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages';
 import type { ChartSpec } from '@/shared/schema';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -56,6 +62,9 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   const [previewSource, setPreviewSource] = useState<PreviewSource>('none');
   const [localPreview, setLocalPreview] = useState<LocalPreviewResult | null>(null);
   const [uploadStartError, setUploadStartError] = useState<string | null>(null);
+  const [pendingSheetFile, setPendingSheetFile] = useState<File | null>(null);
+  const [sheetChoices, setSheetChoices] = useState<string[]>([]);
+  const [selectedSheetName, setSelectedSheetName] = useState<string>('');
   const localPreviewRequestIdRef = useRef(0);
   const composerDraftIdRef = useRef(0);
   const [startMode, setStartMode] = useState<'choice' | 'snowflake'>('choice');
@@ -163,59 +172,70 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     [setMessages]
   );
 
-  const handleStartUploadFromChoice = useCallback(
-    async (file: File) => {
-      const requestId = Date.now();
-      localPreviewRequestIdRef.current = requestId;
-      setIsUploadStarting(true);
-      setPreviewSource('local');
-      setUploadStartError(null);
-      setIsDatasetPreviewLoading(true);
-      setMessages([
-        {
-          role: 'assistant',
-          content: `${DATASET_PREVIEW_LOADING_CONTENT} (Local preview shown while server prepares authoritative preview.)`,
-          charts: [],
-          insights: [],
-          timestamp: Date.now(),
-        },
-      ]);
-      setFileName(file.name);
-      setSampleRows([]);
-      setColumns([]);
-      setNumericColumns([]);
-      setDateColumns([]);
-      setTemporalFacetColumns([]);
-      setTotalRows(0);
-      setTotalColumns(0);
-      try {
-        const parsed = await parseLocalPreview(file);
-        if (localPreviewRequestIdRef.current !== requestId) return;
-        setLocalPreview(parsed);
-        setSampleRows(parsed.rows);
-        setColumns(parsed.columns);
-        setNumericColumns(parsed.numericColumns);
-        setDateColumns(parsed.dateColumns);
-        setTotalRows(parsed.rowCountEstimate || parsed.rows.length);
-        setTotalColumns(parsed.columns.length);
-      } catch (e) {
-        logger.warn('Local preview parse failed; continuing with upload', e);
+  const handleStartUploadFromChoice = async (file: File) => {
+      const lowerFileName = file.name.toLowerCase();
+      if (lowerFileName.endsWith('.xlsx') || lowerFileName.endsWith('.xls')) {
+        try {
+          const workbookInfo = await inspectLocalWorkbookSheets(file);
+          if (workbookInfo.requiresSelection) {
+            setPendingSheetFile(file);
+            setSheetChoices(workbookInfo.sheetNames);
+            setSelectedSheetName(workbookInfo.selectedSheetName || workbookInfo.sheetNames[0] || '');
+            return;
+          }
+        } catch (e) {
+          logger.warn('Workbook inspection failed; continuing upload with server-side checks', e);
+        }
       }
-      handleFileSelect(file);
-    },
-    [
-      handleFileSelect,
-      setColumns,
-      setDateColumns,
-      setFileName,
-      setMessages,
-      setNumericColumns,
-      setSampleRows,
-      setTemporalFacetColumns,
-      setTotalColumns,
-      setTotalRows,
-    ]
-  );
+      await beginUploadWithSheetSelection(file);
+    };
+
+  async function beginUploadWithSheetSelection(file: File, sheetName?: string) {
+    const requestId = Date.now();
+    localPreviewRequestIdRef.current = requestId;
+    setIsUploadStarting(true);
+    setPreviewSource('local');
+    setUploadStartError(null);
+    setIsDatasetPreviewLoading(true);
+    setMessages([
+      {
+        role: 'assistant',
+        content: `${DATASET_PREVIEW_LOADING_CONTENT} (Local preview shown while server prepares authoritative preview.)`,
+        charts: [],
+        insights: [],
+        timestamp: Date.now(),
+      },
+    ]);
+    setFileName(file.name);
+    setSampleRows([]);
+    setColumns([]);
+    setNumericColumns([]);
+    setDateColumns([]);
+    setTemporalFacetColumns([]);
+    setTotalRows(0);
+    setTotalColumns(0);
+    try {
+      const parsed = await parseLocalPreview(file, { sheetName });
+      if (localPreviewRequestIdRef.current !== requestId) return;
+      setLocalPreview(parsed);
+      setSampleRows(parsed.rows);
+      setColumns(parsed.columns);
+      setNumericColumns(parsed.numericColumns);
+      setDateColumns(parsed.dateColumns);
+      setTotalRows(parsed.rowCountEstimate || parsed.rows.length);
+      setTotalColumns(parsed.columns.length);
+    } catch (e) {
+      logger.warn('Local preview parse failed; continuing with upload', e);
+    }
+    handleFileSelect(file, { sheetName });
+  }
+
+  useEffect(() => {
+    if (!pendingSheetFile) return;
+    if (!selectedSheetName && sheetChoices.length > 0) {
+      setSelectedSheetName(sheetChoices[0]);
+    }
+  }, [pendingSheetFile, selectedSheetName, sheetChoices]);
 
   const handleUploadNewWithLocalReset = useCallback(() => {
     localPreviewRequestIdRef.current += 1;
@@ -476,26 +496,96 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     }
   }, [resetTrigger, sessionId, loadedSessionData]);
 
+  const sheetSelectorDialog = (
+    <Dialog
+      open={!!pendingSheetFile}
+      onOpenChange={(open) => {
+        if (!open) {
+          setPendingSheetFile(null);
+          setSheetChoices([]);
+          setSelectedSheetName('');
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Select worksheet</DialogTitle>
+          <DialogDescription>
+            This workbook has multiple sheets. Choose the sheet to preview and ingest.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          {sheetChoices.map((sheet) => (
+            <Button
+              key={sheet}
+              type="button"
+              variant={selectedSheetName === sheet ? 'default' : 'outline'}
+              onClick={() => setSelectedSheetName(sheet)}
+              className="justify-start"
+            >
+              {sheet}
+            </Button>
+          ))}
+        </div>
+        {!selectedSheetName && pendingSheetFile ? (
+          <p className="text-sm text-muted-foreground">Please select a worksheet to continue.</p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setPendingSheetFile(null);
+              setSheetChoices([]);
+              setSelectedSheetName('');
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={!selectedSheetName}
+            onClick={() => {
+              if (!pendingSheetFile || !selectedSheetName) return;
+              const file = pendingSheetFile;
+              const chosenSheet = selectedSheetName;
+              setPendingSheetFile(null);
+              setSheetChoices([]);
+              setSelectedSheetName('');
+              void beginUploadWithSheetSelection(file, chosenSheet);
+            }}
+          >
+            Continue
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   // Don't show start/upload/snowflake if we're loading a session (even if sessionId isn't set yet)
   // Only show when there's no session data being loaded AND no sessionId
   if (!sessionId && !loadedSessionData && previewSource !== 'local') {
     if (startMode === 'choice') {
       return (
-        <StartAnalysisView
-          onSelectUpload={handleStartUploadFromChoice}
-          onSelectSnowflake={() => setStartMode('snowflake')}
-          uploadDialogTrigger={resetTrigger > 0 ? resetTrigger : 0}
-          isUploadStarting={isUploadStarting}
-        />
+        <>
+          <StartAnalysisView
+            onSelectUpload={handleStartUploadFromChoice}
+            onSelectSnowflake={() => setStartMode('snowflake')}
+            uploadDialogTrigger={resetTrigger > 0 ? resetTrigger : 0}
+            isUploadStarting={isUploadStarting}
+          />
+          {sheetSelectorDialog}
+        </>
       );
     }
     if (startMode === 'snowflake') {
       return (
-        <SnowflakeImportFlow
-          onBack={() => setStartMode('choice')}
-          onImport={({ database, schema, tableName }) => snowflakeImportMutation.mutate({ database, schema, tableName })}
-          isImporting={snowflakeImportMutation.isPending}
-        />
+        <>
+          <SnowflakeImportFlow
+            onBack={() => setStartMode('choice')}
+            onImport={({ database, schema, tableName }) => snowflakeImportMutation.mutate({ database, schema, tableName })}
+            isImporting={snowflakeImportMutation.isPending}
+          />
+          {sheetSelectorDialog}
+        </>
       );
     }
   }
@@ -503,16 +593,19 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   // If we're loading a session but sessionId isn't set yet, show loading state
   if (!sessionId && loadedSessionData) {
     return (
-      <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
-        <div className="text-center max-w-md px-6">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Loading analysis</h3>
-          <p className="text-sm text-gray-600 mb-4">Preparing your data and insights...</p>
-          <div className="w-full bg-gray-200 rounded-full h-2">
-            <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '40%' }}></div>
+      <>
+        <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
+          <div className="text-center max-w-md px-6">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Loading analysis</h3>
+            <p className="text-sm text-gray-600 mb-4">Preparing your data and insights...</p>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '40%' }}></div>
+            </div>
           </div>
         </div>
-      </div>
+        {sheetSelectorDialog}
+      </>
     );
   }
 
@@ -570,6 +663,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onSendMessage={handleSendMessage}
         onDraftMessage={handleDraftMessageFromModal}
       />
+      {sheetSelectorDialog}
     </>
   );
 }

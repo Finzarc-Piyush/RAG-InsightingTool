@@ -72,8 +72,13 @@ export async function resolveAnswerQuestionDataLoad(params: {
     }
   }
 
-  // Agentic loop: always retain full schema columns in memory so follow-ups are not missing dimensions.
-  if (isAgenticLoopEnabled() && chatDocument.dataSummary?.columns?.length) {
+  // Agentic loop fallback: if no authoritative precomputed columns were provided,
+  // widen to full schema to avoid missing dimensions on follow-ups.
+  if (
+    isAgenticLoopEnabled() &&
+    !precomputed &&
+    chatDocument.dataSummary?.columns?.length
+  ) {
     const allNames = chatDocument.dataSummary.columns.map((c) => c.name);
     requiredColumns = Array.from(new Set([...requiredColumns, ...allNames]));
   }

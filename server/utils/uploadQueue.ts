@@ -5,6 +5,7 @@
 
 import type { ChartSpec, Insight, SessionAnalysisContext } from '../shared/schema.js';
 import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
+import { ColumnarStorageService } from '../lib/columnarStorage.js';
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -30,6 +31,7 @@ interface UploadJob {
   fileName: string;
   fileBuffer?: Buffer;
   mimeType?: string;
+  sheetName?: string;
   blobInfo?: { blobUrl: string; blobName: string };
   snowflakeImport?: SnowflakeImportConfig;
   status:
@@ -77,6 +79,7 @@ class UploadQueue {
     fileName: string,
     fileBuffer: Buffer,
     mimeType: string,
+    sheetName?: string,
     blobInfo?: { blobUrl: string; blobName: string }
   ): Promise<string> {
     if (this.jobs.size >= this.MAX_QUEUE_SIZE) {
@@ -92,6 +95,7 @@ class UploadQueue {
       fileName,
       fileBuffer,
       mimeType,
+      sheetName,
       blobInfo,
       status: 'pending',
       progress: 0,
@@ -276,7 +280,7 @@ class UploadQueue {
           job.progress = 5;
           
           // Parse file first to get summary (needed for chunking)
-          const tempData = await parseFile(job.fileBuffer, job.fileName);
+          const tempData = await parseFile(job.fileBuffer, job.fileName, { sheetName: job.sheetName });
           if (tempData.length === 0) {
             throw new Error('No data found in file');
           }
@@ -372,7 +376,7 @@ class UploadQueue {
         job.status = 'parsing';
         job.progress = 15;
         try {
-          data = await parseFile(job.fileBuffer, job.fileName);
+          data = await parseFile(job.fileBuffer, job.fileName, { sheetName: job.sheetName });
           const parseDiagnostics = getAndClearLastCsvParseDiagnostics();
           if (parseDiagnostics) {
             const mismatchWarnRatio = Number(process.env.CSV_MISMATCH_WARN_RATIO) || 0.015;
@@ -443,6 +447,7 @@ class UploadQueue {
         ...previewDoc,
         dataSummary: previewSummary,
         sampleRows: previewSample,
+        selectedSheetName: job.sheetName,
         enrichmentStatus: 'in_progress',
         lastUpdatedAt: Date.now(),
       });
@@ -732,7 +737,26 @@ class UploadQueue {
       }
       warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
-      // Step 9: Save to database
+      // Step 9: Materialize authoritative DuckDB table for all upload paths.
+      job.status = 'saving';
+      job.progress = 88;
+      let columnarReadyMarker: string | undefined;
+      try {
+        const storage = new ColumnarStorageService({ sessionId: job.sessionId });
+        await storage.initialize();
+        try {
+          await storage.materializeAuthoritativeDataTable(data, { tableName: 'data' });
+          columnarReadyMarker = storagePath || `materialized:${job.sessionId}`;
+        } finally {
+          await storage.close();
+        }
+      } catch (materializeError) {
+        const errorMsg =
+          materializeError instanceof Error ? materializeError.message : String(materializeError);
+        throw new Error(`Failed to materialize session DuckDB data table: ${errorMsg}`);
+      }
+
+      // Step 10: Save to database
       job.status = 'saving';
       job.progress = 90;
       job.enrichmentStep = 'persisting';
@@ -796,7 +820,8 @@ class UploadQueue {
             rawData: shouldStoreRawData ? data : [],
             sampleRows,
             datasetProfile,
-            columnarStoragePath: useLargeFileProcessing ? storagePath : undefined,
+            selectedSheetName: job.sheetName ?? existingSession.selectedSheetName,
+            columnarStoragePath: columnarReadyMarker,
             chunkIndexBlob: chunkIndexBlob,
             columnStatistics,
             dataSummaryStatistics,
@@ -840,6 +865,8 @@ class UploadQueue {
           chatDocument = await updateChatDocument({
             ...chatDocument,
             enrichmentStatus: 'complete',
+            selectedSheetName: job.sheetName,
+            columnarStoragePath: columnarReadyMarker,
             lastUpdatedAt: Date.now(),
           });
         }

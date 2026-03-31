@@ -107,6 +107,14 @@ const getSuggestions = (messages: Message[], aiSuggestions?: string[]) => {
   return [];
 };
 
+function userExplicitlyAskedForColumnsOrPreview(text: string): boolean {
+  const q = String(text || '').toLowerCase();
+  return (
+    /\b(columns?|column names?|schema|field list|show fields)\b/.test(q) ||
+    /\b(preview|sample rows?|show rows?|show data|data preview)\b/.test(q)
+  );
+}
+
 export function ChatInterface({ 
   messages, 
   onSendMessage, 
@@ -741,6 +749,36 @@ export function ChatInterface({
             const carriesDatasetPreview =
               previewAnchorKey === `${message.timestamp}-${message.role}` &&
               hasDatasetSchema;
+            const allowDatasetPreviewInAnswer = (() => {
+              if (message.role !== 'assistant') return false;
+              if (isDatasetPreviewSystemMessage(message) || isDatasetEnrichmentSystemMessage(message)) {
+                return true;
+              }
+              const scanFrom = originalIndex >= 0 ? originalIndex - 1 : idx - 1;
+              for (let i = scanFrom; i >= 0; i--) {
+                const m = messages[i];
+                if (!m) continue;
+                if (m.role === 'user') {
+                  return userExplicitlyAskedForColumnsOrPreview(m.content);
+                }
+              }
+              return false;
+            })();
+            const allowPivotAutoShow = (() => {
+              if (message.role !== 'assistant') return false;
+              if (isDatasetPreviewSystemMessage(message) || isDatasetEnrichmentSystemMessage(message)) {
+                return false;
+              }
+              const serverHint = Boolean((message as Message & { pivotAutoShow?: boolean }).pivotAutoShow);
+              // Smart auto-show: aggregated intermediate/final tabular payloads.
+              const hasPreviewRows =
+                Array.isArray((message as Message & { preview?: unknown[] }).preview) &&
+                ((message as Message & { preview?: unknown[] }).preview?.length ?? 0) > 0;
+              const hasSummaryRows =
+                Array.isArray((message as Message & { summary?: unknown[] }).summary) &&
+                ((message as Message & { summary?: unknown[] }).summary?.length ?? 0) > 0;
+              return serverHint || hasPreviewRows || hasSummaryRows;
+            })();
             return (
               <div key={`${message.timestamp}-${message.role}-${idx}-wrap`}>
                 <MessageBubble
@@ -762,13 +800,19 @@ export function ChatInterface({
                   thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
                   thinkingPanelStreaming={false}
                   onSuggestedQuestionClick={applySuggestionToComposer}
-                  showDatasetEnrichmentLoader={isEnrichmentMessage && !isDatasetPreviewLoading}
+                  showDatasetEnrichmentLoader={
+                    (isEnrichmentMessage || isDatasetPreviewSystemMessage(message)) &&
+                    isDatasetEnriching &&
+                    !isDatasetPreviewLoading
+                  }
                   enrichmentPhase={enrichmentPoll?.enrichmentPhase}
                   enrichmentStep={enrichmentPoll?.enrichmentStep}
                   uploadProgress={enrichmentPoll?.uploadProgress}
                   enrichmentStartedAtMs={enrichmentStartedAtMs}
                   preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
+                  allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
+                  allowPivotAutoShow={allowPivotAutoShow}
                   ref={isLastMessage ? lastMessageRef : undefined}
                 />
                 {showLiveThinkingStrip && (

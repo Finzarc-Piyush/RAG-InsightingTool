@@ -82,6 +82,8 @@ export interface ChatDocument {
   permanentContext?: string; // Permanent context provided by user during upload, sent to AI with each message
   /** DuckDB/columnar path for large uploads (not in Cosmos payload). */
   columnarStoragePath?: string;
+  /** Selected Excel worksheet name for this upload session. */
+  selectedSheetName?: string;
   chunkIndexBlob?: { // Chunk index for chunked files (faster querying)
     blobName: string;
     totalChunks: number;

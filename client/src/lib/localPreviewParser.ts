@@ -14,6 +14,12 @@ export interface LocalPreviewResult {
   parseError?: string;
 }
 
+export interface LocalWorkbookSheetInfo {
+  sheetNames: string[];
+  selectedSheetName?: string;
+  requiresSelection: boolean;
+}
+
 const MAX_PREVIEW_ROWS = 100;
 const MAX_COLUMNS = 200;
 
@@ -114,15 +120,31 @@ async function parseCsv(file: File): Promise<LocalPreviewResult> {
   });
 }
 
-async function parseXlsx(file: File): Promise<LocalPreviewResult> {
+export async function inspectLocalWorkbookSheets(file: File): Promise<LocalWorkbookSheetInfo> {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array", dense: true, cellDates: false });
+  const sheetNames = workbook.SheetNames || [];
+  return {
+    sheetNames,
+    selectedSheetName: sheetNames[0],
+    requiresSelection: sheetNames.length > 1,
+  };
+}
+
+async function parseXlsx(file: File, selectedSheetName?: string): Promise<LocalPreviewResult> {
   try {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array", dense: true, cellDates: false });
-    const firstSheet = workbook.SheetNames[0];
-    if (!firstSheet) {
+    const workbookInfo = await inspectLocalWorkbookSheets(file);
+    const { sheetNames } = workbookInfo;
+    if (sheetNames.length === 0) {
       return fromHeadersOnly(file.name, [], "No sheet found in workbook");
     }
-    const ws = workbook.Sheets[firstSheet];
+    const sheetName = selectedSheetName || sheetNames[0];
+    if (!sheetNames.includes(sheetName)) {
+      return fromHeadersOnly(file.name, [], `Sheet "${sheetName}" not found in workbook`);
+    }
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array", dense: true, cellDates: false });
+    const ws = workbook.Sheets[sheetName];
     const grid = XLSX.utils.sheet_to_json<(string | number | null)[]>(ws, {
       header: 1,
       raw: false,
@@ -161,13 +183,18 @@ async function parseXlsx(file: File): Promise<LocalPreviewResult> {
   }
 }
 
-export async function parseLocalPreview(file: File): Promise<LocalPreviewResult> {
+export async function parseLocalPreview(
+  file: File,
+  opts?: {
+    sheetName?: string;
+  }
+): Promise<LocalPreviewResult> {
   const lower = file.name.toLowerCase();
   if (lower.endsWith(".csv")) {
     return parseCsv(file);
   }
   if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-    return parseXlsx(file);
+    return parseXlsx(file, opts?.sheetName);
   }
   return fromHeadersOnly(file.name, [], "Unsupported local preview format");
 }

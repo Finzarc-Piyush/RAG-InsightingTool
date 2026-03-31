@@ -3,6 +3,7 @@ import multer from "multer";
 import { uploadQueue } from "../utils/uploadQueue.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
+import { getExcelSheetNames } from "../lib/fileParser.js";
 
 /**
  * Upload file endpoint - now uses async queue processing
@@ -29,6 +30,28 @@ export const uploadFile = async (
 
     // Generate a unique session ID for this upload
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const requestedSheetName =
+      typeof req.body?.sheetName === "string" ? req.body.sheetName.trim() : undefined;
+    const ext = req.file.originalname.split(".").pop()?.toLowerCase();
+    const isExcel = ext === "xlsx" || ext === "xls";
+
+    if (isExcel) {
+      const sheetNames = getExcelSheetNames(req.file.buffer);
+      if (sheetNames.length > 1 && !requestedSheetName) {
+        return res.status(400).json({
+          error: "This workbook has multiple sheets. Please select a sheet before upload.",
+          code: "SHEET_SELECTION_REQUIRED",
+          sheetNames,
+        });
+      }
+      if (requestedSheetName && !sheetNames.includes(requestedSheetName)) {
+        return res.status(400).json({
+          error: `Selected sheet "${requestedSheetName}" does not exist in workbook.`,
+          code: "INVALID_SHEET_NAME",
+          sheetNames,
+        });
+      }
+    }
 
     // Enqueue immediately; placeholder/blob best-effort work happens in queue worker
     const jobId = await uploadQueue.enqueue(
@@ -36,7 +59,8 @@ export const uploadFile = async (
       username,
       req.file.originalname,
       req.file.buffer,
-      req.file.mimetype
+      req.file.mimetype,
+      requestedSheetName
     );
 
     console.log(`📤 Upload job enqueued: ${jobId} for session ${sessionId}`);

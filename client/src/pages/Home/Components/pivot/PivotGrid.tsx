@@ -16,6 +16,8 @@ function formatCell(n: number): string {
   return formatAnalysisNumber(n);
 }
 
+export type PivotShowValuesAsMode = "raw" | "percentOfColumnTotal";
+
 export type PivotGridProps = {
   model: PivotModel;
   flatRows: PivotFlatRow[];
@@ -23,6 +25,12 @@ export type PivotGridProps = {
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   rowSort?: PivotUiConfig["rowSort"];
   onRowSortChange?: (byValueSpecId: string) => void;
+  showValuesAs?: PivotShowValuesAsMode;
+  onDrillthroughCell?: (params: {
+    rowPathKey: string;
+    colKey: string | null;
+    valueSpecId: string;
+  }) => void;
 };
 
 export function PivotGrid({
@@ -32,6 +40,8 @@ export function PivotGrid({
   temporalFacetColumns = [],
   rowSort,
   onRowSortChange,
+  showValuesAs = "raw",
+  onDrillthroughCell,
 }: PivotGridProps) {
   const { colField, colKeys, valueSpecs, columnFieldTruncated } = model;
   const hasMatrix = Boolean(colField && colKeys.length > 0);
@@ -48,6 +58,22 @@ export function PivotGrid({
 
   const valueHeader = (spec: (typeof valueSpecs)[0]) =>
     `${fieldLabel(spec.field, temporalFacetColumns)} (${spec.agg})`;
+  const grandTotalForCell = (ck: string | null, specId: string): number => {
+    if (!hasMatrix || !ck) {
+      return model.tree.grandTotal.flatValues?.[specId] ?? 0;
+    }
+    return model.tree.grandTotal.matrixValues?.[ck]?.[specId] ?? 0;
+  };
+
+  const displayValue = (raw: number, ck: string | null, specId: string): string => {
+    if (showValuesAs === "raw") return formatCell(raw);
+    if (showValuesAs === "percentOfColumnTotal") {
+      const denom = grandTotalForCell(ck, specId);
+      const pct = denom ? (raw / denom) * 100 : 0;
+      return `${formatCell(pct)}%`;
+    }
+    return formatCell(raw);
+  };
 
   if (matrixColumnsEmpty) {
     return (
@@ -218,8 +244,23 @@ export function PivotGrid({
                             'px-3 py-2 text-right tabular-nums text-gray-800 border-l border-gray-100/80 whitespace-nowrap',
                             isStrong && 'font-semibold'
                           )}
+                          onClick={() => {
+                            if (!onDrillthroughCell) return;
+                            if (row.kind !== 'data') return;
+                            onDrillthroughCell({
+                              rowPathKey: row.pathKey,
+                              colKey: ck,
+                              valueSpecId: spec.id,
+                            });
+                          }}
+                          role={row.kind === 'data' && onDrillthroughCell ? 'button' : undefined}
+                          aria-label={
+                            row.kind === 'data' && onDrillthroughCell
+                              ? 'Drill through this pivot cell'
+                              : undefined
+                          }
                         >
-                          {formatCell(v)}
+                          {displayValue(v, ck, spec.id)}
                         </td>
                       );
                     })
@@ -234,8 +275,23 @@ export function PivotGrid({
                           'px-3 py-2 text-right tabular-nums text-gray-800 border-l border-gray-100/80 whitespace-nowrap',
                           isStrong && 'font-semibold'
                         )}
+                        onClick={() => {
+                          if (!onDrillthroughCell) return;
+                          if (row.kind !== 'data') return;
+                          onDrillthroughCell({
+                            rowPathKey: row.pathKey,
+                            colKey: null,
+                            valueSpecId: spec.id,
+                          });
+                        }}
+                        role={row.kind === 'data' && onDrillthroughCell ? 'button' : undefined}
+                        aria-label={
+                          row.kind === 'data' && onDrillthroughCell
+                            ? 'Drill through this pivot cell'
+                            : undefined
+                        }
                       >
-                        {formatCell(v)}
+                        {displayValue(v, null, spec.id)}
                       </td>
                     );
                   })
