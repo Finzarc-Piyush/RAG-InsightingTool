@@ -328,13 +328,22 @@ export const useHomeMutations = ({
         if (st.previewReady || st.status === 'preview_ready') {
           upsertPreviewSystemMessage();
           const fastPathState = applyPreviewFromStatus(st);
+          let hydratedSession: Record<string, any> | null = null;
           if (fastPathState !== 'full') {
-            await hydrateSessionWithRetry(sessionId, {
+            hydratedSession = await hydrateSessionWithRetry(sessionId, {
               retries: fastPathState === 'partial' ? 1 : 2,
               syncMessages: true,
             });
           }
-          setIsDatasetPreviewLoading?.(false);
+
+          // Only stop the preview loading state once we actually have sample
+          // rows for display, or enrichment has completed.
+          const rowsNow =
+            previewStateRef.current.rows.length ||
+            (Array.isArray(hydratedSession?.sampleRows) ? hydratedSession.sampleRows.length : 0);
+          const stopPreviewLoading =
+            rowsNow > 0 || st.enrichmentStatus === 'complete' || st.status === 'completed';
+          setIsDatasetPreviewLoading?.(stopPreviewLoading);
           const enriching =
             !st.understandingReady &&
             st.enrichmentStatus === 'pending' ||

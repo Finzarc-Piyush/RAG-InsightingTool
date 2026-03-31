@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { downloadModifiedDataset } from '@/lib/api';
+import { downloadModifiedDataset, fetchSessionSampleRows } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
-import { facetColumnHeaderLabelForColumn } from '@/lib/temporalFacetDisplay';
+import { facetColumnHeaderLabelForColumn, formatTemporalFacetValue } from '@/lib/temporalFacetDisplay';
 import {
   buildPivotModel,
   createInitialPivotConfig,
@@ -16,6 +16,7 @@ import {
   normalizePivotConfig,
   syncFilterSelectionsWithFilters,
 } from '@/lib/pivot';
+import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotUiConfig } from '@/lib/pivot/types';
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
@@ -93,11 +94,46 @@ export function DataPreviewTable({
     createInitialPivotConfig([], [], [], [])
   );
   const [filterSelections, setFilterSelections] = useState<FilterSelections>({});
+  /** Tracks distinct filter values seen on prior syncs so new values can merge into selections. */
+  const filterDistinctSnapshotRef = useRef<Record<string, Set<string>>>({});
   const [collapsedPivotGroups, setCollapsedPivotGroups] = useState<Set<string>>(
     () => new Set()
   );
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
   const [analysisView, setAnalysisView] = useState<'pivot' | 'flat'>('pivot');
+  /** Row-level rows from columnar store when sessionId is set (defense in depth vs aggregated-only preview). */
+  const [sessionSampleRows, setSessionSampleRows] = useState<
+    Record<string, unknown>[] | null
+  >(null);
+
+  useEffect(() => {
+    if (variant !== 'analysis' || !sessionId) {
+      setSessionSampleRows(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetchSessionSampleRows(sessionId, 2000);
+        if (!cancelled && Array.isArray(res.rows)) {
+          setSessionSampleRows(res.rows as Record<string, unknown>[]);
+        }
+      } catch {
+        if (!cancelled) setSessionSampleRows(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variant, sessionId]);
+
+  /** Prefer session sample for pivot when available; otherwise message preview rows. */
+  const pivotRows = useMemo((): Record<string, unknown>[] => {
+    const base = data ?? [];
+    if (variant !== 'analysis') return base;
+    if (sessionSampleRows && sessionSampleRows.length > 0) return sessionSampleRows;
+    return base;
+  }, [variant, data, sessionSampleRows]);
 
   // Schema-driven keys: used only for pivot config + “choose fields” UI.
   const schemaColumnKeys = useMemo(() => {
@@ -119,10 +155,10 @@ export function DataPreviewTable({
 
     // Defensive fallback: append any keys found in the preview rows that aren't
     // present in the schema list. This prevents regressions when payload/schema diverge.
-    if (Array.isArray(data) && data.length > 0) {
-      const limit = Math.min(data.length, 500);
+    if (Array.isArray(pivotRows) && pivotRows.length > 0) {
+      const limit = Math.min(pivotRows.length, 500);
       for (let i = 0; i < limit; i++) {
-        const row = data[i];
+        const row = pivotRows[i];
         if (!row) continue;
         for (const k of Object.keys(row)) {
           if (!accept(k)) continue;
@@ -134,7 +170,7 @@ export function DataPreviewTable({
     }
 
     return ordered;
-  }, [data, variant, schemaColumns]);
+  }, [pivotRows, variant, schemaColumns]);
 
   // Data-driven keys: used only for the analysis “Flat table” so we don’t show
   // columns that don’t actually exist in the current preview payload.
@@ -166,13 +202,13 @@ export function DataPreviewTable({
   const numericColumns = useMemo(() => {
     const schemaNumeric = numericColumnsProp?.length
       ? numericColumnsProp
-      : inferNumericColumns(data, schemaColumnKeys);
+      : inferNumericColumns(pivotRows, schemaColumnKeys);
 
-    if (!data?.length) return schemaNumeric;
+    if (!pivotRows?.length) return schemaNumeric;
 
     // Augment numeric measures discovered in the *actual preview payload*.
     // Some derived/renamed measures may not exist in schemaNumeric.
-    const inferredFromPreview = inferNumericColumns(data, flatColumnKeys);
+    const inferredFromPreview = inferNumericColumns(pivotRows, schemaColumnKeys);
 
     const seen = new Set<string>();
     const out: string[] = [];
@@ -188,16 +224,16 @@ export function DataPreviewTable({
     }
 
     return out;
-  }, [numericColumnsProp, data, schemaColumnKeys, flatColumnKeys]);
+  }, [numericColumnsProp, pivotRows, schemaColumnKeys]);
 
   const numericColumnsSet = useMemo(() => new Set(numericColumns), [numericColumns]);
 
   const numericCandidatesInPreview = useMemo(() => {
-    if (!data?.length) return [];
+    if (!pivotRows?.length) return [];
     const out: string[] = [];
     for (const col of numericColumns) {
       let found = false;
-      for (const row of data) {
+      for (const row of pivotRows) {
         const n = parseNumericCell(row[col]);
         if (n !== null) {
           found = true;
@@ -207,15 +243,15 @@ export function DataPreviewTable({
       if (found) out.push(col);
     }
     return out;
-  }, [data, numericColumns]);
+  }, [pivotRows, numericColumns]);
 
   const dimensionCandidatesInPreview = useMemo(() => {
-    if (!data?.length) return [];
+    if (!pivotRows?.length) return [];
     const out: string[] = [];
     for (const col of schemaColumnKeys) {
       if (numericColumnsSet.has(col)) continue;
       let nonBlankCount = 0;
-      for (const row of data) {
+      for (const row of pivotRows) {
         const v = row[col];
         if (v === null || v === undefined) continue;
         const s = String(v).trim();
@@ -226,10 +262,10 @@ export function DataPreviewTable({
       if (nonBlankCount > 0) out.push(col);
     }
     return out;
-  }, [data, schemaColumnKeys, numericColumnsSet]);
+  }, [pivotRows, schemaColumnKeys, numericColumnsSet]);
 
   const { defaultRowDim, defaultValueMeasures } = useMemo(() => {
-    if (!data?.length) {
+    if (!pivotRows?.length) {
       return { defaultRowDim: null as string | null, defaultValueMeasures: [] as string[] };
     }
 
@@ -244,7 +280,7 @@ export function DataPreviewTable({
 
       const uniques = new Set<string>();
       let nonBlank = 0;
-      for (const row of data) {
+      for (const row of pivotRows) {
         const v = row[col];
         if (v === null || v === undefined) continue;
         const s = String(v).trim();
@@ -283,7 +319,7 @@ export function DataPreviewTable({
     for (const col of candidates) {
       let numericCount = 0;
       let sumAbs = 0;
-      for (const row of data) {
+      for (const row of pivotRows) {
         const n = parseNumericCell(row[col]);
         if (n === null) continue;
         numericCount += 1;
@@ -309,7 +345,7 @@ export function DataPreviewTable({
       defaultValueMeasures: defaultValueMeasuresResolved,
     };
   }, [
-    data,
+    pivotRows,
     dimensionCandidatesInPreview,
     numericCandidatesInPreview,
     schemaColumnKeys,
@@ -335,6 +371,7 @@ export function DataPreviewTable({
       )
     );
     setFilterSelections({});
+    filterDistinctSnapshotRef.current = {};
     setCollapsedPivotGroups(new Set());
     setAnalysisView('pivot');
   }, [variant, pivotDataSignature]);
@@ -342,9 +379,14 @@ export function DataPreviewTable({
   useEffect(() => {
     if (variant !== 'analysis') return;
     setFilterSelections((prev) =>
-      syncFilterSelectionsWithFilters(data, pivotConfig.filters, prev)
+      syncFilterSelectionsWithFilters(
+        pivotRows as Record<string, unknown>[],
+        pivotConfig.filters,
+        prev,
+        filterDistinctSnapshotRef
+      )
     );
-  }, [variant, data, pivotConfig.filters, pivotDataSignature]);
+  }, [variant, pivotRows, pivotConfig.filters, pivotDataSignature]);
 
   const canPivot = useMemo(() => {
     if (variant !== 'analysis') return false;
@@ -356,10 +398,34 @@ export function DataPreviewTable({
     [schemaColumnKeys, pivotConfig]
   );
 
+  // Help debug: pivot fields present in schema but missing from preview row keys won't show data until rows include them.
+  useEffect(() => {
+    if (variant !== 'analysis' || !pivotRows?.length) return;
+    const sampleKeys = new Set<string>();
+    for (let i = 0; i < Math.min(pivotRows.length, 500); i++) {
+      const row = pivotRows[i];
+      if (!row) continue;
+      for (const k of Object.keys(row)) sampleKeys.add(k);
+    }
+    const pivotFields = [
+      ...normalizedPivotConfig.rows,
+      ...normalizedPivotConfig.columns,
+      ...normalizedPivotConfig.filters,
+    ];
+    for (const f of pivotFields) {
+      if (!sampleKeys.has(f)) {
+        logger.debug(
+          '[DataPreviewTable] Pivot field has no values in current preview rows:',
+          f
+        );
+      }
+    }
+  }, [variant, pivotRows, normalizedPivotConfig]);
+
   const pivotModel = useMemo(() => {
     if (variant !== 'analysis' || !canPivot || analysisView !== 'pivot') return null;
     return buildPivotModel(
-      data as Record<string, unknown>[],
+      pivotRows as Record<string, unknown>[],
       normalizedPivotConfig,
       normalizedPivotConfig.values,
       filterSelections
@@ -368,7 +434,7 @@ export function DataPreviewTable({
     variant,
     canPivot,
     analysisView,
-    data,
+    pivotRows,
     normalizedPivotConfig,
     filterSelections,
   ]);
@@ -428,12 +494,20 @@ export function DataPreviewTable({
     const out: Record<string, TemporalDisplayGrain> = { ...temporalDisplayGrainsByColumn };
     for (const col of dateColumns) {
       if (!out[col]) {
-        const vals = data.slice(0, 500).map((row) => row[col]);
+        const vals = pivotRows.slice(0, 500).map((row) => row[col]);
         out[col] = inferTemporalGrainFromSample(vals);
       }
     }
     return out;
-  }, [data, dateColumns, temporalDisplayGrainsByColumn]);
+  }, [pivotRows, dateColumns, temporalDisplayGrainsByColumn]);
+
+  const facetMetaByName = useMemo(() => {
+    const m: Record<string, TemporalFacetColumnMeta> = {};
+    for (const meta of temporalFacetColumns ?? []) {
+      m[meta.name] = meta;
+    }
+    return m;
+  }, [temporalFacetColumns]);
 
   const handleDownload = async (format: 'xlsx') => {
     if (!sessionId) {
@@ -466,6 +540,11 @@ export function DataPreviewTable({
   const renderFlatAnalysisCell = (col: string, raw: unknown): ReactNode => {
     if (raw === null || raw === undefined) {
       return <span className="text-muted-foreground italic">null</span>;
+    }
+    const facetMeta = facetMetaByName[col];
+    if (facetMeta) {
+      const formatted = formatTemporalFacetValue(raw, facetMeta.grain);
+      return formatted ?? String(raw);
     }
     if (dateColumns.includes(col)) {
       const g = resolvedGrainsByColumn[col];

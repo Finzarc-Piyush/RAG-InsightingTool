@@ -31,7 +31,14 @@ def round_numeric_values_to_2_decimals(data: List[Dict[str, Any]]) -> List[Dict[
                 # Round floats to 2 decimal places
                 rounded_row[key] = round(float(value), 2)
             elif isinstance(value, str):
-                # Try to convert string numbers to float and round
+                # Temporal facet keys (e.g. __tf_year__Order_Date) must remain
+                # categorical strings. Never coerce them to numbers (this can
+                # cause UI to render `2015` as `2,015`).
+                if key.startswith("__tf_"):
+                    rounded_row[key] = value
+                    continue
+
+                # Otherwise, try to convert string numbers to float and round.
                 try:
                     num_value = float(value)
                     if not np.isnan(num_value) and np.isfinite(num_value):
@@ -39,7 +46,7 @@ def round_numeric_values_to_2_decimals(data: List[Dict[str, Any]]) -> List[Dict[
                     else:
                         rounded_row[key] = value
                 except (ValueError, TypeError):
-                    # Not a number, keep as string
+                    # Not a number, keep as string.
                     rounded_row[key] = value
             else:
                 # Keep other types as-is (dates, booleans, etc.)

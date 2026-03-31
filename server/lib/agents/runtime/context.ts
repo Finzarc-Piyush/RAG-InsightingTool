@@ -94,8 +94,16 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const atMentionNote = ctx.question.includes("@")
     ? "\nThe user may prefix column names with @ (e.g. @Sales (Volume)); treat those as references to the exact schema column names listed above."
     : "";
+  const auth =
+    pre?.canonicalColumns?.length ?
+      `\nAUTHORITATIVE columns for this question (use these EXACT strings in execute_query_plan groupBy, aggregations, dimensionFilters, sort, and any tool args that name columns — unless get_schema_summary shows the headers differ): ${pre.canonicalColumns.join(", ")}`
+    : "";
+  const mapBlock =
+    pre?.columnMapping && Object.keys(pre.columnMapping).length > 0 ?
+      `\nPhrase → column: ${JSON.stringify(pre.columnMapping)}`
+    : "";
   const hints = pre
-    ? `\nUpstream analysis intent: ${pre.intentLabel}\nPreferred columns: ${pre.relevantColumns.join(", ") || "(none)"}\nUser intent summary: ${pre.userIntent}`
+    ? `${auth}${mapBlock}\nUpstream analysis intent: ${pre.intentLabel}\nPreferred columns: ${pre.relevantColumns.join(", ") || "(none)"}\nUser intent summary: ${pre.userIntent}`
     : "";
   const blocks = formatUserAndSessionJsonBlocks(ctx, {
     maxUserChars: 6000,

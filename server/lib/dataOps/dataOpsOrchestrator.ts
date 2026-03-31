@@ -13,12 +13,16 @@ import {
   applyTemporalFacetColumns,
   remapGroupByToTemporalFacet,
 } from '../temporalFacetColumns.js';
+import { coerceTemporalFacetKeysToStrings } from "../temporalFacetKeyNormalization.js";
 
 export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
 
 // Streaming configuration for large datasets
 const LARGE_DATASET_THRESHOLD = 50000; // 50k rows
 const BATCH_SIZE = 10000; // Process 10k rows at a time
+
+/** Max rows from the pre-aggregation / pre-transform input to send as chat preview for pivot UI (keeps dims like City). */
+const ROW_LEVEL_PREVIEW_MAX_ROWS = 500;
 
 /**
  * Get preview data from saved rawData (first 50 rows)
@@ -4100,41 +4104,31 @@ export async function executeDataOperation(
         const rowsBefore = result.rows_before;
         const rowsAfter = result.rows_after;
 
-        // Build description
-        const allAggColumns = intent.aggColumns || [];
-        const funcDesc = intent.aggFunc || 'sum';
-        const aggColCount = aggregatedData.length > 0 ? Object.keys(aggregatedData[0]).filter(k => k !== effectiveGroupBy && !k.includes('(Sum)') && !k.includes('(Avg)') && !k.includes('(Min)') && !k.includes('(Max)') && !k.includes('(Count)') && !k.endsWith('_count')).length : 0;
-        const numericColCount = Object.keys(aggregatedData[0] || {}).filter(k => k.includes('(Sum)') || k.includes('(Avg)') || k.includes('(Min)') || k.includes('(Max)') || k.includes('(Count)')).length;
-        const groupLabel =
-          effectiveGroupBy !== groupBy
-            ? `${effectiveGroupBy} (calendar bucket from "${groupBy}")`
-            : effectiveGroupBy;
-        let description = `Aggregated data by "${groupLabel}" using ${funcDesc} for ${numericColCount} numeric column${numericColCount === 1 ? '' : 's'} (excluding ID and string columns)`;
+        // Defensive: temporal facet bucket keys (e.g. __tf_year__...) must remain
+        // categorical strings. If any upstream step coerces them to numbers,
+        // the UI may format them like measures (e.g. `2015` -> `2,015`).
+        coerceTemporalFacetKeysToStrings(aggregatedData);
 
-        // Save aggregated data to session (this changes the data structure permanently)
-        // This saves the transformed data to blob storage in JSON format and updates the session document
-        // All subsequent operations will use this aggregated data instead of the original data
-        const saveResult = await saveModifiedData(
-          sessionId,
-          aggregatedData,
-          'aggregate',
-          description,
-          sessionDoc
-        );
+        const numericColCount = Object.keys(aggregatedData[0] || {}).filter(k => k.includes('(Sum)') || k.includes('(Avg)') || k.includes('(Min)') || k.includes('(Max)') || k.includes('(Count)')).length;
+
+        // Do not persist aggregated-only tables: they drop non-grouped dimensions (e.g. City) and would
+        // clobber the session row-level dataset. Charts / answer use `data` (aggregated); chat preview uses
+        // a row-level slice so the analysis pivot can add dimensions from the original facts.
 
         let answer =
           effectiveGroupBy !== groupBy
             ? `✅ I've created a new aggregated table grouped by calendar bucket column "${effectiveGroupBy}" (from date column "${groupBy}").`
             : `✅ I've created a new aggregated table grouped by "${effectiveGroupBy}".`;
         answer += ` Aggregated ${numericColCount} numeric column${numericColCount === 1 ? '' : 's'} (excluding ID columns and string columns).`;
-        answer += ` The new table has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}) and has been saved to blob storage.`;
+        answer += ` The result has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}).`;
+        answer += ` Your full dataset in this session is unchanged so you can explore other dimensions in the pivot.`;
         if (intent.orderByColumn) {
           answer += ` Results are sorted by ${intent.orderByColumn} ${intent.orderByDirection === 'desc' ? 'descending' : 'ascending'}.`;
         }
 
-        // For aggregation, always show the aggregated data (first 50 rows)
-        // Don't try to get from CosmosDB rawData as it might be empty for large datasets
-        const previewData = aggregatedData.length > 0 ? aggregatedData.slice(0, 50) : [];
+        // Row-level preview (input to aggregation) so pivot UI retains City and other dims
+        const previewData =
+          data.length > 0 ? data.slice(0, Math.min(ROW_LEVEL_PREVIEW_MAX_ROWS, data.length)) : [];
         
         console.log(`✅ Aggregation complete: ${rowsAfter} rows, showing preview of ${previewData.length} rows`);
         if (previewData.length > 0) {
@@ -4146,9 +4140,9 @@ export async function executeDataOperation(
 
         return {
           answer,
-          data: aggregatedData, // Full aggregated dataset
-          preview: previewData,  // Preview for display (first 50 rows)
-          saved: true,
+          data: aggregatedData, // Aggregated result for charts / downstream tooling
+          preview: previewData, // Row-level slice for chat / pivot (non-destructive)
+          saved: false,
         };
       } catch (error) {
         console.error('Error calling Python service for aggregation:', error);
@@ -4220,81 +4214,16 @@ export async function executeDataOperation(
         const rowsAfter = result.rows_after;
         const largeFileBuffer = (result as any)._largeFileBuffer as Buffer | undefined;
 
-        // If we have a large file buffer, save it directly to blob storage
+        // Large in-memory pivot result: do not overwrite session blob with pivoted shape (non-destructive).
         if (largeFileBuffer) {
-          console.log(`💾 Large pivot table detected. Saving ${(largeFileBuffer.length / 1024 / 1024).toFixed(2)}MB buffer directly to blob storage...`);
-          
-          // Get current document for username
-          const doc = sessionDoc ?? await getChatBySessionIdEfficient(sessionId);
-          if (!doc) {
-            throw new Error('Session not found');
-          }
-          
-          // Get current version
-          const currentVersion = doc.currentDataBlob?.version || 1;
-          const newVersion = currentVersion + 1;
-          const username = doc.username;
-          
-          // Import blob storage function
-          const { updateProcessedDataBlob } = await import('../blobStorage.js');
-          
-          // Save buffer directly to blob storage
-          const blobResult = await updateProcessedDataBlob(
-            sessionId,
-            largeFileBuffer, // Pass buffer directly
-            newVersion,
-            username
+          console.log(
+            `📊 Large pivot table (${(largeFileBuffer.length / 1024 / 1024).toFixed(2)}MB buffer). Returning pivot in response without persisting to blob.`
           );
-          
-          console.log(`✅ Saved large pivot data to blob storage: ${blobResult.blobName}`);
-          
-          // Update CosmosDB metadata
-          doc.currentDataBlob = {
-            blobUrl: blobResult.blobUrl,
-            blobName: blobResult.blobName,
-            version: newVersion,
-            lastUpdated: Date.now(),
-          };
-          
-          // Update sample rows with preview
-          doc.sampleRows = pivotData.slice(0, 100);
-          
-          // Update data summary
-          if (pivotData.length > 0) {
-            const firstRow = pivotData[0];
-            const columns = Object.keys(firstRow).map(name => {
-              // Get sample values from preview data
-              const sampleValues = pivotData
-                .slice(0, Math.min(10, pivotData.length))
-                .map(row => row[name] ?? null)
-                .filter(val => val !== null)
-                .slice(0, 5);
-              
-              return {
-                name,
-                type: 'unknown' as string,
-                sampleValues: sampleValues.length > 0 ? sampleValues : [null],
-              };
-            });
-            doc.dataSummary = {
-              ...doc.dataSummary,
-              rowCount: rowsAfter,
-              columns,
-            };
-          }
-          
-          // Save updated document
-          const { updateChatDocument } = await import('../../models/chat.model.js');
-          await updateChatDocument(doc);
-          
-          // Build description
-          let description = `Created pivot on "${indexCol}" showing ${valueColumns.length} column${valueColumns.length === 1 ? '' : 's'}`;
-          
-          // Get unique values from preview
+
           const uniquePivotValues = new Set<string>();
           if (pivotData.length > 0) {
             const firstRow = pivotData[0];
-            Object.keys(firstRow).forEach(key => {
+            Object.keys(firstRow).forEach((key) => {
               if (key.includes('_') && key !== indexCol) {
                 const parts = key.split('_');
                 if (parts.length > 1) {
@@ -4303,24 +4232,29 @@ export async function executeDataOperation(
               }
             });
           }
-          
-          const pivotValuesText = uniquePivotValues.size > 0 
-            ? Array.from(uniquePivotValues).slice(0, 3).join(', ') + (uniquePivotValues.size > 3 ? '...' : '')
-            : 'various values';
-          
+
+          const pivotValuesText =
+            uniquePivotValues.size > 0
+              ? Array.from(uniquePivotValues).slice(0, 3).join(', ') +
+                (uniquePivotValues.size > 3 ? '...' : '')
+              : 'various values';
+
           let answer = `✅ I've created a pivot table on "${indexCol}".`;
           answer += ` The values from "${indexCol}" (${pivotValuesText}) have been converted into separate columns.`;
           answer += ` All other columns have been preserved.`;
-          answer += ` The new table has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}) and has been saved to blob storage.`;
-          answer += ` Showing preview of first ${pivotData.length} rows.`;
-          
-          const previewData = pivotData.slice(0, 50);
-          
+          answer += ` The result has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}).`;
+          answer += ` Your full dataset in this session is unchanged so you can keep exploring dimensions.`;
+
+          const previewData =
+            data.length > 0
+              ? data.slice(0, Math.min(ROW_LEVEL_PREVIEW_MAX_ROWS, data.length))
+              : [];
+
           return {
             answer,
-            data: pivotData, // Preview data only
+            data: pivotData,
             preview: previewData,
-            saved: true,
+            saved: false,
           };
         }
 
@@ -4342,21 +4276,7 @@ export async function executeDataOperation(
           }
         }
 
-        // Build description
-        let description = `Created pivot on "${indexCol}" showing ${valueColumns.length} column${valueColumns.length === 1 ? '' : 's'}`;
-
-        // Save pivot data to session (this changes the data structure permanently)
-        // This saves the transformed data to blob storage in JSON format and updates the session document
-        // All subsequent operations will use this pivoted data instead of the original data
-        console.log(`💾 Saving pivot data to blob storage...`);
-        const saveResult = await saveModifiedData(
-          sessionId,
-          pivotData,
-          'pivot',
-          description,
-          sessionDoc
-        );
-        console.log(`✅ Saved pivot data: version ${saveResult.version}, blob: ${saveResult.blobName}`);
+        // Do not persist pivoted tables to session blob (non-destructive); chat preview uses row-level rows.
 
         // Get unique values from the pivot column to show in the answer
         const uniquePivotValues = new Set<string>();
@@ -4381,62 +4301,29 @@ export async function executeDataOperation(
         let answer = `✅ I've created a pivot table on "${indexCol}".`;
         answer += ` The values from "${indexCol}" (${pivotValuesText}) have been converted into separate columns.`;
         answer += ` All other columns have been preserved.`;
-        answer += ` The new table has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}) and has been saved to blob storage.`;
+        answer += ` The result has ${rowsAfter} row${rowsAfter === 1 ? '' : 's'} (down from ${rowsBefore}).`;
+        answer += ` Your full dataset in this session is unchanged so you can keep exploring dimensions.`;
 
-        // For pivot, show data grouped by status category (3-4 rows per category)
-        // Sort by status column if it exists, then group and limit
-        let previewData: Record<string, any>[] = [];
-        
-        if (pivotData.length > 0) {
-          // Check if status column exists in the data
-          const hasStatusColumn = pivotData.some(row => indexCol in row);
-          
-          if (hasStatusColumn) {
-            // Group by status and show 3-4 rows per category
-            const groupedByStatus = new Map<string, Record<string, any>[]>();
-            
-            for (const row of pivotData) {
-              const statusValue = row[indexCol] ?? 'Unknown';
-              const statusKey = String(statusValue);
-              
-              if (!groupedByStatus.has(statusKey)) {
-                groupedByStatus.set(statusKey, []);
-              }
-              
-              const group = groupedByStatus.get(statusKey)!;
-              if (group.length < 4) { // Show max 4 rows per status category
-                group.push(row);
-              }
-            }
-            
-            // Flatten grouped data, maintaining status order
-            const statusOrder = Array.from(groupedByStatus.keys()).sort();
-            for (const status of statusOrder) {
-              previewData.push(...groupedByStatus.get(status)!);
-            }
-            
-            console.log(`✅ Grouped preview by status: ${groupedByStatus.size} categories, ${previewData.length} total rows`);
-          } else {
-            // No status column, just show first 50 rows
-            previewData = pivotData.slice(0, 50);
-          }
-        }
-        
-        console.log(`✅ Pivot complete: ${rowsAfter} rows, showing preview of ${previewData.length} rows`);
+        const previewData =
+          data.length > 0
+            ? data.slice(0, Math.min(ROW_LEVEL_PREVIEW_MAX_ROWS, data.length))
+            : [];
+
+        console.log(`✅ Pivot complete: ${rowsAfter} rows, row-level preview ${previewData.length} rows`);
         if (previewData.length > 0) {
-          console.log(`📊 Preview columns: ${Object.keys(previewData[0]).join(', ')}`);
-          console.log(`📊 Preview sample row:`, JSON.stringify(previewData[0], null, 2));
+          console.log(`📊 Row-level preview columns: ${Object.keys(previewData[0]).join(', ')}`);
+          console.log(`📊 Row-level sample row:`, JSON.stringify(previewData[0], null, 2));
         } else {
-          console.warn(`⚠️ No preview data available - pivotData is empty`);
+          console.warn(`⚠️ No row-level preview — input data was empty`);
         }
 
-        console.log(`📤 Returning pivot result: answer length=${answer.length}, preview rows=${previewData.length}, saved=${true}`);
+        console.log(`📤 Returning pivot result: answer length=${answer.length}, preview rows=${previewData.length}, saved=false`);
 
         return {
           answer,
-          data: pivotData, // Full pivoted dataset
-          preview: previewData,  // Preview for display (first 50 rows)
-          saved: true,
+          data: pivotData,
+          preview: previewData,
+          saved: false,
         };
       } catch (error) {
         console.error('❌ Error calling Python service for pivot:', error);

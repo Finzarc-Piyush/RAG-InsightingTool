@@ -234,23 +234,66 @@ function buildLevel(
   return out;
 }
 
+export type FilterDistinctSnapshotRef = {
+  current: Record<string, Set<string>>;
+};
+
+/**
+ * Keeps pivot filter selections in sync with the current `filters` list and row data.
+ * When `distinctSnapshotRef` is provided, any **new** distinct values that appear in
+ * `rows` since the last sync are merged into the selection (so stale "all values" sets
+ * don't hide rows after preview/data updates). Values the user explicitly excluded
+ * are not re-added if they were present in the previous snapshot.
+ */
 export function syncFilterSelectionsWithFilters(
   rows: Record<string, unknown>[],
   filters: string[],
-  prev: FilterSelections
+  prev: FilterSelections,
+  distinctSnapshotRef?: FilterDistinctSnapshotRef
 ): FilterSelections {
   const next: FilterSelections = { ...prev };
+  const snap = distinctSnapshotRef?.current ?? null;
+
   for (const f of filters) {
-    if (next[f] !== undefined) continue;
-    const s = new Set<string>();
+    const distinctNow = new Set<string>();
     for (const r of rows) {
-      s.add(String(r[f] ?? ''));
+      distinctNow.add(String(r[f] ?? ''));
     }
-    next[f] = s;
+    const lastSnap = snap?.[f] ?? new Set<string>();
+
+    if (next[f] === undefined) {
+      next[f] = new Set(distinctNow);
+      if (snap) {
+        snap[f] = new Set(distinctNow);
+      }
+      continue;
+    }
+
+    if (!distinctSnapshotRef) {
+      continue;
+    }
+
+    const sel = new Set(next[f]);
+    for (const v of distinctNow) {
+      if (!lastSnap.has(v)) {
+        sel.add(v);
+      }
+    }
+    for (const v of sel) {
+      if (!distinctNow.has(v)) {
+        sel.delete(v);
+      }
+    }
+    next[f] = sel;
+    distinctSnapshotRef.current[f] = new Set(distinctNow);
   }
+
   for (const k of Object.keys(next)) {
     if (!filters.includes(k)) {
       delete next[k];
+      if (snap && k in snap) {
+        delete snap[k];
+      }
     }
   }
   return next;

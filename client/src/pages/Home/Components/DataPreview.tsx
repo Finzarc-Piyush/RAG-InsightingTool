@@ -190,7 +190,12 @@ export function DataPreview({
           <Table className="h-4 w-4" />
           <span className="font-medium">Data Preview</span>
           <span className="text-muted-foreground ml-1">
-            ({sortedData.length} {sortedData.length === 1 ? 'row' : 'rows'})
+            ({sortedData.length} {sortedData.length === 1 ? 'sample row' : 'sample rows'}
+            {typeof totalRows === 'number' &&
+            totalRows > 0 &&
+            totalRows !== sortedData.length
+              ? ` · Total: ${totalRows.toLocaleString()}`
+              : ''})
           </span>
         </Button>
 

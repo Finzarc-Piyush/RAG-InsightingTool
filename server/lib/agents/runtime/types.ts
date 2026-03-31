@@ -68,6 +68,10 @@ export interface StreamPreAnalysis {
   analysis: string;
   relevantColumns: string[];
   userIntent: string;
+  /** Exact schema names for this question — planner must use these in execute_query_plan when listed */
+  canonicalColumns?: string[];
+  /** Natural phrases → exact header (validated) */
+  columnMapping?: Record<string, string>;
 }
 
 /** One completed tool call in the turn — fed back into the planner on replan / structured context. */

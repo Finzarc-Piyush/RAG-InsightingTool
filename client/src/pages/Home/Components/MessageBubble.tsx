@@ -31,6 +31,25 @@ import {
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
 
+const PREVIEW_SIGNATURE_SLICE = 3500;
+
+/** Stable signature for preview/summary arrays so memo re-renders when row content or keys change, not only length. */
+function tablePayloadSignature(payload: unknown[] | undefined): string {
+  if (!payload?.length) return '0';
+  const n = payload.length;
+  const first = payload[0];
+  const last = payload[n - 1];
+  const firstBlob =
+    first != null && typeof first === 'object'
+      ? JSON.stringify(first).slice(0, PREVIEW_SIGNATURE_SLICE)
+      : String(first);
+  const lastBlob =
+    last != null && typeof last === 'object'
+      ? JSON.stringify(last).slice(0, PREVIEW_SIGNATURE_SLICE)
+      : String(last);
+  return `${n}:${firstBlob}:${lastBlob}`;
+}
+
 /**
  * Extract loading state for a correlation chart from thinking steps
  */
@@ -718,10 +737,18 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     // Compare charts by length
     (prevProps.message.charts?.length ?? 0) === (nextProps.message.charts?.length ?? 0) &&
     (prevProps.message.insights?.length ?? 0) === (nextProps.message.insights?.length ?? 0) &&
-    ((prevProps.message as Message & { preview?: unknown[] }).preview?.length ?? 0) ===
-      ((nextProps.message as Message & { preview?: unknown[] }).preview?.length ?? 0) &&
-    ((prevProps.message as Message & { summary?: unknown[] }).summary?.length ?? 0) ===
-      ((nextProps.message as Message & { summary?: unknown[] }).summary?.length ?? 0) &&
+    tablePayloadSignature(
+      (prevProps.message as Message & { preview?: unknown[] }).preview
+    ) ===
+      tablePayloadSignature(
+        (nextProps.message as Message & { preview?: unknown[] }).preview
+      ) &&
+    tablePayloadSignature(
+      (prevProps.message as Message & { summary?: unknown[] }).summary
+    ) ===
+      tablePayloadSignature(
+        (nextProps.message as Message & { summary?: unknown[] }).summary
+      ) &&
     (prevProps.message.thinkingBefore?.steps?.length ?? 0) ===
       (nextProps.message.thinkingBefore?.steps?.length ?? 0) &&
     (prevProps.message.thinkingBefore?.workbench?.length ?? 0) ===

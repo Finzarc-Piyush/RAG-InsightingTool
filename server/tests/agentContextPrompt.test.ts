@@ -32,6 +32,40 @@ describe("summarizeContextForPrompt", () => {
     assert.match(text, /numericColumns:\s*Sales/);
     assert.match(text, /columns:\s*Order Date, Sales, Region/);
   });
+
+  it("includes AUTHORITATIVE columns when streamPreAnalysis provides canonicalColumns", () => {
+    const summary: DataSummary = {
+      rowCount: 2,
+      columnCount: 2,
+      columns: [
+        { name: "Product Category", type: "string", sampleValues: [] },
+        { name: "Sales", type: "number", sampleValues: [1] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "Which categories have highest sales?",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+      streamPreAnalysis: {
+        intentLabel: "compare",
+        analysis: "",
+        relevantColumns: ["Product Category", "Sales"],
+        userIntent: "rank categories",
+        canonicalColumns: ["Product Category", "Sales"],
+        columnMapping: { categories: "Product Category" },
+      },
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    assert.match(text, /AUTHORITATIVE columns for this question/);
+    assert.match(text, /Product Category, Sales/);
+    assert.match(text, /Phrase → column:/);
+  });
 });
 
 describe("execute_query_plan temporal aggregation", () => {

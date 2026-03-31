@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { resolveToSchemaColumn } from "../lib/agents/runtime/plannerColumnResolve.js";
+import {
+  resolveMetricAliasToSchemaColumn,
+  resolveToSchemaColumn,
+} from "../lib/agents/runtime/plannerColumnResolve.js";
 
 describe("resolveToSchemaColumn", () => {
   const columns = [
@@ -22,7 +25,33 @@ describe("resolveToSchemaColumn", () => {
     assert.equal(resolveToSchemaColumn("order date", columns), "Order Date");
   });
 
-  it("returns raw when ambiguous or unknown", () => {
+  it("returns raw when ambiguous or unknown (generic token)", () => {
     assert.equal(resolveToSchemaColumn("Date", columns), "Date");
+  });
+
+  it("resolves partial label to unique schema column", () => {
+    const wide = [
+      { name: "Product Category" },
+      { name: "Sales (USD)" },
+    ];
+    assert.equal(resolveToSchemaColumn("Category", wide), "Product Category");
+    assert.equal(resolveToSchemaColumn("Sales", wide), "Sales (USD)");
+  });
+
+  it("resolves metric alias drift when preferred metric is clear", () => {
+    const m = [
+      { name: "Category" },
+      { name: "Sales" },
+      { name: "Quantity" },
+    ];
+    assert.equal(
+      resolveMetricAliasToSchemaColumn("Total_Revenue", m, ["Sales"]),
+      "Sales"
+    );
+  });
+
+  it("keeps raw metric alias when ambiguous", () => {
+    const m = [{ name: "Net Amount" }, { name: "Gross Value" }];
+    assert.equal(resolveMetricAliasToSchemaColumn("Total_Revenue", m), "Total_Revenue");
   });
 });

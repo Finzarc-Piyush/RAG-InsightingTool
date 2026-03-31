@@ -6,6 +6,29 @@ import {
   UserAnalysisSessionsResponse,
 } from "@/shared/schema";
 
+/** Response from GET /api/data/:sessionId/sample */
+export interface SessionSampleResponse {
+  sessionId: string;
+  rows: Record<string, unknown>[];
+  count: number;
+  limit: number;
+  random: boolean;
+}
+
+/**
+ * Row-level sample from the session columnar store (for pivot when preview is aggregated-only).
+ * Legacy sessions that were persisted as aggregated-only tables cannot regain dropped dimensions
+ * (e.g. City under Region) until the user reverts data-ops changes or re-uploads the source file.
+ */
+export async function fetchSessionSampleRows(
+  sessionId: string,
+  limit = 2000
+): Promise<SessionSampleResponse> {
+  return api.get<SessionSampleResponse>(
+    `/api/data/${encodeURIComponent(sessionId)}/sample?limit=${limit}`
+  );
+}
+
 export const dataApi = {
   getUserSessions: (username: string) =>
     api.get<UserAnalysisSessionsResponse>(`/data/user/${username}/sessions`),
@@ -24,6 +47,11 @@ export const dataApi = {
   getRawData: (chatId: string, username: string, page = 1, limit = 100) =>
     api.get<RawDataResponse>(
       `/data/chat/${chatId}/raw-data?username=${username}&page=${page}&limit=${limit}`
+    ),
+
+  getSessionSampleRows: (sessionId: string, limit = 2000) =>
+    api.get<SessionSampleResponse>(
+      `/api/data/${encodeURIComponent(sessionId)}/sample?limit=${limit}`
     ),
 
   getDataSummary: (sessionId: string) =>

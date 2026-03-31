@@ -28,7 +28,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
   chatDocument: ChatDocument;
   message: string;
   processingChatHistory: Message[];
-  /** When set (e.g. from processChatMessage), skips duplicate classifyIntent / column extraction */
+  /** When set (e.g. from processStreamChat), skips duplicate classifyIntent / column extraction */
   precomputed?: {
     requiredColumns: string[];
     parsedQuery: Record<string, any> | null;
@@ -38,6 +38,12 @@ export async function resolveAnswerQuestionDataLoad(params: {
 
   let requiredColumns: string[] = precomputed?.requiredColumns ?? [];
   let parsedQuery: Record<string, any> | null = precomputed?.parsedQuery ?? null;
+
+  if (precomputed) {
+    console.log(
+      `📊 [resolveAnswerQuestionDataLoad] using precomputed columns (${requiredColumns.length}) — skipping classifyIntent`
+    );
+  }
 
   if (!precomputed) {
     try {

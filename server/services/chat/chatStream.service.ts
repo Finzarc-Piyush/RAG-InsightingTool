@@ -20,8 +20,12 @@ import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
+import { bindSchemaColumnsForAgentic } from "../../lib/schemaColumnBinding.js";
+import { parseUserQuery } from "../../lib/queryParser.js";
+import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 import { persistMidTurnAssistantSessionContext } from "../../lib/sessionAnalysisContext.js";
+import { preserveFinalPreview } from "./previewRetention.js";
 import { Response } from "express";
 import {
   agentSseEventToWorkbenchEntries,
@@ -184,30 +188,45 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    // Extract columns from chat message using RegEx (ONLY place RegEx is used for column extraction)
-    const availableColumns = chatDocument.dataSummary.columns.map(c => c.name);
+    const allMessages = chatDocument.messages || [];
+    const processingChatHistory = targetTimestamp
+      ? allMessages
+      : allMessages.slice(-15);
+    const modeDetectionChatHistory = processingChatHistory;
+
+    const availableColumns = chatDocument.dataSummary.columns.map((c) => c.name);
+
     onThinkingStep({
-      step: 'Extracting columns from message',
-      status: 'active',
+      step: "Resolving question to dataset columns",
+      status: "active",
       timestamp: Date.now(),
+    });
+
+    const schemaBinding = await bindSchemaColumnsForAgentic(
+      message,
+      chatDocument.dataSummary,
+      processingChatHistory
+    );
+    console.log(`📌 Schema binding canonical columns:`, schemaBinding.canonicalColumns);
+
+    onThinkingStep({
+      step: "Resolving question to dataset columns",
+      status: "completed",
+      timestamp: Date.now(),
+      details:
+        schemaBinding.canonicalColumns.length > 0
+          ? `Columns: ${schemaBinding.canonicalColumns.join(", ")}`
+          : "Using full schema fallback",
     });
 
     const extractedColumns = extractColumnsFromMessage(message, availableColumns);
-    console.log(`📋 Extracted columns from message using RegEx:`, extractedColumns);
+    const columnHintsForIntent = Array.from(
+      new Set([...schemaBinding.canonicalColumns, ...extractedColumns])
+    );
 
     onThinkingStep({
-      step: 'Extracting columns from message',
-      status: 'completed',
-      timestamp: Date.now(),
-      details: extractedColumns.length > 0 
-        ? `Found columns: ${extractedColumns.join(', ')}`
-        : 'No columns explicitly mentioned',
-    });
-
-    // Analyze chat message with AI using extracted columns
-    onThinkingStep({
-      step: 'Analyzing user intent',
-      status: 'active',
+      step: "Analyzing user intent",
+      status: "active",
       timestamp: Date.now(),
     });
 
@@ -215,9 +234,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     try {
       chatAnalysis = await analyzeChatWithColumns(
         message,
-        extractedColumns,
+        columnHintsForIntent,
         chatDocument.dataSummary
       );
+      const mergedRelevant = Array.from(
+        new Set([
+          ...schemaBinding.canonicalColumns,
+          ...chatAnalysis.relevantColumns,
+        ])
+      );
+      chatAnalysis = { ...chatAnalysis, relevantColumns: mergedRelevant };
+
       console.log(`🤖 AI Analysis Results:`);
       console.log(`   Intent: ${chatAnalysis.intent}`);
       console.log(`   User Intent: ${chatAnalysis.userIntent}`);
@@ -225,41 +252,59 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       console.log(`   Analysis: ${chatAnalysis.analysis.substring(0, 200)}...`);
 
       onThinkingStep({
-        step: 'Analyzing user intent',
-        status: 'completed',
+        step: "Analyzing user intent",
+        status: "completed",
         timestamp: Date.now(),
-        details: `Intent: ${chatAnalysis.intent}${chatAnalysis.relevantColumns.length > 0 ? ` | Columns: ${chatAnalysis.relevantColumns.join(', ')}` : ''}`,
+        details: `Intent: ${chatAnalysis.intent}${chatAnalysis.relevantColumns.length > 0 ? ` | Columns: ${chatAnalysis.relevantColumns.join(", ")}` : ""}`,
       });
     } catch (error) {
-      console.error('⚠️ Chat analysis failed:', error);
+      console.error("⚠️ Chat analysis failed:", error);
       onThinkingStep({
-        step: 'Analyzing user intent',
-        status: 'completed',
+        step: "Analyzing user intent",
+        status: "completed",
         timestamp: Date.now(),
-        details: `Using extracted columns: ${extractedColumns.length > 0 ? extractedColumns.join(', ') : 'none'}`,
+        details: `Using bound columns: ${schemaBinding.canonicalColumns.join(", ") || "none"}`,
       });
-      // Continue with extracted columns even if AI analysis fails
       chatAnalysis = {
-        intent: 'general',
-        analysis: '',
-        relevantColumns: extractedColumns,
+        intent: "general",
+        analysis: "",
+        relevantColumns:
+          schemaBinding.canonicalColumns.length > 0
+            ? schemaBinding.canonicalColumns
+            : extractedColumns,
         userIntent: message,
       };
     }
 
-    // Log summary of column extraction and analysis
-    console.log(`📊 Column Extraction & Analysis Summary:`);
-    console.log(`   RegEx Extracted: ${extractedColumns.length > 0 ? extractedColumns.join(', ') : 'none'}`);
-    console.log(`   AI Identified: ${chatAnalysis.relevantColumns.length > 0 ? chatAnalysis.relevantColumns.join(', ') : 'none'}`);
-    console.log(`   Final Relevant Columns: ${chatAnalysis.relevantColumns.length > 0 ? chatAnalysis.relevantColumns.join(', ') : 'none'}`);
+    console.log(`📊 Column binding & analysis summary:`);
+    console.log(
+      `   Canonical (schema): ${schemaBinding.canonicalColumns.join(", ") || "(none)"}`
+    );
+    console.log(
+      `   Final relevant: ${chatAnalysis.relevantColumns.join(", ") || "(none)"}`
+    );
 
-    // Fetch last 15 messages from Cosmos DB for mode detection
-    // For edited messages, use full history from database for mode detection
-    // This ensures context-aware mode detection works correctly
-    const allMessages = chatDocument.messages || [];
-    const modeDetectionChatHistory = targetTimestamp 
-      ? allMessages // Use full history from database for edits
-      : allMessages.slice(-15); // Use last 15 messages for new messages
+    let parsedQueryForLoad: Record<string, unknown> | null = null;
+    try {
+      parsedQueryForLoad = await parseUserQuery(
+        message,
+        chatDocument.dataSummary,
+        processingChatHistory
+      );
+    } catch {
+      parsedQueryForLoad = null;
+    }
+
+    const historyColumns = extractColumnsFromHistory(
+      processingChatHistory,
+      chatDocument.dataSummary
+    );
+    const requiredColumnsForLoad = Array.from(
+      new Set([
+        ...schemaBinding.canonicalColumns,
+        ...historyColumns,
+      ])
+    );
 
     // Routing: always classify — client `mode` is ignored (deprecated override removed).
     if (mode != null && mode !== 'general') {
@@ -305,18 +350,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       detectedMode = 'analysis';
     }
 
-    // Fetch last 15 messages from Cosmos DB for processing
-    // For edited messages, use full history from database for processing
-    // This ensures context-aware processing works correctly
-    const processingChatHistory = targetTimestamp 
-      ? allMessages // Use full history from database for edits
-      : allMessages.slice(-15); // Use last 15 messages for new messages
-
     const { latestData, columnarStoragePathOpt, loadFullDataOpt, permanentContext, sessionAnalysisContext } =
       await resolveAnswerQuestionDataLoad({
         chatDocument,
         message,
         processingChatHistory,
+        precomputed: {
+          requiredColumns: requiredColumnsForLoad,
+          parsedQuery: parsedQueryForLoad,
+        },
       });
 
     const agentOptions =
@@ -371,6 +413,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               analysis: chatAnalysis.analysis,
               relevantColumns: chatAnalysis.relevantColumns,
               userIntent: chatAnalysis.userIntent,
+              canonicalColumns: schemaBinding.canonicalColumns,
+              columnMapping: schemaBinding.columnMapping,
             },
             username,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
@@ -454,10 +498,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       transformedResponse.agentTrace = (result as any).agentTrace;
     }
 
-    if (pendingIntermediates.length > 0) {
-      transformedResponse.preview = undefined;
-      transformedResponse.summary = undefined;
-    }
+    preserveFinalPreview(transformedResponse, pendingIntermediates);
     const finalThinkingBefore =
       pendingIntermediates.length > 0 &&
       (thinkingSteps.length > 0 || agentWorkbench.length > 0)

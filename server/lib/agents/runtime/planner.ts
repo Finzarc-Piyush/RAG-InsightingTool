@@ -6,7 +6,10 @@ import { summarizeContextForPrompt } from "./context.js";
 import type { ToolRegistry } from "./toolRegistry.js";
 import { sortPlanStepsByDependency } from "./workingMemory.js";
 import { agentLog } from "./agentLogger.js";
-import { resolveToSchemaColumn } from "./plannerColumnResolve.js";
+import {
+  resolveMetricAliasToSchemaColumn,
+  resolveToSchemaColumn,
+} from "./plannerColumnResolve.js";
 import {
   patchExecuteQueryPlanDateAggregation,
   patchExecuteQueryPlanTrendCoarserGrain,
@@ -21,7 +24,8 @@ const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
 
 function normalizeExecuteQueryPlanStepArgs(
   step: PlanStep,
-  columns: readonly { name: string }[]
+  columns: readonly { name: string }[],
+  preferredNumeric: readonly string[] = []
 ): void {
   if (step.tool !== "execute_query_plan") return;
   const plan = step.args.plan as Record<string, unknown> | undefined;
@@ -33,7 +37,11 @@ function normalizeExecuteQueryPlanStepArgs(
   }
   if (Array.isArray(plan.aggregations)) {
     for (const a of plan.aggregations as { column?: string }[]) {
-      if (a?.column) a.column = resolveToSchemaColumn(a.column, columns);
+      if (!a?.column) continue;
+      const resolved = resolveToSchemaColumn(a.column, columns);
+      a.column = columns.some((c) => c.name === resolved)
+        ? resolved
+        : resolveMetricAliasToSchemaColumn(a.column, columns, preferredNumeric);
     }
   }
   if (Array.isArray(plan.dimensionFilters)) {
@@ -46,6 +54,19 @@ function normalizeExecuteQueryPlanStepArgs(
       if (s?.column) s.column = resolveToSchemaColumn(s.column, columns);
     }
   }
+}
+
+function preferredNumericColumns(ctx: AgentExecutionContext): string[] {
+  const numeric = new Set(ctx.summary.numericColumns || []);
+  if (!numeric.size) return [];
+  const canonical = ctx.streamPreAnalysis?.canonicalColumns || [];
+  const fromCanonical = canonical.filter((c) => numeric.has(c));
+  if (fromCanonical.length > 0) return fromCanonical;
+  const fromMapping = Object.values(ctx.streamPreAnalysis?.columnMapping || {}).filter(
+    (c) => numeric.has(c)
+  );
+  if (fromMapping.length > 0) return Array.from(new Set(fromMapping));
+  return Array.from(numeric);
 }
 
 function normalizeCorrelationStepArgs(
@@ -101,8 +122,11 @@ function firstInvalidQueryPlanColumn(
   for (const c of (plan.groupBy as string[] | undefined) ?? []) {
     if (!check(c)) return c;
   }
-  for (const a of (plan.aggregations as { column: string }[] | undefined) ?? []) {
+  for (const a of (plan.aggregations as { column: string; alias?: string }[] | undefined) ?? []) {
     if (!a?.column || !check(a.column)) return a.column;
+    if (a.alias && a.alias === a.column) {
+      return `aggregation_alias_conflicts_with_column:${a.alias}`;
+    }
   }
   for (const d of (plan.dimensionFilters as { column: string }[] | undefined) ?? []) {
     if (!d?.column || !check(d.column)) return d.column;
@@ -182,10 +206,12 @@ Rules:
 - retrieve_semantic_context: **required** args.query (string) for narrative/themes/wording — never put "query" on run_analytical_query.
 - run_analytical_query: only optional question_override; **never** use a "query" key here.
 - execute_query_plan: use when you need exact groupBy + aggregations (e.g. SUM revenue by year) with args.plan JSON; column names must match schema exactly. Prefer over NL when totals/sums must be correct.
+- For execute_query_plan aggregations, `aggregations[].column` MUST be a real schema metric column (for example `Sales`). Labels like `Total_Revenue` may appear only in `aggregations[].alias`, never in `aggregations[].column`.
 - **Trends / over time** (trend, evolution, “how X changed”, time series): the dataset lists **Derived time-bucket columns** (\`__tf_date__*\`, \`__tf_week__*\`, \`__tf_month__*\`, \`__tf_quarter__*\`, \`__tf_half_year__*\`, \`__tf_year__*\`) precomputed from each date column. Prefer **coarse grain** (month or year via matching \`__tf_*\` **or** \`dateAggregationPeriod\` on the raw date column)—**not** raw daily \`groupBy\` on the date column when that would yield very many points. If the question specifies an **explicit grain** (daily/weekly/monthly/yearly), match it. For the **primary** trend visualization, **build_chart** must use \`type: "line"\` or \`"area"\`, not \`bar\`, when X is temporal (bar reads as a category ranking, not a trend). \`aggregate\` \`none\` when the query already returns one row per bucket.
 - **derive_dimension_bucket**: when the user groups categories into custom buckets (e.g. map A,B,C → "East"), run it **before** \`execute_query_plan\` with \`dependsOn\` chaining; **groupBy** the new column name. Args: \`sourceColumn\`, \`newColumnName\`, \`buckets\`: [\`{ "label", "values": [...] }\`], optional \`matchMode\` \`exact\`|\`case_insensitive\`, optional \`defaultLabel\`.
 - **run_readonly_sql** (analysis only): last-resort SELECT-only query over table \`dataset\` (current in-memory frame, capped rows). Single statement; no DDL/DML.
 - When **Preferred columns** lists a date column and a numeric metric, use those **exact strings** in execute_query_plan unless get_schema_summary shows different headers.
+- If the Dataset block includes **AUTHORITATIVE columns for this question**, you MUST use those exact column names in \`execute_query_plan\` (groupBy, aggregations, filters, sort) and other column-bound tool args for this question, unless a \`get_schema_summary\` step in the same plan proves the headers differ.
 - Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column.
 - Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends). For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), **y must be the aggregated column name on the result rows** (e.g. \`Sales_sum\`), not \`Sales\`. **x** is the same groupBy column (bucket labels). Set \`aggregate\` \`none\` when there is exactly one row per x after bucketing; use sum|mean only when charting raw rows.
@@ -240,8 +266,13 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     return { ok: false, reason: "empty_steps" };
   }
 
+  const preferredNumeric = preferredNumericColumns(ctx);
   for (const step of stepsWithMeta) {
-    normalizeExecuteQueryPlanStepArgs(step, ctx.summary.columns);
+    normalizeExecuteQueryPlanStepArgs(
+      step,
+      ctx.summary.columns,
+      preferredNumeric
+    );
     normalizeCorrelationStepArgs(step, ctx.summary.columns);
     normalizeDeriveDimensionBucketStepArgs(step, ctx.summary.columns);
     patchExecuteQueryPlanDateAggregation(
