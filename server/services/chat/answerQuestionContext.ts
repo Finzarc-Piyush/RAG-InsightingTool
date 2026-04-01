@@ -15,6 +15,8 @@ import { parseUserQuery } from "../../lib/queryParser.js";
 import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
 import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { canonicalizeDateColumnValues } from "../../lib/fileParser.js";
+import { applyTemporalFacetColumns } from "../../lib/temporalFacetColumns.js";
 
 export interface AnswerQuestionDataLoadResult {
   latestData: Record<string, any>[];
@@ -105,6 +107,11 @@ export async function resolveAnswerQuestionDataLoad(params: {
       "📊 Columnar session + analytical/info query: DuckDB sample path (shared loader)"
     );
     latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000);
+    const dateCols = chatDocument.dataSummary?.dateColumns;
+    if (latestData.length > 0 && dateCols && dateCols.length > 0) {
+      canonicalizeDateColumnValues(latestData, dateCols);
+      applyTemporalFacetColumns(latestData, dateCols);
+    }
     columnarStoragePathOpt = true;
     loadFullDataOpt = () =>
       requiredColumns.length > 0
