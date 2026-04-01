@@ -40,4 +40,15 @@ describe("queryPlanDuckdbExecutor", () => {
     assert.match(built!.aggregateSql, /SUM\(CAST\("Sales" AS DOUBLE\)\)/);
     assert.match(built!.countSql, /SELECT COUNT\(\*\)/);
   });
+
+  it("buildQueryPlanDuckdbSql quotes UI-style month facet column id", () => {
+    const x = "Month · Order Date";
+    const built = buildQueryPlanDuckdbSql({
+      groupBy: [x],
+      aggregations: [{ column: "Sales", operation: "sum", alias: "Sales_sum" }],
+      sort: [{ column: x, direction: "asc" }],
+    });
+    assert.ok(built);
+    assert.match(built!.aggregateSql, /Month · Order Date/);
+  });
 });

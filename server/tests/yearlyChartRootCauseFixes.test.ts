@@ -37,29 +37,30 @@ describe("resolveDateBucketForGroupBy", () => {
     assert.equal(r.readColumn, "Order Date");
   });
 
-  it("does not calendar-bucket precomputed __tf_month__ columns even when dateAggregationPeriod is set", () => {
+  it("does not calendar-bucket precomputed month facet columns even when dateAggregationPeriod is set", () => {
+    const monthFacet = "Month · Order Date";
     const summary: DataSummary = {
       rowCount: 2,
       columnCount: 2,
       columns: [
-        { name: "__tf_month__Order_Date", type: "string", sampleValues: ["2018-02"] },
+        { name: monthFacet, type: "string", sampleValues: ["2018-02"] },
         { name: "Sales", type: "number", sampleValues: [1] },
       ],
       numericColumns: ["Sales"],
       dateColumns: ["Order Date"],
     };
     const data: Record<string, unknown>[] = [
-      { __tf_month__Order_Date: "2018-02", Sales: 100 },
-      { __tf_month__Order_Date: "2018-03", Sales: 200 },
+      { [monthFacet]: "2018-02", Sales: 100 },
+      { [monthFacet]: "2018-03", Sales: 200 },
     ];
     const r = resolveDateBucketForGroupBy(
-      "__tf_month__Order_Date",
+      monthFacet,
       summary,
       data as Record<string, any>[],
       "month"
     );
     assert.equal(r.mode, "none");
-    assert.equal(r.readColumn, "__tf_month__Order_Date");
+    assert.equal(r.readColumn, monthFacet);
   });
 });
 
@@ -97,6 +98,16 @@ describe("validateCoarseDateAggregationOutput", () => {
 
     // Output group count above the current cap can be legitimate when using
     // precomputed month facets (e.g. datasets spanning long time ranges).
+    assert.equal(validateCoarseDateAggregationOutput(parsed, 9800, 1230), null);
+  });
+
+  it("does not reject month plans when groupBy uses UI month facet column id", () => {
+    const parsed: ParsedQuery = {
+      rawQuestion: "",
+      groupBy: ["Month · Order Date"],
+      dateAggregationPeriod: "month",
+      aggregations: [{ column: "Sales", operation: "sum" }],
+    };
     assert.equal(validateCoarseDateAggregationOutput(parsed, 9800, 1230), null);
   });
 });

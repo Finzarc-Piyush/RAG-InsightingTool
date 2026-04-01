@@ -99,8 +99,8 @@ export async function proposeAndBuildExtraCharts(
 
         const xTemporal =
           ctx.summary.dateColumns.includes(x) ||
-          x.startsWith("__tf_") ||
-          /__(?:tf_)?(day|week|month|quarter|half_year|year)__/.test(x);
+          /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(x) ||
+          x.startsWith("__tf_");
 
         // Avoid building a bar chart with too many distinct X labels.
         const xUnique = new Set(sample.map((r) => String(r?.[x] ?? ""))).size;

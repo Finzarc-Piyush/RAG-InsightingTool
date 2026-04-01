@@ -108,6 +108,8 @@ type PivotFieldPanelProps = {
   numericColumns: string[];
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   className?: string;
+  /** When true, grow the field list to fill the parent column (e.g. expanded pivot dialog). */
+  fillAvailableHeight?: boolean;
 };
 
 export function PivotFieldPanel({
@@ -119,6 +121,7 @@ export function PivotFieldPanel({
   numericColumns,
   temporalFacetColumns = [],
   className,
+  fillAvailableHeight = false,
 }: PivotFieldPanelProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const numericSet = useMemo(() => new Set(numericColumns), [numericColumns]);
@@ -262,8 +265,14 @@ export function PivotFieldPanel({
       onDragCancel={onDragCancel}
       onDragEnd={onDragEnd}
     >
-      <div className={cn('flex flex-col gap-3', className)}>
-        <div className="space-y-1">
+      <div
+        className={cn(
+          'flex flex-col gap-3',
+          fillAvailableHeight && 'h-full min-h-0 flex-1',
+          className
+        )}
+      >
+        <div className="shrink-0 space-y-1">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Pivot fields
           </h3>
@@ -272,11 +281,16 @@ export function PivotFieldPanel({
           </p>
         </div>
 
-        <div className="space-y-2">
+        <div className="shrink-0 space-y-2">
           {/* Quick add removed; use checkbox controls in the "unused" chooser below instead. */}
         </div>
 
-        <ScrollArea className="h-[min(62vh,520px)] pr-2">
+        <ScrollArea
+          className={cn(
+            fillAvailableHeight ? 'min-h-0 flex-1' : 'h-[min(62vh,520px)]',
+            'pr-2'
+          )}
+        >
           <div className="flex flex-col gap-3 pb-2">
             <Well dropId={zoneDroppableId('unused')} title={ZONE_LABEL.unused}>
               <SortableContext

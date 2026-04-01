@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { ColumnsDisplay } from './ColumnsDisplay';
 import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
-import { facetColumnHeaderLabel } from '@/lib/temporalFacetDisplay';
+import { facetColumnHeaderLabel, isTemporalFacetFieldId } from '@/lib/temporalFacetDisplay';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 
@@ -27,7 +27,7 @@ interface DataPreviewProps {
   numericColumns?: string[];
   dateColumns?: string[];
   temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
-  /** When provided, `__tf_*` column headers use grain + source (e.g. Month · Order Date). */
+  /** When provided, derived time-bucket column headers use grain + source (e.g. Month · Order Date). */
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   totalRows?: number;
   totalColumns?: number;
@@ -70,7 +70,7 @@ export function DataPreview({
   const [showDerivedTimeColumns, setShowDerivedTimeColumns] = useState(false);
 
   const hasTfColumns = useMemo(
-    () => (columns ?? []).some((c) => String(c).startsWith('__tf_')),
+    () => (columns ?? []).some((c) => isTemporalFacetFieldId(c)),
     [columns]
   );
 
@@ -85,7 +85,7 @@ export function DataPreview({
   const visibleColumns = useMemo(() => {
     const cols = columns ?? [];
     if (showDerivedTimeColumns) return cols;
-    return cols.filter((c) => !String(c).startsWith('__tf_'));
+    return cols.filter((c) => !isTemporalFacetFieldId(c));
   }, [columns, showDerivedTimeColumns]);
 
   const displayAsDateColumns = useMemo(() => {
@@ -114,7 +114,7 @@ export function DataPreview({
 
   const compareColumns = useMemo(() => {
     if (!preEnrichmentSnapshot || !postEnrichmentSnapshot) return [];
-    const hideTf = (c: string) => !String(c).startsWith('__tf_');
+    const hideTf = (c: string) => !isTemporalFacetFieldId(c);
     const set = new Set<string>([
       ...preEnrichmentSnapshot.columns.filter(hideTf),
       ...postEnrichmentSnapshot.columns.filter(hideTf),

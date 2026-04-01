@@ -21,6 +21,13 @@ describe("coerceTemporalFacetKeysToStrings", () => {
     assert.equal(rows[0]!["Sales (Sum)"], 12345.67);
   });
 
+  it("coerces UI-style facet column values to strings", () => {
+    const rows = [{ "Year · Order Date": 2015, Sales: 1 }];
+    coerceTemporalFacetKeysToStrings(rows as Array<Record<string, unknown>>);
+    assert.equal(typeof (rows[0]!["Year · Order Date"] as unknown), "string");
+    assert.equal(rows[0]!["Year · Order Date"], "2015");
+  });
+
   it("leaves null/undefined temporal facet values as-is", () => {
     const rows: any[] = [
       { "__tf_year__Order_Date": null, "__tf_month__Order_Date": undefined },

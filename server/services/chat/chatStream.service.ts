@@ -31,6 +31,8 @@ import {
   agentSseEventToWorkbenchEntries,
   appendWorkbenchEntry,
 } from "./agentWorkbench.util.js";
+import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
+import { derivePivotDefaultsFromPreviewRows } from "../../lib/pivotDefaultsFromPreview.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -56,7 +58,7 @@ function derivePivotDefaultsHint(params: {
   dataSummary: ChatDocument["dataSummary"];
 }): Message["pivotDefaults"] | undefined {
   const { parsedQuery, requiredColumns, dataSummary } = params;
-  const allowed = new Set((dataSummary.columns || []).map((c) => c.name));
+  const allowed = allowedColumnNamesForQueryPlan(dataSummary);
   const numeric = new Set(dataSummary.numericColumns || []);
   const dateColumns = new Set(dataSummary.dateColumns || []);
 
@@ -121,7 +123,7 @@ function derivePivotDefaultsFromExecution(params: {
   dataSummary: ChatDocument["dataSummary"];
 }): Message["pivotDefaults"] | undefined {
   const { agentTrace, table, dataSummary } = params;
-  const allowed = new Set((dataSummary.columns || []).map((c) => c.name));
+  const allowed = allowedColumnNamesForQueryPlan(dataSummary);
   const numeric = new Set(dataSummary.numericColumns || []);
   const rows: string[] = [];
   const values: string[] = [];
@@ -166,17 +168,25 @@ function derivePivotDefaultsFromExecution(params: {
         (v): v is string => typeof v === "string"
       )
     : [];
-  if (rows.length === 0) {
-    for (const col of tableColumns) addRow(col);
-  }
-  if (values.length === 0) {
-    for (const col of tableColumns) addValue(col);
-  }
+  const tableRows: Record<string, unknown>[] = Array.isArray((table as any)?.rows)
+    ? ((table as any).rows as Record<string, unknown>[])
+    : [];
 
-  if (rows.length === 0 && values.length === 0) return undefined;
+  const fromPreview = derivePivotDefaultsFromPreviewRows(
+    tableRows,
+    dataSummary,
+    tableColumns.length ? tableColumns : null
+  );
+
+  // Prefer execute_query_plan dimensions/measures (schema-aligned) over preview column
+  // names. Preview often uses aggregate aliases (e.g. Total_Revenue) that are not on `data`.
+  const rowOut = rows.length ? rows : (fromPreview?.rows ?? []);
+  const valueOut = values.length ? values : (fromPreview?.values ?? []);
+
+  if (rowOut.length === 0 && valueOut.length === 0) return undefined;
   return {
-    rows: rows.slice(0, 2),
-    values: values.slice(0, 2),
+    rows: rowOut.slice(0, 2),
+    values: valueOut.slice(0, 2),
   };
 }
 
@@ -288,20 +298,25 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     const flushIntermediateSegment = (
       preview: Record<string, unknown>[],
-      insight?: string
+      insight?: string,
+      segmentPivotDefaults?: Message["pivotDefaults"]
     ) => {
       if (!preview.length) return;
       if (!checkConnection()) return;
       const assistantTimestamp = Date.now() + intermediateSeq++;
       const snapSteps = [...thinkingSteps];
       const snapWb = [...agentWorkbench];
+      const pivotDefaultsForSegment =
+        segmentPivotDefaults?.rows?.length && segmentPivotDefaults?.values?.length
+          ? segmentPivotDefaults
+          : provisionalPivotDefaults;
       if (
         !sendSSE(res, "intermediate", {
           preview,
           thinkingSteps: snapSteps,
           workbench: snapWb,
           assistantTimestamp,
-          ...(provisionalPivotDefaults ? { pivotDefaults: provisionalPivotDefaults } : {}),
+          ...(pivotDefaultsForSegment ? { pivotDefaults: pivotDefaultsForSegment } : {}),
           ...(insight ? { insight } : {}),
         })
       ) {
@@ -312,7 +327,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         preview,
         thinkingSteps: snapSteps,
         workbench: snapWb,
-        pivotDefaults: provisionalPivotDefaults,
+        pivotDefaults: pivotDefaultsForSegment,
         insight,
       });
       thinkingSteps.length = 0;
@@ -585,10 +600,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 phase: p.phase,
               });
             },
-            onIntermediateArtifact: ({ preview, insight }) => {
+            onIntermediateArtifact: ({ preview, insight, pivotDefaults: segmentPivotDefaults }) => {
               flushIntermediateSegment(
                 preview as Record<string, unknown>[],
-                insight
+                insight,
+                segmentPivotDefaults
               );
             },
           }

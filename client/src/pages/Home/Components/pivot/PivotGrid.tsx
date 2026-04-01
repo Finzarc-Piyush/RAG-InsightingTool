@@ -33,6 +33,8 @@ export type PivotGridProps = {
     colKey: string | null;
     valueSpecId: string;
   }) => void;
+  /** Embedded: fixed max height in card. Expanded: fill flex parent (use with flex column + min-h-0). */
+  layout?: 'embedded' | 'expanded';
 };
 
 export function PivotGrid({
@@ -45,6 +47,7 @@ export function PivotGrid({
   onRowLabelSortChange,
   showValuesAs = "raw",
   onDrillthroughCell,
+  layout = 'embedded',
 }: PivotGridProps) {
   const { colField, colKeys, valueSpecs, columnFieldTruncated } = model;
   const hasMatrix = Boolean(colField && colKeys.length > 0);
@@ -93,8 +96,13 @@ export function PivotGrid({
     );
   }
 
+  const shellClass =
+    layout === 'expanded'
+      ? 'overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full border border-gray-200/90 rounded-lg bg-white/60 shadow-inner'
+      : 'overflow-x-auto max-h-[500px] overflow-y-auto border border-gray-200/90 rounded-lg bg-white/60 shadow-inner';
+
   return (
-    <div className="overflow-x-auto max-h-[500px] overflow-y-auto border border-gray-200/90 rounded-lg bg-white/60 shadow-inner">
+    <div className={shellClass}>
       {columnFieldTruncated && model.columnFields[0] && (
         <p className="text-[11px] text-muted-foreground px-3 py-1.5 border-b border-gray-100 bg-amber-50/50">
           Multiple column fields: using the first (

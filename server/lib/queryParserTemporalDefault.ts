@@ -4,8 +4,7 @@ import {
   hasExplicitBreakdownOrGrain,
   vagueTemporalTrendQuestion,
 } from "./questionAggregationPolicy.js";
-
-const TEMPORAL_GROUP_BY_RE = /^__tf_(date|week|month|quarter|half_year|year)__/;
+import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 
 type ParsedWithAgg = ParsedQuery & {
   rawQuestion?: string;
@@ -35,7 +34,7 @@ export function applyVagueTrendDefaultAggregation(
   const gb = parsed.groupBy ?? [];
   const dateSet = new Set(summary.dateColumns);
   const onlyDateOrTemporalFacet = gb.every(
-    (c) => dateSet.has(c) || TEMPORAL_GROUP_BY_RE.test(c)
+    (c) => dateSet.has(c) || isTemporalFacetColumnKey(c)
   );
   if (gb.length > 0 && !onlyDateOrTemporalFacet) return;
 

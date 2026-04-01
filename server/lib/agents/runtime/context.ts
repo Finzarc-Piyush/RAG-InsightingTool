@@ -83,7 +83,7 @@ function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
   const cap = 80;
   const shown = lines.slice(0, cap);
   const more = lines.length > cap ? `\n... +${lines.length - cap} more` : "";
-  return `\nDerived time-bucket columns (precomputed from dateColumns; use the matching __tf_* facet column when the question requests that grain):\n${shown.join("\n")}${more}`;
+  return `\nDerived time-bucket columns (precomputed from dateColumns; use the exact column name shown — e.g. \`Month · Order Date\` — matching the question's grain; legacy \`__tf_*\` ids are still accepted):\n${shown.join("\n")}${more}`;
 }
 
 export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
@@ -111,7 +111,7 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   });
   const temporal = detectPeriodFromQuery(ctx.question);
   const temporalLine = temporal
-    ? `\nTemporal intent from question: use dateAggregationPeriod=${temporal} when bucketing a raw date column, or groupBy the matching precomputed __tf_* facet column and omit date bucketing in the plan. For vague temporal questions (no explicit grain), prefer sorting on the raw date column over forcing yearly buckets.`
+    ? `\nTemporal intent from question: use dateAggregationPeriod=${temporal} when bucketing a raw date column, or groupBy the matching derived time-bucket column (same name as in the list above, e.g. \`Month · …\`) and omit date bucketing in the plan. For vague temporal questions (no explicit grain), prefer sorting on the raw date column over forcing yearly buckets.`
     : "";
   const facetBlock = formatDerivedTemporalFacetsBlock(ctx.summary);
   return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.

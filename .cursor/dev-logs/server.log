@@ -10,21 +10,21 @@
    Chat Deployment: gpt-4o
    API Version: 2023-05-15
 ✅ Data Ops routes registered: /api/data-ops/chat, /api/data-ops/chat/stream, /api/data-ops/download/:sessionId
-{"level":"INFO","message":"[12:38:28.803 PM]: Creating new connection object"}
-{"level":"INFO","message":"[12:38:28.807 PM]: Creating Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] with host: BGSUHJH-VHB73264.snowflakecomputing.com, account: BGSUHJH-VHB73264, accessUrl: https://BGSUHJH-VHB73264.snowflakecomputing.com, user: SAMEER1234, role: undefined, database: undefined, schema: undefined, warehouse: COMPUTE_WH, proxy was not configured, password is provided, region: undefined, authenticator: SNOWFLAKE, ocsp mode: FAIL_OPEN, os: darwin, os version: 25.4.0"}
-{"level":"INFO","message":"[12:38:28.808 PM]: Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] additional details: passcode in password is provided, passcode is not provided, private key is not provided, application: undefined, client name: snowflake-sdk, client version: 2.3.3, retry timeout: 300, private key path: undefined, private key pass is not provided, client store temporary credential: false, browser response timeout: 120000"}
-{"level":"INFO","message":"[12:38:28.808 PM]: Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] - connection object created successfully."}
-{"level":"INFO","message":"[12:38:28.808 PM]: Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] - connecting. Associated Snowflake domain: GLOBAL"}
-{"level":"INFO","message":"[12:38:28.809 PM]: Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] - authentication successful using: SNOWFLAKE"}
-{"level":"INFO","message":"[12:38:28.809 PM]: Trying to initialize Easy Logging"}
+{"level":"INFO","message":"[1:11:43.216 PM]: Creating new connection object"}
+{"level":"INFO","message":"[1:11:43.220 PM]: Creating Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] with host: BGSUHJH-VHB73264.snowflakecomputing.com, account: BGSUHJH-VHB73264, accessUrl: https://BGSUHJH-VHB73264.snowflakecomputing.com, user: SAMEER1234, role: undefined, database: undefined, schema: undefined, warehouse: COMPUTE_WH, proxy was not configured, password is provided, region: undefined, authenticator: SNOWFLAKE, ocsp mode: FAIL_OPEN, os: darwin, os version: 25.4.0"}
+{"level":"INFO","message":"[1:11:43.220 PM]: Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] additional details: passcode in password is provided, passcode is not provided, private key is not provided, application: undefined, client name: snowflake-sdk, client version: 2.3.3, retry timeout: 300, private key path: undefined, private key pass is not provided, client store temporary credential: false, browser response timeout: 120000"}
+{"level":"INFO","message":"[1:11:43.220 PM]: Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] - connection object created successfully."}
+{"level":"INFO","message":"[1:11:43.220 PM]: Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] - connecting. Associated Snowflake domain: GLOBAL"}
+{"level":"INFO","message":"[1:11:43.221 PM]: Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] - authentication successful using: SNOWFLAKE"}
+{"level":"INFO","message":"[1:11:43.221 PM]: Trying to initialize Easy Logging"}
 🔄 Initializing CosmosDB...
 Server running on port 3002
-{"level":"INFO","message":"[12:38:28.824 PM]: No client config detected."}
-{"level":"INFO","message":"[12:38:28.824 PM]: No config file path found. Client config will not be used."}
-{"level":"INFO","message":"[12:38:28.824 PM]: Easy Logging is disabled as no config has been found"}
+{"level":"INFO","message":"[1:11:43.236 PM]: No client config detected."}
+{"level":"INFO","message":"[1:11:43.236 PM]: No config file path found. Client config will not be used."}
+{"level":"INFO","message":"[1:11:43.236 PM]: Easy Logging is disabled as no config has been found"}
 ✅ Azure Blob Storage initialized successfully
 📁 Container: maricoinsight
-{"level":"INFO","message":"[12:38:30.181 PM]: Connection[id: 6d665f52-c931-4c7e-abe1-f706821a4817] - connection established successfully after 1373.3 milliseconds"}
+{"level":"INFO","message":"[1:11:44.732 PM]: Connection[id: 27ae36b3-2f3b-4b54-91db-4c95c5f67a36] - connection established successfully after 1512.2 milliseconds"}
 ✅ Snowflake: connected at startup
 ✅ Database ready: maricoInsight
 ✅ Chats container ready: Chats
@@ -32,66 +32,63 @@ Server running on port 3002
 ✅ Shared analyses container ready: shared-analyses
 ✅ Shared dashboards container ready: shared-dashboards
 ✅ CosmosDB initialized successfully
-📤 Upload job enqueued: job_1775027340546_hes1jw127 for session session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-❌ Session not found: session_1775027340502_90nbbe5v7
-✅ File uploaded to blob storage: piyush_finzarc_com/1775027340552/train_updated.xlsx
-🔗 Blob URL: https://maricoinsightingblob1.blob.core.windows.net/maricoinsight/piyush_finzarc_com/1775027340552/train_updated.xlsx
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-⚠️ No chat document found for sessionId: session_1775027340502_90nbbe5v7
-✅ Retrieved 109 sessions from CosmosDB for user: piyush@finzarc.com
-📝 Creating placeholder session: "train_updated.xlsx" -> "train_updated (65).xlsx"
-✅ Created placeholder session: train_updated__65__xlsx_1775027342787 for sessionId: session_1775027340502_90nbbe5v7
+📤 Upload job enqueued: job_1775029375842_j42s0jp94 for session session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+❌ Session not found: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+✅ File uploaded to blob storage: piyush_finzarc_com/1775029375845/train_updated.xlsx
+🔗 Blob URL: https://maricoinsightingblob1.blob.core.windows.net/maricoinsight/piyush_finzarc_com/1775029375845/train_updated.xlsx
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+⚠️ No chat document found for sessionId: session_1775029375795_5bn63u1rt
+✅ Retrieved 110 sessions from CosmosDB for user: piyush@finzarc.com
+📝 Creating placeholder session: "train_updated.xlsx" -> "train_updated (66).xlsx"
+✅ Created placeholder session: train_updated__66__xlsx_1775029380331 for sessionId: session_1775029375795_5bn63u1rt
 ⚠️ DuckDB not available - large file processing disabled. Using traditional processing.
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-{"ts":1775027378472,"event":"agent.llm_json_retry","turnId":"session_ctx_seed","err":"[\n  {\n    \"code\": \"invalid_literal\",\n    \"expected\": 1,\n    \"path\": [\n      \"version\"\n    ],\n    \"message\": \"Invalid literal value, expected 1\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"shortDescription\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"columnRoles\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"caveats\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"userIntent\",\n      \"interpretedConstraints\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\"\n    ],\n    \"message\": \"Required\"\n  }\n]"}
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+{"ts":1775029408786,"event":"agent.llm_json_retry","turnId":"session_ctx_seed","err":"[\n  {\n    \"code\": \"invalid_literal\",\n    \"expected\": 1,\n    \"path\": [\n      \"version\"\n    ],\n    \"message\": \"Invalid literal value, expected 1\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"shortDescription\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"columnRoles\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"dataset\",\n      \"caveats\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"userIntent\",\n      \"interpretedConstraints\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\"\n    ],\n    \"message\": \"Required\"\n  }\n]"}
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
 ⚠️ seedSessionAnalysisContextLLM failed: [
   {
     "code": "invalid_type",
@@ -114,40 +111,42 @@ Server running on port 3002
     "message": "Required"
   }
 ]
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-[uploadStatus] job=job_1775027340546_hes1jw127 status=saving previewPayloadState=full rows=50
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔄 Updating existing placeholder session: session_1775027340502_90nbbe5v7
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=preview_ready previewPayloadState=full rows=50
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔄 Updating existing placeholder session: session_1775029375795_5bn63u1rt
 ⚠️ Large dataset detected (9800 rows, ~8.15MB). Storing only sampleRows in CosmosDB.
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+[uploadStatus] job=job_1775029375842_j42s0jp94 status=saving previewPayloadState=full rows=50
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+✅ Updated session with processed data: train_updated__66__xlsx_1775029380331
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
+✅ Access granted for session session_1775029375795_5bn63u1rt
 ✅ Enriched 0 messages with chart data
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-✅ Updated session with processed data: train_updated__65__xlsx_1775027342787
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
 ✅ Enriched 0 messages with chart data
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
-   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
-   Session owner: "piyush@finzarc.com"
-   Collaborators: [piyush@finzarc.com]
-   Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
 🔧 Initializing Azure OpenAI Embeddings client...
 📊 Embedding Client Configuration:
    AZURE_OPENAI_EMBEDDING_ENDPOINT: https://maricoinsightingtool.cognitiveservices.azure.com
@@ -167,44 +166,44 @@ Server running on port 3002
    Embedding Deployment: text-embedding-3-large
    Base URL: https://maricoinsightingtool.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large
    Expected full embeddings URL: https://maricoinsightingtool.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large/embeddings?api-version=2023-05-15
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-✅ RAG indexed session session_1775027340502_90nbbe5v7: 3 chunks
-🔍 Fetching chat document for sessionId: session_1775027340502_90nbbe5v7
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+✅ RAG indexed session session_1775029375795_5bn63u1rt: 3 chunks
+🔍 Fetching chat document for sessionId: session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
+✅ Access granted for session session_1775029375795_5bn63u1rt
 ✅ Chat document found
 📤 SSE sent: thinking {
   step: 'Resolving question to dataset columns',
   status: 'active',
-  timestamp: 1775027396580
+  timestamp: 1775029433675
 }
 📌 Schema binding canonical columns: [ 'Sales', 'Order Date' ]
 📤 SSE sent: thinking {
   step: 'Resolving question to dataset columns',
   status: 'completed',
-  timestamp: 1775027398618,
+  timestamp: 1775029435827,
   details: 'Columns: Sales, Order Date'
 }
 📤 SSE sent: thinking {
   step: 'Analyzing user intent',
   status: 'active',
-  timestamp: 1775027398620
+  timestamp: 1775029435830
 }
 🤖 AI Analysis Results:
-   Intent: analyze revenue trends
-   User Intent: The user wants to analyze how total sales revenue changes over time, likely through a time-based trend analysis or visualization.
+   Intent: analyze revenue trends over time
+   User Intent: The user wants to analyze how total sales revenue changes over time, likely to identify trends or patterns in the data.
    Relevant Columns: [ 'Sales', 'Order Date' ]
-   Analysis: The user wants to examine the total sales revenue over time, which suggests analyzing trends in the 'Sales' column across different periods in the 'Order Date'. This could involve aggregating sales da...
+   Analysis: The user is asking to analyze the total sales revenue over time, which suggests they want a time series analysis of the 'Sales' column aggregated by the 'Order Date'. This could involve plotting total...
 📤 SSE sent: thinking {
   step: 'Analyzing user intent',
   status: 'completed',
-  timestamp: 1775027402185,
-  details: 'Intent: analyze revenue trends | Columns: Sales, Order Date'
+  timestamp: 1775029440334,
+  details: 'Intent: analyze revenue trends over time | Columns: Sales, Order Date'
 }
 📊 Column binding & analysis summary:
    Canonical (schema): Sales, Order Date
@@ -219,56 +218,56 @@ Server running on port 3002
 [chatStream] pivot pre-fallback inputs {
   parserGroupBy: [ '__tf_date__Order_Date' ],
   canonicalColumns: [ 'Sales', 'Order Date' ],
-  mapping: { sales: 'Sales', 'over time': 'Order Date' },
+  mapping: { 'sales revenue': 'Sales', 'over time': 'Order Date' },
   provisionalPivotDefaults: { rows: [ '__tf_date__Order_Date' ], values: [ 'Sales' ] }
 }
 📤 SSE sent: thinking {
   step: 'Detecting query type',
   status: 'active',
-  timestamp: 1775027404142
+  timestamp: 1775029443449
 }
-✅ Mode classified: analysis (confidence: 0.95) - The query asks for total sales revenue over time, which involves analyzing trends or aggregating data for insights. This is a statistical or exploratory analysis task, not a data transformation or modeling request.
+✅ Mode classified: analysis (confidence: 0.95) - The query asks for total sales revenue over time, which involves trend analysis and insights rather than data manipulation or model creation. This fits the 'analysis' mode.
 📤 SSE sent: thinking {
   step: 'Detecting query type',
   status: 'completed',
-  timestamp: 1775027405885,
+  timestamp: 1775029444918,
   details: 'Detected: analysis (confidence: 95%)'
 }
 🎯 Classified mode: analysis (confidence: 0.95)
 📊 [resolveAnswerQuestionDataLoad] using precomputed columns (2) — skipping classifyIntent
 📊 Columnar session + analytical/info query: DuckDB sample path (shared loader)
 🚀 answerQuestion() CALLED with question: What is the total sales revenue over time?
-📋 SessionId: session_1775027340502_90nbbe5v7
+📋 SessionId: session_1775029375795_5bn63u1rt
 📊 Data rows: 5000
 📤 SSE sent: thinking {
   step: 'Agent plan',
   status: 'completed',
-  timestamp: 1775027409984,
-  details: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_mon…'
+  timestamp: 1775029447345,
+  details: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a…'
 }
 📤 SSE sent: plan {
-  rationale: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_month__Order_Date`) for a clear trend analysis. The `Sales` column will be summed to calculate total revenue for each month.',
+  rationale: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a clear and meaningful trend visualization.',
   steps: [
     {
-      id: 'query_monthly_sales',
+      id: 'fetch_sales_trend',
       tool: 'execute_query_plan',
       args_summary: '{"plan":{"groupBy":["__tf_month__Order_Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"__tf_month__Order_Date","direction":"asc"}]}}'
     },
     {
-      id: 'chart_monthly_sales',
+      id: 'visualize_sales_trend',
       tool: 'build_chart',
-      args_summary: '{"type":"line","x":"__tf_month__Order_Date","y":"Sales_sum","title":"Total Sales Revenue Over Time","aggregate":"none"}'
+      args_summary: '{"type":"line","x":"__tf_month__Order_Date","y":"Sales_sum","title":"Total Sales Revenue Over Time (Monthly)","aggregate":"none"}'
     }
   ]
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'plan-1775027409985',
+    id: 'plan-1775029447345',
     kind: 'plan',
     title: 'Plan',
-    code: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_month__Order_Date`) for a clear trend analysis. The `Sales` column will be summed to calculate total revenue for each month.\n' +
+    code: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a clear and meaningful trend visualization.\n' +
       '\n' +
-      '1. execute_query_plan (query_monthly_sales)\n' +
+      '1. execute_query_plan (fetch_sales_trend)\n' +
       '   {\n' +
       '  "plan": {\n' +
       '    "groupBy": [\n' +
@@ -288,12 +287,12 @@ Server running on port 3002
       '    ]\n' +
       '  }\n' +
       '}\n' +
-      '2. build_chart (chart_monthly_sales)\n' +
+      '2. build_chart (visualize_sales_trend)\n' +
       '   {\n' +
       '  "type": "line",\n' +
       '  "x": "__tf_month__Order_Date",\n' +
       '  "y": "Sales_sum",\n' +
-      '  "title": "Total Sales Revenue Over Time",\n' +
+      '  "title": "Total Sales Revenue Over Time (Monthly)",\n' +
       '  "aggregate": "none"\n' +
       '}',
     language: 'markdown'
@@ -302,16 +301,16 @@ Server running on port 3002
 📤 SSE sent: thinking {
   step: 'Running tool: execute_query_plan',
   status: 'completed',
-  timestamp: 1775027409987
+  timestamp: 1775029447346
 }
 📤 SSE sent: tool_call {
-  id: 'query_monthly_sales-0',
+  id: 'fetch_sales_trend-0',
   name: 'execute_query_plan',
   args_summary: '{"plan":{"groupBy":["__tf_month__Order_Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"__tf_month__Order_Date","direction":"asc"}]}}'
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'call-query_monthly_sales-0',
+    id: 'call-fetch_sales_trend-0',
     kind: 'tool_call',
     title: 'Tool: execute_query_plan',
     code: '{\n' +
@@ -336,10 +335,10 @@ Server running on port 3002
     language: 'json'
   }
 }
-{"ts":1775027410005,"event":"agent.tool_analytical_meta","tool":"execute_query_plan","groupBy":"__tf_month__Order_Date","dateAggregationPeriod":"","aggOps":"sum","dateBucketSchemaApplied":false}
-{"ts":1775027410005,"event":"agent.tool_done","tool":"execute_query_plan","ms":18,"ok":true}
+{"ts":1775029447359,"event":"agent.tool_analytical_meta","tool":"execute_query_plan","groupBy":"__tf_month__Order_Date","dateAggregationPeriod":"","aggOps":"sum","dateBucketSchemaApplied":false}
+{"ts":1775029447359,"event":"agent.tool_done","tool":"execute_query_plan","ms":12,"ok":true}
 📤 SSE sent: tool_result {
-  id: 'query_monthly_sales-0',
+  id: 'fetch_sales_trend-0',
   ok: true,
   summary: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
     'Rows: 48. Columns: __tf_month__Order_Date, Sales_sum\n' +
@@ -439,7 +438,7 @@ Server running on port 3002
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'result-query_monthly_sales-0',
+    id: 'result-fetch_sales_trend-0',
     kind: 'tool_result',
     title: 'Result (ok)',
     code: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
@@ -542,7 +541,7 @@ Server running on port 3002
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'qp-1775027410005-unttb4o',
+    id: 'qp-1775029447359-v0zkdkd',
     kind: 'query_spec',
     title: 'execute_query_plan',
     code: '{\n' +
@@ -565,15 +564,15 @@ Server running on port 3002
     language: 'json'
   }
 }
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
+✅ Access granted for session session_1775029375795_5bn63u1rt
 📤 SSE sent: critic_verdict {
-  stepId: 'query_monthly_sales',
+  stepId: 'fetch_sales_trend',
   verdict: 'retry_tool',
   issue_codes: [ 'INCOMPLETE_DATA' ],
   course_correction: 'retry_tool'
@@ -581,16 +580,16 @@ Server running on port 3002
 📤 SSE sent: thinking {
   step: 'Running tool: execute_query_plan',
   status: 'completed',
-  timestamp: 1775027412206
+  timestamp: 1775029449050
 }
 📤 SSE sent: tool_call {
-  id: 'query_monthly_sales-1',
+  id: 'fetch_sales_trend-1',
   name: 'execute_query_plan',
   args_summary: '{"plan":{"groupBy":["__tf_month__Order_Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"__tf_month__Order_Date","direction":"asc"}]}}'
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'call-query_monthly_sales-1',
+    id: 'call-fetch_sales_trend-1',
     kind: 'tool_call',
     title: 'Tool: execute_query_plan',
     code: '{\n' +
@@ -615,10 +614,10 @@ Server running on port 3002
     language: 'json'
   }
 }
-{"ts":1775027412221,"event":"agent.tool_analytical_meta","tool":"execute_query_plan","groupBy":"__tf_month__Order_Date","dateAggregationPeriod":"","aggOps":"sum","dateBucketSchemaApplied":false}
-{"ts":1775027412221,"event":"agent.tool_done","tool":"execute_query_plan","ms":15,"ok":true}
+{"ts":1775029449061,"event":"agent.tool_analytical_meta","tool":"execute_query_plan","groupBy":"__tf_month__Order_Date","dateAggregationPeriod":"","aggOps":"sum","dateBucketSchemaApplied":false}
+{"ts":1775029449062,"event":"agent.tool_done","tool":"execute_query_plan","ms":11,"ok":true}
 📤 SSE sent: tool_result {
-  id: 'query_monthly_sales-1',
+  id: 'fetch_sales_trend-1',
   ok: true,
   summary: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
     'Rows: 48. Columns: __tf_month__Order_Date, Sales_sum\n' +
@@ -718,7 +717,7 @@ Server running on port 3002
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'result-query_monthly_sales-1',
+    id: 'result-fetch_sales_trend-1',
     kind: 'tool_result',
     title: 'Result (ok)',
     code: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
@@ -821,7 +820,7 @@ Server running on port 3002
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'qp-1775027412221-aly5jwl',
+    id: 'qp-1775029449061-3w7ofkz',
     kind: 'query_spec',
     title: 'execute_query_plan',
     code: '{\n' +
@@ -844,9 +843,9 @@ Server running on port 3002
     language: 'json'
   }
 }
-{"ts":1775027414702,"event":"agent.llm_json_retry","turnId":"session_ctx_assistant","err":"[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"string\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0\n    ],\n    \"message\": \"Expected object, received string\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"string\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1\n    ],\n    \"message\": \"Expected object, received string\"\n  }\n]"}
+{"ts":1775029450169,"event":"agent.llm_json_retry","turnId":"session_ctx_assistant","err":"[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"string\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0\n    ],\n    \"message\": \"Expected object, received string\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"string\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1\n    ],\n    \"message\": \"Expected object, received string\"\n  }\n]"}
 📤 SSE sent: critic_verdict {
-  stepId: 'query_monthly_sales',
+  stepId: 'fetch_sales_trend',
   verdict: 'retry_tool',
   issue_codes: [ 'INCOMPLETE_DATA' ],
   course_correction: 'retry_tool'
@@ -945,61 +944,61 @@ Server running on port 3002
     {
       step: 'Resolving question to dataset columns',
       status: 'active',
-      timestamp: 1775027396580
+      timestamp: 1775029433675
     },
     {
       step: 'Resolving question to dataset columns',
       status: 'completed',
-      timestamp: 1775027398618,
+      timestamp: 1775029435827,
       details: 'Columns: Sales, Order Date'
     },
     {
       step: 'Analyzing user intent',
       status: 'active',
-      timestamp: 1775027398620
+      timestamp: 1775029435830
     },
     {
       step: 'Analyzing user intent',
       status: 'completed',
-      timestamp: 1775027402185,
-      details: 'Intent: analyze revenue trends | Columns: Sales, Order Date'
+      timestamp: 1775029440334,
+      details: 'Intent: analyze revenue trends over time | Columns: Sales, Order Date'
     },
     {
       step: 'Detecting query type',
       status: 'active',
-      timestamp: 1775027404142
+      timestamp: 1775029443449
     },
     {
       step: 'Detecting query type',
       status: 'completed',
-      timestamp: 1775027405885,
+      timestamp: 1775029444918,
       details: 'Detected: analysis (confidence: 95%)'
     },
     {
       step: 'Agent plan',
       status: 'completed',
-      timestamp: 1775027409984,
-      details: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_mon…'
+      timestamp: 1775029447345,
+      details: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a…'
     },
     {
       step: 'Running tool: execute_query_plan',
       status: 'completed',
-      timestamp: 1775027409987
+      timestamp: 1775029447346
     },
     {
       step: 'Running tool: execute_query_plan',
       status: 'completed',
-      timestamp: 1775027412206
+      timestamp: 1775029449050
     }
   ],
   workbench: [
     {
-      id: 'plan-1775027409985',
+      id: 'plan-1775029447345',
       kind: 'plan',
       title: 'Plan',
-      code: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_month__Order_Date`) for a clear trend analysis. The `Sales` column will be summed to calculate total revenue for each month.\n' +
+      code: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a clear and meaningful trend visualization.\n' +
         '\n' +
-        '1. execute_query_plan (query_monthly_sales)\n' +
+        '1. execute_query_plan (fetch_sales_trend)\n' +
         '   {\n' +
         '  "plan": {\n' +
         '    "groupBy": [\n' +
@@ -1019,18 +1018,18 @@ Server running on port 3002
         '    ]\n' +
         '  }\n' +
         '}\n' +
-        '2. build_chart (chart_monthly_sales)\n' +
+        '2. build_chart (visualize_sales_trend)\n' +
         '   {\n' +
         '  "type": "line",\n' +
         '  "x": "__tf_month__Order_Date",\n' +
         '  "y": "Sales_sum",\n' +
-        '  "title": "Total Sales Revenue Over Time",\n' +
+        '  "title": "Total Sales Revenue Over Time (Monthly)",\n' +
         '  "aggregate": "none"\n' +
         '}',
       language: 'markdown'
     },
     {
-      id: 'call-query_monthly_sales-0',
+      id: 'call-fetch_sales_trend-0',
       kind: 'tool_call',
       title: 'Tool: execute_query_plan',
       code: '{\n' +
@@ -1055,7 +1054,7 @@ Server running on port 3002
       language: 'json'
     },
     {
-      id: 'result-query_monthly_sales-0',
+      id: 'result-fetch_sales_trend-0',
       kind: 'tool_result',
       title: 'Result (ok)',
       code: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
@@ -1156,7 +1155,7 @@ Server running on port 3002
       language: 'text'
     },
     {
-      id: 'qp-1775027410005-unttb4o',
+      id: 'qp-1775029447359-v0zkdkd',
       kind: 'query_spec',
       title: 'execute_query_plan',
       code: '{\n' +
@@ -1179,7 +1178,7 @@ Server running on port 3002
       language: 'json'
     },
     {
-      id: 'call-query_monthly_sales-1',
+      id: 'call-fetch_sales_trend-1',
       kind: 'tool_call',
       title: 'Tool: execute_query_plan',
       code: '{\n' +
@@ -1204,7 +1203,7 @@ Server running on port 3002
       language: 'json'
     },
     {
-      id: 'result-query_monthly_sales-1',
+      id: 'result-fetch_sales_trend-1',
       kind: 'tool_result',
       title: 'Result (ok)',
       code: 'Grouped by __tf_month__Order_Date with sum(Sales)\n' +
@@ -1305,7 +1304,7 @@ Server running on port 3002
       language: 'text'
     },
     {
-      id: 'qp-1775027412221-aly5jwl',
+      id: 'qp-1775029449061-3w7ofkz',
       kind: 'query_spec',
       title: 'execute_query_plan',
       code: '{\n' +
@@ -1328,36 +1327,36 @@ Server running on port 3002
       language: 'json'
     }
   ],
-  assistantTimestamp: 1775027415906,
+  assistantTimestamp: 1775029450750,
   pivotDefaults: { rows: [ '__tf_date__Order_Date' ], values: [ 'Sales' ] },
   insight: 'Grouped by __tf_month__Order_Date with sum(Sales) Rows: 48.'
 }
 📤 SSE sent: thinking {
   step: 'Running tool: build_chart',
   status: 'completed',
-  timestamp: 1775027416609
+  timestamp: 1775029451520
 }
 📤 SSE sent: tool_call {
-  id: 'chart_monthly_sales-2',
+  id: 'visualize_sales_trend-2',
   name: 'build_chart',
-  args_summary: '{"type":"line","x":"__tf_month__Order_Date","y":"Sales_sum","title":"Total Sales Revenue Over Time","aggregate":"none"}'
+  args_summary: '{"type":"line","x":"__tf_month__Order_Date","y":"Sales_sum","title":"Total Sales Revenue Over Time (Monthly)","aggregate":"none"}'
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'call-chart_monthly_sales-2',
+    id: 'call-visualize_sales_trend-2',
     kind: 'tool_call',
     title: 'Tool: build_chart',
     code: '{\n' +
       '  "type": "line",\n' +
       '  "x": "__tf_month__Order_Date",\n' +
       '  "y": "Sales_sum",\n' +
-      '  "title": "Total Sales Revenue Over Time",\n' +
+      '  "title": "Total Sales Revenue Over Time (Monthly)",\n' +
       '  "aggregate": "none"\n' +
       '}',
     language: 'json'
   }
 }
-🔍 Processing chart: "Total Sales Revenue Over Time"
+🔍 Processing chart: "Total Sales Revenue Over Time (Monthly)"
    Type: line, X: "__tf_month__Order_Date", Y: "Sales_sum", Aggregate: none
    Data rows available: 48
    Available columns: [__tf_month__Order_Date, Sales_sum]
@@ -1365,42 +1364,35 @@ Server running on port 3002
    Y column "Sales_sum" (matched from "Sales_sum"): 48 valid values (sample: 14205.706999999997, 4519.892, 55205.79700000003)
    Processing line chart
    line chart result: 48 points (sorted chronologically)
-{"ts":1775027416613,"event":"agent.tool_done","tool":"build_chart","ms":3,"ok":true}
+{"ts":1775029451524,"event":"agent.tool_done","tool":"build_chart","ms":4,"ok":true}
 📤 SSE sent: tool_result {
-  id: 'chart_monthly_sales-2',
+  id: 'visualize_sales_trend-2',
   ok: true,
-  summary: 'Chart line: Total Sales Revenue Over Time (x=__tf_month__Order_Date, y=Sales_sum, aggregate=none), 48 points.'
+  summary: 'Chart line: Total Sales Revenue Over Time (Monthly) (x=__tf_month__Order_Date, y=Sales_sum, aggregate=none), 48 points.'
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'result-chart_monthly_sales-2',
+    id: 'result-visualize_sales_trend-2',
     kind: 'tool_result',
     title: 'Result (ok)',
-    code: 'Chart line: Total Sales Revenue Over Time (x=__tf_month__Order_Date, y=Sales_sum, aggregate=none), 48 points.',
+    code: 'Chart line: Total Sales Revenue Over Time (Monthly) (x=__tf_month__Order_Date, y=Sales_sum, aggregate=none), 48 points.',
     language: 'text'
   }
 }
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
-   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
-   Session owner: "piyush@finzarc.com"
-   Collaborators: [piyush@finzarc.com]
-   Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
+✅ Access granted for session session_1775029375795_5bn63u1rt
 ⚠️ mergeSessionAnalysisContextAssistantLLM failed: [
   {
     "code": "invalid_type",
@@ -1475,30 +1467,36 @@ Server running on port 3002
     "message": "Required"
   }
 ]
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-📤 SSE sent: critic_verdict {
-  stepId: 'chart_monthly_sales',
-  verdict: 'revise_narrative',
-  issue_codes: [ 'INCOMPLETE_ANSWER' ],
-  course_correction: 'revise_narrative'
-}
-{"ts":1775027427780,"event":"agent.llm_json_retry","turnId":"876f8899-ab79-420e-bd83-ddf4d3d7696e","err":"[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"null\",\n    \"path\": [\n      \"user_visible_note\"\n    ],\n    \"message\": \"Expected string, received null\"\n  }\n]"}
-📤 SSE sent: critic_verdict {
-  stepId: 'chart_monthly_sales',
-  verdict: 'pass',
-  issue_codes: [],
-  course_correction: 'pass'
-}
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-{"ts":1775027434485,"event":"agent.llm_json_retry","turnId":"session_ctx_assistant","err":"[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"statement\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"received\": \"assistant_observation\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"user\",\n      \"assistant\",\n      \"data\"\n    ],\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"source\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'user' | 'assistant' | 'data', received 'assistant_observation'\"\n  },\n  {\n    \"expected\": \"'high' | 'medium' | 'low'\",\n    \"received\": \"undefined\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"confidence\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"statement\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"received\": \"assistant_observation\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"user\",\n      \"assistant\",\n      \"data\"\n    ],\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"source\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'user' | 'assistant' | 'data', received 'assistant_observation'\"\n  },\n  {\n    \"expected\": \"'high' | 'medium' | 'low'\",\n    \"received\": \"undefined\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"confidence\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"object\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"analysesDone\",\n      0\n    ],\n    \"message\": \"Expected string, received object\"\n  }\n]"}
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-🔍 Processing chart: "Total Sales Revenue Over Time"
+✅ Access granted for session session_1775029375795_5bn63u1rt
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+📤 SSE sent: critic_verdict {
+  stepId: 'visualize_sales_trend',
+  verdict: 'revise_narrative',
+  issue_codes: [ 'INCOMPLETE_ANSWER' ],
+  course_correction: 'revise_narrative'
+}
+📤 SSE sent: critic_verdict {
+  stepId: 'visualize_sales_trend',
+  verdict: 'pass',
+  issue_codes: [],
+  course_correction: 'pass'
+}
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+{"ts":1775029472405,"event":"agent.llm_json_retry","turnId":"session_ctx_assistant","err":"[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"statement\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"received\": \"assistant_analysis\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"user\",\n      \"assistant\",\n      \"data\"\n    ],\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"source\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'user' | 'assistant' | 'data', received 'assistant_analysis'\"\n  },\n  {\n    \"expected\": \"'high' | 'medium' | 'low'\",\n    \"received\": \"undefined\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      0,\n      \"confidence\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"statement\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"received\": \"assistant_analysis\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"user\",\n      \"assistant\",\n      \"data\"\n    ],\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"source\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'user' | 'assistant' | 'data', received 'assistant_analysis'\"\n  },\n  {\n    \"expected\": \"'high' | 'medium' | 'low'\",\n    \"received\": \"undefined\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"facts\",\n      1,\n      \"confidence\"\n    ],\n    \"message\": \"Required\"\n  },\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"object\",\n    \"path\": [\n      \"sessionKnowledge\",\n      \"analysesDone\",\n      0\n    ],\n    \"message\": \"Expected string, received object\"\n  }\n]"}
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+🔍 Processing chart: "Total Sales Revenue Over Time (Monthly)"
    Type: line, X: "__tf_month__Order_Date", Y: "Sales_sum", Aggregate: none
    Data rows available: 48
    Available columns: [__tf_month__Order_Date, Sales_sum]
@@ -1506,41 +1504,25 @@ Server running on port 3002
    Y column "Sales_sum" (matched from "Sales_sum"): 48 valid values (sample: 14205.706999999997, 4519.892, 55205.79700000003)
    Processing line chart
    line chart result: 48 points (sorted chronologically)
-🔍 Processing chart: "Sales_sum by __tf_month__Order_Date"
-   Type: area, X: "__tf_month__Order_Date", Y: "Sales_sum", Aggregate: none
-   Data rows available: 48
-   Available columns: [__tf_month__Order_Date, Sales_sum]
-   X column "__tf_month__Order_Date" (matched from "__tf_month__Order_Date"): 48 valid values (sample: 2015-01, 2015-02, 2015-03)
-   Y column "Sales_sum" (matched from "Sales_sum"): 48 valid values (sample: 14205.706999999997, 4519.892, 55205.79700000003)
-   Processing area chart
-   area chart result: 48 points (sorted chronologically)
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
-   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
-   Session owner: "piyush@finzarc.com"
-   Collaborators: [piyush@finzarc.com]
-   Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
 📤 SSE sent: thinking {
   step: 'Reviewing answer',
   status: 'completed',
-  timestamp: 1775027449011
+  timestamp: 1775029486984
 }
 📤 SSE sent: critic_verdict {
   stepId: 'final',
   verdict: 'revise_narrative',
-  issue_codes: [ 'NUMERIC_MISMATCH', 'INCOMPLETE_ANALYSIS' ],
+  issue_codes: [ 'NUMERIC_MISMATCH', 'UNSUPPORTED_CLAIM' ],
   course_correction: 'revise_narrative'
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'critic-final-1775027449011-e94p4giq',
+    id: 'critic-final-1775029486984-8l061h5j',
     kind: 'critic',
     title: 'Critic',
     code: 'Verdict: revise_narrative\n' +
       'Step: final\n' +
-      'Issues: NUMERIC_MISMATCH, INCOMPLETE_ANALYSIS\n' +
+      'Issues: NUMERIC_MISMATCH, UNSUPPORTED_CLAIM\n' +
       'Course correction:\n' +
       'revise_narrative',
     language: 'text'
@@ -1549,7 +1531,7 @@ Server running on port 3002
 📤 SSE sent: thinking {
   step: 'Reviewing answer',
   status: 'completed',
-  timestamp: 1775027458720
+  timestamp: 1775029498812
 }
 📤 SSE sent: critic_verdict {
   stepId: 'final',
@@ -1559,7 +1541,7 @@ Server running on port 3002
 }
 📤 SSE sent: workbench {
   entry: {
-    id: 'critic-final-1775027458720-a3lpz9ro',
+    id: 'critic-final-1775029498812-wzfxp33k',
     kind: 'critic',
     title: 'Critic',
     code: 'Verdict: revise_narrative\n' +
@@ -1570,7 +1552,7 @@ Server running on port 3002
     language: 'text'
   }
 }
-{"ts":1775027463623,"event":"agent.turn_done","turnId":"876f8899-ab79-420e-bd83-ddf4d3d7696e","tools":3,"llmCalls":15,"mode":"analysis","legacyFallback":false}
+{"ts":1775029502652,"event":"agent.turn_done","turnId":"bdcb5833-e34f-4d0d-a737-fc78aa44788a","tools":3,"llmCalls":14,"mode":"analysis","legacyFallback":false}
 ✅ Agentic loop returned answer
 [chatStream] pivotDefaults hint {
   groupBy: [ '__tf_date__Order_Date' ],
@@ -1582,43 +1564,44 @@ Server running on port 3002
   source: 'execution',
   value: { rows: [ '__tf_month__Order_Date' ], values: [ 'Sales' ] }
 }
-ℹ️ targetTimestamp 1775027395730 provided but message not found. Treating as new message.
-📝 addMessagesBySessionId - sessionId: session_1775027340502_90nbbe5v7 messages: [ 'user', 'assistant', 'assistant' ]
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🗂️ Appending to doc: train_updated__65__xlsx_1775027342787 partition: piyush@finzarc.com existing messages: 0 new unique messages: 3
-✅ Stored 2 small charts directly in CosmosDB
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
-✅ Upserted chat doc: train_updated__65__xlsx_1775027342787 messages now: 3
-✅ Messages saved to chat: train_updated__65__xlsx_1775027342787
-🔎 Found chat document by sessionId: train_updated__65__xlsx_1775027342787 username: piyush@finzarc.com
-🔍 Access check for session session_1775027340502_90nbbe5v7:
+ℹ️ targetTimestamp 1775029432831 provided but message not found. Treating as new message.
+📝 addMessagesBySessionId - sessionId: session_1775029375795_5bn63u1rt messages: [ 'user', 'assistant', 'assistant' ]
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🗂️ Appending to doc: train_updated__66__xlsx_1775029380331 partition: piyush@finzarc.com existing messages: 0 new unique messages: 3
+✅ Stored 1 small charts directly in CosmosDB
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
+✅ Upserted chat doc: train_updated__66__xlsx_1775029380331 messages now: 3
+✅ Messages saved to chat: train_updated__66__xlsx_1775029380331
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
    Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
    Session owner: "piyush@finzarc.com"
    Collaborators: [piyush@finzarc.com]
    Is requester in collaborators: true
-✅ Access granted for session session_1775027340502_90nbbe5v7
-✅ Updated chat document: train_updated__65__xlsx_1775027342787
+✅ Access granted for session session_1775029375795_5bn63u1rt
+✅ Updated chat document: train_updated__66__xlsx_1775029380331
 📤 SSE sent: response {
-  answer: 'The total sales revenue over time shows fluctuations with clear seasonal trends, particularly higher sales in November and December each year. The claim that December 2017 had the highest monthly revenue ($95,739.12) is incorrect. The evidence indicates that November 2018 recorded the highest monthly revenue in the dataset, with $117,938.16. Other notable peaks include September 2015 ($81,623.53) and November 2017 ($79,066.50).\n' +
+  answer: 'The total sales revenue over the 48-month period reveals fluctuations with a general upward trend. Seasonal spikes consistently occurred in November and December each year, with the highest monthly sales recorded in December 2017 at $95,739.12. The figures cited for November 2018 ($117,938.16) and December 2018 ($101,543.30) are not supported by the provided evidence and should be disregarded.\n' +
     '\n' +
-    '**Key insight:** The data highlights a consistent pattern of increased sales during Q4, particularly in November and December, suggesting a strong holiday season impact. Mid-year months typically show lower sales, presenting opportunities for growth in these periods.\n' +
+    '**Key Insights:**\n' +
+    '- Sales exhibit a recurring seasonal pattern, with peaks in November and December, likely driven by holiday-related demand.\n' +
+    '- The highest recorded monthly sales during the period occurred in December 2017, emphasizing the importance of year-end performance.\n' +
     '\n' +
     '**Recommendations:**\n' +
-    '- Focus marketing and promotional efforts on Q4 to maximize revenue during peak months.\n' +
-    '- Analyze product categories driving Q4 sales to enhance targeted campaigns.\n' +
-    '- Investigate mid-year sales dips to identify and address potential gaps in strategy.\n' +
-    '- Leverage historical trends to optimize inventory and staffing for future Q4 periods.',
+    '- Optimize marketing and inventory strategies for November and December to leverage seasonal demand.\n' +
+    '- Strengthen supply chain operations to handle increased demand during peak months.\n' +
+    '- Analyze factors contributing to sales spikes to replicate success in other periods and sustain growth.',
   charts: [],
   insights: [
     {
       id: 1,
-      text: 'The data highlights a consistent pattern of increased sales during the holiday season, suggesting an opportunity to focus marketing and inventory efforts in Q4 to capitalize on this trend. Conversely, months with lower sales may require targeted strategies to boost revenue.'
+      text: 'Sales exhibit a clear seasonal pattern, with peaks in November and December likely driven by holiday demand. This trend suggests opportunities to optimize marketing and inventory strategies during these high-revenue months. The consistent growth over four years also indicates a healthy upward trajectory for the business.'
     }
   ],
   agentTrace: {
-    turnId: '876f8899-ab79-420e-bd83-ddf4d3d7696e',
-    startedAt: 1775027406007,
-    endedAt: 1775027463623,
+    turnId: 'bdcb5833-e34f-4d0d-a737-fc78aa44788a',
+    startedAt: 1775029445028,
+    endedAt: 1775029502652,
     steps: [ [Object], [Object] ],
     toolCalls: [ [Object], [Object], [Object] ],
     criticRounds: [ [Object], [Object], [Object], [Object], [Object], [Object] ],
@@ -1630,7 +1613,7 @@ Server running on port 3002
     ],
     budgetHits: [],
     parseFailures: 0,
-    planRationale: 'The user wants to analyze total sales revenue over time. Since the dataset includes precomputed time-bucket columns, we will use the monthly grain (`__tf_month__Order_Date`) for a clear trend analysis. The `Sales` column will be summed to calculate total revenue for each month.'
+    planRationale: 'The user wants to analyze total sales revenue trends over time. Using the derived time-bucket column __tf_month__Order_Date for monthly aggregation ensures a clear and meaningful trend visualization.'
   },
   pivotAutoShow: true,
   pivotDefaults: { rows: [ '__tf_month__Order_Date' ], values: [ 'Sales' ] },
@@ -1639,17 +1622,17 @@ Server running on port 3002
     workbench: [ [Object], [Object], [Object], [Object] ]
   },
   suggestions: [
-    "What factors contributed to November 2018's revenue peak?",
-    'How do sales trends vary by customer segment?',
-    'Which cities had the highest sales during holiday seasons?',
-    'What was the average shipping time for top-selling months?'
+    'What factors drive the upward trend in sales revenue?',
+    'How do sales vary by customer segment over time?',
+    'Are there regional differences in sales during peak months?',
+    'What is the average shipping time during high-revenue periods?'
   ]
 }
 📤 SSE sent: response_charts {
   charts: [
     {
       type: 'line',
-      title: 'Total Sales Revenue Over Time',
+      title: 'Total Sales Revenue Over Time (Monthly)',
       x: '__tf_month__Order_Date',
       y: 'Sales_sum',
       xLabel: '__tf_month__Order_Date',
@@ -1657,19 +1640,7 @@ Server running on port 3002
       aggregate: 'none',
       data: [Array],
       yDomain: [Array],
-      keyInsight: 'Top __tf_month__Order_Date "2018-11" has the highest Sales_sum at 117938 (avg 47115, p75 64392). To lift Sales_sum, prioritize __tf_month__Order_Date "2018-11" and target moving weaker segments above 4520.',
-      _useAnalyticalDataOnly: true
-    },
-    {
-      type: 'area',
-      title: 'Sales_sum by __tf_month__Order_Date',
-      x: '__tf_month__Order_Date',
-      y: 'Sales_sum',
-      xLabel: '__tf_month__Order_Date',
-      yLabel: 'Sales_sum',
-      data: [Array],
-      yDomain: [Array],
-      keyInsight: 'Top __tf_month__Order_Date "2018-11" has the highest Sales_sum at 117938 (avg 47115, p75 64392). To lift Sales_sum, prioritize __tf_month__Order_Date "2018-11" and target moving weaker segments above 4520.',
+      keyInsight: 'Total sales revenue shows significant variability over time, ranging from a low of 4520 in 2015-02 to a peak of 117938 in 2018-11. The highest-performing months, including 2018-11 (117938) and 2017-12 (95739), suggest strong seasonal or event-driven spikes. However, the lowest months, such as 2015-02 (4520), highlight potential risks during certain periods, warranting analysis of factors driving these fluctuations to optimize performance year-round.',
       _useAnalyticalDataOnly: true
     }
   ]
@@ -1677,3 +1648,157 @@ Server running on port 3002
 📤 SSE sent: done {}
 ✅ Stream completed successfully
 🚫 Client disconnected from chat stream
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt
+🔎 Found chat document by sessionId: train_updated__66__xlsx_1775029380331 username: piyush@finzarc.com
+🔍 Access check for session session_1775029375795_5bn63u1rt:
+   Requester: "piyush@finzarc.com" -> normalized: "piyush@finzarc.com"
+   Session owner: "piyush@finzarc.com"
+   Collaborators: [piyush@finzarc.com]
+   Is requester in collaborators: true
+✅ Access granted for session session_1775029375795_5bn63u1rt

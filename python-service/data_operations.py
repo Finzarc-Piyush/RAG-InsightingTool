@@ -4,6 +4,14 @@ import numpy as np
 from typing import Any, Dict, List, Optional, Literal, Union
 from datetime import datetime
 import re
+
+_TEMPORAL_FACET_HEADER_RE = re.compile(
+    r"^(Day|Week|Month|Quarter|Half-year|Year) · "
+)
+
+
+def _is_temporal_facet_column_key(key: str) -> bool:
+    return key.startswith("__tf_") or bool(_TEMPORAL_FACET_HEADER_RE.match(key))
 from asteval import Interpreter
 
 
@@ -34,7 +42,7 @@ def round_numeric_values_to_2_decimals(data: List[Dict[str, Any]]) -> List[Dict[
                 # Temporal facet keys (e.g. __tf_year__Order_Date) must remain
                 # categorical strings. Never coerce them to numbers (this can
                 # cause UI to render `2015` as `2,015`).
-                if key.startswith("__tf_"):
+                if _is_temporal_facet_column_key(key):
                     rounded_row[key] = value
                     continue
 

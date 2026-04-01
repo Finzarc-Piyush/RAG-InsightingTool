@@ -1,5 +1,13 @@
 import type { TemporalFacetColumnMeta } from "@/shared/schema";
 
+/** Matches server `isTemporalFacetColumnKey`: legacy `__tf_*` or UI header `Month · …`. */
+const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
+
+export function isTemporalFacetFieldId(name: string): boolean {
+  if (name.startsWith("__tf_")) return true;
+  return DISPLAY_FACET_HEADER_RE.test(name);
+}
+
 const FACET_GRAIN_LABEL: Record<string, string> = {
   date: "Day",
   week: "Week",

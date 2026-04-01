@@ -1,4 +1,5 @@
 import { detectPeriodFromQuery } from "./dateUtils.js";
+import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 
 /** Minimal shape for planner steps; keeps tests free of planner → LLM import chain. */
 export type ExecuteQueryPlanStepLike = {
@@ -54,7 +55,7 @@ export function patchExecuteQueryPlanTrendCoarserGrain(
   const dateSet = new Set(dateColumns);
   const g0 = groupBy[0];
   if (!dateSet.has(g0)) return;
-  if (g0.startsWith("__tf_")) return;
+  if (isTemporalFacetColumnKey(g0)) return;
 
   plan.dateAggregationPeriod = "month";
 }

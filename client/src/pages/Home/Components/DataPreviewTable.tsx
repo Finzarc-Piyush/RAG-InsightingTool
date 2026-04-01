@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Lightbulb, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import {
+  Download,
+  Lightbulb,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+  PanelRightOpen,
+  X,
+} from 'lucide-react';
 import {
   downloadModifiedDataset,
   fetchSessionSampleRows,
@@ -19,7 +29,11 @@ import type {
   ChartSpec,
 } from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
-import { facetColumnHeaderLabelForColumn, formatTemporalFacetValue } from '@/lib/temporalFacetDisplay';
+import {
+  facetColumnHeaderLabelForColumn,
+  formatTemporalFacetValue,
+  isTemporalFacetFieldId,
+} from '@/lib/temporalFacetDisplay';
 import {
   buildPivotModel,
   createInitialPivotConfig,
@@ -109,7 +123,7 @@ function inferDateLikeColumns(
   for (const col of columnKeys) {
     if (numericSet.has(col)) continue;
     if (isIdLikeColumn(col)) continue;
-    if (String(col).startsWith('__tf_')) {
+    if (isTemporalFacetFieldId(col)) {
       out.push(col);
       continue;
     }
@@ -154,6 +168,9 @@ export function DataPreviewTable({
     () => new Set()
   );
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
+  const [pivotExpanded, setPivotExpanded] = useState(false);
+  const pivotExpandButtonRef = useRef<HTMLButtonElement>(null);
+  const pivotWasExpandedRef = useRef(false);
   const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('pivot');
   const [chartType, setChartType] = useState<PivotChartKind>('bar');
   const [chartTitle, setChartTitle] = useState('Pivot chart');
@@ -225,7 +242,7 @@ export function DataPreviewTable({
   // Schema-driven keys: used only for pivot config + “choose fields” UI.
   const schemaColumnKeys = useMemo(() => {
     const accept = (c: string) =>
-      variant === "analysis" ? true : !String(c).startsWith("__tf_");
+      variant === "analysis" ? true : !isTemporalFacetFieldId(c);
 
     const ordered: string[] = [];
     const seen = new Set<string>();
@@ -259,6 +276,24 @@ export function DataPreviewTable({
     return ordered;
   }, [pivotRows, variant, schemaColumns]);
 
+  /** Pivot field universe: schema columns plus temporal facet ids (often missing from columnar `columns`). */
+  const pivotFieldKeys = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const k of schemaColumnKeys) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+    for (const m of temporalFacetColumns ?? []) {
+      const name = m?.name;
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out;
+  }, [schemaColumnKeys, temporalFacetColumns]);
+
   // Data-driven keys: used only for the analysis “Flat table” so we don’t show
   // columns that don’t actually exist in the current preview payload.
   const flatColumnKeys = useMemo(() => {
@@ -269,7 +304,7 @@ export function DataPreviewTable({
     const seen = new Set<string>();
 
     const accept = (c: string) =>
-      variant === "analysis" ? true : !String(c).startsWith("__tf_");
+      variant === "analysis" ? true : !isTemporalFacetFieldId(c);
 
     // Stable ordering: first-seen order, scanning rows from the beginning.
     for (let i = 0; i < limit; i++) {
@@ -344,185 +379,48 @@ export function DataPreviewTable({
     numericColumnsSet,
   ]);
 
-  const numericCandidatesInPreview = useMemo(() => {
-    if (!pivotRows?.length) return [];
-    const out: string[] = [];
-    for (const col of numericColumns) {
-      let found = false;
-      for (const row of pivotRows) {
-        const n = parseNumericCell(row[col]);
-        if (n !== null) {
-          found = true;
-          break;
-        }
-      }
-      if (found) out.push(col);
-    }
-    return out;
-  }, [pivotRows, numericColumns]);
-
-  const dimensionCandidatesInPreview = useMemo(() => {
-    if (!pivotRows?.length) return [];
-    const out: string[] = [];
-    for (const col of schemaColumnKeys) {
-      if (numericColumnsSet.has(col)) continue;
-      let nonBlankCount = 0;
-      for (const row of pivotRows) {
-        const v = row[col];
-        if (v === null || v === undefined) continue;
-        const s = String(v).trim();
-        if (!s || s.toLowerCase() === 'null' || s === '(blank)') continue;
-        nonBlankCount += 1;
-        if (nonBlankCount > 0) break;
-      }
-      if (nonBlankCount > 0) out.push(col);
-    }
-    return out;
-  }, [pivotRows, schemaColumnKeys, numericColumnsSet]);
-
-  const { defaultRowDim, defaultValueMeasures } = useMemo(() => {
+  const { defaultPivotRowKeys, defaultValueMeasures } = useMemo(() => {
     const hintedRows = Array.isArray(pivotDefaults?.rows) ? pivotDefaults.rows : [];
     const hintedValues = Array.isArray(pivotDefaults?.values) ? pivotDefaults.values : [];
-
-    const hintedRowDim =
-      hintedRows.find((c) => dimensionCandidatesInPreview.includes(c)) ??
-      hintedRows.find((c) => schemaColumnKeys.includes(c) && !numericColumnsSet.has(c)) ??
-      null;
-    const hintedValueMeasure =
-      hintedValues.find((c) => numericCandidatesInPreview.includes(c)) ??
-      hintedValues.find((c) => numericColumns.includes(c) && schemaColumnKeys.includes(c)) ??
-      null;
-
-    if (!pivotRows?.length) {
-      return {
-        defaultRowDim: hintedRowDim,
-        defaultValueMeasures: hintedValueMeasure ? [hintedValueMeasure] : [],
-      };
-    }
-
-    // Pick best default dimension:
-    // - non-numeric
-    // - has non-blank values
-    // - avoid ID-like columns (they aren't useful as row labels)
-    let bestRow: {
-      col: string;
-      nonBlank: number;
-      unique: number;
-      schemaIndex: number;
-      score: number;
-    } | null = null;
-    for (const col of dimensionCandidatesInPreview) {
-      if (isIdLikeColumn(col)) continue;
-      const schemaIndex = schemaColumnKeys.indexOf(col);
-
-      const uniques = new Set<string>();
-      let nonBlank = 0;
-      for (const row of pivotRows) {
-        const v = row[col];
-        if (v === null || v === undefined) continue;
-        const s = String(v).trim();
-        if (!s || s.toLowerCase() === 'null' || s === '(blank)') continue;
-        nonBlank += 1;
-        uniques.add(s);
-      }
-
-      if (nonBlank === 0) continue;
-      const unique = uniques.size;
-      const cardinalityRatio = nonBlank > 0 ? unique / nonBlank : 1;
-      // Favor broadly-populated business dimensions while avoiding high-cardinality
-      // fields (e.g. product names/near-identifiers) as default pivot rows.
-      const score = nonBlank - cardinalityRatio * 4 + Math.min(unique, 20) * 0.02;
-
-      const bestScore = bestRow ? bestRow.score : -Infinity;
-
-      if (!bestRow || score > bestScore || (score === bestScore && schemaIndex < bestRow.schemaIndex)) {
-        bestRow = { col, nonBlank, unique, schemaIndex, score };
-      }
-    }
-
-    const defaultRowDimFallback =
-      dimensionCandidatesInPreview.find((c) => !isIdLikeColumn(c)) ??
-      dimensionCandidatesInPreview[0] ??
-      null;
-
-    const defaultRowDimResolved = bestRow?.col ?? defaultRowDimFallback;
-
-    // Pick best default measure:
-    // - numeric candidate with parseable values in preview
-    // - avoid ID-like numeric columns
-    let bestMeasure: { col: string; numericCount: number; sumAbs: number } | null = null;
-    const measureCandidates = numericCandidatesInPreview.filter((c) => !isIdLikeColumn(c));
-    const candidates = measureCandidates.length > 0 ? measureCandidates : numericCandidatesInPreview;
-
-    for (const col of candidates) {
-      let numericCount = 0;
-      let sumAbs = 0;
-      for (const row of pivotRows) {
-        const n = parseNumericCell(row[col]);
-        if (n === null) continue;
-        numericCount += 1;
-        sumAbs += Math.abs(n);
-      }
-      if (numericCount === 0) continue;
-      if (!bestMeasure) {
-        bestMeasure = { col, numericCount, sumAbs };
-        continue;
-      }
-      if (
-        numericCount > bestMeasure.numericCount ||
-        (numericCount === bestMeasure.numericCount && sumAbs > bestMeasure.sumAbs)
-      ) {
-        bestMeasure = { col, numericCount, sumAbs };
-      }
-    }
-
-    const defaultValueMeasuresResolved = bestMeasure ? [bestMeasure.col] : [];
-
     return {
-      defaultRowDim: hintedRowDim ?? defaultRowDimResolved,
-      defaultValueMeasures:
-        hintedValueMeasure != null ? [hintedValueMeasure] : defaultValueMeasuresResolved,
+      defaultPivotRowKeys: hintedRows.slice(0, 2),
+      defaultValueMeasures: hintedValues.slice(0, 2),
     };
-  }, [
-    pivotDefaults,
-    pivotRows,
-    dimensionCandidatesInPreview,
-    numericCandidatesInPreview,
-    schemaColumnKeys,
-    numericColumnsSet,
-    numericColumns,
-  ]);
+  }, [pivotDefaults]);
 
   useEffect(() => {
     if (variant !== 'analysis') return;
     if (process.env.NODE_ENV === 'production') return;
-    if (pivotDefaults?.rows?.length || pivotDefaults?.values?.length) {
-      logger.debug('[DataPreviewTable] Using pivotDefaults hint', {
-        rows: pivotDefaults?.rows ?? [],
-        values: pivotDefaults?.values ?? [],
-        chosenRow: defaultRowDim,
-        chosenValues: defaultValueMeasures,
-      });
-      return;
-    }
-    logger.debug('[DataPreviewTable] Pivot default fallback path', {
-      chosenRow: defaultRowDim,
+    const hintedRows = pivotDefaults?.rows ?? [];
+    const hintedValues = pivotDefaults?.values ?? [];
+    const resolved = createInitialPivotConfig(
+      pivotFieldKeys,
+      numericColumns,
+      defaultPivotRowKeys,
+      defaultValueMeasures
+    );
+    logger.debug('[DataPreviewTable] Pivot defaults from message', {
+      hintedRows,
+      hintedValues,
+      chosenRows: defaultPivotRowKeys,
       chosenValues: defaultValueMeasures,
-      dimensionCandidates: dimensionCandidatesInPreview.slice(0, 10),
+      resolvedRows: resolved.rows,
+      resolvedValues: resolved.values.map((v) => v.field),
     });
   }, [
     variant,
     pivotDefaults,
-    defaultRowDim,
+    pivotFieldKeys,
+    numericColumns,
+    defaultPivotRowKeys,
     defaultValueMeasures,
-    dimensionCandidatesInPreview,
   ]);
 
   const pivotDataSignature = useMemo(() => {
-    return `${schemaColumnKeys.join('\0')}\0${numericColumns.join('\0')}\0${
-      defaultRowDim ?? ''
-    }\0${defaultValueMeasures.join('\0')}`;
-  }, [schemaColumnKeys, numericColumns, defaultRowDim, defaultValueMeasures]);
+    return `${pivotFieldKeys.join('\0')}\0${numericColumns.join('\0')}\0${defaultPivotRowKeys.join(
+      '\0'
+    )}\0${defaultValueMeasures.join('\0')}`;
+  }, [pivotFieldKeys, numericColumns, defaultPivotRowKeys, defaultValueMeasures]);
 
   const [serverPivotModel, setServerPivotModel] = useState<PivotModelContract | null>(
     null
@@ -537,15 +435,17 @@ export function DataPreviewTable({
   const [serverPivotError, setServerPivotError] = useState<string | null>(null);
   const serverPivotRequestSeqRef = useRef(0);
 
+  const normalizedPivotConfig = useMemo(
+    () => normalizePivotConfig(pivotFieldKeys, pivotConfig),
+    [pivotFieldKeys, pivotConfig]
+  );
+
   const canPivot = useMemo(() => {
     if (variant !== 'analysis') return false;
-    return Boolean(defaultRowDim && defaultValueMeasures.length > 0);
-  }, [variant, defaultRowDim, defaultValueMeasures.length]);
-
-  const normalizedPivotConfig = useMemo(
-    () => normalizePivotConfig(schemaColumnKeys, pivotConfig),
-    [schemaColumnKeys, pivotConfig]
-  );
+    return (
+      normalizedPivotConfig.rows.length > 0 && normalizedPivotConfig.values.length > 0
+    );
+  }, [variant, normalizedPivotConfig]);
 
   const chartDimensionOptions = useMemo(() => {
     return schemaColumnKeys.filter((c) => !numericColumnsSet.has(c));
@@ -642,11 +542,11 @@ export function DataPreviewTable({
     if (variant !== 'analysis') return;
     setPivotConfig(
       normalizePivotConfig(
-        schemaColumnKeys,
+        pivotFieldKeys,
         createInitialPivotConfig(
-          schemaColumnKeys,
+          pivotFieldKeys,
           numericColumns,
-          defaultRowDim ? [defaultRowDim] : [],
+          defaultPivotRowKeys,
           defaultValueMeasures
         )
       )
@@ -786,6 +686,35 @@ export function DataPreviewTable({
     }
   }, [variant, pivotRows, normalizedPivotConfig]);
 
+  useEffect(() => {
+    if (analysisView !== 'pivot') setPivotExpanded(false);
+  }, [analysisView]);
+
+  useEffect(() => {
+    if (!pivotExpanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [pivotExpanded]);
+
+  useEffect(() => {
+    if (!pivotExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPivotExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pivotExpanded]);
+
+  useEffect(() => {
+    if (pivotWasExpandedRef.current && !pivotExpanded) {
+      queueMicrotask(() => pivotExpandButtonRef.current?.focus());
+    }
+    pivotWasExpandedRef.current = pivotExpanded;
+  }, [pivotExpanded]);
+
   const pivotModel = useMemo(() => {
     if (variant !== 'analysis' || !canPivot || analysisView !== 'pivot') return null;
     return buildPivotModel(
@@ -832,6 +761,17 @@ export function DataPreviewTable({
       return true;
     });
   }, [pivotModelForRender, collapsedPivotGroups, showSubtotals, showGrandTotal]);
+
+  const handlePivotWorkspaceBgClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (pivotExpanded) return;
+      const el = e.target as HTMLElement;
+      if (el.closest('button, a, input, select, textarea, label, [role="button"]')) return;
+      if (el.closest('table')) return;
+      setPivotExpanded(true);
+    },
+    [pivotExpanded]
+  );
 
   const togglePivotCollapse = useCallback((pathKey: string) => {
     setCollapsedPivotGroups((prev) => {
@@ -924,8 +864,8 @@ export function DataPreviewTable({
 
   const handlePivotConfigChange = useCallback(
     (next: PivotUiConfig) =>
-      setPivotConfig(normalizePivotConfig(schemaColumnKeys, next)),
-    [schemaColumnKeys]
+      setPivotConfig(normalizePivotConfig(pivotFieldKeys, next)),
+    [pivotFieldKeys]
   );
 
   const handleRowSortChange = useCallback(
@@ -946,10 +886,10 @@ export function DataPreviewTable({
             primary: 'measure',
           },
         };
-        return normalizePivotConfig(schemaColumnKeys, next);
+        return normalizePivotConfig(pivotFieldKeys, next);
       });
     },
-    [schemaColumnKeys]
+    [pivotFieldKeys]
   );
 
   const handleRowLabelSortChange = useCallback(() => {
@@ -963,9 +903,9 @@ export function DataPreviewTable({
         ...prev,
         rowSort: { primary: 'rowLabel', direction: nextDirection },
       };
-      return normalizePivotConfig(schemaColumnKeys, next);
+      return normalizePivotConfig(pivotFieldKeys, next);
     });
-  }, [schemaColumnKeys]);
+  }, [pivotFieldKeys]);
 
   const { sortedData, handleSort, getSortIcon } = usePreviewTableSort({
     data,
@@ -1145,7 +1085,7 @@ export function DataPreviewTable({
     );
   }
 
-  if (data.length === 0 && !(variant === 'analysis' && canPivot)) {
+  if (data.length === 0 && variant !== 'analysis') {
     return (
       <Card className="p-4">
         <p className="text-sm text-muted-foreground">No data to display</p>
@@ -1156,8 +1096,17 @@ export function DataPreviewTable({
   // Flat table column set should reflect exactly the preview payload we received.
   const columns = flatColumnKeys;
 
+  const showPivotAnalysisView = variant === 'analysis' && analysisView === 'pivot';
   const showPivotChrome =
-    variant === 'analysis' && canPivot && analysisView === 'pivot' && effectivePivotModel;
+    showPivotAnalysisView && canPivot && Boolean(effectivePivotModel);
+
+  const pivotGridReady =
+    Boolean(showPivotChrome && effectivePivotModel) &&
+    normalizedPivotConfig.values.length > 0 &&
+    !(sessionSampleError && !effectivePivotModel) &&
+    !serverPivotLoading &&
+    !serverPivotError &&
+    serverPivotMeta?.rowCount !== 0;
 
   const trimmedAnalysisInsight = analysisIntermediateInsight?.trim() ?? "";
   const toolPreviewRowCount = data.length;
@@ -1170,6 +1119,155 @@ export function DataPreviewTable({
     !serverPivotLoading &&
     pivotResultRowCount != null &&
     pivotResultRowCount !== toolPreviewRowCount;
+
+  const renderPivotDataWorkspace = (forExpandedView: boolean) => (
+    <div
+      className={forExpandedView ? 'flex flex-col flex-1 min-h-0 min-w-0' : undefined}
+      onClick={handlePivotWorkspaceBgClick}
+    >
+      <div className="flex flex-wrap items-center gap-3 mb-2 shrink-0">
+        <Button
+          ref={forExpandedView ? undefined : pivotExpandButtonRef}
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          title={forExpandedView ? 'Exit expanded view' : 'Expand pivot'}
+          aria-label={forExpandedView ? 'Exit expanded view' : 'Expand pivot'}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (forExpandedView) setPivotExpanded(false);
+            else setPivotExpanded(true);
+          }}
+        >
+          {forExpandedView ? (
+            <Minimize2 className="h-4 w-4" />
+          ) : (
+            <Maximize2 className="h-4 w-4" />
+          )}
+        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Top N</span>
+          <input
+            type="number"
+            min={1}
+            className="w-20 rounded border border-border/60 bg-background px-2 py-1 text-xs"
+            value={pivotTopN ?? ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              if (!v) {
+                setPivotTopN(null);
+                return;
+              }
+              const n = Number(v);
+              setPivotTopN(Number.isFinite(n) && n > 0 ? n : null);
+            }}
+            placeholder="(off)"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Show</span>
+          <select
+            className="rounded border border-border/60 bg-background px-2 py-1 text-xs"
+            value={showValuesAs}
+            onChange={(e) => setShowValuesAs(e.target.value as PivotShowValuesAsMode)}
+          >
+            <option value="raw">Raw</option>
+            <option value="percentOfColumnTotal">% of column total</option>
+          </select>
+        </div>
+
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showSubtotals}
+            onChange={(e) => setShowSubtotals(e.target.checked)}
+          />
+          Subtotals
+        </label>
+
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showGrandTotal}
+            onChange={(e) => setShowGrandTotal(e.target.checked)}
+          />
+          Grand total
+        </label>
+      </div>
+
+      <PivotGrid
+        model={pivotModelForRender as any}
+        flatRows={pivotFlatRows}
+        onToggleCollapse={togglePivotCollapse}
+        temporalFacetColumns={temporalFacetColumns}
+        rowSort={normalizedPivotConfig.rowSort}
+        onRowSortChange={handleRowSortChange}
+        onRowLabelSortChange={handleRowLabelSortChange}
+        showValuesAs={showValuesAs}
+        onDrillthroughCell={handleDrillthroughCell}
+        layout={forExpandedView ? 'expanded' : 'embedded'}
+      />
+
+      {drillthrough && (
+        <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3 shrink-0">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div>
+              <div className="text-xs text-muted-foreground">Drillthrough rows</div>
+              <div className="text-sm font-semibold">
+                {drillthrough.loading ? 'Loading...' : `${drillthrough.count ?? 0} rows`}
+              </div>
+              {drillthrough.error && (
+                <div className="text-xs text-destructive mt-1">{drillthrough.error}</div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="text-xs rounded border border-border/60 px-2 py-1 hover:bg-muted"
+              onClick={() => setDrillthrough(null)}
+            >
+              Close
+            </button>
+          </div>
+
+          {drillthrough.loading ? null : (
+            <div className="overflow-x-auto max-h-[260px]">
+              <table className="w-full border-collapse text-xs">
+                <thead className="sticky top-0 bg-muted/30 z-10">
+                  <tr>
+                    {drillthrough.rows[0]
+                      ? Object.keys(drillthrough.rows[0]!).map((c) => (
+                          <th
+                            key={c}
+                            className="text-left px-2 py-1 border-b border-border/60 whitespace-nowrap"
+                          >
+                            {c}
+                          </th>
+                        ))
+                      : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillthrough.rows.slice(0, 50).map((r, idx) => (
+                    <tr key={idx} className="border-b border-border/40">
+                      {drillthrough.rows[0]
+                        ? Object.keys(drillthrough.rows[0]!).map((c) => (
+                            <td key={c} className="px-2 py-1 whitespace-nowrap">
+                              {String((r as any)[c] ?? '')}
+                            </td>
+                          ))
+                        : null}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <Card className="p-4 mt-2 overflow-hidden border-border/60 shadow-sm bg-gradient-to-br from-card to-card/95">
@@ -1194,15 +1292,13 @@ export function DataPreviewTable({
           </Card>
         </div>
       )}
-      {(title ||
-        sessionId ||
-        (variant === 'analysis' && canPivot)) && (
+      {(title || sessionId || variant === 'analysis') && (
         <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
           {title && (
             <h4 className="text-sm font-semibold text-foreground">{title}</h4>
           )}
           <div className="flex items-center gap-2 ml-auto flex-wrap">
-            {variant === 'analysis' && canPivot && (
+            {variant === 'analysis' && (
               <div className="flex rounded-lg border border-border/80 bg-muted/30 p-0.5">
                 <Button
                   type="button"
@@ -1262,16 +1358,14 @@ export function DataPreviewTable({
 
       <div
         className={
-          variant === 'analysis' && canPivot
+          variant === 'analysis'
             ? 'flex gap-0 items-stretch min-w-0'
             : undefined
         }
       >
         <div
           className={
-            variant === 'analysis' && canPivot
-              ? 'flex-1 min-w-0 pr-2'
-              : undefined
+            variant === 'analysis' ? 'flex-1 min-w-0 pr-2' : undefined
           }
         >
             {analysisView === 'chart' ? (
@@ -1435,10 +1529,11 @@ export function DataPreviewTable({
                   )}
                 </div>
               </div>
-            ) : showPivotChrome && effectivePivotModel ? (
-              normalizedPivotConfig.values.length === 0 ? (
+            ) : showPivotAnalysisView ? (
+              !canPivot ? (
                 <p className="text-sm text-muted-foreground py-6 text-center border rounded-lg border-dashed">
-                  Add at least one field to <strong>Values</strong> in Pivot fields.
+                  Drag fields into <strong>Rows</strong> and <strong>Values</strong> in Pivot fields to
+                  build the pivot.
                 </p>
               ) : sessionSampleError && !effectivePivotModel ? (
                 <div className="rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-6 text-sm text-destructive text-center">
@@ -1456,142 +1551,18 @@ export function DataPreviewTable({
                 <p className="text-sm text-muted-foreground py-6 text-center border rounded-lg border-dashed">
                   No rows match current filters (<code>no_rows_after_filters</code>).
                 </p>
+              ) : pivotGridReady && pivotExpanded ? (
+                <p className="text-xs text-muted-foreground py-6 text-center border border-dashed rounded-lg leading-relaxed px-2">
+                  Pivot is open in an expanded view. Press Escape, click the dimmed backdrop, or use
+                  the close control in the overlay to return here.
+                </p>
               ) : (
-                <>
-                  <div className="flex flex-wrap items-center gap-3 mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Top N</span>
-                      <input
-                        type="number"
-                        min={1}
-                        className="w-20 rounded border border-border/60 bg-background px-2 py-1 text-xs"
-                        value={pivotTopN ?? ''}
-                        onChange={(e) => {
-                          const v = e.target.value.trim();
-                          if (!v) {
-                            setPivotTopN(null);
-                            return;
-                          }
-                          const n = Number(v);
-                          setPivotTopN(Number.isFinite(n) && n > 0 ? n : null);
-                        }}
-                        placeholder="(off)"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Show</span>
-                      <select
-                        className="rounded border border-border/60 bg-background px-2 py-1 text-xs"
-                        value={showValuesAs}
-                        onChange={(e) => setShowValuesAs(e.target.value as PivotShowValuesAsMode)}
-                      >
-                        <option value="raw">Raw</option>
-                        <option value="percentOfColumnTotal">% of column total</option>
-                      </select>
-                    </div>
-
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        checked={showSubtotals}
-                        onChange={(e) => setShowSubtotals(e.target.checked)}
-                      />
-                      Subtotals
-                    </label>
-
-                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        checked={showGrandTotal}
-                        onChange={(e) => setShowGrandTotal(e.target.checked)}
-                      />
-                      Grand total
-                    </label>
-                  </div>
-
-                  <PivotGrid
-                    model={pivotModelForRender as any}
-                    flatRows={pivotFlatRows}
-                    onToggleCollapse={togglePivotCollapse}
-                    temporalFacetColumns={temporalFacetColumns}
-                    rowSort={normalizedPivotConfig.rowSort}
-                    onRowSortChange={handleRowSortChange}
-                    onRowLabelSortChange={handleRowLabelSortChange}
-                    showValuesAs={showValuesAs}
-                    onDrillthroughCell={handleDrillthroughCell}
-                  />
-
-                  {drillthrough && (
-                    <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3">
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <div>
-                          <div className="text-xs text-muted-foreground">
-                            Drillthrough rows
-                          </div>
-                          <div className="text-sm font-semibold">
-                            {drillthrough.loading
-                              ? 'Loading...'
-                              : `${drillthrough.count ?? 0} rows`}
-                          </div>
-                          {drillthrough.error && (
-                            <div className="text-xs text-destructive mt-1">
-                              {drillthrough.error}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          className="text-xs rounded border border-border/60 px-2 py-1 hover:bg-muted"
-                          onClick={() => setDrillthrough(null)}
-                        >
-                          Close
-                        </button>
-                      </div>
-
-                      {drillthrough.loading ? null : (
-                        <div className="overflow-x-auto max-h-[260px]">
-                          <table className="w-full border-collapse text-xs">
-                            <thead className="sticky top-0 bg-muted/30 z-10">
-                              <tr>
-                                {drillthrough.rows[0]
-                                  ? Object.keys(drillthrough.rows[0]!).map((c) => (
-                                      <th
-                                        key={c}
-                                        className="text-left px-2 py-1 border-b border-border/60 whitespace-nowrap"
-                                      >
-                                        {c}
-                                      </th>
-                                    ))
-                                  : null}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {drillthrough.rows.slice(0, 50).map((r, idx) => (
-                                <tr key={idx} className="border-b border-border/40">
-                                  {drillthrough.rows[0]
-                                    ? Object.keys(drillthrough.rows[0]!).map((c) => (
-                                        <td key={c} className="px-2 py-1 whitespace-nowrap">
-                                          {String(
-                                            (r as any)[c] ?? ''
-                                          )}
-                                        </td>
-                                      ))
-                                    : null}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
+                renderPivotDataWorkspace(false)
               )
             ) : (
             <div
               className={
-                variant === 'analysis' && canPivot
+                variant === 'analysis'
                   ? 'overflow-x-auto max-h-[500px] overflow-y-auto border border-border rounded-lg'
                   : 'overflow-x-auto max-w-[42rem] max-h-[500px] overflow-y-auto border border-border rounded-md'
               }
@@ -1659,7 +1630,7 @@ export function DataPreviewTable({
         </div>
 
         <AnimatePresence mode="popLayout">
-          {variant === 'analysis' && canPivot && (
+          {variant === 'analysis' && !(pivotGridReady && pivotExpanded) && (
             <motion.div
               key="pivot-panel"
               initial={false}
@@ -1722,11 +1693,109 @@ export function DataPreviewTable({
       </div>
 
       {data.length > maxRows &&
-        !(variant === 'analysis' && canPivot && analysisView !== 'flat') && (
+        !(variant === 'analysis' && analysisView !== 'flat') && (
         <p className="text-xs text-muted-foreground mt-2">
           Showing {maxRows} of {data.length} rows
         </p>
       )}
+
+      {pivotGridReady &&
+        pivotExpanded &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/50"
+              aria-hidden
+              onClick={() => setPivotExpanded(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="pivot-expanded-title"
+              className="fixed z-[41] flex flex-col rounded-xl border bg-background shadow-2xl overflow-hidden left-3 right-3 top-3 bottom-3 md:left-4 md:right-4 md:top-4 md:bottom-4 max-h-[calc(100dvh-1.5rem)] md:max-h-[calc(100dvh-2rem)]"
+            >
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2 shrink-0 bg-background">
+                <h2 id="pivot-expanded-title" className="text-sm font-semibold">
+                  Pivot
+                </h2>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => setPivotExpanded(false)}
+                  aria-label="Close expanded pivot"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="flex flex-1 min-h-0 min-w-0 gap-0 items-stretch">
+                <div className="flex-1 min-w-0 min-h-0 flex flex-col px-2 pb-2 pt-2">
+                  {renderPivotDataWorkspace(true)}
+                </div>
+                <motion.div
+                  key="pivot-panel-expanded"
+                  initial={false}
+                  animate={{
+                    width: pivotPanelOpen ? 300 : 44,
+                    opacity: 1,
+                  }}
+                  transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                  className="shrink-0 flex h-full min-h-0 flex-col border-l border-border/60 bg-muted/10 overflow-hidden self-stretch"
+                >
+                  <div className="flex min-h-0 min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => setPivotPanelOpen((o) => !o)}
+                      className="shrink-0 w-11 flex flex-col items-center justify-center gap-1 py-3 border-r border-border/50 bg-muted/20 hover:bg-muted/40 transition-colors text-muted-foreground hover:text-foreground"
+                      aria-expanded={pivotPanelOpen}
+                      aria-label={pivotPanelOpen ? 'Collapse pivot fields' : 'Expand pivot fields'}
+                    >
+                      {pivotPanelOpen ? (
+                        <PanelRightClose className="h-4 w-4" />
+                      ) : (
+                        <PanelRightOpen className="h-4 w-4" />
+                      )}
+                      <span
+                        className="text-[10px] font-semibold uppercase tracking-wider"
+                        style={{
+                          writingMode: 'vertical-rl',
+                          transform: 'rotate(180deg)',
+                        }}
+                      >
+                        Fields
+                      </span>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {pivotPanelOpen && (
+                        <motion.div
+                          key="panel-inner-expanded"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.15 }}
+                          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2.5"
+                        >
+                          <PivotFieldPanel
+                            fillAvailableHeight
+                            config={normalizedPivotConfig}
+                            onConfigChange={handlePivotConfigChange}
+                            filterSelections={filterSelections}
+                            onFilterSelectionsChange={setFilterSelections}
+                            data={pivotRows as Record<string, unknown>[]}
+                            numericColumns={numericColumns}
+                            temporalFacetColumns={temporalFacetColumns}
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
     </Card>
   );
 }

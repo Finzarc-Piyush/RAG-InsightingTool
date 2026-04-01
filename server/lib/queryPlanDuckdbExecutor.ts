@@ -1,13 +1,18 @@
 /**
  * Run agent execute_query_plan-style aggregations on the authoritative columnar
- * DuckDB `data` table so results match pivot (full dataset, materialized __tf_*).
+ * DuckDB `data` table so results match pivot (materialized temporal facets).
  */
 
+import type { DataSummary } from "../shared/schema.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { isDuckDBAvailable } from "./columnarStorage.js";
 import type { QueryPlanBody } from "./queryPlanExecutor.js";
 import { clearRedundantDateAggregationForTemporalFacets } from "./queryPlanExecutor.js";
 import { isIdColumn, getCountNameForIdColumn } from "./columnIdHeuristics.js";
+import {
+  buildDisplayToLegacyFacetMap,
+  duckPhysicalColumnName,
+} from "./temporalFacetColumns.js";
 
 const DATA_TABLE = "data";
 
@@ -28,7 +33,10 @@ function dimensionMatchExpr(column: string, match?: string): string {
   return `TRIM(CAST(${q} AS VARCHAR))`;
 }
 
-function buildWhereClause(plan: QueryPlanBody): { sql: string; descriptions: string[] } {
+function buildWhereClause(
+  plan: QueryPlanBody,
+  physicalOf: (logical: string) => string
+): { sql: string; descriptions: string[] } {
   const descriptions: string[] = [];
   const parts: string[] = [];
   for (const filter of plan.dimensionFilters ?? []) {
@@ -37,7 +45,8 @@ function buildWhereClause(plan: QueryPlanBody): { sql: string; descriptions: str
     if (mode === "contains") {
       return { sql: "", descriptions: [] };
     }
-    const expr = dimensionMatchExpr(filter.column, mode);
+    const physCol = physicalOf(filter.column);
+    const expr = dimensionMatchExpr(physCol, mode);
     const vals = filter.values.map((v) => {
       const t = v.trim();
       return mode === "case_insensitive" ? t.toLowerCase() : t;
@@ -59,10 +68,11 @@ function buildWhereClause(plan: QueryPlanBody): { sql: string; descriptions: str
 }
 
 function aggregationSqlExpr(
-  column: string,
+  columnLogical: string,
+  columnPhysical: string,
   operation: NonNullable<QueryPlanBody["aggregations"]>[0]["operation"]
 ): string {
-  const q = quoteIdent(column);
+  const q = quoteIdent(columnPhysical);
   switch (operation) {
     case "sum":
       return `SUM(CAST(${q} AS DOUBLE))`;
@@ -74,7 +84,7 @@ function aggregationSqlExpr(
     case "max":
       return `MAX(CAST(${q} AS DOUBLE))`;
     case "count":
-      if (isIdColumn(column)) {
+      if (isIdColumn(columnLogical)) {
         return `COUNT(DISTINCT ${q})`;
       }
       return `COUNT(*)`;
@@ -116,10 +126,30 @@ export interface BuildQueryPlanDuckdbSqlResult {
   descriptions: string[];
 }
 
-export function buildQueryPlanDuckdbSql(plan: QueryPlanBody): BuildQueryPlanDuckdbSqlResult | null {
+/** When set, facet columns in the plan use UI ids; DuckDB may still store legacy `__tf_*` names. */
+export interface DuckDbQueryPlanBuildContext {
+  tableColumns: Set<string>;
+  summary: DataSummary;
+}
+
+export function buildQueryPlanDuckdbSql(
+  plan: QueryPlanBody,
+  ctx?: DuckDbQueryPlanBuildContext
+): BuildQueryPlanDuckdbSqlResult | null {
   if (!canExecuteQueryPlanOnDuckDb(plan)) return null;
   const p = clearRedundantDateAggregationForTemporalFacets(plan);
-  const { sql: whereSql, descriptions: filterDesc } = buildWhereClause(p);
+  const displayToLegacy = ctx
+    ? buildDisplayToLegacyFacetMap(ctx.summary)
+    : null;
+  const physicalOf = (logical: string): string =>
+    ctx && displayToLegacy
+      ? duckPhysicalColumnName(logical, ctx.tableColumns, displayToLegacy)
+      : logical;
+
+  const { sql: whereSql, descriptions: filterDesc } = buildWhereClause(
+    p,
+    physicalOf
+  );
   if (whereSql === "" && (p.dimensionFilters?.length ?? 0) > 0) {
     return null;
   }
@@ -129,13 +159,21 @@ export function buildQueryPlanDuckdbSql(plan: QueryPlanBody): BuildQueryPlanDuck
   const groupParts: string[] = [];
 
   for (const g of groupBy) {
-    const q = quoteIdent(g);
-    selectParts.push(`${q} AS ${q}`);
-    groupParts.push(q);
+    const phys = physicalOf(g);
+    const qLog = quoteIdent(g);
+    if (phys === g) {
+      selectParts.push(`${qLog} AS ${qLog}`);
+      groupParts.push(qLog);
+    } else {
+      const qPhys = quoteIdent(phys);
+      selectParts.push(`${qPhys} AS ${qLog}`);
+      groupParts.push(qPhys);
+    }
   }
 
   for (const agg of p.aggregations ?? []) {
-    const expr = aggregationSqlExpr(agg.column, agg.operation);
+    const colPhys = physicalOf(agg.column);
+    const expr = aggregationSqlExpr(agg.column, colPhys, agg.operation);
     if (!expr) return null;
     const alias = outputAliasForAgg(agg.column, agg.operation, agg.alias);
     selectParts.push(`${expr} AS ${quoteIdent(alias)}`);
@@ -183,19 +221,27 @@ export type ExecuteQueryPlanOnDuckDbResult =
 
 export async function executeQueryPlanOnDuckDb(
   sessionId: string,
-  plan: QueryPlanBody
+  plan: QueryPlanBody,
+  summary: DataSummary
 ): Promise<ExecuteQueryPlanOnDuckDbResult> {
   if (!isDuckDBAvailable()) {
     return { ok: false, error: "DuckDB not available" };
-  }
-  const built = buildQueryPlanDuckdbSql(plan);
-  if (!built) {
-    return { ok: false, error: "Plan not supported on DuckDB executor" };
   }
 
   const storage = new ColumnarStorageService({ sessionId });
   try {
     await storage.initialize();
+    const descRows = await storage.executeQuery<{ column_name?: string }>(
+      `DESCRIBE ${DATA_TABLE}`
+    );
+    const tableColumns = new Set(
+      descRows.map((r) => String((r as { column_name?: string }).column_name ?? ""))
+    );
+    const built = buildQueryPlanDuckdbSql(plan, { tableColumns, summary });
+    if (!built) {
+      return { ok: false, error: "Plan not supported on DuckDB executor" };
+    }
+
     const cntRows = await storage.executeQuery<{ cnt: bigint | number }>(built.countSql);
     const rawCnt = cntRows[0]?.cnt ?? 0;
     const inputRowCount =

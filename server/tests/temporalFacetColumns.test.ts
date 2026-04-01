@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyTemporalFacetColumns,
   facetColumnKey,
+  facetColumnLegacyMachineKey,
   isTemporalFacetColumnKey,
   remapGroupByToTemporalFacet,
   resolveFacetSourceBindings,
@@ -11,10 +12,14 @@ import {
 } from "../lib/temporalFacetColumns.js";
 
 describe("temporalFacetColumns", () => {
-  it("facetColumnKey is stable and prefixed", () => {
+  it("facetColumnKey matches UI label and isTemporalFacetColumnKey", () => {
     const k = facetColumnKey("Order Date", "year");
     assert.ok(isTemporalFacetColumnKey(k));
-    assert.match(k, /^__tf_year__/);
+    assert.equal(k, "Year · Order Date");
+    assert.equal(
+      facetColumnLegacyMachineKey("Order Date", "year"),
+      "__tf_year__Order_Date"
+    );
   });
 
   it("metadata lists six grains per source (incl. half_year)", () => {
@@ -47,7 +52,7 @@ describe("temporalFacetColumns", () => {
     assert.equal(data[0][mo], "2015-06");
   });
 
-  it("applyTemporalFacetColumns fills __tf_year__Order_Date from Cleaned_Order Date", () => {
+  it("applyTemporalFacetColumns fills Year · Order Date from Cleaned_Order Date", () => {
     const data: Record<string, unknown>[] = [
       { Sales: 1, "Cleaned_Order Date": "2015-06-15" },
       { Sales: 2, "Cleaned_Order Date": "2016-01-02" },
@@ -76,14 +81,21 @@ describe("temporalFacetColumns", () => {
     assert.equal(data[1][h], "2016-H1");
   });
 
-  it("stripTemporalFacetColumns removes __tf_ keys", () => {
+  it("stripTemporalFacetColumns removes legacy __tf_ keys", () => {
     const row = { a: 1, __tf_year__X: "2020" };
     stripTemporalFacetColumns([row]);
     assert.equal(row.__tf_year__X, undefined);
     assert.equal(row.a, 1);
   });
 
-  it("applyTemporalFacetColumns preserves materialized __tf_* when date binding is missing", () => {
+  it("stripTemporalFacetColumns removes display-style facet keys", () => {
+    const row = { a: 1, "Year · Order Date": "2020" };
+    stripTemporalFacetColumns([row]);
+    assert.equal(row["Year · Order Date"], undefined);
+    assert.equal(row.a, 1);
+  });
+
+  it("applyTemporalFacetColumns preserves materialized legacy facet when date binding is missing", () => {
     const data: Record<string, unknown>[] = [
       { Sales: 1, __tf_month__Order_Date: "2018-02" },
     ];

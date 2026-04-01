@@ -30,6 +30,7 @@ import {
 } from "./chartProposalValidation.js";
 import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
+import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -46,6 +47,15 @@ function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[]
     return (t as { rows: Record<string, unknown>[] }).rows;
   }
   return [];
+}
+
+function toolTableColumnOrderForIntermediate(tr: ToolResult): string[] | null {
+  const t = tr.table;
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  const cols = (t as { columns?: unknown }).columns;
+  if (!Array.isArray(cols)) return null;
+  const out = cols.filter((v): v is string => typeof v === "string");
+  return out.length ? out : null;
 }
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 
@@ -755,9 +765,24 @@ export async function runAgentTurn(
           const intermediateRows = toolTableRowsForIntermediate(stepResult);
           if (intermediateRows.length > 0) {
             const insight = buildIntermediateInsight(step.tool, stepResult);
+            const pivotDefaults = derivePivotDefaultsFromPreviewRows(
+              intermediateRows,
+              ctx.summary,
+              toolTableColumnOrderForIntermediate(stepResult)
+            );
+            const hasPivotHint =
+              Boolean(pivotDefaults?.rows?.length) && Boolean(pivotDefaults?.values?.length);
             ctx.onIntermediateArtifact({
               preview: intermediateRows.slice(0, 50),
               insight,
+              ...(hasPivotHint
+                ? {
+                    pivotDefaults: {
+                      rows: pivotDefaults!.rows,
+                      values: pivotDefaults!.values,
+                    },
+                  }
+                : {}),
             });
           }
         }

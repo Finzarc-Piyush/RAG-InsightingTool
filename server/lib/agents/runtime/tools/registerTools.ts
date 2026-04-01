@@ -20,6 +20,7 @@ import {
   canExecuteQueryPlanOnDuckDb,
   executeQueryPlanOnDuckDb,
 } from "../../../queryPlanDuckdbExecutor.js";
+import { migrateLegacyTemporalFacetRowKeys } from "../../../temporalFacetColumns.js";
 import { shouldRejectWideWithoutAgg } from "../../../questionAggregationPolicy.js";
 import { findMatchingColumn } from "../../utils/columnMatcher.js";
 import type { DataSummary } from "../../../../shared/schema.js";
@@ -462,6 +463,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
     executeQueryPlanArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx, args) => {
       const plan = (args as z.infer<typeof executeQueryPlanArgsSchema>).plan;
+      const dateCols = ctx.exec.summary.dateColumns ?? [];
+      if (ctx.exec.data.length > 0 && dateCols.length > 0) {
+        migrateLegacyTemporalFacetRowKeys(ctx.exec.data, dateCols);
+      }
       const keys = new Set(Object.keys(ctx.exec.data[0] ?? {}));
       const effectivePlan = remapQueryPlanGroupByToTemporalFacets(
         plan,
@@ -491,7 +496,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
       if (tryDuck) {
         const duck = await executeQueryPlanOnDuckDb(
           ctx.exec.sessionId,
-          normalizedPlan
+          normalizedPlan,
+          ctx.exec.summary
         );
         if (duck.ok) {
           resultRows = duck.rows as Record<string, any>[];
@@ -505,7 +511,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           const mem = executeQueryPlan(
             ctx.exec.data,
             ctx.exec.summary,
-            effectivePlan
+            normalizedPlan
           );
           if (!mem.ok) {
             return { ok: false, summary: mem.error };
@@ -519,7 +525,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         const mem = executeQueryPlan(
           ctx.exec.data,
           ctx.exec.summary,
-          effectivePlan
+          normalizedPlan
         );
         if (!mem.ok) {
           return { ok: false, summary: mem.error };
@@ -627,9 +633,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Structured query plan: time series (trend) OR dimension breakdowns. For explicit time grain questions (year/month/quarter/etc.), groupBy the matching date bucket. Prefer derived __tf_* facet columns when present; when groupBy is already a __tf_month__ / __tf_year__ / etc. column, OMIT dateAggregationPeriod (the column is pre-bucketed). Use dateAggregationPeriod only when groupBy is a raw date column that needs calendar truncation. For vague 'over time' without an explicit grain, you can omit groupBy/aggregations and instead sort by a date column (and use limit) to return an ordered time series without forcing yearly sums. For breakdowns: groupBy dimension(s) + aggregations. Exact schema column names required.",
+        "Structured query plan: time series (trend) OR dimension breakdowns. For explicit time grain questions (year/month/quarter/etc.), groupBy the matching derived time-bucket column (same label as in schema, e.g. Month · Order Date). When groupBy is already such a bucket column, OMIT dateAggregationPeriod (pre-bucketed). Legacy __tf_month__* ids are normalized automatically. Use dateAggregationPeriod only when groupBy is a raw date column that needs calendar truncation. For vague 'over time' without an explicit grain, you can omit groupBy/aggregations and instead sort by a date column (and use limit) to return an ordered time series without forcing yearly sums. For breakdowns: groupBy dimension(s) + aggregations. Exact schema column names required.",
       argsHelp:
-        'Facet time-series: {"plan":{"groupBy":["__tf_month__Order_Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"__tf_month__Order_Date","direction":"asc"}]}}. Raw date: {"plan":{"groupBy":["Order Date"],"dateAggregationPeriod":"month","aggregations":[{"column":"Sales","operation":"sum"}]}}. Full shape: {"plan": {"groupBy"?: string[], "dateAggregationPeriod"?: "day"|"week"|"half_year"|"month"|"monthOnly"|"quarter"|"year"|null, "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
+        'Facet time-series: {"plan":{"groupBy":["Month · Order Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"Month · Order Date","direction":"asc"}]}}. Raw date: {"plan":{"groupBy":["Order Date"],"dateAggregationPeriod":"month","aggregations":[{"column":"Sales","operation":"sum"}]}}. Full shape: {"plan": {"groupBy"?: string[], "dateAggregationPeriod"?: "day"|"week"|"half_year"|"month"|"monthOnly"|"quarter"|"year"|null, "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
     }
   );
 

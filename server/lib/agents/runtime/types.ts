@@ -117,6 +117,8 @@ export interface AgentExecutionContext {
   onIntermediateArtifact?: (payload: {
     preview: Record<string, unknown>[];
     insight?: string;
+    /** Matches preview column ids (temporal facets, Sales_sum, etc.) for initial Rows/Values. */
+    pivotDefaults?: Message["pivotDefaults"];
   }) => void;
 }
 

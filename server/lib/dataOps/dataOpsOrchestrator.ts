@@ -4104,7 +4104,7 @@ export async function executeDataOperation(
         const rowsBefore = result.rows_before;
         const rowsAfter = result.rows_after;
 
-        // Defensive: temporal facet bucket keys (e.g. __tf_year__...) must remain
+        // Defensive: temporal facet bucket keys (UI or legacy __tf_*) must remain
         // categorical strings. If any upstream step coerces them to numbers,
         // the UI may format them like measures (e.g. `2015` -> `2,015`).
         coerceTemporalFacetKeysToStrings(aggregatedData);

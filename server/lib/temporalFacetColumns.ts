@@ -1,6 +1,8 @@
 /**
- * Hidden per-grain columns (__tf_*) derived from approved date columns so
- * group-by-year/month/etc. does not create one group per distinct day.
+ * Per-grain columns derived from approved date columns so coarse time group-bys
+ * do not create one group per distinct day. Canonical row/summary keys match the
+ * pivot UI: `Month · Order Date`. Legacy `__tf_grain__Slug` ids are still accepted
+ * and remapped via buildLegacyToDisplayFacetMap / migrateLegacyTemporalFacetRowKeys.
  */
 import { isLikelyIdentifierColumnName } from "./columnIdHeuristics.js";
 import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
@@ -9,6 +11,7 @@ import {
   parseFlexibleDate,
   type DatePeriod,
 } from "./dateUtils.js";
+import type { DataSummary } from "../shared/schema.js";
 
 export const TEMPORAL_FACET_PREFIX = "__tf_";
 
@@ -52,8 +55,30 @@ const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
   year: "year",
 };
 
+/** Same grain labels as client `temporalFacetDisplay.ts`. */
+const FACET_GRAIN_LABEL: Record<TemporalFacetGrain, string> = {
+  date: "Day",
+  week: "Week",
+  month: "Month",
+  quarter: "Quarter",
+  half_year: "Half-year",
+  year: "Year",
+};
+
+const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
+
+const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
+  Day: "date",
+  Week: "week",
+  Month: "month",
+  Quarter: "quarter",
+  "Half-year": "half_year",
+  Year: "year",
+};
+
 export function isTemporalFacetColumnKey(name: string): boolean {
-  return name.startsWith(TEMPORAL_FACET_PREFIX);
+  if (name.startsWith(TEMPORAL_FACET_PREFIX)) return true;
+  return DISPLAY_FACET_HEADER_RE.test(name);
 }
 
 export function slugifyColumnKeyForFacet(sourceColumn: string): string {
@@ -64,11 +89,105 @@ export function slugifyColumnKeyForFacet(sourceColumn: string): string {
   return s || "col";
 }
 
-export function facetColumnKey(
+/** Legacy machine id (e.g. `__tf_month__Order_Date`) for remapping and old DuckDB columns. */
+export function facetColumnLegacyMachineKey(
   sourceColumn: string,
   grain: TemporalFacetGrain
 ): string {
   return `${TEMPORAL_FACET_PREFIX}${grain}__${slugifyColumnKeyForFacet(sourceColumn)}`;
+}
+
+/**
+ * Canonical facet column id — same string as pivot field labels (e.g. `Month · Order Date`).
+ */
+export function facetColumnKey(
+  sourceColumn: string,
+  grain: TemporalFacetGrain
+): string {
+  const label = FACET_GRAIN_LABEL[grain] ?? grain;
+  return `${label} · ${sourceColumn}`;
+}
+
+/**
+ * Grain segment for a facet column: legacy `__tf_month__...` or display `Month · ...`.
+ */
+export function temporalFacetGrainTokenFromFacetColumnName(name: string): string | null {
+  if (name.startsWith(TEMPORAL_FACET_PREFIX)) {
+    const without = name.slice(TEMPORAL_FACET_PREFIX.length);
+    const i = without.indexOf("__");
+    if (i <= 0) return null;
+    return without.slice(0, i);
+  }
+  const m = name.match(/^(Day|Week|Month|Quarter|Half-year|Year) · /);
+  return m ? LABEL_TO_GRAIN_TOKEN[m[1]!] ?? null : null;
+}
+
+export function buildLegacyToDisplayFacetMap(
+  summary: Pick<DataSummary, "temporalFacetColumns" | "dateColumns">
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const dateCols = summary.dateColumns ?? [];
+  for (const m of temporalFacetMetadataForDateColumns(dateCols)) {
+    const displayName = m.name;
+    map.set(facetColumnLegacyMachineKey(m.sourceColumn, m.grain), displayName);
+  }
+  for (const m of summary.temporalFacetColumns ?? []) {
+    const displayName = facetColumnKey(m.sourceColumn, m.grain);
+    map.set(facetColumnLegacyMachineKey(m.sourceColumn, m.grain), displayName);
+    if (m.name !== displayName) {
+      map.set(m.name, displayName);
+    }
+  }
+  return map;
+}
+
+/** For DuckDB/SQL: map canonical display facet id → legacy column name when the table was built with __tf_* keys. */
+export function buildDisplayToLegacyFacetMap(
+  summary: Pick<DataSummary, "temporalFacetColumns" | "dateColumns">
+): Map<string, string> {
+  const inv = new Map<string, string>();
+  for (const [legacy, display] of buildLegacyToDisplayFacetMap(summary)) {
+    if (!inv.has(display)) inv.set(display, legacy);
+  }
+  return inv;
+}
+
+export function duckPhysicalColumnName(
+  logical: string,
+  tableColumns: Set<string>,
+  displayToLegacy: Map<string, string>
+): string {
+  if (tableColumns.has(logical)) return logical;
+  const leg = displayToLegacy.get(logical);
+  if (leg && tableColumns.has(leg)) return leg;
+  return logical;
+}
+
+/** Remap legacy `__tf_*` keys on rows to display facet keys (old DuckDB / sessions). */
+export function migrateLegacyTemporalFacetRowKeys(
+  data: Record<string, any>[],
+  dateColumns: string[]
+): void {
+  if (data.length === 0 || !dateColumns.length) return;
+  const metas = temporalFacetMetadataForDateColumns(dateColumns);
+  for (const m of metas) {
+    const legacy = facetColumnLegacyMachineKey(m.sourceColumn, m.grain);
+    if (legacy === m.name) continue;
+    for (const row of data) {
+      if (!Object.prototype.hasOwnProperty.call(row, legacy)) continue;
+      if (!Object.prototype.hasOwnProperty.call(row, m.name)) {
+        row[m.name] = row[legacy];
+      }
+      delete row[legacy];
+    }
+  }
+}
+
+export function normalizeLegacyTemporalFacetColumnRef(
+  col: string,
+  map: Map<string, string>
+): string {
+  return map.get(col) ?? col;
 }
 
 export function temporalFacetMetadataForDateColumns(
@@ -142,7 +261,7 @@ export type FacetSourceBinding = { logical: string; readFrom: string };
 /**
  * For each logical date column in summary, choose where to read values from the row.
  * If "Order Date" is missing but "Cleaned_Order Date" exists (enrichment), read cleaned
- * but still emit __tf_* keys for the logical name (e.g. __tf_year__Order_Date).
+ * but still emit facet keys for the logical name (e.g. `Year · Order Date`).
  */
 export function resolveFacetSourceBindings(
   keys: Set<string>,
@@ -170,8 +289,8 @@ export function resolveFacetSourceBindings(
 }
 
 /**
- * Mutates rows: removes prior __tf_* keys, then adds facet fields for each date column.
- * Returns metadata for columns written (for summaries).
+ * Mutates rows: migrates legacy facet keys, removes prior facet keys, then adds
+ * facet fields for each date column. Returns metadata for columns written.
  */
 export function applyTemporalFacetColumns(
   data: Record<string, any>[],
@@ -185,11 +304,12 @@ export function applyTemporalFacetColumns(
   }
   if (data.length === 0 || !dateColumns.length) return [];
 
+  migrateLegacyTemporalFacetRowKeys(data, dateColumns);
+
   const keys = new Set(Object.keys(data[0]));
   const bindings = resolveFacetSourceBindings(keys, dateColumns);
-  // Never strip existing __tf_* keys unless we can re-derive them from a bound
-  // source date column. Otherwise columnar rows that already carry materialized
-  // facet columns (e.g. from DuckDB) would lose them and groupBy on __tf_* fails.
+  // Never strip facet keys unless we can re-derive them from a bound source date column.
+  // Otherwise columnar rows that already carry materialized facets would lose them.
   if (!bindings.length) return [];
 
   stripTemporalFacetColumns(data);
@@ -293,7 +413,7 @@ export function resolveDateColumnForGroupBy(
 
 /**
  * When the user asks for coarse time aggregation but groupBy is still the raw date column,
- * rewrite to the matching __tf_* column.
+ * rewrite to the matching UI facet column id.
  */
 export function remapGroupByToTemporalFacet(params: {
   groupByColumn: string;

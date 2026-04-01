@@ -70,13 +70,14 @@ describe("remapQueryPlanGroupByToTemporalFacets + execute_query_plan", () => {
     }
   });
 
-  it("execute_query_plan uses facet values when plan sets dateAggregationPeriod with __tf_month groupBy", () => {
+  it("execute_query_plan migrates legacy __tf_month groupBy and uses facet values", () => {
     const data: Record<string, unknown>[] = [
       { Region: "West", Sales: 10, __tf_month__Order_Date: "2015-06" },
       { Region: "West", Sales: 5, __tf_month__Order_Date: "2015-07" },
       { Region: "East", Sales: 3, __tf_month__Order_Date: "2015-06" },
     ];
     const keys = new Set(Object.keys(data[0]!));
+    const monthKey = facetColumnKey("Order Date", "month");
     const summary = {
       rowCount: 3,
       columnCount: keys.size,
@@ -88,9 +89,8 @@ describe("remapQueryPlanGroupByToTemporalFacets + execute_query_plan", () => {
       numericColumns: ["Sales"],
       dateColumns: ["Order Date"],
     };
-    const monthKey = "__tf_month__Order_Date";
     const plan = {
-      groupBy: [monthKey, "Region"],
+      groupBy: ["__tf_month__Order_Date", "Region"],
       dateAggregationPeriod: "month" as const,
       aggregations: [{ column: "Sales", operation: "sum" as const, alias: "s" }],
     };

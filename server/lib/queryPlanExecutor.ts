@@ -10,6 +10,10 @@ import type { DataSummary } from "../shared/schema.js";
 import {
   remapGroupByToTemporalFacet,
   temporalFacetColumnNamesForDateColumns,
+  buildLegacyToDisplayFacetMap,
+  normalizeLegacyTemporalFacetColumnRef,
+  temporalFacetGrainTokenFromFacetColumnName,
+  migrateLegacyTemporalFacetRowKeys,
 } from "./temporalFacetColumns.js";
 
 const aggOpSchema = z.enum([
@@ -71,13 +75,35 @@ export const executeQueryPlanArgsSchema = z
 
 export type QueryPlanBody = z.infer<typeof queryPlanBodySchema>;
 
-/** Grain segment in a key like `__tf_month__Order_Date` (between `__tf_` and the next `__`). */
-function temporalFacetGrainTokenFromKey(name: string): string | null {
-  if (!name.startsWith("__tf_")) return null;
-  const without = name.slice("__tf_".length);
-  const i = without.indexOf("__");
-  if (i <= 0) return null;
-  return without.slice(0, i);
+export function normalizeLegacyTemporalFacetKeysInPlan(
+  plan: QueryPlanBody,
+  summary: DataSummary
+): QueryPlanBody {
+  const map = buildLegacyToDisplayFacetMap(summary);
+  if (map.size === 0) return plan;
+  const norm = (col: string) => normalizeLegacyTemporalFacetColumnRef(col, map);
+
+  const next: QueryPlanBody = { ...plan };
+  if (plan.groupBy?.length) {
+    next.groupBy = plan.groupBy.map(norm);
+  }
+  if (plan.aggregations?.length) {
+    next.aggregations = plan.aggregations.map((a) => ({
+      ...a,
+      column: norm(a.column),
+      ...(a.alias !== undefined ? { alias: norm(a.alias) } : {}),
+    }));
+  }
+  if (plan.dimensionFilters?.length) {
+    next.dimensionFilters = plan.dimensionFilters.map((f) => ({
+      ...f,
+      column: norm(f.column),
+    }));
+  }
+  if (plan.sort?.length) {
+    next.sort = plan.sort.map((s) => ({ ...s, column: norm(s.column) }));
+  }
+  return next;
 }
 
 function facetGrainMatchesAggregationPeriod(
@@ -100,7 +126,7 @@ export function clearRedundantDateAggregationForTemporalFacets(
   const period = plan.dateAggregationPeriod;
   if (period == null || !plan.groupBy?.length) return plan;
   for (const g of plan.groupBy) {
-    const grain = temporalFacetGrainTokenFromKey(g);
+    const grain = temporalFacetGrainTokenFromFacetColumnName(g);
     if (grain && facetGrainMatchesAggregationPeriod(grain, period)) {
       return { ...plan, dateAggregationPeriod: undefined };
     }
@@ -155,7 +181,7 @@ export function queryPlanToParsedQuery(plan: QueryPlanBody): ParsedQuery {
   };
 }
 
-/** Schema columns plus derived __tf_* names (columnar metadata often omits facets from `columns`). */
+/** Schema columns plus derived temporal facet names (columnar metadata often omits facets from `columns`). */
 export function allowedColumnNamesForQueryPlan(summary: DataSummary): Set<string> {
   const allowed = new Set<string>();
   for (const c of summary.columns) allowed.add(c.name);
@@ -219,7 +245,9 @@ export function normalizeAndValidateQueryPlanBody(
   summary: DataSummary,
   plan: QueryPlanBody
 ): { ok: true; normalizedPlan: QueryPlanBody } | { ok: false; error: string } {
-  const normalizedPlan = clearRedundantDateAggregationForTemporalFacets(plan);
+  const withDisplayFacets = normalizeLegacyTemporalFacetKeysInPlan(plan, summary);
+  const normalizedPlan =
+    clearRedundantDateAggregationForTemporalFacets(withDisplayFacets);
   const colErr = assertPlanColumnsAllowed(summary, normalizedPlan);
   if (colErr) {
     return { ok: false, error: colErr };
@@ -246,6 +274,10 @@ export function executeQueryPlan(
   summary: DataSummary,
   plan: QueryPlanBody
 ): ExecuteQueryPlanSuccess | ExecuteQueryPlanFailure {
+  const dateCols = summary.dateColumns ?? [];
+  if (data.length > 0 && dateCols.length > 0) {
+    migrateLegacyTemporalFacetRowKeys(data, dateCols);
+  }
   const v = normalizeAndValidateQueryPlanBody(summary, plan);
   if (!v.ok) {
     return { ok: false, error: v.error };
@@ -292,7 +324,7 @@ export function validateCoarseDateAggregationOutput(
 
   // This heuristic is meant to catch cases where the model *didn't* apply calendar
   // bucketing for the requested coarse grain. When `groupBy` is already a temporal
-  // facet column like `__tf_month__<DateColumn>`, bucketing is already correct, and
+  // facet column (UI id or legacy `__tf_*`), bucketing is already correct, and
   // rejecting purely on row count can become a false negative for long ranges.
   //
   // Also, the cap below assumes a single date bucket dimension; if there are
@@ -314,8 +346,8 @@ export function validateCoarseDateAggregationOutput(
             ? "month"
             : null;
   if (facetGrain) {
-    const facetPrefix = `__tf_${facetGrain}__`;
-    if (gb0.startsWith(facetPrefix)) {
+    const token = temporalFacetGrainTokenFromFacetColumnName(gb0);
+    if (token === facetGrain) {
       return null;
     }
   }

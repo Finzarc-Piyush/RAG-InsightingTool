@@ -1,4 +1,5 @@
 import type { PivotUiConfig } from './types';
+import { isTemporalFacetFieldId } from '@/lib/temporalFacetDisplay';
 
 export type PivotChartKind = 'line' | 'bar' | 'scatter' | 'pie' | 'area' | 'heatmap';
 
@@ -26,7 +27,7 @@ const HEATMAP_MAX_ROW_KEYS = 40;
 
 function isDateLike(field: string | null, dateColumns: Set<string>): boolean {
   if (!field) return false;
-  if (field.startsWith('__tf_')) return true;
+  if (isTemporalFacetFieldId(field)) return true;
   if (dateColumns.has(field)) return true;
   const lower = field.toLowerCase();
   return /\b(date|month|week|year|time|period|quarter)\b/i.test(lower);

@@ -403,14 +403,11 @@ export function createInitialPivotConfig(
   const numericSet = new Set(numericKeys);
   const allDims = allKeys.filter((k) => !numericSet.has(k));
 
-  // Default pivot rows: prefer user-selected defaults, but fall back to the
-  // first available non-numeric dimension.
-  const rowsFromDefaults = defaultRowKeys.filter((k) => allDims.includes(k));
-  const rows = rowsFromDefaults.length > 0 ? rowsFromDefaults : allDims.slice(0, 1);
+  // Rows/values come only from provided defaults (filtered to valid fields).
+  // No implicit "first dimension" or "first numeric" fallback — empty defaults stay empty.
+  const rows = defaultRowKeys.filter((k) => allDims.includes(k));
 
-  // Default pivot values: prefer user-selected defaults, but fall back to the
-  // first numeric key if none were provided.
-  const valuesFromDefaults = defaultValueKeys
+  const values: PivotValueSpec[] = defaultValueKeys
     .filter((k) => allKeys.includes(k))
     .map((field) => ({
       id: `meas_${field}`,
@@ -418,22 +415,6 @@ export function createInitialPivotConfig(
       // If numericSet says it's numeric, sum it; otherwise count it.
       agg: numericSet.has(field) ? ("sum" as PivotAgg) : ("count" as PivotAgg),
     }));
-
-  const values: PivotValueSpec[] =
-    valuesFromDefaults.length > 0
-      ? valuesFromDefaults
-      : (() => {
-          const firstNumeric = numericKeys.find((k) => allKeys.includes(k));
-          return firstNumeric
-            ? [
-                {
-                  id: `meas_${firstNumeric}`,
-                  field: firstNumeric,
-                  agg: "sum" as PivotAgg,
-                },
-              ]
-            : [];
-        })();
 
   // `unused` should include everything except what's currently in Rows/Values.
   const usedFields = new Set<string>([...rows, ...values.map((v) => v.field)]);
