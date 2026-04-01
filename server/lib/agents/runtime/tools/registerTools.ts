@@ -10,10 +10,16 @@ import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/sc
 import {
   executeQueryPlan,
   executeQueryPlanArgsSchema,
+  normalizeAndValidateQueryPlanBody,
   questionImpliesSumAggregation,
+  queryPlanToParsedQuery,
   remapQueryPlanGroupByToTemporalFacets,
   validateCoarseDateAggregationOutput,
 } from "../../../queryPlanExecutor.js";
+import {
+  canExecuteQueryPlanOnDuckDb,
+  executeQueryPlanOnDuckDb,
+} from "../../../queryPlanDuckdbExecutor.js";
 import { shouldRejectWideWithoutAgg } from "../../../questionAggregationPolicy.js";
 import { findMatchingColumn } from "../../utils/columnMatcher.js";
 import type { DataSummary } from "../../../../shared/schema.js";
@@ -463,12 +469,66 @@ export function registerDefaultTools(registry: ToolRegistry) {
         keys,
         ctx.exec.question
       );
-      const exec = executeQueryPlan(ctx.exec.data, ctx.exec.summary, effectivePlan);
-      if (!exec.ok) {
-        return { ok: false, summary: exec.error };
+      const validated = normalizeAndValidateQueryPlanBody(
+        ctx.exec.summary,
+        effectivePlan
+      );
+      if (!validated.ok) {
+        return { ok: false, summary: validated.error };
       }
-      const { data: resultRows, descriptions, parsed } = exec;
-      const inputRowCount = ctx.exec.data.length;
+      const { normalizedPlan } = validated;
+
+      let resultRows: Record<string, any>[] = [];
+      let descriptions: string[] = [];
+      let parsed = queryPlanToParsedQuery(normalizedPlan);
+      let inputRowCount = ctx.exec.data.length;
+
+      const tryDuck =
+        Boolean(ctx.exec.columnarStoragePath) &&
+        Boolean(ctx.exec.sessionId) &&
+        canExecuteQueryPlanOnDuckDb(normalizedPlan);
+
+      if (tryDuck) {
+        const duck = await executeQueryPlanOnDuckDb(
+          ctx.exec.sessionId,
+          normalizedPlan
+        );
+        if (duck.ok) {
+          resultRows = duck.rows as Record<string, any>[];
+          descriptions = duck.descriptions;
+          inputRowCount = duck.inputRowCount;
+        } else {
+          agentLog("execute_query_plan_duckdb_fallback", {
+            sessionId: ctx.exec.sessionId,
+            error: duck.error.slice(0, 400),
+          });
+          const mem = executeQueryPlan(
+            ctx.exec.data,
+            ctx.exec.summary,
+            effectivePlan
+          );
+          if (!mem.ok) {
+            return { ok: false, summary: mem.error };
+          }
+          resultRows = mem.data;
+          descriptions = mem.descriptions;
+          parsed = mem.parsed;
+          inputRowCount = ctx.exec.data.length;
+        }
+      } else {
+        const mem = executeQueryPlan(
+          ctx.exec.data,
+          ctx.exec.summary,
+          effectivePlan
+        );
+        if (!mem.ok) {
+          return { ok: false, summary: mem.error };
+        }
+        resultRows = mem.data;
+        descriptions = mem.descriptions;
+        parsed = mem.parsed;
+        inputRowCount = ctx.exec.data.length;
+      }
       const outputRowCount = resultRows.length;
       const appliedAggregation = appliedAggregationFromParsed(parsed);
       const analyticalMeta = {
@@ -567,9 +627,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Structured query plan: time series (trend) OR dimension breakdowns. For explicit time grain questions (year/month/quarter/etc.), groupBy the matching date bucket (prefer derived __tf_* facets when present) and set dateAggregationPeriod as needed, then use aggregations e.g. sum(Sales). For vague 'over time' without an explicit grain, you can omit groupBy/aggregations and instead sort by a date column (and use limit) to return an ordered time series without forcing yearly sums. For breakdowns: groupBy dimension(s) + aggregations. Exact schema column names required.",
+        "Structured query plan: time series (trend) OR dimension breakdowns. For explicit time grain questions (year/month/quarter/etc.), groupBy the matching date bucket. Prefer derived __tf_* facet columns when present; when groupBy is already a __tf_month__ / __tf_year__ / etc. column, OMIT dateAggregationPeriod (the column is pre-bucketed). Use dateAggregationPeriod only when groupBy is a raw date column that needs calendar truncation. For vague 'over time' without an explicit grain, you can omit groupBy/aggregations and instead sort by a date column (and use limit) to return an ordered time series without forcing yearly sums. For breakdowns: groupBy dimension(s) + aggregations. Exact schema column names required.",
       argsHelp:
-        'Time-series example: {"plan":{"groupBy":["Order Date"],"dateAggregationPeriod":"month","aggregations":[{"column":"Sales","operation":"sum"}]}}. Full shape: {"plan": {"groupBy"?: string[], "dateAggregationPeriod"?: "day"|"week"|"half_year"|"month"|"monthOnly"|"quarter"|"year"|null, "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
+        'Facet time-series: {"plan":{"groupBy":["__tf_month__Order_Date"],"aggregations":[{"column":"Sales","operation":"sum"}],"sort":[{"column":"__tf_month__Order_Date","direction":"asc"}]}}. Raw date: {"plan":{"groupBy":["Order Date"],"dateAggregationPeriod":"month","aggregations":[{"column":"Sales","operation":"sum"}]}}. Full shape: {"plan": {"groupBy"?: string[], "dateAggregationPeriod"?: "day"|"week"|"half_year"|"month"|"monthOnly"|"quarter"|"year"|null, "aggregations"?: [{"column": string, "operation": "sum"|"mean"|"avg"|"count"|"min"|"max"|"median"|"percent_change", "alias"?: string}], "dimensionFilters"?: [...], "limit"?: number, "sort"?: [...]}}',
     }
   );
 

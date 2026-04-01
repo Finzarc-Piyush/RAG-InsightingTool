@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Download, Lightbulb, Loader2, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import {
   downloadModifiedDataset,
   fetchSessionSampleRows,
@@ -30,11 +30,13 @@ import {
 import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotUiConfig } from '@/lib/pivot/types';
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
+import { parseDateLike } from '@/lib/parseDateLike';
 import { api } from '@/lib/httpClient';
 import { recommendPivotChart, type PivotChartKind } from '@/lib/pivot/chartRecommendation';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
 import { ChartRenderer } from './ChartRenderer';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 interface DataPreviewTableProps {
   data: Record<string, any>[];
@@ -57,6 +59,8 @@ interface DataPreviewTableProps {
     rows?: string[];
     values?: string[];
   };
+  /** Shown above the analysis table when the agent emits an intermediate summary (e.g. tool row count). */
+  analysisIntermediateInsight?: string;
 }
 
 function inferNumericColumns(
@@ -94,6 +98,34 @@ function isIdLikeColumn(field: string): boolean {
   );
 }
 
+/** Columns that parse as dates in preview rows (created/derived dims not in schema dateColumns). */
+function inferDateLikeColumns(
+  rows: Record<string, any>[],
+  columnKeys: string[],
+  numericSet: Set<string>
+): string[] {
+  const sample = rows.slice(0, 500);
+  const out: string[] = [];
+  for (const col of columnKeys) {
+    if (numericSet.has(col)) continue;
+    if (isIdLikeColumn(col)) continue;
+    if (String(col).startsWith('__tf_')) {
+      out.push(col);
+      continue;
+    }
+    let n = 0;
+    let ok = 0;
+    for (const row of sample) {
+      const v = row[col];
+      if (v === null || v === undefined || v === '') continue;
+      n++;
+      if (parseDateLike(v) !== null) ok++;
+    }
+    if (n >= 3 && ok / n >= 0.7) out.push(col);
+  }
+  return out;
+}
+
 export function DataPreviewTable({ 
   data, 
   title, 
@@ -101,12 +133,13 @@ export function DataPreviewTable({
   sessionId,
   columns: schemaColumns,
   numericColumns: numericColumnsProp,
-  dateColumns = [],
+  dateColumns: dateColumnsFromSchema = [],
   temporalDisplayGrainsByColumn = {},
   temporalFacetColumns = [],
   variant = "dataset",
   onChartAdded,
   pivotDefaults,
+  analysisIntermediateInsight,
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
   const { toast } = useToast();
@@ -281,6 +314,35 @@ export function DataPreviewTable({
   }, [numericColumnsProp, pivotRows, schemaColumnKeys]);
 
   const numericColumnsSet = useMemo(() => new Set(numericColumns), [numericColumns]);
+
+  const effectiveDateColumns = useMemo(() => {
+    const base: string[] = [];
+    const seen = new Set<string>();
+    for (const c of dateColumnsFromSchema) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      base.push(c);
+    }
+    for (const m of temporalFacetColumns ?? []) {
+      if (seen.has(m.name)) continue;
+      if (pivotRows.some((r) => r[m.name] != null && String(r[m.name]).trim() !== '')) {
+        seen.add(m.name);
+        base.push(m.name);
+      }
+    }
+    for (const c of inferDateLikeColumns(pivotRows, schemaColumnKeys, numericColumnsSet)) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      base.push(c);
+    }
+    return base;
+  }, [
+    dateColumnsFromSchema,
+    temporalFacetColumns,
+    pivotRows,
+    schemaColumnKeys,
+    numericColumnsSet,
+  ]);
 
   const numericCandidatesInPreview = useMemo(() => {
     if (!pivotRows?.length) return [];
@@ -498,7 +560,7 @@ export function DataPreviewTable({
     return recommendPivotChart({
       pivotConfig: normalizedPivotConfig,
       numericColumns,
-      dateColumns,
+      dateColumns: effectiveDateColumns,
       rowCount: serverPivotMeta?.rowCount ?? pivotRows.length,
       colKeyCount: serverPivotMeta?.colKeyCount ?? 0,
     });
@@ -507,7 +569,7 @@ export function DataPreviewTable({
     canPivot,
     normalizedPivotConfig,
     numericColumns,
-    dateColumns,
+    effectiveDateColumns,
     serverPivotMeta?.rowCount,
     serverPivotMeta?.colKeyCount,
     pivotRows.length,
@@ -871,12 +933,18 @@ export function DataPreviewTable({
       setPivotConfig((prev) => {
         const prevSort = prev.rowSort;
         const nextDirection =
-          prevSort?.byValueSpecId === byValueSpecId && prevSort.direction === 'desc'
+          prevSort?.primary !== 'rowLabel' &&
+          prevSort?.byValueSpecId === byValueSpecId &&
+          prevSort.direction === 'desc'
             ? 'asc'
             : 'desc';
         const next: PivotUiConfig = {
           ...prev,
-          rowSort: { byValueSpecId, direction: nextDirection },
+          rowSort: {
+            byValueSpecId,
+            direction: nextDirection,
+            primary: 'measure',
+          },
         };
         return normalizePivotConfig(schemaColumnKeys, next);
       });
@@ -884,11 +952,26 @@ export function DataPreviewTable({
     [schemaColumnKeys]
   );
 
+  const handleRowLabelSortChange = useCallback(() => {
+    setPivotConfig((prev) => {
+      const prevSort = prev.rowSort;
+      const nextDirection =
+        prevSort?.primary === 'rowLabel' && prevSort.direction === 'desc'
+          ? 'asc'
+          : 'desc';
+      const next: PivotUiConfig = {
+        ...prev,
+        rowSort: { primary: 'rowLabel', direction: nextDirection },
+      };
+      return normalizePivotConfig(schemaColumnKeys, next);
+    });
+  }, [schemaColumnKeys]);
+
   const { sortedData, handleSort, getSortIcon } = usePreviewTableSort({
     data,
     columns: flatColumnKeys,
     numericColumns,
-    dateColumns,
+    dateColumns: effectiveDateColumns,
     variant,
   });
 
@@ -899,14 +982,14 @@ export function DataPreviewTable({
 
   const resolvedGrainsByColumn = useMemo(() => {
     const out: Record<string, TemporalDisplayGrain> = { ...temporalDisplayGrainsByColumn };
-    for (const col of dateColumns) {
+    for (const col of effectiveDateColumns) {
       if (!out[col]) {
         const vals = pivotRows.slice(0, 500).map((row) => row[col]);
         out[col] = inferTemporalGrainFromSample(vals);
       }
     }
     return out;
-  }, [pivotRows, dateColumns, temporalDisplayGrainsByColumn]);
+  }, [pivotRows, effectiveDateColumns, temporalDisplayGrainsByColumn]);
 
   const facetMetaByName = useMemo(() => {
     const m: Record<string, TemporalFacetColumnMeta> = {};
@@ -1037,7 +1120,7 @@ export function DataPreviewTable({
       const formatted = formatTemporalFacetValue(raw, facetMeta.grain);
       return formatted ?? String(raw);
     }
-    if (dateColumns.includes(col)) {
+    if (effectiveDateColumns.includes(col)) {
       const g = resolvedGrainsByColumn[col];
       const formatted =
         g !== undefined ? formatDateCellForGrain(raw, g) : null;
@@ -1076,8 +1159,41 @@ export function DataPreviewTable({
   const showPivotChrome =
     variant === 'analysis' && canPivot && analysisView === 'pivot' && effectivePivotModel;
 
+  const trimmedAnalysisInsight = analysisIntermediateInsight?.trim() ?? "";
+  const toolPreviewRowCount = data.length;
+  const pivotResultRowCount = serverPivotMeta?.rowCount;
+  const showPivotVersusToolRowClarification =
+    variant === "analysis" &&
+    Boolean(trimmedAnalysisInsight) &&
+    analysisView === "pivot" &&
+    Boolean(sessionId) &&
+    !serverPivotLoading &&
+    pivotResultRowCount != null &&
+    pivotResultRowCount !== toolPreviewRowCount;
+
   return (
     <Card className="p-4 mt-2 overflow-hidden border-border/60 shadow-sm bg-gradient-to-br from-card to-card/95">
+      {variant === "analysis" && trimmedAnalysisInsight && (
+        <div className="mb-3">
+          <Card className="p-4 bg-primary/5 border-l-4 border-l-primary shadow-sm border-border/60">
+            <div className="flex items-center gap-2 mb-2">
+              <Lightbulb className="w-4 h-4 text-primary" />
+              <h4 className="text-sm font-semibold text-foreground">Key insight</h4>
+            </div>
+            <div className="text-sm text-foreground">
+              <MarkdownRenderer content={trimmedAnalysisInsight} />
+            </div>
+            {showPivotVersusToolRowClarification && (
+              <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                The pivot below is computed from the full session dataset ({pivotResultRowCount}{" "}
+                {pivotResultRowCount === 1 ? "row" : "rows"} for the current layout). The summary
+                above describes the analytical query result ({toolPreviewRowCount}{" "}
+                {toolPreviewRowCount === 1 ? "row" : "rows"}).
+              </p>
+            )}
+          </Card>
+        </div>
+      )}
       {(title ||
         sessionId ||
         (variant === 'analysis' && canPivot)) && (
@@ -1401,6 +1517,7 @@ export function DataPreviewTable({
                     temporalFacetColumns={temporalFacetColumns}
                     rowSort={normalizedPivotConfig.rowSort}
                     onRowSortChange={handleRowSortChange}
+                    onRowLabelSortChange={handleRowLabelSortChange}
                     showValuesAs={showValuesAs}
                     onDrillthroughCell={handleDrillthroughCell}
                   />
@@ -1518,7 +1635,7 @@ export function DataPreviewTable({
                               ? renderFlatAnalysisCell(col, raw)
                               : raw === null || raw === undefined ? (
                                   <span className="text-muted-foreground italic">null</span>
-                                ) : dateColumns.includes(col) ? (
+                                ) : effectiveDateColumns.includes(col) ? (
                                   (() => {
                                     const g = resolvedGrainsByColumn[col];
                                     const formatted =

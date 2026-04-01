@@ -7,7 +7,7 @@ import {
   TemporalDisplayGrain,
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
-import { User, Bot, Edit2, Check, X as XIcon, Lightbulb } from 'lucide-react';
+import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DataPreview } from './DataPreview';
@@ -472,35 +472,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         )}
 
         {!isUser && allowPivotAutoShow && hasAggPreview && (
-          <>
-            {message.isIntermediate && message.intermediateInsight && (
-              <div className="mb-3">
-                <Card className="p-4 bg-primary/5 border-l-4 border-l-primary shadow-sm">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Lightbulb className="w-4 h-4 text-primary" />
-                    <h4 className="text-sm font-semibold text-foreground">Key insight</h4>
-                  </div>
-                  <div className="text-sm text-foreground">
-                    <MarkdownRenderer content={message.intermediateInsight} />
-                  </div>
-                </Card>
-              </div>
-            )}
-            <div className="mt-1 mb-3">
-              <DataPreviewTable 
-                data={(message as Message & { preview: Record<string, unknown>[] }).preview} 
-                sessionId={sessionId}
-                variant="analysis"
-                columns={columns}
-                numericColumns={numericColumns}
-                dateColumns={dateColumns}
-                temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
-                temporalFacetColumns={temporalFacetColumns}
-                pivotDefaults={message.pivotDefaults}
-                onChartAdded={onAppendAssistantChart}
-              />
-            </div>
-          </>
+          <div className="mt-1 mb-3">
+            <DataPreviewTable
+              data={(message as Message & { preview: Record<string, unknown>[] }).preview}
+              sessionId={sessionId}
+              variant="analysis"
+              columns={columns}
+              numericColumns={numericColumns}
+              dateColumns={dateColumns}
+              temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+              temporalFacetColumns={temporalFacetColumns}
+              pivotDefaults={message.pivotDefaults}
+              onChartAdded={onAppendAssistantChart}
+              analysisIntermediateInsight={
+                message.isIntermediate ? message.intermediateInsight : undefined
+              }
+            />
+          </div>
         )}
 
         {!isUser && allowPivotAutoShow && hasAggSummary && (

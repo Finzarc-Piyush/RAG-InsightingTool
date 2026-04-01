@@ -11,6 +11,7 @@ import {
 } from '../shared/queryTypes.js';
 import { DataSummary, Message } from '../shared/schema.js';
 import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate } from './dateUtils.js';
+import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.js';
 
 interface QueryParserResult extends ParsedQuery {
   confidence: number;
@@ -288,6 +289,9 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   parsed.topBottom = sanitiseTopBottom(raw?.topBottom as Nullable<TopBottomRequest>);
   if (typeof raw?.limit === 'number') parsed.limit = Math.max(1, Math.round(raw.limit));
   if (raw?.notes) parsed.notes = raw.notes.filter(Boolean) as string[];
+
+  applyVagueTrendDefaultAggregation(parsed, parsed.rawQuestion || '', summary);
+
   return parsed;
 }
 

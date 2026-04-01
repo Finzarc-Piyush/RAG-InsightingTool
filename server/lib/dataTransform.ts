@@ -14,6 +14,7 @@ import { normalizeDateToPeriod, DatePeriod, parseFlexibleDate } from './dateUtil
 import { agentLog } from './agents/runtime/agentLogger.js';
 import { isIdColumn, getCountNameForIdColumn } from './columnIdHeuristics.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
+import { isTemporalFacetColumnKey } from './temporalFacetColumns.js';
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -448,6 +449,12 @@ export function resolveDateBucketForGroupBy(
   dateAggregationPeriod: DatePeriod | null | undefined
 ): DateBucketResolution {
   if (!dateAggregationPeriod || !data.length) {
+    return { mode: "none", readColumn: col };
+  }
+
+  // Precomputed __tf_* buckets are already discrete period labels; never fuzzy-map them
+  // onto raw date columns or re-parse through calendar bucketing.
+  if (isTemporalFacetColumnKey(col)) {
     return { mode: "none", readColumn: col };
   }
 

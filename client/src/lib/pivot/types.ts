@@ -14,11 +14,14 @@ export type PivotUiConfig = {
   unused: string[];
   /**
    * How pivot row groups should be ordered.
-   * If unset, the UI falls back to key-based ordering.
+   * If unset, the UI falls back to key-based ordering (chronological when labels are temporal).
    */
   rowSort?: {
-    byValueSpecId: string;
+    /** Required when primary is measure (or omitted). */
+    byValueSpecId?: string;
     direction: "asc" | "desc";
+    /** Sort by row dimension labels (time-aware) instead of by a measure. */
+    primary?: "measure" | "rowLabel";
   };
 };
 

@@ -25,6 +25,8 @@ export type PivotGridProps = {
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   rowSort?: PivotUiConfig["rowSort"];
   onRowSortChange?: (byValueSpecId: string) => void;
+  /** Toggle chronological / reverse-chronological row label ordering. */
+  onRowLabelSortChange?: () => void;
   showValuesAs?: PivotShowValuesAsMode;
   onDrillthroughCell?: (params: {
     rowPathKey: string;
@@ -40,6 +42,7 @@ export function PivotGrid({
   temporalFacetColumns = [],
   rowSort,
   onRowSortChange,
+  onRowLabelSortChange,
   showValuesAs = "raw",
   onDrillthroughCell,
 }: PivotGridProps) {
@@ -47,7 +50,13 @@ export function PivotGrid({
   const hasMatrix = Boolean(colField && colKeys.length > 0);
   const matrixColumnsEmpty = Boolean(colField && colKeys.length === 0);
 
+  const sortIconForRowLabel = (): string => {
+    if (!rowSort || rowSort.primary !== 'rowLabel') return '↕';
+    return rowSort.direction === 'desc' ? '↓' : '↑';
+  };
+
   const sortIconFor = (specId: string): string => {
+    if (rowSort?.primary === 'rowLabel') return '↕';
     if (!rowSort || rowSort.byValueSpecId !== specId) return '↕';
     return rowSort.direction === 'desc' ? '↓' : '↑';
   };
@@ -103,6 +112,16 @@ export function PivotGrid({
                 >
                   <div className="flex items-center gap-2">
                     <span>Row labels</span>
+                    {onRowLabelSortChange && model.rowFields.length > 0 && (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => onRowLabelSortChange()}
+                        aria-label="Sort rows by row labels (time order when applicable)"
+                      >
+                        {sortIconForRowLabel()}
+                      </button>
+                    )}
                     {onRowSortChange && valueSpecs.length === 1 && (
                       <button
                         type="button"
@@ -155,7 +174,19 @@ export function PivotGrid({
           ) : (
             <tr className="border-b border-gray-200">
               <th className="px-3 py-2.5 text-left font-semibold text-gray-800 whitespace-nowrap min-w-[10rem]">
-                Row labels
+                <div className="flex items-center gap-2">
+                  <span>Row labels</span>
+                  {onRowLabelSortChange && model.rowFields.length > 0 && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => onRowLabelSortChange()}
+                      aria-label="Sort rows by row labels (time order when applicable)"
+                    >
+                      {sortIconForRowLabel()}
+                    </button>
+                  )}
+                </div>
               </th>
               {valueSpecs.map((spec) => (
                 <th

@@ -1,4 +1,5 @@
 import { ChartSpec } from '../shared/schema.js';
+import { isTemporalFacetColumnKey } from './temporalFacetColumns.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 import {
   normalizeDateToPeriod,
@@ -309,14 +310,15 @@ function coerceChartDate(raw: unknown): Date | null {
   return null;
 }
 
-/** X is temporal only if the dataset profile listed it in dateColumns (declaredDateColumns). */
+/** X is temporal if listed in dateColumns or is a precomputed __tf_* facet (derived from dates). */
 function xColumnIsDeclaredDate(
   xSpec: string,
   available: string[],
   declared?: string[]
 ): boolean {
-  if (!declared?.length) return false;
   const mx = findMatchingColumn(xSpec, available) || xSpec;
+  if (isTemporalFacetColumnKey(mx)) return true;
+  if (!declared?.length) return false;
   return declared.some((d) => (findMatchingColumn(d, available) || d) === mx);
 }
 

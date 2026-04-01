@@ -3,6 +3,7 @@
  * group-by-year/month/etc. does not create one group per distinct day.
  */
 import { isLikelyIdentifierColumnName } from "./columnIdHeuristics.js";
+import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
 import {
   normalizeDateToPeriod,
   parseFlexibleDate,
@@ -157,6 +158,12 @@ export function resolveFacetSourceBindings(
     const cleaned = `Cleaned_${src}`;
     if (keys.has(cleaned)) {
       bindings.push({ logical: src, readFrom: cleaned });
+      continue;
+    }
+    const keyList = [...keys];
+    const fuzzy = findMatchingColumn(src, keyList);
+    if (fuzzy && keys.has(fuzzy)) {
+      bindings.push({ logical: src, readFrom: fuzzy });
     }
   }
   return bindings;
@@ -178,11 +185,14 @@ export function applyTemporalFacetColumns(
   }
   if (data.length === 0 || !dateColumns.length) return [];
 
-  stripTemporalFacetColumns(data);
-
   const keys = new Set(Object.keys(data[0]));
   const bindings = resolveFacetSourceBindings(keys, dateColumns);
+  // Never strip existing __tf_* keys unless we can re-derive them from a bound
+  // source date column. Otherwise columnar rows that already carry materialized
+  // facet columns (e.g. from DuckDB) would lose them and groupBy on __tf_* fails.
   if (!bindings.length) return [];
+
+  stripTemporalFacetColumns(data);
 
   const logicalSources = [...new Set(bindings.map((b) => b.logical))];
   const meta = temporalFacetMetadataForDateColumns(logicalSources);

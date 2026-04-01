@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  clearRedundantDateAggregationForTemporalFacets,
   executeQueryPlan,
   remapQueryPlanGroupByToTemporalFacets,
 } from "../lib/queryPlanExecutor.js";
@@ -8,6 +9,21 @@ import {
   applyTemporalFacetColumns,
   facetColumnKey,
 } from "../lib/temporalFacetColumns.js";
+
+describe("clearRedundantDateAggregationForTemporalFacets", () => {
+  it("strips dateAggregationPeriod when groupBy is matching __tf_month__ facet (user bug shape)", () => {
+    const plan = {
+      groupBy: ["__tf_month__Order_Date"],
+      dateAggregationPeriod: "month" as const,
+      aggregations: [
+        { column: "Sales", operation: "sum" as const, alias: "Total_Sales" },
+      ],
+    };
+    const cleared = clearRedundantDateAggregationForTemporalFacets(plan);
+    assert.equal(cleared.dateAggregationPeriod, undefined);
+    assert.deepEqual(cleared.groupBy, ["__tf_month__Order_Date"]);
+  });
+});
 
 describe("remapQueryPlanGroupByToTemporalFacets + execute_query_plan", () => {
   it("month intent remaps groupBy to __tf_month__* when that key exists", () => {
@@ -51,6 +67,38 @@ describe("remapQueryPlanGroupByToTemporalFacets + execute_query_plan", () => {
     assert.equal(exec.ok, true);
     if (exec.ok) {
       assert.ok(exec.data.length >= 1);
+    }
+  });
+
+  it("execute_query_plan uses facet values when plan sets dateAggregationPeriod with __tf_month groupBy", () => {
+    const data: Record<string, unknown>[] = [
+      { Region: "West", Sales: 10, __tf_month__Order_Date: "2015-06" },
+      { Region: "West", Sales: 5, __tf_month__Order_Date: "2015-07" },
+      { Region: "East", Sales: 3, __tf_month__Order_Date: "2015-06" },
+    ];
+    const keys = new Set(Object.keys(data[0]!));
+    const summary = {
+      rowCount: 3,
+      columnCount: keys.size,
+      columns: [...keys].map((name) => ({
+        name,
+        type: "string",
+        sampleValues: [] as (string | number | null)[],
+      })),
+      numericColumns: ["Sales"],
+      dateColumns: ["Order Date"],
+    };
+    const monthKey = "__tf_month__Order_Date";
+    const plan = {
+      groupBy: [monthKey, "Region"],
+      dateAggregationPeriod: "month" as const,
+      aggregations: [{ column: "Sales", operation: "sum" as const, alias: "s" }],
+    };
+    const exec = executeQueryPlan(data as Record<string, any>[], summary, plan);
+    assert.equal(exec.ok, true);
+    if (exec.ok) {
+      assert.equal(exec.data.length, 3);
+      assert.ok(!exec.data.some((r) => String(r[monthKey]) === "undefined"));
     }
   });
 });

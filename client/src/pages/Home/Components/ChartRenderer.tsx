@@ -45,6 +45,7 @@ import {
   ChartFilterDefinition,
 } from '@/lib/chartFilters';
 import { parseDateLike } from '@/lib/parseDateLike';
+import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 
 interface ChartRendererProps {
   chart: ChartSpec;
@@ -364,6 +365,25 @@ export function ChartRenderer({
   const baseChartData = enableFilters ? filteredData : originalData;
   
   const chartData = baseChartData;
+
+  /** Chronological X order for trend charts (backend may return unsorted string dates). */
+  const lineAreaSortedData = useMemo(() => {
+    if (type !== 'line' && type !== 'area') return chartData;
+    if (typeof x !== 'string') return chartData;
+    return [...chartData].sort((a, b) => {
+      const ra = (a as Record<string, unknown>)[x];
+      const rb = (b as Record<string, unknown>)[x];
+      const sa =
+        ra instanceof Date && !isNaN(ra.getTime())
+          ? ra.toISOString()
+          : String(ra ?? '');
+      const sb =
+        rb instanceof Date && !isNaN(rb.getTime())
+          ? rb.toISOString()
+          : String(rb ?? '');
+      return compareTemporalOrLexicalLabels(sa, sb);
+    });
+  }, [type, chartData, x]);
   
   // Process scatter plot data for display (only outlier filtering) - show ALL data points
   const processedScatterData = useMemo(() => {
@@ -475,11 +495,11 @@ export function ChartRenderer({
     if (type !== 'line' && type !== 'area') return undefined;
     if (typeof x !== 'string') return undefined;
     return evenlySpacedDataKeys(
-      chartData as Record<string, unknown>[],
+      lineAreaSortedData as Record<string, unknown>[],
       x,
       LINE_AREA_MAX_X_TICKS
     );
-  }, [type, chartData, x]);
+  }, [type, lineAreaSortedData, x]);
 
   const compactXAxisTicks = useMemo(() => {
     if (!shouldCompactView || typeof x !== 'string') {
@@ -755,14 +775,14 @@ export function ChartRenderer({
         // For dual-axis charts, use blue for left axis, red for right axis
         const leftAxisColor = chart.y2 ? 'hsl(var(--chart-1))' : chartColor;
         const rightAxisColor = 'hsl(var(--chart-4))';
-        const leftValues = getNumericValues(chartData as Record<string, any>[], y);
+        const leftValues = getNumericValues(lineAreaSortedData as Record<string, any>[], y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
-        const rightValues = chart.y2 ? getNumericValues(chartData as Record<string, any>[], chart.y2 as string) : [];
+        const rightValues = chart.y2 ? getNumericValues(lineAreaSortedData as Record<string, any>[], chart.y2 as string) : [];
         const rightDomain = chart.y2 ? getDynamicDomain(rightValues) : undefined;
         
         return (
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <LineChart data={chartData} margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 30 }}>
+            <LineChart data={lineAreaSortedData} margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 30 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -927,8 +947,8 @@ export function ChartRenderer({
           if (rv !== undefined && rv !== null && String(rv) !== '') rowSet.add(String(rv));
           if (cv !== undefined && cv !== null && String(cv) !== '') colSet.add(String(cv));
         }
-        const rowLabels = Array.from(rowSet).sort((a, b) => a.localeCompare(b));
-        const colLabels = Array.from(colSet).sort((a, b) => a.localeCompare(b));
+        const rowLabels = Array.from(rowSet).sort(compareTemporalOrLexicalLabels);
+        const colLabels = Array.from(colSet).sort(compareTemporalOrLexicalLabels);
         const cellMap = new Map<string, number>();
         let vmin = Infinity;
         let vmax = -Infinity;
@@ -1221,7 +1241,7 @@ export function ChartRenderer({
       case 'area':
         return (
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <AreaChart data={chartData} margin={{ left: 50, right: 10, top: 10, bottom: 30 }}>
+            <AreaChart data={lineAreaSortedData} margin={{ left: 50, right: 10, top: 10, bottom: 30 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}

@@ -1,4 +1,5 @@
 import { parseNumericCell } from '@/lib/formatAnalysisNumber';
+import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 import type {
   FilterSelections,
   PivotAgg,
@@ -58,12 +59,33 @@ function aggregatePivot(
   const matrixValues: Record<string, Record<string, number>> = {};
   for (const ck of colKeys) {
     matrixValues[ck] = {};
-    const slice = rows.filter((r) => String(r[colField] ?? '') === ck);
+    const slice = rows.filter(
+      (r) => pivotDimensionStringKey(r[colField]) === ck
+    );
     for (const spec of valueSpecs) {
       matrixValues[ck][spec.id] = applyAgg(slice, spec);
     }
   }
   return { flatValues: null, matrixValues };
+}
+
+/** Stable key for grouping/filtering pivot dimensions (avoids `[object Object]`). */
+function pivotDimensionStringKey(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
+  if (typeof raw === 'number')
+    return Number.isFinite(raw) ? String(raw) : '';
+  if (typeof raw === 'string') return raw;
+  if (raw instanceof Date && !isNaN(raw.getTime())) return raw.toISOString();
+  if (typeof raw === 'object') {
+    try {
+      const o = raw as Record<string, unknown>;
+      return JSON.stringify(raw, Object.keys(o).sort());
+    } catch {
+      return '[unserializable]';
+    }
+  }
+  return String(raw);
 }
 
 function groupByField(
@@ -72,7 +94,7 @@ function groupByField(
 ): Map<string, Record<string, unknown>[]> {
   const map = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {
-    const k = String(r[field] ?? '');
+    const k = pivotDimensionStringKey(r[field]);
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(r);
   }
@@ -80,80 +102,7 @@ function groupByField(
 }
 
 function sortedKeys(map: Map<string, Record<string, unknown>[]>): string[] {
-  return [...map.keys()].sort((a, b) =>
-    a.localeCompare(b, undefined, { numeric: true })
-  );
-}
-
-function isoWeekStartUtc(isoYear: number, isoWeek: number): number {
-  // ISO week starts on Monday. ISO week 1 is the week containing Jan 4th.
-  const jan4 = new Date(Date.UTC(isoYear, 0, 4));
-  const dayOfWeek = jan4.getUTCDay() || 7; // Sunday => 7
-  const mondayWeek1 = new Date(jan4);
-  mondayWeek1.setUTCDate(jan4.getUTCDate() - (dayOfWeek - 1));
-  const mondayTarget = new Date(mondayWeek1);
-  mondayTarget.setUTCDate(mondayWeek1.getUTCDate() + (isoWeek - 1) * 7);
-  return mondayTarget.getTime();
-}
-
-function parseTemporalFacetKeyForSort(key: string): number | null {
-  const s = String(key ?? "").trim();
-  if (!s) return null;
-
-  let m: RegExpMatchArray | null;
-
-  // Year: YYYY
-  if (/^\d{4}$/.test(s)) {
-    const year = Number(s);
-    return Date.UTC(year, 0, 1);
-  }
-
-  // Month: YYYY-MM
-  m = s.match(/^(\d{4})-(\d{2})$/);
-  if (m) {
-    const year = Number(m[1]);
-    const month = Number(m[2]);
-    if (month >= 1 && month <= 12) return Date.UTC(year, month - 1, 1);
-  }
-
-  // Quarter: YYYY-Qn
-  m = s.match(/^(\d{4})-Q([1-4])$/);
-  if (m) {
-    const year = Number(m[1]);
-    const q = Number(m[2]);
-    const month = (q - 1) * 3;
-    return Date.UTC(year, month, 1);
-  }
-
-  // Half-year: YYYY-Hn
-  m = s.match(/^(\d{4})-H([1-2])$/);
-  if (m) {
-    const year = Number(m[1]);
-    const h = Number(m[2]);
-    const month = (h - 1) * 6;
-    return Date.UTC(year, month, 1);
-  }
-
-  // ISO week: YYYY-Www
-  m = s.match(/^(\d{4})-W(\d{2})$/);
-  if (m) {
-    const year = Number(m[1]);
-    const wk = Number(m[2]);
-    if (wk >= 1 && wk <= 53) return isoWeekStartUtc(year, wk);
-  }
-
-  // Day: YYYY-MM-DD
-  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) {
-    const year = Number(m[1]);
-    const month = Number(m[2]);
-    const day = Number(m[3]);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return Date.UTC(year, month - 1, day);
-    }
-  }
-
-  return null;
+  return [...map.keys()].sort(compareTemporalOrLexicalLabels);
 }
 
 function buildLevel(
@@ -173,7 +122,12 @@ function buildLevel(
   const isLast = depth === rowFields.length - 1;
   const groups = groupByField(rows, field);
   let keys = sortedKeys(groups);
-  if (rowSort?.byValueSpecId) {
+  if (rowSort?.primary === 'rowLabel') {
+    keys = [...groups.keys()].sort((a, b) => {
+      const c = compareTemporalOrLexicalLabels(a, b);
+      return rowSort.direction === 'desc' ? -c : c;
+    });
+  } else if (rowSort?.byValueSpecId) {
     const chosen = valueSpecs.find((v) => v.id === rowSort.byValueSpecId);
     if (chosen) {
       keys = [...groups.keys()].sort((a, b) => {
@@ -183,10 +137,7 @@ function buildLevel(
         const totalB = applyAgg(subB, chosen);
 
         if (totalA === totalB) {
-          const ta = parseTemporalFacetKeyForSort(a);
-          const tb = parseTemporalFacetKeyForSort(b);
-          if (ta != null && tb != null) return ta - tb;
-          return a.localeCompare(b, undefined, { numeric: true });
+          return compareTemporalOrLexicalLabels(a, b);
         }
 
         // desc => higher totals first
@@ -257,7 +208,7 @@ export function syncFilterSelectionsWithFilters(
   for (const f of filters) {
     const distinctNow = new Set<string>();
     for (const r of rows) {
-      distinctNow.add(String(r[f] ?? ''));
+      distinctNow.add(pivotDimensionStringKey(r[f]));
     }
     const lastSnap = snap?.[f] ?? new Set<string>();
 
@@ -310,7 +261,7 @@ export function filterPivotRows(
       const sel = selections[f];
       if (sel === undefined) continue;
       if (sel.size === 0) return false;
-      const v = String(r[f] ?? '');
+      const v = pivotDimensionStringKey(r[f]);
       if (!sel.has(v)) return false;
     }
     return true;
@@ -323,9 +274,9 @@ export function collectColKeys(
 ): string[] {
   const set = new Set<string>();
   for (const r of rows) {
-    set.add(String(r[colField] ?? ''));
+    set.add(pivotDimensionStringKey(r[colField]));
   }
-  return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return [...set].sort(compareTemporalOrLexicalLabels);
 }
 
 export function buildPivotTree(
@@ -489,7 +440,13 @@ export function createInitialPivotConfig(
   const unused = allKeys.filter((k) => !usedFields.has(k));
 
   const rowSort: PivotUiConfig["rowSort"] =
-    values.length > 0 ? { byValueSpecId: values[0]!.id, direction: "desc" } : undefined;
+    values.length > 0
+      ? {
+          byValueSpecId: values[0]!.id,
+          direction: "desc",
+          primary: "measure",
+        }
+      : undefined;
   return {
     filters: [],
     columns: [],
@@ -526,12 +483,22 @@ export function normalizePivotConfig(
 
   let rowSort = config.rowSort;
   if (rowSort) {
-    const stillExists = vals.some((v) => v.id === rowSort!.byValueSpecId);
-    if (!stillExists) {
-      rowSort =
-        vals.length > 0
-          ? { byValueSpecId: vals[0]!.id, direction: rowSort.direction }
-          : undefined;
+    if (rowSort.primary === "rowLabel") {
+      // keep row-label sort without requiring a measure id
+    } else {
+      const stillExists =
+        rowSort.byValueSpecId &&
+        vals.some((v) => v.id === rowSort!.byValueSpecId);
+      if (!stillExists) {
+        rowSort =
+          vals.length > 0
+            ? {
+                byValueSpecId: vals[0]!.id,
+                direction: rowSort.direction,
+                primary: "measure",
+              }
+            : undefined;
+      }
     }
   }
 

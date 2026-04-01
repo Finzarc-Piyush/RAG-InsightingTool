@@ -82,6 +82,25 @@ function localeNumericSort(a: string, b: string): number {
 /**
  * Client-aligned numeric parsing (see `client/src/lib/formatAnalysisNumber.ts`).
  */
+/** Stable string key for pivot grouping (avoids `[object Object]` from plain objects). */
+function pivotDimensionStringKey(raw: unknown): string {
+  if (raw === null || raw === undefined) return "";
+  if (typeof raw === "boolean") return raw ? "true" : "false";
+  if (typeof raw === "number")
+    return Number.isFinite(raw) ? String(raw) : "";
+  if (typeof raw === "string") return raw;
+  if (raw instanceof Date && !isNaN(raw.getTime())) return raw.toISOString();
+  if (typeof raw === "object") {
+    try {
+      const o = raw as Record<string, unknown>;
+      return JSON.stringify(raw, Object.keys(o).sort());
+    } catch {
+      return "[unserializable]";
+    }
+  }
+  return String(raw);
+}
+
 function parseNumericCell(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -141,9 +160,9 @@ function collectColKeys(
 ): string[] {
   const set = new Set<string>();
   for (const r of rows) {
-    set.add(String(r[colField] ?? ""));
+    set.add(pivotDimensionStringKey(r[colField]));
   }
-  return [...set].sort(localeNumericSort);
+  return [...set].sort(compareTemporalOrLocale);
 }
 
 function aggregatePivot(
@@ -163,7 +182,7 @@ function aggregatePivot(
   const matrixValues: Record<string, Record<string, number>> = {};
   for (const ck of colKeys) {
     matrixValues[ck] = {};
-    const slice = rows.filter((r) => String(r[colField] ?? "") === ck);
+    const slice = rows.filter((r) => pivotDimensionStringKey(r[colField]) === ck);
     for (const spec of valueSpecs) {
       matrixValues[ck][spec.id] = applyAgg(slice, spec);
     }
@@ -177,7 +196,7 @@ function groupByField(
 ): Map<string, Record<string, unknown>[]> {
   const map = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {
-    const k = String(r[field] ?? "");
+    const k = pivotDimensionStringKey(r[field]);
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(r);
   }
@@ -252,11 +271,23 @@ function parseTemporalFacetKeyForSort(key: string): number | null {
     }
   }
 
+  const isoTry = Date.parse(s);
+  if (!Number.isNaN(isoTry)) return isoTry;
+
   return null;
 }
 
+function compareTemporalOrLocale(a: string, b: string): number {
+  const ta = parseTemporalFacetKeyForSort(a);
+  const tb = parseTemporalFacetKeyForSort(b);
+  if (ta != null && tb != null) return ta - tb;
+  if (ta != null) return -1;
+  if (tb != null) return 1;
+  return localeNumericSort(a, b);
+}
+
 function sortedKeys(keys: string[]): string[] {
-  return [...keys].sort((a, b) => localeNumericSort(a, b));
+  return [...keys].sort(compareTemporalOrLocale);
 }
 
 function buildLevel(
@@ -276,7 +307,12 @@ function buildLevel(
   const groups = groupByField(rows, field);
   let keys = sortedKeys([...groups.keys()]);
 
-  if (rowSort?.byValueSpecId) {
+  if (rowSort?.primary === "rowLabel") {
+    keys = [...groups.keys()].sort((a, b) => {
+      const c = compareTemporalOrLocale(a, b);
+      return rowSort.direction === "desc" ? -c : c;
+    });
+  } else if (rowSort?.byValueSpecId) {
     const chosen = valueSpecs.find((v) => v.id === rowSort.byValueSpecId);
     if (chosen) {
       keys = [...groups.keys()].sort((a, b) => {
@@ -286,10 +322,7 @@ function buildLevel(
         const totalB = applyAgg(subB, chosen);
 
         if (totalA === totalB) {
-          const ta = parseTemporalFacetKeyForSort(a);
-          const tb = parseTemporalFacetKeyForSort(b);
-          if (ta != null && tb != null) return ta - tb;
-          return a.localeCompare(b, undefined, { numeric: true });
+          return compareTemporalOrLocale(a, b);
         }
 
         const diff = totalA - totalB;

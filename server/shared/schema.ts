@@ -589,10 +589,22 @@ export const pivotModelSchema = z.object({
 });
 export type PivotModel = z.infer<typeof pivotModelSchema>;
 
-export const pivotRowSortSchema = z.object({
-  byValueSpecId: z.string().max(200),
-  direction: z.enum(["asc", "desc"]),
-});
+export const pivotRowSortSchema = z
+  .object({
+    byValueSpecId: z.string().max(200).optional(),
+    direction: z.enum(["asc", "desc"]),
+    /** Sort pivot rows by dimension labels (chronological when parsable) instead of by a measure. */
+    primary: z.enum(["measure", "rowLabel"]).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const p = data.primary ?? "measure";
+    if (p === "measure" && (!data.byValueSpecId || !data.byValueSpecId.trim())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "byValueSpecId is required when primary is measure (or omitted)",
+      });
+    }
+  });
 export type PivotRowSort = z.infer<typeof pivotRowSortSchema>;
 
 export const pivotQueryRequestSchema = z.object({

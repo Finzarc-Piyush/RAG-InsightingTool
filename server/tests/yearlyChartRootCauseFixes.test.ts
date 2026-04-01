@@ -36,6 +36,31 @@ describe("resolveDateBucketForGroupBy", () => {
     assert.equal(r.mode, "schema");
     assert.equal(r.readColumn, "Order Date");
   });
+
+  it("does not calendar-bucket precomputed __tf_month__ columns even when dateAggregationPeriod is set", () => {
+    const summary: DataSummary = {
+      rowCount: 2,
+      columnCount: 2,
+      columns: [
+        { name: "__tf_month__Order_Date", type: "string", sampleValues: ["2018-02"] },
+        { name: "Sales", type: "number", sampleValues: [1] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: ["Order Date"],
+    };
+    const data: Record<string, unknown>[] = [
+      { __tf_month__Order_Date: "2018-02", Sales: 100 },
+      { __tf_month__Order_Date: "2018-03", Sales: 200 },
+    ];
+    const r = resolveDateBucketForGroupBy(
+      "__tf_month__Order_Date",
+      summary,
+      data as Record<string, any>[],
+      "month"
+    );
+    assert.equal(r.mode, "none");
+    assert.equal(r.readColumn, "__tf_month__Order_Date");
+  });
 });
 
 describe("validateCoarseDateAggregationOutput", () => {

@@ -32,6 +32,21 @@ describe("temporalFacetColumns", () => {
     assert.equal(b[0].readFrom, "Cleaned_Order Date");
   });
 
+  it("resolveFacetSourceBindings maps logical Order Date to Order_Date when DuckDB-style names differ", () => {
+    const keys = new Set(["Sales", "Order_Date"]);
+    const b = resolveFacetSourceBindings(keys, ["Order Date"]);
+    assert.equal(b.length, 1);
+    assert.equal(b[0].logical, "Order Date");
+    assert.equal(b[0].readFrom, "Order_Date");
+  });
+
+  it("applyTemporalFacetColumns fills facets from fuzzy-matched Order_Date column", () => {
+    const data: Record<string, unknown>[] = [{ Sales: 1, Order_Date: "2015-06-15" }];
+    const mo = facetColumnKey("Order Date", "month");
+    applyTemporalFacetColumns(data as Record<string, any>[], ["Order Date"]);
+    assert.equal(data[0][mo], "2015-06");
+  });
+
   it("applyTemporalFacetColumns fills __tf_year__Order_Date from Cleaned_Order Date", () => {
     const data: Record<string, unknown>[] = [
       { Sales: 1, "Cleaned_Order Date": "2015-06-15" },
@@ -66,6 +81,16 @@ describe("temporalFacetColumns", () => {
     stripTemporalFacetColumns([row]);
     assert.equal(row.__tf_year__X, undefined);
     assert.equal(row.a, 1);
+  });
+
+  it("applyTemporalFacetColumns preserves materialized __tf_* when date binding is missing", () => {
+    const data: Record<string, unknown>[] = [
+      { Sales: 1, __tf_month__Order_Date: "2018-02" },
+    ];
+    const meta = applyTemporalFacetColumns(data as Record<string, any>[], ["Ship Date"]);
+    assert.deepEqual(meta, []);
+    assert.equal(data[0].__tf_month__Order_Date, "2018-02");
+    assert.equal(data[0].Sales, 1);
   });
 
   it("remapGroupByToTemporalFacet maps date column + year intent to year facet", () => {

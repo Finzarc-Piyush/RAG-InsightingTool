@@ -1,6 +1,6 @@
 INFO:     Will watch for changes in these directories: ['/Users/tida/Documents/Cursor Projects/RAG-InsightingTool/python-service']
 INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [80178] using WatchFiles
-INFO:     Started server process [80282]
+INFO:     Started reloader process [86713] using WatchFiles
+INFO:     Started server process [86822]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.

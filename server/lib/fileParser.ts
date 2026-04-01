@@ -2,12 +2,14 @@ import { parse } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { DataSummary } from '../shared/schema.js';
 import {
+  isDateColumnName,
   isTemporalWhitelistColumnName,
   parseFlexibleDate,
   sanitizeDateStringForParse,
 } from './dateUtils.js';
 import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
+import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 import type { DatasetProfile } from './datasetProfile.js';
 import { computeCleanedDateColumnNames } from './dirtyDateEnrichment.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
@@ -355,6 +357,28 @@ function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
 }
 
 /**
+ * When row keys differ from summary date names (e.g. DuckDB "Order_Date" vs profile "Order Date"),
+ * copy values onto the logical column name so canonicalization and temporal facets see them.
+ */
+function hydrateLogicalDateColumnKeysFromPhysical(
+  data: Record<string, any>[],
+  logicalCols: string[]
+): void {
+  if (data.length === 0) return;
+  const physical = Object.keys(data[0]);
+  for (const logical of logicalCols) {
+    if (physical.includes(logical)) continue;
+    const m = findMatchingColumn(logical, physical);
+    if (!m || m === logical) continue;
+    for (const row of data) {
+      if (row[logical] === undefined && row[m] !== undefined) {
+        row[logical] = row[m];
+      }
+    }
+  }
+}
+
+/**
  * Normalize values in date columns to ISO (date-only or full instant) for consistent analysis and display.
  */
 export function canonicalizeDateColumnValues(data: Record<string, any>[], dateColumns: string[]): void {
@@ -383,6 +407,7 @@ export function canonicalizeDateColumnValues(data: Record<string, any>[], dateCo
 
   const safeCols = dateColumns.filter((c) => !isLikelyIdentifierColumnName(c));
   if (safeCols.length === 0) return;
+  hydrateLogicalDateColumnKeysFromPhysical(data, safeCols);
   const changedByCol = new Map<string, number>();
 
   for (const row of data) {
@@ -442,6 +467,24 @@ function computeTopStringValues(
     .sort((a, b) => b[1] - a[1])
     .slice(0, maxReturn)
     .map(([value, count]) => ({ value, count }));
+}
+
+/** Share threshold logic for summary typing and upload approval. */
+export function isDateParseableAtThreshold(
+  values: unknown[],
+  thresholdRatio: number
+): boolean {
+  const nonNull = values.filter((v) => v !== null && v !== undefined && v !== '');
+  if (nonNull.length === 0) return false;
+  const matches = nonNull.filter((v) => {
+    if (v instanceof Date && !isNaN(v.getTime())) return true;
+    if (typeof v === 'string' || typeof v === 'number') {
+      return !!parseFlexibleDate(String(v));
+    }
+    return false;
+  }).length;
+  const threshold = Math.max(1, Math.ceil(nonNull.length * thresholdRatio));
+  return matches >= threshold;
 }
 
 export function createDataSummary(data: Record<string, any>[]): DataSummary {
@@ -512,12 +555,20 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     const numericThreshold = Math.max(1, Math.ceil(nonNullValues.length * 0.7)); // 70% threshold
     const isNumeric = nonNullValues.length > 0 && numericMatches >= numericThreshold;
 
-    // Date typing is name-whitelist based; value parseability is diagnostics only.
     const nn = nonNullValues.filter((v) => v !== null && v !== undefined && v !== '');
-    const isDate =
-      !isLikelyIdentifierColumnName(col) &&
-      nn.length > 0 &&
-      isTemporalWhitelistColumnName(col);
+    let isDate = false;
+    if (!isNumeric && !isLikelyIdentifierColumnName(col) && nn.length > 0) {
+      if (isTemporalWhitelistColumnName(col)) {
+        isDate = true;
+      } else if (
+        isDateColumnName(col) &&
+        isDateParseableAtThreshold(values, 0.65)
+      ) {
+        isDate = true;
+      } else if (isDateParseableAtThreshold(values, 0.88)) {
+        isDate = true;
+      }
+    }
 
     if (isNumeric) {
       type = 'number';
@@ -626,20 +677,6 @@ export function resolveEffectiveDateColumns(
     if (cleaned && keys.has(cleaned)) return cleaned;
     return c;
   });
-}
-
-function isDateParseableAtThreshold(values: unknown[], thresholdRatio: number): boolean {
-  const nonNull = values.filter((v) => v !== null && v !== undefined && v !== '');
-  if (nonNull.length === 0) return false;
-  const matches = nonNull.filter((v) => {
-    if (v instanceof Date && !isNaN(v.getTime())) return true;
-    if (typeof v === 'string' || typeof v === 'number') {
-      return !!parseFlexibleDate(String(v));
-    }
-    return false;
-  }).length;
-  const threshold = Math.max(1, Math.ceil(nonNull.length * thresholdRatio));
-  return matches >= threshold;
 }
 
 /**

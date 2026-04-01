@@ -7,7 +7,10 @@ import { z } from "zod";
 import { applyQueryTransformations } from "./dataTransform.js";
 import type { ParsedQuery } from "../shared/queryTypes.js";
 import type { DataSummary } from "../shared/schema.js";
-import { remapGroupByToTemporalFacet } from "./temporalFacetColumns.js";
+import {
+  remapGroupByToTemporalFacet,
+  temporalFacetColumnNamesForDateColumns,
+} from "./temporalFacetColumns.js";
 
 const aggOpSchema = z.enum([
   "sum",
@@ -68,6 +71,44 @@ export const executeQueryPlanArgsSchema = z
 
 export type QueryPlanBody = z.infer<typeof queryPlanBodySchema>;
 
+/** Grain segment in a key like `__tf_month__Order_Date` (between `__tf_` and the next `__`). */
+function temporalFacetGrainTokenFromKey(name: string): string | null {
+  if (!name.startsWith("__tf_")) return null;
+  const without = name.slice("__tf_".length);
+  const i = without.indexOf("__");
+  if (i <= 0) return null;
+  return without.slice(0, i);
+}
+
+function facetGrainMatchesAggregationPeriod(
+  grainToken: string,
+  period: NonNullable<QueryPlanBody["dateAggregationPeriod"]>
+): boolean {
+  if (period === "monthOnly" && grainToken === "month") return true;
+  if (period === "day" && grainToken === "date") return true;
+  return grainToken === period;
+}
+
+/**
+ * If the plan already groups by a precomputed `__tf_*` column whose grain matches
+ * `dateAggregationPeriod`, drop the period so `applyAggregations` does not re-bucket via
+ * fuzzy-matched raw date columns (which may be absent on the current frame).
+ */
+export function clearRedundantDateAggregationForTemporalFacets(
+  plan: QueryPlanBody
+): QueryPlanBody {
+  const period = plan.dateAggregationPeriod;
+  if (period == null || !plan.groupBy?.length) return plan;
+  for (const g of plan.groupBy) {
+    const grain = temporalFacetGrainTokenFromKey(g);
+    if (grain && facetGrainMatchesAggregationPeriod(grain, period)) {
+      return { ...plan, dateAggregationPeriod: undefined };
+    }
+  }
+  return plan;
+}
+
+
 /**
  * Aligns raw date groupBy entries with precomputed `__tf_*` facet columns when the user
  * question implies a coarse period (month/year/…) and those keys exist on rows — same
@@ -114,11 +155,22 @@ export function queryPlanToParsedQuery(plan: QueryPlanBody): ParsedQuery {
   };
 }
 
+/** Schema columns plus derived __tf_* names (columnar metadata often omits facets from `columns`). */
+export function allowedColumnNamesForQueryPlan(summary: DataSummary): Set<string> {
+  const allowed = new Set<string>();
+  for (const c of summary.columns) allowed.add(c.name);
+  for (const m of summary.temporalFacetColumns ?? []) allowed.add(m.name);
+  for (const n of temporalFacetColumnNamesForDateColumns(summary.dateColumns ?? [])) {
+    allowed.add(n);
+  }
+  return allowed;
+}
+
 function assertPlanColumnsAllowed(
   summary: DataSummary,
   plan: QueryPlanBody
 ): string | null {
-  const allowed = new Set(summary.columns.map((c) => c.name));
+  const allowed = allowedColumnNamesForQueryPlan(summary);
   const check = (col: string) => {
     if (!allowed.has(col)) return `Column not in schema: ${col}`;
     return null;
@@ -160,18 +212,25 @@ export interface ExecuteQueryPlanFailure {
   error: string;
 }
 
-export function executeQueryPlan(
-  data: Record<string, any>[],
+/**
+ * Same normalization and validation as executeQueryPlan (before touching row data).
+ */
+export function normalizeAndValidateQueryPlanBody(
   summary: DataSummary,
   plan: QueryPlanBody
-): ExecuteQueryPlanSuccess | ExecuteQueryPlanFailure {
-  const colErr = assertPlanColumnsAllowed(summary, plan);
+): { ok: true; normalizedPlan: QueryPlanBody } | { ok: false; error: string } {
+  const normalizedPlan = clearRedundantDateAggregationForTemporalFacets(plan);
+  const colErr = assertPlanColumnsAllowed(summary, normalizedPlan);
   if (colErr) {
     return { ok: false, error: colErr };
   }
 
-  const hasAggregations = (plan.aggregations?.length ?? 0) > 0;
-  if (!hasAggregations && (plan.dimensionFilters?.length ?? 0) === 0 && !plan.limit) {
+  const hasAggregations = (normalizedPlan.aggregations?.length ?? 0) > 0;
+  if (
+    !hasAggregations &&
+    (normalizedPlan.dimensionFilters?.length ?? 0) === 0 &&
+    !normalizedPlan.limit
+  ) {
     return {
       ok: false,
       error:
@@ -179,7 +238,21 @@ export function executeQueryPlan(
     };
   }
 
-  const parsed = queryPlanToParsedQuery(plan);
+  return { ok: true, normalizedPlan };
+}
+
+export function executeQueryPlan(
+  data: Record<string, any>[],
+  summary: DataSummary,
+  plan: QueryPlanBody
+): ExecuteQueryPlanSuccess | ExecuteQueryPlanFailure {
+  const v = normalizeAndValidateQueryPlanBody(summary, plan);
+  if (!v.ok) {
+    return { ok: false, error: v.error };
+  }
+  const { normalizedPlan } = v;
+
+  const parsed = queryPlanToParsedQuery(normalizedPlan);
   const { data: out, descriptions } = applyQueryTransformations(
     data,
     summary,

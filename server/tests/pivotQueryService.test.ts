@@ -190,3 +190,68 @@ test("pivot query uses full table rows without sample-style truncation", async (
   assert.equal(out.model.tree.grandTotal.flatValues?.meas_sales, 2500);
 });
 
+test("pivot default row order is chronological for YYYY-MM keys when rowSort omitted", async () => {
+  const sessionId = `pivot_time_sort_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const storage = new ColumnarStorageService({ sessionId });
+  await storage.initialize();
+  try {
+    await storage.materializeAuthoritativeDataTable(
+      [
+        { MonthKey: "2024-03", Sales: 300 },
+        { MonthKey: "2024-01", Sales: 100 },
+        { MonthKey: "2024-02", Sales: 200 },
+      ],
+      { tableName: "data" }
+    );
+  } finally {
+    await storage.close();
+  }
+
+  const out = await executePivotQuery(
+    sessionId,
+    {
+      rowFields: ["MonthKey"],
+      colFields: [],
+      filterFields: [],
+      valueSpecs: [{ id: "meas_sales", field: "Sales", agg: "sum" }],
+    },
+    { dataVersion: 1 }
+  );
+
+  const labels = (out.model.tree.nodes as { label: string }[]).map((n) => n.label);
+  assert.deepEqual(labels, ["2024-01", "2024-02", "2024-03"]);
+});
+
+test("pivot primary rowLabel sorts by time order ascending", async () => {
+  const sessionId = `pivot_rowlabel_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const storage = new ColumnarStorageService({ sessionId });
+  await storage.initialize();
+  try {
+    await storage.materializeAuthoritativeDataTable(
+      [
+        { MonthKey: "2024-03", Sales: 300 },
+        { MonthKey: "2024-01", Sales: 100 },
+        { MonthKey: "2024-02", Sales: 200 },
+      ],
+      { tableName: "data" }
+    );
+  } finally {
+    await storage.close();
+  }
+
+  const out = await executePivotQuery(
+    sessionId,
+    {
+      rowFields: ["MonthKey"],
+      colFields: [],
+      filterFields: [],
+      valueSpecs: [{ id: "meas_sales", field: "Sales", agg: "sum" }],
+      rowSort: { primary: "rowLabel", direction: "asc" },
+    },
+    { dataVersion: 1 }
+  );
+
+  const labels = (out.model.tree.nodes as { label: string }[]).map((n) => n.label);
+  assert.deepEqual(labels, ["2024-01", "2024-02", "2024-03"]);
+});
+

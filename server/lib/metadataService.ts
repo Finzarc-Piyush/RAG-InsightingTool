@@ -49,7 +49,13 @@ export class MetadataService {
       )) {
         type = 'number';
         numericColumns.push(col.name);
-      } else if (col.type && col.type.includes('DATE')) {
+      } else if (
+        col.type &&
+        (/\bDATE\b/i.test(col.type) ||
+          /\bTIMESTAMP\b/i.test(col.type) ||
+          /\bDATETIME\b/i.test(col.type) ||
+          /^TIME\b/i.test(col.type.trim()))
+      ) {
         type = 'date';
         dateColumns.push(col.name);
       }
