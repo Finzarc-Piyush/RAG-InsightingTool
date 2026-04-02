@@ -39,6 +39,10 @@ import type {
   PivotValueSpec,
 } from '@/lib/pivot/types';
 import { facetColumnHeaderLabelForColumn } from '@/lib/temporalFacetDisplay';
+import {
+  buildTemporalFacetMetaByFieldName,
+  distinctPivotFilterKeysFromRows,
+} from '@/lib/temporalFacetRowDimension';
 import type { TemporalFacetColumnMeta } from '@/shared/schema';
 
 const DIM_PREFIX = 'd|';
@@ -107,6 +111,8 @@ type PivotFieldPanelProps = {
   data: Record<string, unknown>[];
   numericColumns: string[];
   temporalFacetColumns?: TemporalFacetColumnMeta[];
+  /** Distinct values per filter field from session `data` (GET pivot/fields). Omitted fields use row scan. */
+  filterDistinctsFromSession?: Record<string, string[]>;
   className?: string;
   /** When true, grow the field list to fill the parent column (e.g. expanded pivot dialog). */
   fillAvailableHeight?: boolean;
@@ -120,11 +126,16 @@ export function PivotFieldPanel({
   data,
   numericColumns,
   temporalFacetColumns = [],
+  filterDistinctsFromSession,
   className,
   fillAvailableHeight = false,
 }: PivotFieldPanelProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const numericSet = useMemo(() => new Set(numericColumns), [numericColumns]);
+  const facetMetaByFieldName = useMemo(
+    () => buildTemporalFacetMetaByFieldName(temporalFacetColumns),
+    [temporalFacetColumns]
+  );
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -333,6 +344,8 @@ export function PivotFieldPanel({
                     field={field}
                     label={fieldTitle(field)}
                     data={data}
+                    facetMetaByFieldName={facetMetaByFieldName}
+                    filterDistinctsFromSession={filterDistinctsFromSession}
                     selected={filterSelections[field]}
                     onSelectionChange={(next) =>
                       onFilterSelectionsChange({ ...filterSelections, [field]: next })
@@ -568,6 +581,8 @@ function FilterFieldRow({
   field,
   label,
   data,
+  facetMetaByFieldName,
+  filterDistinctsFromSession,
   selected,
   onSelectionChange,
   onRemove,
@@ -575,17 +590,23 @@ function FilterFieldRow({
   field: string;
   label: string;
   data: Record<string, unknown>[];
+  facetMetaByFieldName: Map<string, TemporalFacetColumnMeta>;
+  filterDistinctsFromSession?: Record<string, string[]>;
   selected: Set<string> | undefined;
   onSelectionChange: (next: Set<string>) => void;
   onRemove: () => void;
 }) {
   const options = useMemo(() => {
-    const s = new Set<string>();
-    for (const r of data) {
-      s.add(String(r[field] ?? ''));
+    if (
+      filterDistinctsFromSession &&
+      Object.prototype.hasOwnProperty.call(filterDistinctsFromSession, field)
+    ) {
+      return [...filterDistinctsFromSession[field]].sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true })
+      );
     }
-    return [...s].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [data, field]);
+    return distinctPivotFilterKeysFromRows(data, field, facetMetaByFieldName);
+  }, [data, field, facetMetaByFieldName, filterDistinctsFromSession]);
 
   const effective = selected ?? new Set(options);
 

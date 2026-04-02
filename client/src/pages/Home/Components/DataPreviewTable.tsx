@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {
   downloadModifiedDataset,
+  fetchPivotColumnDistincts,
   fetchSessionSampleRows,
   pivotQuery,
   pivotDrillthrough,
@@ -164,6 +165,10 @@ export function DataPreviewTable({
   const [filterSelections, setFilterSelections] = useState<FilterSelections>({});
   /** Tracks distinct filter values seen on prior syncs so new values can merge into selections. */
   const filterDistinctSnapshotRef = useRef<Record<string, Set<string>>>({});
+  const filterDistinctFetchSeqRef = useRef(0);
+  const [sessionFilterDistincts, setSessionFilterDistincts] = useState<
+    Record<string, string[]>
+  >({});
   const [collapsedPivotGroups, setCollapsedPivotGroups] = useState<Set<string>>(
     () => new Set()
   );
@@ -440,6 +445,11 @@ export function DataPreviewTable({
     [pivotFieldKeys, pivotConfig]
   );
 
+  const filterFieldsSignature = useMemo(
+    () => normalizedPivotConfig.filters.join('\0'),
+    [normalizedPivotConfig.filters]
+  );
+
   const canPivot = useMemo(() => {
     if (variant !== 'analysis') return false;
     return (
@@ -499,7 +509,7 @@ export function DataPreviewTable({
 
     // Payload guard: don't send full "all values" selections to the backend.
     // Only include selections that represent an explicit user exclusion.
-    const filterSelectionsObj: Record<string, string[]> = {};
+    const filterSelectionsPayload: Record<string, string[]> = {};
     for (const f of filterFields) {
       const sel = filterSelections[f];
       if (!sel) continue;
@@ -513,19 +523,19 @@ export function DataPreviewTable({
         if (isAll) continue;
       }
 
-      filterSelectionsObj[f] = selArr;
+      filterSelectionsPayload[f] = selArr;
     }
 
-    const filterSelections =
-      Object.keys(filterSelectionsObj).length > 0
-        ? filterSelectionsObj
+    const filterSelectionsForRequest =
+      Object.keys(filterSelectionsPayload).length > 0
+        ? filterSelectionsPayload
         : undefined;
 
     return {
       rowFields,
       colFields,
       filterFields,
-      filterSelections,
+      filterSelections: filterSelectionsForRequest,
       valueSpecs: normalizedPivotConfig.values,
       rowSort: normalizedPivotConfig.rowSort,
     };
@@ -610,16 +620,56 @@ export function DataPreviewTable({
   }, [pivotQueryRequest, sessionId]);
 
   useEffect(() => {
+    if (variant !== 'analysis' || !sessionId) {
+      setSessionFilterDistincts({});
+      return;
+    }
+    const fields = [...new Set(normalizedPivotConfig.filters)];
+    if (fields.length === 0) {
+      setSessionFilterDistincts({});
+      return;
+    }
+    let cancelled = false;
+    const seq = ++filterDistinctFetchSeqRef.current;
+    void (async () => {
+      const out: Record<string, string[]> = {};
+      await Promise.all(
+        fields.map(async (f) => {
+          try {
+            out[f] = await fetchPivotColumnDistincts(sessionId, f, 2000);
+          } catch {
+            // omit key — fall back to preview-row distincts
+          }
+        })
+      );
+      if (cancelled || seq !== filterDistinctFetchSeqRef.current) return;
+      setSessionFilterDistincts(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variant, sessionId, filterFieldsSignature]);
+
+  useEffect(() => {
     if (variant !== 'analysis') return;
     setFilterSelections((prev) =>
       syncFilterSelectionsWithFilters(
         pivotRows as Record<string, unknown>[],
         pivotConfig.filters,
         prev,
-        filterDistinctSnapshotRef
+        filterDistinctSnapshotRef,
+        temporalFacetColumns,
+        sessionFilterDistincts
       )
     );
-  }, [variant, pivotRows, pivotConfig.filters, pivotDataSignature]);
+  }, [
+    variant,
+    pivotRows,
+    pivotConfig.filters,
+    pivotDataSignature,
+    sessionFilterDistincts,
+    temporalFacetColumns,
+  ]);
 
   useEffect(() => {
     if (variant !== 'analysis') return;
@@ -721,7 +771,8 @@ export function DataPreviewTable({
       pivotRows as Record<string, unknown>[],
       normalizedPivotConfig,
       normalizedPivotConfig.values,
-      filterSelections
+      filterSelections,
+      temporalFacetColumns
     );
   }, [
     variant,
@@ -1682,6 +1733,7 @@ export function DataPreviewTable({
                         data={pivotRows as Record<string, unknown>[]}
                         numericColumns={numericColumns}
                         temporalFacetColumns={temporalFacetColumns}
+                        filterDistinctsFromSession={sessionFilterDistincts}
                       />
                     </motion.div>
                   )}
@@ -1785,6 +1837,7 @@ export function DataPreviewTable({
                             data={pivotRows as Record<string, unknown>[]}
                             numericColumns={numericColumns}
                             temporalFacetColumns={temporalFacetColumns}
+                            filterDistinctsFromSession={sessionFilterDistincts}
                           />
                         </motion.div>
                       )}

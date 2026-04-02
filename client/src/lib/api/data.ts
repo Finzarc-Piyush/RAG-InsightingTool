@@ -86,6 +86,35 @@ export async function pivotQuery(
   );
 }
 
+/** Response shape for GET /api/data/:sessionId/pivot/fields?column=... */
+export interface PivotFieldsColumnDistinctResponse {
+  sessionId: string;
+  fields: Array<{
+    name: string;
+    type?: string;
+    cardinality?: number;
+    distinctValues?: string[];
+    hasMore?: boolean;
+  }>;
+}
+
+/**
+ * Distinct string values for a column from the session `data` table (full dataset).
+ * Used for pivot filter UI when preview rows omit the column.
+ */
+export async function fetchPivotColumnDistincts(
+  sessionId: string,
+  column: string,
+  limit = 2000
+): Promise<string[]> {
+  const res = await api.get<PivotFieldsColumnDistinctResponse>(
+    `/api/data/${encodeURIComponent(sessionId)}/pivot/fields?column=${encodeURIComponent(column)}&limit=${limit}`
+  );
+  const vals = res.fields?.[0]?.distinctValues;
+  if (!Array.isArray(vals)) return [];
+  return vals.map((v) => (v === null || v === undefined ? '' : String(v)));
+}
+
 export interface PivotDrillthroughRequest {
   rowFields: string[];
   rowValues: string[];

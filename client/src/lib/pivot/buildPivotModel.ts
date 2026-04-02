@@ -1,5 +1,10 @@
 import { parseNumericCell } from '@/lib/formatAnalysisNumber';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
+import {
+  buildTemporalFacetMetaByFieldName,
+  pivotRowDimensionKey,
+} from '@/lib/temporalFacetRowDimension';
+import type { TemporalFacetColumnMeta } from '@/shared/schema';
 import type {
   FilterSelections,
   PivotAgg,
@@ -12,6 +17,8 @@ import type {
   PivotUiConfig,
   PivotValueSpec,
 } from './types';
+
+type FacetMetaByField = Map<string, TemporalFacetColumnMeta> | undefined;
 
 function applyAgg(
   rows: Record<string, unknown>[],
@@ -47,7 +54,8 @@ function aggregatePivot(
   rows: Record<string, unknown>[],
   valueSpecs: PivotValueSpec[],
   colField: string | null,
-  colKeys: string[]
+  colKeys: string[],
+  facetMetaByField: FacetMetaByField
 ): PivotAggRow {
   if (!colField) {
     const flatValues: Record<string, number> = {};
@@ -60,7 +68,7 @@ function aggregatePivot(
   for (const ck of colKeys) {
     matrixValues[ck] = {};
     const slice = rows.filter(
-      (r) => pivotDimensionStringKey(r[colField]) === ck
+      (r) => pivotRowDimensionKey(r, colField, facetMetaByField) === ck
     );
     for (const spec of valueSpecs) {
       matrixValues[ck][spec.id] = applyAgg(slice, spec);
@@ -69,32 +77,14 @@ function aggregatePivot(
   return { flatValues: null, matrixValues };
 }
 
-/** Stable key for grouping/filtering pivot dimensions (avoids `[object Object]`). */
-function pivotDimensionStringKey(raw: unknown): string {
-  if (raw === null || raw === undefined) return '';
-  if (typeof raw === 'boolean') return raw ? 'true' : 'false';
-  if (typeof raw === 'number')
-    return Number.isFinite(raw) ? String(raw) : '';
-  if (typeof raw === 'string') return raw;
-  if (raw instanceof Date && !isNaN(raw.getTime())) return raw.toISOString();
-  if (typeof raw === 'object') {
-    try {
-      const o = raw as Record<string, unknown>;
-      return JSON.stringify(raw, Object.keys(o).sort());
-    } catch {
-      return '[unserializable]';
-    }
-  }
-  return String(raw);
-}
-
 function groupByField(
   rows: Record<string, unknown>[],
-  field: string
+  field: string,
+  facetMetaByField: FacetMetaByField
 ): Map<string, Record<string, unknown>[]> {
   const map = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {
-    const k = pivotDimensionStringKey(r[field]);
+    const k = pivotRowDimensionKey(r, field, facetMetaByField);
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(r);
   }
@@ -113,6 +103,7 @@ function buildLevel(
   colField: string | null,
   colKeys: string[],
   valueSpecs: PivotValueSpec[],
+  facetMetaByField: FacetMetaByField,
   rowSort?: PivotUiConfig["rowSort"]
 ): (PivotGroupNode | PivotLeafNode)[] {
   if (rowFields.length === 0) {
@@ -120,7 +111,7 @@ function buildLevel(
   }
   const field = rowFields[depth];
   const isLast = depth === rowFields.length - 1;
-  const groups = groupByField(rows, field);
+  const groups = groupByField(rows, field, facetMetaByField);
   let keys = sortedKeys(groups);
   if (rowSort?.primary === 'rowLabel') {
     keys = [...groups.keys()].sort((a, b) => {
@@ -158,7 +149,7 @@ function buildLevel(
         depth,
         label: k,
         pathKey,
-        values: aggregatePivot(sub, valueSpecs, colField, colKeys),
+        values: aggregatePivot(sub, valueSpecs, colField, colKeys, facetMetaByField),
       });
     } else {
       const children = buildLevel(
@@ -169,9 +160,10 @@ function buildLevel(
         colField,
         colKeys,
         valueSpecs,
+        facetMetaByField,
         rowSort
       );
-      const subtotal = aggregatePivot(sub, valueSpecs, colField, colKeys);
+      const subtotal = aggregatePivot(sub, valueSpecs, colField, colKeys, facetMetaByField);
       out.push({
         type: 'group',
         depth,
@@ -200,15 +192,31 @@ export function syncFilterSelectionsWithFilters(
   rows: Record<string, unknown>[],
   filters: string[],
   prev: FilterSelections,
-  distinctSnapshotRef?: FilterDistinctSnapshotRef
+  distinctSnapshotRef?: FilterDistinctSnapshotRef,
+  temporalFacetColumns?: TemporalFacetColumnMeta[] | null,
+  /** Per filter field: distinct values from session `data` (GET pivot/fields). If a field is missing here, distincts come from `rows`. */
+  datasetDistincts?: Record<string, string[]> | null
 ): FilterSelections {
   const next: FilterSelections = { ...prev };
   const snap = distinctSnapshotRef?.current ?? null;
+  const facetMetaByField =
+    temporalFacetColumns?.length ?
+      buildTemporalFacetMetaByFieldName(temporalFacetColumns)
+    : undefined;
 
   for (const f of filters) {
     const distinctNow = new Set<string>();
-    for (const r of rows) {
-      distinctNow.add(pivotDimensionStringKey(r[f]));
+    if (
+      datasetDistincts &&
+      Object.prototype.hasOwnProperty.call(datasetDistincts, f)
+    ) {
+      for (const v of datasetDistincts[f]) {
+        distinctNow.add(v);
+      }
+    } else {
+      for (const r of rows) {
+        distinctNow.add(pivotRowDimensionKey(r, f, facetMetaByField));
+      }
     }
     const lastSnap = snap?.[f] ?? new Set<string>();
 
@@ -253,15 +261,20 @@ export function syncFilterSelectionsWithFilters(
 export function filterPivotRows(
   rows: Record<string, unknown>[],
   filterFields: string[],
-  selections: FilterSelections
+  selections: FilterSelections,
+  temporalFacetColumns?: TemporalFacetColumnMeta[] | null
 ): Record<string, unknown>[] {
   if (filterFields.length === 0) return rows;
+  const facetMetaByField =
+    temporalFacetColumns?.length ?
+      buildTemporalFacetMetaByFieldName(temporalFacetColumns)
+    : undefined;
   return rows.filter((r) => {
     for (const f of filterFields) {
       const sel = selections[f];
       if (sel === undefined) continue;
       if (sel.size === 0) return false;
-      const v = pivotDimensionStringKey(r[f]);
+      const v = pivotRowDimensionKey(r, f, facetMetaByField);
       if (!sel.has(v)) return false;
     }
     return true;
@@ -270,11 +283,12 @@ export function filterPivotRows(
 
 export function collectColKeys(
   rows: Record<string, unknown>[],
-  colField: string
+  colField: string,
+  facetMetaByField?: FacetMetaByField
 ): string[] {
   const set = new Set<string>();
   for (const r of rows) {
-    set.add(pivotDimensionStringKey(r[colField]));
+    set.add(pivotRowDimensionKey(r, colField, facetMetaByField));
   }
   return [...set].sort(compareTemporalOrLexicalLabels);
 }
@@ -282,14 +296,19 @@ export function collectColKeys(
 export function buildPivotTree(
   rows: Record<string, unknown>[],
   config: PivotUiConfig,
-  valueSpecs: PivotValueSpec[]
+  valueSpecs: PivotValueSpec[],
+  temporalFacetColumns?: TemporalFacetColumnMeta[] | null
 ): PivotTree {
+  const facetMetaByField =
+    temporalFacetColumns?.length ?
+      buildTemporalFacetMetaByFieldName(temporalFacetColumns)
+    : undefined;
   const rowFields = config.rows;
   const colField = config.columns[0] ?? null;
-  const colKeys = colField ? collectColKeys(rows, colField) : [];
+  const colKeys = colField ? collectColKeys(rows, colField, facetMetaByField) : [];
 
   if (rowFields.length === 0) {
-    const grandTotal = aggregatePivot(rows, valueSpecs, colField, colKeys);
+    const grandTotal = aggregatePivot(rows, valueSpecs, colField, colKeys, facetMetaByField);
     return { nodes: [], grandTotal };
   }
 
@@ -301,9 +320,10 @@ export function buildPivotTree(
     colField,
     colKeys,
     valueSpecs,
+    facetMetaByField,
     config.rowSort
   );
-  const grandTotal = aggregatePivot(rows, valueSpecs, colField, colKeys);
+  const grandTotal = aggregatePivot(rows, valueSpecs, colField, colKeys, facetMetaByField);
   return { nodes, grandTotal };
 }
 
@@ -311,14 +331,24 @@ export function buildPivotModel(
   allRows: Record<string, unknown>[],
   config: PivotUiConfig,
   valueSpecs: PivotValueSpec[],
-  filterSelections: FilterSelections
+  filterSelections: FilterSelections,
+  temporalFacetColumns?: TemporalFacetColumnMeta[] | null
 ): PivotModel {
-  const filtered = filterPivotRows(allRows, config.filters, filterSelections);
+  const filtered = filterPivotRows(
+    allRows,
+    config.filters,
+    filterSelections,
+    temporalFacetColumns
+  );
   const colFieldEffective = config.columns[0] ?? null;
+  const facetMetaByField =
+    temporalFacetColumns?.length ?
+      buildTemporalFacetMetaByFieldName(temporalFacetColumns)
+    : undefined;
   const colKeys = colFieldEffective
-    ? collectColKeys(filtered, colFieldEffective)
+    ? collectColKeys(filtered, colFieldEffective, facetMetaByField)
     : [];
-  const tree = buildPivotTree(filtered, config, valueSpecs);
+  const tree = buildPivotTree(filtered, config, valueSpecs, temporalFacetColumns);
   return {
     rowFields: config.rows,
     colField: colFieldEffective,

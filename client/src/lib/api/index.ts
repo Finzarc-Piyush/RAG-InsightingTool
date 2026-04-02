@@ -3,10 +3,14 @@ export type { ApiRequestOptions } from "@/lib/httpClient";
 export {
   dataApi,
   fetchSessionSampleRows,
+  fetchPivotColumnDistincts,
   pivotQuery,
   pivotDrillthrough,
 } from "./data";
-export type { SessionSampleResponse } from "./data";
+export type {
+  SessionSampleResponse,
+  PivotFieldsColumnDistinctResponse,
+} from "./data";
 export { sessionsApi } from "./sessions";
 export { dashboardsApi } from "./dashboards";
 export { sharedAnalysesApi } from "./sharedAnalyses";
