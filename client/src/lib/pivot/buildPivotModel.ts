@@ -327,6 +327,15 @@ export function buildPivotTree(
   return { nodes, grandTotal };
 }
 
+/** Row/column label filters use the same `filterSelections` map as the Filters zone. */
+export function pivotSliceFilterFields(config: PivotUiConfig): string[] {
+  const u = new Set<string>();
+  for (const f of config.filters) u.add(f);
+  for (const f of config.rows) u.add(f);
+  for (const f of config.columns) u.add(f);
+  return [...u];
+}
+
 export function buildPivotModel(
   allRows: Record<string, unknown>[],
   config: PivotUiConfig,
@@ -336,7 +345,7 @@ export function buildPivotModel(
 ): PivotModel {
   const filtered = filterPivotRows(
     allRows,
-    config.filters,
+    pivotSliceFilterFields(config),
     filterSelections,
     temporalFacetColumns
   );

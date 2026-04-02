@@ -27,6 +27,7 @@ import {
 } from "../shared/schema.js";
 import { processChartData } from "../lib/chartGenerator.js";
 import { calculateSmartDomainsForChart } from "../lib/axisScaling.js";
+import { filterRowsByPivotSelections } from "../lib/pivotRowFilters.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 
 function isTransientPythonSummaryError(e: unknown): boolean {
@@ -826,7 +827,18 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "No dataset loaded for this session" });
     }
 
-    const body = (req.body?.chart ?? req.body) as Partial<ChartSpec>;
+    const rawBody = req.body as Record<string, unknown> | undefined;
+    const body = (rawBody?.chart ?? rawBody) as Partial<ChartSpec>;
+    const pivotFilterFields = Array.isArray(rawBody?.pivotFilterFields)
+      ? (rawBody.pivotFilterFields as string[])
+      : [];
+    const pivotFilterSelections =
+      rawBody?.pivotFilterSelections &&
+      typeof rawBody.pivotFilterSelections === "object" &&
+      !Array.isArray(rawBody.pivotFilterSelections)
+        ? (rawBody.pivotFilterSelections as Record<string, string[]>)
+        : undefined;
+
     if (!body.type || !body.x || !body.y) {
       return res.status(400).json({ error: "chart.type, chart.x, and chart.y are required" });
     }
@@ -851,6 +863,18 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     let data = await loadLatestData(session);
     if (!data?.length) {
       return res.status(400).json({ error: "No rows available for this session" });
+    }
+
+    if (pivotFilterFields.length > 0 && pivotFilterSelections) {
+      data = filterRowsByPivotSelections(
+        data as Record<string, unknown>[],
+        pivotFilterFields,
+        pivotFilterSelections
+      ) as Record<string, any>[];
+    }
+
+    if (!data?.length) {
+      return res.status(400).json({ error: "No rows match the current pivot filters" });
     }
     const MAX = 50000;
     if (data.length > MAX) {

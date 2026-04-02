@@ -255,3 +255,25 @@ test("pivot primary rowLabel sorts by time order ascending", async () => {
   assert.deepEqual(labels, ["2024-01", "2024-02", "2024-03"]);
 });
 
+test("pivotQueryService applies slice filter on row dimension via filterFields", async () => {
+  const sessionId = `pivot_row_slice_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  await setupSession(sessionId);
+
+  const out = await executePivotQuery(
+    sessionId,
+    {
+      rowFields: ["Category", "Sub-Category"],
+      colFields: [],
+      filterFields: ["Category"],
+      filterSelections: { Category: ["Technology"] },
+      valueSpecs: [{ id: "meas_sales", field: "Sales", agg: "sum" }],
+    },
+    { dataVersion: 42 }
+  );
+
+  assert.equal(out.model.tree.grandTotal.flatValues?.meas_sales, 150);
+  const top = out.model.tree.nodes as { label: string }[];
+  assert.equal(top.length, 1);
+  assert.equal(top[0]!.label, "Technology");
+});
+

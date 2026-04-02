@@ -20,4 +20,5 @@ export {
   flattenPivotTree,
   normalizePivotConfig,
   syncFilterSelectionsWithFilters,
+  pivotSliceFilterFields,
 } from './buildPivotModel';

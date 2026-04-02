@@ -1,9 +1,10 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatAnalysisNumber } from '@/lib/formatAnalysisNumber';
-import type { PivotFlatRow, PivotModel, PivotUiConfig } from '@/lib/pivot/types';
+import type { FilterSelections, PivotFlatRow, PivotModel, PivotUiConfig } from '@/lib/pivot/types';
 import type { TemporalFacetColumnMeta } from '@/shared/schema';
 import { facetColumnHeaderLabelForColumn } from '@/lib/temporalFacetDisplay';
+import { PivotHeaderSliceFilter } from './PivotHeaderSliceFilter';
 
 function fieldLabel(
   field: string,
@@ -35,6 +36,16 @@ export type PivotGridProps = {
   }) => void;
   /** Embedded: fixed max height in card. Expanded: fill flex parent (use with flex column + min-h-0). */
   layout?: 'embedded' | 'expanded';
+  /** Optional header filters for row/column dimensions (same selection map as pivot Filters zone). */
+  sliceFilter?: {
+    sessionId: string | null;
+    rowField: string | null;
+    colField: string | null;
+    filterSelections: FilterSelections;
+    onSliceChange: (field: string, next: Set<string>) => void;
+  };
+  /** Remove one column key from the column dimension slice (hide matrix column). */
+  onHideColumnMember?: (colField: string, memberKey: string) => void;
 };
 
 export function PivotGrid({
@@ -48,6 +59,8 @@ export function PivotGrid({
   showValuesAs = "raw",
   onDrillthroughCell,
   layout = 'embedded',
+  sliceFilter,
+  onHideColumnMember,
 }: PivotGridProps) {
   const { colField, colKeys, valueSpecs, columnFieldTruncated } = model;
   const hasMatrix = Boolean(colField && colKeys.length > 0);
@@ -118,8 +131,27 @@ export function PivotGrid({
                   rowSpan={valueSpecs.length > 1 ? 2 : 1}
                   className="px-3 py-2.5 text-left font-semibold text-gray-800 whitespace-nowrap align-bottom min-w-[10rem]"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span>Row labels</span>
+                    {sliceFilter?.rowField ? (
+                      <PivotHeaderSliceFilter
+                        field={sliceFilter.rowField}
+                        ariaLabel={`Filter ${fieldLabel(sliceFilter.rowField, temporalFacetColumns)}`}
+                        sessionId={sliceFilter.sessionId}
+                        filterSelections={sliceFilter.filterSelections}
+                        onSliceChange={sliceFilter.onSliceChange}
+                      />
+                    ) : null}
+                    {hasMatrix && sliceFilter?.colField ? (
+                      <PivotHeaderSliceFilter
+                        field={sliceFilter.colField}
+                        ariaLabel={`Filter ${fieldLabel(sliceFilter.colField, temporalFacetColumns)}`}
+                        sessionId={sliceFilter.sessionId}
+                        filterSelections={sliceFilter.filterSelections}
+                        onSliceChange={sliceFilter.onSliceChange}
+                        seedValues={colKeys}
+                      />
+                    ) : null}
                     {onRowLabelSortChange && model.rowFields.length > 0 && (
                       <button
                         type="button"
@@ -148,7 +180,25 @@ export function PivotGrid({
                     colSpan={Math.max(1, valueSpecs.length)}
                     className="px-3 py-2 text-center font-semibold text-gray-700 border-l border-gray-200/80 whitespace-nowrap"
                   >
-                    {fieldLabel(colField!, temporalFacetColumns)}: {ck || '(blank)'}
+                    <div className="inline-flex items-center justify-center gap-1 flex-wrap">
+                      <span>
+                        {fieldLabel(colField!, temporalFacetColumns)}: {ck || '(blank)'}
+                      </span>
+                      {sliceFilter?.colField && onHideColumnMember ? (
+                        <button
+                          type="button"
+                          className="rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          title="Hide this column"
+                          aria-label={`Hide column ${ck || '(blank)'}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onHideColumnMember(sliceFilter.colField!, ck);
+                          }}
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
                   </th>
                 ))}
               </tr>
@@ -182,8 +232,17 @@ export function PivotGrid({
           ) : (
             <tr className="border-b border-gray-200">
               <th className="px-3 py-2.5 text-left font-semibold text-gray-800 whitespace-nowrap min-w-[10rem]">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span>Row labels</span>
+                  {sliceFilter?.rowField ? (
+                    <PivotHeaderSliceFilter
+                      field={sliceFilter.rowField}
+                      ariaLabel={`Filter ${fieldLabel(sliceFilter.rowField, temporalFacetColumns)}`}
+                      sessionId={sliceFilter.sessionId}
+                      filterSelections={sliceFilter.filterSelections}
+                      onSliceChange={sliceFilter.onSliceChange}
+                    />
+                  ) : null}
                   {onRowLabelSortChange && model.rowFields.length > 0 && (
                     <button
                       type="button"

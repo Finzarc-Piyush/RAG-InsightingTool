@@ -12,6 +12,10 @@ import {
   type PivotRowSort,
 } from "../shared/schema.js";
 import { pivotCache, stableHashJson } from "./pivotCache.js";
+import {
+  buildPivotFilterWhereSql,
+  quoteIdent,
+} from "./pivotFilterSql.js";
 
 const pivotWarmupStarted = new Set<string>();
 
@@ -65,14 +69,6 @@ async function warmupPivotForSession(sessionId: string, dataVersion: number | st
     // Best-effort: never fail the user-facing pivot request.
     console.warn("Pivot warmup failed (non-fatal):", error);
   }
-}
-
-function quoteIdent(col: string): string {
-  return `"${col.replace(/"/g, '""')}"`;
-}
-
-function escapeSqlStringLiteral(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
 }
 
 function localeNumericSort(a: string, b: string): number {
@@ -401,26 +397,17 @@ function buildPivotTree(
 function buildWhereClause(
   request: PivotQueryRequest
 ): { whereSql: string; usedFilters: Record<string, string[]> } {
-  const usedFilters: Record<string, string[]> = {};
   const filterSelections = request.filterSelections ?? {};
   const filterFields = request.filterFields ?? [];
-
-  const parts: string[] = [];
+  const usedFilters: Record<string, string[]> = {};
   for (const f of filterFields) {
     const sel = filterSelections[f];
-    if (sel === undefined) continue; // includes all values
-    usedFilters[f] = sel;
-
-    if (sel.length === 0) {
-      return { whereSql: "1=0", usedFilters };
-    }
-
-    const colExpr = `COALESCE(CAST(${quoteIdent(f)} AS VARCHAR), '')`;
-    const inList = sel.map((v) => escapeSqlStringLiteral(String(v))).join(", ");
-    parts.push(`${colExpr} IN (${inList})`);
+    if (sel !== undefined) usedFilters[f] = sel;
   }
-
-  return { whereSql: parts.length ? parts.join(" AND ") : "1=1", usedFilters };
+  return {
+    whereSql: buildPivotFilterWhereSql(filterFields, filterSelections),
+    usedFilters,
+  };
 }
 
 async function fetchFilteredRows(
