@@ -32,7 +32,7 @@ import {
   appendWorkbenchEntry,
 } from "./agentWorkbench.util.js";
 import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
-import { derivePivotDefaultsFromPreviewRows } from "../../lib/pivotDefaultsFromPreview.js";
+import { derivePivotDefaultsFromExecutionMerged } from "../../lib/pivotDefaultsFromExecution.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -122,72 +122,11 @@ function derivePivotDefaultsFromExecution(params: {
   table?: unknown;
   dataSummary: ChatDocument["dataSummary"];
 }): Message["pivotDefaults"] | undefined {
-  const { agentTrace, table, dataSummary } = params;
-  const allowed = allowedColumnNamesForQueryPlan(dataSummary);
-  const numeric = new Set(dataSummary.numericColumns || []);
-  const rows: string[] = [];
-  const values: string[] = [];
-  const seenRows = new Set<string>();
-  const seenValues = new Set<string>();
-
-  const addRow = (col: string) => {
-    if (!allowed.has(col) || numeric.has(col) || seenRows.has(col)) return;
-    seenRows.add(col);
-    rows.push(col);
-  };
-  const addValue = (col: string) => {
-    if (!allowed.has(col) || !numeric.has(col) || seenValues.has(col)) return;
-    seenValues.add(col);
-    values.push(col);
-  };
-
-  const steps = Array.isArray((agentTrace as any)?.steps)
-    ? ((agentTrace as any).steps as Array<Record<string, unknown>>)
-    : [];
-  for (let i = steps.length - 1; i >= 0; i -= 1) {
-    const step = steps[i];
-    if (step?.tool !== "execute_query_plan") continue;
-    const plan = (step?.args as Record<string, unknown> | undefined)?.plan as
-      | Record<string, unknown>
-      | undefined;
-    const groupBy = Array.isArray(plan?.groupBy)
-      ? (plan?.groupBy as unknown[]).filter((v): v is string => typeof v === "string")
-      : [];
-    for (const col of groupBy) addRow(col);
-    const aggregations = Array.isArray(plan?.aggregations)
-      ? (plan?.aggregations as Array<{ column?: unknown }>)
-      : [];
-    for (const agg of aggregations) {
-      if (typeof agg?.column === "string") addValue(agg.column);
-    }
-    if (rows.length > 0 || values.length > 0) break;
-  }
-
-  const tableColumns: string[] = Array.isArray((table as any)?.columns)
-    ? ((table as any).columns as unknown[]).filter(
-        (v): v is string => typeof v === "string"
-      )
-    : [];
-  const tableRows: Record<string, unknown>[] = Array.isArray((table as any)?.rows)
-    ? ((table as any).rows as Record<string, unknown>[])
-    : [];
-
-  const fromPreview = derivePivotDefaultsFromPreviewRows(
-    tableRows,
-    dataSummary,
-    tableColumns.length ? tableColumns : null
+  return derivePivotDefaultsFromExecutionMerged(
+    params.dataSummary,
+    params.agentTrace,
+    params.table
   );
-
-  // Prefer execute_query_plan dimensions/measures (schema-aligned) over preview column
-  // names. Preview often uses aggregate aliases (e.g. Total_Revenue) that are not on `data`.
-  const rowOut = rows.length ? rows : (fromPreview?.rows ?? []);
-  const valueOut = values.length ? values : (fromPreview?.values ?? []);
-
-  if (rowOut.length === 0 && valueOut.length === 0) return undefined;
-  return {
-    rows: rowOut.slice(0, 2),
-    values: valueOut.slice(0, 2),
-  };
 }
 
 /**

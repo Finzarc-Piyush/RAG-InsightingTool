@@ -92,6 +92,7 @@ function inferNumericColumns(
   const sample = rows.slice(0, 500);
   const out: string[] = [];
   for (const col of columnKeys) {
+    if (isTemporalFacetFieldId(col)) continue;
     let n = 0;
     let numeric = 0;
     for (const row of sample) {
@@ -499,7 +500,7 @@ export function DataPreviewTable({
     if (variant !== "analysis") return null;
     if (!sessionId) return null;
     if (!canPivot) return null;
-    if (analysisView !== "pivot") return null;
+    if (analysisView === "flat") return null;
     if (!normalizedPivotConfig) return null;
 
     const rowFields = normalizedPivotConfig.rows;
@@ -1130,6 +1131,7 @@ export function DataPreviewTable({
           chart: body,
           pivotFilterFields: pivotFilterPayloadForChart.pivotFilterFields,
           pivotFilterSelections: pivotFilterPayloadForChart.pivotFilterSelections,
+          ...(pivotQueryRequest ? { pivotQuery: pivotQueryRequest } : {}),
         }
       );
       if (seq !== chartPreviewRequestSeqRef.current) return;
@@ -1154,6 +1156,7 @@ export function DataPreviewTable({
     chartBarLayout,
     pivotFilterPayloadForChart.pivotFilterFields,
     pivotFilterPayloadForChart.pivotFilterSelections,
+    pivotQueryRequest,
   ]);
 
   useEffect(() => {
@@ -1179,6 +1182,7 @@ export function DataPreviewTable({
     chartBarLayout,
     chartTitle,
     pivotFilterPayloadForChart,
+    pivotQueryRequest,
     runChartPreview,
   ]);
 

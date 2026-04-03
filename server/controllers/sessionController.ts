@@ -28,6 +28,7 @@ import {
 import { processChartData } from "../lib/chartGenerator.js";
 import { calculateSmartDomainsForChart } from "../lib/axisScaling.js";
 import { filterRowsByPivotSelections } from "../lib/pivotRowFilters.js";
+import { tryProcessChartDataFromPivotQuery } from "../lib/chartPreviewFromPivot.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 
 function isTransientPythonSummaryError(e: unknown): boolean {
@@ -839,6 +840,8 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
         ? (rawBody.pivotFilterSelections as Record<string, string[]>)
         : undefined;
 
+    const pivotQueryBody = rawBody?.pivotQuery;
+
     if (!body.type || !body.x || !body.y) {
       return res.status(400).json({ error: "chart.type, chart.x, and chart.y are required" });
     }
@@ -859,6 +862,60 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       y2Series: body.y2Series,
       y2Label: body.y2Label,
     });
+
+    const dataVersion =
+      session.currentDataBlob?.version ?? session.ragIndex?.dataVersion ?? 0;
+
+    if (pivotQueryBody !== undefined && pivotQueryBody !== null) {
+      const fromPivot = await tryProcessChartDataFromPivotQuery(
+        sessionId,
+        dataVersion,
+        { ...spec },
+        pivotQueryBody,
+        session.dataSummary.dateColumns
+      );
+      if (fromPivot?.length) {
+        let extra: Partial<ChartSpec> = {};
+        if (spec.type === "heatmap") {
+          extra = {};
+        } else if (spec.seriesKeys?.length) {
+          const sk = spec.seriesKeys;
+          let maxSum = 0;
+          for (const row of fromPivot) {
+            let s = 0;
+            for (const k of sk) {
+              const v = row[k];
+              const n = typeof v === "number" ? v : Number(v);
+              if (Number.isFinite(n)) s += n;
+            }
+            maxSum = Math.max(maxSum, s);
+          }
+          extra = { yDomain: [0, maxSum * 1.05] as [number, number] };
+        } else {
+          extra = calculateSmartDomainsForChart(
+            fromPivot as Record<string, any>[],
+            spec.x,
+            spec.y,
+            spec.y2 || undefined,
+            {
+              yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+              y2Options: spec.y2
+                ? { useIQR: true, paddingPercent: 5, includeOutliers: true }
+                : undefined,
+            }
+          );
+        }
+
+        const out: ChartSpec = {
+          ...spec,
+          ...extra,
+          data: fromPivot as Record<string, any>[],
+          xLabel: spec.xLabel || spec.x,
+          yLabel: spec.yLabel || spec.y,
+        };
+        return res.json({ chart: out });
+      }
+    }
 
     let data = await loadLatestData(session);
     if (!data?.length) {
