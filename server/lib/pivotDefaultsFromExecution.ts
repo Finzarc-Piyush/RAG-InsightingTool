@@ -10,7 +10,10 @@ import {
   allowedColumnNamesForQueryPlan,
   normalizeLegacyTemporalFacetKeysInPlan,
 } from "./queryPlanExecutor.js";
-import { derivePivotDefaultsFromPreviewRows } from "./pivotDefaultsFromPreview.js";
+import {
+  derivePivotDefaultsFromPreviewRows,
+  normalizePivotValueFieldForBaseTable,
+} from "./pivotDefaultsFromPreview.js";
 
 export type PivotDefaultsRowsValues = { rows: string[]; values: string[] };
 
@@ -90,9 +93,18 @@ export function mergePivotDefaultRowsAndValues(params: {
       ? fromPreview.rows
       : traceRows;
 
-  const valueOut = traceValues.length
+  const rawValues = traceValues.length
     ? traceValues
     : (fromPreview?.values ?? []);
+
+  const seenNorm = new Set<string>();
+  const valueOut: string[] = [];
+  for (const v of rawValues) {
+    const n = normalizePivotValueFieldForBaseTable(v, dataSummary);
+    if (seenNorm.has(n)) continue;
+    seenNorm.add(n);
+    valueOut.push(n);
+  }
 
   if (rowOut.length === 0 && valueOut.length === 0) return undefined;
   return {

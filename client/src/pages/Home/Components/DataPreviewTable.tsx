@@ -733,7 +733,7 @@ export function DataPreviewTable({
   }, [chartUiActive, recommendedPivotChart]);
 
   useEffect(() => {
-    if (!chartUiActive || !chartLayoutForPreview) return;
+    if (!(chartUiActive || pivotExpanded) || !chartLayoutForPreview) return;
     setChartTitle('Pivot chart');
     setChartXCol(chartLayoutForPreview.x ?? '');
     setChartYCol(chartLayoutForPreview.y ?? '');
@@ -741,7 +741,7 @@ export function DataPreviewTable({
     setChartSeriesCol(chartLayoutForPreview.seriesColumn ?? '');
     setChartBarLayout(chartLayoutForPreview.barLayout);
     setChartRecommendationReason(chartLayoutForPreview.reason);
-  }, [chartUiActive, chartLayoutForPreview]);
+  }, [chartUiActive, pivotExpanded, chartLayoutForPreview]);
 
   // Help debug: pivot fields present in schema but missing from preview row keys won't show data until rows include them.
   useEffect(() => {
@@ -1121,7 +1121,10 @@ export function DataPreviewTable({
       if (chartType === 'heatmap') {
         body.z = chartZCol;
       }
-      if (chartType === 'bar' && chartSeriesCol) {
+      if (
+        (chartType === 'bar' || chartType === 'line' || chartType === 'area') &&
+        chartSeriesCol
+      ) {
         body.seriesColumn = chartSeriesCol;
         body.barLayout = chartBarLayout;
       }

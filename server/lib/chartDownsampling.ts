@@ -106,6 +106,79 @@ export function resampleTimeSeries(
   });
 }
 
+/** Like {@link resampleTimeSeries} but keeps multiple numeric columns (wide multi-series rows). */
+export function resampleTimeSeriesMulti(
+  data: Record<string, any>[],
+  xColumn: string,
+  valueColumns: string[],
+  period: DatePeriod = "day",
+  aggregate: "sum" | "mean" | "count" = "mean"
+): Record<string, any>[] {
+  if (data.length === 0) return [];
+
+  type Bucket = { perCol: Map<string, number[]>; date: Date | null };
+  const grouped = new Map<string, Bucket>();
+
+  for (const row of data) {
+    const date = chartCellAsDateLoose(row[xColumn]);
+    let key: string;
+    let bucketDate: Date | null = null;
+
+    if (date) {
+      const normalized = normalizeDateToPeriod(date, period);
+      if (!normalized) continue;
+      key = normalized.normalizedKey;
+      bucketDate = date;
+    } else {
+      key = String(row[xColumn]);
+    }
+
+    if (!grouped.has(key)) {
+      grouped.set(key, { perCol: new Map(), date: bucketDate });
+    }
+    const g = grouped.get(key)!;
+
+    for (const col of valueColumns) {
+      const yValue = toNumber(row[col]);
+      if (isNaN(yValue)) continue;
+      if (!g.perCol.has(col)) g.perCol.set(col, []);
+      g.perCol.get(col)!.push(yValue);
+    }
+  }
+
+  const result: Record<string, any>[] = [];
+  for (const [key, { perCol }] of grouped.entries()) {
+    const out: Record<string, any> = { [xColumn]: key };
+    for (const col of valueColumns) {
+      const values = perCol.get(col);
+      if (!values || values.length === 0) continue;
+      let aggregatedValue: number;
+      switch (aggregate) {
+        case "sum":
+          aggregatedValue = values.reduce((a, b) => a + b, 0);
+          break;
+        case "mean":
+          aggregatedValue = values.reduce((a, b) => a + b, 0) / values.length;
+          break;
+        case "count":
+          aggregatedValue = values.length;
+          break;
+        default:
+          aggregatedValue = values[0];
+      }
+      out[col] = aggregatedValue;
+    }
+    if (Object.keys(out).length > 1) result.push(out);
+  }
+
+  return result.sort((a, b) => {
+    const dateA = chartCellAsDateLoose(a[xColumn]);
+    const dateB = chartCellAsDateLoose(b[xColumn]);
+    if (dateA && dateB) return dateA.getTime() - dateB.getTime();
+    return String(a[xColumn]).localeCompare(String(b[xColumn]));
+  });
+}
+
 export function inferOptimalPeriodForChartColumn(
   data: Record<string, any>[],
   xColumn: string
@@ -245,6 +318,51 @@ function aggregateDownsample(
   return result;
 }
 
+function aggregateDownsampleMulti(
+  data: Record<string, any>[],
+  xColumn: string,
+  valueColumns: string[],
+  maxPoints: number,
+  aggregate: "sum" | "mean" | "count"
+): Record<string, any>[] {
+  if (data.length <= maxPoints) return data;
+
+  const bucketSize = Math.ceil(data.length / maxPoints);
+  const result: Record<string, any>[] = [];
+
+  for (let i = 0; i < data.length; i += bucketSize) {
+    const bucket = data.slice(i, Math.min(i + bucketSize, data.length));
+    if (bucket.length === 0) continue;
+
+    const xValues = bucket.map((row) => row[xColumn]);
+    const xRepresentative = xValues[Math.floor(xValues.length / 2)];
+    const out: Record<string, any> = { [xColumn]: xRepresentative };
+
+    for (const col of valueColumns) {
+      const yValues = bucket.map((row) => toNumber(row[col])).filter((v) => !isNaN(v));
+      if (yValues.length === 0) continue;
+      let aggregatedY: number;
+      switch (aggregate) {
+        case "sum":
+          aggregatedY = yValues.reduce((a, b) => a + b, 0);
+          break;
+        case "mean":
+          aggregatedY = yValues.reduce((a, b) => a + b, 0) / yValues.length;
+          break;
+        case "count":
+          aggregatedY = yValues.length;
+          break;
+        default:
+          aggregatedY = yValues[0];
+      }
+      out[col] = aggregatedY;
+    }
+    if (Object.keys(out).length > 1) result.push(out);
+  }
+
+  return result;
+}
+
 export function downsampleChartData(
   data: Record<string, any>[],
   chartSpec: ChartSpec,
@@ -258,6 +376,12 @@ export function downsampleChartData(
   const availableColumns = Object.keys(data[0] || {});
   const matchedX = findMatchingColumn(x, availableColumns) || x;
   const matchedY = findMatchingColumn(y, availableColumns) || y;
+
+  const seriesKeysPresent =
+    chartSpec.seriesKeys?.filter((k) => availableColumns.includes(k)) ?? [];
+  const valueColumns =
+    seriesKeysPresent.length > 0 ? seriesKeysPresent : [matchedY];
+  const primaryYForLttb = valueColumns[0] ?? matchedY;
 
   const isDateCol = xIsDeclaredDate(x, availableColumns, declaredDateColumns);
   const hasDates =
@@ -278,7 +402,10 @@ export function downsampleChartData(
       console.log(
         `📊 Time series: bucketing to ${period} (rows=${working.length})`
       );
-      working = resampleTimeSeries(working, matchedX, matchedY, period, 'sum');
+      working =
+        seriesKeysPresent.length > 0 ?
+          resampleTimeSeriesMulti(working, matchedX, valueColumns, period, "sum")
+        : resampleTimeSeries(working, matchedX, matchedY, period, "sum");
     }
   }
 
@@ -294,9 +421,12 @@ export function downsampleChartData(
     const period = datePeriodHint ?? determineOptimalPeriod(working, matchedX);
     if (period) {
       console.log(`📊 Time series detected: Resampling to ${period} periods (${working.length} → ~${Math.ceil(working.length / (period === 'day' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365))} points)`);
-      const resampled = resampleTimeSeries(working, matchedX, matchedY, period, 'sum');
+      const resampled =
+        seriesKeysPresent.length > 0 ?
+          resampleTimeSeriesMulti(working, matchedX, valueColumns, period, "sum")
+        : resampleTimeSeries(working, matchedX, matchedY, period, "sum");
       if (resampled.length > maxPoints) {
-        return downsampleLTTB(resampled, matchedX, matchedY, maxPoints);
+        return downsampleLTTB(resampled, matchedX, primaryYForLttb, maxPoints);
       }
       return resampled;
     }
@@ -304,14 +434,28 @@ export function downsampleChartData(
 
   if (agg !== 'none') {
     console.log(`📊 Using aggregation-based downsampling (${working.length} → ${maxPoints} points)`);
-    return aggregateDownsample(working, matchedX, matchedY, maxPoints, agg as 'sum' | 'mean' | 'count');
+    return seriesKeysPresent.length > 0 ?
+        aggregateDownsampleMulti(
+          working,
+          matchedX,
+          valueColumns,
+          maxPoints,
+          agg as "sum" | "mean" | "count"
+        )
+      : aggregateDownsample(
+          working,
+          matchedX,
+          matchedY,
+          maxPoints,
+          agg as "sum" | "mean" | "count"
+        );
   }
 
   if ((type === 'line' || type === 'area') && !hasDatesAfter) {
     const firstX = toNumber(working[0]?.[matchedX]);
     if (!isNaN(firstX)) {
       console.log(`📊 Using LTTB downsampling for line chart (${working.length} → ${maxPoints} points)`);
-      return downsampleLTTB(working, matchedX, matchedY, maxPoints);
+      return downsampleLTTB(working, matchedX, primaryYForLttb, maxPoints);
     }
   }
 

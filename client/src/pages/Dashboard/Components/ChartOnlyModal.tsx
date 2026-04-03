@@ -11,6 +11,12 @@ import { Slider } from '@/components/ui/slider';
 import { Filter, X, Settings2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec } from '@/shared/schema';
+import {
+  CHART_SERIES_COLORS,
+  evenlySpacedDataKeys,
+  LINE_AREA_MAX_X_TICKS,
+  sortRowsForLineAreaChart,
+} from '@/lib/chartRechartsShared';
 import { ChartFilterDefinition, ActiveChartFilters } from '@/lib/chartFilters';
 import { format as formatDate } from 'date-fns';
 import {
@@ -145,7 +151,20 @@ export function ChartOnlyModal({
 }: ChartOnlyModalProps) {
   const [showDots, setShowDots] = useState(true); // Default to showing dots in modal
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
-  const { type, title, data: chartDataSource = [], x, y, xDomain, yDomain, trendLine, xLabel, yLabel } = chart;
+  const {
+    type,
+    title,
+    data: chartDataSource = [],
+    x,
+    y,
+    xDomain,
+    yDomain,
+    trendLine,
+    xLabel,
+    yLabel,
+    seriesKeys: specSeriesKeys,
+    barLayout,
+  } = chart;
   const chartColor = COLORS[0];
   
   // Use filtered data if available, otherwise use original data
@@ -201,6 +220,27 @@ export function ChartOnlyModal({
   
   const data = type === 'scatter' ? processedScatterData : allData;
 
+  const lineAreaSortedData = useMemo(
+    () =>
+      sortRowsForLineAreaChart(
+        type,
+        allData as Record<string, unknown>[],
+        typeof x === 'string' ? x : undefined
+      ),
+    [type, allData, x]
+  );
+
+  const lineAreaXTicks = useMemo(() => {
+    if (type !== 'line' && type !== 'area') return undefined;
+    if (typeof x !== 'string') return undefined;
+    return evenlySpacedDataKeys(lineAreaSortedData, x, LINE_AREA_MAX_X_TICKS);
+  }, [type, lineAreaSortedData, x]);
+
+  const barModalXTicks = useMemo(() => {
+    if (type !== 'bar' || typeof x !== 'string') return undefined;
+    return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, LINE_AREA_MAX_X_TICKS);
+  }, [type, allData, x]);
+
   // Optimize scatter data for rendering performance (computed at component level for use in metadata)
   const getMaxRenderPoints = () => {
     if (type !== 'scatter') return 0;
@@ -226,18 +266,88 @@ export function ChartOnlyModal({
 
   const renderChart = () => {
     switch (type) {
-      case 'line':
-        // For dual-axis charts, use blue for left axis, red for right axis
-        const leftAxisColor = chart.y2 ? '#3b82f6' : chartColor; // Blue for left when dual-axis
-        const rightAxisColor = '#ef4444'; // Red for right axis
-        const leftValues = getNumericValues(data as Record<string, any>[], y);
+      case 'line': {
+        const lineRows = lineAreaSortedData as Record<string, any>[];
+        const lineMultiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+
+        if (lineMultiKeys.length > 0) {
+          const combinedVals = lineMultiKeys.flatMap((k) => getNumericValues(lineRows, k));
+          const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
+          return (
+            <ResponsiveContainer width="100%" height={480}>
+              <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis
+                  dataKey={x}
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12, fontFamily: 'var(--font-mono)' }}
+                  angle={-45}
+                  textAnchor="end"
+                  stroke="hsl(var(--muted-foreground))"
+                  ticks={lineAreaXTicks}
+                  label={{
+                    value: xLabel || x,
+                    position: 'insideBottom',
+                    offset: -5,
+                    style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
+                  }}
+                  height={95}
+                />
+                <YAxis
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
+                  stroke="hsl(var(--muted-foreground))"
+                  tickFormatter={formatAxisLabel}
+                  width={90}
+                  label={{
+                    value: yLabel || y,
+                    angle: -90,
+                    position: 'left',
+                    style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
+                  }}
+                  domain={unifiedDomain}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--card))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                    boxShadow: 'var(--shadow-lg)',
+                    fontSize: '14px',
+                  }}
+                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
+                  itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
+                />
+                <Legend wrapperStyle={{ paddingTop: '10px' }} iconType="line" formatter={(value) => value} />
+                {lineMultiKeys.map((k, i) => {
+                  const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                  return (
+                    <Line
+                      key={k}
+                      type="monotone"
+                      dataKey={k}
+                      name={k}
+                      stroke={c}
+                      strokeWidth={2}
+                      dot={showDots ? { r: 4, fill: c } : false}
+                      activeDot={{ r: 8 }}
+                    />
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          );
+        }
+
+        const leftAxisColor = chart.y2 ? '#3b82f6' : chartColor;
+        const rightAxisColor = '#ef4444';
+        const leftValues = getNumericValues(lineAreaSortedData as Record<string, any>[], y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
-        const rightValues = chart.y2 ? getNumericValues(data as Record<string, any>[], chart.y2 as string) : [];
+        const rightValues = chart.y2 ? getNumericValues(lineAreaSortedData as Record<string, any>[], chart.y2 as string) : [];
         const rightDomain = chart.y2 ? getDynamicDomain(rightValues) : undefined;
-        
+
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <LineChart data={data} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
+            <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -245,6 +355,7 @@ export function ChartOnlyModal({
                 angle={-45}
                 textAnchor="end"
                 stroke="hsl(var(--muted-foreground))"
+                ticks={lineAreaXTicks}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
                 height={95}
               />
@@ -271,14 +382,14 @@ export function ChartOnlyModal({
                   />
                 </>
               ) : (
-              <YAxis
+                <YAxis
                   tick={{ fill: leftAxisColor, fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
                   stroke={leftAxisColor}
-                tickFormatter={formatAxisLabel}
-                width={90}
+                  tickFormatter={formatAxisLabel}
+                  width={90}
                   label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
-                domain={leftDomain}
-              />
+                  domain={leftDomain}
+                />
               )}
               <Tooltip
                 contentStyle={{
@@ -306,7 +417,7 @@ export function ChartOnlyModal({
                 strokeWidth={3}
                 dot={showDots ? { r: 6, fill: leftAxisColor } : false}
                 activeDot={{ r: 8 }}
-                {...(chart.y2 ? { yAxisId: "left" } : {})}
+                {...(chart.y2 ? { yAxisId: 'left' } : {})}
               />
               {chart.y2 && (
                 <>
@@ -322,32 +433,37 @@ export function ChartOnlyModal({
                       yAxisId="right"
                     />
                   )}
-                  {chart.y2Series && chart.y2Series.map((series, index) => {
-                    const colors = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-                    const seriesColor = colors[index % colors.length];
-                    return (
-                      <Line
-                        key={series}
-                        type="monotone"
-                        dataKey={series}
-                        name={series}
-                        stroke={seriesColor}
-                        strokeWidth={2}
-                        dot={showDots ? { r: 4, fill: seriesColor } : false}
-                        activeDot={{ r: 5 }}
-                        yAxisId="right"
-                      />
-                    );
-                  })}
+                  {chart.y2Series &&
+                    chart.y2Series.map((series, index) => {
+                      const colors = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+                      const seriesColor = colors[index % colors.length];
+                      return (
+                        <Line
+                          key={series}
+                          type="monotone"
+                          dataKey={series}
+                          name={series}
+                          stroke={seriesColor}
+                          strokeWidth={2}
+                          dot={showDots ? { r: 4, fill: seriesColor } : false}
+                          activeDot={{ r: 5 }}
+                          yAxisId="right"
+                        />
+                      );
+                    })}
                 </>
               )}
             </LineChart>
           </ResponsiveContainer>
         );
-      case 'bar':
+      }
+
+      case 'bar': {
+        const multiKeys = specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+        const stacked = barLayout !== 'grouped';
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <BarChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
+            <BarChart data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -355,7 +471,8 @@ export function ChartOnlyModal({
                 angle={-45}
                 textAnchor="end"
                 stroke="hsl(var(--muted-foreground))"
-                interval={0}
+                interval={barModalXTicks ? undefined : 0}
+                ticks={barModalXTicks}
                 label={{ value: xLabel || x, position: 'bottom', offset: 5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 14, fontWeight: 600 } }}
                 height={90}
               />
@@ -364,7 +481,12 @@ export function ChartOnlyModal({
                 stroke="hsl(var(--muted-foreground))"
                 tickFormatter={formatAxisLabel}
                 width={90}
-                label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
+                label={{
+                  value: multiKeys.length ? yLabel || y : yLabel || y,
+                  angle: -90,
+                  position: 'left',
+                  style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
+                }}
               />
               <Tooltip
                 contentStyle={{
@@ -377,10 +499,26 @@ export function ChartOnlyModal({
                 labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                 itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
               />
-              <Bar dataKey={y} fill={chartColor} radius={[6, 6, 0, 0]} maxBarSize={60} />
+              {multiKeys.length > 0 ? (
+                <>
+                  <Legend wrapperStyle={{ paddingTop: 8 }} />
+                  {multiKeys.map((k, i) => (
+                    <Bar
+                      key={k}
+                      dataKey={k}
+                      stackId={stacked ? 'stack' : undefined}
+                      fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
+                      radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                    />
+                  ))}
+                </>
+              ) : (
+                <Bar dataKey={y} fill={chartColor} radius={[6, 6, 0, 0]} maxBarSize={60} />
+              )}
             </BarChart>
           </ResponsiveContainer>
         );
+      }
       case 'scatter':
         const getTickCount = (domain: [number, number] | undefined): number => {
           if (!domain) return 8;
@@ -556,10 +694,82 @@ export function ChartOnlyModal({
             </PieChart>
           </ResponsiveContainer>
         );
-      case 'area':
+      case 'area': {
+        const areaRows = lineAreaSortedData as Record<string, any>[];
+        const areaMultiKeys = specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+        const stackedArea = barLayout !== 'grouped';
+
+        if (areaMultiKeys.length > 0) {
+          const combinedVals = areaMultiKeys.flatMap((k) => getNumericValues(areaRows, k));
+          const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
+          return (
+            <ResponsiveContainer width="100%" height={480}>
+              <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis
+                  dataKey={x}
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12, fontFamily: 'var(--font-mono)' }}
+                  angle={-45}
+                  textAnchor="end"
+                  stroke="hsl(var(--muted-foreground))"
+                  ticks={lineAreaXTicks}
+                  label={{
+                    value: xLabel || x,
+                    position: 'insideBottom',
+                    offset: -5,
+                    style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
+                  }}
+                  height={95}
+                />
+                <YAxis
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
+                  stroke="hsl(var(--muted-foreground))"
+                  tickFormatter={formatAxisLabel}
+                  width={90}
+                  label={{
+                    value: yLabel || y,
+                    angle: -90,
+                    position: 'left',
+                    style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
+                  }}
+                  domain={unifiedDomain}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--card))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                    boxShadow: 'var(--shadow-lg)',
+                    fontSize: '14px',
+                  }}
+                  labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
+                  itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
+                />
+                <Legend wrapperStyle={{ paddingTop: 8 }} iconType="line" formatter={(value) => value} />
+                {areaMultiKeys.map((k, i) => {
+                  const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                  return (
+                    <Area
+                      key={k}
+                      type="monotone"
+                      dataKey={k}
+                      name={k}
+                      stackId={stackedArea ? 'areaStack' : undefined}
+                      stroke={c}
+                      fill={c}
+                      fillOpacity={stackedArea ? 0.55 : 0.3}
+                      strokeWidth={2}
+                    />
+                  );
+                })}
+              </AreaChart>
+            </ResponsiveContainer>
+          );
+        }
+
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <AreaChart data={data} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+            <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -567,6 +777,7 @@ export function ChartOnlyModal({
                 angle={-45}
                 textAnchor="end"
                 stroke="hsl(var(--muted-foreground))"
+                ticks={lineAreaXTicks}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
                 height={95}
               />
@@ -599,6 +810,7 @@ export function ChartOnlyModal({
             </AreaChart>
           </ResponsiveContainer>
         );
+      }
       default:
         return <p className="text-muted-foreground text-center py-8">Unsupported chart type</p>;
     }

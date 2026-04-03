@@ -1,10 +1,13 @@
 import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
 import { processChartData } from "./chartGenerator.js";
+import { normalizePivotValueFieldForBaseTable } from "./pivotDefaultsFromPreview.js";
 import { executePivotQuery } from "./pivotQueryService.js";
 import {
   pivotQueryRequestSchema,
   type ChartSpec,
+  type DataSummary,
   type PivotModel,
+  type PivotValueSpec,
 } from "../shared/schema.js";
 
 type PivotTreeNode = PivotModel["tree"]["nodes"][number];
@@ -23,61 +26,178 @@ function collectLeaves(
   return out;
 }
 
+function resolveRowFieldIndex(model: PivotModel, fieldSpec: string): number {
+  const exact = model.rowFields.indexOf(fieldSpec);
+  if (exact >= 0) return exact;
+  for (let i = 0; i < model.rowFields.length; i++) {
+    const rf = model.rowFields[i]!;
+    if (findMatchingColumn(fieldSpec, [rf]) === rf) return i;
+  }
+  return -1;
+}
+
 /**
- * Flatten a pivot model (no column fields / matrix) into one row per leaf for chart processing.
- * Keys use the chart spec's x/y strings so `processChartData` column matching behaves like row-level mode.
+ * Map chart Y (e.g. analytical alias `Sales_sum`) to a pivot value spec on the base table (`Sales`).
  */
-export function pivotModelToPreAggregatedChartRows(
+export function resolvePivotValueSpecForChartY(
+  y: string | undefined,
+  valueSpecs: PivotValueSpec[],
+  numericColumns: string[]
+): { valueSpec: PivotValueSpec; canonicalY: string } | null {
+  if (!y?.trim()) return null;
+  const summary = {
+    numericColumns,
+    columns: (numericColumns ?? []).map((name) => ({ name })),
+  } as DataSummary;
+  const tryMatch = (candidate: string) =>
+    valueSpecs.find(
+      (v) =>
+        v.field === candidate ||
+        findMatchingColumn(candidate, [v.field]) === v.field
+    );
+
+  const trimmed = y.trim();
+  let vs = tryMatch(trimmed);
+  if (!vs) {
+    const base = normalizePivotValueFieldForBaseTable(trimmed, summary);
+    if (base !== trimmed) vs = tryMatch(base);
+  }
+  if (!vs) return null;
+  return { valueSpec: vs, canonicalY: vs.field };
+}
+
+/**
+ * Flatten pivot leaf aggregates into rows for `processChartData`.
+ * - No column pivot: rolls up multiple row dimensions so each X appears once (sums Y across outer dims).
+ * - With seriesColumn matching a row field: long rows (x, series, y) per leaf.
+ * - With column pivot: long rows (x, colField label, y) per leaf × col key when seriesColumn matches col field.
+ */
+export function pivotModelRowsForChartSpec(
   model: PivotModel,
-  xSpec: string,
-  ySpec: string
+  spec: Pick<ChartSpec, "x" | "y" | "seriesColumn" | "type"> & { title?: string },
+  numericColumns: string[] = []
 ): Record<string, unknown>[] | null {
-  if (model.colField) return null;
-  if (model.columnFields.length > 0) return null;
+  if (model.columnFields.length > 1) return null;
 
-  const valueSpec = model.valueSpecs.find(
-    (v) => v.field === ySpec || findMatchingColumn(ySpec, [v.field]) === v.field
-  );
-  if (!valueSpec) return null;
+  const resolved = resolvePivotValueSpecForChartY(spec.y, model.valueSpecs, numericColumns);
+  if (!resolved) return null;
+  const { valueSpec } = resolved;
+  const yKey = resolved.canonicalY;
 
-  const rowFieldIdx = (() => {
-    const exact = model.rowFields.indexOf(xSpec);
-    if (exact >= 0) return exact;
-    for (let i = 0; i < model.rowFields.length; i++) {
-      const rf = model.rowFields[i]!;
-      if (findMatchingColumn(xSpec, [rf]) === rf) return i;
-    }
-    return -1;
-  })();
+  const xIdx = resolveRowFieldIndex(model, spec.x);
+  if (xIdx < 0) return null;
 
   const leaves = collectLeaves(model.tree.nodes);
-  const rows: Record<string, unknown>[] = [];
 
+  // Column pivot → long format (one row per x × col key)
+  if (model.colField && model.columnFields.length === 1 && model.colKeys.length) {
+    const seriesCol = spec.seriesColumn?.trim();
+    if (!seriesCol) return null;
+    const colMatches =
+      model.colField === seriesCol ||
+      findMatchingColumn(seriesCol, [model.colField]) === model.colField;
+    if (!colMatches) return null;
+
+    const rows: Record<string, unknown>[] = [];
+    for (const leaf of leaves) {
+      const mv = leaf.values?.matrixValues;
+      if (!mv) continue;
+      const parts = leaf.pathKey.split("\x1f");
+      const xVal = xIdx < parts.length ? parts[xIdx]! : leaf.label;
+      if (xVal === "" || xVal == null) continue;
+      for (const ck of model.colKeys) {
+        const n = mv[ck]?.[valueSpec.id];
+        if (typeof n !== "number" || !Number.isFinite(n)) continue;
+        rows.push({
+          [spec.x]: xVal,
+          [seriesCol]: ck,
+          [yKey]: n,
+        });
+      }
+    }
+    return rows.length ? rows : null;
+  }
+
+  if (model.colField) return null;
+
+  const seriesSpec = spec.seriesColumn?.trim();
+  if (seriesSpec) {
+    const sIdx = resolveRowFieldIndex(model, seriesSpec);
+    if (sIdx < 0 || sIdx === xIdx) return null;
+    const rows: Record<string, unknown>[] = [];
+    for (const leaf of leaves) {
+      const fv = leaf.values?.flatValues;
+      if (!fv) continue;
+      const yNum = fv[valueSpec.id];
+      if (typeof yNum !== "number" || !Number.isFinite(yNum)) continue;
+      const parts = leaf.pathKey.split("\x1f");
+      if (xIdx >= parts.length || sIdx >= parts.length) continue;
+      const xVal = parts[xIdx]!;
+      const sVal = parts[sIdx]!;
+      if (xVal === "" || sVal === "") continue;
+      rows.push({
+        [spec.x]: xVal,
+        [seriesSpec]: sVal,
+        [yKey]: yNum,
+      });
+    }
+    return rows.length ? rows : null;
+  }
+
+  const byX = new Map<string, number>();
+  const order: string[] = [];
   for (const leaf of leaves) {
     const fv = leaf.values?.flatValues;
     if (!fv) continue;
     const yNum = fv[valueSpec.id];
     if (typeof yNum !== "number" || !Number.isFinite(yNum)) continue;
-
     const parts = leaf.pathKey.split("\x1f");
-    let xVal: string;
-    if (rowFieldIdx >= 0 && rowFieldIdx < parts.length) {
-      xVal = parts[rowFieldIdx]!;
-    } else {
-      xVal = leaf.label;
+    const xVal = xIdx >= 0 && xIdx < parts.length ? parts[xIdx]! : leaf.label;
+    if (xVal === "" || xVal == null) continue;
+    if (!byX.has(xVal)) {
+      byX.set(xVal, 0);
+      order.push(xVal);
     }
-    if (xVal === "" || xVal === null || xVal === undefined) continue;
-
-    rows.push({ [xSpec]: xVal, [ySpec]: yNum });
+    byX.set(xVal, byX.get(xVal)! + yNum);
   }
-
-  return rows.length ? rows : null;
+  const out = order.map((xv) => ({
+    [spec.x]: xv,
+    [yKey]: byX.get(xv)!,
+  }));
+  return out.length ? out : null;
 }
+
+/**
+ * @deprecated Prefer {@link pivotModelRowsForChartSpec}; kept for tests and narrow x/y-only flattening.
+ * Returns null when a column pivot is present (no implicit series column).
+ */
+export function pivotModelToPreAggregatedChartRows(
+  model: PivotModel,
+  xSpec: string,
+  ySpec: string,
+  numericColumns: string[] = []
+): Record<string, unknown>[] | null {
+  return pivotModelRowsForChartSpec(
+    model,
+    {
+      type: "bar",
+      title: "pivot",
+      x: xSpec,
+      y: ySpec,
+    },
+    numericColumns
+  );
+}
+
+export type PivotChartPreviewResult = {
+  rows: Record<string, unknown>[];
+  /** Measure column name aligned with pivot value spec (e.g. `Sales` not `Sales_sum`). */
+  yField: string;
+};
 
 function chartUnsupportedForPivotPath(spec: ChartSpec): boolean {
   if (spec.type === "heatmap") return true;
   if (spec.type === "scatter") return true;
-  if (spec.seriesColumn?.trim()) return true;
   if (spec.y2?.trim()) return true;
   if (spec.y2Series && spec.y2Series.length > 0) return true;
   return false;
@@ -93,28 +213,47 @@ export async function tryProcessChartDataFromPivotQuery(
   dataVersion: number | string,
   chartSpec: ChartSpec,
   pivotBody: unknown,
-  declaredDateColumns: string[] | undefined
-): Promise<Record<string, unknown>[] | null> {
+  declaredDateColumns: string[] | undefined,
+  numericColumns: string[] = []
+): Promise<PivotChartPreviewResult | null> {
   if (chartUnsupportedForPivotPath(chartSpec)) return null;
 
   const parsed = pivotQueryRequestSchema.safeParse(pivotBody);
   if (!parsed.success) return null;
-  if (parsed.data.colFields.length > 0) return null;
+  if (parsed.data.colFields.length > 1) return null;
   if (!parsed.data.rowFields.length || !parsed.data.valueSpecs.length) return null;
 
   try {
     const { model } = await executePivotQuery(sessionId, parsed.data, {
       dataVersion,
     });
-    const preRows = pivotModelToPreAggregatedChartRows(
-      model,
-      chartSpec.x,
-      chartSpec.y
+
+    const specForPivot: ChartSpec = { ...chartSpec };
+    const yResolved = resolvePivotValueSpecForChartY(
+      specForPivot.y,
+      model.valueSpecs,
+      numericColumns
     );
+    if (yResolved) {
+      specForPivot.y = yResolved.canonicalY;
+    }
+    if (
+      model.colField &&
+      parsed.data.colFields.length === 1 &&
+      (specForPivot.type === "bar" ||
+        specForPivot.type === "line" ||
+        specForPivot.type === "area")
+    ) {
+      if (!specForPivot.seriesColumn?.trim()) {
+        specForPivot.seriesColumn = model.colField;
+      }
+    }
+
+    const preRows = pivotModelRowsForChartSpec(model, specForPivot, numericColumns);
     if (!preRows?.length) return null;
 
     const specForProcess: ChartSpec = {
-      ...chartSpec,
+      ...specForPivot,
       aggregate: "none",
     };
 
@@ -124,7 +263,8 @@ export async function tryProcessChartDataFromPivotQuery(
       declaredDateColumns,
       { chartQuestion: "" }
     );
-    return processed.length ? processed : null;
+    if (!processed.length) return null;
+    return { rows: processed, yField: specForProcess.y };
   } catch (e) {
     console.warn("tryProcessChartDataFromPivotQuery (non-fatal, falling back):", e);
     return null;

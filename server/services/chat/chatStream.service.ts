@@ -33,6 +33,7 @@ import {
 } from "./agentWorkbench.util.js";
 import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
 import { derivePivotDefaultsFromExecutionMerged } from "../../lib/pivotDefaultsFromExecution.js";
+import { normalizePivotValueFieldForBaseTable } from "../../lib/pivotDefaultsFromPreview.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -102,9 +103,17 @@ function derivePivotDefaultsHint(params: {
   for (const col of requiredColumns) addValue(col);
 
   if (rows.length === 0 && values.length === 0) return undefined;
+  const seenNorm = new Set<string>();
+  const normalizedValues: string[] = [];
+  for (const v of values) {
+    const n = normalizePivotValueFieldForBaseTable(v, dataSummary);
+    if (seenNorm.has(n)) continue;
+    seenNorm.add(n);
+    normalizedValues.push(n);
+  }
   const hint = {
     rows: rows.slice(0, 2),
-    values: values.slice(0, 2),
+    values: normalizedValues.slice(0, 2),
   };
   if (process.env.NODE_ENV !== "production") {
     console.debug("[chatStream] pivotDefaults hint", {

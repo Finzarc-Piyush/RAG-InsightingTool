@@ -6,6 +6,7 @@ export type ChartProposalXY = {
   type: string;
   z?: string;
   seriesColumn?: string;
+  barLayout?: "stacked" | "grouped";
 };
 
 function rowHasKeys(
@@ -93,8 +94,14 @@ export function chartRowsForProposal(
 ): { rows: Record<string, unknown>[]; useAnalyticalOnly: boolean } {
   const lat = ctx.lastAnalyticalTable;
   const first = lat?.rows?.[0] as Record<string, unknown> | undefined;
-  if (lat?.rows?.length && rowHasKeys(first, p.x, p.y)) {
-    return { rows: lat.rows as Record<string, unknown>[], useAnalyticalOnly: true };
+  if (!lat?.rows?.length || !rowHasKeys(first, p.x, p.y)) {
+    return { rows: ctx.data as Record<string, unknown>[], useAnalyticalOnly: false };
   }
-  return { rows: ctx.data as Record<string, unknown>[], useAnalyticalOnly: false };
+  if (p.type === "heatmap" && p.z && !rowHasKey(first, p.z)) {
+    return { rows: ctx.data as Record<string, unknown>[], useAnalyticalOnly: false };
+  }
+  if (p.seriesColumn && !rowHasKey(first, p.seriesColumn)) {
+    return { rows: ctx.data as Record<string, unknown>[], useAnalyticalOnly: false };
+  }
+  return { rows: lat.rows as Record<string, unknown>[], useAnalyticalOnly: true };
 }

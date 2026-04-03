@@ -62,6 +62,7 @@ const chartArgs = z
     y: z.string(),
     z: z.string().optional(),
     seriesColumn: z.string().optional(),
+    barLayout: z.enum(["stacked", "grouped"]).optional(),
     y2: z.string().optional(),
     title: z.string().optional(),
     aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
@@ -770,16 +771,31 @@ export function registerDefaultTools(registry: ToolRegistry) {
     "build_chart",
     chartArgs,
     async (ctx, args) => {
-      const names = [args.x, args.y, ...(args.y2 ? [args.y2] : [])];
+      const names = [
+        args.x,
+        args.y,
+        ...(args.y2 ? [args.y2] : []),
+        ...(args.type === "heatmap" && args.z ? [args.z] : []),
+        ...(args.seriesColumn ? [args.seriesColumn] : []),
+      ];
       const colErr = assertChartColumns(ctx, names);
       if (colErr) return { ok: false, summary: colErr };
+      const defaultAgg =
+        args.aggregate !== undefined && args.aggregate !== null
+          ? args.aggregate
+          : args.seriesColumn && (args.type === "bar" || args.type === "line" || args.type === "area")
+            ? "sum"
+            : "none";
       const spec = chartSpecSchema.parse({
         type: args.type,
         title: args.title || `${args.y} by ${args.x}`,
         x: args.x,
         y: args.y,
+        ...(args.type === "heatmap" && args.z ? { z: args.z } : {}),
+        ...(args.seriesColumn ? { seriesColumn: args.seriesColumn } : {}),
+        ...(args.seriesColumn && args.barLayout ? { barLayout: args.barLayout } : {}),
         ...(args.y2 ? { y2: args.y2 } : {}),
-        aggregate: args.aggregate ?? "none",
+        aggregate: defaultAgg,
       });
       let processed = processChartData(
         ctx.exec.data,
@@ -795,18 +811,22 @@ export function registerDefaultTools(registry: ToolRegistry) {
         data: processed,
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       };
+      const layerNote = args.seriesColumn
+        ? `, series=${args.seriesColumn}${args.barLayout ? ` (${args.barLayout})` : ""}`
+        : "";
+      const zNote = args.type === "heatmap" && args.z ? `, z=${args.z}` : "";
       return {
         ok: true,
-        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${args.y2 ? `, y2=${args.y2}` : ""}, aggregate=${spec.aggregate ?? "none"}), ${processed.length} points.`,
+        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${args.y2 ? `, y2=${args.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.`,
         charts: [full],
         memorySlots: { chart_x: spec.x, chart_y: spec.y },
       };
     },
     {
       description:
-        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). aggregate none only when one row per x already.",
+        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). Use aggregate none when one row per x already. For breakdowns (e.g. sales by month AND region), use bar or line/area with seriesColumn = the second dimension column (long-format rows: one row per x×series with y numeric); default aggregate sum then applies per series cell. For two numeric metrics over the same x (e.g. Revenue and Profit over time), use y2 instead of seriesColumn. Heatmap: type heatmap, x=row dim, y=col dim, z=numeric measure.",
       argsHelp:
-        '{"type": "line"|"bar"|"scatter"|"pie"|"area", "x": string, "y": string, "y2"?: string, "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none"} — after execute_query_plan sum(Sales), use y: Sales_sum (or alias); aggregate none when pre-bucketed.',
+        '{"type": "line"|"bar"|"scatter"|"pie"|"area"|"heatmap", "x": string, "y": string, "z"?: string (heatmap cell value), "seriesColumn"?: string (second category for stacked/grouped bar or multi-series line/area), "barLayout"?: "stacked"|"grouped", "y2"?: string (second numeric series, dual-axis line), "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none"} — after execute_query_plan, y must match result column names (e.g. Sales_sum). With seriesColumn, omit aggregate or use sum/mean to roll up raw rows per x×series.',
     }
   );
 

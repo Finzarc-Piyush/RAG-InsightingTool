@@ -77,6 +77,9 @@ function rowKeysFromFirstRow(rows: Record<string, unknown>[]): string[] {
 type DeferredBuildChartTemplate = Pick<ChartSpec, "type" | "title" | "x" | "y" | "aggregate"> & {
   y2?: string;
   y2Series?: string[];
+  z?: string;
+  seriesColumn?: string;
+  barLayout?: "stacked" | "grouped";
 };
 
 function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplate {
@@ -87,6 +90,9 @@ function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplat
     y: c.y,
     ...(c.y2 ? { y2: c.y2 } : {}),
     ...(c.y2Series?.length ? { y2Series: [...c.y2Series] } : {}),
+    ...(c.z ? { z: c.z } : {}),
+    ...(c.seriesColumn ? { seriesColumn: c.seriesColumn } : {}),
+    ...(c.barLayout ? { barLayout: c.barLayout } : {}),
     ...(c.aggregate != null ? { aggregate: c.aggregate } : {}),
   };
 }
@@ -96,7 +102,14 @@ function rowFrameSupportsDeferredTemplate(
   t: DeferredBuildChartTemplate
 ): boolean {
   if (!first) return false;
-  const keys = [t.x, t.y, ...(t.y2 ? [t.y2] : []), ...(t.y2Series ?? [])];
+  const keys = [
+    t.x,
+    t.y,
+    ...(t.y2 ? [t.y2] : []),
+    ...(t.y2Series ?? []),
+    ...(t.z ? [t.z] : []),
+    ...(t.seriesColumn ? [t.seriesColumn] : []),
+  ];
   return keys.every((k) => Object.prototype.hasOwnProperty.call(first, k));
 }
 
@@ -112,7 +125,14 @@ function materializeDeferredBuildCharts(
   if (!deferred.length) return;
   for (const tmpl of deferred) {
     try {
-      const p = { type: tmpl.type, x: tmpl.x, y: tmpl.y };
+      const p = {
+        type: tmpl.type,
+        x: tmpl.x,
+        y: tmpl.y,
+        ...(tmpl.z ? { z: tmpl.z } : {}),
+        ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
+        ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
+      };
       if (!validateChartProposal(ctx, p)) continue;
       const { rows, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
       const first = rows[0] as Record<string, unknown> | undefined;
@@ -122,6 +142,9 @@ function materializeDeferredBuildCharts(
         title: tmpl.title,
         x: tmpl.x,
         y: tmpl.y,
+        ...(tmpl.z ? { z: tmpl.z } : {}),
+        ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
+        ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
         ...(tmpl.y2 ? { y2: tmpl.y2 } : {}),
         ...(tmpl.y2Series?.length ? { y2Series: tmpl.y2Series } : {}),
         aggregate: tmpl.aggregate ?? "none",
@@ -133,16 +156,34 @@ function materializeDeferredBuildCharts(
         ctx.summary.dateColumns,
         { chartQuestion: ctx.question }
       );
-      const smartDomains = calculateSmartDomainsForChart(
-        processed,
-        spec.x,
-        spec.y,
-        spec.y2 || undefined,
-        {
-          yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-          y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
+      let smartDomains: Record<string, unknown> = {};
+      if (spec.type === "heatmap") {
+        smartDomains = {};
+      } else if (spec.seriesKeys?.length) {
+        const sk = spec.seriesKeys;
+        let maxSum = 0;
+        for (const row of processed) {
+          let s = 0;
+          for (const k of sk) {
+            const v = row[k];
+            const n = typeof v === "number" ? v : Number(v);
+            if (Number.isFinite(n)) s += n;
+          }
+          maxSum = Math.max(maxSum, s);
         }
-      );
+        smartDomains = { yDomain: [0, maxSum * 1.05] as [number, number] };
+      } else {
+        smartDomains = calculateSmartDomainsForChart(
+          processed,
+          spec.x,
+          spec.y,
+          spec.y2 || undefined,
+          {
+            yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+            y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
+          }
+        );
+      }
       mergedCharts.push({
         ...spec,
         xLabel: spec.x,

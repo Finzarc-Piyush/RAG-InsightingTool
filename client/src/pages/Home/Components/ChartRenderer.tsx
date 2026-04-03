@@ -46,6 +46,12 @@ import {
 } from '@/lib/chartFilters';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
+import {
+  CHART_SERIES_COLORS as COLORS,
+  evenlySpacedDataKeys,
+  LINE_AREA_MAX_X_TICKS,
+  sortRowsForLineAreaChart,
+} from '@/lib/chartRechartsShared';
 
 interface ChartRendererProps {
   chart: ChartSpec;
@@ -61,44 +67,7 @@ interface ChartRendererProps {
   loadingProgress?: { processed: number; total: number; message?: string }; // Progress info
 }
 
-/** Theme-aware series colors (see index.css --chart-1 … --chart-5) */
-const COLORS = [
-  'hsl(var(--chart-1))',
-  'hsl(var(--chart-2))',
-  'hsl(var(--chart-3))',
-  'hsl(var(--chart-4))',
-  'hsl(var(--chart-5))',
-  'hsl(var(--chart-1) / 0.85)',
-];
 const MAX_COMPACT_X_TICKS = 6;
-const LINE_AREA_MAX_X_TICKS = 12;
-
-function evenlySpacedDataKeys(
-  rows: Record<string, unknown>[],
-  xKey: string,
-  maxTicks: number
-): Array<string | number> | undefined {
-  if (rows.length <= maxTicks) return undefined;
-  const out: Array<string | number> = [];
-  const n = rows.length;
-  const target = Math.min(maxTicks, n);
-  const step = Math.max(1, Math.floor((n - 1) / Math.max(1, target - 1)));
-  for (let i = 0; i < n && out.length < target; i += step) {
-    const v = rows[i]?.[xKey];
-    if (v !== undefined && v !== null) {
-      out.push(typeof v === 'string' || typeof v === 'number' ? v : String(v));
-    }
-  }
-  const lastRow = rows[n - 1];
-  const last = lastRow?.[xKey];
-  if (last !== undefined && last !== null) {
-    const normalized = typeof last === 'string' || typeof last === 'number' ? last : String(last);
-    if (out[out.length - 1] !== normalized) {
-      out.push(normalized);
-    }
-  }
-  return out.length > 0 ? out : undefined;
-}
 
 type FiltersUpdater = ActiveChartFilters | ((prev: ActiveChartFilters) => ActiveChartFilters);
 
@@ -366,24 +335,15 @@ export function ChartRenderer({
   
   const chartData = baseChartData;
 
-  /** Chronological X order for trend charts (backend may return unsorted string dates). */
-  const lineAreaSortedData = useMemo(() => {
-    if (type !== 'line' && type !== 'area') return chartData;
-    if (typeof x !== 'string') return chartData;
-    return [...chartData].sort((a, b) => {
-      const ra = (a as Record<string, unknown>)[x];
-      const rb = (b as Record<string, unknown>)[x];
-      const sa =
-        ra instanceof Date && !isNaN(ra.getTime())
-          ? ra.toISOString()
-          : String(ra ?? '');
-      const sb =
-        rb instanceof Date && !isNaN(rb.getTime())
-          ? rb.toISOString()
-          : String(rb ?? '');
-      return compareTemporalOrLexicalLabels(sa, sb);
-    });
-  }, [type, chartData, x]);
+  const lineAreaSortedData = useMemo(
+    () =>
+      sortRowsForLineAreaChart(
+        type,
+        chartData as Record<string, unknown>[],
+        typeof x === 'string' ? x : undefined
+      ) as typeof chartData,
+    [type, chartData, x]
+  );
   
   // Process scatter plot data for display (only outlier filtering) - show ALL data points
   const processedScatterData = useMemo(() => {
@@ -771,18 +731,108 @@ export function ChartRenderer({
     }
 
     switch (type) {
-      case 'line':
-        // For dual-axis charts, use blue for left axis, red for right axis
+      case 'line': {
+        const lineRows = lineAreaSortedData as Record<string, any>[];
+        const lineMultiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+
+        if (lineMultiKeys.length > 0) {
+          const combinedVals = lineMultiKeys.flatMap((k) =>
+            getNumericValues(lineRows, k)
+          );
+          const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
+          return (
+            <ResponsiveContainer
+              width="100%"
+              height={fillParent ? '100%' : isSingleChart ? 400 : 250}
+            >
+              <LineChart
+                data={lineAreaSortedData}
+                margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis
+                  dataKey={x}
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                  angle={-45}
+                  textAnchor="end"
+                  ticks={lineAreaXTicks}
+                  label={{
+                    value: xLabel || x,
+                    position: 'insideBottom',
+                    offset: -5,
+                    style: {
+                      textAnchor: 'middle',
+                      fill: 'hsl(var(--foreground))',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    },
+                  }}
+                  height={50}
+                />
+                <YAxis
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10, fontWeight: 500 }}
+                  width={60}
+                  tickFormatter={formatAxisLabel}
+                  label={{
+                    value: yLabel || y,
+                    angle: -90,
+                    position: 'left',
+                    style: {
+                      textAnchor: 'middle',
+                      fill: 'hsl(var(--foreground))',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    },
+                  }}
+                  stroke="hsl(var(--foreground))"
+                  domain={unifiedDomain}
+                />
+                <Tooltip />
+                <Legend
+                  wrapperStyle={{ paddingTop: '10px' }}
+                  iconType="line"
+                  formatter={(value) => value}
+                />
+                {lineMultiKeys.map((k, i) => {
+                  const c = COLORS[i % COLORS.length];
+                  return (
+                    <Line
+                      key={k}
+                      type="monotone"
+                      dataKey={k}
+                      name={k}
+                      stroke={c}
+                      strokeWidth={2}
+                      dot={showDots ? { r: 4, fill: c } : false}
+                      activeDot={{ r: 4 }}
+                    />
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          );
+        }
+
+        // Dual-axis (y2) or single-series line
         const leftAxisColor = chart.y2 ? 'hsl(var(--chart-1))' : chartColor;
         const rightAxisColor = 'hsl(var(--chart-4))';
-        const leftValues = getNumericValues(lineAreaSortedData as Record<string, any>[], y);
+        const leftValues = getNumericValues(lineRows, y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
-        const rightValues = chart.y2 ? getNumericValues(lineAreaSortedData as Record<string, any>[], chart.y2 as string) : [];
+        const rightValues = chart.y2
+          ? getNumericValues(lineRows, chart.y2 as string)
+          : [];
         const rightDomain = chart.y2 ? getDynamicDomain(rightValues) : undefined;
-        
+
         return (
-          <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <LineChart data={lineAreaSortedData} margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 30 }}>
+          <ResponsiveContainer
+            width="100%"
+            height={fillParent ? '100%' : isSingleChart ? 400 : 250}
+          >
+            <LineChart
+              data={lineAreaSortedData}
+              margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 30 }}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -790,29 +840,59 @@ export function ChartRenderer({
                 angle={-45}
                 textAnchor="end"
                 ticks={lineAreaXTicks}
-                label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
+                label={{
+                  value: xLabel || x,
+                  position: 'insideBottom',
+                  offset: -5,
+                  style: {
+                    textAnchor: 'middle',
+                    fill: 'hsl(var(--foreground))',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  },
+                }}
                 height={50}
               />
               {chart.y2 ? (
                 <>
-              <YAxis
+                  <YAxis
                     tick={{ fill: leftAxisColor, fontSize: 10, fontWeight: 500 }}
-                width={60}
-                tickFormatter={formatAxisLabel}
-                    label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 12, fontWeight: 600 } }}
-                yAxisId="left"
+                    width={60}
+                    tickFormatter={formatAxisLabel}
+                    label={{
+                      value: yLabel || y,
+                      angle: -90,
+                      position: 'left',
+                      style: {
+                        textAnchor: 'middle',
+                        fill: leftAxisColor,
+                        fontSize: 12,
+                        fontWeight: 600,
+                      },
+                    }}
+                    yAxisId="left"
                     stroke={leftAxisColor}
-                domain={leftDomain}
-              />
-                <YAxis
-                  orientation="right"
-                  yAxisId="right"
+                    domain={leftDomain}
+                  />
+                  <YAxis
+                    orientation="right"
+                    yAxisId="right"
                     tick={{ fill: rightAxisColor, fontSize: 10, fontWeight: 500 }}
                     width={60}
                     tickFormatter={formatAxisLabel}
-                    label={{ value: chart.y2Label || chart.y2, angle: 90, position: 'right', style: { textAnchor: 'middle', fill: rightAxisColor, fontSize: 12, fontWeight: 600 } }}
+                    label={{
+                      value: chart.y2Label || chart.y2,
+                      angle: 90,
+                      position: 'right',
+                      style: {
+                        textAnchor: 'middle',
+                        fill: rightAxisColor,
+                        fontSize: 12,
+                        fontWeight: 600,
+                      },
+                    }}
                     stroke={rightAxisColor}
-                  domain={rightDomain}
+                    domain={rightDomain}
                   />
                 </>
               ) : (
@@ -820,9 +900,19 @@ export function ChartRenderer({
                   tick={{ fill: leftAxisColor, fontSize: 10, fontWeight: 500 }}
                   width={60}
                   tickFormatter={formatAxisLabel}
-                  label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 12, fontWeight: 600 } }}
+                  label={{
+                    value: yLabel || y,
+                    angle: -90,
+                    position: 'left',
+                    style: {
+                      textAnchor: 'middle',
+                      fill: leftAxisColor,
+                      fontSize: 12,
+                      fontWeight: 600,
+                    },
+                  }}
                   stroke={leftAxisColor}
-                domain={leftDomain}
+                  domain={leftDomain}
                 />
               )}
               <Tooltip />
@@ -836,7 +926,7 @@ export function ChartRenderer({
               <Line
                 type="monotone"
                 dataKey={y}
-                name={chart.y2 ? (yLabel || y) : undefined}
+                name={chart.y2 ? yLabel || y : undefined}
                 stroke={leftAxisColor}
                 strokeWidth={2}
                 dot={showDots ? { r: 4, fill: leftAxisColor } : false}
@@ -845,7 +935,6 @@ export function ChartRenderer({
               />
               {chart.y2 && (
                 <>
-                  {/* Render single y2 if no y2Series */}
                   {!chart.y2Series && (
                     <Line
                       type="monotone"
@@ -858,30 +947,31 @@ export function ChartRenderer({
                       yAxisId="right"
                     />
                   )}
-                  {/* Render multiple y2Series if present */}
-                  {chart.y2Series && chart.y2Series.map((series, index) => {
-                    // Use different colors for multiple series
-                    const colors = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-                    const seriesColor = colors[index % colors.length];
-                    return (
-                      <Line
-                        key={series}
-                        type="monotone"
-                        dataKey={series}
-                        name={series}
-                        stroke={seriesColor}
-                        strokeWidth={2}
-                        dot={showDots ? { r: 4, fill: seriesColor } : false}
-                        activeDot={{ r: 4 }}
-                        yAxisId="right"
-                      />
-                    );
-                  })}
+                  {chart.y2Series &&
+                    chart.y2Series.map((series, idx) => {
+                      const c = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][
+                        idx % 5
+                      ];
+                      return (
+                        <Line
+                          key={series}
+                          type="monotone"
+                          dataKey={series}
+                          name={series}
+                          stroke={c}
+                          strokeWidth={2}
+                          dot={showDots ? { r: 4, fill: c } : false}
+                          activeDot={{ r: 4 }}
+                          yAxisId="right"
+                        />
+                      );
+                    })}
                 </>
               )}
             </LineChart>
           </ResponsiveContainer>
         );
+      }
 
       case 'bar': {
         const multiKeys =
@@ -1238,10 +1328,99 @@ export function ChartRenderer({
           </ResponsiveContainer>
         );
 
-      case 'area':
+      case 'area': {
+        const areaRows = lineAreaSortedData as Record<string, any>[];
+        const areaMultiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+        const stackedArea = barLayout !== 'grouped';
+
+        if (areaMultiKeys.length > 0) {
+          const combinedVals = areaMultiKeys.flatMap((k) =>
+            getNumericValues(areaRows, k)
+          );
+          const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
+          return (
+            <ResponsiveContainer
+              width="100%"
+              height={fillParent ? '100%' : isSingleChart ? 400 : 250}
+            >
+              <AreaChart
+                data={lineAreaSortedData}
+                margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis
+                  dataKey={x}
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                  angle={-45}
+                  textAnchor="end"
+                  ticks={lineAreaXTicks}
+                  label={{
+                    value: xLabel || x,
+                    position: 'insideBottom',
+                    offset: -5,
+                    style: {
+                      textAnchor: 'middle',
+                      fill: 'hsl(var(--foreground))',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    },
+                  }}
+                  height={50}
+                />
+                <YAxis
+                  tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                  width={60}
+                  tickFormatter={formatAxisLabel}
+                  label={{
+                    value: yLabel || y,
+                    angle: -90,
+                    position: 'left',
+                    style: {
+                      textAnchor: 'middle',
+                      fill: 'hsl(var(--foreground))',
+                      fontSize: 12,
+                      fontWeight: 600,
+                    },
+                  }}
+                  domain={unifiedDomain}
+                />
+                <Tooltip />
+                <Legend
+                  wrapperStyle={{ paddingTop: 8 }}
+                  iconType="line"
+                  formatter={(value) => value}
+                />
+                {areaMultiKeys.map((k, i) => {
+                  const c = COLORS[i % COLORS.length];
+                  return (
+                    <Area
+                      key={k}
+                      type="monotone"
+                      dataKey={k}
+                      name={k}
+                      stackId={stackedArea ? 'areaStack' : undefined}
+                      stroke={c}
+                      fill={c}
+                      fillOpacity={stackedArea ? 0.55 : 0.3}
+                      strokeWidth={2}
+                    />
+                  );
+                })}
+              </AreaChart>
+            </ResponsiveContainer>
+          );
+        }
+
         return (
-          <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <AreaChart data={lineAreaSortedData} margin={{ left: 50, right: 10, top: 10, bottom: 30 }}>
+          <ResponsiveContainer
+            width="100%"
+            height={fillParent ? '100%' : isSingleChart ? 400 : 250}
+          >
+            <AreaChart
+              data={lineAreaSortedData}
+              margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -1249,14 +1428,34 @@ export function ChartRenderer({
                 angle={-45}
                 textAnchor="end"
                 ticks={lineAreaXTicks}
-                label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
+                label={{
+                  value: xLabel || x,
+                  position: 'insideBottom',
+                  offset: -5,
+                  style: {
+                    textAnchor: 'middle',
+                    fill: 'hsl(var(--foreground))',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  },
+                }}
                 height={50}
               />
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 width={60}
                 tickFormatter={formatAxisLabel}
-                label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
+                label={{
+                  value: yLabel || y,
+                  angle: -90,
+                  position: 'left',
+                  style: {
+                    textAnchor: 'middle',
+                    fill: 'hsl(var(--foreground))',
+                    fontSize: 12,
+                    fontWeight: 600,
+                  },
+                }}
               />
               <Tooltip />
               <Area
@@ -1270,6 +1469,7 @@ export function ChartRenderer({
             </AreaChart>
           </ResponsiveContainer>
         );
+      }
 
       default:
         return <p className="text-muted-foreground text-center py-8">Unsupported chart type</p>;

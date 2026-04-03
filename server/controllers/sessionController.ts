@@ -867,14 +867,17 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       session.currentDataBlob?.version ?? session.ragIndex?.dataVersion ?? 0;
 
     if (pivotQueryBody !== undefined && pivotQueryBody !== null) {
-      const fromPivot = await tryProcessChartDataFromPivotQuery(
+      const pivotPreview = await tryProcessChartDataFromPivotQuery(
         sessionId,
         dataVersion,
         { ...spec },
         pivotQueryBody,
-        session.dataSummary.dateColumns
+        session.dataSummary.dateColumns,
+        session.dataSummary.numericColumns ?? []
       );
-      if (fromPivot?.length) {
+      if (pivotPreview?.rows?.length) {
+        const fromPivot = pivotPreview.rows;
+        const yField = pivotPreview.yField;
         let extra: Partial<ChartSpec> = {};
         if (spec.type === "heatmap") {
           extra = {};
@@ -895,7 +898,7 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
           extra = calculateSmartDomainsForChart(
             fromPivot as Record<string, any>[],
             spec.x,
-            spec.y,
+            yField,
             spec.y2 || undefined,
             {
               yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
@@ -908,10 +911,11 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
 
         const out: ChartSpec = {
           ...spec,
+          y: yField,
           ...extra,
           data: fromPivot as Record<string, any>[],
           xLabel: spec.xLabel || spec.x,
-          yLabel: spec.yLabel || spec.y,
+          yLabel: spec.yLabel || yField,
         };
         return res.json({ chart: out });
       }

@@ -227,19 +227,34 @@ export async function proposeAndBuildExtraCharts(
       let processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
         chartQuestion: ctx.question,
       });
-      const smartDomains =
-        spec.type === "heatmap"
-          ? {}
-          : calculateSmartDomainsForChart(
-              processed,
-              spec.x,
-              spec.y,
-              spec.y2 || undefined,
-              {
-                yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-                y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
-              }
-            );
+      let smartDomains: Record<string, unknown> = {};
+      if (spec.type === "heatmap") {
+        smartDomains = {};
+      } else if (spec.seriesKeys?.length) {
+        const sk = spec.seriesKeys;
+        let maxSum = 0;
+        for (const row of processed) {
+          let s = 0;
+          for (const k of sk) {
+            const v = row[k];
+            const n = typeof v === "number" ? v : Number(v);
+            if (Number.isFinite(n)) s += n;
+          }
+          maxSum = Math.max(maxSum, s);
+        }
+        smartDomains = { yDomain: [0, maxSum * 1.05] as [number, number] };
+      } else {
+        smartDomains = calculateSmartDomainsForChart(
+          processed,
+          spec.x,
+          spec.y,
+          spec.y2 || undefined,
+          {
+            yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
+            y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
+          }
+        );
+      }
       built.push({
         ...spec,
         xLabel: spec.x,

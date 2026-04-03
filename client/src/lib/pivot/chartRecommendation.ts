@@ -25,6 +25,54 @@ const PIE_MAX_CATEGORIES = 8;
 const HEATMAP_MAX_COL_KEYS = 24;
 const HEATMAP_MAX_ROW_KEYS = 40;
 
+const AGG_SUFFIX_CAPTURE = /^(.*)_(sum|avg|mean|min|max|count)$/i;
+
+/**
+ * Align pivot value field with base table measure names (e.g. `Sales_sum` → `Sales`) for chart Y
+ * and numeric checks; mirrors server {@link normalizePivotValueFieldForBaseTable} suffix rules.
+ */
+export function normalizePivotMeasureFieldForChart(
+  field: string | null,
+  numericColumns: string[]
+): string | null {
+  if (!field) return null;
+  const numericSet = new Set(numericColumns);
+  if (numericSet.has(field)) return field;
+  const m = field.match(AGG_SUFFIX_CAPTURE);
+  if (m?.[1] && numericSet.has(m[1])) return m[1];
+  return field;
+}
+
+/**
+ * Column pivot field wins over a second row field. For bar/line/area only, when there is no
+ * column field but two+ row fields, use the inner row (rows[1]) as series so chart preview
+ * matches nested pivot tables (server: pivotModelRowsForChartSpec long-format branch).
+ */
+export function resolveSeriesColumnForPivotChart(
+  pivotConfig: Pick<PivotUiConfig, 'rows' | 'columns'>,
+  chartKind: PivotChartKind
+): string | null {
+  const col = pivotConfig.columns[0] ?? null;
+  if (col) return col;
+  if (chartKind === 'bar' || chartKind === 'line' || chartKind === 'area') {
+    if (pivotConfig.rows.length >= 2) return pivotConfig.rows[1] ?? null;
+  }
+  return null;
+}
+
+/** Stacked when series comes from a column field; grouped for single series or row-derived series. */
+function barLayoutForPivotSeries(firstCol: string | null | undefined): 'stacked' | 'grouped' {
+  return firstCol ? 'stacked' : 'grouped';
+}
+
+function isInnerRowSeries(
+  pivotConfig: Pick<PivotUiConfig, 'rows' | 'columns'>,
+  seriesColumn: string | null
+): boolean {
+  const r1 = pivotConfig.rows[1];
+  return Boolean(r1 && seriesColumn === r1 && !pivotConfig.columns[0]);
+}
+
 function isDateLike(field: string | null, dateColumns: Set<string>): boolean {
   if (!field) return false;
   if (isTemporalFacetFieldId(field)) return true;
@@ -44,19 +92,25 @@ export function recommendPivotChart({
   const numericSet = new Set(numericColumns);
   const firstRow = pivotConfig.rows[0] ?? null;
   const firstCol = pivotConfig.columns[0] ?? null;
-  const firstValue = pivotConfig.values[0]?.field ?? null;
+  const rawFirstValue = pivotConfig.values[0]?.field ?? null;
+  const firstValue =
+    normalizePivotMeasureFieldForChart(rawFirstValue, numericColumns) ?? rawFirstValue;
   const yNumeric = firstValue ? numericSet.has(firstValue) : false;
   const xDateLike = isDateLike(firstRow, dateSet);
 
   if (xDateLike && yNumeric && rowCount >= 2) {
+    const seriesColumn = resolveSeriesColumnForPivotChart(pivotConfig, 'line');
+    const innerRow = isInnerRowSeries(pivotConfig, seriesColumn);
     return {
       chartType: 'line',
       x: firstRow,
       y: firstValue,
       z: null,
-      seriesColumn: null,
-      barLayout: 'stacked',
-      reason: 'Temporal dimension detected, line chart selected by default.',
+      seriesColumn,
+      barLayout: barLayoutForPivotSeries(firstCol),
+      reason: innerRow
+        ? 'Temporal dimension on X with inner row field as series.'
+        : 'Temporal dimension detected, line chart selected by default.',
     };
   }
 
@@ -93,18 +147,30 @@ export function recommendPivotChart({
     };
   }
 
+  const seriesColumn = resolveSeriesColumnForPivotChart(pivotConfig, 'bar');
+  const innerRow = isInnerRowSeries(pivotConfig, seriesColumn);
   return {
     chartType: 'bar',
     x: firstRow,
     y: firstValue,
     z: null,
-    seriesColumn: firstCol,
-    barLayout: firstCol ? 'stacked' : 'grouped',
-    reason: 'Categorical comparison baseline; bar is the safest default.',
+    seriesColumn,
+    barLayout: barLayoutForPivotSeries(firstCol),
+    reason: innerRow
+      ? 'Bar chart: outer row on X, inner row as series, first measure on Y.'
+      : 'Categorical comparison baseline; bar is the safest default.',
   };
 }
 
-function barLikeReason(kind: string): string {
+function barLikeReason(
+  kind: string,
+  pivotConfig: Pick<PivotUiConfig, 'rows' | 'columns'>,
+  chartKind: 'bar' | 'line' | 'area'
+): string {
+  const sc = resolveSeriesColumnForPivotChart(pivotConfig, chartKind);
+  if (isInnerRowSeries(pivotConfig, sc)) {
+    return `${kind} chart: outer row on X, inner row as series, first value measure on Y.`;
+  }
   return `${kind} chart from pivot row vs first value measure.`;
 }
 
@@ -122,7 +188,9 @@ export function recommendPivotChartForType(
   const numericSet = new Set(numericColumns);
   const firstRow = pivotConfig.rows[0] ?? null;
   const firstCol = pivotConfig.columns[0] ?? null;
-  const firstValue = pivotConfig.values[0]?.field ?? null;
+  const rawFirstValue = pivotConfig.values[0]?.field ?? null;
+  const firstValue =
+    normalizePivotMeasureFieldForChart(rawFirstValue, numericColumns) ?? rawFirstValue;
   const yNumeric = firstValue ? numericSet.has(firstValue) : false;
   const xDateLike = isDateLike(firstRow, dateSet);
   const meas = numericColumns.filter((c) => numericSet.has(c));
@@ -210,15 +278,20 @@ export function recommendPivotChartForType(
   }
 
   if (forcedType === 'line' || forcedType === 'area') {
+    const lineAreaKind = forcedType === 'line' ? 'line' : 'area';
+    const seriesLA = resolveSeriesColumnForPivotChart(pivotConfig, lineAreaKind);
     if (xDateLike && yNumeric && firstRow && firstValue && rowCount >= 2) {
+      const innerRow = isInnerRowSeries(pivotConfig, seriesLA);
       return {
         chartType: forcedType,
         x: firstRow,
         y: firstValue,
         z: null,
-        seriesColumn: firstCol,
-        barLayout: firstCol ? 'stacked' : 'grouped',
-        reason: `${forcedType === 'line' ? 'Line' : 'Area'}: time-like row dimension with a measure.`,
+        seriesColumn: seriesLA,
+        barLayout: barLayoutForPivotSeries(firstCol),
+        reason: innerRow
+          ? `${forcedType === 'line' ? 'Line' : 'Area'}: time on X with inner row as series.`
+          : `${forcedType === 'line' ? 'Line' : 'Area'}: time-like row dimension with a measure.`,
       };
     }
     if (firstRow && firstValue && yNumeric) {
@@ -227,9 +300,13 @@ export function recommendPivotChartForType(
         x: firstRow,
         y: firstValue,
         z: null,
-        seriesColumn: firstCol,
-        barLayout: firstCol ? 'stacked' : 'grouped',
-        reason: barLikeReason(forcedType === 'line' ? 'Line' : 'Area'),
+        seriesColumn: seriesLA,
+        barLayout: barLayoutForPivotSeries(firstCol),
+        reason: barLikeReason(
+          forcedType === 'line' ? 'Line' : 'Area',
+          pivotConfig,
+          lineAreaKind
+        ),
       };
     }
     return {
@@ -237,22 +314,23 @@ export function recommendPivotChartForType(
       x: firstRow ?? auto.x,
       y: firstValue ?? auto.y,
       z: null,
-      seriesColumn: firstCol,
-      barLayout: firstCol ? 'stacked' : 'grouped',
+      seriesColumn: resolveSeriesColumnForPivotChart(pivotConfig, lineAreaKind),
+      barLayout: barLayoutForPivotSeries(firstCol),
       reason: `Add a row dimension and value measure. (${auto.reason})`,
     };
   }
 
   if (forcedType === 'bar') {
+    const seriesBar = resolveSeriesColumnForPivotChart(pivotConfig, 'bar');
     if (firstRow && firstValue && yNumeric) {
       return {
         chartType: 'bar',
         x: firstRow,
         y: firstValue,
         z: null,
-        seriesColumn: firstCol,
-        barLayout: firstCol ? 'stacked' : 'grouped',
-        reason: barLikeReason('Bar'),
+        seriesColumn: seriesBar,
+        barLayout: barLayoutForPivotSeries(firstCol),
+        reason: barLikeReason('Bar', pivotConfig, 'bar'),
       };
     }
     return {
@@ -260,8 +338,8 @@ export function recommendPivotChartForType(
       x: firstRow ?? auto.x,
       y: firstValue ?? auto.y,
       z: null,
-      seriesColumn: firstCol ?? auto.seriesColumn,
-      barLayout: firstCol ? 'stacked' : 'grouped',
+      seriesColumn: seriesBar ?? auto.seriesColumn,
+      barLayout: barLayoutForPivotSeries(firstCol),
       reason: auto.reason,
     };
   }
