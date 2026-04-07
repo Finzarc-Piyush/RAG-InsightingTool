@@ -128,6 +128,26 @@ export function parseFlexibleDate(dateStr: string | Date): Date | null {
     return null;
   }
 
+  // US-style M/D/YY or D/M/YY with two-digit year (pivot: 00–30 → 2000+, else 1900+), aligned with temporal facet Date.parse fallback.
+  const mdyy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2})$/);
+  if (mdyy) {
+    const month = Number(mdyy[1]);
+    const day = Number(mdyy[2]);
+    let year = Number(mdyy[3]);
+    if (Number.isFinite(month) && Number.isFinite(day) && Number.isFinite(year)) {
+      if (year < 100) {
+        year = year <= 30 ? 2000 + year : 1900 + year;
+      }
+      if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const d = new Date(year, month - 1, day);
+        if (d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day) {
+          return d;
+        }
+      }
+    }
+    return null;
+  }
+
   // Month name + year: "Sep-24", "Mar 23", "January 2025", "Dec/99" (aligns with client chartFilters / DataPreview pivot).
   const mmmYy = str.match(/^([A-Za-z]{3,})[-\s/]?(\d{2,4})$/i);
   if (mmmYy) {

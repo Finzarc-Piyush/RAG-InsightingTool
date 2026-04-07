@@ -236,7 +236,8 @@ function dateFromNumericCell(raw: number): Date | null {
   return null;
 }
 
-function parseRowDate(raw: unknown): Date | null {
+/** Parse cell values the same way temporal facets do (incl. Date.parse fallback for M/D/YY). */
+export function parseRowDate(raw: unknown): Date | null {
   if (raw === null || raw === undefined || raw === "") return null;
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
   if (typeof raw === "number" && Number.isFinite(raw)) {

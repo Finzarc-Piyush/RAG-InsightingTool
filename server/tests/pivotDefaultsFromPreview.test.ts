@@ -56,4 +56,31 @@ describe("derivePivotDefaultsFromPreviewRows", () => {
   it("returns undefined for empty rows", () => {
     assert.equal(derivePivotDefaultsFromPreviewRows([], minimalSummary(), null), undefined);
   });
+
+  it("includes every non-measure column as row keys (three dimensions)", () => {
+    const rows = [
+      {
+        Region: "West",
+        Category: "Technology",
+        Segment: "Consumer",
+        Sales_sum: 100,
+      },
+    ];
+    const summary = minimalSummary({
+      columns: [
+        { name: "Region", type: "string", sampleValues: [] },
+        { name: "Category", type: "string", sampleValues: [] },
+        { name: "Segment", type: "string", sampleValues: [] },
+        { name: "Sales", type: "number", sampleValues: [] },
+      ] as DataSummary["columns"],
+    });
+    const out = derivePivotDefaultsFromPreviewRows(rows, summary, [
+      "Region",
+      "Category",
+      "Segment",
+      "Sales_sum",
+    ]);
+    assert.deepEqual(out?.rows, ["Region", "Category", "Segment"]);
+    assert.deepEqual(out?.values, ["Sales"]);
+  });
 });

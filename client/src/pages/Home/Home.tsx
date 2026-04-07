@@ -19,6 +19,8 @@ import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages'
 import type { ChartSpec } from '@/shared/schema';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
+import { buildChatPivotNavEntries } from '@/pages/Home/lib/chatPivotNav';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -79,6 +81,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setExternalComposerDraft({ text, id: composerDraftIdRef.current });
   }, []);
   const { toast } = useToast();
+  const { setPivotEntries } = useChatSidebarNav();
   const {
     sessionId,
     fileName,
@@ -409,6 +412,11 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
       onSessionChange(sessionId, fileName);
     }
   }, [sessionId, fileName, onSessionChange]);
+
+  useEffect(() => {
+    setPivotEntries(buildChatPivotNavEntries(messages));
+    return () => setPivotEntries([]);
+  }, [messages, setPivotEntries]);
 
   // Fetch collaborators when sessionId is available
   useEffect(() => {

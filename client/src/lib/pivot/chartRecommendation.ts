@@ -60,9 +60,13 @@ export function resolveSeriesColumnForPivotChart(
   return null;
 }
 
-/** Stacked when series comes from a column field; grouped for single series or row-derived series. */
-function barLayoutForPivotSeries(firstCol: string | null | undefined): 'stacked' | 'grouped' {
-  return firstCol ? 'stacked' : 'grouped';
+/** Stacked default whenever a second dimension becomes series (column field or inner row); matches server chart compiler. */
+function barLayoutForPivotSeries(
+  pivotConfig: Pick<PivotUiConfig, 'rows' | 'columns'>,
+  chartKind: 'bar' | 'line' | 'area'
+): 'stacked' | 'grouped' {
+  const sc = resolveSeriesColumnForPivotChart(pivotConfig, chartKind);
+  return sc ? 'stacked' : 'grouped';
 }
 
 function isInnerRowSeries(
@@ -107,7 +111,7 @@ export function recommendPivotChart({
       y: firstValue,
       z: null,
       seriesColumn,
-      barLayout: barLayoutForPivotSeries(firstCol),
+      barLayout: barLayoutForPivotSeries(pivotConfig, 'line'),
       reason: innerRow
         ? 'Temporal dimension on X with inner row field as series.'
         : 'Temporal dimension detected, line chart selected by default.',
@@ -155,7 +159,7 @@ export function recommendPivotChart({
     y: firstValue,
     z: null,
     seriesColumn,
-    barLayout: barLayoutForPivotSeries(firstCol),
+    barLayout: barLayoutForPivotSeries(pivotConfig, 'bar'),
     reason: innerRow
       ? 'Bar chart: outer row on X, inner row as series, first measure on Y.'
       : 'Categorical comparison baseline; bar is the safest default.',
@@ -288,7 +292,7 @@ export function recommendPivotChartForType(
         y: firstValue,
         z: null,
         seriesColumn: seriesLA,
-        barLayout: barLayoutForPivotSeries(firstCol),
+        barLayout: barLayoutForPivotSeries(pivotConfig, lineAreaKind),
         reason: innerRow
           ? `${forcedType === 'line' ? 'Line' : 'Area'}: time on X with inner row as series.`
           : `${forcedType === 'line' ? 'Line' : 'Area'}: time-like row dimension with a measure.`,
@@ -301,7 +305,7 @@ export function recommendPivotChartForType(
         y: firstValue,
         z: null,
         seriesColumn: seriesLA,
-        barLayout: barLayoutForPivotSeries(firstCol),
+        barLayout: barLayoutForPivotSeries(pivotConfig, lineAreaKind),
         reason: barLikeReason(
           forcedType === 'line' ? 'Line' : 'Area',
           pivotConfig,
@@ -315,7 +319,7 @@ export function recommendPivotChartForType(
       y: firstValue ?? auto.y,
       z: null,
       seriesColumn: resolveSeriesColumnForPivotChart(pivotConfig, lineAreaKind),
-      barLayout: barLayoutForPivotSeries(firstCol),
+      barLayout: barLayoutForPivotSeries(pivotConfig, lineAreaKind),
       reason: `Add a row dimension and value measure. (${auto.reason})`,
     };
   }
@@ -329,7 +333,7 @@ export function recommendPivotChartForType(
         y: firstValue,
         z: null,
         seriesColumn: seriesBar,
-        barLayout: barLayoutForPivotSeries(firstCol),
+        barLayout: barLayoutForPivotSeries(pivotConfig, 'bar'),
         reason: barLikeReason('Bar', pivotConfig, 'bar'),
       };
     }
@@ -339,7 +343,7 @@ export function recommendPivotChartForType(
       y: firstValue ?? auto.y,
       z: null,
       seriesColumn: seriesBar ?? auto.seriesColumn,
-      barLayout: barLayoutForPivotSeries(firstCol),
+      barLayout: barLayoutForPivotSeries(pivotConfig, 'bar'),
       reason: auto.reason,
     };
   }

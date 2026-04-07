@@ -24,7 +24,7 @@ Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify","note":string
 - finish: we have enough to answer the user
 - replan: the plan is wrong (rare)
 - clarify: need user input (set clarify_message)
-If observations contain lines including [SYSTEM_VALIDATION], treat them as high-priority signals: prefer **continue** (if more steps can fix it) or **replan** (adjust dateAggregationPeriod, groupBy, filters, or use derive_dimension_bucket) over **finish** when the mismatch would produce a misleading answer.
+If observations contain lines including [SYSTEM_VALIDATION], treat them as high-priority signals: prefer **continue** (if more steps can fix it) or **replan** (adjust dateAggregationPeriod, groupBy, filters, use derive_dimension_bucket, or add_computed_columns then re-aggregate) over **finish** when the mismatch would produce a misleading answer.
 Use Last analytical metadata when present: if run_analytical_query failed (ok=false) or appliedAggregation is false with output row count nearly equal to input row count, prefer continue or replan over finish until an aggregated result or a clear row-level answer exists. If outputRows=0 but inputRows is large, prefer replan (retry with dimensionFilters / case_insensitive / fewer dimensions) over finish or clarify — observations often include distinct value samples to fix filters. If a chart would help comparisons and none was produced yet, prefer continue.`;
 
   const appendix = appendixForReflectorPrompt(ctx);

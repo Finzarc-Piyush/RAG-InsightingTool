@@ -1,4 +1,5 @@
 import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
+import { compileChartSpec } from "./chartSpecCompiler.js";
 import { processChartData } from "./chartGenerator.js";
 import { normalizePivotValueFieldForBaseTable } from "./pivotDefaultsFromPreview.js";
 import { executePivotQuery } from "./pivotQueryService.js";
@@ -34,6 +35,44 @@ function resolveRowFieldIndex(model: PivotModel, fieldSpec: string): number {
     if (findMatchingColumn(fieldSpec, [rf]) === rf) return i;
   }
   return -1;
+}
+
+/**
+ * Sets `seriesColumn` from the pivot model before flattening so multi-row layouts stay long-format
+ * (matches client {@link resolveSeriesColumnForPivotChart} when column pivot is empty).
+ */
+export function applyPivotSeriesColumnFromModel(
+  model: PivotModel,
+  spec: ChartSpec,
+  colFieldsLength: number
+): ChartSpec {
+  const next: ChartSpec = { ...spec };
+  if (
+    next.type !== "bar" &&
+    next.type !== "line" &&
+    next.type !== "area"
+  ) {
+    return next;
+  }
+  if (next.seriesColumn?.trim()) return next;
+
+  if (model.colField && colFieldsLength === 1) {
+    next.seriesColumn = model.colField;
+    return next;
+  }
+
+  if (model.rowFields.length >= 2) {
+    const xIdx = resolveRowFieldIndex(model, next.x);
+    if (xIdx >= 0) {
+      for (let i = 0; i < model.rowFields.length; i++) {
+        if (i !== xIdx) {
+          next.seriesColumn = model.rowFields[i]!;
+          break;
+        }
+      }
+    }
+  }
+  return next;
 }
 
 /**
@@ -193,6 +232,11 @@ export type PivotChartPreviewResult = {
   rows: Record<string, unknown>[];
   /** Measure column name aligned with pivot value spec (e.g. `Sales` not `Sales_sum`). */
   yField: string;
+  /** Merge into API chart object so metadata matches processed `rows`. */
+  resolvedSpec: Pick<
+    ChartSpec,
+    "type" | "x" | "y" | "z" | "seriesColumn" | "barLayout" | "aggregate"
+  >;
 };
 
 function chartUnsupportedForPivotPath(spec: ChartSpec): boolean {
@@ -237,23 +281,40 @@ export async function tryProcessChartDataFromPivotQuery(
     if (yResolved) {
       specForPivot.y = yResolved.canonicalY;
     }
-    if (
-      model.colField &&
-      parsed.data.colFields.length === 1 &&
-      (specForPivot.type === "bar" ||
-        specForPivot.type === "line" ||
-        specForPivot.type === "area")
-    ) {
-      if (!specForPivot.seriesColumn?.trim()) {
-        specForPivot.seriesColumn = model.colField;
-      }
-    }
+    Object.assign(
+      specForPivot,
+      applyPivotSeriesColumnFromModel(
+        model,
+        specForPivot,
+        parsed.data.colFields.length
+      )
+    );
 
     const preRows = pivotModelRowsForChartSpec(model, specForPivot, numericColumns);
     if (!preRows?.length) return null;
 
+    const preCols = preRows[0] ? Object.keys(preRows[0]) : [];
+    const { merged: compiled } = compileChartSpec(
+      preRows as Record<string, unknown>[],
+      { numericColumns, dateColumns: declaredDateColumns },
+      {
+        type: specForPivot.type,
+        x: specForPivot.x,
+        y: specForPivot.y,
+        z: specForPivot.z,
+        seriesColumn: specForPivot.seriesColumn,
+        barLayout: specForPivot.barLayout,
+        aggregate: specForPivot.aggregate,
+        y2: specForPivot.y2,
+        y2Series: specForPivot.y2Series,
+        seriesKeys: specForPivot.seriesKeys,
+      },
+      { columnOrder: preCols, disallowHeatmapUpgrade: true }
+    );
+
     const specForProcess: ChartSpec = {
       ...specForPivot,
+      ...compiled,
       aggregate: "none",
     };
 
@@ -264,7 +325,19 @@ export async function tryProcessChartDataFromPivotQuery(
       { chartQuestion: "" }
     );
     if (!processed.length) return null;
-    return { rows: processed, yField: specForProcess.y };
+    return {
+      rows: processed,
+      yField: specForProcess.y,
+      resolvedSpec: {
+        type: specForProcess.type,
+        x: specForProcess.x,
+        y: specForProcess.y,
+        z: specForProcess.z,
+        seriesColumn: specForProcess.seriesColumn,
+        barLayout: specForProcess.barLayout,
+        aggregate: specForProcess.aggregate,
+      },
+    };
   } catch (e) {
     console.warn("tryProcessChartDataFromPivotQuery (non-fatal, falling back):", e);
     return null;

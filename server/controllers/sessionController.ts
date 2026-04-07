@@ -29,6 +29,7 @@ import { processChartData } from "../lib/chartGenerator.js";
 import { calculateSmartDomainsForChart } from "../lib/axisScaling.js";
 import { filterRowsByPivotSelections } from "../lib/pivotRowFilters.js";
 import { tryProcessChartDataFromPivotQuery } from "../lib/chartPreviewFromPivot.js";
+import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 
 function isTransientPythonSummaryError(e: unknown): boolean {
@@ -846,7 +847,10 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "chart.type, chart.x, and chart.y are required" });
     }
 
-    const spec = chartSpecSchema.parse({
+    const aggregateProvided =
+      body.aggregate !== undefined && body.aggregate !== null;
+
+    let spec = chartSpecSchema.parse({
       title: body.title || "Chart",
       type: body.type,
       x: body.x,
@@ -909,12 +913,14 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
           );
         }
 
+        const resolved = pivotPreview.resolvedSpec;
         const out: ChartSpec = {
           ...spec,
+          ...resolved,
           y: yField,
           ...extra,
           data: fromPivot as Record<string, any>[],
-          xLabel: spec.xLabel || spec.x,
+          xLabel: spec.xLabel || resolved.x,
           yLabel: spec.yLabel || yField,
         };
         return res.json({ chart: out });
@@ -946,6 +952,38 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       }
       data = sampled as Record<string, any>[];
     }
+
+    const { merged: rowCompiled } = compileChartSpec(
+      data as Record<string, unknown>[],
+      {
+        numericColumns: session.dataSummary.numericColumns ?? [],
+        dateColumns: session.dataSummary.dateColumns,
+      },
+      {
+        type: spec.type,
+        x: spec.x,
+        y: spec.y,
+        z: spec.z,
+        seriesColumn: spec.seriesColumn,
+        barLayout: spec.barLayout,
+        ...(aggregateProvided ? { aggregate: spec.aggregate } : {}),
+        y2: spec.y2,
+        y2Series: spec.y2Series,
+        seriesKeys: spec.seriesKeys,
+      },
+      { preserveAggregate: aggregateProvided }
+    );
+
+    spec = chartSpecSchema.parse({
+      ...spec,
+      type: rowCompiled.type,
+      x: rowCompiled.x,
+      y: rowCompiled.y,
+      z: rowCompiled.z,
+      seriesColumn: rowCompiled.seriesColumn,
+      barLayout: rowCompiled.barLayout,
+      aggregate: rowCompiled.aggregate ?? spec.aggregate,
+    });
 
     const processed = processChartData(
       data as Record<string, any>[],

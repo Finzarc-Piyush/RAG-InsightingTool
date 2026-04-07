@@ -22,6 +22,7 @@ export type SupportedDateAggregationPeriod =
  * - fiscal year / FY (needs anchor month + optional week rules)
  * - rolling N-day / N-week windows
  * - arbitrary multi-year bins (e.g. "every 3 years") — use derive_dimension_bucket or readonly SQL on a year column
+ * - row-wise metrics that do not exist yet (e.g. days between two dates) — use add_computed_columns then execute_query_plan
  * - hour / minute grain
  *
  * Priority extensions if product asks: fiscal_year, rolling_week, custom_month_step (N-month buckets).

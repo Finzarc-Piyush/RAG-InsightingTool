@@ -1,10 +1,14 @@
-import React, { useState, useEffect, Suspense, lazy } from "react";
+import React, { useState, useEffect, useLayoutEffect, Suspense, lazy } from "react";
 import { Switch, Route, useLocation, Router as WouterRouter } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { sessionsApi } from "@/lib/api";
+import { getUserEmail } from "@/utils/userStorage";
+import type { SessionsResponse } from "@/pages/Analysis/types";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/pages/Layout";
+import { ChatSidebarNavProvider } from "@/contexts/ChatSidebarNavContext";
 import { DashboardProvider } from "@/pages/Dashboard/context/DashboardContext";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -31,6 +35,8 @@ const RouteLoadingFallback = () => (
 type PageType = 'home' | 'dashboard' | 'analysis';
 
 function Router() {
+  const queryClient = useQueryClient();
+  const userEmail = getUserEmail();
   const [location, setLocation] = useLocation();
   const [resetTrigger, setResetTrigger] = useState(0);
   const [loadedSessionData, setLoadedSessionData] = useState<any>(null);
@@ -90,6 +96,15 @@ function Router() {
     }
   }, [location, setLocation]);
 
+  // Warm sessions cache as early as possible so the Analysis sidebar opens instantly.
+  useLayoutEffect(() => {
+    if (!userEmail) return;
+    void queryClient.prefetchQuery({
+      queryKey: ['sessions', userEmail],
+      queryFn: () => sessionsApi.getAllSessions() as Promise<SessionsResponse>,
+    });
+  }, [userEmail, queryClient]);
+
   const currentPage = getCurrentPage();
 
   const handleSessionChange = (sessionId: string | null, fileName: string | null) => {
@@ -98,35 +113,38 @@ function Router() {
   };
 
   return (
-    <Layout 
-      currentPage={currentPage}
-      onNavigate={handleNavigate}
-      onNewChat={handleNewChat}
-      onUploadNew={handleUploadNew}
-      sessionId={currentSessionId}
-      fileName={currentFileName}
-    >
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <Switch>
-          <Route path="/history">
-            <Analysis onNavigate={handleNavigate} onNewChat={handleNewChat} onLoadSession={handleLoadSession} onUploadNew={handleUploadNew} />
-          </Route>
-          <Route path="/dashboard">
-            <Dashboard />
-          </Route>
-          <Route path="/analysis">
-            <Home
-              resetTrigger={resetTrigger}
-              loadedSessionData={loadedSessionData}
-              onSessionChange={handleSessionChange}
-            />
-          </Route>
-          <Route>
-            <NotFound />
-          </Route>
-        </Switch>
-      </Suspense>
-    </Layout>
+    <ChatSidebarNavProvider>
+      <Layout
+        currentPage={currentPage}
+        onNavigate={handleNavigate}
+        onNewChat={handleNewChat}
+        onUploadNew={handleUploadNew}
+        onLoadSession={handleLoadSession}
+        sessionId={currentSessionId}
+        fileName={currentFileName}
+      >
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Switch>
+            <Route path="/history">
+              <Analysis onNavigate={handleNavigate} onNewChat={handleNewChat} onLoadSession={handleLoadSession} onUploadNew={handleUploadNew} />
+            </Route>
+            <Route path="/dashboard">
+              <Dashboard />
+            </Route>
+            <Route path="/analysis">
+              <Home
+                resetTrigger={resetTrigger}
+                loadedSessionData={loadedSessionData}
+                onSessionChange={handleSessionChange}
+              />
+            </Route>
+            <Route>
+              <NotFound />
+            </Route>
+          </Switch>
+        </Suspense>
+      </Layout>
+    </ChatSidebarNavProvider>
   );
 }
 

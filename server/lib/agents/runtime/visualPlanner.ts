@@ -6,6 +6,7 @@ import type { AgentExecutionContext } from "./types.js";
 import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
+import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
@@ -37,6 +38,7 @@ Rules:
 - Prefer **bar** for categorical X vs numeric sum. Prefer **line** or **area** when X is a date column or temporal bucket labels—**never** propose **bar** for “distribution across dates” or long date sequences (many distinct dates): bar sorts by magnitude by default and misreads as a ranking, not a time trend.
 - If dateColumns contains the proposed X and the analytical table has **more than ~50 rows**, do **not** add a second **bar** on that date X; use **line/area** or skip the extra chart if it duplicates the primary trend.
 - If no useful pair exists, return {"addCharts":[]}.
+- When ANALYTICAL_RESULT_COLUMNS list **multiple categorical dimensions** plus a measure, prefer **bar** (or line/area for time-like X) so the server can bind a breakdown; you may omit \`seriesColumn\`—the chart compiler will bind a second dimension from the result rows.
 Output JSON only matching the schema.`;
 
 export async function proposeAndBuildExtraCharts(
@@ -107,15 +109,45 @@ export async function proposeAndBuildExtraCharts(
         if (xUnique <= 60) {
           const chartType = xTemporal ? "line" : "bar";
 
+          const { merged: mp } = compileChartSpec(
+            rows as Record<string, unknown>[],
+            {
+              numericColumns: ctx.summary.numericColumns,
+              dateColumns: ctx.summary.dateColumns,
+            },
+            { type: chartType, x, y },
+            { columnOrder: columns }
+          );
+
           const spec = chartSpecSchema.parse({
-            type: chartType,
-            title: `${y} by ${x}`,
-            x,
-            y,
-            aggregate: "none" as const,
+            type: mp.type,
+            title:
+              mp.type === "heatmap"
+                ? `${mp.z} (${mp.x} × ${mp.y})`
+                : `${mp.y} by ${mp.x}`,
+            x: mp.x,
+            y: mp.y,
+            ...(mp.z ? { z: mp.z } : {}),
+            ...(mp.seriesColumn ? { seriesColumn: mp.seriesColumn } : {}),
+            ...(mp.barLayout ? { barLayout: mp.barLayout } : {}),
+            aggregate:
+              mp.aggregate ??
+              (mp.seriesColumn &&
+              (mp.type === "bar" || mp.type === "line" || mp.type === "area")
+                ? ("sum" as const)
+                : ("none" as const)),
           });
 
-          if (validateChartProposal(ctx, { x, y, type: chartType }) && !existingCharts.length) {
+          if (
+            validateChartProposal(ctx, {
+              x: mp.x,
+              y: mp.y,
+              type: mp.type,
+              z: mp.z,
+              seriesColumn: mp.seriesColumn,
+            }) &&
+            !existingCharts.length
+          ) {
             const processed = processChartData(
               rows,
               spec,
@@ -204,24 +236,66 @@ export async function proposeAndBuildExtraCharts(
     if (!validateChartProposal(ctx, p)) continue;
     if (existingCharts.some((c) => c.x === p.x && c.y === p.y && c.type === p.type)) continue;
     const { rows: rowSource, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
-    const xIsDate = ctx.summary.dateColumns.some((d) => d === p.x);
-    if (p.type === "bar" && xIsDate && rowSource.length > 50) {
+    const { merged: mp } = compileChartSpec(
+      rowSource as Record<string, unknown>[],
+      {
+        numericColumns: ctx.summary.numericColumns,
+        dateColumns: ctx.summary.dateColumns,
+      },
+      {
+        type: p.type,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        seriesColumn: p.seriesColumn,
+      },
+      {
+        columnOrder: ctx.lastAnalyticalTable?.columns ?? null,
+      }
+    );
+
+    if (
+      !validateChartProposal(ctx, {
+        x: mp.x,
+        y: mp.y,
+        type: mp.type,
+        z: mp.z,
+        seriesColumn: mp.seriesColumn,
+      })
+    ) {
+      continue;
+    }
+
+    const xIsDate = ctx.summary.dateColumns.some((d) => d === mp.x);
+    if (mp.type === "bar" && xIsDate && rowSource.length > 50) {
       continue;
     }
     try {
       const manyRows = rowSource.length > 50;
       const aggregateTimeSeries =
-        (p.type === "line" || p.type === "area") && xIsDate && manyRows ?
+        (mp.type === "line" || mp.type === "area") && xIsDate && manyRows ?
           ("sum" as const)
         : undefined;
+      const baseAgg =
+        mp.seriesColumn && (mp.type === "bar" || mp.type === "line" || mp.type === "area")
+          ? (mp.aggregate ?? "sum")
+          : mp.type === "heatmap"
+            ? (mp.aggregate ?? "sum")
+            : (mp.aggregate ?? "none");
       const spec = chartSpecSchema.parse({
-        type: p.type,
-        title: p.title || `${p.y} by ${p.x}`,
-        x: p.x,
-        y: p.y,
-        ...(p.z ? { z: p.z } : {}),
-        ...(p.seriesColumn ? { seriesColumn: p.seriesColumn, barLayout: "stacked" as const, aggregate: "sum" as const } : {}),
-        ...(aggregateTimeSeries ? { aggregate: aggregateTimeSeries } : {}),
+        type: mp.type,
+        title:
+          p.title ||
+          (mp.type === "heatmap" && mp.z
+            ? `${mp.z} (${mp.x} × ${mp.y})`
+            : `${mp.y} by ${mp.x}`),
+        x: mp.x,
+        y: mp.y,
+        ...(mp.z ? { z: mp.z } : {}),
+        ...(mp.seriesColumn
+          ? { seriesColumn: mp.seriesColumn, barLayout: mp.barLayout ?? ("stacked" as const) }
+          : {}),
+        aggregate: aggregateTimeSeries ?? baseAgg,
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
       let processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {

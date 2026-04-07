@@ -112,8 +112,8 @@ function derivePivotDefaultsHint(params: {
     normalizedValues.push(n);
   }
   const hint = {
-    rows: rows.slice(0, 2),
-    values: normalizedValues.slice(0, 2),
+    rows,
+    values: normalizedValues,
   };
   if (process.env.NODE_ENV !== "production") {
     console.debug("[chatStream] pivotDefaults hint", {

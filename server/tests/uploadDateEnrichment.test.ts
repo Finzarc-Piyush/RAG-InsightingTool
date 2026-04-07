@@ -20,6 +20,14 @@ describe("parseFlexibleDate (heuristic + fallback)", () => {
     assert.ok(parseFlexibleDate("20150113") instanceof Date);
   });
 
+  it("parses M/D/YY two-digit year (Superstore-style)", () => {
+    const d = parseFlexibleDate("11/8/17");
+    assert.ok(d);
+    assert.equal(d!.getFullYear(), 2017);
+    assert.equal(d!.getMonth(), 10);
+    assert.equal(d!.getDate(), 8);
+  });
+
   it("rejects plain all-digit non-date strings", () => {
     assert.equal(parseFlexibleDate("1234567890"), null);
   });

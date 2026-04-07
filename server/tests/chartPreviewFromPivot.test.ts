@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  applyPivotSeriesColumnFromModel,
   pivotModelToPreAggregatedChartRows,
   pivotModelRowsForChartSpec,
   resolvePivotValueSpecForChartY,
 } from "../lib/chartPreviewFromPivot.js";
-import type { PivotModel } from "../shared/schema.js";
+import type { ChartSpec, PivotModel } from "../shared/schema.js";
 
 describe("pivotModelToPreAggregatedChartRows", () => {
   it("uses pathKey segment aligned to rowFields for multi-row layout", () => {
@@ -91,6 +92,92 @@ describe("pivotModelToPreAggregatedChartRows", () => {
     assert.equal(rows?.length, 1);
     assert.equal(rows![0].Month, "Jan");
     assert.equal(rows![0].Sales, 35);
+  });
+});
+
+describe("applyPivotSeriesColumnFromModel", () => {
+  it("sets seriesColumn to first row field other than x when two row dims, no column pivot", () => {
+    const model: PivotModel = {
+      rowFields: ["Region", "Month"],
+      colField: null,
+      columnFields: [],
+      colKeys: [],
+      valueSpecs: [{ id: "m", field: "Sales", agg: "sum" }],
+      tree: { nodes: [], grandTotal: { flatValues: null, matrixValues: null } },
+      columnFieldTruncated: false,
+    };
+    const spec = {
+      type: "bar" as const,
+      title: "t",
+      x: "Month",
+      y: "Sales",
+    } satisfies ChartSpec;
+    const out = applyPivotSeriesColumnFromModel(model, spec, 0);
+    assert.equal(out.seriesColumn, "Region");
+  });
+
+  it("sets seriesColumn from colField when column pivot is active", () => {
+    const model: PivotModel = {
+      rowFields: ["Region"],
+      colField: "Quarter",
+      columnFields: ["Quarter"],
+      colKeys: ["Q1"],
+      valueSpecs: [{ id: "m", field: "Sales", agg: "sum" }],
+      tree: { nodes: [], grandTotal: { flatValues: null, matrixValues: null } },
+      columnFieldTruncated: false,
+    };
+    const spec = {
+      type: "bar" as const,
+      title: "t",
+      x: "Region",
+      y: "Sales",
+    } satisfies ChartSpec;
+    const out = applyPivotSeriesColumnFromModel(model, spec, 1);
+    assert.equal(out.seriesColumn, "Quarter");
+  });
+
+  it("infers series so two-row pivot stays long-format (not rolled up)", () => {
+    const model: PivotModel = {
+      rowFields: ["Region", "Month"],
+      colField: null,
+      columnFields: [],
+      colKeys: [],
+      valueSpecs: [{ id: "meas_Sales", field: "Sales", agg: "sum" }],
+      tree: {
+        nodes: [
+          {
+            type: "leaf",
+            depth: 2,
+            label: "Jan",
+            pathKey: `West\x1fJan`,
+            values: { flatValues: { meas_Sales: 10 }, matrixValues: null },
+          },
+          {
+            type: "leaf",
+            depth: 2,
+            label: "Jan",
+            pathKey: `East\x1fJan`,
+            values: { flatValues: { meas_Sales: 25 }, matrixValues: null },
+          },
+        ],
+        grandTotal: { flatValues: null, matrixValues: null },
+      },
+      columnFieldTruncated: false,
+    };
+    const spec = {
+      type: "bar" as const,
+      title: "t",
+      x: "Month",
+      y: "Sales",
+    } satisfies ChartSpec;
+    const withSeries = applyPivotSeriesColumnFromModel(model, spec, 0);
+    assert.equal(withSeries.seriesColumn, "Region");
+    const rows = pivotModelRowsForChartSpec(model, withSeries, []);
+    assert.equal(rows?.length, 2);
+    const west = rows!.find((r) => r.Region === "West");
+    const east = rows!.find((r) => r.Region === "East");
+    assert.ok(west && west.Month === "Jan" && west.Sales === 10);
+    assert.ok(east && east.Month === "Jan" && east.Sales === 25);
   });
 });
 

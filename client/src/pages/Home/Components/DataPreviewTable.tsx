@@ -398,8 +398,8 @@ export function DataPreviewTable({
     const hintedRows = Array.isArray(pivotDefaults?.rows) ? pivotDefaults.rows : [];
     const hintedValues = Array.isArray(pivotDefaults?.values) ? pivotDefaults.values : [];
     return {
-      defaultPivotRowKeys: hintedRows.slice(0, 2),
-      defaultValueMeasures: hintedValues.slice(0, 2),
+      defaultPivotRowKeys: hintedRows,
+      defaultValueMeasures: hintedValues,
     };
   }, [pivotDefaults]);
 
@@ -1116,8 +1116,11 @@ export function DataPreviewTable({
         type: chartType,
         x: chartXCol,
         y: chartType === 'heatmap' ? chartYCol : chartYCol,
-        aggregate: chartType === 'scatter' ? 'none' : 'sum',
       };
+      // Omit default aggregate so chart-preview can infer none vs sum from row grain (row fallback).
+      if (chartType === 'scatter') {
+        body.aggregate = 'none';
+      }
       if (chartType === 'heatmap') {
         body.z = chartZCol;
       }

@@ -99,6 +99,32 @@ describe("mergePivotDefaultRowsAndValues", () => {
     assert.deepEqual(out?.rows, [monthCol]);
     assert.deepEqual(out?.values, ["Sales"]);
   });
+
+  it("keeps all trace groupBy row fields (three dimensions), not truncated to two", () => {
+    const summary = minimalSummary({
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [] },
+        { name: "Order Date", type: "date", sampleValues: [] },
+        { name: "Region", type: "string", sampleValues: [] },
+        { name: "Category", type: "string", sampleValues: [] },
+        { name: "Segment", type: "string", sampleValues: [] },
+      ] as DataSummary["columns"],
+    });
+    const plan: QueryPlanBody = {
+      groupBy: ["Region", "Category", "Segment"],
+      aggregations: [{ column: "Sales", operation: "sum" }],
+    };
+    const out = mergePivotDefaultRowsAndValues({
+      dataSummary: summary,
+      tracePlan: plan,
+      tableRows: [
+        { Region: "West", Category: "Technology", Segment: "Consumer", Sales_sum: 100 },
+      ],
+      tableColumns: ["Region", "Category", "Segment", "Sales_sum"],
+    });
+    assert.deepEqual(out?.rows, ["Region", "Category", "Segment"]);
+    assert.deepEqual(out?.values, ["Sales"]);
+  });
 });
 
 describe("derivePivotDefaultsFromExecutionMerged", () => {
@@ -136,6 +162,31 @@ describe("derivePivotDefaultsFromExecutionMerged", () => {
     };
     const out = derivePivotDefaultsFromExecutionMerged(summary, {}, table);
     assert.deepEqual(out?.rows, [monthCol]);
+    assert.deepEqual(out?.values, ["Sales"]);
+  });
+
+  it("preview-only path returns all row dimensions from wide preview (three+)", () => {
+    const summary = minimalSummary({
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [] },
+        { name: "Region", type: "string", sampleValues: [] },
+        { name: "Category", type: "string", sampleValues: [] },
+        { name: "Segment", type: "string", sampleValues: [] },
+      ] as DataSummary["columns"],
+    });
+    const table = {
+      rows: [
+        {
+          Region: "West",
+          Category: "Technology",
+          Segment: "Consumer",
+          Sales_sum: 42,
+        },
+      ],
+      columns: ["Region", "Category", "Segment", "Sales_sum"],
+    };
+    const out = derivePivotDefaultsFromExecutionMerged(summary, {}, table);
+    assert.deepEqual(out?.rows, ["Region", "Category", "Segment"]);
     assert.deepEqual(out?.values, ["Sales"]);
   });
 });

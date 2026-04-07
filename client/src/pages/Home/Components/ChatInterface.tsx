@@ -38,6 +38,8 @@ import {
   isDatasetEnrichmentSystemMessage,
   isDatasetPreviewSystemMessage,
 } from '@/pages/Home/modules/uploadSystemMessages';
+import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
+import { computeAllowPivotAutoShow } from '@/pages/Home/lib/chatPivotNav';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -155,6 +157,7 @@ export function ChatInterface({
   uploadStartError = null,
   onAppendAssistantChart,
 }: ChatInterfaceProps) {
+  const { scrollRequest, clearPivotScrollRequest } = useChatSidebarNav();
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('all');
@@ -319,6 +322,19 @@ export function ChatInterface({
       container.removeEventListener('scroll', handleScroll);
     };
   }, [filteredMessages]);
+
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const { id } = scrollRequest;
+    const frame = requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      clearPivotScrollRequest();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [scrollRequest, clearPivotScrollRequest]);
 
   const scrollToTop = () => {
     messagesContainerRef.current?.scrollTo({
@@ -764,27 +780,7 @@ export function ChatInterface({
               }
               return false;
             })();
-            const allowPivotAutoShow = (() => {
-              if (message.role !== 'assistant') return false;
-              if (isDatasetPreviewSystemMessage(message) || isDatasetEnrichmentSystemMessage(message)) {
-                return false;
-              }
-              if (message.isIntermediate) {
-                const hasIntermediatePivotDefaults =
-                  Boolean(message.pivotDefaults?.rows?.length) ||
-                  Boolean(message.pivotDefaults?.values?.length);
-                return hasIntermediatePivotDefaults;
-              }
-              const serverHint = Boolean((message as Message & { pivotAutoShow?: boolean }).pivotAutoShow);
-              // Smart auto-show: aggregated intermediate/final tabular payloads.
-              const hasPreviewRows =
-                Array.isArray((message as Message & { preview?: unknown[] }).preview) &&
-                ((message as Message & { preview?: unknown[] }).preview?.length ?? 0) > 0;
-              const hasSummaryRows =
-                Array.isArray((message as Message & { summary?: unknown[] }).summary) &&
-                ((message as Message & { summary?: unknown[] }).summary?.length ?? 0) > 0;
-              return serverHint || hasPreviewRows || hasSummaryRows;
-            })();
+            const allowPivotAutoShow = computeAllowPivotAutoShow(message);
             return (
               <div key={`${message.timestamp}-${message.role}-${idx}-wrap`}>
                 <MessageBubble

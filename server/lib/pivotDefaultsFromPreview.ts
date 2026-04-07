@@ -116,7 +116,7 @@ export function derivePivotDefaultsFromPreviewRows(
   }
 
   return {
-    rows: rowKeys.slice(0, 2),
-    values: normalizedValues.slice(0, 2),
+    rows: rowKeys,
+    values: normalizedValues,
   };
 }

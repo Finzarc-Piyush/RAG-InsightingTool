@@ -135,6 +135,40 @@ function normalizeDeriveDimensionBucketStepArgs(
   }
 }
 
+function normalizeAddComputedColumnsStepArgs(
+  step: PlanStep,
+  columns: readonly { name: string }[]
+): void {
+  if (step.tool !== "add_computed_columns") return;
+  const arr = step.args.columns;
+  if (!Array.isArray(arr)) return;
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const def = (item as { def?: Record<string, unknown> }).def;
+    if (!def || typeof def !== "object") continue;
+    const t = def.type;
+    if (t === "date_diff_days") {
+      const s = def.startColumn;
+      const e = def.endColumn;
+      if (typeof s === "string" && s.length > 0) {
+        def.startColumn = resolveToSchemaColumn(s, columns);
+      }
+      if (typeof e === "string" && e.length > 0) {
+        def.endColumn = resolveToSchemaColumn(e, columns);
+      }
+    } else if (t === "numeric_binary") {
+      const l = def.leftColumn;
+      const r = def.rightColumn;
+      if (typeof l === "string" && l.length > 0) {
+        def.leftColumn = resolveToSchemaColumn(l, columns);
+      }
+      if (typeof r === "string" && r.length > 0) {
+        def.rightColumn = resolveToSchemaColumn(r, columns);
+      }
+    }
+  }
+}
+
 export type PlannerRejectReason =
   | "llm_json_invalid"
   | "unknown_tool"
@@ -222,10 +256,45 @@ function validateDeriveDimensionStep(step: PlanStep, cumulative: Set<string>): s
   return null;
 }
 
+function validateAddComputedColumnsStep(step: PlanStep, cumulative: Set<string>): string | null {
+  if (step.tool !== "add_computed_columns") return null;
+  const cols = step.args.columns;
+  if (!Array.isArray(cols) || cols.length === 0) return "add_computed_columns_columns";
+  const stepCumulative = new Set(cumulative);
+  for (const entry of cols) {
+    if (!entry || typeof entry !== "object") return "add_computed_columns_item";
+    const name = (entry as { name?: string }).name;
+    const def = (entry as { def?: { type?: string } }).def;
+    if (typeof name !== "string" || !name.trim()) return "add_computed_columns_name";
+    if (stepCumulative.has(name)) return "add_computed_columns_name_conflict";
+    if (!def || typeof def !== "object" || typeof def.type !== "string") {
+      return "add_computed_columns_def";
+    }
+    if (def.type === "date_diff_days") {
+      const s = (def as { startColumn?: string }).startColumn;
+      const e = (def as { endColumn?: string }).endColumn;
+      if (typeof s !== "string" || !stepCumulative.has(s)) return "add_computed_columns_startColumn";
+      if (typeof e !== "string" || !stepCumulative.has(e)) return "add_computed_columns_endColumn";
+    } else if (def.type === "numeric_binary") {
+      const l = (def as { leftColumn?: string }).leftColumn;
+      const r = (def as { rightColumn?: string }).rightColumn;
+      if (typeof l !== "string" || !stepCumulative.has(l)) return "add_computed_columns_leftColumn";
+      if (typeof r !== "string" || !stepCumulative.has(r)) return "add_computed_columns_rightColumn";
+    } else {
+      return "add_computed_columns_def_type";
+    }
+    stepCumulative.add(name);
+  }
+  return null;
+}
+
 function firstInvalidColumnReference(step: PlanStep, cumulative: Set<string>): string | null {
   const der = validateDeriveDimensionStep(step, cumulative);
   if (der) return der;
   if (step.tool === "derive_dimension_bucket") return null;
+  const ac = validateAddComputedColumnsStep(step, cumulative);
+  if (ac) return ac;
+  if (step.tool === "add_computed_columns") return null;
   return firstInvalidBoundColumnArg(step, cumulative);
 }
 
@@ -261,16 +330,17 @@ Rules:
 - retrieve_semantic_context: **required** args.query (string) for narrative/themes/wording — never put "query" on run_analytical_query.
 - run_analytical_query: only optional question_override; **never** use a "query" key here.
 - execute_query_plan: use when you need exact groupBy + aggregations (e.g. SUM revenue by year) with args.plan JSON; column names must match schema exactly. Prefer over NL when totals/sums must be correct.
-- For execute_query_plan aggregations, \`aggregations[].column\` MUST be a real schema metric column (for example \`Sales\`). Labels like \`Total_Revenue\` may appear only in \`aggregations[].alias\`, never in \`aggregations[].column\`.
+- For execute_query_plan aggregations, \`aggregations[].column\` MUST be an existing numeric column on the current frame (for example \`Sales\`), or a column added earlier in this plan by \`add_computed_columns\` (e.g. date_diff_days → numeric). Labels like \`Total_Revenue\` may appear only in \`aggregations[].alias\`, never in \`aggregations[].column\`.
 - **Trends / over time** (trend, evolution, “how X changed”, time series): the dataset lists **Derived time-bucket columns** (human-readable ids like \`Day · Order Date\`, \`Month · Order Date\`, \`Year · Order Date\`, etc.) precomputed from each date column. Prefer **coarse grain** (month or year): \`groupBy\` the matching derived column and **omit** \`dateAggregationPeriod\` (already bucketed), **or** \`groupBy\` the raw date column **with** \`dateAggregationPeriod\`—**not** raw daily \`groupBy\` on the date column when that would yield very many points. If the question specifies an **explicit grain** (daily/weekly/monthly/yearly), match it. For the **primary** trend visualization, **build_chart** must use \`type: "line"\` or \`"area"\`, not \`bar\`, when X is temporal (bar reads as a category ranking, not a trend). \`aggregate\` \`none\` when the query already returns one row per bucket.
 - **derive_dimension_bucket**: when the user groups categories into custom buckets (e.g. map A,B,C → "East"), run it **before** \`execute_query_plan\` with \`dependsOn\` chaining; **groupBy** the new column name. Args: \`sourceColumn\`, \`newColumnName\`, \`buckets\`: [\`{ "label", "values": [...] }\`], optional \`matchMode\` \`exact\`|\`case_insensitive\`, optional \`defaultLabel\`.
+- **add_computed_columns**: row-wise derived numeric columns (safe defs only). Use **before** \`execute_query_plan\` when you need a metric that does not exist (e.g. days between two date columns: \`date_diff_days\` with \`startColumn\`, \`endColumn\`; optional \`clampNegative\`). Also \`numeric_binary\` with \`op\` \`add\`|\`subtract\`|\`multiply\`|\`divide\` and \`leftColumn\`/\`rightColumn\`. Args: \`columns\`: [\`{ "name", "def" }\`] (max 12). Optional \`persistToSession\` (default false): **true** only if the user asked to save/add the column to the dataset permanently. Optional \`persistDescription\` for the version history note.
 - **run_readonly_sql** (analysis only): last-resort SELECT-only query over table \`dataset\` (current in-memory frame, capped rows). Single statement; no DDL/DML.
 - When **Preferred columns** lists a date column and a numeric metric, use those **exact strings** in execute_query_plan unless get_schema_summary shows different headers.
 - If the Dataset block includes **AUTHORITATIVE columns for this question**, you MUST use those exact column names in \`execute_query_plan\` (groupBy, aggregations, filters, sort) and other column-bound tool args for this question, unless a \`get_schema_summary\` step in the same plan proves the headers differ.
 - Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column.
 - Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends). For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), **y must be the aggregated column name on the result rows** (e.g. \`Sales_sum\`), not \`Sales\`. **x** is the same groupBy column (bucket labels). Set \`aggregate\` \`none\` when there is exactly one row per x after bucketing; use sum|mean only when charting raw rows.
-- **Layered charts**: If execute_query_plan returns **long** rows (one row per x × second dimension, e.g. month × region) with a numeric measure column, use **build_chart** with \`seriesColumn\` set to the **second dimension** column (categorical) and \`type\` \`bar\` (stacked default) or \`line\`/\`area\` for trends; optional \`barLayout\`: \`stacked\`|\`grouped\`. For **two numeric metrics** over the same x (e.g. revenue vs profit over time), use \`y2\` instead of \`seriesColumn\`. Heatmaps: \`type\` \`heatmap\`, \`x\`/\`y\` as the two dimensions, \`z\` the numeric cell value.
+- **Layered charts**: If execute_query_plan returns **long** rows (one row per x × second dimension, e.g. month × region) with a numeric measure column, use **build_chart** with \`type\` \`bar\` (stacked default) or \`line\`/\`area\` for trends; set \`seriesColumn\` to the **second dimension** when convenient—the server **chart compiler** will bind a second categorical column from the result if you omit it, as long as the result still includes that column (never rely on the chart layer to drop dimensions). Optional \`barLayout\`: \`stacked\`|\`grouped\`. For **two numeric metrics** over the same x (e.g. revenue vs profit over time), use \`y2\` instead of \`seriesColumn\`. Heatmaps: \`type\` \`heatmap\`, \`x\`/\`y\` as the two dimensions, \`z\` the numeric cell value.
 - Use clarify_user if critical information is missing.
 - Compose multiple tools instead of a single catch-all; there is no legacy "delegate" tool.
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
@@ -332,6 +402,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     );
     normalizeCorrelationStepArgs(step, ctx.summary.columns);
     normalizeDeriveDimensionBucketStepArgs(step, ctx.summary.columns);
+    normalizeAddComputedColumnsStepArgs(step, ctx.summary.columns);
     patchExecuteQueryPlanDateAggregation(
       step,
       ctx.question,
@@ -452,6 +523,14 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     if (step.tool === "derive_dimension_bucket") {
       const neu = step.args.newColumnName;
       if (typeof neu === "string" && neu.trim()) cumulative.add(neu);
+    }
+    if (step.tool === "add_computed_columns") {
+      const arr = step.args.columns as { name?: string }[] | undefined;
+      if (Array.isArray(arr)) {
+        for (const c of arr) {
+          if (typeof c?.name === "string" && c.name.trim()) cumulative.add(c.name);
+        }
+      }
     }
   }
 

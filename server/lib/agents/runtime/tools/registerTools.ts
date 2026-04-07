@@ -6,6 +6,7 @@ import { executeAnalyticalQuery } from "../../../analyticalQueryExecutor.js";
 import type { ParsedQuery } from "../../../shared/queryTypes.js";
 import { analyzeCorrelations } from "../../../correlationAnalyzer.js";
 import { processChartData } from "../../../chartGenerator.js";
+import { compileChartSpec } from "../../../chartSpecCompiler.js";
 import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/schema.js";
 import {
   executeQueryPlan,
@@ -33,6 +34,14 @@ import {
   READONLY_SQL_MAX_LENGTH,
   sanitizeReadonlyDatasetSql,
 } from "../../../agentReadonlySql.js";
+import {
+  addComputedColumnsArgsSchema,
+  applyAddComputedColumns,
+  replaceSummaryFromFresh,
+} from "../../../computedColumns.js";
+import { createDataSummary } from "../../../fileParser.js";
+import { saveModifiedData } from "../../../dataOps/dataPersistence.js";
+import queryCache from "../../../cache.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -692,6 +701,75 @@ export function registerDefaultTools(registry: ToolRegistry) {
   );
 
   registry.register(
+    "add_computed_columns",
+    addComputedColumnsArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
+    async (ctx, args) => {
+      if (ctx.exec.mode !== "analysis") {
+        return {
+          ok: false,
+          summary: "add_computed_columns is only available in analysis mode.",
+        };
+      }
+      const parsed = addComputedColumnsArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          summary: `Invalid args for add_computed_columns: ${parsed.error.message}`,
+        };
+      }
+      const out = applyAddComputedColumns(ctx.exec.data, ctx.exec.summary, parsed.data);
+      if (!out.ok) {
+        return { ok: false, summary: out.error };
+      }
+      const rows = out.rows;
+      let persistNote = "";
+      if (parsed.data.persistToSession) {
+        try {
+          await saveModifiedData(
+            ctx.exec.sessionId,
+            rows,
+            "add_computed_columns",
+            (parsed.data.persistDescription?.trim() ||
+              "Computed columns added from analysis agent") as string
+          );
+          queryCache.invalidateSession(ctx.exec.sessionId);
+          const fresh = createDataSummary(rows);
+          replaceSummaryFromFresh(ctx.exec.summary, fresh);
+          persistNote = " Persisted to session dataset (new blob version).";
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return {
+            ok: false,
+            summary: `Computed columns were built but persist failed: ${msg.slice(0, 400)}`,
+          };
+        }
+      }
+      const cols = rows.length > 0 ? Object.keys(rows[0]!) : [];
+      const sample = JSON.stringify(rows.slice(0, 15), null, 2);
+      const names = parsed.data.columns.map((c) => c.name).join(", ");
+      return {
+        ok: true,
+        summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Columns: ${cols.join(", ")}${persistNote}\nSample:\n${sample.slice(0, 3500)}`,
+        table: {
+          rows,
+          columns: cols,
+          rowCount: rows.length,
+        },
+        memorySlots: {
+          computed_columns: names.slice(0, 200),
+          ...(parsed.data.persistToSession ? { persisted: "1" } : {}),
+        },
+      };
+    },
+    {
+      description:
+        "Add row-wise numeric columns from safe definitions (date difference in whole days between two date columns; or numeric add/subtract/multiply/divide). Use before execute_query_plan when you need a derived metric. Same row count as input. Optional persistToSession saves the enriched frame as the session dataset (use only when the user asked to keep/save the new column).",
+      argsHelp:
+        '{"columns": [{"name": string, "def": {"type":"date_diff_days","startColumn": string, "endColumn": string, "clampNegative"?: boolean} | {"type":"numeric_binary","op":"add"|"subtract"|"multiply"|"divide","leftColumn": string, "rightColumn": string}}], "persistToSession"?: boolean, "persistDescription"?: string}',
+    }
+  );
+
+  registry.register(
     "run_readonly_sql",
     readonlySqlArgs,
     async (ctx, args) => {
@@ -780,20 +858,66 @@ export function registerDefaultTools(registry: ToolRegistry) {
       ];
       const colErr = assertChartColumns(ctx, names);
       if (colErr) return { ok: false, summary: colErr };
-      const defaultAgg =
-        args.aggregate !== undefined && args.aggregate !== null
-          ? args.aggregate
-          : args.seriesColumn && (args.type === "bar" || args.type === "line" || args.type === "area")
-            ? "sum"
-            : "none";
-      const spec = chartSpecSchema.parse({
+      const explicitAgg =
+        args.aggregate !== undefined && args.aggregate !== null;
+      const compileProposal = {
         type: args.type,
-        title: args.title || `${args.y} by ${args.x}`,
         x: args.x,
         y: args.y,
         ...(args.type === "heatmap" && args.z ? { z: args.z } : {}),
-        ...(args.seriesColumn ? { seriesColumn: args.seriesColumn } : {}),
-        ...(args.seriesColumn && args.barLayout ? { barLayout: args.barLayout } : {}),
+        seriesColumn: args.seriesColumn,
+        barLayout: args.barLayout,
+        ...(args.aggregate !== undefined && args.aggregate !== null
+          ? { aggregate: args.aggregate }
+          : {}),
+        ...(args.y2 ? { y2: args.y2 } : {}),
+      };
+      const { merged: compiled } = compileChartSpec(
+        ctx.exec.data as Record<string, unknown>[],
+        {
+          numericColumns: ctx.exec.summary?.numericColumns ?? [],
+          dateColumns: ctx.exec.summary?.dateColumns,
+        },
+        compileProposal,
+        {
+          preserveAggregate: explicitAgg,
+          columnOrder: Array.isArray(ctx.exec.lastAnalyticalTable?.columns)
+            ? (ctx.exec.lastAnalyticalTable!.columns as string[])
+            : null,
+        }
+      );
+      const postNames = [
+        compiled.x,
+        compiled.y,
+        ...(compiled.type === "heatmap" && compiled.z ? [compiled.z] : []),
+        ...(compiled.seriesColumn ? [compiled.seriesColumn] : []),
+        ...(args.y2 ? [args.y2] : []),
+      ];
+      const colErr2 = assertChartColumns(ctx, postNames);
+      if (colErr2) return { ok: false, summary: colErr2 };
+
+      const defaultAgg =
+        explicitAgg
+          ? (args.aggregate as "sum" | "mean" | "count" | "none")
+          : compiled.seriesColumn &&
+              (compiled.type === "bar" ||
+                compiled.type === "line" ||
+                compiled.type === "area")
+            ? compiled.aggregate ?? "sum"
+            : compiled.aggregate ??
+              (compiled.type === "heatmap"
+                ? "sum"
+                : "none");
+      const spec = chartSpecSchema.parse({
+        type: compiled.type,
+        title: args.title || `${compiled.y} by ${compiled.x}`,
+        x: compiled.x,
+        y: compiled.y,
+        ...(compiled.type === "heatmap" && compiled.z ? { z: compiled.z } : {}),
+        ...(compiled.seriesColumn ? { seriesColumn: compiled.seriesColumn } : {}),
+        ...(compiled.seriesColumn && compiled.barLayout
+          ? { barLayout: compiled.barLayout }
+          : {}),
         ...(args.y2 ? { y2: args.y2 } : {}),
         aggregate: defaultAgg,
       });
@@ -811,10 +935,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
         data: processed,
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       };
-      const layerNote = args.seriesColumn
-        ? `, series=${args.seriesColumn}${args.barLayout ? ` (${args.barLayout})` : ""}`
+      const layerNote = spec.seriesColumn
+        ? `, series=${spec.seriesColumn}${spec.barLayout ? ` (${spec.barLayout})` : ""}`
         : "";
-      const zNote = args.type === "heatmap" && args.z ? `, z=${args.z}` : "";
+      const zNote = spec.type === "heatmap" && spec.z ? `, z=${spec.z}` : "";
       return {
         ok: true,
         summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${args.y2 ? `, y2=${args.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.`,

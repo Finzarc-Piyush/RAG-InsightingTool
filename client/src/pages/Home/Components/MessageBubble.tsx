@@ -27,6 +27,7 @@ import {
   isDatasetEnrichmentSystemMessage,
   isDatasetPreviewSystemMessage,
 } from '@/pages/Home/modules/uploadSystemMessages';
+import { chatPivotAnchorId } from '@/pages/Home/lib/chatPivotNav';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
@@ -472,7 +473,10 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         )}
 
         {!isUser && allowPivotAutoShow && hasAggPreview && (
-          <div className="mt-1 mb-3">
+          <div
+            id={chatPivotAnchorId(message)}
+            className="mt-1 mb-3 scroll-mt-4"
+          >
             <DataPreviewTable
               data={(message as Message & { preview: Record<string, unknown>[] }).preview}
               sessionId={sessionId}

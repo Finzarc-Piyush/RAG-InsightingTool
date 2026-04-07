@@ -108,8 +108,8 @@ export function mergePivotDefaultRowsAndValues(params: {
 
   if (rowOut.length === 0 && valueOut.length === 0) return undefined;
   return {
-    rows: rowOut.slice(0, 2),
-    values: valueOut.slice(0, 2),
+    rows: rowOut,
+    values: valueOut,
   };
 }
 
@@ -155,8 +155,8 @@ export function derivePivotDefaultsFromExecutionMerged(
     );
     if (!fromPreview?.rows?.length && !fromPreview?.values?.length) return undefined;
     return {
-      rows: (fromPreview.rows ?? []).slice(0, 2),
-      values: (fromPreview.values ?? []).slice(0, 2),
+      rows: fromPreview.rows ?? [],
+      values: fromPreview.values ?? [],
     };
   }
 

@@ -147,8 +147,8 @@ export const thinkingSnapshotSchema = z.object({
 export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
 
 export const pivotDefaultsSchema = z.object({
-  rows: z.array(z.string()).max(4).optional(),
-  values: z.array(z.string()).max(4).optional(),
+  rows: z.array(z.string()).optional(),
+  values: z.array(z.string()).optional(),
 });
 
 export const messageSchema = z.object({

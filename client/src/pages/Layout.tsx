@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -10,6 +11,10 @@ import {
   Upload,
   User,
   Share2,
+  ChevronDown,
+  ChevronRight,
+  Table2,
+  Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -21,6 +26,16 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
+import { sessionsApi } from '@/lib/api';
+import { getUserEmail } from '@/utils/userStorage';
+import { useToast } from '@/hooks/use-toast';
+import type { Session, SessionsResponse } from '@/pages/Analysis/types';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -28,6 +43,7 @@ interface LayoutProps {
   onNavigate: (page: 'home' | 'dashboard' | 'analysis') => void;
   onNewChat: () => void;
   onUploadNew?: () => void;
+  onLoadSession?: (sessionId: string, sessionData: unknown) => void;
   sessionId?: string;
   fileName?: string;
 }
@@ -37,7 +53,7 @@ const PAGE_COPY: Record<
   { title: string; subtitle: string }
 > = {
   home: {
-    title: 'Chats',
+    title: 'Chat',
     subtitle: 'Ask questions and explore your data',
   },
   dashboard: {
@@ -50,41 +66,75 @@ const PAGE_COPY: Record<
   },
 };
 
+const RECENT_SESSIONS_LIMIT = 10;
+
 export function Layout({
   children,
   currentPage,
   onNavigate,
   onNewChat: _onNewChat,
   onUploadNew,
+  onLoadSession,
   sessionId,
   fileName,
 }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [analysisNavOpen, setAnalysisNavOpen] = useState(false);
+  const [pivotsNavOpen, setPivotsNavOpen] = useState(false);
+  const [loadingSidebarSessionId, setLoadingSidebarSessionId] = useState<
+    string | null
+  >(null);
   const { user } = useAuth();
+  const { toast } = useToast();
+  const userEmail = getUserEmail();
+  const { pivotEntries, requestPivotScroll } = useChatSidebarNav();
+
+  const { data: sessionsData, isPending: sessionsPending } =
+    useQuery<SessionsResponse>({
+      queryKey: ['sessions', userEmail],
+      queryFn: () => sessionsApi.getAllSessions(),
+      enabled: !!userEmail,
+    });
+
+  const recentSessions = useMemo(() => {
+    const list = sessionsData?.sessions ?? [];
+    return [...list]
+      .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt)
+      .slice(0, RECENT_SESSIONS_LIMIT);
+  }, [sessionsData]);
 
   const navigationItems = [
     {
       id: 'home' as const,
-      label: 'Chats',
+      label: 'Chat',
       icon: MessageSquare,
-      description: 'Conversations',
     },
     {
       id: 'dashboard' as const,
       label: 'Dashboard',
       icon: BarChart3,
-      description: 'Saved boards',
-    },
-    {
-      id: 'analysis' as const,
-      label: 'Analysis',
-      icon: TrendingUp,
-      description: 'Session history',
     },
   ];
 
   const page = PAGE_COPY[currentPage];
+
+  const handleRecentSessionClick = async (session: Session) => {
+    if (!onLoadSession || loadingSidebarSessionId) return;
+    setLoadingSidebarSessionId(session.sessionId);
+    try {
+      const details = await sessionsApi.getSessionDetails(session.sessionId);
+      onLoadSession(session.sessionId, details);
+    } catch {
+      toast({
+        title: 'Error loading session',
+        description: 'Failed to load session details. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoadingSidebarSessionId(null);
+    }
+  };
 
   const NavButton = (props: {
     item: (typeof navigationItems)[0];
@@ -98,9 +148,7 @@ export function Layout({
         onClick={() => onNavigate(item.id)}
         variant={isActive ? 'default' : 'ghost'}
         aria-current={isActive ? 'page' : undefined}
-        aria-label={
-          !sidebarOpen ? `${item.label} — ${item.description}` : undefined
-        }
+        aria-label={!sidebarOpen ? item.label : undefined}
         className={cn(
           'min-h-11 w-full justify-start gap-3 rounded-xl px-3 py-2.5 transition-colors duration-200 motion-reduce:transition-none',
           isActive
@@ -111,10 +159,9 @@ export function Layout({
       >
         <Icon className="h-5 w-5 shrink-0" aria-hidden />
         {sidebarOpen && (
-          <div className="flex min-w-0 flex-col items-start text-start">
-            <span className="font-medium leading-none">{item.label}</span>
-            <span className="mt-1 text-xs opacity-80">{item.description}</span>
-          </div>
+          <span className="min-w-0 truncate text-start font-medium leading-none">
+            {item.label}
+          </span>
         )}
       </Button>
     );
@@ -125,7 +172,6 @@ export function Layout({
           <TooltipTrigger asChild>{button}</TooltipTrigger>
           <TooltipContent side="right" className="max-w-[14rem] font-normal">
             <p className="font-medium">{item.label}</p>
-            <p className="text-xs text-muted-foreground">{item.description}</p>
           </TooltipContent>
         </Tooltip>
       );
@@ -133,6 +179,26 @@ export function Layout({
 
     return button;
   };
+
+  const analysisDisclosureActive = currentPage === 'analysis';
+
+  const analysisCollapsedIconButton = (
+    <Button
+      type="button"
+      variant={analysisDisclosureActive ? 'default' : 'ghost'}
+      aria-label="Analysis"
+      aria-current={analysisDisclosureActive ? 'page' : undefined}
+      onClick={() => onNavigate('analysis')}
+      className={cn(
+        'min-h-11 w-full justify-center rounded-xl px-0 py-2.5 transition-colors duration-200 motion-reduce:transition-none',
+        analysisDisclosureActive
+          ? 'bg-primary text-primary-foreground shadow-sm'
+          : 'text-sidebar-foreground hover:bg-sidebar-accent/80'
+      )}
+    >
+      <TrendingUp className="h-5 w-5 shrink-0" aria-hidden />
+    </Button>
+  );
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-background">
@@ -186,14 +252,144 @@ export function Layout({
           </Button>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3" aria-label="App sections">
-          {navigationItems.map((item) => (
-            <NavButton
-              key={item.id}
-              item={item}
-              isActive={currentPage === item.id}
-            />
-          ))}
+        <nav
+          className="flex flex-1 flex-col gap-1 overflow-y-auto p-3"
+          aria-label="App sections"
+        >
+          <NavButton
+            key="home"
+            item={navigationItems[0]}
+            isActive={currentPage === 'home'}
+          />
+
+          {sidebarOpen &&
+            currentPage === 'home' &&
+            pivotEntries.length > 0 && (
+              <Collapsible open={pivotsNavOpen} onOpenChange={setPivotsNavOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="min-h-11 w-full justify-start gap-2 rounded-xl px-3 py-2.5 text-sidebar-foreground hover:bg-sidebar-accent/80"
+                  >
+                    {pivotsNavOpen ? (
+                      <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
+                    )}
+                    <Table2 className="h-5 w-5 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-start font-medium leading-none">
+                      Pivots
+                    </span>
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-0.5 pl-2 pt-0.5">
+                  {pivotEntries.map((entry) => (
+                    <Button
+                      key={entry.id}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto min-h-9 w-full justify-start whitespace-normal rounded-lg px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground hover:bg-sidebar-accent/80"
+                      onClick={() => requestPivotScroll(entry.id)}
+                    >
+                      <span className="line-clamp-2">{entry.label}</span>
+                    </Button>
+                  ))}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+
+          <NavButton
+            key="dashboard"
+            item={navigationItems[1]}
+            isActive={currentPage === 'dashboard'}
+          />
+
+          {sidebarOpen ? (
+            <Collapsible
+              open={analysisNavOpen}
+              onOpenChange={setAnalysisNavOpen}
+            >
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant={analysisDisclosureActive ? 'default' : 'ghost'}
+                  aria-expanded={analysisNavOpen}
+                  aria-current={analysisDisclosureActive ? 'page' : undefined}
+                  className={cn(
+                    'min-h-11 w-full justify-start gap-2 rounded-xl px-3 py-2.5 transition-colors duration-200 motion-reduce:transition-none',
+                    analysisDisclosureActive
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-sidebar-foreground hover:bg-sidebar-accent/80'
+                  )}
+                >
+                  {analysisNavOpen ? (
+                    <ChevronDown className="h-4 w-4 shrink-0" aria-hidden />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 shrink-0" aria-hidden />
+                  )}
+                  <TrendingUp className="h-5 w-5 shrink-0" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate text-start font-medium leading-none">
+                    Analysis
+                  </span>
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent
+                forceMount
+                className="space-y-0.5 pl-2 pt-0.5 data-[state=closed]:hidden"
+              >
+                {sessionsPending && !sessionsData && (
+                  <p className="px-3 py-1 text-xs text-muted-foreground">
+                    Loading…
+                  </p>
+                )}
+                {!(sessionsPending && !sessionsData) &&
+                  recentSessions.map((session) => {
+                    const busy =
+                      loadingSidebarSessionId === session.sessionId;
+                    return (
+                      <Button
+                        key={session.sessionId}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        className="h-auto min-h-9 w-full justify-start gap-2 whitespace-normal rounded-lg px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground hover:bg-sidebar-accent/80"
+                        onClick={() => handleRecentSessionClick(session)}
+                      >
+                        {busy ? (
+                          <Loader2
+                            className="h-3.5 w-3.5 shrink-0 animate-spin"
+                            aria-hidden
+                          />
+                        ) : null}
+                        <span className="line-clamp-2">{session.fileName}</span>
+                      </Button>
+                    );
+                  })}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 h-8 w-full justify-start px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  onClick={() => onNavigate('analysis')}
+                >
+                  Browse all
+                </Button>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : (
+            <Tooltip delayDuration={300}>
+              <TooltipTrigger asChild>{analysisCollapsedIconButton}</TooltipTrigger>
+              <TooltipContent side="right" className="max-w-[14rem] font-normal">
+                <p className="font-medium">Analysis</p>
+                <p className="text-xs text-muted-foreground">
+                  Expand sidebar for recent sessions
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          )}
         </nav>
 
         <div

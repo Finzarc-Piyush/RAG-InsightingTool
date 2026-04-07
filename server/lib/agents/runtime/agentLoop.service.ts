@@ -25,6 +25,10 @@ import { chartSpecSchema, type ChartSpec, type Insight } from "../../../shared/s
 import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
 import { registerDerivedColumnOnSummary } from "../../deriveDimensionBucket.js";
 import {
+  addComputedColumnsArgsSchema,
+  registerComputedColumnsOnSummary,
+} from "../../computedColumns.js";
+import {
   validateChartProposal,
   chartRowsForProposal,
 } from "./chartProposalValidation.js";
@@ -37,6 +41,7 @@ const INTERMEDIATE_TABLE_TOOLS = new Set([
   "execute_query_plan",
   "run_readonly_sql",
   "derive_dimension_bucket",
+  "add_computed_columns",
 ]);
 
 function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[] {
@@ -836,6 +841,7 @@ export async function runAgentTurn(
           (step.tool === "run_analytical_query" ||
             step.tool === "execute_query_plan" ||
             step.tool === "derive_dimension_bucket" ||
+            step.tool === "add_computed_columns" ||
             step.tool === "run_readonly_sql")
         ) {
           const analyticalRows = stepResult.table.rows as Record<string, unknown>[];
@@ -851,6 +857,13 @@ export async function runAgentTurn(
           const neu = step.args.newColumnName;
           if (typeof neu === "string" && neu.trim()) {
             registerDerivedColumnOnSummary(ctx.summary, neu, ctx.data);
+          }
+        }
+
+        if (stepResult.ok && step.tool === "add_computed_columns") {
+          const parsedArgs = addComputedColumnsArgsSchema.safeParse(step.args);
+          if (parsedArgs.success) {
+            registerComputedColumnsOnSummary(ctx.summary, parsedArgs.data, ctx.data);
           }
         }
 

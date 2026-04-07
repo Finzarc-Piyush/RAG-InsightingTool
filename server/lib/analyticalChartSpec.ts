@@ -1,10 +1,16 @@
 /**
  * Merges deterministic analytical charts into chat responses (uses insight generator).
  */
-import type { ChartSpec, DataSummary, Insight } from "../shared/schema.js";
+import {
+  chartSpecSchema,
+  type ChartSpec,
+  type DataSummary,
+  type Insight,
+} from "../shared/schema.js";
 import type { ParsedQuery } from "../shared/queryTypes.js";
 import type { AnalyticalQueryResult } from "./analyticalQueryExecutor.js";
 import { processChartData } from "./chartGenerator.js";
+import { compileChartSpec } from "./chartSpecCompiler.js";
 import { generateChartInsights } from "./insightGenerator.js";
 import { calculateSmartDomainsForChart } from "./axisScaling.js";
 import {
@@ -57,19 +63,52 @@ export async function mergeDeterministicAnalyticalCharts(
   for (const spec of specs) {
     if (seen.has(chartFingerprint(spec))) continue;
     try {
+      const { merged: rowCompiled } = compileChartSpec(
+        rows as Record<string, unknown>[],
+        {
+          numericColumns: summary.numericColumns ?? [],
+          dateColumns: summary.dateColumns,
+        },
+        {
+          type: spec.type,
+          x: spec.x,
+          y: spec.y,
+          z: spec.z,
+          seriesColumn: spec.seriesColumn,
+          barLayout: spec.barLayout,
+          aggregate: spec.aggregate,
+          y2: spec.y2,
+          y2Series: spec.y2Series,
+          seriesKeys: spec.seriesKeys,
+        },
+        {
+          preserveAggregate: spec.seriesColumn != null && spec.seriesColumn !== "",
+          columnOrder: keys,
+        }
+      );
+      const mergedSpec = chartSpecSchema.parse({
+        ...spec,
+        type: rowCompiled.type,
+        x: rowCompiled.x,
+        y: rowCompiled.y,
+        z: rowCompiled.z,
+        seriesColumn: rowCompiled.seriesColumn,
+        barLayout: rowCompiled.barLayout,
+        aggregate: rowCompiled.aggregate ?? spec.aggregate,
+      });
       const processed = processChartData(
         workingData,
-        { ...spec },
+        { ...mergedSpec },
         summary.dateColumns,
         { chartQuestion: question }
       );
       if (!processed.length) continue;
 
       let domains: Record<string, unknown> = {};
-      if (spec.type === "heatmap") {
+      if (mergedSpec.type === "heatmap") {
         domains = {};
-      } else if ((spec as ChartSpec & { seriesKeys?: string[] }).seriesKeys?.length) {
-        const sk = (spec as ChartSpec & { seriesKeys?: string[] }).seriesKeys!;
+      } else if ((mergedSpec as ChartSpec & { seriesKeys?: string[] }).seriesKeys?.length) {
+        const sk = (mergedSpec as ChartSpec & { seriesKeys?: string[] }).seriesKeys!;
         let maxSum = 0;
         for (const row of processed) {
           let s = 0;
@@ -84,12 +123,12 @@ export async function mergeDeterministicAnalyticalCharts(
       } else {
         domains = calculateSmartDomainsForChart(
           processed,
-          spec.x,
-          spec.y,
-          spec.y2 || undefined,
+          mergedSpec.x,
+          mergedSpec.y,
+          mergedSpec.y2 || undefined,
           {
             yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-            y2Options: spec.y2
+            y2Options: mergedSpec.y2
               ? { useIQR: true, paddingPercent: 5, includeOutliers: true }
               : undefined,
           }
@@ -97,20 +136,20 @@ export async function mergeDeterministicAnalyticalCharts(
       }
 
       const insights = await generateChartInsights(
-        spec,
+        mergedSpec,
         processed,
         summary,
         chatInsights
       );
       out.push({
-        ...spec,
+        ...mergedSpec,
         ...domains,
         data: processed,
         keyInsight: insights.keyInsight,
-        xLabel: spec.xLabel || spec.x,
-        yLabel: spec.yLabel || spec.y,
+        xLabel: mergedSpec.xLabel || mergedSpec.x,
+        yLabel: mergedSpec.yLabel || mergedSpec.y,
       });
-      seen.add(chartFingerprint(spec));
+      seen.add(chartFingerprint(mergedSpec));
     } catch {
       /* skip */
     }
