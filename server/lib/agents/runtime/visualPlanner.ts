@@ -7,7 +7,11 @@ import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
-import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import {
+  calculateSmartDomainsForChart,
+  multiSeriesYDomainKind,
+  yDomainForMultiSeriesRows,
+} from "../../axisScaling.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
 
@@ -306,17 +310,11 @@ export async function proposeAndBuildExtraCharts(
         smartDomains = {};
       } else if (spec.seriesKeys?.length) {
         const sk = spec.seriesKeys;
-        let maxSum = 0;
-        for (const row of processed) {
-          let s = 0;
-          for (const k of sk) {
-            const v = row[k];
-            const n = typeof v === "number" ? v : Number(v);
-            if (Number.isFinite(n)) s += n;
-          }
-          maxSum = Math.max(maxSum, s);
-        }
-        smartDomains = { yDomain: [0, maxSum * 1.05] as [number, number] };
+        smartDomains = yDomainForMultiSeriesRows(
+          processed,
+          sk,
+          multiSeriesYDomainKind(spec.type, spec.barLayout)
+        );
       } else {
         smartDomains = calculateSmartDomainsForChart(
           processed,

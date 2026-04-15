@@ -28,6 +28,7 @@ import {
   isDatasetPreviewSystemMessage,
 } from '@/pages/Home/modules/uploadSystemMessages';
 import { chatPivotAnchorId } from '@/pages/Home/lib/chatPivotNav';
+import { splitAssistantFollowUpPrompts } from '@/lib/chat/splitAssistantFollowUpPrompts';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
@@ -329,6 +330,17 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
       message.isIntermediate &&
       (!String(displayContent).trim() || String(displayContent).trim() === "Preliminary results")
     );
+
+  const assistantMarkdownParts = useMemo(() => {
+    if (isUser || !displayContent) {
+      return { markdownBody: displayContent, followUpChips: [] as string[] };
+    }
+    const split = splitAssistantFollowUpPrompts(displayContent);
+    const structured = (message.followUpPrompts ?? []).map((s) => s.trim()).filter(Boolean);
+    const followUpChips = (structured.length > 0 ? structured : split.extractedPrompts).slice(0, 3);
+    const markdownBody = split.hadYouMightTrySection ? split.mainMarkdown : displayContent.trimEnd();
+    return { markdownBody, followUpChips };
+  }, [isUser, displayContent, message.followUpPrompts]);
   
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
@@ -503,12 +515,32 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
 
         {showMarkdownBlock && (
           <div
-            className="rounded-xl border border-border/80 bg-card px-4 py-3 shadow-sm"
+            className="rounded-xl border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-sm"
             data-testid={`message-content-${message.role}`}
           >
             <div className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-              <MarkdownRenderer content={displayContent} />
+              <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
             </div>
+            {assistantMarkdownParts.followUpChips.length > 0 && onSuggestedQuestionClick && (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-foreground mb-2">You might try:</p>
+                <div className="flex flex-wrap gap-2">
+                  {assistantMarkdownParts.followUpChips.map((q, i) => (
+                    <Button
+                      key={`followup-${i}`}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs rounded-full h-auto py-1.5 px-3"
+                      aria-label={`Add to message: ${q}`}
+                      onClick={() => onSuggestedQuestionClick(q)}
+                    >
+                      {q}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
               onSuggestedQuestionClick && (
@@ -626,6 +658,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                         enableFilters
                         isLoading={chartLoadingState.isLoading}
                         loadingProgress={chartLoadingState.progress}
+                        keyInsightSessionId={sessionId ?? null}
                       />
                     </Suspense>
                   );
@@ -761,6 +794,8 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     prevProps.message.intermediateInsight === nextProps.message.intermediateInsight &&
     (prevProps.message.suggestedQuestions?.length ?? 0) ===
       (nextProps.message.suggestedQuestions?.length ?? 0) &&
+    JSON.stringify(prevProps.message.followUpPrompts ?? []) ===
+      JSON.stringify(nextProps.message.followUpPrompts ?? []) &&
     prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
     prevProps.preEnrichmentPreviewSnapshot === nextProps.preEnrichmentPreviewSnapshot &&
     prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&

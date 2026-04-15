@@ -125,6 +125,32 @@ describe("mergePivotDefaultRowsAndValues", () => {
     assert.deepEqual(out?.rows, ["Region", "Category", "Segment"]);
     assert.deepEqual(out?.values, ["Sales"]);
   });
+
+  it("adds filterFields and filterSelections from plan dimensionFilters", () => {
+    const summary = minimalSummary({
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [] },
+        { name: "Category", type: "string", sampleValues: ["Technology"] },
+        { name: "Segment", type: "string", sampleValues: [] },
+      ] as DataSummary["columns"],
+    });
+    const plan: QueryPlanBody = {
+      groupBy: ["Segment"],
+      aggregations: [{ column: "Sales", operation: "sum" }],
+      dimensionFilters: [{ column: "Category", op: "in", values: ["Technology"] }],
+    };
+    const out = mergePivotDefaultRowsAndValues({
+      dataSummary: summary,
+      tracePlan: plan,
+      tableRows: [
+        { Segment: "Consumer", Sales_sum: 100 },
+      ],
+      tableColumns: ["Segment", "Sales_sum"],
+    });
+    assert.deepEqual(out?.rows, ["Segment"]);
+    assert.deepEqual(out?.filterFields, ["Category"]);
+    assert.deepEqual(out?.filterSelections, { Category: ["Technology"] });
+  });
 });
 
 describe("derivePivotDefaultsFromExecutionMerged", () => {

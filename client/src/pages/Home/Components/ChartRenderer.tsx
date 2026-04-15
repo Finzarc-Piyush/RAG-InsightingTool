@@ -52,6 +52,8 @@ import {
   LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
+import { formatChartTooltipValue, rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 
 interface ChartRendererProps {
   chart: ChartSpec;
@@ -65,6 +67,8 @@ interface ChartRendererProps {
   onFiltersChange?: (filters: ActiveChartFilters) => void;
   isLoading?: boolean; // Loading state for correlation charts
   loadingProgress?: { processed: number; total: number; message?: string }; // Progress info
+  /** Enables on-demand Key Insight fetch in the modal when the chart has no insight. */
+  keyInsightSessionId?: string | null;
 }
 
 const MAX_COMPACT_X_TICKS = 6;
@@ -162,6 +166,7 @@ export function ChartRenderer({
   onFiltersChange,
   isLoading = false,
   loadingProgress,
+  keyInsightSessionId = null,
 }: ChartRendererProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
@@ -748,7 +753,7 @@ export function ChartRenderer({
             >
               <LineChart
                 data={lineAreaSortedData}
-                margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+                margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
@@ -760,7 +765,7 @@ export function ChartRenderer({
                   label={{
                     value: xLabel || x,
                     position: 'insideBottom',
-                    offset: -5,
+                    offset: 2,
                     style: {
                       textAnchor: 'middle',
                       fill: 'hsl(var(--foreground))',
@@ -788,11 +793,11 @@ export function ChartRenderer({
                   stroke="hsl(var(--foreground))"
                   domain={unifiedDomain}
                 />
-                <Tooltip />
+                <Tooltip formatter={rechartsTooltipValueFormatter} />
                 <Legend
-                  wrapperStyle={{ paddingTop: '10px' }}
+                  wrapperStyle={{ paddingTop: 4 }}
                   iconType="line"
-                  formatter={(value) => value}
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
                 />
                 {lineMultiKeys.map((k, i) => {
                   const c = COLORS[i % COLORS.length];
@@ -831,7 +836,7 @@ export function ChartRenderer({
           >
             <LineChart
               data={lineAreaSortedData}
-              margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 30 }}
+              margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 52 }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -843,7 +848,7 @@ export function ChartRenderer({
                 label={{
                   value: xLabel || x,
                   position: 'insideBottom',
-                  offset: -5,
+                  offset: 2,
                   style: {
                     textAnchor: 'middle',
                     fill: 'hsl(var(--foreground))',
@@ -915,12 +920,12 @@ export function ChartRenderer({
                   domain={leftDomain}
                 />
               )}
-              <Tooltip />
+              <Tooltip formatter={rechartsTooltipValueFormatter} />
               {chart.y2 && (
                 <Legend
-                  wrapperStyle={{ paddingTop: '10px' }}
+                  wrapperStyle={{ paddingTop: 4 }}
                   iconType="line"
-                  formatter={(value) => value}
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
                 />
               )}
               <Line
@@ -949,9 +954,7 @@ export function ChartRenderer({
                   )}
                   {chart.y2Series &&
                     chart.y2Series.map((series, idx) => {
-                      const c = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][
-                        idx % 5
-                      ];
+                      const c = COLORS[(idx + 2) % COLORS.length];
                       return (
                         <Line
                           key={series}
@@ -1004,10 +1007,13 @@ export function ChartRenderer({
                   style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 },
                 }}
               />
-              <Tooltip />
+              <Tooltip formatter={rechartsTooltipValueFormatter} />
               {multiKeys.length > 0 ? (
                 <>
-                  <Legend wrapperStyle={{ paddingTop: 8 }} />
+                  <Legend
+                    wrapperStyle={{ paddingTop: 8 }}
+                    content={(props) => <RechartsWideLegendContent {...props} />}
+                  />
                   {multiKeys.map((k, i) => (
                     <Bar
                       key={k}
@@ -1214,6 +1220,15 @@ export function ChartRenderer({
         }
 
         // Custom tooltip for scatter to show exact X, Y values
+        const formatAxisTooltipMaybe = (v: unknown) => {
+          if (typeof v === 'number' && Number.isFinite(v)) return formatChartTooltipValue(v);
+          if (typeof v === 'string') {
+            const n = Number(v.replace(/[%,]/g, '').trim());
+            if (Number.isFinite(n)) return formatChartTooltipValue(n);
+          }
+          return String(v ?? '');
+        };
+
         const renderScatterTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
           // Some environments don't set `active` reliably; rely on payload presence
           if (!payload || payload.length === 0) return null;
@@ -1224,9 +1239,9 @@ export function ChartRenderer({
           return (
             <div style={{ background: 'white', border: '1px solid hsl(var(--border))', borderRadius: 6, padding: '6px 8px', boxShadow: '0 2px 6px rgba(0,0,0,0.08)' }}>
               <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginBottom: 4 }}>{xLabel || x}</div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{String(xVal)}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{formatAxisTooltipMaybe(xVal)}</div>
               <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))', marginTop: 6 }}>{yLabel || y}</div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{String(yVal)}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'hsl(var(--foreground))' }}>{formatAxisTooltipMaybe(yVal)}</div>
             </div>
           );
         };
@@ -1260,12 +1275,21 @@ export function ChartRenderer({
                 formatter={(_value: any, _name: any, props: any) => {
                   const p = (props && props.payload) || {};
                   const yVal = p[y];
-                  return [String(yVal), yLabel || y];
+                  return [formatChartTooltipValue(yVal), yLabel || y];
                 }}
                 labelFormatter={(_label: any, payload: any[]) => {
                   const p = payload && payload[0] && payload[0].payload;
                   const xVal = p ? p[x] : '';
-                  return `${xLabel || x}: ${String(xVal)}`;
+                  const xDisp =
+                    typeof xVal === 'number' && Number.isFinite(xVal)
+                      ? formatChartTooltipValue(xVal)
+                      : typeof xVal === 'string'
+                        ? (() => {
+                            const n = Number(xVal.replace(/[%,]/g, '').trim());
+                            return Number.isFinite(n) ? formatChartTooltipValue(n) : xVal;
+                          })()
+                        : String(xVal ?? '');
+                  return `${xLabel || x}: ${xDisp}`;
                 }}
                 content={!isLargeDataset ? renderScatterTooltip as any : undefined}
               />
@@ -1317,12 +1341,13 @@ export function ChartRenderer({
                   <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip />
-              <Legend 
-                verticalAlign="bottom" 
-                height={36}
+              <Tooltip formatter={rechartsTooltipValueFormatter} />
+              <Legend
+                verticalAlign="bottom"
+                height={40}
                 iconType="circle"
                 wrapperStyle={{ fontSize: '12px' }}
+                content={(props) => <RechartsWideLegendContent {...props} iconType="circle" />}
               />
             </PieChart>
           </ResponsiveContainer>
@@ -1346,7 +1371,7 @@ export function ChartRenderer({
             >
               <AreaChart
                 data={lineAreaSortedData}
-                margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+                margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
@@ -1358,7 +1383,7 @@ export function ChartRenderer({
                   label={{
                     value: xLabel || x,
                     position: 'insideBottom',
-                    offset: -5,
+                    offset: 2,
                     style: {
                       textAnchor: 'middle',
                       fill: 'hsl(var(--foreground))',
@@ -1385,11 +1410,11 @@ export function ChartRenderer({
                   }}
                   domain={unifiedDomain}
                 />
-                <Tooltip />
+                <Tooltip formatter={rechartsTooltipValueFormatter} />
                 <Legend
                   wrapperStyle={{ paddingTop: 8 }}
                   iconType="line"
-                  formatter={(value) => value}
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
                 />
                 {areaMultiKeys.map((k, i) => {
                   const c = COLORS[i % COLORS.length];
@@ -1419,7 +1444,7 @@ export function ChartRenderer({
           >
             <AreaChart
               data={lineAreaSortedData}
-              margin={{ left: 50, right: 10, top: 10, bottom: 30 }}
+              margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -1431,7 +1456,7 @@ export function ChartRenderer({
                 label={{
                   value: xLabel || x,
                   position: 'insideBottom',
-                  offset: -5,
+                  offset: 2,
                   style: {
                     textAnchor: 'middle',
                     fill: 'hsl(var(--foreground))',
@@ -1457,7 +1482,7 @@ export function ChartRenderer({
                   },
                 }}
               />
-              <Tooltip />
+              <Tooltip formatter={rechartsTooltipValueFormatter} />
               <Area
                 type="monotone"
                 dataKey={y}
@@ -1697,9 +1722,9 @@ export function ChartRenderer({
           handleDateChange={handleDateChange}
           handleNumericSliderChange={handleNumericSliderChange}
           handleNumericBoundsChange={handleNumericBoundsChange}
-          handleResetFilters={handleResetFilters}
-          formatDateForDisplay={formatDateForDisplay}
-          determineSliderStep={determineSliderStep}
+        handleResetFilters={handleResetFilters}
+        formatDateForDisplay={formatDateForDisplay}
+        determineSliderStep={determineSliderStep}
         />
       ) : (
       <ChartModal
@@ -1720,6 +1745,7 @@ export function ChartRenderer({
         handleResetFilters={handleResetFilters}
         formatDateForDisplay={formatDateForDisplay}
         determineSliderStep={determineSliderStep}
+        keyInsightSessionId={keyInsightSessionId}
       />
       )}
       <DashboardModal

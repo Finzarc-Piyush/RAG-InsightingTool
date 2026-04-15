@@ -62,7 +62,11 @@ function toolTableColumnOrderForIntermediate(tr: ToolResult): string[] | null {
   const out = cols.filter((v): v is string => typeof v === "string");
   return out.length ? out : null;
 }
-import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import {
+  calculateSmartDomainsForChart,
+  multiSeriesYDomainKind,
+  yDomainForMultiSeriesRows,
+} from "../../axisScaling.js";
 
 export type AgentSseEmitter = (event: string, data: unknown) => void;
 
@@ -166,17 +170,11 @@ function materializeDeferredBuildCharts(
         smartDomains = {};
       } else if (spec.seriesKeys?.length) {
         const sk = spec.seriesKeys;
-        let maxSum = 0;
-        for (const row of processed) {
-          let s = 0;
-          for (const k of sk) {
-            const v = row[k];
-            const n = typeof v === "number" ? v : Number(v);
-            if (Number.isFinite(n)) s += n;
-          }
-          maxSum = Math.max(maxSum, s);
-        }
-        smartDomains = { yDomain: [0, maxSum * 1.05] as [number, number] };
+        smartDomains = yDomainForMultiSeriesRows(
+          processed,
+          sk,
+          multiSeriesYDomainKind(spec.type, spec.barLayout)
+        );
       } else {
         smartDomains = calculateSmartDomainsForChart(
           processed,
@@ -243,19 +241,11 @@ function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefin
   return undefined;
 }
 
-function formatAnswerFromEnvelope(
-  body: string,
-  keyInsight: string | null | undefined,
-  ctas: string[]
-): string {
+function formatAnswerFromEnvelope(body: string, keyInsight: string | null | undefined): string {
   const parts: string[] = [body.trim()];
   const ki = keyInsight?.trim();
   if (ki) {
     parts.push("", `**Key insight:** ${ki}`);
-  }
-  const cleanCtas = ctas.map((c) => c.trim()).filter(Boolean).slice(0, 3);
-  if (cleanCtas.length) {
-    parts.push("", "**You might try:**", ...cleanCtas.map((c) => `- ${c}`));
   }
   return parts.join("\n").trim();
 }
@@ -314,7 +304,7 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
   const { body, keyInsight, ctas } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
-  let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null, ctaList);
+  let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null);
   let suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
 
   if (!answer.trim()) {
@@ -479,6 +469,7 @@ export async function runAgentTurn(
 
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
+  let followUpPrompts: string[] | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
@@ -971,6 +962,8 @@ export async function runAgentTurn(
         const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
         answer = env.answer;
         agentSuggestionHints = env.suggestionHints;
+        const trimmedCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+        if (trimmedCtas.length) followUpPrompts = trimmedCtas;
         appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
       } catch (synErr) {
         const msg = synErr instanceof Error ? synErr.message : String(synErr);
@@ -1109,6 +1102,7 @@ export async function runAgentTurn(
       operationResult,
       agentTrace: capAgentTrace(trace),
       agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
+      ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
     };
   } catch (e) {
@@ -1159,6 +1153,7 @@ export async function runAgentTurn(
       table,
       operationResult,
       agentTrace: capAgentTrace(trace),
+      ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
     };
   }

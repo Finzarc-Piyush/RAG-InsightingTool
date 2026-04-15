@@ -1,3 +1,4 @@
+import type { ChatDocument } from '../models/chat.model.js';
 import {
   ChartSpec,
   Insight,
@@ -393,6 +394,8 @@ export interface AnswerQuestionAgentOptions {
   onAgentEvent?: (event: string, data: unknown) => void;
   streamPreAnalysis?: StreamPreAnalysis;
   username?: string;
+  /** For DuckDB rematerialize when temp session DB is missing. */
+  chatDocument?: ChatDocument;
   /** For RAG vector filter (session currentDataBlob.version). */
   dataBlobVersion?: number;
   /** Throttled sessionAnalysisContext merge during the turn (e.g. tool milestones). */
@@ -423,6 +426,7 @@ export async function answerQuestion(
   operationResult?: any;
   agentTrace?: import('./agents/runtime/types.js').AgentTrace;
   agentSuggestionHints?: string[];
+  followUpPrompts?: string[];
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
 }> {
   // CRITICAL: This log should ALWAYS appear first
@@ -452,6 +456,7 @@ export async function answerQuestion(
         permanentContext,
         sessionAnalysisContext,
         columnarStoragePath,
+        chatDocument: agentOptions?.chatDocument,
         dataBlobVersion: agentOptions?.dataBlobVersion,
         loadFullData,
         streamPreAnalysis: agentOptions?.streamPreAnalysis,
@@ -469,6 +474,7 @@ export async function answerQuestion(
           operationResult: loopResult.operationResult,
           agentTrace: loopResult.agentTrace,
           agentSuggestionHints: loopResult.agentSuggestionHints,
+          ...(loopResult.followUpPrompts?.length ? { followUpPrompts: loopResult.followUpPrompts } : {}),
           lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
         };
       }
@@ -501,6 +507,7 @@ export async function answerQuestion(
         operationResult: loopResult?.operationResult,
         agentTrace: loopResult?.agentTrace,
         agentSuggestionHints: loopResult?.agentSuggestionHints,
+        ...(loopResult?.followUpPrompts?.length ? { followUpPrompts: loopResult.followUpPrompts } : {}),
         lastAnalyticalRowsForEnrichment: loopResult?.lastAnalyticalRowsForEnrichment,
       };
     } catch (agenticErr) {
@@ -532,7 +539,8 @@ export async function answerQuestion(
         chatInsights,
         undefined,
         columnarStoragePath,
-        loadFullData
+        loadFullData,
+        agentOptions?.chatDocument
       );
       
       if (result && result.answer && result.answer.trim().length > 0) {
@@ -1836,7 +1844,20 @@ export async function answerQuestion(
 
   // For general questions, generate answer and optional charts
   // Pass workingData (already filtered) instead of raw data
-  return await generateGeneralAnswer(workingData, question, chatHistory, summary, sessionId, parsedQuery, transformationNotes, chatInsights);
+  return await generateGeneralAnswer(
+    workingData,
+    question,
+    chatHistory,
+    summary,
+    sessionId,
+    parsedQuery,
+    transformationNotes,
+    chatInsights,
+    undefined,
+    columnarStoragePath,
+    loadFullData,
+    agentOptions?.chatDocument
+  );
 }
 
 async function generateChartSpecs(summary: DataSummary, useFastModel: boolean = false): Promise<ChartSpec[]> {
@@ -2621,7 +2642,8 @@ export async function generateGeneralAnswer(
   chatInsights?: Insight[],
   requiredColumns?: string[],
   columnarStoragePath?: boolean,
-  loadFullData?: () => Promise<Record<string, any>[]>
+  loadFullData?: () => Promise<Record<string, any>[]>,
+  duckDbChat?: ChatDocument | null
 ): Promise<{ answer: string; charts?: ChartSpec[]; insights?: Insight[] }> {
   // QUERY-ONLY ARCHITECTURE: For information-seeking queries, execute query and return results (no explanations)
   if (isInformationSeekingQuery(question)) {
@@ -2645,7 +2667,7 @@ export async function generateGeneralAnswer(
       if (columnarStoragePath && sessionId) {
         const { executePlanInDuckDB } = await import('./duckdbPlanExecutor.js');
         console.log('📋 Step 3: Trying DuckDB plan execution (no full data load)...');
-        executionResult = await executePlanInDuckDB(sessionId, executionPlan);
+        executionResult = await executePlanInDuckDB(sessionId, executionPlan, duckDbChat);
         if (executionResult.success) {
           console.log(`✅ Query executed in DuckDB: ${executionResult.data?.length ?? 0} rows returned`);
         } else {
@@ -2778,7 +2800,7 @@ export async function generateGeneralAnswer(
       if (columnarStoragePath && sessionId) {
         const { executePlanInDuckDB } = await import('./duckdbPlanExecutor.js');
         console.log('📋 Step 3: Trying DuckDB plan execution (no full data load)...');
-        executionResult = await executePlanInDuckDB(sessionId, executionPlan);
+        executionResult = await executePlanInDuckDB(sessionId, executionPlan, duckDbChat);
         if (executionResult.success) {
           console.log(`✅ Query executed in DuckDB: ${executionResult.data?.length ?? 0} rows returned`);
         } else {

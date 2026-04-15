@@ -42,6 +42,11 @@ import {
 import { createDataSummary } from "../../../fileParser.js";
 import { saveModifiedData } from "../../../dataOps/dataPersistence.js";
 import queryCache from "../../../cache.js";
+import {
+  ColumnarStorageService,
+  isDuckDBAvailable,
+} from "../../../columnarStorage.js";
+import { metadataService } from "../../../metadataService.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -507,7 +512,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
         const duck = await executeQueryPlanOnDuckDb(
           ctx.exec.sessionId,
           normalizedPlan,
-          ctx.exec.summary
+          ctx.exec.summary,
+          ctx.exec.chatDocument
         );
         if (duck.ok) {
           resultRows = duck.rows as Record<string, any>[];
@@ -717,12 +723,53 @@ export function registerDefaultTools(registry: ToolRegistry) {
           summary: `Invalid args for add_computed_columns: ${parsed.error.message}`,
         };
       }
-      const out = applyAddComputedColumns(ctx.exec.data, ctx.exec.summary, parsed.data);
-      if (!out.ok) {
-        return { ok: false, summary: out.error };
+
+      const useColumnarDuckdb =
+        Boolean(ctx.exec.columnarStoragePath) && isDuckDBAvailable();
+
+      let rows: Record<string, any>[];
+      if (useColumnarDuckdb) {
+        let base: Record<string, any>[];
+        try {
+          base = ctx.exec.loadFullData
+            ? await ctx.exec.loadFullData()
+            : ctx.exec.data;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return {
+            ok: false,
+            summary: `add_computed_columns: loadFullData failed (${msg.slice(0, 300)}).`,
+          };
+        }
+        if (!base?.length) {
+          return {
+            ok: false,
+            summary: "add_computed_columns: no rows loaded for columnar session.",
+          };
+        }
+        const fullOut = applyAddComputedColumns(
+          base,
+          ctx.exec.summary,
+          parsed.data
+        );
+        if (!fullOut.ok) {
+          return { ok: false, summary: fullOut.error };
+        }
+        rows = fullOut.rows;
+      } else {
+        const out = applyAddComputedColumns(
+          ctx.exec.data,
+          ctx.exec.summary,
+          parsed.data
+        );
+        if (!out.ok) {
+          return { ok: false, summary: out.error };
+        }
+        rows = out.rows;
       }
-      const rows = out.rows;
+
       let persistNote = "";
+      let duckdbNote = "";
       if (parsed.data.persistToSession) {
         try {
           await saveModifiedData(
@@ -744,12 +791,38 @@ export function registerDefaultTools(registry: ToolRegistry) {
           };
         }
       }
+
+      if (useColumnarDuckdb) {
+        const storage = new ColumnarStorageService({
+          sessionId: ctx.exec.sessionId,
+        });
+        try {
+          await storage.initialize();
+          await storage.materializeAuthoritativeDataTable(rows, {
+            tableName: "data",
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return {
+            ok: false,
+            summary: `Computed columns built but DuckDB rematerialize failed: ${msg.slice(0, 400)}`,
+          };
+        } finally {
+          await storage.close().catch(() => {
+            /* ignore */
+          });
+        }
+        metadataService.invalidateCache(ctx.exec.sessionId);
+        queryCache.invalidateSession(ctx.exec.sessionId);
+        ctx.exec.data = rows;
+        duckdbNote = " Session DuckDB table `data` updated for pivot/sample queries.";
+      }
       const cols = rows.length > 0 ? Object.keys(rows[0]!) : [];
       const sample = JSON.stringify(rows.slice(0, 15), null, 2);
       const names = parsed.data.columns.map((c) => c.name).join(", ");
       return {
         ok: true,
-        summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Columns: ${cols.join(", ")}${persistNote}\nSample:\n${sample.slice(0, 3500)}`,
+        summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Columns: ${cols.join(", ")}${persistNote}${duckdbNote}\nSample:\n${sample.slice(0, 3500)}`,
         table: {
           rows,
           columns: cols,

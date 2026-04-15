@@ -1,3 +1,4 @@
+import type { ChatDocument } from "../../../models/chat.model.js";
 import type {
   DataSummary,
   Insight,
@@ -22,6 +23,7 @@ export function buildAgentExecutionContext(params: {
   permanentContext?: string;
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;
+  chatDocument?: ChatDocument;
   dataBlobVersion?: number;
   loadFullData?: () => Promise<Record<string, any>[]>;
   streamPreAnalysis?: StreamPreAnalysis;
@@ -40,6 +42,7 @@ export function buildAgentExecutionContext(params: {
     permanentContext: params.permanentContext,
     sessionAnalysisContext: params.sessionAnalysisContext,
     columnarStoragePath: params.columnarStoragePath,
+    chatDocument: params.chatDocument,
     dataBlobVersion: params.dataBlobVersion,
     loadFullData: params.loadFullData,
     streamPreAnalysis: params.streamPreAnalysis,

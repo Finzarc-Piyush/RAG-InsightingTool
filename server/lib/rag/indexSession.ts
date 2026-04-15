@@ -46,7 +46,7 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
       dataRows = doc.rawData;
     } else if (columnar) {
       try {
-        duckdbSample = await getSampleFromDuckDB(sessionId, 3000);
+        duckdbSample = await getSampleFromDuckDB(sessionId, 3000, doc);
       } catch (e) {
         console.warn("⚠️ RAG: DuckDB sample failed for columnar session:", e);
       }

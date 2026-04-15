@@ -9,7 +9,15 @@ import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { sendError, sendValidationError, sendNotFound } from "../utils/responseFormatter.js";
 import { getChatBySessionIdEfficient } from "../models/chat.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
+import { downloadFilenameTimestamp } from "../utils/downloadFilenameTimestamp.js";
 import * as XLSX from 'xlsx';
+
+function sanitizeDownloadFileStem(stem: string, fallback: string): string {
+  let s = stem.trim().replace(/"/g, "_");
+  s = s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_");
+  s = s.replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return s.length > 0 ? s : fallback;
+}
 
 /**
  * Non-streaming Data Ops chat endpoint
@@ -110,10 +118,10 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
       return sendError(res, 'No data available to download');
     }
 
-    // Get filename from original file or generate one
-    const originalFileName = chatDocument.fileName || 'dataset';
-    const baseFileName = originalFileName.replace(/\.[^/.]+$/, ''); // Remove extension
-    const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const originalFileName = chatDocument.fileName || "dataset";
+    const stem = originalFileName.replace(/\.[^/.]+$/, "");
+    const baseFileName = sanitizeDownloadFileStem(stem, "dataset");
+    const timestamp = downloadFilenameTimestamp();
 
     if (format === 'xlsx') {
       // Convert to Excel

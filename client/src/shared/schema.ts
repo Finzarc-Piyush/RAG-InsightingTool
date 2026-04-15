@@ -149,6 +149,10 @@ export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
 export const pivotDefaultsSchema = z.object({
   rows: z.array(z.string()).optional(),
   values: z.array(z.string()).optional(),
+  /** Categorical fields in the pivot Filters well (slice dimensions not on rows/columns). */
+  filterFields: z.array(z.string()).optional(),
+  /** Initial slice selections (field → selected values); `in` filters only in v1. */
+  filterSelections: z.record(z.array(z.string())).optional(),
 });
 
 export const messageSchema = z.object({
@@ -157,6 +161,7 @@ export const messageSchema = z.object({
   charts: z.array(chartSpecSchema).optional(),
   insights: z.array(insightSchema).optional(),
   suggestedQuestions: z.array(z.string()).optional(),
+  followUpPrompts: z.array(z.string()).max(3).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(),
   agentWorkbench: agentWorkbenchSchema.optional(),
@@ -409,6 +414,7 @@ export const chatResponseSchema = z.object({
   charts: z.array(chartSpecSchema).optional(),
   insights: z.array(insightSchema).optional(),
   suggestions: z.array(z.string()).optional(),
+  followUpPrompts: z.array(z.string()).max(3).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;

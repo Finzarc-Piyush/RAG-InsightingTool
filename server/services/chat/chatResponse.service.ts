@@ -66,7 +66,9 @@ export async function enrichCharts(
           }
         }
         
-        const insights = !('keyInsight' in c)
+        const hasUsableKeyInsight =
+          typeof c.keyInsight === "string" && c.keyInsight.trim().length > 0;
+        const insights = !hasUsableKeyInsight
           ? await generateChartInsights(c, dataForChart, chatDocument.dataSummary, chatLevelInsights, {
               userQuestion: enrichmentContext?.userQuestion,
               sessionAnalysisContext:
@@ -74,11 +76,11 @@ export async function enrichCharts(
               permanentContext: enrichmentContext?.permanentContext,
             })
           : null;
-        
+
         enrichedCharts.push({
           ...c,
           data: dataForChart,
-          keyInsight: c.keyInsight ?? insights?.keyInsight,
+          keyInsight: hasUsableKeyInsight ? c.keyInsight : (insights?.keyInsight ?? c.keyInsight),
         });
       } catch (chartError) {
         console.error(`Error enriching chart "${c.title}":`, chartError);
@@ -116,6 +118,43 @@ export function deriveInsightsFromCharts(charts: any[]): { id: number; text: str
 }
 
 /**
+ * After response insights are final, copy chat-level insight text onto chart.keyInsight so the
+ * zoom modal matches InsightCard (single chart → first insight; N charts + N insights → by index).
+ */
+export function alignChartKeyInsightsToChatInsights(validated: any): any {
+  const charts = validated?.charts;
+  const insights = validated?.insights;
+  if (!Array.isArray(charts) || charts.length === 0) return validated;
+  if (!Array.isArray(insights) || insights.length === 0) return validated;
+
+  if (charts.length === 1) {
+    const t = insights[0]?.text;
+    if (typeof t === "string" && t.trim().length > 0) {
+      return {
+        ...validated,
+        charts: [{ ...charts[0], keyInsight: t }],
+      };
+    }
+    return validated;
+  }
+
+  if (charts.length === insights.length) {
+    return {
+      ...validated,
+      charts: charts.map((c: any, i: number) => {
+        const t = insights[i]?.text;
+        if (typeof t === "string" && t.trim().length > 0) {
+          return { ...c, keyInsight: t };
+        }
+        return c;
+      }),
+    };
+  }
+
+  return validated;
+}
+
+/**
  * Validate and enrich chat response
  */
 export function validateAndEnrichResponse(result: any, chatDocument: ChatDocument, chatLevelInsights?: any[]): any {
@@ -135,7 +174,7 @@ export function validateAndEnrichResponse(result: any, chatDocument: ChatDocumen
     }
   }
 
-  return validated;
+  return alignChartKeyInsightsToChatInsights(validated);
 }
 
 /**

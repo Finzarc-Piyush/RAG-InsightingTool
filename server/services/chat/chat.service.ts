@@ -139,8 +139,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     ? {
         dataBlobVersion: chatDocument.currentDataBlob?.version,
         username,
+        chatDocument,
       }
-    : undefined;
+    : { chatDocument };
 
   const answerResult = await answerQuestion(
     latestData,
@@ -267,6 +268,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         ...(mergedSuggestedQuestions.length > 0
           ? { suggestedQuestions: mergedSuggestedQuestions }
           : {}),
+        ...(validated.followUpPrompts?.length
+          ? { followUpPrompts: validated.followUpPrompts }
+          : {}),
       },
     ]);
     console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
@@ -294,6 +298,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     charts: validated.charts,
     insights: validated.insights,
     suggestions,
+    ...(validated.followUpPrompts?.length ? { followUpPrompts: validated.followUpPrompts } : {}),
   };
 
   if (!isAgenticLoopEnabled()) {

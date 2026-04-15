@@ -195,7 +195,9 @@ export function syncFilterSelectionsWithFilters(
   distinctSnapshotRef?: FilterDistinctSnapshotRef,
   temporalFacetColumns?: TemporalFacetColumnMeta[] | null,
   /** Per filter field: distinct values from session `data` (GET pivot/fields). If a field is missing here, distincts come from `rows`. */
-  datasetDistincts?: Record<string, string[]> | null
+  datasetDistincts?: Record<string, string[]> | null,
+  /** When a field has no prior selection, narrow to these values (intersected with current distincts) instead of selecting all. */
+  initialSelections?: Record<string, string[]> | null
 ): FilterSelections {
   const next: FilterSelections = { ...prev };
   const snap = distinctSnapshotRef?.current ?? null;
@@ -221,7 +223,18 @@ export function syncFilterSelectionsWithFilters(
     const lastSnap = snap?.[f] ?? new Set<string>();
 
     if (next[f] === undefined) {
-      next[f] = new Set(distinctNow);
+      const hinted = initialSelections?.[f];
+      let initial: Set<string>;
+      if (hinted?.length) {
+        const narrowed = new Set(
+          hinted.filter((v) => distinctNow.has(v))
+        );
+        initial =
+          narrowed.size > 0 ? narrowed : new Set(distinctNow);
+      } else {
+        initial = new Set(distinctNow);
+      }
+      next[f] = initial;
       if (snap) {
         snap[f] = new Set(distinctNow);
       }
@@ -433,11 +446,17 @@ export function flattenPivotTree(
   return out;
 }
 
+export type CreateInitialPivotConfigOpts = {
+  /** Dimensions to place in the Filters well (must be categorical keys, not row/value fields). */
+  defaultFilterKeys?: string[];
+};
+
 export function createInitialPivotConfig(
   allKeys: string[],
   numericKeys: string[],
   defaultRowKeys: string[],
-  defaultValueKeys: string[]
+  defaultValueKeys: string[],
+  opts?: CreateInitialPivotConfigOpts
 ): PivotUiConfig {
   const numericSet = new Set(numericKeys);
   const allDims = allKeys.filter((k) => !numericSet.has(k));
@@ -455,8 +474,16 @@ export function createInitialPivotConfig(
       agg: numericSet.has(field) ? ("sum" as PivotAgg) : ("count" as PivotAgg),
     }));
 
-  // `unused` should include everything except what's currently in Rows/Values.
-  const usedFields = new Set<string>([...rows, ...values.map((v) => v.field)]);
+  const filters = (opts?.defaultFilterKeys ?? []).filter(
+    (k) => allDims.includes(k) && !rows.includes(k)
+  );
+
+  // `unused` should include everything except what's currently in Rows/Values/Filters.
+  const usedFields = new Set<string>([
+    ...filters,
+    ...rows,
+    ...values.map((v) => v.field),
+  ]);
   const unused = allKeys.filter((k) => !usedFields.has(k));
 
   const rowSort: PivotUiConfig["rowSort"] =
@@ -468,7 +495,7 @@ export function createInitialPivotConfig(
         }
       : undefined;
   return {
-    filters: [],
+    filters,
     columns: [],
     rows,
     values,

@@ -10,7 +10,10 @@ export type {
   PivotValueSpec,
   PivotAgg,
 } from './types';
-export type { FilterDistinctSnapshotRef } from './buildPivotModel';
+export type {
+  FilterDistinctSnapshotRef,
+  CreateInitialPivotConfigOpts,
+} from './buildPivotModel';
 export {
   buildPivotModel,
   buildPivotTree,

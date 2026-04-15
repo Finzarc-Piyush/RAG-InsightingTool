@@ -5,6 +5,7 @@ import {
   SessionDataNotMaterializedError,
 } from "../lib/columnarStorage.js";
 import { executePivotQuery } from "../lib/pivotQueryService.js";
+import type { ChatDocument } from "../models/chat.model.js";
 
 async function setupSession(sessionId: string) {
   const storage = new ColumnarStorageService({ sessionId });
@@ -106,6 +107,60 @@ test("pivotQueryService throws typed invariant error when data table missing", a
       return true;
     }
   );
+});
+
+test("pivotQueryService rematerializes DuckDB when chat provided and data table missing", async () => {
+  const sessionId = `pivot_remat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const storage = new ColumnarStorageService({ sessionId });
+  await storage.initialize();
+  await storage.close();
+
+  const chat = {
+    sessionId,
+    username: "u@test",
+    fileName: "f.csv",
+    uploadedAt: 1,
+    createdAt: 1,
+    lastUpdatedAt: 1,
+    dataSummary: {
+      rowCount: 3,
+      columnCount: 3,
+      columns: [
+        { name: "Category", type: "string" as const },
+        { name: "Sub-Category", type: "string" as const },
+        { name: "Sales", type: "number" as const },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    },
+    messages: [],
+    charts: [],
+    insights: [],
+    rawData: [
+      { Category: "Technology", "Sub-Category": "Phones", Sales: 100 },
+      { Category: "Technology", "Sub-Category": "Accessories", Sales: 50 },
+      { Category: "Furniture", "Sub-Category": "Chairs", Sales: 200 },
+    ],
+    sampleRows: [],
+    columnStatistics: {},
+    analysisMetadata: {
+      totalProcessingTime: 0,
+      aiModelUsed: "test",
+      fileSize: 0,
+      analysisVersion: "1",
+    },
+  } as ChatDocument;
+
+  const request = {
+    rowFields: ["Category", "Sub-Category"],
+    colFields: [],
+    filterFields: [],
+    valueSpecs: [{ id: "meas_sales", field: "Sales", agg: "sum" as const }],
+    rowSort: undefined,
+  };
+
+  const out = await executePivotQuery(sessionId, request, { dataVersion: 1, chat });
+  assert.equal(out.model.tree.grandTotal.flatValues?.meas_sales, 350);
 });
 
 test("materializeAuthoritativeDataTable is idempotent and replaces data", async () => {
@@ -275,5 +330,39 @@ test("pivotQueryService applies slice filter on row dimension via filterFields",
   const top = out.model.tree.nodes as { label: string }[];
   assert.equal(top.length, 1);
   assert.equal(top[0]!.label, "Technology");
+});
+
+test("pivot aggregates column present only after rematerialize (computed-column parity)", async () => {
+  const sessionId = `pivot_computed_col_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const storage = new ColumnarStorageService({ sessionId });
+  await storage.initialize();
+  try {
+    await storage.materializeAuthoritativeDataTable(
+      [
+        { Category: "A", Sales: 10, LagDays: 2 },
+        { Category: "A", Sales: 20, LagDays: 4 },
+      ],
+      { tableName: "data" }
+    );
+  } finally {
+    await storage.close();
+  }
+
+  const out = await executePivotQuery(
+    sessionId,
+    {
+      rowFields: ["Category"],
+      colFields: [],
+      filterFields: [],
+      valueSpecs: [
+        { id: "meas_lag", field: "LagDays", agg: "mean" as const },
+        { id: "meas_sales", field: "Sales", agg: "sum" as const },
+      ],
+    },
+    { dataVersion: 1 }
+  );
+
+  assert.equal(out.model.tree.grandTotal.flatValues?.meas_lag, 3);
+  assert.equal(out.model.tree.grandTotal.flatValues?.meas_sales, 30);
 });
 

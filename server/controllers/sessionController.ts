@@ -26,11 +26,18 @@ import {
   type DataSummary,
 } from "../shared/schema.js";
 import { processChartData } from "../lib/chartGenerator.js";
-import { calculateSmartDomainsForChart } from "../lib/axisScaling.js";
+import {
+  calculateSmartDomainsForChart,
+  multiSeriesYDomainKind,
+  yDomainForMultiSeriesRows,
+} from "../lib/axisScaling.js";
 import { filterRowsByPivotSelections } from "../lib/pivotRowFilters.js";
 import { tryProcessChartDataFromPivotQuery } from "../lib/chartPreviewFromPivot.js";
 import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
+import { generateChartInsights } from "../lib/insightGenerator.js";
+
+const CHART_KEY_INSIGHT_MAX_ROWS = 800;
 
 function isTransientPythonSummaryError(e: unknown): boolean {
   if (e && typeof e === "object" && "code" in e) {
@@ -877,7 +884,8 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
         { ...spec },
         pivotQueryBody,
         session.dataSummary.dateColumns,
-        session.dataSummary.numericColumns ?? []
+        session.dataSummary.numericColumns ?? [],
+        session
       );
       if (pivotPreview?.rows?.length) {
         const fromPivot = pivotPreview.rows;
@@ -887,17 +895,11 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
           extra = {};
         } else if (spec.seriesKeys?.length) {
           const sk = spec.seriesKeys;
-          let maxSum = 0;
-          for (const row of fromPivot) {
-            let s = 0;
-            for (const k of sk) {
-              const v = row[k];
-              const n = typeof v === "number" ? v : Number(v);
-              if (Number.isFinite(n)) s += n;
-            }
-            maxSum = Math.max(maxSum, s);
-          }
-          extra = { yDomain: [0, maxSum * 1.05] as [number, number] };
+          extra = yDomainForMultiSeriesRows(
+            fromPivot as Record<string, any>[],
+            sk,
+            multiSeriesYDomainKind(spec.type, spec.barLayout)
+          );
         } else {
           extra = calculateSmartDomainsForChart(
             fromPivot as Record<string, any>[],
@@ -1000,17 +1002,11 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       extra = {};
     } else if (spec.seriesKeys?.length) {
       const sk = spec.seriesKeys;
-      let maxSum = 0;
-      for (const row of processed) {
-        let s = 0;
-        for (const k of sk) {
-          const v = row[k];
-          const n = typeof v === "number" ? v : Number(v);
-          if (Number.isFinite(n)) s += n;
-        }
-        maxSum = Math.max(maxSum, s);
-      }
-      extra = { yDomain: [0, maxSum * 1.05] as [number, number] };
+      extra = yDomainForMultiSeriesRows(
+        processed,
+        sk,
+        multiSeriesYDomainKind(spec.type, spec.barLayout)
+      );
     } else {
       extra = calculateSmartDomainsForChart(
         processed,
@@ -1040,6 +1036,59 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     }
     console.error("postChartPreviewEndpoint:", error);
     const msg = error instanceof Error ? error.message : "Chart preview failed";
+    return res.status(400).json({ error: msg });
+  }
+};
+
+/** On-demand Key Insight for chart preview / pivot charts (avoids LLM on debounced preview). */
+export const postChartKeyInsightEndpoint = async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    const username = requireUsername(req);
+    const session = await getChatBySessionIdForUser(sessionId, username);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    if (!session.dataSummary) {
+      return res.status(400).json({ error: "No dataset loaded for this session" });
+    }
+
+    const rawBody = req.body as Record<string, unknown> | undefined;
+    const bodyChart = rawBody?.chart ?? rawBody;
+    if (!bodyChart || typeof bodyChart !== "object") {
+      return res.status(400).json({ error: "Request body must include a chart object" });
+    }
+
+    const chart = chartSpecSchema.parse(bodyChart) as ChartSpec;
+    const rows = Array.isArray(chart.data) ? chart.data : [];
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "chart.data is required and must be non-empty" });
+    }
+
+    const capped = rows.slice(0, CHART_KEY_INSIGHT_MAX_ROWS) as Record<string, any>[];
+    const chartForInsight: ChartSpec = {
+      ...chart,
+      data: capped,
+    };
+
+    const { keyInsight } = await generateChartInsights(
+      chartForInsight,
+      capped,
+      session.dataSummary as DataSummary,
+      undefined,
+      undefined
+    );
+
+    return res.json({ keyInsight });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    console.error("postChartKeyInsightEndpoint:", error);
+    const msg = error instanceof Error ? error.message : "Key insight generation failed";
     return res.status(400).json({ error: msg });
   }
 };

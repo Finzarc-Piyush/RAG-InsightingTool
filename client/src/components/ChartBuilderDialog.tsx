@@ -261,15 +261,22 @@ export function ChartBuilderDialog({
           </Button>
         </div>
 
-        <div className="rounded-xl border border-border bg-muted/20 p-4 min-h-[240px]">
+        <div className="rounded-xl border border-border bg-muted/20 p-4 min-h-[400px]">
           {loading && (
             <div className="flex items-center justify-center h-[220px]">
               <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
             </div>
           )}
           {!loading && preview && (
-            <Suspense fallback={<Skeleton className="h-[220px] w-full" />}>
-              <ChartRenderer chart={preview} index={0} isSingleChart showAddButton={false} />
+            <Suspense fallback={<Skeleton className="h-[400px] w-full" />}>
+              <ChartRenderer
+                chart={preview}
+                index={0}
+                isSingleChart
+                showAddButton
+                enableFilters
+                keyInsightSessionId={sessionId ?? null}
+              />
             </Suspense>
           )}
           {!loading && !preview && (

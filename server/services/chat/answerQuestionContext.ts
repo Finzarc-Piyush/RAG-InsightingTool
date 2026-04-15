@@ -106,7 +106,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
     console.log(
       "📊 Columnar session + analytical/info query: DuckDB sample path (shared loader)"
     );
-    latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000);
+    latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000, chatDocument);
     const dateCols = chatDocument.dataSummary?.dateColumns;
     if (latestData.length > 0 && dateCols && dateCols.length > 0) {
       canonicalizeDateColumnValues(latestData, dateCols);

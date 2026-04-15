@@ -1,3 +1,4 @@
+import type { ChatDocument } from "../../../models/chat.model.js";
 import type {
   ChartSpec,
   DataSummary,
@@ -105,6 +106,8 @@ export interface AgentExecutionContext {
   /** Rolling LLM JSON context (seed + user + assistant merges). */
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;
+  /** Full session doc for DuckDB rematerialization when temp columnar DB is cold. */
+  chatDocument?: ChatDocument;
   /** Matches indexed vectors after data-ops saves (currentDataBlob.version). */
   dataBlobVersion?: number;
   loadFullData?: () => Promise<Record<string, any>[]>;
@@ -217,6 +220,8 @@ export interface AgentLoopResult {
   agentTrace?: AgentTrace;
   /** Phrases already surfaced in the answer (CTAs, insight) for suggestion de-duplication. */
   agentSuggestionHints?: string[];
+  /** Synthesis CTAs; rendered as follow-up chips (not embedded in answer markdown). */
+  followUpPrompts?: string[];
   /** Rows from last analytical frame; passed to enrichCharts when chart data was stripped. */
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
 }

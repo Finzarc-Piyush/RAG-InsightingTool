@@ -3,6 +3,8 @@ import { getUserEmail } from "@/utils/userStorage";
 import { AgentWorkbenchEntry, ChatResponse, ThinkingStep } from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { getAuthorizationHeader } from "@/auth/msalToken";
+import { downloadFilenameTimestamp } from "@/lib/downloadFilenameTimestamp";
+import { parseFilenameFromContentDisposition } from "./parseContentDispositionFilename";
 
 async function buildApiHeaders(
   base: Record<string, string> = {}
@@ -40,16 +42,11 @@ export async function downloadModifiedDataset(
       throw new Error(`Failed to download dataset: ${response.status} ${errorText}`);
     }
 
-    // Get filename from Content-Disposition header or generate one
     const contentDisposition = response.headers.get("Content-Disposition");
-    let filename = `dataset_modified_${new Date().toISOString().split('T')[0]}.${format}`;
-    
-    if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
-      if (filenameMatch) {
-        filename = filenameMatch[1];
-      }
-    }
+    const parsedName = parseFilenameFromContentDisposition(contentDisposition);
+    const filename =
+      parsedName ??
+      `dataset_modified_${downloadFilenameTimestamp()}.${format}`;
 
     // Convert response to blob and trigger download
     const blob = await response.blob();
@@ -77,6 +74,8 @@ export interface StreamIntermediatePayload {
   pivotDefaults?: {
     rows?: string[];
     values?: string[];
+    filterFields?: string[];
+    filterSelections?: Record<string, string[]>;
   };
   insight?: string;
 }

@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { applyQueryTransformations } from "./dataTransform.js";
-import type { ParsedQuery } from "../shared/queryTypes.js";
+import type { DimensionFilter, ParsedQuery } from "../shared/queryTypes.js";
 import type { DataSummary } from "../shared/schema.js";
 import {
   remapGroupByToTemporalFacet,
@@ -15,6 +15,7 @@ import {
   temporalFacetGrainTokenFromFacetColumnName,
   migrateLegacyTemporalFacetRowKeys,
 } from "./temporalFacetColumns.js";
+import { repairMisassignedDimensionFilters } from "./dimensionFilterRepair.js";
 
 const aggOpSchema = z.enum([
   "sum",
@@ -246,8 +247,19 @@ export function normalizeAndValidateQueryPlanBody(
   plan: QueryPlanBody
 ): { ok: true; normalizedPlan: QueryPlanBody } | { ok: false; error: string } {
   const withDisplayFacets = normalizeLegacyTemporalFacetKeysInPlan(plan, summary);
+  let planAfterRepair: QueryPlanBody = withDisplayFacets;
+  if (withDisplayFacets.dimensionFilters?.length) {
+    const repaired = repairMisassignedDimensionFilters(
+      withDisplayFacets.dimensionFilters as DimensionFilter[],
+      summary
+    );
+    planAfterRepair = {
+      ...withDisplayFacets,
+      dimensionFilters: repaired as QueryPlanBody["dimensionFilters"],
+    };
+  }
   const normalizedPlan =
-    clearRedundantDateAggregationForTemporalFacets(withDisplayFacets);
+    clearRedundantDateAggregationForTemporalFacets(planAfterRepair);
   const colErr = assertPlanColumnsAllowed(summary, normalizedPlan);
   if (colErr) {
     return { ok: false, error: colErr };

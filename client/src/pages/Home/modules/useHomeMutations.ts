@@ -756,6 +756,9 @@ export const useHomeMutations = ({
                           .pivotDefaults,
                       thinkingBefore: (response as Message & { thinkingBefore?: Message['thinkingBefore'] })
                         .thinkingBefore,
+                      ...(response.followUpPrompts?.length
+                        ? { followUpPrompts: response.followUpPrompts }
+                        : {}),
                     },
                   ];
                 });
@@ -872,6 +875,7 @@ export const useHomeMutations = ({
         summary: (data as any).summary,
         pivotDefaults: (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
         thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+        ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
       };
       
       console.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
@@ -912,6 +916,7 @@ export const useHomeMutations = ({
                 (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
               agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
               thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+              ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
             };
             const withFinalTrace =
               !segmentedTurn &&

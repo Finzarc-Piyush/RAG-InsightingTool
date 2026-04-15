@@ -5,8 +5,9 @@
 
 import { Router, Request, Response } from 'express';
 import { ColumnarStorageService, SessionDataNotMaterializedError } from '../lib/columnarStorage.js';
+import { ensureAuthoritativeDataTable } from '../lib/ensureSessionDuckdbMaterialized.js';
 import { metadataService } from '../lib/metadataService.js';
-import { getChatBySessionIdForUser } from '../models/chat.model.js';
+import { getChatBySessionIdForUser, type ChatDocument } from '../models/chat.model.js';
 import { getAuthenticatedEmail } from '../utils/auth.helper.js';
 import { sendError, sendValidationError } from '../utils/responseFormatter.js';
 import { executePivotQuery } from '../lib/pivotQueryService.js';
@@ -57,6 +58,18 @@ async function assertDataApiAccess(
   }
 }
 
+async function loadChatForDataSession(req: Request, sessionId: string): Promise<ChatDocument> {
+  const email = getAuthenticatedEmail(req);
+  if (!email) {
+    throw new Error('Unauthorized');
+  }
+  const chat = await getChatBySessionIdForUser(sessionId, email);
+  if (!chat) {
+    throw new Error('Session not found');
+  }
+  return chat;
+}
+
 /**
  * Get sampled rows from dataset
  * GET /api/data/:sessionId/sample?limit=50&random=false
@@ -79,6 +92,8 @@ router.get('/:sessionId/sample', async (req: Request, res: Response) => {
     await storage.initialize();
 
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       // No-downsampling policy: return full table rows for analytical preview consumers.
       // Keep route contract unchanged (limit/random fields remain for compatibility only).
@@ -131,6 +146,8 @@ router.get('/:sessionId/metadata', async (req: Request, res: Response) => {
     await storage.initialize();
 
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       const metadata = await storage.computeMetadata();
       const sampleRows = await storage.getSampleRows(50);
@@ -186,6 +203,8 @@ router.post('/:sessionId/query', async (req: Request, res: Response) => {
     await storage.initialize();
 
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       const results = await storage.executeQuery(query);
       res.json({
@@ -233,6 +252,8 @@ router.get('/:sessionId/stats', async (req: Request, res: Response) => {
     await storage.initialize();
 
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       const stats = await storage.getNumericStats(columns);
       res.json({
@@ -263,16 +284,11 @@ router.post('/:sessionId/pivot/query', async (req: Request, res: Response) => {
       return;
     }
 
-    const email = getAuthenticatedEmail(req);
-    const chat = email
-      ? await getChatBySessionIdForUser(sessionId, email)
-      : null;
+    const chat = await loadChatForDataSession(req, sessionId);
     const dataVersion =
-      chat?.currentDataBlob?.version ??
-      chat?.ragIndex?.dataVersion ??
-      0;
+      chat.currentDataBlob?.version ?? chat.ragIndex?.dataVersion ?? 0;
 
-    const out = await executePivotQuery(sessionId, req.body, { dataVersion });
+    const out = await executePivotQuery(sessionId, req.body, { dataVersion, chat });
     res.json(out);
   } catch (error) {
     console.error('Error executing pivot query:', error);
@@ -302,6 +318,8 @@ router.get('/:sessionId/pivot/fields', async (req: Request, res: Response) => {
     const storage = new ColumnarStorageService({ sessionId });
     await storage.initialize();
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       let cached = metadataService.getCachedMetadata(sessionId);
       if (!cached) {
@@ -450,6 +468,8 @@ router.post('/:sessionId/pivot/drillthrough', async (req: Request, res: Response
     const storage = new ColumnarStorageService({ sessionId });
     await storage.initialize();
     try {
+      const chat = await loadChatForDataSession(req, sessionId);
+      await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
       const countSql = `SELECT COUNT(*) as count FROM data WHERE ${whereSql}`;
       const countRows = await storage.executeQuery<{ count: number }>(countSql);

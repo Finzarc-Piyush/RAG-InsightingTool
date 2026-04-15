@@ -4,6 +4,7 @@ import {
   applyPivotSeriesColumnFromModel,
   pivotModelToPreAggregatedChartRows,
   pivotModelRowsForChartSpec,
+  pivotModelRowsForHeatmapSpec,
   resolvePivotValueSpecForChartY,
 } from "../lib/chartPreviewFromPivot.js";
 import type { ChartSpec, PivotModel } from "../shared/schema.js";
@@ -346,5 +347,44 @@ describe("pivotModelRowsForChartSpec", () => {
       assert.equal(r.Region, "West");
       assert.equal(r.Category, "Technology");
     }
+  });
+
+  it("pivotModelRowsForHeatmapSpec emits row × col cells from matrix values", () => {
+    const model: PivotModel = {
+      rowFields: ["Region"],
+      colField: "Category",
+      columnFields: ["Category"],
+      colKeys: ["Furniture", "Technology"],
+      valueSpecs: [{ id: "meas_Sales", field: "Sales", agg: "sum" }],
+      tree: {
+        nodes: [
+          {
+            type: "leaf",
+            depth: 1,
+            label: "West",
+            pathKey: "West",
+            values: {
+              flatValues: null,
+              matrixValues: {
+                Furniture: { meas_Sales: 11 },
+                Technology: { meas_Sales: 22 },
+              },
+            },
+          },
+        ],
+        grandTotal: { flatValues: null, matrixValues: null },
+      },
+      columnFieldTruncated: false,
+    };
+    const rows = pivotModelRowsForHeatmapSpec(model, {
+      type: "heatmap",
+      x: "Region",
+      y: "Category",
+      z: "Sales",
+    });
+    assert.equal(rows?.length, 2);
+    const byCat = new Map(rows!.map((r) => [String(r.Category), r.Sales as number]));
+    assert.equal(byCat.get("Furniture"), 11);
+    assert.equal(byCat.get("Technology"), 22);
   });
 });

@@ -13,10 +13,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChartSpec } from '@/shared/schema';
 import {
   CHART_SERIES_COLORS,
+  CHART_DUAL_AXIS_STROKES,
   evenlySpacedDataKeys,
   LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
+import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { ChartFilterDefinition, ActiveChartFilters } from '@/lib/chartFilters';
 import { format as formatDate } from 'date-fns';
 import {
@@ -59,8 +62,6 @@ interface ChartOnlyModalProps {
   formatDateForDisplay?: (value?: string) => string | undefined;
   determineSliderStep?: (min: number, max: number) => number;
 }
-
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
 const formatAxisLabel = (value: number): string => {
   if (Math.abs(value) < 0.01 && value !== 0) {
@@ -149,7 +150,7 @@ export function ChartOnlyModal({
   formatDateForDisplay = formatDateForDisplayLocal,
   determineSliderStep = determineSliderStepLocal,
 }: ChartOnlyModalProps) {
-  const [showDots, setShowDots] = useState(true); // Default to showing dots in modal
+  const [showDots, setShowDots] = useState(false);
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
   const {
     type,
@@ -165,7 +166,7 @@ export function ChartOnlyModal({
     seriesKeys: specSeriesKeys,
     barLayout,
   } = chart;
-  const chartColor = COLORS[0];
+  const chartColor = CHART_SERIES_COLORS[0];
   
   // Use filtered data if available, otherwise use original data
   const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
@@ -307,6 +308,7 @@ export function ChartOnlyModal({
                   domain={unifiedDomain}
                 />
                 <Tooltip
+                  formatter={rechartsTooltipValueFormatter}
                   contentStyle={{
                     backgroundColor: 'hsl(var(--card))',
                     border: '1px solid hsl(var(--border))',
@@ -317,7 +319,11 @@ export function ChartOnlyModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend wrapperStyle={{ paddingTop: '10px' }} iconType="line" formatter={(value) => value} />
+                <Legend
+                  wrapperStyle={{ paddingTop: 4 }}
+                  iconType="line"
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
+                />
                 {lineMultiKeys.map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
                   return (
@@ -338,8 +344,8 @@ export function ChartOnlyModal({
           );
         }
 
-        const leftAxisColor = chart.y2 ? '#3b82f6' : chartColor;
-        const rightAxisColor = '#ef4444';
+        const leftAxisColor = chart.y2 ? CHART_DUAL_AXIS_STROKES[0]! : chartColor;
+        const rightAxisColor = CHART_DUAL_AXIS_STROKES[1]!;
         const leftValues = getNumericValues(lineAreaSortedData as Record<string, any>[], y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
         const rightValues = chart.y2 ? getNumericValues(lineAreaSortedData as Record<string, any>[], chart.y2 as string) : [];
@@ -392,6 +398,7 @@ export function ChartOnlyModal({
                 />
               )}
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -404,9 +411,9 @@ export function ChartOnlyModal({
               />
               {chart.y2 && (
                 <Legend
-                  wrapperStyle={{ paddingTop: '10px' }}
+                  wrapperStyle={{ paddingTop: 4 }}
                   iconType="line"
-                  formatter={(value) => value}
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
                 />
               )}
               <Line
@@ -435,8 +442,8 @@ export function ChartOnlyModal({
                   )}
                   {chart.y2Series &&
                     chart.y2Series.map((series, index) => {
-                      const colors = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-                      const seriesColor = colors[index % colors.length];
+                      const seriesColor =
+                        CHART_SERIES_COLORS[(index + 2) % CHART_SERIES_COLORS.length];
                       return (
                         <Line
                           key={series}
@@ -489,6 +496,7 @@ export function ChartOnlyModal({
                 }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -501,7 +509,10 @@ export function ChartOnlyModal({
               />
               {multiKeys.length > 0 ? (
                 <>
-                  <Legend wrapperStyle={{ paddingTop: 8 }} />
+                  <Legend
+                    wrapperStyle={{ paddingTop: 8 }}
+                    content={(props) => <RechartsWideLegendContent {...props} />}
+                  />
                   {multiKeys.map((k, i) => (
                     <Bar
                       key={k}
@@ -614,6 +625,7 @@ export function ChartOnlyModal({
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -669,10 +681,14 @@ export function ChartOnlyModal({
                 labelLine={{ stroke: 'hsl(var(--foreground))' }}
               >
                 {data.map((_, idx) => (
-                  <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
+                  <Cell
+                    key={`cell-${idx}`}
+                    fill={CHART_SERIES_COLORS[idx % CHART_SERIES_COLORS.length]}
+                  />
                 ))}
               </Pie>
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -682,14 +698,15 @@ export function ChartOnlyModal({
                 }}
                 itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
               />
-              <Legend 
-                verticalAlign="bottom" 
-                height={36}
+              <Legend
+                verticalAlign="bottom"
+                height={40}
                 iconType="circle"
-                wrapperStyle={{ 
+                wrapperStyle={{
                   fontSize: '14px',
-                  color: 'hsl(var(--foreground))'
+                  color: 'hsl(var(--foreground))',
                 }}
+                content={(props) => <RechartsWideLegendContent {...props} iconType="circle" />}
               />
             </PieChart>
           </ResponsiveContainer>
@@ -735,6 +752,7 @@ export function ChartOnlyModal({
                   domain={unifiedDomain}
                 />
                 <Tooltip
+                  formatter={rechartsTooltipValueFormatter}
                   contentStyle={{
                     backgroundColor: 'hsl(var(--card))',
                     border: '1px solid hsl(var(--border))',
@@ -745,7 +763,11 @@ export function ChartOnlyModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend wrapperStyle={{ paddingTop: 8 }} iconType="line" formatter={(value) => value} />
+                <Legend
+                  wrapperStyle={{ paddingTop: 8 }}
+                  iconType="line"
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
+                />
                 {areaMultiKeys.map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
                   return (
@@ -789,6 +811,7 @@ export function ChartOnlyModal({
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',

@@ -146,6 +146,10 @@ export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
 export const pivotDefaultsSchema = z.object({
   rows: z.array(z.string()).optional(),
   values: z.array(z.string()).optional(),
+  /** Categorical fields in the pivot Filters well (slice dimensions not on rows/columns). */
+  filterFields: z.array(z.string()).optional(),
+  /** Initial slice selections (field → selected values); `in` filters only in v1. */
+  filterSelections: z.record(z.array(z.string())).optional(),
 });
 
 export const messageSchema = z.object({
@@ -155,6 +159,8 @@ export const messageSchema = z.object({
   insights: z.array(insightSchema).optional(),
   /** LLM-suggested starter questions (initial upload message). */
   suggestedQuestions: z.array(z.string()).optional(),
+  /** Agent synthesis CTAs; rendered as clickable follow-up chips (max 3). */
+  followUpPrompts: z.array(z.string()).max(3).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
   /** Normalized agent activity blocks for the workbench UI (capped server-side) */
@@ -409,6 +415,7 @@ export const chatResponseSchema = z.object({
   charts: z.array(chartSpecSchema).optional(),
   insights: z.array(insightSchema).optional(),
   suggestions: z.array(z.string()).optional(),
+  followUpPrompts: z.array(z.string()).max(3).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;

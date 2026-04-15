@@ -278,9 +278,82 @@ export function calculateSmartDomainsForChart(
   return result;
 }
 
+export type MultiSeriesYDomainKind = "stacked-bar" | "overlay";
 
+/**
+ * How to combine multiple series when computing Y max:
+ * - stacked-bar: max per-row sum (stacked bars).
+ * - overlay: max individual series value (line/area, grouped bars).
+ */
+export function multiSeriesYDomainKind(
+  chartType: string,
+  barLayout: string | undefined
+): MultiSeriesYDomainKind {
+  if (chartType === "bar" && barLayout !== "grouped") {
+    return "stacked-bar";
+  }
+  return "overlay";
+}
 
+/**
+ * Y domain for wide/multi-series chart rows (series keys as columns).
+ * Replaces incorrect "always sum series per row" logic for line/area/grouped bars.
+ */
+export function yDomainForMultiSeriesRows(
+  processed: Record<string, any>[],
+  seriesKeys: string[],
+  kind: MultiSeriesYDomainKind
+): { yDomain: [number, number] } {
+  if (!seriesKeys.length || !processed.length) {
+    return { yDomain: [0, 1] };
+  }
 
+  if (kind === "stacked-bar") {
+    let maxSum = 0;
+    for (const row of processed) {
+      let s = 0;
+      for (const k of seriesKeys) {
+        const v = row[k];
+        const n = typeof v === "number" ? v : Number(v);
+        if (Number.isFinite(n)) s += n;
+      }
+      maxSum = Math.max(maxSum, s);
+    }
+    const top = maxSum > 0 ? maxSum * 1.05 : 1;
+    return { yDomain: [0, top] };
+  }
+
+  const vals: number[] = [];
+  for (const row of processed) {
+    for (const k of seriesKeys) {
+      const v = row[k];
+      const n = typeof v === "number" ? v : Number(v);
+      if (Number.isFinite(n)) vals.push(n);
+    }
+  }
+  if (!vals.length) {
+    return { yDomain: [0, 1] };
+  }
+
+  const dataMin = Math.min(...vals);
+  const dataMax = Math.max(...vals);
+  const span = dataMax - dataMin;
+  const pad = Math.max(span * 0.2, Math.abs(dataMax) * 0.05, span === 0 ? Math.max(Math.abs(dataMax) * 0.1, 1) : 0);
+
+  if (dataMin >= 0) {
+    return { yDomain: [0, dataMax + pad] as [number, number] };
+  }
+
+  const smart = calculateSmartDomain(vals, {
+    useIQR: true,
+    paddingPercent: 20,
+    includeOutliers: true,
+  });
+  if (smart) {
+    return { yDomain: smart };
+  }
+  return { yDomain: [dataMin - pad, dataMax + pad] as [number, number] };
+}
 
 
 

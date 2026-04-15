@@ -12,6 +12,7 @@ import {
 import { DataSummary, Message } from '../shared/schema.js';
 import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate } from './dateUtils.js';
 import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.js';
+import { repairMisassignedDimensionFilters } from './dimensionFilterRepair.js';
 
 interface QueryParserResult extends ParsedQuery {
   confidence: number;
@@ -278,8 +279,12 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   
   parsed.timeFilters = sanitiseTimeFilters(raw?.timeFilters as Nullable<TimeFilter>[]);
   parsed.valueFilters = sanitiseValueFilters(raw?.valueFilters as Nullable<ValueFilter>[]);
-  parsed.dimensionFilters = sanitiseDimensionFilters(
+  const dimensionFiltersRepaired = repairMisassignedDimensionFilters(
     raw?.dimensionFilters as Nullable<DimensionFilter>[],
+    summary
+  );
+  parsed.dimensionFilters = sanitiseDimensionFilters(
+    dimensionFiltersRepaired ?? (raw?.dimensionFilters as Nullable<DimensionFilter>[]),
     summary
   );
   parsed.exclusionFilters = sanitiseExclusionFilters(raw?.exclusionFilters as Nullable<ExclusionFilter>[]);
@@ -463,6 +468,7 @@ YOUR TASK:
 - When the question asks for **comparisons, rankings, best/worst, highest/lowest, totals per entity, breakdowns by dimension, share, or typical BI aggregates**, set **groupBy** on the dimension column(s) and **aggregations** on the measure column(s) (e.g. sum of Sales), plus **sort** / **topBottom** / **limit** as appropriate. Match real column names (e.g. "Category", "Sales").
 - When the user only wants **filtered row-level records** (list/show rows matching conditions) without summarizing by dimension, use **timeFilters**, **dimensionFilters** (categorical), **valueFilters** (numeric only), **exclusionFilters**, **limit** only—leave **aggregations** and **groupBy** null.
 - CRITICAL: **valueFilters** are for **numeric** columns only (comparisons on amounts, counts). For **string/category** columns (Region, Category, Segment, Status, etc.) use **dimensionFilters** with op "in" or "not_in" and string values. Align literal values with sample_values/top_values when present (exact spelling). Use match "case_insensitive" when user wording may differ in case.
+- When the user says **"for X"**, **"in X"**, **"within X"**, or similar, and **X** appears as a literal in **sample_values** or **top_values** for a category column (e.g. a product category name like "Technology"), use **dimensionFilters** on **that column** with values containing X (exact spelling from hints)—do **not** use a column whose name is literally X unless X is an actual column name in AVAILABLE COLUMNS.
 - If the user references time (years, months, quarters, ranges), capture it in timeFilters.
 - If the user mentions specific dates like "Apr-24", "March 2022", "2024", "15/01/2024", extract them and create timeFilters.
   * For month-year formats (e.g., "Apr-24", "March 2022"), create a timeFilter with type "month" and include the full month name (e.g., "April", "March").

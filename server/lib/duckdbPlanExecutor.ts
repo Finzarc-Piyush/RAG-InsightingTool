@@ -4,7 +4,9 @@
  * to avoid loading full data into memory for analytical/info-seeking chat.
  */
 
+import type { ChatDocument } from '../models/chat.model.js';
 import { ColumnarStorageService, isDuckDBAvailable } from './columnarStorage.js';
+import { ensureAuthoritativeDataTable } from './ensureSessionDuckdbMaterialized.js';
 import type { ExecutionPlan, ExecutionStep } from './analyticalQueryEngine.js';
 
 const TABLE_NAME = 'data';
@@ -178,7 +180,8 @@ export function buildSqlFromPlan(plan: ExecutionPlan): string | null {
  */
 export async function executePlanInDuckDB(
   sessionId: string,
-  plan: ExecutionPlan
+  plan: ExecutionPlan,
+  chat?: ChatDocument | null
 ): Promise<{ success: boolean; data?: Record<string, any>[]; error?: string }> {
   if (!isDuckDBAvailable()) return { success: false, error: 'DuckDB not available' };
 
@@ -188,6 +191,14 @@ export async function executePlanInDuckDB(
   const storage = new ColumnarStorageService({ sessionId });
   try {
     await storage.initialize();
+    if (chat) {
+      try {
+        await ensureAuthoritativeDataTable(storage, chat);
+      } catch (ensureErr) {
+        const msg = ensureErr instanceof Error ? ensureErr.message : String(ensureErr);
+        return { success: false, error: msg };
+      }
+    }
     const rows = await storage.executeQuery<Record<string, any>>(sql);
     return { success: true, data: rows };
   } catch (err) {
@@ -203,13 +214,21 @@ export async function executePlanInDuckDB(
  */
 export async function getSampleFromDuckDB(
   sessionId: string,
-  limit: number = 5000
+  limit: number = 5000,
+  chat?: ChatDocument | null
 ): Promise<Record<string, any>[]> {
   if (!isDuckDBAvailable()) return [];
 
   const storage = new ColumnarStorageService({ sessionId });
   try {
     await storage.initialize();
+    if (chat) {
+      try {
+        await ensureAuthoritativeDataTable(storage, chat);
+      } catch {
+        return [];
+      }
+    }
     return await storage.getSampleRows(limit);
   } catch {
     return [];

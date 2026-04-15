@@ -10,6 +10,12 @@ export const CHART_SERIES_COLORS = [
   'hsl(var(--chart-1) / 0.85)',
 ] as const;
 
+/** Primary / secondary Y axis for dual-axis line charts */
+export const CHART_DUAL_AXIS_STROKES: readonly string[] = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-4))',
+];
+
 export const LINE_AREA_MAX_X_TICKS = 12;
 
 export function evenlySpacedDataKeys(

@@ -4,6 +4,7 @@
  * when every hint appears on actual result columns (avoids Order Date vs Month · Order Date skew).
  */
 
+import type { DimensionFilter } from "../shared/queryTypes.js";
 import type { DataSummary } from "../shared/schema.js";
 import type { QueryPlanBody } from "./queryPlanExecutor.js";
 import {
@@ -14,8 +15,14 @@ import {
   derivePivotDefaultsFromPreviewRows,
   normalizePivotValueFieldForBaseTable,
 } from "./pivotDefaultsFromPreview.js";
+import { pivotSliceDefaultsFromDimensionFilters } from "./pivotSliceDefaultsFromDimensionFilters.js";
 
-export type PivotDefaultsRowsValues = { rows: string[]; values: string[] };
+export type PivotDefaultsRowsValues = {
+  rows: string[];
+  values: string[];
+  filterFields?: string[];
+  filterSelections?: Record<string, string[]>;
+};
 
 function collectTraceHintsFromPlan(
   plan: QueryPlanBody,
@@ -107,10 +114,28 @@ export function mergePivotDefaultRowsAndValues(params: {
   }
 
   if (rowOut.length === 0 && valueOut.length === 0) return undefined;
-  return {
+
+  const normalizedPlan = normalizeLegacyTemporalFacetKeysInPlan(
+    tracePlan,
+    dataSummary
+  );
+  const slice = pivotSliceDefaultsFromDimensionFilters(
+    dataSummary,
+    normalizedPlan.dimensionFilters as DimensionFilter[] | undefined,
+    rowOut
+  );
+
+  const out: PivotDefaultsRowsValues = {
     rows: rowOut,
     values: valueOut,
   };
+  if (slice.filterFields.length) {
+    out.filterFields = slice.filterFields;
+  }
+  if (Object.keys(slice.filterSelections).length) {
+    out.filterSelections = slice.filterSelections;
+  }
+  return out;
 }
 
 export function derivePivotDefaultsFromExecutionMerged(
@@ -130,7 +155,13 @@ export function derivePivotDefaultsFromExecutionMerged(
     if (!raw || typeof raw !== "object") continue;
     const plan = raw as QueryPlanBody;
     const hints = collectTraceHintsFromPlan(plan, dataSummary);
-    if (hints.traceRows.length > 0 || hints.traceValues.length > 0) {
+    const hasDimensionFilters =
+      Array.isArray(plan.dimensionFilters) && plan.dimensionFilters.length > 0;
+    if (
+      hints.traceRows.length > 0 ||
+      hints.traceValues.length > 0 ||
+      hasDimensionFilters
+    ) {
       tracePlan = plan;
       break;
     }

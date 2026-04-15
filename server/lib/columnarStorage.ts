@@ -69,9 +69,10 @@ export interface DatasetMetadata {
 export class SessionDataNotMaterializedError extends Error {
   readonly code = 'SESSION_DATA_NOT_MATERIALIZED';
   readonly statusCode = 409;
-  constructor(sessionId: string, tableName: string = 'data') {
+  constructor(sessionId: string, tableName: string = 'data', message?: string) {
     super(
-      `Session ${sessionId} is missing required DuckDB table "${tableName}". Upload processing must materialize authoritative session data before pivot/sample queries.`
+      message ??
+        `Session ${sessionId} is missing required DuckDB table "${tableName}". Upload processing must materialize authoritative session data before pivot/sample queries.`
     );
     this.name = 'SessionDataNotMaterializedError';
   }

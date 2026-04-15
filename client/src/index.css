@@ -76,12 +76,12 @@
 
   --input: 240 5% 84%;
   --ring: 221 83% 53%;
-  /* Chart series: distinct, readable on white + light gray cards */
-  --chart-1: 221 83% 53%;
-  --chart-2: 152 55% 38%;
-  --chart-3: 32 95% 44%;
-  --chart-4: 346 77% 50%;
-  --chart-5: 262 70% 52%;
+  /* Chart series: blue / teal / amber / rose / violet — distinct & colorblind-friendly */
+  --chart-1: 217 91% 48%;
+  --chart-2: 172 48% 38%;
+  --chart-3: 30 92% 46%;
+  --chart-4: 340 75% 50%;
+  --chart-5: 265 78% 54%;
 
   --font-sans: "Plus Jakarta Sans", Inter, system-ui, -apple-system, sans-serif;
   --font-serif: Georgia, serif;
@@ -199,12 +199,12 @@
 
   --input: 240 4% 22%;
   --ring: 221 83% 58%;
-  /* Slightly brighter series for dark surfaces */
-  --chart-1: 221 83% 62%;
-  --chart-2: 152 50% 52%;
-  --chart-3: 32 90% 58%;
-  --chart-4: 346 72% 62%;
-  --chart-5: 262 65% 68%;
+  /* Brighter series for dark surfaces */
+  --chart-1: 217 85% 62%;
+  --chart-2: 172 55% 54%;
+  --chart-3: 32 88% 58%;
+  --chart-4: 340 72% 62%;
+  --chart-5: 265 72% 68%;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.20);
   --shadow-xs: 0px 1px 3px 0px hsl(0 0% 0% / 0.30);

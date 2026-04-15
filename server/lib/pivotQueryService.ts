@@ -1,4 +1,6 @@
+import type { ChatDocument } from "../models/chat.model.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
+import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
 import { metadataService } from "./metadataService.js";
 import {
   pivotQueryRequestSchema,
@@ -439,7 +441,7 @@ async function fetchFilteredRows(
 export async function executePivotQuery(
   sessionId: string,
   rawBody: unknown,
-  opts?: { dataVersion?: number | string }
+  opts?: { dataVersion?: number | string; chat?: ChatDocument | null }
 ): Promise<PivotQueryResponse> {
   const request = pivotQueryRequestSchema.parse(rawBody);
 
@@ -487,6 +489,9 @@ export async function executePivotQuery(
   const storage = new ColumnarStorageService({ sessionId });
   await storage.initialize();
   try {
+    if (opts?.chat) {
+      await ensureAuthoritativeDataTable(storage, opts.chat);
+    }
     await storage.assertTableExists('data');
     const start = Date.now();
     const filteredRows = await fetchFilteredRows(storage, request);

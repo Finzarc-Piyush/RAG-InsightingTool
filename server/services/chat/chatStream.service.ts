@@ -34,6 +34,11 @@ import {
 import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
 import { derivePivotDefaultsFromExecutionMerged } from "../../lib/pivotDefaultsFromExecution.js";
 import { normalizePivotValueFieldForBaseTable } from "../../lib/pivotDefaultsFromPreview.js";
+import type { DimensionFilter } from "../../shared/queryTypes.js";
+import {
+  mergePivotSliceDefaults,
+  pivotSliceDefaultsFromDimensionFilters,
+} from "../../lib/pivotSliceDefaultsFromDimensionFilters.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -43,6 +48,74 @@ export interface ProcessStreamChatParams {
   res: Response;
   /** @deprecated Ignored for routing — classifyMode always runs. Accepted for backward compatibility. */
   mode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
+}
+
+function readDimensionFiltersFromParsed(
+  parsedQuery: Record<string, unknown> | null | undefined
+): DimensionFilter[] | undefined {
+  if (!parsedQuery) return undefined;
+  const raw = parsedQuery.dimensionFilters;
+  if (!Array.isArray(raw)) return undefined;
+  const out: DimensionFilter[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.column !== "string") continue;
+    if (o.op !== "in" && o.op !== "not_in") continue;
+    if (!Array.isArray(o.values)) continue;
+    out.push({
+      column: o.column,
+      op: o.op as "in" | "not_in",
+      values: o.values.map((v) => String(v)),
+      match:
+        o.match === "exact" ||
+        o.match === "case_insensitive" ||
+        o.match === "contains"
+          ? o.match
+          : undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+function mergePivotDefaultsForResponse(params: {
+  dataSummary: ChatDocument["dataSummary"];
+  parsedQuery: Record<string, unknown> | null;
+  parserPivot: Message["pivotDefaults"] | undefined;
+  executionPivot: Message["pivotDefaults"] | undefined;
+}): Message["pivotDefaults"] | undefined {
+  const { dataSummary, parsedQuery, parserPivot, executionPivot } = params;
+  const finalRows = executionPivot?.rows?.length
+    ? executionPivot.rows
+    : parserPivot?.rows;
+  const finalValues = executionPivot?.values?.length
+    ? executionPivot.values
+    : parserPivot?.values;
+  const hasRows = finalRows && finalRows.length > 0;
+  const hasValues = finalValues && finalValues.length > 0;
+  if (!hasRows && !hasValues) return undefined;
+
+  const parserSlice = pivotSliceDefaultsFromDimensionFilters(
+    dataSummary,
+    readDimensionFiltersFromParsed(parsedQuery),
+    finalRows ?? []
+  );
+  const mergedSlice = mergePivotSliceDefaults(parserSlice, {
+    filterFields: executionPivot?.filterFields ?? [],
+    filterSelections: executionPivot?.filterSelections ?? {},
+  });
+
+  const out: Message["pivotDefaults"] = {
+    rows: finalRows ?? [],
+    values: finalValues ?? [],
+  };
+  if (mergedSlice.filterFields.length) {
+    out.filterFields = mergedSlice.filterFields;
+  }
+  if (Object.keys(mergedSlice.filterSelections).length) {
+    out.filterSelections = mergedSlice.filterSelections;
+  }
+  return out;
 }
 
 function userExplicitlyAskedForColumnsOrPreview(text: string): boolean {
@@ -111,16 +184,29 @@ function derivePivotDefaultsHint(params: {
     seenNorm.add(n);
     normalizedValues.push(n);
   }
-  const hint = {
+  const slice = pivotSliceDefaultsFromDimensionFilters(
+    dataSummary,
+    readDimensionFiltersFromParsed(parsedQuery),
+    rows
+  );
+  const hint: Message["pivotDefaults"] = {
     rows,
     values: normalizedValues,
   };
+  if (slice.filterFields.length) {
+    hint.filterFields = slice.filterFields;
+  }
+  if (Object.keys(slice.filterSelections).length) {
+    hint.filterSelections = slice.filterSelections;
+  }
   if (process.env.NODE_ENV !== "production") {
     console.debug("[chatStream] pivotDefaults hint", {
       groupBy,
       requiredColumns: requiredColumns.slice(0, 8),
       rows: hint.rows,
       values: hint.values,
+      filterFields: hint.filterFields,
+      filterSelections: hint.filterSelections,
     });
   }
   return hint;
@@ -481,8 +567,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         },
       });
 
-    const agentOptions =
-      isAgenticLoopEnabled()
+    const agentOptions = isAgenticLoopEnabled()
         ? {
             onAgentEvent: (event: string, data: unknown) => {
               if (!checkConnection()) return;
@@ -537,6 +622,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               columnMapping: schemaBinding.columnMapping,
             },
             username,
+            chatDocument,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
             onMidTurnSessionContext: async (p) => {
               await persistMidTurnAssistantSessionContext({
@@ -556,7 +642,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               );
             },
           }
-        : undefined;
+        : { chatDocument };
 
     const result = await answerQuestion(
       latestData,
@@ -633,10 +719,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       table: (result as any).table,
       dataSummary: chatDocument.dataSummary,
     });
-    transformedResponse.pivotDefaults = executionPivotDefaults ?? parserPivotDefaults;
+    transformedResponse.pivotDefaults = mergePivotDefaultsForResponse({
+      dataSummary: chatDocument.dataSummary,
+      parsedQuery: parsedQueryForLoad,
+      parserPivot: parserPivotDefaults,
+      executionPivot: executionPivotDefaults,
+    });
     if (process.env.NODE_ENV !== "production") {
-      console.debug("[chatStream] pivotDefaults source", {
-        source: executionPivotDefaults ? "execution" : parserPivotDefaults ? "parser" : "none",
+      console.debug("[chatStream] pivotDefaults merged", {
+        parser: parserPivotDefaults,
+        execution: executionPivotDefaults,
         value: transformedResponse.pivotDefaults,
       });
     }
@@ -773,6 +865,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         ...(finalThinkingBefore ? { thinkingBefore: finalThinkingBefore } : {}),
         ...(mergedSuggestedQuestions.length > 0
           ? { suggestedQuestions: mergedSuggestedQuestions }
+          : {}),
+        ...(transformedResponse.followUpPrompts?.length
+          ? { followUpPrompts: transformedResponse.followUpPrompts }
           : {}),
       };
 

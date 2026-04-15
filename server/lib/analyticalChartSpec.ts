@@ -12,7 +12,11 @@ import type { AnalyticalQueryResult } from "./analyticalQueryExecutor.js";
 import { processChartData } from "./chartGenerator.js";
 import { compileChartSpec } from "./chartSpecCompiler.js";
 import { generateChartInsights } from "./insightGenerator.js";
-import { calculateSmartDomainsForChart } from "./axisScaling.js";
+import {
+  calculateSmartDomainsForChart,
+  multiSeriesYDomainKind,
+  yDomainForMultiSeriesRows,
+} from "./axisScaling.js";
 import {
   buildAnalyticalChartSpecs,
   shouldBuildDeterministicAnalyticalCharts,
@@ -109,17 +113,11 @@ export async function mergeDeterministicAnalyticalCharts(
         domains = {};
       } else if ((mergedSpec as ChartSpec & { seriesKeys?: string[] }).seriesKeys?.length) {
         const sk = (mergedSpec as ChartSpec & { seriesKeys?: string[] }).seriesKeys!;
-        let maxSum = 0;
-        for (const row of processed) {
-          let s = 0;
-          for (const k of sk) {
-            const v = row[k];
-            const n = typeof v === "number" ? v : Number(v);
-            if (Number.isFinite(n)) s += n;
-          }
-          maxSum = Math.max(maxSum, s);
-        }
-        domains = { yDomain: [0, maxSum * 1.05] as [number, number] };
+        domains = yDomainForMultiSeriesRows(
+          processed,
+          sk,
+          multiSeriesYDomainKind(mergedSpec.type, mergedSpec.barLayout)
+        );
       } else {
         domains = calculateSmartDomainsForChart(
           processed,

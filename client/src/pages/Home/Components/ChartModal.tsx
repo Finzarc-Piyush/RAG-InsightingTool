@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,15 +8,19 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
-import { Filter, X, Plus, Settings2, Table2 } from 'lucide-react';
+import { Filter, X, Plus, Settings2, Table2, Loader2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec, DashboardTableSpec } from '@/shared/schema';
+import { api } from '@/lib/httpClient';
 import {
   CHART_SERIES_COLORS,
+  CHART_DUAL_AXIS_STROKES,
   evenlySpacedDataKeys,
   LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
+import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
 import { ChartFilterDefinition, ActiveChartFilters } from '@/lib/chartFilters';
@@ -60,9 +64,9 @@ interface ChartModalProps {
   handleResetFilters?: () => void;
   formatDateForDisplay?: (value?: string) => string | undefined;
   determineSliderStep?: (min: number, max: number) => number;
+  /** When set and the chart has no keyInsight, fetch one on open (pivot preview / chart builder). */
+  keyInsightSessionId?: string | null;
 }
-
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
 const TABLE_V1_PREFIX = 'TABLE_V1|';
 
@@ -160,16 +164,21 @@ export function ChartModal({
   handleResetFilters,
   formatDateForDisplay = formatDateForDisplayLocal,
   determineSliderStep = determineSliderStepLocal,
+  keyInsightSessionId = null,
 }: ChartModalProps) {
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
   const [isDashboardTableModalOpen, setIsDashboardTableModalOpen] = useState(false);
   const [dashboardTableForModal, setDashboardTableForModal] = useState<DashboardTableSpec | null>(null);
-  const [showDots, setShowDots] = useState(true); // Default to showing dots in modal
+  const [showDots, setShowDots] = useState(false);
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
   // Point visibility controls for scatter plots
   const [pointSize, setPointSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [pointOpacity, setPointOpacity] = useState<'low' | 'medium' | 'high'>('medium');
   const [pointDensity, setPointDensity] = useState<'low' | 'medium' | 'high' | 'all'>('medium');
+  const [fetchedKeyInsight, setFetchedKeyInsight] = useState<string | null>(null);
+  const [keyInsightLoading, setKeyInsightLoading] = useState(false);
+  const [keyInsightError, setKeyInsightError] = useState<string | null>(null);
+
   const {
     type,
     title,
@@ -184,7 +193,7 @@ export function ChartModal({
     seriesKeys: specSeriesKeys,
     barLayout,
   } = chart;
-  const chartColor = COLORS[0]; // Use primary color for modal
+  const chartColor = CHART_SERIES_COLORS[0];
 
   const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
     if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;
@@ -217,7 +226,49 @@ export function ChartModal({
   };
 
   const isTableInsight = typeof chart.keyInsight === 'string' && chart.keyInsight.startsWith(TABLE_V1_PREFIX);
-  
+
+  useEffect(() => {
+    if (!isOpen) {
+      setFetchedKeyInsight(null);
+      setKeyInsightLoading(false);
+      setKeyInsightError(null);
+      return;
+    }
+    const existing =
+      typeof chart.keyInsight === 'string' && chart.keyInsight.trim().length > 0;
+    if (existing || isTableInsight) return;
+    const sid = keyInsightSessionId?.trim();
+    if (!sid) return;
+    if (!Array.isArray(chart.data) || chart.data.length === 0) return;
+
+    let cancelled = false;
+    setKeyInsightLoading(true);
+    setKeyInsightError(null);
+    void (async () => {
+      try {
+        const res = await api.post<{ keyInsight: string }>(
+          `/api/sessions/${sid}/chart-key-insight`,
+          { chart }
+        );
+        if (!cancelled) {
+          setFetchedKeyInsight(res.keyInsight ?? null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setKeyInsightError(e instanceof Error ? e.message : 'Failed to load key insight');
+        }
+      } finally {
+        if (!cancelled) setKeyInsightLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, keyInsightSessionId, chart, isTableInsight]);
+
+  const displayKeyInsight =
+    (typeof chart.keyInsight === 'string' && chart.keyInsight.trim()) || fetchedKeyInsight;
+
   // Use filtered data if available, otherwise use original data
   const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
   const allData = Array.isArray(baseData) ? baseData : [];
@@ -358,6 +409,7 @@ export function ChartModal({
                   domain={unifiedDomain}
                 />
                 <Tooltip
+                  formatter={rechartsTooltipValueFormatter}
                   contentStyle={{
                     backgroundColor: 'hsl(var(--card))',
                     border: '1px solid hsl(var(--border))',
@@ -368,7 +420,11 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend wrapperStyle={{ paddingTop: '10px' }} iconType="line" formatter={(value) => value} />
+                <Legend
+                  wrapperStyle={{ paddingTop: 4 }}
+                  iconType="line"
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
+                />
                 {lineMultiKeys.map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
                   return (
@@ -389,8 +445,8 @@ export function ChartModal({
           );
         }
 
-        const leftAxisColor = chart.y2 ? '#3b82f6' : chartColor;
-        const rightAxisColor = '#ef4444';
+        const leftAxisColor = chart.y2 ? CHART_DUAL_AXIS_STROKES[0]! : chartColor;
+        const rightAxisColor = CHART_DUAL_AXIS_STROKES[1]!;
         const leftValues = getNumericValues(lineAreaSortedData as Record<string, any>[], y);
         const leftDomain = yDomain || getDynamicDomain(leftValues);
         const rightValues = chart.y2 ? getNumericValues(lineAreaSortedData as Record<string, any>[], chart.y2 as string) : [];
@@ -443,6 +499,7 @@ export function ChartModal({
                 />
               )}
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -455,9 +512,9 @@ export function ChartModal({
               />
               {chart.y2 && (
                 <Legend
-                  wrapperStyle={{ paddingTop: '10px' }}
+                  wrapperStyle={{ paddingTop: 4 }}
                   iconType="line"
-                  formatter={(value) => value}
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
                 />
               )}
               <Line
@@ -486,8 +543,8 @@ export function ChartModal({
                   )}
                   {chart.y2Series &&
                     chart.y2Series.map((series, index) => {
-                      const colors = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
-                      const seriesColor = colors[index % colors.length];
+                      const seriesColor =
+                        CHART_SERIES_COLORS[(index + 2) % CHART_SERIES_COLORS.length];
                       return (
                         <Line
                           key={series}
@@ -540,6 +597,7 @@ export function ChartModal({
                 }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -552,7 +610,10 @@ export function ChartModal({
               />
               {multiKeys.length > 0 ? (
                 <>
-                  <Legend wrapperStyle={{ paddingTop: 8 }} />
+                  <Legend
+                    wrapperStyle={{ paddingTop: 8 }}
+                    content={(props) => <RechartsWideLegendContent {...props} />}
+                  />
                   {multiKeys.map((k, i) => (
                     <Bar
                       key={k}
@@ -682,6 +743,7 @@ export function ChartModal({
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -738,10 +800,14 @@ export function ChartModal({
                 labelLine={{ stroke: 'hsl(var(--foreground))' }}
               >
                 {data.map((_, idx) => (
-                  <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
+                  <Cell
+                    key={`cell-${idx}`}
+                    fill={CHART_SERIES_COLORS[idx % CHART_SERIES_COLORS.length]}
+                  />
                 ))}
               </Pie>
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -751,14 +817,15 @@ export function ChartModal({
                 }}
                 itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
               />
-              <Legend 
-                verticalAlign="bottom" 
-                height={36}
+              <Legend
+                verticalAlign="bottom"
+                height={40}
                 iconType="circle"
-                wrapperStyle={{ 
+                wrapperStyle={{
                   fontSize: '14px',
-                  color: 'hsl(var(--foreground))'
+                  color: 'hsl(var(--foreground))',
                 }}
+                content={(props) => <RechartsWideLegendContent {...props} iconType="circle" />}
               />
             </PieChart>
           </ResponsiveContainer>
@@ -805,6 +872,7 @@ export function ChartModal({
                   domain={unifiedDomain}
                 />
                 <Tooltip
+                  formatter={rechartsTooltipValueFormatter}
                   contentStyle={{
                     backgroundColor: 'hsl(var(--card))',
                     border: '1px solid hsl(var(--border))',
@@ -815,7 +883,11 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend wrapperStyle={{ paddingTop: 8 }} iconType="line" formatter={(value) => value} />
+                <Legend
+                  wrapperStyle={{ paddingTop: 8 }}
+                  iconType="line"
+                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
+                />
                 {areaMultiKeys.map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
                   return (
@@ -859,6 +931,7 @@ export function ChartModal({
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
               />
               <Tooltip
+                formatter={rechartsTooltipValueFormatter}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
@@ -1319,26 +1392,38 @@ export function ChartModal({
             </div>
             
             {/* Right side - Insights */}
-            <div className="w-80 flex-shrink-0 min-h-0 overflow-y-auto">
-              <div className="space-y-4">
-                {/* Key Insight */}
-                {chart.keyInsight && (
-                  <div className="bg-blue-50 dark:bg-blue-950/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
-                    <div className="flex items-start gap-3">
-                      <div className="w-3 h-3 bg-blue-500 rounded-full mt-1 flex-shrink-0"></div>
-                      <div className="flex-1 min-w-0 overflow-hidden">
-                          <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">Key Insight</h3>
-                          <div 
-                            className="max-h-32 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400"
-                            onWheel={(e) => {
-                              e.stopPropagation();
-                              const element = e.currentTarget;
-                              element.scrollTop += e.deltaY;
-                            }}
-                          >
-                          <p className="text-sm text-blue-800 dark:text-blue-200 leading-relaxed break-words">{chart.keyInsight}</p>
-                          </div>
+            <div className="flex h-full min-h-0 w-80 max-w-[min(100%,20rem)] flex-shrink-0 flex-col">
+              <div className="flex min-h-0 flex-1 flex-col gap-4">
+                {(displayKeyInsight || keyInsightLoading || keyInsightError) && (
+                  <div className="flex min-h-0 max-h-full flex-col rounded-lg border border-blue-200/90 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/25">
+                    <div className="flex shrink-0 items-start gap-3 p-4 pb-2">
+                      <div className="mt-1 h-3 w-3 shrink-0 rounded-full bg-blue-500" />
+                      <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100">
+                        Key Insight
+                      </h3>
+                    </div>
+                    <div
+                      className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-4 pb-4 pt-0 scrollbar-thin scrollbar-thumb-blue-200 scrollbar-track-transparent hover:scrollbar-thumb-blue-300 dark:scrollbar-thumb-blue-900 dark:hover:scrollbar-thumb-blue-800"
+                      style={{ maxHeight: 'min(100%, calc(90vh - 12rem))' }}
+                      onWheel={(e) => {
+                        e.stopPropagation();
+                        e.currentTarget.scrollTop += e.deltaY;
+                      }}
+                    >
+                      {keyInsightLoading && !displayKeyInsight ? (
+                        <div className="flex items-center gap-2 text-sm text-blue-800 dark:text-blue-200">
+                          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                          Generating insight…
                         </div>
+                      ) : null}
+                      {keyInsightError ? (
+                        <p className="text-sm text-destructive break-words">{keyInsightError}</p>
+                      ) : null}
+                      {displayKeyInsight ? (
+                        <p className="text-sm leading-relaxed text-blue-800 dark:text-blue-200 break-words">
+                          {displayKeyInsight}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 )}

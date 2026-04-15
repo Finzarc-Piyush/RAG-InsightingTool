@@ -3,9 +3,11 @@
  * DuckDB `data` table so results match pivot (materialized temporal facets).
  */
 
+import type { ChatDocument } from "../models/chat.model.js";
 import type { DataSummary } from "../shared/schema.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { isDuckDBAvailable } from "./columnarStorage.js";
+import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
 import type { QueryPlanBody } from "./queryPlanExecutor.js";
 import { clearRedundantDateAggregationForTemporalFacets } from "./queryPlanExecutor.js";
 import { isIdColumn, getCountNameForIdColumn } from "./columnIdHeuristics.js";
@@ -222,7 +224,8 @@ export type ExecuteQueryPlanOnDuckDbResult =
 export async function executeQueryPlanOnDuckDb(
   sessionId: string,
   plan: QueryPlanBody,
-  summary: DataSummary
+  summary: DataSummary,
+  chat?: ChatDocument | null
 ): Promise<ExecuteQueryPlanOnDuckDbResult> {
   if (!isDuckDBAvailable()) {
     return { ok: false, error: "DuckDB not available" };
@@ -231,6 +234,14 @@ export async function executeQueryPlanOnDuckDb(
   const storage = new ColumnarStorageService({ sessionId });
   try {
     await storage.initialize();
+    if (chat) {
+      try {
+        await ensureAuthoritativeDataTable(storage, chat);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: msg };
+      }
+    }
     const descRows = await storage.executeQuery<{ column_name?: string }>(
       `DESCRIBE ${DATA_TABLE}`
     );

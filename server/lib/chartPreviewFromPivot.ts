@@ -3,6 +3,7 @@ import { compileChartSpec } from "./chartSpecCompiler.js";
 import { processChartData } from "./chartGenerator.js";
 import { normalizePivotValueFieldForBaseTable } from "./pivotDefaultsFromPreview.js";
 import { executePivotQuery } from "./pivotQueryService.js";
+import type { ChatDocument } from "../models/chat.model.js";
 import {
   pivotQueryRequestSchema,
   type ChartSpec,
@@ -207,6 +208,62 @@ export function pivotModelRowsForChartSpec(
 }
 
 /**
+ * Heatmap long rows: row dimension (chart x) × column pivot member (chart y) → cell value (chart z).
+ * Requires exactly one column field and `spec.y` matching that column field.
+ */
+export function pivotModelRowsForHeatmapSpec(
+  model: PivotModel,
+  spec: Pick<ChartSpec, "x" | "y" | "z" | "type">,
+  numericColumns: string[] = []
+): Record<string, unknown>[] | null {
+  if (spec.type !== "heatmap") return null;
+  if (!spec.z?.trim() || !spec.y?.trim() || !spec.x?.trim()) return null;
+  if (model.columnFields.length > 1) return null;
+  if (!model.colField || model.columnFields.length !== 1 || !model.colKeys.length) {
+    return null;
+  }
+  const yMatch =
+    model.colField === spec.y.trim() ||
+    findMatchingColumn(spec.y, [model.colField]) === model.colField;
+  if (!yMatch) return null;
+
+  const zResolved = resolvePivotValueSpecForChartY(
+    spec.z,
+    model.valueSpecs,
+    numericColumns
+  );
+  if (!zResolved) return null;
+  const { valueSpec } = zResolved;
+  const zKey = zResolved.canonicalY;
+
+  const xIdx = resolveRowFieldIndex(model, spec.x);
+  if (xIdx < 0) return null;
+
+  const leaves = collectLeaves(model.tree.nodes);
+  const yDimKey = spec.y.trim();
+  const xDimKey = spec.x.trim();
+
+  const rows: Record<string, unknown>[] = [];
+  for (const leaf of leaves) {
+    const mv = leaf.values?.matrixValues;
+    if (!mv) continue;
+    const parts = leaf.pathKey.split("\x1f");
+    const xVal = xIdx < parts.length ? parts[xIdx]! : leaf.label;
+    if (xVal === "" || xVal == null) continue;
+    for (const ck of model.colKeys) {
+      const n = mv[ck]?.[valueSpec.id];
+      if (typeof n !== "number" || !Number.isFinite(n)) continue;
+      rows.push({
+        [xDimKey]: xVal,
+        [yDimKey]: ck,
+        [zKey]: n,
+      });
+    }
+  }
+  return rows.length ? rows : null;
+}
+
+/**
  * @deprecated Prefer {@link pivotModelRowsForChartSpec}; kept for tests and narrow x/y-only flattening.
  * Returns null when a column pivot is present (no implicit series column).
  */
@@ -240,7 +297,6 @@ export type PivotChartPreviewResult = {
 };
 
 function chartUnsupportedForPivotPath(spec: ChartSpec): boolean {
-  if (spec.type === "heatmap") return true;
   if (spec.type === "scatter") return true;
   if (spec.y2?.trim()) return true;
   if (spec.y2Series && spec.y2Series.length > 0) return true;
@@ -258,7 +314,8 @@ export async function tryProcessChartDataFromPivotQuery(
   chartSpec: ChartSpec,
   pivotBody: unknown,
   declaredDateColumns: string[] | undefined,
-  numericColumns: string[] = []
+  numericColumns: string[] = [],
+  chat?: ChatDocument | null
 ): Promise<PivotChartPreviewResult | null> {
   if (chartUnsupportedForPivotPath(chartSpec)) return null;
 
@@ -270,27 +327,43 @@ export async function tryProcessChartDataFromPivotQuery(
   try {
     const { model } = await executePivotQuery(sessionId, parsed.data, {
       dataVersion,
+      chat: chat ?? undefined,
     });
 
     const specForPivot: ChartSpec = { ...chartSpec };
-    const yResolved = resolvePivotValueSpecForChartY(
-      specForPivot.y,
-      model.valueSpecs,
-      numericColumns
-    );
-    if (yResolved) {
-      specForPivot.y = yResolved.canonicalY;
-    }
-    Object.assign(
-      specForPivot,
-      applyPivotSeriesColumnFromModel(
-        model,
-        specForPivot,
-        parsed.data.colFields.length
-      )
-    );
 
-    const preRows = pivotModelRowsForChartSpec(model, specForPivot, numericColumns);
+    let preRows: Record<string, unknown>[] | null = null;
+
+    if (specForPivot.type === "heatmap") {
+      const zResolved = resolvePivotValueSpecForChartY(
+        specForPivot.z,
+        model.valueSpecs,
+        numericColumns
+      );
+      if (zResolved) {
+        specForPivot.z = zResolved.canonicalY;
+      }
+      preRows = pivotModelRowsForHeatmapSpec(model, specForPivot, numericColumns);
+    } else {
+      const yResolved = resolvePivotValueSpecForChartY(
+        specForPivot.y,
+        model.valueSpecs,
+        numericColumns
+      );
+      if (yResolved) {
+        specForPivot.y = yResolved.canonicalY;
+      }
+      Object.assign(
+        specForPivot,
+        applyPivotSeriesColumnFromModel(
+          model,
+          specForPivot,
+          parsed.data.colFields.length
+        )
+      );
+      preRows = pivotModelRowsForChartSpec(model, specForPivot, numericColumns);
+    }
+
     if (!preRows?.length) return null;
 
     const preCols = preRows[0] ? Object.keys(preRows[0]) : [];
