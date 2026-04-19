@@ -237,6 +237,19 @@ function applyDimensionFilter(
   return { data: result, description: desc };
 }
 
+/** Apply dimension filters sequentially (AND). Exported for diagnostic / agent tools. */
+export function filterRowsByDimensionFilters(
+  data: Record<string, any>[],
+  filters: DimensionFilter[] | undefined | null
+): Record<string, any>[] {
+  if (!filters?.length) return data;
+  let working = data;
+  for (const f of filters) {
+    working = applyDimensionFilter(working, f).data;
+  }
+  return working;
+}
+
 function applyValueFilter(
   data: Record<string, any>[],
   filter: ValueFilter,

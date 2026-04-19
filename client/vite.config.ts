@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname), "");
   const devApiTarget =
     env.VITE_DEV_API_ORIGIN?.trim() ||
-    `http://127.0.0.1:${env.VITE_DEV_API_PORT?.trim() || "3003"}`;
+    `http://127.0.0.1:${env.VITE_DEV_API_PORT?.trim() || "3002"}`;
 
   return {
     plugins: [react()],

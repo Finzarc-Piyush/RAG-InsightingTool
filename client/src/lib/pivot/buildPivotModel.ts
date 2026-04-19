@@ -449,6 +449,8 @@ export function flattenPivotTree(
 export type CreateInitialPivotConfigOpts = {
   /** Dimensions to place in the Filters well (must be categorical keys, not row/value fields). */
   defaultFilterKeys?: string[];
+  /** Non-numeric dimensions for the pivot Columns axis (after rows are resolved). */
+  defaultColumnKeys?: string[];
 };
 
 export function createInitialPivotConfig(
@@ -465,6 +467,10 @@ export function createInitialPivotConfig(
   // No implicit "first dimension" or "first numeric" fallback — empty defaults stay empty.
   const rows = defaultRowKeys.filter((k) => allDims.includes(k));
 
+  const columns = (opts?.defaultColumnKeys ?? [])
+    .filter((k) => allDims.includes(k) && !rows.includes(k))
+    .filter((k, i, arr) => arr.indexOf(k) === i);
+
   const values: PivotValueSpec[] = defaultValueKeys
     .filter((k) => allKeys.includes(k))
     .map((field) => ({
@@ -475,12 +481,13 @@ export function createInitialPivotConfig(
     }));
 
   const filters = (opts?.defaultFilterKeys ?? []).filter(
-    (k) => allDims.includes(k) && !rows.includes(k)
+    (k) => allDims.includes(k) && !rows.includes(k) && !columns.includes(k)
   );
 
   // `unused` should include everything except what's currently in Rows/Values/Filters.
   const usedFields = new Set<string>([
     ...filters,
+    ...columns,
     ...rows,
     ...values.map((v) => v.field),
   ]);
@@ -496,7 +503,7 @@ export function createInitialPivotConfig(
       : undefined;
   return {
     filters,
-    columns: [],
+    columns,
     rows,
     values,
     unused,

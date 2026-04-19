@@ -107,6 +107,25 @@ export interface ChatDocument {
   pendingUserMessage?: { content: string; timestamp: number };
 }
 
+/** Lightweight row for session list APIs (avoids loading messages/charts/rawData from Cosmos). */
+export interface SessionListSummary {
+  id: string;
+  username: string;
+  fileName: string;
+  uploadedAt: number;
+  createdAt: number;
+  lastUpdatedAt: number;
+  collaborators?: string[];
+  sessionId: string;
+  messageCount: number;
+  chartCount: number;
+}
+
+const SESSION_LIST_SELECT =
+  "SELECT c.id, c.username, c.fileName, c.uploadedAt, c.createdAt, c.lastUpdatedAt, c.collaborators, c.sessionId, " +
+  "IIF(IS_DEFINED(c.messages) AND IS_ARRAY(c.messages), ARRAY_LENGTH(c.messages), 0) AS messageCount, " +
+  "IIF(IS_DEFINED(c.charts) AND IS_ARRAY(c.charts), ARRAY_LENGTH(c.charts), 0) AS chartCount FROM c";
+
 // Helper functions
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -126,6 +145,30 @@ const ensureCollaborators = (chatDocument: ChatDocument): string[] => {
 
   chatDocument.collaborators = collaborators;
   return collaborators;
+};
+
+const finalizeSessionListSummary = (raw: Record<string, unknown>): SessionListSummary => {
+  const row: SessionListSummary = {
+    id: String(raw.id ?? ""),
+    username: String(raw.username ?? ""),
+    fileName: String(raw.fileName ?? ""),
+    uploadedAt: Number(raw.uploadedAt ?? 0),
+    createdAt: Number(raw.createdAt ?? 0),
+    lastUpdatedAt: Number(raw.lastUpdatedAt ?? 0),
+    collaborators: Array.isArray(raw.collaborators)
+      ? (raw.collaborators as string[]).filter((e): e is string => typeof e === "string")
+      : undefined,
+    sessionId: String(raw.sessionId ?? ""),
+    messageCount: Number(raw.messageCount ?? 0),
+    chartCount: Number(raw.chartCount ?? 0),
+  };
+  const stub = {
+    username: row.username,
+    collaborators: row.collaborators,
+  } as ChatDocument;
+  ensureCollaborators(stub);
+  row.collaborators = stub.collaborators;
+  return row;
 };
 
 const deepClone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -1110,47 +1153,44 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
 };
 
 /**
- * Get all sessions from CosmosDB container (optionally filtered by username)
- * Uses retry logic to handle connection errors and query timeouts
+ * Get all sessions from CosmosDB container (optionally filtered by username).
+ * Uses a narrow projection (no messages/charts/rawData) to keep payloads small and avoid timeouts.
  */
-export const getAllSessions = async (username?: string): Promise<ChatDocument[]> => {
+export const getAllSessions = async (username?: string): Promise<SessionListSummary[]> => {
   return retryOnConnectionError(async () => {
     try {
       const containerInstance = await waitForContainer();
-      
-      let query = "SELECT * FROM c";
+
+      let query = SESSION_LIST_SELECT;
       const parameters: Array<{ name: string; value: any }> = [];
-      
-      // Add username filter if provided
+
       if (username) {
-        query += " WHERE (ARRAY_CONTAINS(c.collaborators, @username) OR c.username = @username)";
-        parameters.push({ name: "@username", value: normalizeEmail(username) || username });
+        query +=
+          " WHERE (ARRAY_CONTAINS(c.collaborators, @username) OR c.username = @username)";
+        parameters.push({
+          name: "@username",
+          value: normalizeEmail(username) || username,
+        });
       }
-      
+
       query += " ORDER BY c.createdAt DESC";
-      
-      const queryOptions = parameters.length > 0 ? { parameters } : {};
-      
-      // Add query configuration to limit items per page and avoid timeout
-      // Cross-partition queries are enabled by default in Cosmos DB SDK v4+
+
+      const querySpec =
+        parameters.length > 0 ? { query, parameters } : { query };
+
       const { resources } = await containerInstance.items
-        .query(
-          {
-            query,
-            ...queryOptions,
-          },
-          { 
-            maxItemCount: 1000, // Limit items per page to avoid timeout
-          }
-        )
+        .query(querySpec, {
+          maxItemCount: 1000,
+          enableCrossPartitionQuery: true,
+        })
         .fetchAll();
-      
-      console.log(`✅ Retrieved ${resources.length} sessions from CosmosDB${username ? ` for user: ${username}` : ''}`);
-      return resources.map((doc) => {
-        const typed = doc as ChatDocument;
-        ensureCollaborators(typed);
-        return typed;
-      });
+
+      console.log(
+        `✅ Retrieved ${resources.length} sessions from CosmosDB${username ? ` for user: ${username}` : ""}`
+      );
+      return resources.map((doc) =>
+        finalizeSessionListSummary(doc as Record<string, unknown>)
+      );
     } catch (error) {
       console.error("❌ Failed to get all sessions:", error);
       throw error;
@@ -1166,47 +1206,49 @@ export const getAllSessionsPaginated = async (
   continuationToken?: string,
   username?: string
 ): Promise<{
-  sessions: ChatDocument[];
+  sessions: SessionListSummary[];
   continuationToken?: string;
   hasMoreResults: boolean;
 }> => {
   try {
     const containerInstance = await waitForContainer();
-    
-    let query = "SELECT * FROM c";
+
+    let query = SESSION_LIST_SELECT;
     const parameters: Array<{ name: string; value: any }> = [];
-    
-    // Add username filter if provided
+
     if (username) {
-      query += " WHERE (ARRAY_CONTAINS(c.collaborators, @username) OR c.username = @username)";
-      parameters.push({ name: "@username", value: normalizeEmail(username) || username });
+      query +=
+        " WHERE (ARRAY_CONTAINS(c.collaborators, @username) OR c.username = @username)";
+      parameters.push({
+        name: "@username",
+        value: normalizeEmail(username) || username,
+      });
     }
-    
+
     query += " ORDER BY c.createdAt DESC";
-    
+
     const queryOptions = {
       maxItemCount: pageSize,
       continuationToken,
+      enableCrossPartitionQuery: true as const,
       ...(parameters.length > 0 && { parameters }),
     };
-    
-    const { resources, continuationToken: nextToken, hasMoreResults } = await containerInstance.items
-      .query(
-        {
-          query,
-          parameters,
-        },
-        queryOptions
-      )
-      .fetchNext();
-    
-    console.log(`✅ Retrieved ${resources.length} sessions (page size: ${pageSize})${username ? ` for user: ${username}` : ''}`);
-    
-    const sessions = resources.map((doc) => {
-      const typed = doc as ChatDocument;
-      ensureCollaborators(typed);
-      return typed;
-    });
+
+    const { resources, continuationToken: nextToken, hasMoreResults } =
+      await containerInstance.items
+        .query(
+          parameters.length > 0 ? { query, parameters } : { query },
+          queryOptions
+        )
+        .fetchNext();
+
+    console.log(
+      `✅ Retrieved ${resources.length} sessions (page size: ${pageSize})${username ? ` for user: ${username}` : ""}`
+    );
+
+    const sessions = resources.map((doc) =>
+      finalizeSessionListSummary(doc as Record<string, unknown>)
+    );
 
     return {
       sessions,
@@ -1311,8 +1353,14 @@ export const getSessionStatistics = async (): Promise<{
     const uniqueUsers = new Set(allSessions.map(s => s.username));
     const totalUsers = uniqueUsers.size;
     
-    const totalMessages = allSessions.reduce((sum, session) => sum + session.messages.length, 0);
-    const totalCharts = allSessions.reduce((sum, session) => sum + session.charts.length, 0);
+    const totalMessages = allSessions.reduce(
+      (sum, session) => sum + session.messageCount,
+      0
+    );
+    const totalCharts = allSessions.reduce(
+      (sum, session) => sum + session.chartCount,
+      0
+    );
     
     // Sessions by user
     const sessionsByUser: Record<string, number> = {};

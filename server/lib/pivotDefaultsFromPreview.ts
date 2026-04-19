@@ -8,6 +8,7 @@
 import type { DataSummary } from "../../shared/schema.js";
 import { resolveMetricAliasToSchemaColumn } from "./agents/runtime/plannerColumnResolve.js";
 import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
+import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.js";
 
 const AGG_SUFFIX = /_(sum|avg|mean|min|max|count)$/i;
 const AGG_SUFFIX_CAPTURE = /^(.*)_(sum|avg|mean|min|max|count)$/i;
@@ -59,7 +60,11 @@ function isMeasureColumn(
   return false;
 }
 
-export type PivotDefaultsFromPreview = { rows: string[]; values: string[] };
+export type PivotDefaultsFromPreview = {
+  rows: string[];
+  values: string[];
+  columns?: string[];
+};
 
 /**
  * @param columnOrder - Prefer tool `table.columns` when present so order matches SQL SELECT.
@@ -115,8 +120,18 @@ export function derivePivotDefaultsFromPreviewRows(
     normalizedValues.push(n);
   }
 
-  return {
-    rows: rowKeys,
+  const layout = suggestPivotColumnsFromDimensions({
+    rowCandidates: rowKeys,
+    dataSummary: summary,
+    pivotColumnDimensions: undefined,
+  });
+
+  const out: PivotDefaultsFromPreview = {
+    rows: layout.rows,
     values: normalizedValues,
   };
+  if (layout.columns.length) {
+    out.columns = layout.columns;
+  }
+  return out;
 }

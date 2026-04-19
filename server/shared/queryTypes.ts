@@ -61,10 +61,17 @@ export interface SortRequest {
 
 export interface ParsedQuery {
   rawQuestion: string;
+  /** Parser self-reported confidence 0–1 (when produced by parseUserQuery). */
+  confidence?: number;
   chartTypeHint?: 'line' | 'bar' | 'scatter' | 'pie' | 'area';
   variables?: string[];
   secondaryVariables?: string[];
   groupBy?: string[];
+  /**
+   * Non-numeric dimensions to place on the pivot Columns axis (matrix breakdown).
+   * Omit when a single row breakdown or unclear; max one column is honored by the pivot engine.
+   */
+  pivotColumnDimensions?: string[];
   dateAggregationPeriod?:
     | 'day'
     | 'week'

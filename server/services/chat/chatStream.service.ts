@@ -39,6 +39,11 @@ import {
   mergePivotSliceDefaults,
   pivotSliceDefaultsFromDimensionFilters,
 } from "../../lib/pivotSliceDefaultsFromDimensionFilters.js";
+import { mergeIntermediateSegmentPivotDefaults } from "../../lib/diagnosticIntermediatePivot.js";
+import {
+  sanitisePivotColumnDimensionsInput,
+  suggestPivotColumnsFromDimensions,
+} from "../../lib/pivotLayoutFromDimensions.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -95,10 +100,17 @@ function mergePivotDefaultsForResponse(params: {
   const hasValues = finalValues && finalValues.length > 0;
   if (!hasRows && !hasValues) return undefined;
 
+  const finalColumns =
+    executionPivot?.columns?.length
+      ? executionPivot.columns
+      : parserPivot?.columns;
+  const colKeys = finalColumns?.length ? finalColumns : [];
+
   const parserSlice = pivotSliceDefaultsFromDimensionFilters(
     dataSummary,
     readDimensionFiltersFromParsed(parsedQuery),
-    finalRows ?? []
+    finalRows ?? [],
+    colKeys
   );
   const mergedSlice = mergePivotSliceDefaults(parserSlice, {
     filterFields: executionPivot?.filterFields ?? [],
@@ -109,6 +121,9 @@ function mergePivotDefaultsForResponse(params: {
     rows: finalRows ?? [],
     values: finalValues ?? [],
   };
+  if (colKeys.length) {
+    out.columns = colKeys;
+  }
   if (mergedSlice.filterFields.length) {
     out.filterFields = mergedSlice.filterFields;
   }
@@ -176,6 +191,19 @@ function derivePivotDefaultsHint(params: {
   for (const col of requiredColumns) addValue(col);
 
   if (rows.length === 0 && values.length === 0) return undefined;
+
+  const pcd = sanitisePivotColumnDimensionsInput(
+    parsedQuery?.pivotColumnDimensions,
+    dataSummary
+  );
+  const laid = suggestPivotColumnsFromDimensions({
+    rowCandidates: rows,
+    dataSummary,
+    pivotColumnDimensions: pcd.length ? pcd : undefined,
+  });
+  const rowFinal = laid.rows;
+  const columnsFinal = laid.columns;
+
   const seenNorm = new Set<string>();
   const normalizedValues: string[] = [];
   for (const v of values) {
@@ -187,12 +215,16 @@ function derivePivotDefaultsHint(params: {
   const slice = pivotSliceDefaultsFromDimensionFilters(
     dataSummary,
     readDimensionFiltersFromParsed(parsedQuery),
-    rows
+    rowFinal,
+    columnsFinal
   );
   const hint: Message["pivotDefaults"] = {
-    rows,
+    rows: rowFinal,
     values: normalizedValues,
   };
+  if (columnsFinal.length) {
+    hint.columns = columnsFinal;
+  }
   if (slice.filterFields.length) {
     hint.filterFields = slice.filterFields;
   }
@@ -204,6 +236,7 @@ function derivePivotDefaultsHint(params: {
       groupBy,
       requiredColumns: requiredColumns.slice(0, 8),
       rows: hint.rows,
+      columns: hint.columns,
       values: hint.values,
       filterFields: hint.filterFields,
       filterSelections: hint.filterSelections,
@@ -329,6 +362,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const pendingIntermediates: PendingIntermediate[] = [];
     let intermediateSeq = 0;
     let provisionalPivotDefaults: Message["pivotDefaults"] | undefined;
+    let parsedQueryForLoad: Record<string, unknown> | null = null;
 
     const flushIntermediateSegment = (
       preview: Record<string, unknown>[],
@@ -340,10 +374,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       const assistantTimestamp = Date.now() + intermediateSeq++;
       const snapSteps = [...thinkingSteps];
       const snapWb = [...agentWorkbench];
-      const pivotDefaultsForSegment =
-        segmentPivotDefaults?.rows?.length && segmentPivotDefaults?.values?.length
-          ? segmentPivotDefaults
-          : provisionalPivotDefaults;
+      let pivotDefaultsForSegment: Message["pivotDefaults"] | undefined;
+      if (segmentPivotDefaults?.rows?.length && segmentPivotDefaults?.values?.length) {
+        pivotDefaultsForSegment = mergeIntermediateSegmentPivotDefaults({
+          dataSummary: chatDocument.dataSummary,
+          userMessage: message,
+          parsedQuery: parsedQueryForLoad,
+          segmentPivot: segmentPivotDefaults,
+        });
+      } else {
+        pivotDefaultsForSegment = provisionalPivotDefaults;
+      }
       if (
         !sendSSE(res, "intermediate", {
           preview,
@@ -475,7 +516,6 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       `   Final relevant: ${chatAnalysis.relevantColumns.join(", ") || "(none)"}`
     );
 
-    let parsedQueryForLoad: Record<string, unknown> | null = null;
     try {
       parsedQueryForLoad = await parseUserQuery(
         message,

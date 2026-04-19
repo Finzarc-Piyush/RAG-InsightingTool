@@ -8,7 +8,7 @@ export const sessionsApi = {
     if (continuationToken) {
       params.append("continuationToken", continuationToken);
     }
-    return api.get(`/sessions/paginated?${params}`);
+    return api.get(`/api/sessions/paginated?${params}`);
   },
 
   getSessionsFiltered: (filters: {

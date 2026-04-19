@@ -54,6 +54,43 @@ export type ChartFilterSelection = CategoricalFilterSelection | DateFilterSelect
 
 export type ActiveChartFilters = Record<string, ChartFilterSelection | undefined>;
 
+/** Wide multi-series charts: row filters ignore this; ChartRenderer uses it to show/hide series. */
+export const CHART_SERIES_VISIBILITY_FILTER_KEY = "__seriesKeys";
+
+/** Millisecond timestamps plausible for real dates; below this, numbers are measures (sales, etc.). */
+const MIN_MS_FOR_DATE_LIKE_NUMBER = 1e11;
+
+/** Which wide-series columns to render; empty filter means all `specSeriesKeys`. */
+export function visibleSeriesKeysFromFilters(
+  specSeriesKeys: string[] | undefined,
+  effectiveFilters: ActiveChartFilters
+): string[] {
+  if (!specSeriesKeys?.length) return [];
+  const s = effectiveFilters[CHART_SERIES_VISIBILITY_FILTER_KEY];
+  if (!s || s.type !== "categorical" || !s.values?.length) return [...specSeriesKeys];
+  const allowed = new Set(s.values);
+  const hit = specSeriesKeys.filter((k) => allowed.has(k));
+  return hit.length ? hit : [...specSeriesKeys];
+}
+
+/**
+ * For series visibility, no stored selection means "all on" in the UI.
+ * Other categorical filters keep prior behavior (empty = nothing selected).
+ */
+export function effectiveCategoricalValuesForCheckbox(
+  filterKey: string,
+  selection: ChartFilterSelection | undefined,
+  allOptionValues: string[]
+): string[] {
+  if (filterKey === CHART_SERIES_VISIBILITY_FILTER_KEY) {
+    if (selection?.type === "categorical" && selection.values.length > 0) {
+      return selection.values;
+    }
+    return allOptionValues;
+  }
+  return selection?.type === "categorical" ? selection.values : [];
+}
+
 interface FieldAccumulator {
   total: number;
   stringCount: number;
@@ -277,7 +314,10 @@ export const deriveChartFilterDefinitions = (
           acc.dateCounts.set(timestamp, (acc.dateCounts.get(timestamp) ?? 0) + 1);
         }
       } else if (typeof value === "number") {
-        const parsed = normalizeDateValue(value);
+        const parsed =
+          Math.abs(value) >= MIN_MS_FOR_DATE_LIKE_NUMBER
+            ? normalizeDateValue(value)
+            : undefined;
         if (Number.isFinite(value)) {
           acc.numericCount += 1;
           acc.numericMin = acc.numericMin === undefined ? value : Math.min(acc.numericMin, value);
@@ -296,6 +336,23 @@ export const deriveChartFilterDefinitions = (
 
   accumulators.forEach((acc, key) => {
     if (acc.total === 0) return;
+
+    if (forceNumeric.has(key)) {
+      if (
+        acc.numericCount >= 1 &&
+        acc.numericMin !== undefined &&
+        acc.numericMax !== undefined
+      ) {
+        definitions.push({
+          key,
+          label: toLabel(key),
+          type: "numeric",
+          min: acc.numericMin,
+          max: acc.numericMax,
+        });
+      }
+      return;
+    }
 
     const dateRatio = acc.dateCandidateCount / acc.total;
     
@@ -390,6 +447,7 @@ export const applyChartFilters = <T extends Record<string, unknown>>(
   return data.filter((row) => {
     return Object.entries(filters).every(([key, selection]) => {
       if (!selection) return true;
+      if (key === CHART_SERIES_VISIBILITY_FILTER_KEY) return true;
       const value = row[key];
 
       if (selection.type === "categorical") {

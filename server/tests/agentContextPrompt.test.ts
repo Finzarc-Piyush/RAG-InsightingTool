@@ -66,6 +66,32 @@ describe("summarizeContextForPrompt", () => {
     assert.match(text, /Product Category, Sales/);
     assert.match(text, /Phrase → column:/);
   });
+
+  it("includes DIAGNOSTIC_ANALYSIS_HINT when analysisSpec.mode is diagnostic", () => {
+    const summary: DataSummary = {
+      rowCount: 2,
+      columnCount: 2,
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [1] },
+        { name: "Region", type: "string", sampleValues: ["East"] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "Investigating factors driving Technology success in the East",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+      analysisSpec: { mode: "diagnostic" as const, outcomeColumn: "Sales" },
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    assert.match(text, /DIAGNOSTIC_ANALYSIS_HINT/);
+    assert.match(text, /Sales/);
+  });
 });
 
 describe("execute_query_plan temporal aggregation", () => {

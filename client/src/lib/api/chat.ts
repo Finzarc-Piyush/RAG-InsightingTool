@@ -74,6 +74,7 @@ export interface StreamIntermediatePayload {
   pivotDefaults?: {
     rows?: string[];
     values?: string[];
+    columns?: string[];
     filterFields?: string[];
     filterSelections?: Record<string, string[]>;
   };

@@ -13,6 +13,7 @@ import { DataSummary, Message } from '../shared/schema.js';
 import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate } from './dateUtils.js';
 import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.js';
 import { repairMisassignedDimensionFilters } from './dimensionFilterRepair.js';
+import { sanitisePivotColumnDimensionsInput } from './pivotLayoutFromDimensions.js';
 
 interface QueryParserResult extends ParsedQuery {
   confidence: number;
@@ -221,7 +222,14 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   if (raw?.variables) parsed.variables = raw.variables.filter(Boolean) as string[];
   if (raw?.secondaryVariables) parsed.secondaryVariables = raw.secondaryVariables.filter(Boolean) as string[];
   if (raw?.groupBy) parsed.groupBy = raw.groupBy.filter(Boolean) as string[];
-  
+  if (summary) {
+    const pcd = sanitisePivotColumnDimensionsInput(
+      raw?.pivotColumnDimensions,
+      summary
+    );
+    if (pcd.length) parsed.pivotColumnDimensions = pcd;
+  }
+
   // Sanitize dateAggregationPeriod
   const validPeriods: DatePeriod[] = [
     'day',
@@ -476,6 +484,7 @@ YOUR TASK:
   * For specific dates (e.g., "2024-01-15", "15/01/2024"), create a timeFilter with type "dateRange" using that date as both startDate and endDate.
   * For date ranges (e.g., "from Apr-24 to Jun-24"), create a timeFilter with type "dateRange" with startDate and endDate.
 - When the question clearly needs **time-bucketed metrics** (e.g. revenue by month, yearly trend), set **dateAggregationPeriod** and align **groupBy** with the actual date column name from the schema.
+- When the user wants a **metric over time broken down by another categorical dimension** (trend or series *by* region, category, segment, etc.), keep the **time bucket** in **groupBy** together with that breakdown column, and set **pivotColumnDimensions** to the **single breakdown column name** (the dimension after *by*) so a pivot can show time on rows and that dimension on columns. Omit **pivotColumnDimensions** when there is only one non-time breakdown dimension or the layout is unclear.
 - For **growth rates, month-over-month, or seasonal pattern** questions where the user needs **series of raw or lightly filtered rows** to compute deltas in a later step, you may use **timeFilters** only and omit aggregations—use judgment from the question.
 - IMPORTANT: Distinguish between:
   * "month" - groups by month-year (e.g., "Jan 2024", "Jan 2022" are separate)
@@ -505,11 +514,14 @@ YOUR TASK:
 - If the user wants to exclude categories, use exclusionFilters.
 - If the user asks for **top/bottom N** or superlatives implying a short ranked list, populate **topBottom** and/or **sort** and ensure **groupBy** + **aggregations** match the dimension and measure being ranked.
 - Identify chart type hints (line, bar, scatter, pie, area) if strongly implied.
+- **Investigative / driver phrasing**: Questions like **"Investigating factors driving …"**, **"What drives success in …"**, **"Drivers of X in [region]"**, **"Why is [category] strong in [region]?"** — extract **dimensionFilters** for every named literal that matches **sample_values** / **top_values** (e.g. Region **East**, Category **Technology**). Prefer **dimensionFilters** over guessing new column names. If the user does **not** ask for totals or breakdowns yet, you may leave **aggregations** and **groupBy** null and rely on filters only; set **confidence** ≥ 0.85 when literals clearly match hints.
 
 FEW-SHOT MEANING (do not copy verbatim; apply same logic to the real schema):
 - Q: "Which product categories generate the highest sales?" with columns including Category, Sales → groupBy: ["Category"], aggregations: [{column: "Sales", operation: "sum", alias: null}], sort: [{column: "Sales", direction: "desc"}], topBottom: {type: "top", column: "Sales", count: 10} or similar.
 - Q: "Show every order in 2023 where Region is West" → timeFilters + dimensionFilters: [{column: "Region", op: "in", values: ["West"], match: "exact"}], aggregations null, groupBy null, limit if needed.
 - Q: "Sales by Sub-Category within Technology category" with Category, Sub-Category, Sales → dimensionFilters: [{column: "Category", op: "in", values: ["Technology"], match: "case_insensitive"}], groupBy: ["Sub-Category"], aggregations: [{column: "Sales", operation: "sum", alias: null}], sort: [{column: "Sales", direction: "desc"}].
+- Q: abstract — *Measure over time by dimension D* with date column T, categorical D, measure M → groupBy includes T (or its time bucket) and D, aggregations on M, **pivotColumnDimensions**: ["D"] (one name only).
+- Q: "Investigating factors driving Technology's success in the East" with columns Region, Category, Sales → dimensionFilters: [{column: "Region", op: "in", values: ["East"], match: "case_insensitive"}, {column: "Category", op: "in", values: ["Technology"], match: "case_insensitive"}], aggregations null, groupBy null unless the user explicitly asked for a breakdown, confidence: 0.9.
 - List key variables mentioned.
 - Provide a confidence score between 0 and 1.
 
@@ -521,6 +533,7 @@ Output valid JSON with the following structure:
   "variables": string[] | null,
   "secondaryVariables": string[] | null,
   "groupBy": string[] | null,
+  "pivotColumnDimensions": string[] | null,
   "dateAggregationPeriod": "day" | "week" | "half_year" | "month" | "monthOnly" | "quarter" | "year" | null,
   "timeFilters": [
     {

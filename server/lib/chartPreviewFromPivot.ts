@@ -292,7 +292,14 @@ export type PivotChartPreviewResult = {
   /** Merge into API chart object so metadata matches processed `rows`. */
   resolvedSpec: Pick<
     ChartSpec,
-    "type" | "x" | "y" | "z" | "seriesColumn" | "barLayout" | "aggregate"
+    | "type"
+    | "x"
+    | "y"
+    | "z"
+    | "seriesColumn"
+    | "barLayout"
+    | "aggregate"
+    | "seriesKeys"
   >;
 };
 
@@ -409,6 +416,9 @@ export async function tryProcessChartDataFromPivotQuery(
         seriesColumn: specForProcess.seriesColumn,
         barLayout: specForProcess.barLayout,
         aggregate: specForProcess.aggregate,
+        ...(specForProcess.seriesKeys?.length
+          ? { seriesKeys: specForProcess.seriesKeys }
+          : {}),
       },
     };
   } catch (e) {

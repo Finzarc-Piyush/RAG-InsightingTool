@@ -20,7 +20,12 @@ import {
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
-import { ChartFilterDefinition, ActiveChartFilters } from '@/lib/chartFilters';
+import {
+  ChartFilterDefinition,
+  ActiveChartFilters,
+  effectiveCategoricalValuesForCheckbox,
+  visibleSeriesKeysFromFilters,
+} from '@/lib/chartFilters';
 import { format as formatDate } from 'date-fns';
 import {
   ResponsiveContainer,
@@ -255,6 +260,12 @@ export function ChartOnlyModal({
   };
   
   const MAX_RENDER_POINTS = getMaxRenderPoints();
+
+  const modalVisibleSeriesKeys = useMemo(
+    () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
+    [specSeriesKeys, effectiveFilters]
+  );
+
   const optimizedScatterData = useMemo(() => {
     if (type !== 'scatter' || processedScatterData.length <= MAX_RENDER_POINTS) {
       return processedScatterData;
@@ -270,7 +281,7 @@ export function ChartOnlyModal({
       case 'line': {
         const lineRows = lineAreaSortedData as Record<string, any>[];
         const lineMultiKeys =
-          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+          specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
 
         if (lineMultiKeys.length > 0) {
           const combinedVals = lineMultiKeys.flatMap((k) => getNumericValues(lineRows, k));
@@ -466,7 +477,8 @@ export function ChartOnlyModal({
       }
 
       case 'bar': {
-        const multiKeys = specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+        const multiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
         const stacked = barLayout !== 'grouped';
         return (
           <ResponsiveContainer width="100%" height={480}>
@@ -713,7 +725,8 @@ export function ChartOnlyModal({
         );
       case 'area': {
         const areaRows = lineAreaSortedData as Record<string, any>[];
-        const areaMultiKeys = specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+        const areaMultiKeys =
+          specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
         const stackedArea = barLayout !== 'grouped';
 
         if (areaMultiKeys.length > 0) {
@@ -1007,9 +1020,12 @@ export function ChartOnlyModal({
                           <ScrollArea className="h-52 pr-2">
                             <div className="flex flex-col gap-2">
                               {definition.options.map((option) => {
-                                const isChecked =
-                                  selection?.type === 'categorical' &&
-                                  selection.values.includes(option.value);
+                                const selectedValues = effectiveCategoricalValuesForCheckbox(
+                                  definition.key,
+                                  selection,
+                                  definition.options.map((o) => o.value)
+                                );
+                                const isChecked = selectedValues.includes(option.value);
                                 return (
                                   <label
                                     key={option.value}

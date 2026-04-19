@@ -122,6 +122,65 @@ function normalizeCorrelationStepArgs(
   if (typeof tv === "string" && tv.length > 0) {
     step.args.targetVariable = resolveToSchemaColumn(tv, columns);
   }
+  const dfs = step.args.dimensionFilters;
+  if (Array.isArray(dfs)) {
+    for (const d of dfs) {
+      if (d && typeof d === "object" && typeof (d as { column?: string }).column === "string") {
+        (d as { column: string }).column = resolveToSchemaColumn(
+          (d as { column: string }).column,
+          columns
+        );
+      }
+    }
+  }
+}
+
+function normalizeRunSegmentDriverStepArgs(
+  step: PlanStep,
+  columns: readonly { name: string }[]
+): void {
+  if (step.tool !== "run_segment_driver_analysis") return;
+  const out = step.args.outcomeColumn;
+  if (typeof out === "string" && out.length > 0) {
+    step.args.outcomeColumn = resolveToSchemaColumn(out, columns);
+  }
+  const dfs = step.args.dimensionFilters;
+  if (Array.isArray(dfs)) {
+    for (const d of dfs) {
+      if (d && typeof d === "object" && typeof (d as { column?: string }).column === "string") {
+        (d as { column: string }).column = resolveToSchemaColumn(
+          (d as { column: string }).column,
+          columns
+        );
+      }
+    }
+  }
+  const bc = step.args.breakdownColumns;
+  if (Array.isArray(bc)) {
+    step.args.breakdownColumns = (bc as string[])
+      .filter((c): c is string => typeof c === "string" && c.length > 0)
+      .map((c) => resolveToSchemaColumn(c, columns));
+  }
+}
+
+function validateRunSegmentDriverStep(step: PlanStep, colNames: Set<string>): string | null {
+  if (step.tool !== "run_segment_driver_analysis") return null;
+  const out = step.args.outcomeColumn;
+  if (typeof out !== "string" || !colNames.has(out)) return "segment_outcomeColumn";
+  const dfs = step.args.dimensionFilters;
+  if (!Array.isArray(dfs) || dfs.length === 0) return "segment_dimensionFilters";
+  for (const d of dfs) {
+    if (!d || typeof d !== "object") return "segment_dimensionFilters_item";
+    const col = (d as { column?: string }).column;
+    if (typeof col !== "string" || !colNames.has(col)) return `segment_filter:${col}`;
+  }
+  const bc = step.args.breakdownColumns;
+  if (Array.isArray(bc)) {
+    for (const c of bc) {
+      if (typeof c === "string" && c.length > 0 && !colNames.has(c)) return `segment_breakdown:${c}`;
+    }
+  }
+  return null;
 }
 
 function normalizeDeriveDimensionBucketStepArgs(
@@ -289,6 +348,9 @@ function validateAddComputedColumnsStep(step: PlanStep, cumulative: Set<string>)
 }
 
 function firstInvalidColumnReference(step: PlanStep, cumulative: Set<string>): string | null {
+  const seg = validateRunSegmentDriverStep(step, cumulative);
+  if (seg) return seg;
+  if (step.tool === "run_segment_driver_analysis") return null;
   const der = validateDeriveDimensionStep(step, cumulative);
   if (der) return der;
   if (step.tool === "derive_dimension_bucket") return null;
@@ -338,7 +400,9 @@ Rules:
 - When **Preferred columns** lists a date column and a numeric metric, use those **exact strings** in execute_query_plan unless get_schema_summary shows different headers.
 - If the Dataset block includes **AUTHORITATIVE columns for this question**, you MUST use those exact column names in \`execute_query_plan\` (groupBy, aggregations, filters, sort) and other column-bound tool args for this question, unless a \`get_schema_summary\` step in the same plan proves the headers differ.
 - Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
-- Use run_correlation when the user asks what drives/affects/correlates with a numeric column.
+- Use run_correlation when the user asks what drives/affects/correlates with a numeric column. Pass **dimensionFilters** when correlating within a segment so the tool uses **row-level turn-start data**, not a tiny aggregate frame left in ctx.data.
+- If the Dataset block includes **DIAGNOSTIC_ANALYSIS_HINT**, follow that playbook: row-level slice → breakdowns → correlation; avoid correlating on aggregate-only tables.
+- **run_segment_driver_analysis** (when listed in tools): optional one-shot driver path for a filtered segment + outcome column.
 - Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends). For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), **y must be the aggregated column name on the result rows** (e.g. \`Sales_sum\`), not \`Sales\`. **x** is the same groupBy column (bucket labels). Set \`aggregate\` \`none\` when there is exactly one row per x after bucketing; use sum|mean only when charting raw rows.
 - **Layered charts**: If execute_query_plan returns **long** rows (one row per x × second dimension, e.g. month × region) with a numeric measure column, use **build_chart** with \`type\` \`bar\` (stacked default) or \`line\`/\`area\` for trends; set \`seriesColumn\` to the **second dimension** when convenient—the server **chart compiler** will bind a second categorical column from the result if you omit it, as long as the result still includes that column (never rely on the chart layer to drop dimensions). Optional \`barLayout\`: \`stacked\`|\`grouped\`. For **two numeric metrics** over the same x (e.g. revenue vs profit over time), use \`y2\` instead of \`seriesColumn\`. Heatmaps: \`type\` \`heatmap\`, \`x\`/\`y\` as the two dimensions, \`z\` the numeric cell value.
 - Use clarify_user if critical information is missing.
@@ -401,6 +465,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       ctx.streamPreAnalysis
     );
     normalizeCorrelationStepArgs(step, ctx.summary.columns);
+    normalizeRunSegmentDriverStepArgs(step, ctx.summary.columns);
     normalizeDeriveDimensionBucketStepArgs(step, ctx.summary.columns);
     normalizeAddComputedColumnsStepArgs(step, ctx.summary.columns);
     patchExecuteQueryPlanDateAggregation(

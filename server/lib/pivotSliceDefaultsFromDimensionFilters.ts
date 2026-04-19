@@ -13,12 +13,13 @@ export type PivotSliceDefaults = {
 
 /**
  * Build filter well fields + initial selections from dimension filters.
- * Columns already used as pivot rows only get `filterSelections` (same field is in slice keys).
+ * Fields on pivot rows or pivot columns only get `filterSelections` (same field is in slice keys).
  */
 export function pivotSliceDefaultsFromDimensionFilters(
   dataSummary: DataSummary,
   dimensionFilters: DimensionFilter[] | undefined,
-  pivotRowKeys: string[]
+  pivotRowKeys: string[],
+  pivotColumnKeys: string[] = []
 ): PivotSliceDefaults {
   const allowed = allowedColumnNamesForQueryPlan(dataSummary);
   const numeric = new Set(dataSummary.numericColumns ?? []);
@@ -36,7 +37,9 @@ export function pivotSliceDefaultsFromDimensionFilters(
       .filter(Boolean);
     if (!vals.length) continue;
     filterSelections[f.column] = [...vals];
-    if (!pivotRowKeys.includes(f.column) && !seenFilterWell.has(f.column)) {
+    const onPivotAxis =
+      pivotRowKeys.includes(f.column) || pivotColumnKeys.includes(f.column);
+    if (!onPivotAxis && !seenFilterWell.has(f.column)) {
       seenFilterWell.add(f.column);
       filterFields.push(f.column);
     }

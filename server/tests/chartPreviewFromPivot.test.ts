@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { compileChartSpec } from "../lib/chartSpecCompiler.js";
+import { processChartData } from "../lib/chartGenerator.js";
 import {
   applyPivotSeriesColumnFromModel,
   pivotModelToPreAggregatedChartRows,
@@ -386,5 +388,86 @@ describe("pivotModelRowsForChartSpec", () => {
     const byCat = new Map(rows!.map((r) => [String(r.Category), r.Sales as number]));
     assert.equal(byCat.get("Furniture"), 11);
     assert.equal(byCat.get("Technology"), 22);
+  });
+});
+
+describe("pivot chart preview seriesKeys (wide line metadata)", () => {
+  it("processChartData sets seriesKeys so resolvedSpec can expose them for multi-series line", () => {
+    const model: PivotModel = {
+      rowFields: ["Region"],
+      colField: "Quarter",
+      columnFields: ["Quarter"],
+      colKeys: ["Q1", "Q2"],
+      valueSpecs: [{ id: "meas_Sales", field: "Sales", agg: "sum" }],
+      tree: {
+        nodes: [
+          {
+            type: "leaf",
+            depth: 1,
+            label: "North",
+            pathKey: "North",
+            values: {
+              flatValues: null,
+              matrixValues: {
+                Q1: { meas_Sales: 4 },
+                Q2: { meas_Sales: 9 },
+              },
+            },
+          },
+        ],
+        grandTotal: { flatValues: null, matrixValues: null },
+      },
+      columnFieldTruncated: false,
+    };
+    const preRows = pivotModelRowsForChartSpec(model, {
+      type: "line",
+      title: "t",
+      x: "Region",
+      y: "Sales",
+      seriesColumn: "Quarter",
+    });
+    assert.ok(preRows && preRows.length >= 1);
+    const preCols = Object.keys(preRows![0]!);
+    const specForPivot: ChartSpec = {
+      type: "line",
+      title: "t",
+      x: "Region",
+      y: "Sales",
+      seriesColumn: "Quarter",
+      aggregate: "sum",
+    };
+    const { merged: compiled } = compileChartSpec(
+      preRows as Record<string, unknown>[],
+      { numericColumns: ["Sales"], dateColumns: [] },
+      {
+        type: specForPivot.type,
+        x: specForPivot.x,
+        y: specForPivot.y,
+        z: specForPivot.z,
+        seriesColumn: specForPivot.seriesColumn,
+        barLayout: specForPivot.barLayout,
+        aggregate: specForPivot.aggregate,
+      },
+      { columnOrder: preCols, disallowHeatmapUpgrade: true }
+    );
+    const specForProcess: ChartSpec = {
+      ...specForPivot,
+      ...compiled,
+      aggregate: "none",
+    };
+    const processed = processChartData(
+      preRows as Record<string, unknown>[],
+      specForProcess,
+      [],
+      { chartQuestion: "" }
+    );
+    assert.ok(processed.length);
+    assert.ok(specForProcess.seriesKeys?.length);
+    for (const sk of specForProcess.seriesKeys!) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(processed[0], sk),
+        `wide row should include series column ${sk}`
+      );
+    }
   });
 });

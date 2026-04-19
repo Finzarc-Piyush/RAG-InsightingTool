@@ -27,6 +27,27 @@ describe("derivePivotDefaultsFromPreviewRows", () => {
     ]);
     assert.deepEqual(out?.rows, [monthCol]);
     assert.deepEqual(out?.values, ["Sales"]);
+    assert.equal(out?.columns, undefined);
+  });
+
+  it("splits temporal facet and categorical into rows vs columns", () => {
+    const monthCol = facetColumnKey("Order Date", "month");
+    const rows = [{ [monthCol]: "2015-01", Category: "Technology", Sales_sum: 14206 }];
+    const summary = minimalSummary({
+      columns: [
+        { name: "Category", type: "string", sampleValues: [] },
+        { name: "Sales", type: "number", sampleValues: [] },
+        { name: "Order Date", type: "date", sampleValues: [] },
+      ] as DataSummary["columns"],
+    });
+    const out = derivePivotDefaultsFromPreviewRows(rows, summary, [
+      monthCol,
+      "Category",
+      "Sales_sum",
+    ]);
+    assert.deepEqual(out?.rows, [monthCol]);
+    assert.deepEqual(out?.columns, ["Category"]);
+    assert.deepEqual(out?.values, ["Sales"]);
   });
 
   it("maps aggregate alias Total_Revenue to schema Sales for pivot values", () => {

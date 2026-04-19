@@ -16,10 +16,12 @@ import {
   normalizePivotValueFieldForBaseTable,
 } from "./pivotDefaultsFromPreview.js";
 import { pivotSliceDefaultsFromDimensionFilters } from "./pivotSliceDefaultsFromDimensionFilters.js";
+import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.js";
 
 export type PivotDefaultsRowsValues = {
   rows: string[];
   values: string[];
+  columns?: string[];
   filterFields?: string[];
   filterSelections?: Record<string, string[]>;
 };
@@ -94,11 +96,30 @@ export function mergePivotDefaultRowsAndValues(params: {
   const traceRowsMatchOutput =
     traceRows.length > 0 && traceRows.every((r) => previewKeys.has(r));
 
-  const rowOut = traceRowsMatchOutput
+  let rowOut = traceRowsMatchOutput
     ? traceRows
     : fromPreview?.rows?.length
       ? fromPreview.rows
       : traceRows;
+
+  let columnsOut: string[] =
+    !traceRowsMatchOutput && fromPreview?.columns?.length
+      ? [...fromPreview.columns]
+      : [];
+
+  const needsTraceOrFallbackLayout =
+    traceRowsMatchOutput ||
+    (!fromPreview?.rows?.length && rowOut.length > 0);
+
+  if (needsTraceOrFallbackLayout) {
+    const laid = suggestPivotColumnsFromDimensions({
+      rowCandidates: traceRowsMatchOutput ? traceRows : rowOut,
+      dataSummary,
+      pivotColumnDimensions: undefined,
+    });
+    rowOut = laid.rows;
+    columnsOut = [...laid.columns];
+  }
 
   const rawValues = traceValues.length
     ? traceValues
@@ -122,13 +143,17 @@ export function mergePivotDefaultRowsAndValues(params: {
   const slice = pivotSliceDefaultsFromDimensionFilters(
     dataSummary,
     normalizedPlan.dimensionFilters as DimensionFilter[] | undefined,
-    rowOut
+    rowOut,
+    columnsOut
   );
 
   const out: PivotDefaultsRowsValues = {
     rows: rowOut,
     values: valueOut,
   };
+  if (columnsOut.length) {
+    out.columns = columnsOut;
+  }
   if (slice.filterFields.length) {
     out.filterFields = slice.filterFields;
   }
@@ -185,10 +210,14 @@ export function derivePivotDefaultsFromExecutionMerged(
       tableColumns.length ? tableColumns : null
     );
     if (!fromPreview?.rows?.length && !fromPreview?.values?.length) return undefined;
-    return {
+    const out: PivotDefaultsRowsValues = {
       rows: fromPreview.rows ?? [],
       values: fromPreview.values ?? [],
     };
+    if (fromPreview.columns?.length) {
+      out.columns = [...fromPreview.columns];
+    }
+    return out;
   }
 
   return mergePivotDefaultRowsAndValues({

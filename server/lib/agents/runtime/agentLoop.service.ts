@@ -42,6 +42,7 @@ const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_readonly_sql",
   "derive_dimension_bucket",
   "add_computed_columns",
+  "run_segment_driver_analysis",
 ]);
 
 function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[] {
@@ -817,6 +818,9 @@ export async function runAgentTurn(
                     pivotDefaults: {
                       rows: pivotDefaults!.rows,
                       values: pivotDefaults!.values,
+                      ...(pivotDefaults!.columns?.length
+                        ? { columns: pivotDefaults!.columns }
+                        : {}),
                     },
                   }
                 : {}),

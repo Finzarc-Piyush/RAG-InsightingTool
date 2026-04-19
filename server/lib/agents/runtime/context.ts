@@ -5,7 +5,7 @@ import type {
   Message,
   SessionAnalysisContext,
 } from "../../../shared/schema.js";
-import type { AgentExecutionContext, StreamPreAnalysis } from "./types.js";
+import type { AgentExecutionContext, AnalysisSpecForAgent, StreamPreAnalysis } from "./types.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
 import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
 
@@ -27,6 +27,7 @@ export function buildAgentExecutionContext(params: {
   dataBlobVersion?: number;
   loadFullData?: () => Promise<Record<string, any>[]>;
   streamPreAnalysis?: StreamPreAnalysis;
+  analysisSpec?: AnalysisSpecForAgent | null;
   onMidTurnSessionContext?: MidTurnPersist;
   onIntermediateArtifact?: AgentExecutionContext["onIntermediateArtifact"];
 }): AgentExecutionContext {
@@ -35,6 +36,8 @@ export function buildAgentExecutionContext(params: {
     username: params.username,
     question: params.question,
     data: params.data,
+    turnStartDataRef: params.data?.length ? params.data : null,
+    analysisSpec: params.analysisSpec ?? null,
     summary: params.summary,
     chatHistory: params.chatHistory,
     chatInsights: params.chatInsights,
@@ -117,8 +120,12 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
     ? `\nTemporal intent from question: use dateAggregationPeriod=${temporal} when bucketing a raw date column, or groupBy the matching derived time-bucket column (same name as in the list above, e.g. \`Month · …\`) and omit date bucketing in the plan. For vague temporal questions (no explicit grain), prefer sorting on the raw date column over forcing yearly buckets.`
     : "";
   const facetBlock = formatDerivedTemporalFacetsBlock(ctx.summary);
+  const diag =
+    ctx.analysisSpec?.mode === "diagnostic" ?
+      `\nDIAGNOSTIC_ANALYSIS_HINT: User question matches driver/factor/deep-dive intent. Prefer: (1) execute_query_plan with dimensionFilters only (no aggregations) OR run_readonly_sql on row-level \`dataset\` to slice the segment; (2) breakdowns (groupBy + sum) **on the sliced frame**; (3) run_correlation with **dimensionFilters** matching the slice and **targetVariable** = numeric outcome (e.g. Sales)—do **not** run correlation only on small aggregate tables from step (1) if that table has one row per group already. When **run_segment_driver_analysis** is available and the question is clearly about drivers in a segment, you may use it as one step. Independent post-slice queries may be planned as parallel-friendly separate steps with the same dependsOn parent if the executor supports it; otherwise keep a short linear plan.\nSuggested outcome column (hint only): ${ctx.analysisSpec.outcomeColumn ?? "(infer from question)"}`
+    : "";
   return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.
 dateColumns: ${dates}
 numericColumns: ${numerics}${facetBlock}${hints}${atMentionNote}${temporalLine}
-Mode: ${ctx.mode}${blocks}`;
+Mode: ${ctx.mode}${diag}${blocks}`;
 }

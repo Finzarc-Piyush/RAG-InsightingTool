@@ -141,7 +141,7 @@ CLASSIFICATION RULES:
    * Model types: linear, logistic, ridge, lasso, random forest, decision tree, gradient boosting, elasticnet, svm, knn, polynomial, bayesian, quantile, poisson, gamma, tweedie, xgboost, lightgbm, catboost, mlp, naive bayes, lda, qda, etc.
    * Set confidence to 0.9+ for these patterns (including advice-style questions about models and follow-up responses in modeling context)
 2. "correlation" - User asks about relationships, what affects/influences something, or correlation between variables
-   * HIGH PRIORITY: Questions like "what impacts X?", "what affects X?", "what influences X?", "correlation of X with all other variables" should ALWAYS be classified as "correlation"
+   * HIGH PRIORITY: Questions like "what impacts X?", "what affects X?", "what influences X?", "factors driving X", "drivers of X", "what explains X", "investigating … success", "investigating factors driving …", "correlation of X with all other variables" should ALWAYS be classified as "correlation"
    * CRITICAL: Questions that contain correlation language (impacts, affects, influences, correlation) should be classified as "correlation" EVEN IF they also mention charts/visualizations
    * Examples: "show me a chart to visualize does X impact Y", "create a chart showing what affects X", "visualize the correlation between X and Y" → ALL should be "correlation"
    * These are correlation queries even if the target variable (X) is not immediately recognizable

@@ -81,6 +81,7 @@ interface DataPreviewTableProps {
   pivotDefaults?: {
     rows?: string[];
     values?: string[];
+    columns?: string[];
     filterFields?: string[];
     filterSelections?: Record<string, string[]>;
   };
@@ -399,11 +400,15 @@ export function DataPreviewTable({
     numericColumnsSet,
   ]);
 
-  const { defaultPivotRowKeys, defaultValueMeasures } = useMemo(() => {
+  const { defaultPivotRowKeys, defaultPivotColumnKeys, defaultValueMeasures } = useMemo(() => {
     const hintedRows = Array.isArray(pivotDefaults?.rows) ? pivotDefaults.rows : [];
+    const hintedColumns = Array.isArray(pivotDefaults?.columns)
+      ? pivotDefaults.columns
+      : [];
     const hintedValues = Array.isArray(pivotDefaults?.values) ? pivotDefaults.values : [];
     return {
       defaultPivotRowKeys: hintedRows,
+      defaultPivotColumnKeys: hintedColumns,
       defaultValueMeasures: hintedValues,
     };
   }, [pivotDefaults]);
@@ -430,19 +435,25 @@ export function DataPreviewTable({
     const defaultFilterKeys = (pivotDefaults?.filterFields ?? []).filter((k) =>
       pivotFieldKeys.includes(k)
     );
+    const hintedColumns = pivotDefaults?.columns ?? [];
     const resolved = createInitialPivotConfig(
       pivotFieldKeys,
       numericColumns,
       defaultPivotRowKeys,
       defaultValueMeasures,
-      { defaultFilterKeys }
+      {
+        defaultFilterKeys,
+        defaultColumnKeys: Array.isArray(hintedColumns) ? hintedColumns : [],
+      }
     );
     logger.debug('[DataPreviewTable] Pivot defaults from message', {
       hintedRows,
+      hintedColumns,
       hintedValues,
       chosenRows: defaultPivotRowKeys,
       chosenValues: defaultValueMeasures,
       resolvedRows: resolved.rows,
+      resolvedColumns: resolved.columns,
       resolvedValues: resolved.values.map((v) => v.field),
       resolvedFilters: resolved.filters,
     });
@@ -452,17 +463,21 @@ export function DataPreviewTable({
     pivotFieldKeys,
     numericColumns,
     defaultPivotRowKeys,
+    defaultPivotColumnKeys,
     defaultValueMeasures,
   ]);
 
   const pivotDataSignature = useMemo(() => {
     return `${pivotFieldKeys.join('\0')}\0${numericColumns.join('\0')}\0${defaultPivotRowKeys.join(
       '\0'
-    )}\0${defaultValueMeasures.join('\0')}\0${pivotFilterDefaultsKey}`;
+    )}\0${defaultPivotColumnKeys.join('\0')}\0${defaultValueMeasures.join(
+      '\0'
+    )}\0${pivotFilterDefaultsKey}`;
   }, [
     pivotFieldKeys,
     numericColumns,
     defaultPivotRowKeys,
+    defaultPivotColumnKeys,
     defaultValueMeasures,
     pivotFilterDefaultsKey,
   ]);
@@ -612,7 +627,12 @@ export function DataPreviewTable({
           numericColumns,
           defaultPivotRowKeys,
           defaultValueMeasures,
-          { defaultFilterKeys }
+          {
+            defaultFilterKeys,
+            defaultColumnKeys: defaultPivotColumnKeys.filter((k) =>
+              pivotFieldKeys.includes(k)
+            ),
+          }
         )
       )
     );
@@ -1957,20 +1977,22 @@ export function DataPreviewTable({
                               ))}
                             </select>
                           </div>
-                          <div className="space-y-1.5 min-w-[9rem]">
-                            <label className="text-xs text-muted-foreground">Bar layout</label>
-                            <select
-                              className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                              value={chartBarLayout}
-                              onChange={(e) => {
-                                chartMappingManualRef.current = true;
-                                setChartBarLayout(e.target.value as 'stacked' | 'grouped');
-                              }}
-                            >
-                              <option value="stacked">Stacked</option>
-                              <option value="grouped">Grouped</option>
-                            </select>
-                          </div>
+                          {chartType === 'bar' ? (
+                            <div className="space-y-1.5 min-w-[9rem]">
+                              <label className="text-xs text-muted-foreground">Bar layout</label>
+                              <select
+                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                                value={chartBarLayout}
+                                onChange={(e) => {
+                                  chartMappingManualRef.current = true;
+                                  setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                                }}
+                              >
+                                <option value="stacked">Stacked</option>
+                                <option value="grouped">Grouped</option>
+                              </select>
+                            </div>
+                          ) : null}
                         </>
                       ) : null}
                     </>
@@ -2476,20 +2498,22 @@ export function DataPreviewTable({
                                     ))}
                                   </select>
                                 </div>
-                                <div className="space-y-1.5 min-w-[9rem]">
-                                  <label className="text-xs text-muted-foreground">Bar layout</label>
-                                  <select
-                                    className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                    value={chartBarLayout}
-                                    onChange={(e) => {
-                                      chartMappingManualRef.current = true;
-                                      setChartBarLayout(e.target.value as 'stacked' | 'grouped');
-                                    }}
-                                  >
-                                    <option value="stacked">Stacked</option>
-                                    <option value="grouped">Grouped</option>
-                                  </select>
-                                </div>
+                                {chartType === 'bar' ? (
+                                  <div className="space-y-1.5 min-w-[9rem]">
+                                    <label className="text-xs text-muted-foreground">Bar layout</label>
+                                    <select
+                                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                                      value={chartBarLayout}
+                                      onChange={(e) => {
+                                        chartMappingManualRef.current = true;
+                                        setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                                      }}
+                                    >
+                                      <option value="stacked">Stacked</option>
+                                      <option value="grouped">Grouped</option>
+                                    </select>
+                                  </div>
+                                ) : null}
                               </>
                             ) : null}
                           </>

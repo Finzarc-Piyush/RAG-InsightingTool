@@ -38,6 +38,17 @@ describe("pivotSliceDefaultsFromDimensionFilters", () => {
     assert.deepEqual(out.filterFields, []);
     assert.deepEqual(out.filterSelections, { Segment: ["Consumer"] });
   });
+
+  it("does not duplicate pivot column dimension in filterFields", () => {
+    const out = pivotSliceDefaultsFromDimensionFilters(
+      summary,
+      [{ column: "Category", op: "in", values: ["Technology"] }],
+      ["Segment"],
+      ["Category"]
+    );
+    assert.deepEqual(out.filterFields, []);
+    assert.deepEqual(out.filterSelections, { Category: ["Technology"] });
+  });
 });
 
 describe("mergePivotSliceDefaults", () => {

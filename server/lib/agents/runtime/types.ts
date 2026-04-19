@@ -75,6 +75,9 @@ export interface StreamPreAnalysis {
   columnMapping?: Record<string, string>;
 }
 
+/** Heuristic diagnostic vs descriptive mode (see analysisSpecRouter.ts). */
+export type AnalysisSpecForAgent = import("../../analysisSpecRouter.js").AnalysisSpec;
+
 /** One completed tool call in the turn — fed back into the planner on replan / structured context. */
 export interface WorkingMemoryEntry {
   callId: string;
@@ -98,6 +101,10 @@ export interface AgentExecutionContext {
   username?: string;
   question: string;
   data: Record<string, any>[];
+  /** Same array reference as the row-level frame at turn start; never reassigned (used for diagnostic slices when ctx.data became aggregates). */
+  turnStartDataRef?: Record<string, any>[] | null;
+  /** Lightweight mode/outcome hints for planner (heuristic). */
+  analysisSpec?: AnalysisSpecForAgent | null;
   summary: DataSummary;
   chatHistory: Message[];
   chatInsights?: Insight[];

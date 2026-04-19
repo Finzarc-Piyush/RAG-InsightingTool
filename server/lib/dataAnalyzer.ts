@@ -13,6 +13,7 @@ import {
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
+import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 
 let agenticStrictDeprecationLogged = false;
 import { openai, MODEL } from './openai.js';
@@ -444,6 +445,7 @@ export async function answerQuestion(
 
     try {
       const config = loadAgentConfigFromEnv();
+      const analysisSpec = classifyAnalysisSpec(question, summary);
       const execCtx = buildAgentExecutionContext({
         sessionId: sessionId || 'unknown',
         username: agentOptions?.username,
@@ -460,6 +462,7 @@ export async function answerQuestion(
         dataBlobVersion: agentOptions?.dataBlobVersion,
         loadFullData,
         streamPreAnalysis: agentOptions?.streamPreAnalysis,
+        analysisSpec,
         onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
       });

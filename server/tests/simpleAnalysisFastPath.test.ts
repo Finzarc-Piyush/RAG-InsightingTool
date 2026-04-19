@@ -67,4 +67,14 @@ describe("simpleAnalysisFastPath", () => {
       false
     );
   });
+
+  it("does not route diagnostic driver phrasing to orchestrator fast path", () => {
+    assert.equal(
+      shouldUseOrchestratorInsteadOfAgentLoop(
+        "Investigating factors driving Technology's success in the East.",
+        "analysis"
+      ),
+      false
+    );
+  });
 });

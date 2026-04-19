@@ -149,6 +149,8 @@ export type ThinkingSnapshot = z.infer<typeof thinkingSnapshotSchema>;
 export const pivotDefaultsSchema = z.object({
   rows: z.array(z.string()).optional(),
   values: z.array(z.string()).optional(),
+  /** Optional pivot Columns axis (non-numeric dimensions); engine uses first only when multiple. */
+  columns: z.array(z.string()).optional(),
   /** Categorical fields in the pivot Filters well (slice dimensions not on rows/columns). */
   filterFields: z.array(z.string()).optional(),
   /** Initial slice selections (field → selected values); `in` filters only in v1. */

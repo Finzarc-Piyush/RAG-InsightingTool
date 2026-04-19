@@ -33,6 +33,10 @@ import {
 } from "../lib/axisScaling.js";
 import { filterRowsByPivotSelections } from "../lib/pivotRowFilters.js";
 import { tryProcessChartDataFromPivotQuery } from "../lib/chartPreviewFromPivot.js";
+import {
+  deriveSeriesKeysFromWideDataRow,
+  seriesKeysPatchesFromProcessedSpec,
+} from "../lib/ensureChartSpecSeriesKeys.js";
 import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 import { generateChartInsights } from "../lib/insightGenerator.js";
@@ -135,7 +139,7 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
     const sessions = await getAllSessions(username);
     
     // Return simplified session list for better performance
-    const sessionList = sessions.map(session => ({
+    const sessionList = sessions.map((session) => ({
       id: session.id,
       username: session.username,
       fileName: session.fileName,
@@ -143,8 +147,8 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
       createdAt: session.createdAt,
       lastUpdatedAt: session.lastUpdatedAt,
       collaborators: session.collaborators || [session.username],
-      messageCount: session.messages.length,
-      chartCount: session.charts.length,
+      messageCount: session.messageCount,
+      chartCount: session.chartCount,
       sessionId: session.sessionId,
     }));
 
@@ -185,7 +189,7 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
     const result = await getAllSessionsPaginated(pageSize, continuationToken, username);
     
     // Return simplified session list
-    const sessionList = result.sessions.map(session => ({
+    const sessionList = result.sessions.map((session) => ({
       id: session.id,
       username: session.username,
       fileName: session.fileName,
@@ -193,8 +197,8 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
       createdAt: session.createdAt,
       lastUpdatedAt: session.lastUpdatedAt,
       collaborators: session.collaborators || [session.username],
-      messageCount: session.messages.length,
-      chartCount: session.charts.length,
+      messageCount: session.messageCount,
+      chartCount: session.chartCount,
       sessionId: session.sessionId,
     }));
 
@@ -252,7 +256,7 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
     const sessions = await getSessionsWithFilters(options);
     
     // Return simplified session list
-    const sessionList = sessions.map(session => ({
+    const sessionList = sessions.map((session) => ({
       id: session.id,
       username: session.username,
       fileName: session.fileName,
@@ -453,7 +457,7 @@ export const getSessionsByUserEndpoint = async (req: Request, res: Response) => 
     const sessions = await getSessionsWithFilters({ username: pathUser });
     
     // Return simplified session list
-    const sessionList = sessions.map(session => ({
+    const sessionList = sessions.map((session) => ({
       id: session.id,
       username: session.username,
       fileName: session.fileName,
@@ -890,11 +894,15 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       if (pivotPreview?.rows?.length) {
         const fromPivot = pivotPreview.rows;
         const yField = pivotPreview.yField;
+        const resolved = pivotPreview.resolvedSpec;
+        const seriesKeysForDomain = resolved.seriesKeys?.length
+          ? resolved.seriesKeys
+          : spec.seriesKeys;
         let extra: Partial<ChartSpec> = {};
         if (spec.type === "heatmap") {
           extra = {};
-        } else if (spec.seriesKeys?.length) {
-          const sk = spec.seriesKeys;
+        } else if (seriesKeysForDomain?.length) {
+          const sk = seriesKeysForDomain;
           extra = yDomainForMultiSeriesRows(
             fromPivot as Record<string, any>[],
             sk,
@@ -914,9 +922,7 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
             }
           );
         }
-
-        const resolved = pivotPreview.resolvedSpec;
-        const out: ChartSpec = {
+        let out: ChartSpec = {
           ...spec,
           ...resolved,
           y: yField,
@@ -925,6 +931,18 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
           xLabel: spec.xLabel || resolved.x,
           yLabel: spec.yLabel || yField,
         };
+        const derivedSk = out.seriesKeys?.length
+          ? undefined
+          : deriveSeriesKeysFromWideDataRow(
+              out.type,
+              out.x,
+              out.y,
+              out.seriesColumn,
+              fromPivot[0] as Record<string, unknown>
+            );
+        if (derivedSk?.length) {
+          out = { ...out, seriesKeys: derivedSk };
+        }
         return res.json({ chart: out });
       }
     }
@@ -987,15 +1005,34 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       aggregate: rowCompiled.aggregate ?? spec.aggregate,
     });
 
+    const specProcessing: ChartSpec = { ...spec };
     const processed = processChartData(
       data as Record<string, any>[],
-      { ...spec },
+      specProcessing,
       session.dataSummary.dateColumns,
       { chartQuestion: "" }
     );
     if (!processed.length) {
       return res.status(400).json({ error: "No data points produced for this chart configuration" });
     }
+
+    let mergedPatches = seriesKeysPatchesFromProcessedSpec(specProcessing);
+    if (!mergedPatches.seriesKeys?.length && spec.seriesColumn && processed[0]) {
+      const d = deriveSeriesKeysFromWideDataRow(
+        spec.type,
+        spec.x,
+        spec.y,
+        spec.seriesColumn,
+        processed[0] as Record<string, unknown>
+      );
+      if (d?.length) {
+        mergedPatches = { ...mergedPatches, seriesKeys: d };
+      }
+    }
+    spec = chartSpecSchema.parse({
+      ...spec,
+      ...mergedPatches,
+    });
 
     let extra: Partial<ChartSpec> = {};
     if (spec.type === "heatmap") {

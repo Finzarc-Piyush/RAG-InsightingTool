@@ -3,7 +3,16 @@ import { ToolRegistry, type ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
 import { AGENT_WORKBENCH_ENTRY_CODE_MAX, isAgenticLoopEnabled } from "../types.js";
 import { executeAnalyticalQuery } from "../../../analyticalQueryExecutor.js";
-import type { ParsedQuery } from "../../../shared/queryTypes.js";
+import type { DimensionFilter, ParsedQuery } from "../../../shared/queryTypes.js";
+import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
+import {
+  diagnosticSliceRowCap,
+  isDiagnosticCompositeToolEnabled,
+} from "../../../diagnosticPipelineConfig.js";
+import {
+  runSegmentDriverAnalysisTool,
+  segmentDriverArgsSchema,
+} from "../../../segmentDriverAnalysisTool.js";
 import { analyzeCorrelations } from "../../../correlationAnalyzer.js";
 import { processChartData } from "../../../chartGenerator.js";
 import { compileChartSpec } from "../../../chartSpecCompiler.js";
@@ -63,10 +72,21 @@ const analyticalArgs = z
     question_override: z.string().optional(),
   })
   .strict();
+const correlationDimensionFilterSchema = z
+  .object({
+    column: z.string(),
+    op: z.enum(["in", "not_in"]),
+    values: z.array(z.string()),
+    match: z.enum(["exact", "case_insensitive", "contains"]).optional(),
+  })
+  .strict();
+
 const correlationArgs = z
   .object({
     targetVariable: z.string(),
     filter: z.enum(["all", "positive", "negative"]).optional(),
+    /** When set, correlation runs on this slice of **turn-start** row-level data (not on aggregated ctx.data). */
+    dimensionFilters: z.array(correlationDimensionFilterSchema).max(12).optional(),
   })
   .strict();
 const chartArgs = z
@@ -893,8 +913,29 @@ export function registerDefaultTools(registry: ToolRegistry) {
           summary: `Target ${args.targetVariable} is not a numeric column.`,
         };
       }
+
+      const rawFilters = (args as { dimensionFilters?: DimensionFilter[] }).dimensionFilters;
+      let frame = ctx.exec.data;
+      let filterNote = "";
+      if (rawFilters?.length) {
+        const base =
+          ctx.exec.turnStartDataRef && ctx.exec.turnStartDataRef.length > 0
+            ? ctx.exec.turnStartDataRef
+            : ctx.exec.data;
+        const cap = diagnosticSliceRowCap();
+        const capped = base.length > cap ? base.slice(0, cap) : base;
+        frame = filterRowsByDimensionFilters(capped, rawFilters) as Record<string, any>[];
+        filterNote = ` (slice: ${rawFilters.length} dimension filter(s), n=${frame.length}${base.length > cap ? `, frame capped at ${cap}` : ""})`;
+        if (!frame.length) {
+          return {
+            ok: false,
+            summary: "dimensionFilters matched zero rows for correlation.",
+          };
+        }
+      }
+
       const { charts, insights } = await analyzeCorrelations(
-        ctx.exec.data,
+        frame,
         args.targetVariable,
         numeric,
         args.filter ?? "all",
@@ -907,16 +948,41 @@ export function registerDefaultTools(registry: ToolRegistry) {
       );
       return {
         ok: true,
-        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).`,
+        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).${filterNote}`,
         charts,
         insights,
       };
     },
     {
-      description: "Correlation / drivers for a numeric target column.",
-      argsHelp: '{"targetVariable": string, "filter"?: "all"|"positive"|"negative"}',
+      description:
+        "Correlation / drivers for a numeric target column. Optional dimensionFilters apply to **row-level turn-start data** (not aggregated frames).",
+      argsHelp:
+        '{"targetVariable": string, "filter"?: "all"|"positive"|"negative", "dimensionFilters"?: [{"column": string, "op": "in"|"not_in", "values": string[], "match"?: "exact"|"case_insensitive"|"contains"}]}',
     }
   );
+
+  if (isDiagnosticCompositeToolEnabled()) {
+    registry.register(
+      "run_segment_driver_analysis",
+      segmentDriverArgsSchema,
+      async (ctx, args) => {
+        const parsed = segmentDriverArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          return { ok: false, summary: `Invalid args: ${parsed.error.message}` };
+        }
+        if (ctx.exec.mode !== "analysis") {
+          return { ok: false, summary: "run_segment_driver_analysis is only for analysis mode." };
+        }
+        return runSegmentDriverAnalysisTool(ctx.exec, parsed.data);
+      },
+      {
+        description:
+          "One-shot diagnostic: slice by dimensionFilters on row-level data, benchmark vs global, parallel breakdowns, correlation on slice. Prefer when the user asks for drivers/factors in a segment.",
+        argsHelp:
+          '{"outcomeColumn": string, "dimensionFilters": [{"column": string, "op": "in"|"not_in", "values": string[]}], "breakdownColumns"?: string[]}',
+      }
+    );
+  }
 
   registry.register(
     "build_chart",

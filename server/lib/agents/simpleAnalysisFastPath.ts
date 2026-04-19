@@ -49,6 +49,8 @@ export function shouldUseOrchestratorInsteadOfAgentLoop(
     /\bbuild\s+a?\s*(model|dashboard)/i,
     /\bcreate\s+a?\s*(pivot|dashboard)/i,
     /\bmultiple\s+(charts?|metrics?|series)/i,
+    /\b(factors?\s+driving|drivers?\s+of|what\s+explains)\b/i,
+    /\binvestigating\b.*\b(success|performance|factor|driver)s?\b/i,
   ];
   if (complexPatterns.some((p) => p.test(q))) return false;
 

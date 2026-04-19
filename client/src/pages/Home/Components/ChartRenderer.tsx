@@ -40,9 +40,11 @@ import {
 import {
   ActiveChartFilters,
   applyChartFilters,
+  CHART_SERIES_VISIBILITY_FILTER_KEY,
   deriveChartFilterDefinitions,
   hasActiveFilters,
   ChartFilterDefinition,
+  visibleSeriesKeysFromFilters,
 } from '@/lib/chartFilters';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
@@ -214,13 +216,22 @@ export function ChartRenderer({
     const forceCategoricalKeys: string[] = [];
     const forceNumericKeys: string[] = [];
     const forceDateKeys: string[] = [];
-    // Exclude Y-axis from filters - only show X-axis filters
     const excludeKeys: string[] = [];
-    if (typeof y === 'string') {
-      excludeKeys.push(y);
+
+    const rowKeys = originalData[0] ? Object.keys(originalData[0]) : [];
+    if (
+      (type === 'line' || type === 'bar' || type === 'area') &&
+      typeof y === 'string' &&
+      rowKeys.includes(y)
+    ) {
+      forceNumericKeys.push(y);
     }
     if (specSeriesKeys?.length) {
-      excludeKeys.push(...specSeriesKeys);
+      for (const sk of specSeriesKeys) {
+        if (!forceNumericKeys.includes(sk)) {
+          forceNumericKeys.push(sk);
+        }
+      }
     }
 
     // Check if X-axis is a date column (for time-based charts)
@@ -253,13 +264,38 @@ export function ChartRenderer({
       }
     }
 
-    return deriveChartFilterDefinitions(originalData, {
+    const base = deriveChartFilterDefinitions(originalData, {
       excludeKeys,
       forceCategoricalKeys,
       forceNumericKeys,
       forceDateKeys,
     });
-  }, [enableFilters, originalData, x, y, specSeriesKeys]);
+
+    if (
+      specSeriesKeys &&
+      specSeriesKeys.length > 1 &&
+      (type === 'line' || type === 'bar' || type === 'area')
+    ) {
+      const seriesLabel = chart.seriesColumn?.trim()
+        ? chart.seriesColumn.replace(/\s*·\s*/g, ' · ')
+        : 'Series';
+      const seriesFilter: ChartFilterDefinition = {
+        key: CHART_SERIES_VISIBILITY_FILTER_KEY,
+        label: seriesLabel,
+        type: 'categorical',
+        options: specSeriesKeys.map((k) => ({
+          value: k,
+          label: k
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase()),
+          count: originalData.length,
+        })),
+      };
+      return [...base, seriesFilter].sort((a, b) => a.label.localeCompare(b.label));
+    }
+
+    return base;
+  }, [enableFilters, originalData, x, y, specSeriesKeys, type, chart.seriesColumn]);
 
   const isControlled = filters !== undefined;
 
@@ -329,6 +365,11 @@ export function ChartRenderer({
 
     return sanitized;
   }, [baseFilters, enableFilters, filterDefinitions]);
+
+  const filteredSeriesKeys = useMemo(
+    () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
+    [specSeriesKeys, effectiveFilters]
+  );
 
   const filteredData = useMemo(() => {
     if (!enableFilters) return originalData;
@@ -739,7 +780,7 @@ export function ChartRenderer({
       case 'line': {
         const lineRows = lineAreaSortedData as Record<string, any>[];
         const lineMultiKeys =
-          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+          specSeriesKeys && specSeriesKeys.length > 0 ? filteredSeriesKeys : [];
 
         if (lineMultiKeys.length > 0) {
           const combinedVals = lineMultiKeys.flatMap((k) =>
@@ -979,7 +1020,7 @@ export function ChartRenderer({
       case 'bar': {
         const multiKeys =
           specSeriesKeys && specSeriesKeys.length > 0
-            ? specSeriesKeys
+            ? filteredSeriesKeys
             : [];
         const stacked = barLayout !== 'grouped';
         return (
@@ -1356,7 +1397,7 @@ export function ChartRenderer({
       case 'area': {
         const areaRows = lineAreaSortedData as Record<string, any>[];
         const areaMultiKeys =
-          specSeriesKeys && specSeriesKeys.length > 0 ? specSeriesKeys : [];
+          specSeriesKeys && specSeriesKeys.length > 0 ? filteredSeriesKeys : [];
         const stackedArea = barLayout !== 'grouped';
 
         if (areaMultiKeys.length > 0) {

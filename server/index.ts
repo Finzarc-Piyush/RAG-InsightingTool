@@ -83,7 +83,7 @@ if (!process.env.VERCEL) {
       const app = createApp();
       const { createServer } = await import("http");
       const server = createServer(app);
-      const port = process.env.PORT || 3003;
+      const port = process.env.PORT || 3002;
       server.listen(port, () => {
         console.log(`Server running on port ${port}`);
       });
