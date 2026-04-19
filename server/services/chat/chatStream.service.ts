@@ -44,6 +44,11 @@ import {
   sanitisePivotColumnDimensionsInput,
   suggestPivotColumnsFromDimensions,
 } from "../../lib/pivotLayoutFromDimensions.js";
+import {
+  filterProvisionalPivotDefaultsToPreviewKeys,
+  intermediatePreviewSignature,
+  shouldEmitIntermediatePivotFlush,
+} from "./intermediatePivotPolicy.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -354,6 +359,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     type PendingIntermediate = {
       assistantTimestamp: number;
       preview: Record<string, unknown>[];
+      previewSignature: string;
       thinkingSteps: ThinkingStep[];
       workbench: AgentWorkbenchEntry[];
       pivotDefaults?: Message["pivotDefaults"];
@@ -371,6 +377,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     ) => {
       if (!preview.length) return;
       if (!checkConnection()) return;
+      const priorTail = pendingIntermediates[pendingIntermediates.length - 1];
+      if (
+        !shouldEmitIntermediatePivotFlush({
+          priorPendingTail: priorTail
+            ? { preview: priorTail.preview, previewSignature: priorTail.previewSignature }
+            : undefined,
+          incoming: { preview },
+        })
+      ) {
+        return;
+      }
       const assistantTimestamp = Date.now() + intermediateSeq++;
       const snapSteps = [...thinkingSteps];
       const snapWb = [...agentWorkbench];
@@ -383,7 +400,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           segmentPivot: segmentPivotDefaults,
         });
       } else {
-        pivotDefaultsForSegment = provisionalPivotDefaults;
+        pivotDefaultsForSegment = filterProvisionalPivotDefaultsToPreviewKeys(
+          provisionalPivotDefaults,
+          preview
+        );
       }
       if (
         !sendSSE(res, "intermediate", {
@@ -400,6 +420,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       pendingIntermediates.push({
         assistantTimestamp,
         preview,
+        previewSignature: intermediatePreviewSignature(preview),
         thinkingSteps: snapSteps,
         workbench: snapWb,
         pivotDefaults: pivotDefaultsForSegment,
@@ -628,7 +649,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                   step: "Agent plan",
                   status: "completed",
                   timestamp: now,
-                  details: r.length > 160 ? `${r.slice(0, 157)}…` : r || undefined,
+                  details: r || undefined,
                 });
               } else if (event === "tool_call" && data && typeof data === "object") {
                 const t = data as { name?: string };

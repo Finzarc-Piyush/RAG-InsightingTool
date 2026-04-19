@@ -143,4 +143,49 @@ describe("lintAfterAnalyticalTool", () => {
     });
     assert.ok(lines.some((l) => l.includes("[SYSTEM_VALIDATION]")));
   });
+
+  it("emits SYSTEM_VALIDATION for vague trend when single-row aggregate has no time bucket column", () => {
+    const parsed: ParsedQuery = {
+      rawQuestion: "",
+      groupBy: [],
+      dateAggregationPeriod: null,
+      aggregations: [{ column: "Sales", operation: "sum" }],
+    };
+    const lines = lintAfterAnalyticalTool({
+      tool: "execute_query_plan",
+      ok: true,
+      question: "sales trend",
+      parsed,
+      outputRowCount: 1,
+      outputColumns: ["Sales_sum"],
+      appliedAggregation: true,
+    });
+    assert.ok(
+      lines.some(
+        (l) =>
+          l.includes("[SYSTEM_VALIDATION]") &&
+          l.includes("time-bucket") &&
+          l.includes("Replan")
+      )
+    );
+  });
+
+  it("does not emit trend single-row lint when output includes a temporal facet column", () => {
+    const parsed: ParsedQuery = {
+      rawQuestion: "",
+      groupBy: ["Month · Order Date"],
+      dateAggregationPeriod: null,
+      aggregations: [{ column: "Sales", operation: "sum" }],
+    };
+    const lines = lintAfterAnalyticalTool({
+      tool: "execute_query_plan",
+      ok: true,
+      question: "sales trend",
+      parsed,
+      outputRowCount: 1,
+      outputColumns: ["Month · Order Date", "Sales_sum"],
+      appliedAggregation: true,
+    });
+    assert.ok(!lines.some((l) => l.includes("time-bucket")));
+  });
 });

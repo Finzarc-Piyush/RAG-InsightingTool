@@ -30,6 +30,10 @@ import {
   canExecuteQueryPlanOnDuckDb,
   executeQueryPlanOnDuckDb,
 } from "../../../queryPlanDuckdbExecutor.js";
+import {
+  pickRowLevelDataForQueryPlan,
+  promoteQueryPlanDateAggregationToFacetGroupBy,
+} from "../../../queryPlanFacetPromotion.js";
 import { migrateLegacyTemporalFacetRowKeys } from "../../../temporalFacetColumns.js";
 import { shouldRejectWideWithoutAgg } from "../../../questionAggregationPolicy.js";
 import { findMatchingColumn } from "../../utils/columnMatcher.js";
@@ -498,15 +502,25 @@ export function registerDefaultTools(registry: ToolRegistry) {
     executeQueryPlanArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx, args) => {
       const plan = (args as z.infer<typeof executeQueryPlanArgsSchema>).plan;
+      const promotedPlan = promoteQueryPlanDateAggregationToFacetGroupBy(
+        plan,
+        ctx.exec.summary
+      );
       const dateCols = ctx.exec.summary.dateColumns ?? [];
       if (ctx.exec.data.length > 0 && dateCols.length > 0) {
         migrateLegacyTemporalFacetRowKeys(ctx.exec.data, dateCols);
       }
-      const keys = new Set(Object.keys(ctx.exec.data[0] ?? {}));
+      const keysFromData = new Set(Object.keys(ctx.exec.data[0] ?? {}));
+      const mergedKeys = new Set(keysFromData);
+      if (ctx.exec.turnStartDataRef?.[0]) {
+        for (const k of Object.keys(ctx.exec.turnStartDataRef[0])) {
+          mergedKeys.add(k);
+        }
+      }
       const effectivePlan = remapQueryPlanGroupByToTemporalFacets(
-        plan,
+        promotedPlan,
         ctx.exec.summary,
-        keys,
+        mergedKeys,
         ctx.exec.question
       );
       const validated = normalizeAndValidateQueryPlanBody(
@@ -522,6 +536,12 @@ export function registerDefaultTools(registry: ToolRegistry) {
       let descriptions: string[] = [];
       let parsed = queryPlanToParsedQuery(normalizedPlan);
       let inputRowCount = ctx.exec.data.length;
+
+      const memFrame = pickRowLevelDataForQueryPlan(
+        normalizedPlan,
+        ctx.exec.data,
+        ctx.exec.turnStartDataRef
+      );
 
       const tryDuck =
         Boolean(ctx.exec.columnarStoragePath) &&
@@ -545,7 +565,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
             error: duck.error.slice(0, 400),
           });
           const mem = executeQueryPlan(
-            ctx.exec.data,
+            memFrame,
             ctx.exec.summary,
             normalizedPlan
           );
@@ -555,11 +575,11 @@ export function registerDefaultTools(registry: ToolRegistry) {
           resultRows = mem.data;
           descriptions = mem.descriptions;
           parsed = mem.parsed;
-          inputRowCount = ctx.exec.data.length;
+          inputRowCount = memFrame.length;
         }
       } else {
         const mem = executeQueryPlan(
-          ctx.exec.data,
+          memFrame,
           ctx.exec.summary,
           normalizedPlan
         );
@@ -569,7 +589,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         resultRows = mem.data;
         descriptions = mem.descriptions;
         parsed = mem.parsed;
-        inputRowCount = ctx.exec.data.length;
+        inputRowCount = memFrame.length;
       }
       const outputRowCount = resultRows.length;
       const appliedAggregation = appliedAggregationFromParsed(parsed);

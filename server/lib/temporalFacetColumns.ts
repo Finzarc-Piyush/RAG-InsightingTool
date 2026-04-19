@@ -412,6 +412,29 @@ export function resolveDateColumnForGroupBy(
   );
 }
 
+/** Map execute_query_plan dateAggregationPeriod to the same coarse intents as the user message. */
+export function coarseTimeIntentFromQueryPlanDatePeriod(
+  period: string
+): CoarseTimeIntent | null {
+  switch (period) {
+    case "day":
+      return "day";
+    case "week":
+      return "week";
+    case "month":
+    case "monthOnly":
+      return "month";
+    case "quarter":
+      return "quarter";
+    case "half_year":
+      return "half_year";
+    case "year":
+      return "year";
+    default:
+      return null;
+  }
+}
+
 /**
  * When the user asks for coarse time aggregation but groupBy is still the raw date column,
  * rewrite to the matching UI facet column id.
@@ -421,12 +444,27 @@ export function remapGroupByToTemporalFacet(params: {
   dateColumns: string[];
   originalMessage: string | undefined;
   availableKeys: Set<string>;
+  /** From execute_query_plan when the trend patch set period without "monthly" etc. in the message. */
+  planDateAggregationPeriod?: string | null;
 }): { groupBy: string; remapped: boolean } {
-  const { groupByColumn, dateColumns, originalMessage, availableKeys } = params;
+  const {
+    groupByColumn,
+    dateColumns,
+    originalMessage,
+    availableKeys,
+    planDateAggregationPeriod,
+  } = params;
   if (isTemporalFacetColumnKey(groupByColumn)) {
     return { groupBy: groupByColumn, remapped: false };
   }
-  const intent = detectCoarseTimeIntentFromMessage(originalMessage);
+  let intent = detectCoarseTimeIntentFromMessage(originalMessage);
+  if (
+    !intent &&
+    planDateAggregationPeriod != null &&
+    planDateAggregationPeriod !== undefined
+  ) {
+    intent = coarseTimeIntentFromQueryPlanDatePeriod(planDateAggregationPeriod);
+  }
   if (!intent) return { groupBy: groupByColumn, remapped: false };
 
   const source = resolveDateColumnForGroupBy(groupByColumn, dateColumns);

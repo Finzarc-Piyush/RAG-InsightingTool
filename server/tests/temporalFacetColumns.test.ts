@@ -146,4 +146,19 @@ describe("temporalFacetColumns", () => {
     assert.equal(r.remapped, false);
     assert.equal(r.groupBy, "Order Date");
   });
+
+  it("remapGroupByToTemporalFacet uses planDateAggregationPeriod when message lacks coarse intent", () => {
+    const data = [{ "Order Date": "2015-01-01", Sales: 1 }];
+    applyTemporalFacetColumns(data, ["Order Date"]);
+    const keys = new Set(Object.keys(data[0]));
+    const r = remapGroupByToTemporalFacet({
+      groupByColumn: "Order Date",
+      dateColumns: ["Order Date"],
+      originalMessage: "What is the sales trend over time?",
+      availableKeys: keys,
+      planDateAggregationPeriod: "month",
+    });
+    assert.equal(r.remapped, true);
+    assert.equal(r.groupBy, facetColumnKey("Order Date", "month"));
+  });
 });

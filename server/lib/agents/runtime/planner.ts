@@ -13,6 +13,7 @@ import {
 import {
   patchExecuteQueryPlanDateAggregation,
   patchExecuteQueryPlanTrendCoarserGrain,
+  patchExecuteQueryPlanTrendMissingGroupBy,
 } from "../../queryPlanTemporalPatch.js";
 import {
   repairExecuteQueryPlanDimensionFilters,
@@ -477,6 +478,11 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       step,
       ctx.question,
       ctx.summary.dateColumns
+    );
+    patchExecuteQueryPlanTrendMissingGroupBy(
+      step,
+      ctx.question,
+      ctx.summary.dateColumns ?? []
     );
     // Belt-and-suspenders: repair common planner schema drift (e.g. missing
     // execute_query_plan.dimensionFilters[].op) before Zod validation.

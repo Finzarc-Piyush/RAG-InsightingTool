@@ -1,5 +1,10 @@
 import type { ParsedQuery } from "../shared/queryTypes.js";
 import { detectPeriodFromQuery } from "./dateUtils.js";
+import {
+  hasExplicitBreakdownOrGrain,
+  vagueTemporalTrendQuestion,
+} from "./questionAggregationPolicy.js";
+import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 
 export type AnalyticalLintInput = {
   tool: string;
@@ -9,6 +14,8 @@ export type AnalyticalLintInput = {
   outputRowCount?: number;
   /** Column names on aggregated output (if known) */
   outputColumns?: string[];
+  /** True when the plan applied aggregations (execute_query_plan meta). */
+  appliedAggregation?: boolean;
 };
 
 /**
@@ -58,6 +65,23 @@ export function lintAfterAnalyticalTool(input: AnalyticalLintInput): string[] {
         )}) but they were not present in the tool output columns. Verify selection/projection preserves groupBy dimensions.`
       );
     }
+  }
+
+  const outCols = input.outputColumns ?? [];
+  const hasTemporalFacetInOutput = outCols.some((c) => isTemporalFacetColumnKey(c));
+
+  if (
+    input.tool === "execute_query_plan" &&
+    vagueTemporalTrendQuestion(input.question) &&
+    !hasExplicitBreakdownOrGrain(input.question) &&
+    input.appliedAggregation === true &&
+    input.outputRowCount === 1 &&
+    Boolean(input.parsed?.aggregations?.length) &&
+    !hasTemporalFacetInOutput
+  ) {
+    notes.push(
+      `[SYSTEM_VALIDATION] Trend-style question produced a single aggregated row with no time-bucket column in the result. Replan execute_query_plan with groupBy on a monthly facet (e.g. "Month · <DateColumn>") or raw date + dateAggregationPeriod "month", plus sum on the metric.`
+    );
   }
 
   return notes;

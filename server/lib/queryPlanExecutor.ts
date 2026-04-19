@@ -158,6 +158,7 @@ export function remapQueryPlanGroupByToTemporalFacets(
       dateColumns,
       originalMessage,
       availableKeys,
+      planDateAggregationPeriod: plan.dateAggregationPeriod ?? null,
     });
     if (remapped) anyRemapped = true;
     return ng;

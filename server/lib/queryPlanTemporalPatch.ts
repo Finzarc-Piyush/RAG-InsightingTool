@@ -1,4 +1,8 @@
 import { detectPeriodFromQuery } from "./dateUtils.js";
+import {
+  hasExplicitBreakdownOrGrain,
+  vagueTemporalTrendQuestion,
+} from "./questionAggregationPolicy.js";
 import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 
 /** Minimal shape for planner steps; keeps tests free of planner → LLM import chain. */
@@ -58,4 +62,42 @@ export function patchExecuteQueryPlanTrendCoarserGrain(
   if (isTemporalFacetColumnKey(g0)) return;
 
   plan.dateAggregationPeriod = "month";
+}
+
+/**
+ * When the user asks a vague trend / over-time question but the model omitted groupBy
+ * (aggregations only → one row), inject the primary date column + monthly bucketing so
+ * {@link promoteQueryPlanDateAggregationToFacetGroupBy} can align with pivot facets.
+ * Runs after {@link patchExecuteQueryPlanTrendCoarserGrain}.
+ */
+export function patchExecuteQueryPlanTrendMissingGroupBy(
+  step: ExecuteQueryPlanStepLike,
+  question: string,
+  dateColumns: readonly string[]
+): void {
+  if (step.tool !== "execute_query_plan") return;
+  const q = question.trim();
+  if (!q) return;
+  if (/\b(daily|per\s+day|each\s+day|day\s+by\s+day)\b/i.test(q)) return;
+
+  const trendIntent =
+    TREND_OVER_TIME_RE.test(q) || vagueTemporalTrendQuestion(question);
+  if (!trendIntent) return;
+  if (hasExplicitBreakdownOrGrain(question)) return;
+
+  const plan = step.args.plan as Record<string, unknown> | undefined;
+  if (!plan || typeof plan !== "object") return;
+
+  const aggs = plan.aggregations as unknown[] | undefined;
+  if (!aggs?.length) return;
+
+  const groupBy = plan.groupBy as string[] | undefined;
+  if (Array.isArray(groupBy) && groupBy.length > 0) return;
+
+  if (!dateColumns.length) return;
+
+  plan.groupBy = [dateColumns[0]];
+  if (plan.dateAggregationPeriod == null || plan.dateAggregationPeriod === undefined) {
+    plan.dateAggregationPeriod = "month";
+  }
 }

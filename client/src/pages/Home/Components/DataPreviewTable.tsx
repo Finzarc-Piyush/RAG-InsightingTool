@@ -1675,10 +1675,21 @@ export function DataPreviewTable({
             </div>
             {showPivotVersusToolRowClarification && (
               <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
-                The pivot below is computed from the full session dataset ({pivotResultRowCount}{" "}
-                {pivotResultRowCount === 1 ? "row" : "rows"} for the current layout). The summary
-                above describes the analytical query result ({toolPreviewRowCount}{" "}
-                {toolPreviewRowCount === 1 ? "row" : "rows"}).
+                {analysisIntermediateInsight && toolPreviewRowCount <= 1 ? (
+                  <>
+                    The pivot reflects the full session dataset ({pivotResultRowCount}{" "}
+                    {pivotResultRowCount === 1 ? "row" : "rows"} for the current layout). The preview
+                    table may show only a small slice from this step, so row counts can differ from
+                    the pivot.
+                  </>
+                ) : (
+                  <>
+                    The pivot below is computed from the full session dataset ({pivotResultRowCount}{" "}
+                    {pivotResultRowCount === 1 ? "row" : "rows"} for the current layout). The summary
+                    above describes the analytical query result ({toolPreviewRowCount}{" "}
+                    {toolPreviewRowCount === 1 ? "row" : "rows"}).
+                  </>
+                )}
               </p>
             )}
           </Card>

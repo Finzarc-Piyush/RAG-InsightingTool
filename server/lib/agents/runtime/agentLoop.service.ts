@@ -35,6 +35,7 @@ import {
 import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
 import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
+import { sanitizeIntermediatePreviewRows } from "../../agentIntermediatePreviewSanitize.js";
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -800,7 +801,9 @@ export async function runAgentTurn(
           ctx.onIntermediateArtifact &&
           INTERMEDIATE_TABLE_TOOLS.has(step.tool)
         ) {
-          const intermediateRows = toolTableRowsForIntermediate(stepResult);
+          const intermediateRows = sanitizeIntermediatePreviewRows(
+            toolTableRowsForIntermediate(stepResult)
+          );
           if (intermediateRows.length > 0) {
             const insight = buildIntermediateInsight(step.tool, stepResult);
             const pivotDefaults = derivePivotDefaultsFromPreviewRows(
@@ -872,6 +875,7 @@ export async function runAgentTurn(
           outputColumns: Array.isArray(stepResult.table?.columns)
             ? (stepResult.table.columns as string[])
             : undefined,
+          appliedAggregation: stepResult.analyticalMeta?.appliedAggregation,
         })) {
           observations.push(line);
         }

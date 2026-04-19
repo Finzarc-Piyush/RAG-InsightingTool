@@ -69,7 +69,9 @@ function StepRow({ step }: { step: ThinkingStep }) {
       <div className="flex-1 min-w-0">
         <div className={textColor}>{step.step}</div>
         {step.details && (
-          <div className="text-xs text-muted-foreground mt-0.5">{step.details}</div>
+          <div className="text-xs text-muted-foreground mt-0.5 whitespace-pre-wrap break-words">
+            {step.details}
+          </div>
         )}
       </div>
     </div>
@@ -107,7 +109,7 @@ function WorkbenchActivityRow({
       <div className="flex-1 min-w-0 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-foreground/90 font-medium truncate">{entry.title}</div>
+            <div className="text-foreground/90 font-medium break-words">{entry.title}</div>
             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
               <span className="inline-flex rounded-full border border-border/80 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 {entry.kind}
