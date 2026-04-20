@@ -44,7 +44,9 @@ questionShape classification (pick at most one; leave unset if unclear):
 
 candidateDriverDimensions: only set for driver_discovery or variance_diagnostic. Propose up to 6 column names from the Columns line that might plausibly drive the outcomeMetricColumn (ordinarily categorical dimensions, region/category/segment-like columns). Must not overlap segmentationDimensions.
 
-requestsDashboard (Phase-2): set to true when the user explicitly asks to build / create / turn-into a dashboard, a report, or a monitoring view. Trigger phrases include "make me a dashboard", "turn this into a dashboard", "give me a dashboard for X", "build a report for X", "monitoring view". Do NOT set true for plain analytical questions even if they're broad.`;
+requestsDashboard (Phase-2): set to true when the user explicitly asks to build / create / turn-into a dashboard, a report, or a monitoring view. Trigger phrases include "make me a dashboard", "turn this into a dashboard", "give me a dashboard for X", "build a report for X", "monitoring view". Do NOT set true for plain analytical questions even if they're broad.
+
+comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly contrasts two named time windows (e.g. "Mar-22 vs Apr-25", "Q3 vs Q4", "last year vs this year"). Each side is an array of analysisBriefFilterSchema that selects the period — typically a single filter on a date-like column whose values are the literal period labels the user named. Include short aLabel / bLabel (e.g. "Mar-22", "Apr-25") so downstream narrative reads naturally. Leave unset when the user gives a single window or no window at all.`;
 
   const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}`;
 

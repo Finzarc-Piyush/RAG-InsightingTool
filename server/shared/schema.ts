@@ -563,6 +563,26 @@ export const analysisBriefSchema = z.object({
   candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
   /** Phase-2: user asked to turn this turn into a dashboard. */
   requestsDashboard: z.boolean().optional(),
+  /**
+   * Phase-1 time_window_diff: two explicit filter sets the user named
+   * for a period-A vs period-B comparison (e.g. "Mar-22" filters vs
+   * "Apr-25" filters on a temporal facet column). Both sides required
+   * for the skill to dispatch; single-period questions use `filters`
+   * instead.
+   *
+   * Example: questionShape="comparison" + comparisonPeriods = {
+   *   a: [{ column:"Month · Order Date", op:"in", values:["2022-03"] }],
+   *   b: [{ column:"Month · Order Date", op:"in", values:["2025-04"] }],
+   * }
+   */
+  comparisonPeriods: z
+    .object({
+      a: z.array(analysisBriefFilterSchema).min(1).max(8),
+      b: z.array(analysisBriefFilterSchema).min(1).max(8),
+      aLabel: z.string().max(80).optional(),
+      bLabel: z.string().max(80).optional(),
+    })
+    .optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;

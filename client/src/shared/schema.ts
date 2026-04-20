@@ -559,6 +559,15 @@ export const analysisBriefSchema = z.object({
   candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
   /** Phase-2: user asked to turn this turn into a dashboard. */
   requestsDashboard: z.boolean().optional(),
+  /** Phase-1 time_window_diff: see server/shared/schema.ts for details. */
+  comparisonPeriods: z
+    .object({
+      a: z.array(analysisBriefFilterSchema).min(1).max(8),
+      b: z.array(analysisBriefFilterSchema).min(1).max(8),
+      aLabel: z.string().max(80).optional(),
+      bLabel: z.string().max(80).optional(),
+    })
+    .optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;
