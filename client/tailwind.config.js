@@ -5,9 +5,20 @@ export default {
   theme: {
     extend: {
       borderRadius: {
-        lg: ".5625rem", /* 9px */
-        md: ".375rem", /* 6px */
-        sm: ".1875rem", /* 3px */
+        // Legacy scale kept so existing rounded-sm/md/lg classes do not
+        // shift mid-migration. UX-2 begins switching primitives onto the
+        // new brand-* ladder below, one component at a time.
+        lg: ".5625rem", /* 9px legacy */
+        md: ".375rem",  /* 6px legacy */
+        sm: ".1875rem", /* 3px legacy */
+        // UX-0 · canonical radius ladder (see docs/brand/brand-guidebook.md §4)
+        // chip → brand-full, input → brand-md, button → brand-md,
+        // card → brand-lg, dialog → brand-xl, hero → brand-2xl.
+        "brand-sm": "0.375rem",  /* 6px  */
+        "brand-md": "0.625rem",  /* 10px */
+        "brand-lg": "0.75rem",   /* 12px */
+        "brand-xl": "1rem",      /* 16px */
+        "brand-2xl": "1.25rem",  /* 20px */
       },
       colors: {
         // Flat / base colors (regular buttons)
@@ -80,11 +91,53 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+        // UX-0 · Brand signature accent (single-use per view) + semantic additions.
+        "accent-gold": {
+          DEFAULT: "hsl(var(--accent-gold) / <alpha-value>)",
+        },
+        success: {
+          DEFAULT: "hsl(var(--success) / <alpha-value>)",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning) / <alpha-value>)",
+        },
+      },
+      // UX-0 · Motion primitives consumed via Tailwind utilities
+      // (`duration-base`, `ease-entrance`, `animate-brand-settle`, …).
+      transitionDuration: {
+        instant: "100ms",
+        quick: "160ms",
+        base: "220ms",
+        slow: "320ms",
+        decisive: "420ms",
+      },
+      transitionTimingFunction: {
+        entrance: "cubic-bezier(0.16, 1, 0.3, 1)",
+        exit: "cubic-bezier(0.7, 0, 0.84, 0)",
+        standard: "cubic-bezier(0.4, 0, 0.2, 1)",
+        emphasized: "cubic-bezier(0.2, 0, 0, 1)",
+      },
+      // UX-0 · Named elevation ladder alias to the CSS shadow scale.
+      boxShadow: {
+        "elev-1": "var(--shadow-xs)",
+        "elev-2": "var(--shadow-sm)",
+        "elev-3": "var(--shadow-md)",
+        "elev-4": "var(--shadow-lg)",
+        "elev-5": "var(--shadow-2xl)",
+      },
+      // UX-0 · Background-image token aliases for the brand gradients.
+      backgroundImage: {
+        "gradient-canvas": "var(--gradient-canvas)",
+        "gradient-ink-soft": "var(--gradient-ink-soft)",
+        "gradient-elevate": "var(--gradient-elevate)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
+        // UX-0 · Brand roles (see docs/brand/brand-guidebook.md §3).
+        display: ["var(--font-display)"],
+        metric: ["var(--font-metric)"],
       },
       keyframes: {
         "accordion-down": {
@@ -95,10 +148,38 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        // UX-0 · Brand keyframes. Every consumer must wrap them in a
+        // `@media (prefers-reduced-motion: no-preference)` selector — the
+        // `.animate-brand-*` utilities in index.css do that by default.
+        "brand-settle": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "brand-shimmer": {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
+        "brand-breathe": {
+          "0%, 100%": { transform: "scale(1)", opacity: "0.9" },
+          "50%": { transform: "scale(1.02)", opacity: "1" },
+        },
+        "brand-underline": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" },
+        },
+        "brand-ring": {
+          "0%": { boxShadow: "0 0 0 0 hsl(var(--primary) / 0.40)" },
+          "100%": { boxShadow: "0 0 0 6px hsl(var(--primary) / 0)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "brand-settle": "brand-settle 320ms cubic-bezier(0.16, 1, 0.3, 1) both",
+        "brand-shimmer": "brand-shimmer 1500ms linear infinite",
+        "brand-breathe": "brand-breathe 1800ms cubic-bezier(0.4, 0, 0.2, 1) infinite",
+        "brand-underline": "brand-underline 260ms cubic-bezier(0.2, 0, 0, 1) both",
+        "brand-ring": "brand-ring 900ms cubic-bezier(0.4, 0, 0.2, 1) both",
       },
     },
   },

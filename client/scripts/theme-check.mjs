@@ -11,6 +11,11 @@ const temporaryDebtFiles = new Set([
   'src/pages/Home/Components/DataSummaryModal.tsx',
   'src/pages/Home/Components/DatasetEnrichmentLoader.tsx',
   'src/pages/Home/Home.tsx',
+  // UX-0 · grandfathered for the new gradient / rgb rules; UX-7 rebuilds
+  // the affected surfaces (StartAnalysisView hero, filter-applied banner,
+  // pivot grid sticky header) against the `--gradient-*` tokens.
+  'src/components/FilterAppliedMessage.tsx',
+  'src/pages/Home/Components/pivot/PivotGrid.tsx',
 ]);
 
 const forbiddenPatterns = [
@@ -20,6 +25,15 @@ const forbiddenPatterns = [
   { name: 'border-gray-*', regex: /\bborder-gray-\d{2,3}(?:\/\d+)?\b/g },
   { name: 'hover:bg-gray-*', regex: /\bhover:bg-gray-\d{2,3}(?:\/\d+)?\b/g },
   { name: 'hardcoded hex color', regex: /#[0-9a-fA-F]{3,8}\b/g },
+  // UX-0 · bans ad-hoc gradient shortcuts; use bg-gradient-canvas /
+  // bg-gradient-ink-soft / bg-gradient-elevate or inline `var(--gradient-*)`.
+  { name: 'from-slate-*', regex: /\bfrom-slate-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'to-slate-*', regex: /\bto-slate-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'from-blue-*', regex: /\bfrom-blue-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'from-zinc-*', regex: /\bfrom-zinc-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'to-white', regex: /\bto-white(?:\/\d+)?\b/g },
+  // UX-0 · raw rgb()/rgba() inside JSX/TSX should be a token instead.
+  { name: 'raw rgb() color', regex: /\brgba?\(\s*\d/g },
 ];
 
 function walk(dir) {
