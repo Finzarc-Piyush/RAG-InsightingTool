@@ -691,6 +691,19 @@ export async function runAgentTurn(
     selectSkill,
     expandSkill,
   } = await import("./skills/index.js");
+  const { diagnosticMaxParallelBranches } = await import(
+    "../../diagnosticPipelineConfig.js"
+  );
+  const { preResolveParallelSteps } = await import(
+    "./skills/parallelResolve.js"
+  );
+  /**
+   * PR 1.E: cache of pre-resolved tool results. Populated when a
+   * parallelizable skill dispatches; the step loop consumes from this
+   * cache first and only falls back to registry.execute if the step has
+   * no entry. Keyed by step.id.
+   */
+  const preResolvedToolResults = new Map<string, ToolResult>();
 
   try {
     let replans = 0;
@@ -757,6 +770,51 @@ export async function runAgentTurn(
                   `Skill ${skill.name} expanded into ${invocation.steps.length} step(s).`,
                 steps: invocation.steps,
               } as unknown as Awaited<ReturnType<typeof runPlannerWithOneRetry>>;
+
+              // PR 1.E: when the skill opts into parallelism, pre-run the
+              // independent steps (no dependsOn) in parallel up to the
+              // diagnostic branch budget. The step loop picks these results
+              // out of preResolvedToolResults instead of re-executing; per
+              // -step reflector / verifier / state updates still run serial
+              // in plan order.
+              if (invocation.parallelizable === true) {
+                const maxParallel = diagnosticMaxParallelBranches();
+                try {
+                  const parallelOut = await preResolveParallelSteps(
+                    invocation,
+                    (step) => registry.execute(step.tool, step.args, toolCtx),
+                    maxParallel
+                  );
+                  if (parallelOut.stepIds.length > 0) {
+                    safeEmit("skill_parallel_batch", {
+                      invocationId: invocation.id,
+                      stepIds: parallelOut.stepIds,
+                      budget: maxParallel,
+                      elapsedMs: parallelOut.elapsedMs,
+                    });
+                    for (const [id, result] of parallelOut.resolved) {
+                      preResolvedToolResults.set(id, result);
+                    }
+                    agentLog("skill.parallel.resolved", {
+                      turnId,
+                      invocationId: invocation.id,
+                      count: parallelOut.stepIds.length,
+                      elapsedMs: parallelOut.elapsedMs,
+                    });
+                  }
+                } catch (parallelErr) {
+                  // Non-fatal: clear the cache and let the step loop
+                  // execute tools sequentially via registry.execute.
+                  preResolvedToolResults.clear();
+                  agentLog("skill.parallel.failed", {
+                    turnId,
+                    error:
+                      parallelErr instanceof Error
+                        ? parallelErr.message
+                        : String(parallelErr),
+                  });
+                }
+              }
             }
           }
         } catch (skillErr) {
@@ -894,7 +952,17 @@ export async function runAgentTurn(
           safeEmit("tool_call", { id: callId, name: step.tool, args_summary: argsSummary });
 
           const t0 = Date.now();
-          const result = await registry.execute(step.tool, step.args, toolCtx);
+          // PR 1.E: consume the pre-resolved parallel-batch result if one
+          // was computed during skill dispatch. Only first-attempt steps
+          // use the cache — retries always hit registry.execute so a
+          // transient failure isn't replayed from the cached failure.
+          const cachedResult =
+            attempt === 0 ? preResolvedToolResults.get(step.id) : undefined;
+          if (cachedResult) {
+            preResolvedToolResults.delete(step.id);
+          }
+          const result =
+            cachedResult ?? (await registry.execute(step.tool, step.args, toolCtx));
           const t1 = Date.now();
           toolCallsDone++;
 
