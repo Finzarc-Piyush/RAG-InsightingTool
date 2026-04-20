@@ -446,7 +446,8 @@ async function runPlannerWithOneRetry(
   onLlmCall: () => void,
   priorObservationsText?: string,
   workingMemoryBlock?: string,
-  handoffDigest?: string
+  handoffDigest?: string,
+  ragHitsBlock?: string
 ) {
   const first = await runPlanner(
     ctx,
@@ -455,7 +456,8 @@ async function runPlannerWithOneRetry(
     onLlmCall,
     priorObservationsText,
     workingMemoryBlock,
-    handoffDigest
+    handoffDigest,
+    ragHitsBlock
   );
   if (first.ok) return first;
   const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
@@ -472,7 +474,8 @@ async function runPlannerWithOneRetry(
     onLlmCall,
     priorObservationsText,
     workingMemoryBlock,
-    handoffDigest
+    handoffDigest,
+    ragHitsBlock
   );
 }
 
@@ -609,6 +612,38 @@ export async function runAgentTurn(
     return `Summary from tool output:\n\n${body.slice(0, 8000)}`;
   }
 
+  // P-A1: upfront RAG retrieval so the planner has semantic grounding on its
+  // first call. Retrieval failures are non-fatal — planner still works on the
+  // data summary alone; the block simply stays empty.
+  let upfrontRagHitsBlock: string | undefined;
+  try {
+    const { isRagEnabled } = await import("../../rag/config.js");
+    if (isRagEnabled()) {
+      const { retrieveRagHits, formatHitsForPrompt } = await import(
+        "../../rag/retrieve.js"
+      );
+      const { hits } = await retrieveRagHits({
+        sessionId: ctx.sessionId,
+        question: ctx.question,
+        summary: ctx.summary,
+        dataVersion: ctx.dataBlobVersion,
+      });
+      // Top few hits only; formatter already joins with separators.
+      const topHits = hits.slice(0, 3);
+      if (topHits.length > 0) {
+        upfrontRagHitsBlock = formatHitsForPrompt(topHits);
+        if (lastRagHitCount === undefined) {
+          lastRagHitCount = topHits.length;
+        }
+      }
+    }
+  } catch (err) {
+    agentLog("upfrontRag.failed", {
+      turnId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   try {
     let replans = 0;
     // P-020: promoted to AgentConfig so operators can tune via AGENT_MAX_REPLANS_PER_STEP.
@@ -634,7 +669,8 @@ export async function runAgentTurn(
         onLlmCall,
         priorForPlanner,
         workingMemoryBlock || undefined,
-        handoffDigest
+        handoffDigest,
+        upfrontRagHitsBlock
       );
       if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;

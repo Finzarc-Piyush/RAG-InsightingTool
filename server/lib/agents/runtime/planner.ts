@@ -375,7 +375,9 @@ export async function runPlanner(
   onLlmCall: () => void,
   priorObservationsText?: string,
   workingMemoryBlock?: string,
-  handoffDigest?: string
+  handoffDigest?: string,
+  /** P-A1: upfront RAG retrieval digest for the initial planner call. */
+  ragHitsBlock?: string
 ): Promise<PlannerRunResult> {
   const tools = registry.formatToolManifestForPlanner();
   const modeNote =
@@ -432,7 +434,15 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       `Coordinator handoff log (this turn — use to align the new plan with prior decisions):\n${handoffDigest.trim().slice(0, 12000)}\n\n`
       : "";
 
-  const user = `User question:\n${ctx.question}\n\n${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  // P-A1: Inject a compact digest of upfront RAG hits so the planner has
+  // semantic grounding on the first call, rather than having to discover it
+  // via retrieve_semantic_context. Cap at 1500 chars so this stays cheap.
+  const ragBlock =
+    ragHitsBlock?.trim().length ?
+      `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 1500)}\n\n`
+      : "";
+
+  const user = `User question:\n${ctx.question}\n\n${ragBlock}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,
