@@ -64,7 +64,13 @@ user_visible_note: optional string
 
 If evidence includes output from run_analytical_query (numeric/tabular results), treat those numbers as authoritative over retrieved RAG text snippets when they conflict. Use code NUMERIC_MISMATCH when the candidate contradicts analytical evidence.
 If evidence states zero rows with diagnostic distinct samples, pass verdict "pass" when the candidate explains that outcome and uses those samples (do not force revise_narrative for grounded empty-result explanations).
-When ANALYSIS_BRIEF_JSON is provided, flag UNSUPPORTED_CAUSAL_CLAIM if the candidate states definitive root causes not backed by experimental design; prefer "consistent with" / "largest downward contribution" language aligned with epistemicNotes in the brief.`;
+When ANALYSIS_BRIEF_JSON is provided, flag UNSUPPORTED_CAUSAL_CLAIM if the candidate states definitive root causes not backed by experimental design; prefer "consistent with" / "largest downward contribution" language aligned with epistemicNotes in the brief.
+
+Phase-1 completeness checks (only when ANALYSIS_BRIEF_JSON.questionShape is set):
+- questionShape="driver_discovery": the candidate should discuss each column in candidateDriverDimensions — at least note whether it was tested. Flag INCOMPLETE_DRIVERS (severity "medium") when one or more candidates are ignored without justification.
+- questionShape="variance_diagnostic": the candidate should decompose the change into at least two of (time effect, segment-composition shift, intra-segment metric change) with supporting numbers. Flag MISSING_DECOMPOSITION (severity "medium") when the narrative is one-dimensional.
+- For every Phase-1 shape (driver_discovery, variance_diagnostic, trend, comparison, exploration): flag MISSING_MAGNITUDES (severity "low") when the candidate does not cite at least one numeric magnitude (percentage, delta, or absolute value) supporting its main claim.
+Prefer course_correction "revise_narrative" for completeness issues (evidence is usually present; the narrative just didn't surface it). Only escalate to "replan" when the required evidence is actually absent from the tool output.`;
 
   const brief = formatAnalysisBriefForPrompt(ctx);
   const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 6000)}\n\nCandidate:\n${params.candidate.slice(0, 4000)}`;
