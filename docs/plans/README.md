@@ -6,8 +6,8 @@ can stand alone. Status tracked in the plan itself.
 | Plan | Problem | Status |
 |------|---------|--------|
 | [phase-1-deep-analysis.md](./phase-1-deep-analysis.md) | One-stop in-depth analysis (hypotheses → parallel evidence → ranked drivers → rich answer) | 1.A–1.G shipped; 1.H partial (insight_explorer done, time_window_diff deferred) |
-| [dashboard-ux-collision-fix.md](./dashboard-ux-collision-fix.md) | Dragging a card over another cascades everything; fix to swap semantics + stable reflow | core fix shipped; polish remaining |
-| [phase-2-dashboard-generation.md](./phase-2-dashboard-generation.md) | Generate a full dashboard from a chat answer with a preview-and-commit flow | 2.A–2.C shipped; 2.D rollout / 2.E patch tool remain |
+| [dashboard-ux-collision-fix.md](./dashboard-ux-collision-fix.md) | Dragging a card over another cascades everything; fix to swap semantics + stable reflow | all shipped (swap, undo, aria-live, keyboard move-mode); snap guides optional |
+| [phase-2-dashboard-generation.md](./phase-2-dashboard-generation.md) | Generate a full dashboard from a chat answer with a preview-and-commit flow | 2.A–2.C shipped; 2.E patch primitive shipped; agent wiring + 2.D rollout remain |
 
 ## Dependencies
 

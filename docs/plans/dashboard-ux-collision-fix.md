@@ -1,6 +1,17 @@
 # Dashboard UX — fix the cascade-push on collision
 
-**Status:** core fix shipped on `claude/add-claude-documentation-PaA9h` (`dashboardGridLogic.ts` + `resolveLayoutsDropBySwap` wired into `DashboardTiles.tsx`). **Remaining:** undo stack, snap guides, keyboard/a11y — optional polish.
+**Status:** core fix + undo + aria-live + keyboard move-mode all shipped on `claude/add-claude-documentation-PaA9h`. **Remaining:** snap guides during drag (visual, optional).
+
+## Progress
+
+| Item | Status | Files |
+|------|--------|-------|
+| Swap-on-collision | ✅ shipped | `dashboardGridLogic.ts`, `DashboardTiles.tsx` |
+| Stable reflow (no greedy re-stack) | ✅ shipped | `dashboardGridLogic.ts` (stablePlaceTiles) |
+| Undo stack (Cmd/Ctrl+Z) | ✅ shipped | `hooks/useLayoutHistory.ts` |
+| aria-live announcer | ✅ shipped | `DashboardTiles.tsx` (sr-only role=status) |
+| Keyboard move-mode (Tab/Space/arrows/Esc) | ✅ shipped | `DashboardTiles.tsx` |
+| Snap guides during drag | ⏳ optional | TBD — visual-only polish |
 
 ## Context
 
