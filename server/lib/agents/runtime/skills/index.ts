@@ -76,3 +76,4 @@ export function expandSkill(
 // (HMR, tests) are safe.
 import "./varianceDecomposer.js";
 import "./driverDiscovery.js";
+import "./insightExplorer.js";

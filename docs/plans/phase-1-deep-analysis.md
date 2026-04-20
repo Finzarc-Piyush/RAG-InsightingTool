@@ -1,8 +1,8 @@
 # Phase 1 — Deep analysis as one-stop answer
 
-**Status:** in progress (1.A–1.D landed on `claude/add-claude-documentation-PaA9h`). **Feature flag:** `DEEP_ANALYSIS_SKILLS_ENABLED` (default off until rollout).
+**Status:** 1.A–1.G shipped end-to-end; 1.H partial. Branch: `claude/add-claude-documentation-PaA9h`. **Feature flag:** `DEEP_ANALYSIS_SKILLS_ENABLED` (default off until rollout).
 
-## Progress so far
+## Progress
 
 | PR | Status | Summary |
 |----|--------|---------|
@@ -10,10 +10,10 @@
 | 1.B | ✅ shipped | `skills/` registry + planner manifest hook (no-op when flag off). |
 | 1.C | ✅ shipped | `variance_decomposer` skill + agent-loop dispatch + `skill_execution` SSE event. |
 | 1.D | ✅ shipped | `driver_discovery` skill. |
-| 1.E | ⏳ next | Parallel step runner (opt-in via `SkillInvocation.parallelizable`). |
-| 1.F | ⏳ | Verifier completeness checks (`INCOMPLETE_DRIVERS`, `MISSING_MAGNITUDES`). |
-| 1.G | ⏳ | Rich answer envelope (`hypothesesTable`, `magnitudes`, `unexplained`). |
-| 1.H | ⏳ | `time_window_diff` + `insight_explorer` (needs brief-parser extensions for A/B filters). |
+| 1.E | ✅ shipped | Parallel step runner (`preResolveParallelSteps`, capped at `DIAGNOSTIC_MAX_PARALLEL`, default 3); driver_discovery + insight_explorer opt in. |
+| 1.F | ✅ shipped | Verifier prompt extended with `INCOMPLETE_DRIVERS`, `MISSING_DECOMPOSITION`, `MISSING_MAGNITUDES` codes. |
+| 1.G | ✅ shipped | Rich answer envelope: `magnitudes` + `unexplained` threaded synthesiser → loop → chat response → persisted `Message`. New SSE events. |
+| 1.H | 🟡 partial | `insight_explorer` skill shipped. `time_window_diff` deferred — needs a brief-parser extension to capture two explicit period filters. |
 
 To enable in staging:
 ```

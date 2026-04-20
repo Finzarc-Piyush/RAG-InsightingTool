@@ -79,6 +79,10 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | Phase-1 1.B | `skills/` registry + planner manifest hook (flag-gated, zero behavior when off) | PR 1.B |
 | Phase-1 1.C | `variance_decomposer` skill + agent-loop dispatch + `skill_execution` SSE | PR 1.C |
 | Phase-1 1.D | `driver_discovery` skill | PR 1.D |
+| Phase-1 1.E | Parallel step runner (`preResolveParallelSteps`) + `skill_parallel_batch` SSE | PR 1.E |
+| Phase-1 1.F | Verifier completeness codes (`INCOMPLETE_DRIVERS`, `MISSING_DECOMPOSITION`, `MISSING_MAGNITUDES`) | PR 1.F |
+| Phase-1 1.G | Rich envelope (`magnitudes`, `unexplained`) threaded synthesiser → persisted Message | PR 1.G |
+| Phase-1 1.H (insight_explorer) | Auto-exploration skill for open prompts | PR 1.H |
 
 ## Partially addressed / deferred follow-ups
 
