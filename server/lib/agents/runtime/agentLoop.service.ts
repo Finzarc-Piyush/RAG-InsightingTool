@@ -153,10 +153,30 @@ function materializeDeferredBuildCharts(
         ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
         ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
       };
-      if (!validateChartProposal(ctx, p)) continue;
+      if (!validateChartProposal(ctx, p)) {
+        // P-A5: don't silently drop; leave a breadcrumb so operators can trace
+        // charts that never rendered.
+        agentLog("deferredChart.dropped", {
+          reason: "validateChartProposal",
+          title: tmpl.title,
+          x: tmpl.x,
+          y: tmpl.y,
+        });
+        continue;
+      }
       const { rows, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
       const first = rows[0] as Record<string, unknown> | undefined;
-      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) continue;
+      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) {
+        agentLog("deferredChart.dropped", {
+          reason: "frameMissingColumns",
+          title: tmpl.title,
+          x: tmpl.x,
+          y: tmpl.y,
+          ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
+          availableKeys: Object.keys(first ?? {}).slice(0, 12),
+        });
+        continue;
+      }
       const spec = chartSpecSchema.parse({
         type: tmpl.type,
         title: tmpl.title,
