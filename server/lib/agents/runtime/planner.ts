@@ -6,6 +6,7 @@ import { summarizeContextForPrompt } from "./context.js";
 import type { ToolRegistry } from "./toolRegistry.js";
 import { sortPlanStepsByDependency } from "./workingMemory.js";
 import { agentLog } from "./agentLogger.js";
+import { formatSkillsManifestForPlanner } from "./skills/index.js";
 import {
   resolveMetricAliasToSchemaColumn,
   resolveToSchemaColumn,
@@ -416,7 +417,7 @@ Rules:
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
 - If "Prior tool observations" or "Structured working memory" are present, use them for later-step args (columns, filters). Do not ignore successful tool output. If a prior step failed or returned a near–full-table result without useful summary, replan with a clearer question_override or add a follow-up tool.
 - At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan).
-
+${formatSkillsManifestForPlanner()}
 Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string}]}`;
 
   const priorBlock =
