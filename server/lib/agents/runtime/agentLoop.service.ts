@@ -1065,6 +1065,15 @@ export async function runAgentTurn(
           isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
             ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 3500)
             : undefined;
+        // P-A3: aggregate distinct suggested columns from prior successful
+        // tool calls so the reflector can see what's already been explored.
+        const workingMemorySuggestedColumns = Array.from(
+          new Set(
+            workingMemory
+              .filter((e) => e.ok && Array.isArray(e.suggestedColumns))
+              .flatMap((e) => e.suggestedColumns ?? [])
+          )
+        );
         const ref = await runReflector(
           ctx,
           {
@@ -1076,6 +1085,7 @@ export async function runAgentTurn(
               step.tool === "execute_query_plan"
                 ? stepResult.analyticalMeta
                 : undefined,
+            workingMemorySuggestedColumns,
           },
           turnId,
           onLlmCall,
