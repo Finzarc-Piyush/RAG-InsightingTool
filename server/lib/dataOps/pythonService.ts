@@ -689,15 +689,9 @@ export async function createPivotTable(
         } catch (previewError) {
           console.warn('⚠️ Could not parse preview from large file:', previewError);
         }
-        
-        // Clean up temp file
-        try {
-          fs.unlinkSync(tempFile);
-        } catch (unlinkError) {
-          console.warn('⚠️ Could not delete temp file:', unlinkError);
-        }
-        
-        // Return response with file buffer for blob storage and preview only
+
+        // Return response with file buffer for blob storage and preview only.
+        // Temp file cleanup is handled unconditionally in the outer finally (P-028).
         return {
           data: previewRows, // Preview only (first 50 rows)
           rows_before: rowsBefore,
@@ -705,15 +699,6 @@ export async function createPivotTable(
           _largeFileBuffer: fileBuffer, // Special flag - buffer to save to blob storage
         } as any;
       } catch (error) {
-        // Clean up temp file on error (unlinkSync is synchronous, no .catch needed)
-        if (fs.existsSync(tempFile)) {
-          try {
-            fs.unlinkSync(tempFile);
-          } catch (unlinkError) {
-            console.warn('⚠️ Could not delete temp file on error:', unlinkError);
-          }
-        }
-        
         if (error instanceof Error && (
           error.message.includes('Cannot create a string longer than') ||
           error.message.includes('ERR_STRING_TOO_LONG')
@@ -726,6 +711,15 @@ export async function createPivotTable(
           );
         }
         throw error;
+      } finally {
+        // Guaranteed cleanup on every exit path (happy, early return, throw).
+        try {
+          if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile);
+          }
+        } catch (unlinkError) {
+          console.warn('⚠️ Could not delete pivot temp file:', unlinkError);
+        }
       }
     }
     

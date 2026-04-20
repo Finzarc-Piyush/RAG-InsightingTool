@@ -18,8 +18,11 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     for (const d of res.data.sort((a, b) => a.index - b.index)) {
       const v = d.embedding as number[];
       if (v.length !== dim) {
-        console.warn(
-          `⚠️ RAG: embedding dim ${v.length} != expected ${dim}; set AZURE_OPENAI_EMBEDDING_DIMENSIONS`
+        // Wrong-dim vectors silently corrupt the Azure Search index and
+        // produce garbage retrieval; refuse rather than upsert.
+        throw new Error(
+          `RAG embedding dimension mismatch: got ${v.length}, expected ${dim}. ` +
+            `Verify AZURE_OPENAI_EMBEDDING_DIMENSIONS matches the deployed model and the Azure Search index vector field.`
         );
       }
       out.push(v);

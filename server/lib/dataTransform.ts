@@ -1155,33 +1155,38 @@ function mergeAggregatedResults(
         merged.set(key, newRow);
       }
 
-      // Merge aggregation values
+      // Merge aggregation values. For min/max we must distinguish
+      // "slot has never received a real value" from "slot is legitimately 0",
+      // otherwise Math.min(0 || Infinity, …) swallows real zeros.
       aggregations.forEach(agg => {
         const targetName = agg.alias || `${agg.column}_${agg.operation}`;
-        const existingValue = merged.get(key)![targetName] || 0;
+        const bucket = merged.get(key)!;
+        const rawExisting = bucket[targetName];
+        const hasExisting = typeof rawExisting === 'number' && Number.isFinite(rawExisting);
+        const existingValue = hasExisting ? (rawExisting as number) : 0;
         const newValue = toNumber(row[targetName]);
-        
+
         if (!isNaN(newValue)) {
           switch (agg.operation) {
             case 'sum':
-              merged.get(key)![targetName] = existingValue + newValue;
+              bucket[targetName] = existingValue + newValue;
               break;
             case 'mean':
             case 'avg':
               // For mean, we need to track count - simplified for now
-              merged.get(key)![targetName] = (existingValue + newValue) / 2;
+              bucket[targetName] = hasExisting ? (existingValue + newValue) / 2 : newValue;
               break;
             case 'count':
-              merged.get(key)![targetName] = existingValue + newValue;
+              bucket[targetName] = existingValue + newValue;
               break;
             case 'max':
-              merged.get(key)![targetName] = Math.max(existingValue, newValue);
+              bucket[targetName] = hasExisting ? Math.max(existingValue, newValue) : newValue;
               break;
             case 'min':
-              merged.get(key)![targetName] = Math.min(existingValue || Infinity, newValue);
+              bucket[targetName] = hasExisting ? Math.min(existingValue, newValue) : newValue;
               break;
             default:
-              merged.get(key)![targetName] = newValue;
+              bucket[targetName] = newValue;
           }
         }
       });

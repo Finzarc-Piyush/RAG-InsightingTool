@@ -68,9 +68,26 @@ export async function deleteRagDocumentsBySessionId(sessionId: string): Promise<
     skip += pageSize;
   }
   const batch = 500;
+  const failures: Array<{ id: string; error: string }> = [];
   for (let i = 0; i < ids.length; i += batch) {
     const slice = ids.slice(i, i + batch).map((id) => ({ id }));
-    await client.deleteDocuments(slice);
+    const result = await client.deleteDocuments(slice);
+    // Azure SDK returns per-document results; collect any that did not succeed
+    // so the caller can see orphan chunks rather than assuming success (P-022).
+    for (const r of result.results ?? []) {
+      if (!r.succeeded) {
+        failures.push({ id: r.key, error: r.errorMessage ?? "unknown error" });
+      }
+    }
+  }
+  if (failures.length > 0) {
+    const sample = failures
+      .slice(0, 3)
+      .map((f) => `${f.id}: ${f.error}`)
+      .join("; ");
+    throw new Error(
+      `RAG delete left ${failures.length} orphan chunk(s) for session ${sessionId}. Sample: ${sample}`
+    );
   }
 }
 
