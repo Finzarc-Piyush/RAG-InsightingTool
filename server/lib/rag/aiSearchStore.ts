@@ -163,3 +163,42 @@ export async function vectorSearchSession(params: {
   }
   return hits;
 }
+
+/**
+ * P-A2: Keyword (BM25) search companion to vectorSearchSession. Used as a
+ * fallback when vector recall is low (e.g. user wording diverges from
+ * indexed phrasing) so synonyms / verbatim column names still surface.
+ */
+export async function keywordSearchSession(params: {
+  sessionId: string;
+  query: string;
+  topK?: number;
+  dataVersion?: number;
+}): Promise<RagHit[]> {
+  const queryText = (params.query || "").trim();
+  if (!queryText) return [];
+  const { client } = getClient();
+  const topK = params.topK ?? getRagTopK();
+  let filter = `sessionId eq '${params.sessionId.replace(/'/g, "''")}'`;
+  if (params.dataVersion != null) {
+    filter += ` and dataVersion eq ${params.dataVersion}`;
+  }
+  const results = await withSearchRetry("keywordSearchSession", () =>
+    client.search<RagSearchDocument>(queryText, {
+      filter,
+      searchFields: ["content"] as any,
+      select: ["chunkId", "chunkType", "content"] as any,
+      top: topK,
+    })
+  );
+  const hits: RagHit[] = [];
+  for await (const r of results.results) {
+    hits.push({
+      chunkId: r.document.chunkId,
+      chunkType: r.document.chunkType,
+      content: r.document.content,
+      score: r.score,
+    });
+  }
+  return hits;
+}
