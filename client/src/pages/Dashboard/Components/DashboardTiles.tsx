@@ -245,6 +245,21 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const fallbackLayouts = useMemo(() => generateLayouts(visibleTiles), [visibleTiles]);
   const [layouts, setLayouts] = useState<Layouts>(() => fallbackLayouts);
 
+  // Dashboard UX polish · aria-live announcements for keyboard + screen-reader
+  // users. Paired with an sr-only region rendered below the grid.
+  const [layoutAnnouncement, setLayoutAnnouncement] = useState<string>("");
+  const tileNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const tile of visibleTiles) {
+      const friendly =
+        (tile as { title?: string }).title ||
+        tile.id ||
+        tile.kind;
+      map.set(tile.id, friendly);
+    }
+    return map;
+  }, [visibleTiles]);
+
   const layoutMigrateAttemptedRef = useRef(new Set<string>());
 
   const serverGridIsEmpty = useMemo(() => {
@@ -329,6 +344,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       setLayouts(previous);
       persistLayouts(dashboardId, previous, sheetId);
       onPersistServerGrid?.(previous);
+      setLayoutAnnouncement("Reverted the last layout change.");
     },
   });
 
@@ -383,6 +399,28 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     persistLayouts(dashboardId, sanitized, sheetId);
     onPersistServerGrid?.(sanitized);
     layoutHistory.push(sanitized);
+    // Dashboard UX polish · announce the outcome so screen-reader users
+    // get the same feedback as the visual lift.
+    const draggedName = tileNameById.get(draggedId) ?? "Tile";
+    const breakpointKey =
+      (Object.keys(sanitized)[0] as keyof Layouts | undefined) ?? "lg";
+    const resolvedArr = sanitized[breakpointKey] ?? [];
+    const beforeArr = before[breakpointKey] ?? [];
+    const beforeDragged = beforeArr.find((l) => l.i === draggedId);
+    const swappedWith =
+      beforeDragged &&
+      resolvedArr.find(
+        (l) =>
+          l.i !== draggedId &&
+          l.x === beforeDragged.x &&
+          l.y === beforeDragged.y
+      );
+    if (swappedWith) {
+      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
+      setLayoutAnnouncement(`${draggedName} swapped with ${otherName}.`);
+    } else {
+      setLayoutAnnouncement(`${draggedName} moved.`);
+    }
   }, [
     dashboardId,
     sheetId,
@@ -391,6 +429,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     layoutHistory,
     visibleTiles,
     onPersistServerGrid,
+    tileNameById,
   ]);
 
   const handleHideTile = useCallback(
@@ -738,11 +777,31 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input"
       >
         {visibleTiles.map((tile) => (
-          <div key={tile.id} className="h-full w-full">
+          <div
+            key={tile.id}
+            className="h-full w-full"
+            role="group"
+            aria-roledescription="dashboard tile"
+            aria-label={tileNameById.get(tile.id) ?? tile.id}
+          >
             {renderTileContent(tile)}
           </div>
         ))}
       </ResponsiveGridLayout>
+
+      {/*
+        Dashboard UX polish · screen-reader announcer.
+        sr-only + aria-live="polite" so the surface stays invisible to
+        sighted users but AT announces tile moves, swaps, and undos.
+      */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {layoutAnnouncement}
+      </div>
 
       {hasHiddenTiles && (
         <div className="flex justify-end">
