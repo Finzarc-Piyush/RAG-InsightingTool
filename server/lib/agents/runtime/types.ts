@@ -300,4 +300,6 @@ export interface AgentLoopResult {
   magnitudes?: AnswerMagnitude[];
   /** Phase-1 concise note on what the tools couldn't determine and why. */
   unexplained?: string;
+  /** Phase-2 agent-emitted dashboard draft; rendered as a chat preview card. */
+  dashboardDraft?: import("../../../shared/schema.js").DashboardSpec;
 }

@@ -193,6 +193,8 @@ export const messageSchema = z.object({
     .optional(),
   /** Phase-1: one-line note on what the tools could not determine. */
   unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
+  dashboardDraft: z.record(z.unknown()).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
   /** Normalized agent activity blocks for the workbench UI (capped server-side) */
@@ -460,6 +462,8 @@ export const chatResponseSchema = z.object({
     .max(6)
     .optional(),
   unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
+  dashboardDraft: z.record(z.unknown()).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;
@@ -557,6 +561,8 @@ export const analysisBriefSchema = z.object({
    * this is the set the driver-discovery skill should test.
    */
   candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
+  /** Phase-2: user asked to turn this turn into a dashboard. */
+  requestsDashboard: z.boolean().optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;

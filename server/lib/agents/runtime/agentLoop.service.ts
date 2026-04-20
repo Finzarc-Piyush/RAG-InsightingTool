@@ -582,6 +582,10 @@ export async function runAgentTurn(
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
+  // PR 2.B — dashboard draft emitted when the brief flags requestsDashboard.
+  let dashboardDraft:
+    | import("../../../shared/schema.js").DashboardSpec
+    | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
@@ -1493,6 +1497,60 @@ export async function runAgentTurn(
       }
     }
 
+    // PR 2.B — emit a DashboardSpec draft when the user asked for a dashboard
+    // and at least one chart exists. Non-fatal: failures leave dashboardDraft
+    // unset and the normal answer still streams to the client.
+    try {
+      const { shouldBuildDashboard, buildDashboardFromTurn } = await import(
+        "./buildDashboard.js"
+      );
+      if (
+        answer?.trim() &&
+        shouldBuildDashboard({
+          brief: ctx.analysisBrief,
+          charts: mergedCharts,
+        })
+      ) {
+        const spec = await buildDashboardFromTurn({
+          question: ctx.question,
+          answerBody: answer,
+          keyInsight: mergedInsights[0]?.body,
+          charts: mergedCharts,
+          magnitudes: envelopeMagnitudes,
+          brief: ctx.analysisBrief,
+          turnId,
+          onLlmCall,
+        });
+        if (spec) {
+          dashboardDraft = spec;
+          safeEmit("dashboard_draft", {
+            name: spec.name,
+            template: spec.template,
+            sheetCount: spec.sheets.length,
+            chartCount: mergedCharts.length,
+          });
+          appendInterAgentMessage(
+            trace,
+            {
+              from: "Synthesizer",
+              to: "Coordinator",
+              intent: "dashboard_drafted",
+              meta: {
+                template: spec.template,
+                sheetCount: String(spec.sheets.length),
+              },
+            },
+            safeEmit
+          );
+        }
+      }
+    } catch (dashErr) {
+      agentLog("buildDashboard.dispatch_failed", {
+        turnId,
+        error: dashErr instanceof Error ? dashErr.message : String(dashErr),
+      });
+    }
+
     if (!answer?.trim()) {
       trace.endedAt = Date.now();
       agentLog("turn.abort", {
@@ -1601,6 +1659,7 @@ export async function runAgentTurn(
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
       ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
+      ...(dashboardDraft ? { dashboardDraft } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
     };

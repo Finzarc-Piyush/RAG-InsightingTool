@@ -960,6 +960,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 .unexplained,
             }
           : {}),
+        ...((transformedResponse as { dashboardDraft?: Record<string, unknown> }).dashboardDraft
+          ? {
+              dashboardDraft: (
+                transformedResponse as { dashboardDraft: Record<string, unknown> }
+              ).dashboardDraft,
+            }
+          : {}),
       };
 
       await addMessagesBySessionId(sessionId, [
