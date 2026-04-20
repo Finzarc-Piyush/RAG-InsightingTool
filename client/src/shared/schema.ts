@@ -724,6 +724,8 @@ export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
 
 export const createDashboardFromSpecRequestSchema = z.object({
   spec: dashboardSpecSchema,
+  /** Phase 2.E · See server/shared/schema.ts for why. */
+  sessionId: z.string().max(200).optional(),
 });
 
 export type CreateDashboardFromSpecRequest = z.infer<

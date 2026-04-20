@@ -394,6 +394,18 @@ export const createDashboardFromSpecController = async (
     const username = requireUsername(req);
     const parsed = createDashboardFromSpecRequestSchema.parse(req.body);
     const dashboard = await createDashboardFromSpec(username, parsed.spec);
+    // Phase 2.E · Best-effort remember the dashboard so future agent
+    // turns can call patch_dashboard without the user restating the id.
+    if (parsed.sessionId) {
+      const { setLastCreatedDashboardForSession } = await import(
+        "../models/chat.model.js"
+      );
+      void setLastCreatedDashboardForSession(
+        parsed.sessionId,
+        username,
+        dashboard.id
+      );
+    }
     res.status(201).json(dashboard);
   } catch (error: any) {
     if (error instanceof AuthenticationError) {

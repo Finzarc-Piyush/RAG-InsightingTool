@@ -733,6 +733,13 @@ export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
 
 export const createDashboardFromSpecRequestSchema = z.object({
   spec: dashboardSpecSchema,
+  /**
+   * Phase 2.E · Optional session this dashboard was created from. When
+   * supplied, the server stamps `chatDocument.lastCreatedDashboardId`
+   * so the `patch_dashboard` agent tool can resolve follow-up edits
+   * without the user re-stating the dashboard id.
+   */
+  sessionId: z.string().max(200).optional(),
 });
 
 export type CreateDashboardFromSpecRequest = z.infer<
