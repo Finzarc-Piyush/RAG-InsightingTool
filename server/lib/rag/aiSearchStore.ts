@@ -5,6 +5,36 @@ import type { RagHit } from "./ragHit.js";
 
 export type { RagHit } from "./ragHit.js";
 
+// P-023: Azure Search 429 / 5xx retry with exponential backoff + jitter.
+// Reads are always safe to retry; writes (upsert / delete) are idempotent by id
+// so retry is also safe. Max 3 attempts, capped delay.
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+async function withSearchRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const maxAttempts = 3;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const statusCode = (err as { statusCode?: number; status?: number })?.statusCode
+        ?? (err as { status?: number })?.status;
+      const retryable = statusCode == null ? false : RETRYABLE_STATUS.has(statusCode);
+      if (!retryable || attempt === maxAttempts) {
+        throw err;
+      }
+      const backoff = Math.min(2000, 200 * 2 ** (attempt - 1));
+      const jitter = Math.floor(Math.random() * backoff);
+      console.warn(
+        `⚠️ Azure Search ${label} attempt ${attempt} failed (status ${statusCode}); retrying in ${backoff + jitter}ms`
+      );
+      await new Promise((r) => setTimeout(r, backoff + jitter));
+    }
+  }
+  throw lastErr;
+}
+
 export interface RagSearchDocument {
   id: string;
   sessionId: string;
@@ -35,7 +65,7 @@ export async function upsertRagDocuments(docs: RagSearchDocument[]): Promise<voi
     return;
   }
   const { client } = getClient();
-  await client.mergeOrUploadDocuments(docs);
+  await withSearchRetry("upsertRagDocuments", () => client.mergeOrUploadDocuments(docs));
 }
 
 /**
@@ -111,14 +141,16 @@ export async function vectorSearchSession(params: {
     fields: ["contentVector"] as any,
   };
 
-  const results = await client.search<RagSearchDocument>("*", {
-    filter,
-    vectorSearchOptions: {
-      queries: [vectorQuery],
-    },
-    select: ["chunkId", "chunkType", "content"] as any,
-    top: topK,
-  });
+  const results = await withSearchRetry("vectorSearchSession", () =>
+    client.search<RagSearchDocument>("*", {
+      filter,
+      vectorSearchOptions: {
+        queries: [vectorQuery],
+      },
+      select: ["chunkId", "chunkType", "content"] as any,
+      top: topK,
+    })
+  );
 
   const hits: RagHit[] = [];
   for await (const r of results.results) {

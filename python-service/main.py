@@ -1,4 +1,5 @@
 """FastAPI application for Data Operations Service"""
+import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -65,6 +66,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# P-037: Refuse to boot in a production-like environment without an API key.
+# Setting VERCEL or ENVIRONMENT=production flips this on. Local dev still
+# works with the key unset.
+if not config.INTERNAL_API_KEY:
+    _prod_markers = {
+        "VERCEL": os.getenv("VERCEL"),
+        "ENVIRONMENT": os.getenv("ENVIRONMENT", "").lower(),
+        "NODE_ENV": os.getenv("NODE_ENV", "").lower(),
+    }
+    if _prod_markers["VERCEL"] or _prod_markers["ENVIRONMENT"] == "production" or _prod_markers["NODE_ENV"] == "production":
+        raise RuntimeError(
+            "PYTHON_SERVICE_API_KEY must be set in production; refusing to start world-accessible."
+        )
 
 
 @app.middleware("http")

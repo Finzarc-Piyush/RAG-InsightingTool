@@ -112,6 +112,16 @@ export const useHomeMutations = ({
         clearInterval(uploadPollIntervalRef.current);
         uploadPollIntervalRef.current = null;
       }
+      // P-017: abort any in-flight chat stream on unmount so the fetch does
+      // not try to setState on a gone component (and so SSE bytes stop).
+      if (abortControllerRef.current) {
+        try {
+          abortControllerRef.current.abort();
+        } catch {
+          /* ignore */
+        }
+        abortControllerRef.current = null;
+      }
     };
   }, []);
 

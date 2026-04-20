@@ -611,7 +611,8 @@ export async function runAgentTurn(
 
   try {
     let replans = 0;
-    while (replans <= 2) {
+    // P-020: promoted to AgentConfig so operators can tune via AGENT_MAX_REPLANS_PER_STEP.
+    while (replans <= config.maxReplansPerStep) {
       if (Date.now() > deadline) {
         trace.budgetHits?.push("wall_time");
         break;

@@ -89,9 +89,13 @@ function Router() {
     setLocation('/analysis');
   };
 
-  // Redirect root and old routes to /analysis
+  // Redirect root and old (/data-ops, /modeling) routes to /analysis.
+  // Guard against re-invoking setLocation when already on target (P-045).
+  // Legacy paths kept for bookmark-compat (P-072).
   useEffect(() => {
-    if (location === '/' || location === '/data-ops' || location === '/modeling') {
+    const isLegacy =
+      location === '/' || location === '/data-ops' || location === '/modeling';
+    if (isLegacy && location !== '/analysis') {
       setLocation('/analysis');
     }
   }, [location, setLocation]);
@@ -177,11 +181,20 @@ function AuthRedirectHandler() {
   );
 }
 
-// Create MSAL instance with dynamic config
-const msalInstance = new PublicClientApplication(createMsalConfig());
-registerMsalInstance(msalInstance);
+// P-016: Lazy singleton instead of top-level construction. Module re-parse
+// during HMR (or second import via code-split chunks) previously instantiated
+// a second MSAL client and silently invalidated cached auth state.
+let cachedMsalInstance: PublicClientApplication | null = null;
+function getMsalInstance(): PublicClientApplication {
+  if (!cachedMsalInstance) {
+    cachedMsalInstance = new PublicClientApplication(createMsalConfig());
+    registerMsalInstance(cachedMsalInstance);
+  }
+  return cachedMsalInstance;
+}
 
 function App() {
+  const msalInstance = getMsalInstance();
   return (
     <ErrorBoundary>
       <ThemeProvider>

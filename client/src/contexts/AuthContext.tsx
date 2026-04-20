@@ -46,18 +46,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     if (accounts.length > 0) {
       const userAccount = accounts[0];
       setUser(userAccount);
-      
+
       // Store user email in localStorage when user is authenticated
       if (userAccount.username) {
         setUserEmail(userAccount.username);
         console.log('✅ User email stored in localStorage:', userAccount.username);
       }
-      
+
       setIsLoading(false);
     } else if (inProgress === 'none') {
       setIsLoading(false);
     }
   }, [accounts, inProgress]);
+
+  // P-013: failsafe — if MSAL gets wedged in a non-terminal inProgress state
+  // with no accounts (e.g. popup blocked, stalled handleRedirectPromise), the
+  // loading screen would never clear. Force-clear after a sensible budget so
+  // the user at least sees the login path.
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = setTimeout(() => {
+      console.warn('⚠️ AuthContext isLoading failsafe tripped after 5s');
+      setIsLoading(false);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [isLoading]);
 
   const login = async () => {
     try {

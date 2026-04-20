@@ -79,6 +79,8 @@ export interface AgentConfig {
   maxToolCalls: number;
   maxVerifierRoundsPerStep: number;
   maxVerifierRoundsFinal: number;
+  /** Max planner replans per step (was hardcoded as `replans <= 2`). */
+  maxReplansPerStep: number;
   maxTotalLlmCallsPerTurn: number;
   sampleRowsCap: number;
   observationMaxChars: number;
@@ -95,6 +97,8 @@ export function loadAgentConfigFromEnv(): AgentConfig {
     maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 20),
     maxVerifierRoundsPerStep: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_STEP, 2),
     maxVerifierRoundsFinal: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_FINAL, 2),
+    // Default of 2 preserves prior hardcoded behaviour (P-020).
+    maxReplansPerStep: num(process.env.AGENT_MAX_REPLANS_PER_STEP, 2),
     maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 40),
     sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
     observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 8000),

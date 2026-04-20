@@ -29,6 +29,39 @@ function pythonServiceHeaders(
   return h;
 }
 
+/**
+ * P-027: wrapper that guarantees timeout cleanup and explicitly destroys the
+ * response body on abort so a streaming body cannot keep bytes flowing after
+ * the timer trips.
+ */
+export async function pythonServiceFetch(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number = REQUEST_TIMEOUT
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchFn(`${PYTHON_SERVICE_URL}${path}`, {
+      ...init,
+      headers: pythonServiceHeaders(
+        (init.headers as Record<string, string> | undefined) ?? {}
+      ),
+      signal: controller.signal,
+    });
+    return response;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Python service request timed out after ${timeoutMs}ms: ${path}`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // Import fs for file operations (to handle large responses)
 import * as fs from 'fs';
 import * as path from 'path';
