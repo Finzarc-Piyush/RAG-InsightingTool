@@ -2,6 +2,12 @@
  * Python Service Client
  * Communicates with the Python microservice for data operations
  */
+import {
+  aggregateResponseSchema,
+  parsePythonResponse,
+  previewResponseSchema,
+} from "./pythonResponseSchemas.js";
+
 // Use global fetch (Node.js 18+) or provide polyfill
 let fetchFn: typeof fetch;
 if (typeof fetch !== 'undefined') {
@@ -367,7 +373,12 @@ export async function getDataPreview(
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
-    return await response.json() as PreviewResponse;
+    const raw = await response.json();
+    return parsePythonResponse(
+      "/preview",
+      previewResponseSchema,
+      raw
+    ) as PreviewResponse;
   } catch (error) {
     console.error('Error calling Python service preview:', error);
     throw error;
@@ -551,7 +562,12 @@ export async function aggregateData(
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
-    return await response.json() as AggregateResponse;
+    const raw = await response.json();
+    return parsePythonResponse(
+      "/aggregate",
+      aggregateResponseSchema,
+      raw
+    ) as AggregateResponse;
   } catch (error) {
     console.error('Error calling Python service aggregate:', error);
     throw error;
