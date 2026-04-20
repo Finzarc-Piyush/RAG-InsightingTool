@@ -194,13 +194,54 @@ export function allowedColumnNamesForQueryPlan(summary: DataSummary): Set<string
   return allowed;
 }
 
+/**
+ * P-A4: Cheap "did you mean" suggestions when a plan references a column
+ * that isn't in the schema. Case-insensitive prefix / substring match on
+ * the full allowed set, ranked by token overlap. Keeps top 3.
+ */
+function suggestCloseColumnNames(
+  missing: string,
+  allowed: ReadonlySet<string>
+): string[] {
+  const m = missing.toLowerCase();
+  if (!m) return [];
+  const scored: Array<{ name: string; score: number }> = [];
+  for (const name of allowed) {
+    const n = name.toLowerCase();
+    if (n === m) continue;
+    let score = 0;
+    if (n.startsWith(m) || m.startsWith(n)) score += 4;
+    if (n.includes(m) || m.includes(n)) score += 2;
+    const mTokens = new Set(m.split(/[^a-z0-9]+/).filter(Boolean));
+    const nTokens = new Set(n.split(/[^a-z0-9]+/).filter(Boolean));
+    for (const t of mTokens) if (nTokens.has(t)) score += 1;
+    if (score > 0) scored.push({ name, score });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((s) => s.name);
+}
+
+function formatMissingColumnError(
+  missing: string,
+  allowed: ReadonlySet<string>
+): string {
+  const suggestions = suggestCloseColumnNames(missing, allowed);
+  // Structured prefix so the reflector / planner can parse it reliably.
+  if (suggestions.length === 0) {
+    return `Column not in schema: ${missing}`;
+  }
+  return `Column not in schema: ${missing}. Did you mean: ${suggestions.join(", ")}?`;
+}
+
 function assertPlanColumnsAllowed(
   summary: DataSummary,
   plan: QueryPlanBody
 ): string | null {
   const allowed = allowedColumnNamesForQueryPlan(summary);
   const check = (col: string) => {
-    if (!allowed.has(col)) return `Column not in schema: ${col}`;
+    if (!allowed.has(col)) return formatMissingColumnError(col, allowed);
     return null;
   };
   for (const c of plan.groupBy ?? []) {
@@ -222,7 +263,7 @@ function assertPlanColumnsAllowed(
   }
   for (const s of plan.sort ?? []) {
     if (!allowedSort.has(s.column)) {
-      return `Column not in schema: ${s.column}`;
+      return formatMissingColumnError(s.column, allowedSort);
     }
   }
   return null;
