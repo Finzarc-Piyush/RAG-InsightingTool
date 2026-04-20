@@ -739,6 +739,49 @@ export type CreateDashboardFromSpecRequest = z.infer<
   typeof createDashboardFromSpecRequestSchema
 >;
 
+/**
+ * Phase 2.E — atomic follow-up edits to an existing dashboard.
+ *
+ * Used by the chat "add a margin chart to the dashboard we just built"
+ * flow (server side only in this PR; agent tool wiring lands later).
+ * Server applies in order: remove → add → rename — so the caller never
+ * has to think about index shifts.
+ */
+export const dashboardPatchSchema = z.object({
+  addCharts: z
+    .array(
+      z.object({
+        chart: chartSpecSchema,
+        sheetId: z.string().max(120).optional(),
+      })
+    )
+    .max(8)
+    .optional(),
+  removeCharts: z
+    .array(
+      z.object({
+        sheetId: z.string().max(120),
+        chartIndex: z.number().int().min(0).max(200),
+      })
+    )
+    .max(20)
+    .optional(),
+  renameSheet: z
+    .object({
+      sheetId: z.string().max(120),
+      name: z.string().min(1).max(200),
+    })
+    .optional(),
+});
+
+export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;
+
+export const patchDashboardRequestSchema = z.object({
+  patch: dashboardPatchSchema,
+});
+
+export type PatchDashboardRequest = z.infer<typeof patchDashboardRequestSchema>;
+
 export const patchDashboardSheetRequestSchema = z
   .object({
     narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),

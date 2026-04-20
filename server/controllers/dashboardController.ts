@@ -6,6 +6,7 @@ import {
   createDashboardRequestSchema,
   createReportDashboardRequestSchema,
   exportDashboardRequestSchema,
+  patchDashboardRequestSchema,
   patchDashboardSheetRequestSchema,
   removeChartFromDashboardRequestSchema,
 } from "../shared/schema.js";
@@ -31,6 +32,7 @@ import {
   updateTableCaption,
   createReportDashboardFromAnalysis,
   createDashboardFromSpec,
+  patchDashboard,
   patchDashboardSheet,
 } from "../models/dashboard.model.js";
 import {
@@ -400,6 +402,28 @@ export const createDashboardFromSpecController = async (
     }
     res.status(400).json({
       error: error?.message || "Failed to create dashboard from spec",
+    });
+  }
+};
+
+/**
+ * Phase 2.E — atomic follow-up edits to an existing dashboard.
+ * Chat "add a margin chart to the dashboard we just built" calls this.
+ */
+export const patchDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = patchDashboardRequestSchema.parse(req.body);
+    const dashboard = await patchDashboard(dashboardId, username, parsed.patch);
+    res.json(dashboard);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({
+      error: error?.message || "Failed to patch dashboard",
     });
   }
 };

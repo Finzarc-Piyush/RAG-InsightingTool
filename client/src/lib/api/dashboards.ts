@@ -6,6 +6,7 @@ import {
   CreateReportDashboardRequest,
   Dashboard,
   DashboardNarrativeBlock,
+  DashboardPatch,
   DashboardSpec,
   DashboardTableSpec,
 } from "@/shared/schema";
@@ -60,6 +61,9 @@ export const dashboardsApi = {
   /** Phase 2 — commit an agent-emitted DashboardSpec from the chat preview card. */
   createFromSpec: (spec: DashboardSpec) =>
     api.post<Dashboard>("/api/dashboards/from-spec", { spec }),
+  /** Phase 2.E — atomic follow-up edits to an existing dashboard. */
+  patch: (dashboardId: string, patch: DashboardPatch) =>
+    api.post<Dashboard>(`/api/dashboards/${dashboardId}/patch`, { patch }),
   patchSheetContent: (
     dashboardId: string,
     sheetId: string,
