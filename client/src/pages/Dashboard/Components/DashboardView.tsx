@@ -660,13 +660,29 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                         <div
                           key={sheet.id}
                           className={cn(
-                            "w-full flex items-center gap-2 px-3 py-2.5 rounded-md transition-colors group",
+                            // UX-4 · Sheet sidebar row. Active = left
+                            // accent bar + subtle primary tint; hover =
+                            // surface-hover utility from the tokens.
+                            "relative w-full flex items-center gap-2 px-3 py-2.5 rounded-brand-md transition-colors duration-quick ease-standard group",
                             isActive && !isEditing
-                              ? "bg-primary text-primary-foreground"
-                              : "hover:bg-muted text-foreground"
+                              ? "bg-primary/10 text-foreground"
+                              : "text-foreground hover:surface-hover"
                           )}
                         >
-                          <FileText className={cn("h-4 w-4 flex-shrink-0", isActive && !isEditing ? "text-primary-foreground" : "text-muted-foreground")} />
+                          {isActive && !isEditing ? (
+                            <span
+                              aria-hidden="true"
+                              className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-primary animate-brand-underline origin-top"
+                            />
+                          ) : null}
+                          <FileText
+                            className={cn(
+                              "h-4 w-4 flex-shrink-0",
+                              isActive && !isEditing
+                                ? "text-primary"
+                                : "text-muted-foreground"
+                            )}
+                          />
                           {isEditing ? (
                             <div className="flex-1 flex items-center gap-1">
                               <Input
@@ -700,20 +716,25 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                                 onClick={() => setActiveSheetId(sheet.id)}
                                 className="flex-1 min-w-0 text-left"
                               >
-                                <div className={cn("font-medium text-sm truncate", isActive && "text-primary-foreground")}>
+                                <div
+                                  className={cn(
+                                    "font-medium text-sm truncate",
+                                    isActive && "text-foreground"
+                                  )}
+                                >
                                   {sheet.name}
                                 </div>
-                                <div className={cn("text-xs truncate", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                                <div className="text-xs truncate text-muted-foreground">
                                   {sheet.charts.length} chart{sheet.charts.length !== 1 ? 's' : ''}
                                 </div>
                               </button>
                               {canEdit && (
-                                <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-quick ease-standard">
                                   <Button
                                     variant="ghost"
                                     size="icon"
                                     onClick={handleStartEdit}
-                                    className={cn("h-6 w-6 flex-shrink-0", isActive && "text-primary-foreground")}
+                                    className="h-6 w-6 flex-shrink-0"
                                     aria-label="Rename view"
                                   >
                                     <Edit2 className="h-3 w-3" />
@@ -723,7 +744,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                                       variant="ghost"
                                       size="icon"
                                       onClick={handleDeleteClick}
-                                      className={cn("h-6 w-6 flex-shrink-0 hover:text-destructive", isActive && "text-primary-foreground hover:text-destructive")}
+                                      className="h-6 w-6 flex-shrink-0 hover:text-destructive"
                                       aria-label="Delete view"
                                     >
                                       <Trash2 className="h-3 w-3" />

@@ -495,7 +495,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     switch (tile.kind) {
       case 'chart':
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-background shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="chart">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-background shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="chart">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
             <div className="flex items-center justify-between w-full">
                 <CardTitle className="text-base text-foreground">
@@ -538,7 +538,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       case 'insight': {
         const chartIndex = tile.relatedChartId ? parseInt(tile.relatedChartId.replace('chart-', ''), 10) : -1;
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="insight">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="insight">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
               <div className="flex items-center justify-between w-full">
                 {tile.title && (
@@ -582,7 +582,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       case 'narrative':
         return (
           <Card
-            className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group"
+            className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group"
             data-dashboard-tile="narrative"
           >
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
@@ -619,7 +619,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         );
       case 'table': {
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="table">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="table">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
               <div className="flex items-center justify-between w-full">
                 <CardTitle className="text-sm font-semibold text-primary flex-1 min-w-0">

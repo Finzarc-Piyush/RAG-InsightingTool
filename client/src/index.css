@@ -371,6 +371,37 @@
     @apply hidden;
   }
 
+  /*
+   * UX-4 · Dashboard drag cues.
+   *
+   * react-grid-layout adds `.react-grid-item.react-draggable-dragging`
+   * while a tile is being dragged and paints a `.react-grid-placeholder`
+   * at the target slot. Two rules:
+   *   - dragging tile elevates to shadow-md + 4px lift;
+   *   - placeholder becomes a 2px dashed primary outline at 40% alpha.
+   */
+  .react-grid-item.react-draggable-dragging {
+    z-index: 30;
+  }
+  .react-grid-item.react-draggable-dragging [data-dashboard-tile] {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-4px);
+    transition: box-shadow 180ms var(--ease-standard),
+      transform 180ms var(--ease-standard);
+  }
+  .react-grid-placeholder {
+    background: transparent !important;
+    border: 2px dashed hsl(var(--primary) / 0.4) !important;
+    border-radius: 0.75rem !important;
+    opacity: 1 !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .react-grid-item.react-draggable-dragging [data-dashboard-tile] {
+      transform: none;
+      transition: none;
+    }
+  }
+
   /* Placeholder styling for contentEditable div */
   [contenteditable][data-placeholder]:empty::before {
     content: attr(data-placeholder);

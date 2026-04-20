@@ -16,6 +16,9 @@ const temporaryDebtFiles = new Set([
   // pivot grid sticky header) against the `--gradient-*` tokens.
   'src/components/FilterAppliedMessage.tsx',
   'src/pages/Home/Components/pivot/PivotGrid.tsx',
+  // UX-4 · sole pre-existing violation is an intentional #FFFFFF for
+  // html-to-image PDF/PNG export (paper white, not a UI colour).
+  'src/pages/Dashboard/Components/DashboardView.tsx',
 ]);
 
 const forbiddenPatterns = [
