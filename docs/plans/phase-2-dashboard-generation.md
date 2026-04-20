@@ -10,7 +10,7 @@
 | 2.B | ✅ shipped | `AnalysisBrief.requestsDashboard` + prompt, `buildDashboard` module (`shouldBuildDashboard` guard + `buildDashboardFromTurn` LLM call), agent-loop dispatch + `dashboard_draft` SSE, threaded through `AgentLoopResult → dataAnalyzer → Message`. |
 | 2.C | ✅ shipped | Deterministic grid-layout templates (`executive` / `deep_dive` / `monitoring`) via `dashboardTemplates.ts`; client `DashboardDraftCard` renders inline with "Create dashboard" CTA that POSTs `/from-spec` and navigates. |
 | 2.D | ⏳ | Rollout gating (staging 10% → 100%). |
-| 2.E | ⏳ stretch | `patch_dashboard` tool for follow-up edits. |
+| 2.E | ✅ shipped | `DashboardPatch` schema + `POST /dashboards/:id/patch` + `patch_dashboard` agent tool + session-memory stamp on `from-spec` so "the dashboard we just built" resolves without a manual id. |
 
 ## Context
 

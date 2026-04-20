@@ -87,6 +87,7 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | Phase-2 2.B | Brief `requestsDashboard` trigger + `buildDashboard` module + `dashboard_draft` SSE | PR 2.B |
 | Phase-2 2.C | Layout templates + inline `DashboardDraftCard` + "Create dashboard" CTA | PR 2.C |
 | Phase-2 2.E (primitive) | `DashboardPatch` schema + `patchDashboard` model + `POST /api/dashboards/:id/patch` + client API | PR 2.E |
+| Phase-2 2.E (agent + memory) | `ChatDocument.lastCreatedDashboardId` stamped by /from-spec + `patch_dashboard` agent tool that resolves session memory; client threads `sessionId` through `DashboardDraftCard` | PR 2.E |
 | Dashboard UX polish | Undo stack (`useLayoutHistory`) + Cmd/Ctrl+Z | — |
 | Dashboard UX polish | aria-live swap/move announcer + tile `role="group"` + aria-label | — |
 | Dashboard UX polish | Keyboard move-mode (Tab/Space/arrows/Esc) | — |
