@@ -23,7 +23,8 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve(__dirname, "src"),
         "@shared": path.resolve(__dirname, "src/shared"),
-        "@assets": path.resolve(__dirname, "../attached_assets"),
+        // P-038: @assets alias pointed at ../attached_assets which does not
+        // exist and had zero imports; removed.
       },
     },
     server: {

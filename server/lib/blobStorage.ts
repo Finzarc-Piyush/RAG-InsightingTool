@@ -19,19 +19,30 @@ const blobServiceClient = new BlobServiceClient(
 // Get container client
 const containerClient = blobServiceClient.getContainerClient(AZURE_STORAGE_CONTAINER_NAME);
 
-// Initialize blob storage
-export const initializeBlobStorage = async () => {
-  try {
-    // Create container if it doesn't exist
-    await containerClient.createIfNotExists();
-    
-    console.log("✅ Azure Blob Storage initialized successfully");
-    console.log(`📁 Container: ${AZURE_STORAGE_CONTAINER_NAME}`);
-  } catch (error) {
-    console.error("❌ Failed to initialize Azure Blob Storage:", error);
-    throw error;
-  }
+// P-060: fire-and-forget init from server startup created a race where the
+// first upload could 500 before createIfNotExists completed. Memoize the
+// init promise so every call site can await the same work.
+let initPromise: Promise<void> | null = null;
+
+export const initializeBlobStorage = async (): Promise<void> => {
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    try {
+      await containerClient.createIfNotExists();
+      console.log("✅ Azure Blob Storage initialized successfully");
+      console.log(`📁 Container: ${AZURE_STORAGE_CONTAINER_NAME}`);
+    } catch (error) {
+      console.error("❌ Failed to initialize Azure Blob Storage:", error);
+      // Allow a later retry rather than caching the rejection forever.
+      initPromise = null;
+      throw error;
+    }
+  })();
+  return initPromise;
 };
+
+/** Await on first use so callers cannot hit the container before createIfNotExists. */
+export const ensureBlobStorageReady = (): Promise<void> => initializeBlobStorage();
 
 // Upload file to blob storage
 export const uploadFileToBlob = async (

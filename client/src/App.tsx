@@ -152,23 +152,15 @@ function Router() {
   );
 }
 
-// Component to handle authentication redirects
+// Component to handle authentication redirects. P-065: compute the redirect
+// flag synchronously from the URL so we never flash both branches while an
+// async setState settles.
 function AuthRedirectHandler() {
-  const [isHandlingRedirect, setIsHandlingRedirect] = useState(true);
-
-  useEffect(() => {
-    // Check if we're handling a redirect
+  const isHandlingRedirect = (() => {
+    if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    const isRedirect = urlParams.has('code') || urlParams.has('error');
-    
-    if (isRedirect) {
-      // We're in a redirect flow, show the callback component
-      setIsHandlingRedirect(true);
-    } else {
-      // Normal app flow
-      setIsHandlingRedirect(false);
-    }
-  }, []);
+    return urlParams.has('code') || urlParams.has('error');
+  })();
 
   if (isHandlingRedirect) {
     return <AuthCallback />;

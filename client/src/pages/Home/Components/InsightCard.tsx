@@ -81,7 +81,7 @@ const parseInsightText = (text: string) => {
       // This is a bold section - remove the ** and make it darker
       const boldText = part.slice(2, -2);
       return (
-        <span key={index} className="font-semibold text-gray-800 dark:text-gray-200">
+        <span key={index} className="font-semibold text-foreground">
           {boldText}
         </span>
       );
