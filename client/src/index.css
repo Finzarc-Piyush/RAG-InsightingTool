@@ -351,7 +351,7 @@
   }
 
   .token-table-frame {
-    @apply rounded-md border border-border bg-card;
+    @apply rounded-brand-lg border border-border bg-card;
   }
 
   .token-table-head {
@@ -359,11 +359,23 @@
   }
 
   .token-table-row {
-    @apply border-b border-border transition-colors;
+    @apply border-b border-border transition-colors duration-quick ease-standard;
   }
 
   .token-table-row:hover {
     background-color: var(--surface-hover);
+  }
+
+  /*
+   * UX-5 · Numeric cell class. Apply to any <td> whose column is
+   * numeric. Right-aligns, enables tabular numerics (digit widths
+   * aligned row-to-row), and uses the metric font family so a column
+   * of numbers reads as one figure at a glance.
+   */
+  .token-table-cell-numeric {
+    @apply font-metric text-right;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
   }
 
   /* Hide ugly search cancel button in Chrome until we can style it properly */
