@@ -64,6 +64,16 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | P-071 | `main.tsx` throws clear error when `#root` missing | Wave 3 |
 | P-072 | Legacy `/data-ops` `/modeling` redirects annotated | Wave 2 |
 | P-078 | Stale IE11 comment removed from `msalConfig.ts` | Wave 3 |
+| P-025 | Intermediate SSE preview clamped to `AGENT_INTERMEDIATE_PREVIEW_ROW_CAP` rows | PR B.5 |
+| P-029 | Zod schemas + `parsePythonResponse()`; wired into `/preview` and `/aggregate` | PR B.1 |
+| P-032 | `assertPlanColumnsAllowed` returns did-you-mean suggestions | PR A.4 |
+| P-059 | `scripts/check-shared-schema-drift.mjs` landed (not yet CI-wired; surfaces real drift) | PR B.5 |
+| P-073 | `console.*` → `logger.*` in `msalConfig.ts`, `AuthContext.tsx`, `envCheck.ts` | PR B.2 |
+| P-074 | Verified: `httpClient.ts` DEV logger already scoped to method + route + status | PR B.2 |
+| A.1 (query quality) | Upfront RAG hits injected into initial planner prompt | PR A.1 |
+| A.2 (query quality) | RAG keyword-search fallback + content-hash dedup | PR A.2 |
+| A.3 (query quality) | Reflector sees working-memory columns + 12k observation cap | PR A.3 |
+| A.5 (query quality) | Deferred-chart drops now emit `deferredChart.dropped` agentLog | PR A.5 |
 
 ## Partially addressed / deferred follow-ups
 
@@ -71,9 +81,7 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 |----|--------|--------|
 | P-001 (history) | deferred — runbook only | `git filter-repo` rewrites shared history; requires coordination (see `docs/problems/RUNBOOK-history-purge.md`) |
 | P-010 | partial | Body-size middleware + `_with_training_gate` helper added; per-endpoint wiring of ~40 training routes deferred |
-| P-025 | deferred | SSE intermediate-flush row cap needs a targeted pass on `intermediatePivotPolicy` |
-| P-029 | deferred | Per-endpoint Zod on Python responses (~20 call sites) — opaque errors, no behavior bug |
-| P-032 | deferred | Executor column pre-validation against `dataSummary` — depth > one sitting |
+| P-029 | partial | Zod helper + schemas landed; wired into `/preview` and `/aggregate`. Remaining call sites migrate incrementally (same pattern). |
 | P-035 | partial | `REQUEST_TIMEOUT` exists; actual `asyncio.wait_for` wrap per training handler deferred |
 | P-050 | deferred | Message sliding window needs UX design for history-on-scroll |
 | P-051 | partial | Top offender (`InsightCard`) fixed; the other tempDebt files (Dialog / FilterApplied / DashboardModal) still need refactors |
@@ -81,13 +89,13 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | P-053 | deferred | a11y audit pass (aria labels, focus restoration) |
 | P-056 | deferred | Negative-path tests for chart compiler / RAG retrieve / Snowflake / SSE flusher |
 | P-058 | partial | CSV diagnostics surface malformed rows; strict-first fallback not yet implemented |
-| P-059 | deferred | Shared schema codegen / hash gate |
+| P-059 | partial | Drift-check script landed; CI wiring blocks on real reconciliation (`agentTrace` is client-only today) |
 | P-061 | deferred | Per-batch CSV schema revalidation |
 | P-062 | deferred | Vitest + `test` script in `client/` (new tooling) |
 | P-063 | deferred | `postcss.config.js` vs Tailwind v4 assumptions |
 | P-064 | deferred | Recharts chunk split (perf polish) |
-| P-073 | deferred | Sweep `console.*` → `logger` across listed client files |
-| P-074 | deferred | Header-redaction in httpClient DEV logger |
+| P-073 | partial | Auth-path swept; remaining DashboardModal / DataSummaryModal / DatasetEnrichmentLoader sweeps left |
+| P-074 | done (verified already narrow) | `httpClient.ts` already logs method + route + status + request-id only |
 | P-075 | deferred | Context value memoization |
 | P-076 | deferred | `useSessionLoader` dep stabilization |
 | P-077 | deferred | `client.env` → `.env.local` rename decision |
