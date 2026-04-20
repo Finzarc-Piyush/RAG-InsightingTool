@@ -74,6 +74,11 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | A.2 (query quality) | RAG keyword-search fallback + content-hash dedup | PR A.2 |
 | A.3 (query quality) | Reflector sees working-memory columns + 12k observation cap | PR A.3 |
 | A.5 (query quality) | Deferred-chart drops now emit `deferredChart.dropped` agentLog | PR A.5 |
+| Dashboard UX (cascade push) | Swap-on-collision via `resolveLayoutsDropBySwap`; stable re-layout helpers + unit tests | dashboard-ux-fix |
+| Phase-1 1.A | `questionShape` + `candidateDriverDimensions` on `AnalysisBrief`; `intent_parsed` SSE | PR 1.A |
+| Phase-1 1.B | `skills/` registry + planner manifest hook (flag-gated, zero behavior when off) | PR 1.B |
+| Phase-1 1.C | `variance_decomposer` skill + agent-loop dispatch + `skill_execution` SSE | PR 1.C |
+| Phase-1 1.D | `driver_discovery` skill | PR 1.D |
 
 ## Partially addressed / deferred follow-ups
 

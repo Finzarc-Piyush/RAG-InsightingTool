@@ -1,6 +1,6 @@
 # Dashboard UX — fix the cascade-push on collision
 
-**Status:** plan. **Ship target:** next UX sprint.
+**Status:** core fix shipped on `claude/add-claude-documentation-PaA9h` (`dashboardGridLogic.ts` + `resolveLayoutsDropBySwap` wired into `DashboardTiles.tsx`). **Remaining:** undo stack, snap guides, keyboard/a11y — optional polish.
 
 ## Context
 

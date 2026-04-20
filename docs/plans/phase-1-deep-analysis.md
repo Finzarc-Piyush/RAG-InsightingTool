@@ -1,6 +1,26 @@
 # Phase 1 — Deep analysis as one-stop answer
 
-**Status:** plan. **Owner:** TBD. **Feature flag:** `DEEP_ANALYSIS_SKILLS_ENABLED` (default off until rollout).
+**Status:** in progress (1.A–1.D landed on `claude/add-claude-documentation-PaA9h`). **Feature flag:** `DEEP_ANALYSIS_SKILLS_ENABLED` (default off until rollout).
+
+## Progress so far
+
+| PR | Status | Summary |
+|----|--------|---------|
+| 1.A | ✅ shipped | `questionShape` + `candidateDriverDimensions` on `AnalysisBrief`; `intent_parsed` SSE event. |
+| 1.B | ✅ shipped | `skills/` registry + planner manifest hook (no-op when flag off). |
+| 1.C | ✅ shipped | `variance_decomposer` skill + agent-loop dispatch + `skill_execution` SSE event. |
+| 1.D | ✅ shipped | `driver_discovery` skill. |
+| 1.E | ⏳ next | Parallel step runner (opt-in via `SkillInvocation.parallelizable`). |
+| 1.F | ⏳ | Verifier completeness checks (`INCOMPLETE_DRIVERS`, `MISSING_MAGNITUDES`). |
+| 1.G | ⏳ | Rich answer envelope (`hypothesesTable`, `magnitudes`, `unexplained`). |
+| 1.H | ⏳ | `time_window_diff` + `insight_explorer` (needs brief-parser extensions for A/B filters). |
+
+To enable in staging:
+```
+DEEP_ANALYSIS_SKILLS_ENABLED=true
+# optional: narrow rollout to one skill at a time
+DEEP_ANALYSIS_SKILL_ALLOWLIST=variance_decomposer
+```
 
 ## Context
 
