@@ -73,3 +73,8 @@ one lands — earlier waves unblock the later ones and reduce merge conflict ris
 - Medium: 36
 - Low: 33
 - **Total: 86**
+
+## Live execution status
+
+See [docs/problems/STATUS.md](docs/problems/STATUS.md) for the per-P-NNN
+closed / deferred / exploratory tracker. Updated after every commit.
