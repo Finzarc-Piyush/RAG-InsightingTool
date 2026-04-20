@@ -291,10 +291,19 @@ function capAgentTrace(trace: AgentTrace): AgentTrace {
   };
 }
 
+/** PR 1.G — rich envelope for Phase-1 shapes. All new fields optional. */
+const magnitudeSchema = z.object({
+  label: z.string().min(1).max(140),
+  value: z.string().min(1).max(80),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+});
+
 const finalAnswerEnvelopeSchema = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
+  magnitudes: z.array(magnitudeSchema).max(6).optional(),
+  unexplained: z.string().max(800).optional(),
 });
 
 function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefined {
@@ -320,7 +329,14 @@ async function synthesizeFinalAnswerEnvelope(
   observations: string[],
   turnId: string,
   onLlmCall: () => void
-): Promise<{ answer: string; keyInsight?: string; ctas: string[]; suggestionHints: string[] }> {
+): Promise<{
+  answer: string;
+  keyInsight?: string;
+  ctas: string[];
+  suggestionHints: string[];
+  magnitudes?: z.infer<typeof magnitudeSchema>[];
+  unexplained?: string;
+}> {
   const sacBlock = ctx.sessionAnalysisContext
     ? `\n\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, 10000)}`
     : "";
@@ -329,13 +345,21 @@ async function synthesizeFinalAnswerEnvelope(
     : "";
   const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 12000)}`;
 
+  const phase1Shape = ctx.analysisBrief?.questionShape;
+  const phase1Block = phase1Shape
+    ? `\n\nPhase-1 rich envelope (REQUIRED when questionShape is set):
+- "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
+- "unexplained": one sentence (≤180 chars) on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
+Current questionShape: ${phase1Shape}.`
+    : "";
+
   const system = `You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
 - "body": main markdown answer (clear, concise). Do not duplicate the full key insight inside body; keep body focused on the direct answer.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions: segments, risk, opportunity, or “so what” for the business—using general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
-If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.`;
+If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.${phase1Block}`;
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
@@ -366,9 +390,16 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     return { answer: fallback, ctas: [], suggestionHints: [] };
   }
 
-  const { body, keyInsight, ctas } = out.data;
+  const { body, keyInsight, ctas, magnitudes, unexplained } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+  const cleanedMagnitudes =
+    Array.isArray(magnitudes) && magnitudes.length > 0
+      ? magnitudes
+          .filter((m) => m && m.label && m.value)
+          .slice(0, 6)
+      : undefined;
+  const cleanedUnexplained = unexplained?.trim()?.slice(0, 800) || undefined;
   let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null);
   let suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
 
@@ -404,7 +435,14 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     };
   }
 
-  return { answer, keyInsight: ki, ctas: ctaList, suggestionHints };
+  return {
+    answer,
+    keyInsight: ki,
+    ctas: ctaList,
+    suggestionHints,
+    ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
+    ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+  };
 }
 
 function buildPreSynthesisMidTurnSummary(
@@ -541,6 +579,9 @@ export async function runAgentTurn(
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   let followUpPrompts: string[] | undefined;
+  // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
+  let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
+  let envelopeUnexplained: string | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
@@ -1367,6 +1408,15 @@ export async function runAgentTurn(
         agentSuggestionHints = env.suggestionHints;
         const trimmedCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
         if (trimmedCtas.length) followUpPrompts = trimmedCtas;
+        // PR 1.G — capture Phase-1 rich fields when the synthesiser produced them.
+        if (env.magnitudes && env.magnitudes.length > 0) {
+          envelopeMagnitudes = env.magnitudes;
+          safeEmit("magnitudes", { items: env.magnitudes });
+        }
+        if (env.unexplained) {
+          envelopeUnexplained = env.unexplained;
+          safeEmit("unexplained", { note: env.unexplained });
+        }
         appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
         appendInterAgentMessage(
           trace,
@@ -1549,6 +1599,8 @@ export async function runAgentTurn(
       agentTrace: capAgentTrace(trace),
       agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
+      ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
+      ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
     };

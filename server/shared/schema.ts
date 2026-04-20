@@ -180,6 +180,19 @@ export const messageSchema = z.object({
   suggestedQuestions: z.array(z.string()).optional(),
   /** Agent synthesis CTAs; rendered as clickable follow-up chips (max 3). */
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1: 2–4 numeric magnitudes that back the main claim. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  /** Phase-1: one-line note on what the tools could not determine. */
+  unexplained: z.string().max(800).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
   /** Normalized agent activity blocks for the workbench UI (capped server-side) */
@@ -435,6 +448,18 @@ export const chatResponseSchema = z.object({
   insights: z.array(insightSchema).optional(),
   suggestions: z.array(z.string()).optional(),
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1 rich envelope — see messageSchema.magnitudes for details. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  unexplained: z.string().max(800).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;

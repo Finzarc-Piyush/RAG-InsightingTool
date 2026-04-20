@@ -266,6 +266,21 @@ export interface VerifierResult {
   user_visible_note?: string;
 }
 
+/**
+ * Phase-1 rich-envelope extensions — populated by the synthesiser when the
+ * user's question has a questionShape (driver_discovery, variance_diagnostic,
+ * trend, comparison, exploration). All optional so existing consumers stay
+ * valid.
+ */
+export interface AnswerMagnitude {
+  /** What the magnitude measures, e.g. "East tech decline Mar→Apr". */
+  label: string;
+  /** Human-readable value — allows "-23.4%" or "$1.2M" without a numeric type. */
+  value: string;
+  /** Optional confidence bucket rendered in the UI as a chip. */
+  confidence?: "low" | "medium" | "high";
+}
+
 export interface AgentLoopResult {
   answer: string;
   charts?: ChartSpec[];
@@ -281,4 +296,8 @@ export interface AgentLoopResult {
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
   /** Structured brief from maybeRunAnalysisBrief when diagnostic/report intent ran. */
   analysisBrief?: AnalysisBrief;
+  /** Phase-1 magnitudes backing the main claim (2–4 entries). */
+  magnitudes?: AnswerMagnitude[];
+  /** Phase-1 concise note on what the tools couldn't determine and why. */
+  unexplained?: string;
 }

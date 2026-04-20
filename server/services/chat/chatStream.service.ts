@@ -947,6 +947,19 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         ...(transformedResponse.followUpPrompts?.length
           ? { followUpPrompts: transformedResponse.followUpPrompts }
           : {}),
+        ...((transformedResponse as { magnitudes?: Array<{ label: string; value: string; confidence?: "low" | "medium" | "high" }> }).magnitudes?.length
+          ? {
+              magnitudes: (
+                transformedResponse as { magnitudes: Array<{ label: string; value: string; confidence?: "low" | "medium" | "high" }> }
+              ).magnitudes,
+            }
+          : {}),
+        ...((transformedResponse as { unexplained?: string }).unexplained
+          ? {
+              unexplained: (transformedResponse as { unexplained: string })
+                .unexplained,
+            }
+          : {}),
       };
 
       await addMessagesBySessionId(sessionId, [
