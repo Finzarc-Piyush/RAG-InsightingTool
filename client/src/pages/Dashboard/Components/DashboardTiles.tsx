@@ -23,6 +23,7 @@ const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { resolveLayoutsDropBySwap } from './dashboardGridLogic';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -305,15 +306,63 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     setLayouts((prev) => ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts));
   }, [visibleTiles, fallbackLayouts]);
 
+  // Drag-drop swap semantics (fixes cascade-push UX):
+  //  - Snapshot layouts when a drag begins.
+  //  - While dragging, update visuals but don't persist (drag emits many layout changes).
+  //  - On drag stop, resolve the final position via resolveLayoutsDropBySwap
+  //    which swaps overlapped tiles, cancels cascade pushes on non-dragged
+  //    tiles, and reverts on ambiguous drops.
+  const isDraggingRef = useRef(false);
+  const layoutsAtDragStartRef = useRef<Layouts | null>(null);
+  const draggedIdRef = useRef<string | null>(null);
+
   const handleLayoutChange = useCallback(
     (_current: Layout[], allLayouts: Layouts) => {
       const sanitized = ensureLayoutsForTiles(allLayouts, visibleTiles, fallbackLayouts);
       setLayouts(sanitized);
+      // Defer persistence during an active drag; handleDragStop will apply
+      // the resolved layout once the gesture completes.
+      if (isDraggingRef.current) return;
       persistLayouts(dashboardId, sanitized, sheetId);
       onPersistServerGrid?.(sanitized);
     },
     [dashboardId, sheetId, fallbackLayouts, visibleTiles, onPersistServerGrid]
   );
+
+  const handleDragStart = useCallback(
+    (_layout: Layout[], _oldItem: Layout, newItem: Layout) => {
+      isDraggingRef.current = true;
+      draggedIdRef.current = newItem.i;
+      // Structured clone to avoid mutation from subsequent onLayoutChange calls.
+      layoutsAtDragStartRef.current = JSON.parse(JSON.stringify(layouts));
+    },
+    [layouts]
+  );
+
+  const handleDragStop = useCallback(() => {
+    const before = layoutsAtDragStartRef.current;
+    const draggedId = draggedIdRef.current;
+    isDraggingRef.current = false;
+    layoutsAtDragStartRef.current = null;
+    draggedIdRef.current = null;
+    if (!before || !draggedId) {
+      persistLayouts(dashboardId, layouts, sheetId);
+      onPersistServerGrid?.(layouts);
+      return;
+    }
+    const resolved = resolveLayoutsDropBySwap(before, layouts, draggedId);
+    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
+    setLayouts(sanitized);
+    persistLayouts(dashboardId, sanitized, sheetId);
+    onPersistServerGrid?.(sanitized);
+  }, [
+    dashboardId,
+    sheetId,
+    layouts,
+    fallbackLayouts,
+    visibleTiles,
+    onPersistServerGrid,
+  ]);
 
   const handleHideTile = useCallback(
     (tileId: string) => {
@@ -652,6 +701,8 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         isDraggable={canEdit}
         resizeHandles={canEdit ? ['s', 'e', 'n', 'w', 'se', 'sw', 'ne', 'nw'] : []}
         onLayoutChange={handleLayoutChange}
+        onDragStart={handleDragStart}
+        onDragStop={handleDragStop}
         draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
         compactType={null}
         preventCollision={false}
