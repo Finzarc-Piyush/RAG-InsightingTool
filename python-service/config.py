@@ -9,9 +9,10 @@ class Config:
     PORT: int = int(os.getenv("PYTHON_SERVICE_PORT", "8001"))
     
     # CORS configuration
+    # P-044: removed unused http://localhost:5173 default (the client runs on 3000).
     CORS_ORIGINS: list[str] = os.getenv(
-        "CORS_ORIGINS", 
-        "http://localhost:3000,http://localhost:5173"
+        "CORS_ORIGINS",
+        "http://localhost:3000"
     ).split(",")
     
     # Timeout configuration

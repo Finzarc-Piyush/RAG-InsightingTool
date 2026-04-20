@@ -1,0 +1,10 @@
+# Default owners for every file in the repo.
+# Replace @finzarc-piyush with the GitHub handle(s) of the primary maintainer(s).
+* @finzarc-piyush
+
+# Per-service overrides (populate as ownership solidifies).
+# /client/          @client-owner
+# /server/          @server-owner
+# /python-service/  @python-owner
+# /api/             @platform-owner
+# /.github/         @platform-owner
