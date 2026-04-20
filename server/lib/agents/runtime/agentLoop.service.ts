@@ -561,6 +561,22 @@ export async function runAgentTurn(
 
   if (ctx.mode === "analysis") {
     await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+    // Phase-1 PR 1.A: publish a compact intent digest so the thinking panel
+    // can surface "what the model thinks the user asked for" before any tools
+    // run. Purely observational — no branching, no behavior change.
+    if (ctx.analysisBrief) {
+      const brief = ctx.analysisBrief;
+      safeEmit("intent_parsed", {
+        questionShape: brief.questionShape,
+        outcomeMetricColumn: brief.outcomeMetricColumn,
+        segmentationDimensions: brief.segmentationDimensions,
+        candidateDriverDimensions: brief.candidateDriverDimensions,
+        timeWindow: brief.timeWindow,
+        comparisonBaseline: brief.comparisonBaseline,
+        filters: brief.filters,
+        clarifyingQuestions: brief.clarifyingQuestions,
+      });
+    }
   }
 
   const briefOut = () =>

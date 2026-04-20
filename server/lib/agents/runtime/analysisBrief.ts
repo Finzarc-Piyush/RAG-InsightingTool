@@ -32,7 +32,17 @@ export async function maybeRunAnalysisBrief(
 Output JSON only matching the schema. Use ONLY column names that appear in the provided Columns line.
 If the question is ambiguous, put questions in clarifyingQuestions (do not invent column names).
 epistemicNotes must remind analysts to avoid claiming causation from observational data alone (attribution vs causation).
-filters: use op "in" or "not_in" with values[] when the user names literal segments (regions, categories).`;
+filters: use op "in" or "not_in" with values[] when the user names literal segments (regions, categories).
+
+questionShape classification (pick at most one; leave unset if unclear):
+- "driver_discovery" — user asks what drives / impacts / affects / correlates with an outcome. Example: "what impacts my sales the most?"
+- "variance_diagnostic" — user asks WHY a metric moved in a segment between two periods. Example: "why did east-region tech sales fall Mar-22 to Apr-25?"
+- "trend" — user asks how a metric evolved over time.
+- "comparison" — user contrasts two explicit segments / periods without asking "why".
+- "exploration" — open prompt like "show me something interesting / surprising".
+- "descriptive" — lookup/summary question ("what's my top region by revenue?").
+
+candidateDriverDimensions: only set for driver_discovery or variance_diagnostic. Propose up to 6 column names from the Columns line that might plausibly drive the outcomeMetricColumn (ordinarily categorical dimensions, region/category/segment-like columns). Must not overlap segmentationDimensions.`;
 
   const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}`;
 

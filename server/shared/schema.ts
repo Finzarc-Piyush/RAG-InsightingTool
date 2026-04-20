@@ -489,6 +489,22 @@ export const analysisBriefFilterSchema = z.object({
   match: z.enum(["exact", "case_insensitive"]).optional(),
 });
 
+/**
+ * Coarse question-shape label that lets Phase-1 skills dispatch. Optional so
+ * existing briefs stay valid; defaults to undefined when the classifier
+ * isn't confident.
+ */
+export const questionShapeSchema = z.enum([
+  "driver_discovery",    // "what impacts X the most?"
+  "variance_diagnostic", // "why did X fall in segment Y between A and B?"
+  "trend",               // "how did X change over time?"
+  "comparison",          // "how does A compare to B?"
+  "exploration",         // "show me something interesting"
+  "descriptive",         // "what's my top segment by revenue?"
+]);
+
+export type QuestionShape = z.infer<typeof questionShapeSchema>;
+
 export const analysisBriefSchema = z.object({
   version: z.literal(1),
   outcomeMetricColumn: z.string().max(200).optional(),
@@ -508,6 +524,14 @@ export const analysisBriefSchema = z.object({
   clarifyingQuestions: z.array(z.string().max(350)).max(6),
   epistemicNotes: z.array(z.string().max(500)).max(8),
   successCriteria: z.string().max(1200).optional(),
+  /** Phase-1: coarse question-shape label that skills dispatch on. */
+  questionShape: questionShapeSchema.optional(),
+  /**
+   * Phase-1: dimensions that might plausibly drive the outcome metric.
+   * Distinct from segmentationDimensions (which the user has already named);
+   * this is the set the driver-discovery skill should test.
+   */
+  candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;
