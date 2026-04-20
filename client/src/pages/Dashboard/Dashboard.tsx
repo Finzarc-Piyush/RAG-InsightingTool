@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useDashboardContext } from './context/DashboardContext';
 import { DashboardData } from './modules/useDashboardState';
@@ -25,6 +25,34 @@ export default function Dashboard() {
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [dashboardToDelete, setDashboardToDelete] = useState<string | null>(null);
+  const openedFromQueryRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const openId = new URLSearchParams(window.location.search).get('open');
+    if (!openId) return;
+    if (openedFromQueryRef.current === openId) return;
+
+    void (async () => {
+      const listDash = dashboards.find((d) => d.id === openId);
+      try {
+        const fresh = await fetchDashboardById(openId);
+        openedFromQueryRef.current = openId;
+        setCurrentDashboard({
+          ...fresh,
+          isShared: listDash?.isShared ?? fresh.isShared,
+          sharedPermission: listDash?.sharedPermission ?? fresh.sharedPermission,
+          sharedBy: listDash?.sharedBy ?? fresh.sharedBy,
+          permission: listDash?.permission ?? fresh.permission ?? fresh.sharedPermission,
+          collaborators: fresh.collaborators ?? listDash?.collaborators,
+          hasCollaborators: fresh.hasCollaborators ?? listDash?.hasCollaborators,
+        });
+      } catch (e) {
+        console.error('Deep-link dashboard open failed:', e);
+        return;
+      }
+      window.history.replaceState({}, '', '/dashboard');
+    })();
+  }, [dashboards, fetchDashboardById]);
 
   const handleViewDashboard = async (dashboard: DashboardData) => {
     // Fetch fresh dashboard data to get updated lastOpenedAt

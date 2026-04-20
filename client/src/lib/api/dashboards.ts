@@ -1,5 +1,14 @@
-import { api } from "@/lib/httpClient";
-import { ChartSpec, Dashboard, DashboardTableSpec } from "@/shared/schema";
+import { api, apiClient } from "@/lib/httpClient";
+import { getAuthorizationHeader } from "@/auth/msalToken";
+import { getUserEmail } from "@/utils/userStorage";
+import {
+  ChartSpec,
+  CreateReportDashboardRequest,
+  Dashboard,
+  DashboardNarrativeBlock,
+  DashboardTableSpec,
+} from "@/shared/schema";
+import type { Layouts } from "react-grid-layout";
 
 export const dashboardsApi = {
   list: () => api.get<{ dashboards: Dashboard[] }>("/api/dashboards"),
@@ -45,6 +54,46 @@ export const dashboardsApi = {
       sheetId,
       ...updates,
     }),
+  createFromAnalysis: (body: CreateReportDashboardRequest) =>
+    api.post<Dashboard>("/api/dashboards/from-analysis", body),
+  patchSheetContent: (
+    dashboardId: string,
+    sheetId: string,
+    body: {
+      narrativeBlocks?: DashboardNarrativeBlock[];
+      gridLayout?: Layouts;
+    }
+  ) =>
+    api.patch<Dashboard>(
+      `/api/dashboards/${dashboardId}/sheets/${sheetId}/content`,
+      body
+    ),
+  exportDashboard: async (dashboardId: string, format: "pdf" | "pptx") => {
+    const auth = await getAuthorizationHeader();
+    const userEmail = getUserEmail();
+    const res = await apiClient.post(
+      `/api/dashboards/${dashboardId}/export`,
+      { format },
+      {
+        responseType: "blob",
+        headers: {
+          ...auth,
+          "Content-Type": "application/json",
+          ...(userEmail ? { "X-User-Email": userEmail } : {}),
+        },
+      }
+    );
+    const cd = res.headers["content-disposition"] as string | undefined;
+    const nameMatch = cd?.match(/filename="([^"]+)"/);
+    const filename =
+      nameMatch?.[1] ?? `dashboard.${format === "pdf" ? "pdf" : "pptx"}`;
+    const url = URL.createObjectURL(res.data as Blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 

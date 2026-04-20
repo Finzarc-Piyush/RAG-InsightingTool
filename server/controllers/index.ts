@@ -9,6 +9,7 @@ export {
 } from './dataRetrievalController.js';
 export {
   createDashboardController,
+  createReportDashboardController,
   listDashboardsController,
   getDashboardController,
   deleteDashboardController,
@@ -22,6 +23,8 @@ export {
   renameDashboardController,
   updateChartInsightOrRecommendationController,
   updateTableCaptionController,
+  patchDashboardSheetController,
+  exportDashboardController,
 } from './dashboardController.js';
 export {
   shareAnalysisController,

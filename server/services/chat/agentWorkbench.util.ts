@@ -114,6 +114,35 @@ export function agentSseEventToWorkbenchEntries(
     return out;
   }
 
+  if (event === "handoff" && data && typeof data === "object") {
+    const h = data as {
+      at?: number;
+      from?: string;
+      to?: string;
+      intent?: string;
+      artifacts?: string[];
+      evidenceRefs?: string[];
+      blockingQuestions?: string[];
+      meta?: Record<string, string>;
+    };
+    const payload = {
+      intent: h.intent,
+      artifacts: h.artifacts,
+      evidenceRefs: h.evidenceRefs,
+      blockingQuestions: h.blockingQuestions,
+      meta: h.meta,
+    };
+    const code = truncateCode(JSON.stringify(payload, null, 2));
+    out.push({
+      id: `handoff-${h.at ?? ts}-${Math.random().toString(36).slice(2, 10)}`,
+      kind: "handoff",
+      title: `Handoff: ${h.from ?? "?"} → ${h.to ?? "?"}`,
+      code,
+      language: "json",
+    });
+    return out;
+  }
+
   if (event === "critic_verdict" && data && typeof data === "object") {
     const c = data as CriticSse;
     // Per-step critic still runs server-side; workbench shows only final synthesis review by default.

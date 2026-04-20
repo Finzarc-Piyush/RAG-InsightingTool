@@ -1,5 +1,6 @@
 import type { ChatDocument } from "../../../models/chat.model.js";
 import type {
+  AnalysisBrief,
   ChartSpec,
   DataSummary,
   Insight,
@@ -34,6 +35,42 @@ export function isAgenticLoopEnabled(): boolean {
  */
 export function isAgenticStrictEnabled(): boolean {
   return process.env.AGENTIC_STRICT === "true";
+}
+
+/** When true, `runAgentTurn` records structured handoffs in `AgentTrace.interAgentMessages`. */
+export function isInterAgentTraceEnabled(): boolean {
+  return process.env.AGENT_INTER_AGENT_MESSAGES === "true";
+}
+
+/**
+ * When true (and inter-agent messages exist), a compact handoff digest is appended to planner
+ * and reflector prompts so replans can use prior coordinator decisions. Increases tokens slightly.
+ */
+export function isInterAgentPromptFeedbackEnabled(): boolean {
+  return process.env.AGENT_INTER_AGENT_PROMPT_FEEDBACK === "true";
+}
+
+/** Named roles in the coordinator loop (for trace / future multi-agent expansion). */
+export type InterAgentRole =
+  | "Coordinator"
+  | "Planner"
+  | "Executor"
+  | "Reflector"
+  | "Verifier"
+  | "Synthesizer"
+  | "VisualPlanner";
+
+/** Coordinator-visible message between logical agents (no PII; sizes enforced in append helper). */
+export interface InterAgentMessage {
+  at: number;
+  from: InterAgentRole;
+  to: InterAgentRole;
+  intent: string;
+  artifacts?: string[];
+  /** Tool call ids, step ids, or other non-PII refs into the trace. */
+  evidenceRefs?: string[];
+  blockingQuestions?: string[];
+  meta?: Record<string, string>;
 }
 
 export interface AgentConfig {
@@ -105,6 +142,8 @@ export interface AgentExecutionContext {
   turnStartDataRef?: Record<string, any>[] | null;
   /** Lightweight mode/outcome hints for planner (heuristic). */
   analysisSpec?: AnalysisSpecForAgent | null;
+  /** Structured NL → metrics/dimensions; set by maybeRunAnalysisBrief before planning. */
+  analysisBrief?: AnalysisBrief;
   summary: DataSummary;
   chatHistory: Message[];
   chatInsights?: Insight[];
@@ -174,6 +213,11 @@ export interface AgentTrace {
   plannerRejectReason?: string;
   /** Non-PII planner rejection detail (e.g. tool name, arg key). */
   plannerRejectDetail?: string;
+  /**
+   * Optional handoff log between Planner / Executor / Reflector / Verifier / Synthesizer.
+   * Populated when `AGENT_INTER_AGENT_MESSAGES=true`.
+   */
+  interAgentMessages?: InterAgentMessage[];
 }
 
 export interface AgentState {
@@ -231,4 +275,6 @@ export interface AgentLoopResult {
   followUpPrompts?: string[];
   /** Rows from last analytical frame; passed to enrichCharts when chart data was stripped. */
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
+  /** Structured brief from maybeRunAnalysisBrief when diagnostic/report intent ran. */
+  analysisBrief?: AnalysisBrief;
 }

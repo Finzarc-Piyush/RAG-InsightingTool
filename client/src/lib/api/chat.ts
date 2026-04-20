@@ -92,7 +92,7 @@ export interface StreamChatCallbacks {
   onDone?: () => void;
   /** Server queued the message until dataset enrichment completes */
   onQueued?: (payload: { message?: string; reason?: string }) => void;
-  /** plan | tool_call | tool_result | critic_verdict when AGENTIC_LOOP_ENABLED */
+  /** plan | tool_call | tool_result | critic_verdict | handoff (+ mirrored workbench rows) when AGENTIC_LOOP_ENABLED */
   onAgentEvent?: (event: string, data: unknown) => void;
 }
 

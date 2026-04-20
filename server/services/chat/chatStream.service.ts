@@ -948,6 +948,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           username,
           assistantMessage: transformedResponse.answer,
           agentTrace: transformedResponse.agentTrace,
+          analysisBrief: (result as { analysisBrief?: import("../../shared/schema.js").AnalysisBrief })
+            .analysisBrief,
         });
       } catch (ctxErr) {
         console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);

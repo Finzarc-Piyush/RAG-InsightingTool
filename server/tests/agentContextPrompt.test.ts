@@ -92,6 +92,37 @@ describe("summarizeContextForPrompt", () => {
     assert.match(text, /DIAGNOSTIC_ANALYSIS_HINT/);
     assert.match(text, /Sales/);
   });
+
+  it("includes ANALYSIS_BRIEF_JSON when ctx.analysisBrief is set", () => {
+    const summary: DataSummary = {
+      rowCount: 2,
+      columnCount: 2,
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [1] },
+        { name: "Region", type: "string", sampleValues: ["East"] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "Why did sales fall?",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+      analysisBrief: {
+        version: 1 as const,
+        outcomeMetricColumn: "Sales",
+        clarifyingQuestions: [],
+        epistemicNotes: ["Avoid causal claims."],
+      },
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    assert.match(text, /ANALYSIS_BRIEF_JSON/);
+    assert.match(text, /Avoid causal claims/);
+  });
 });
 
 describe("execute_query_plan temporal aggregation", () => {

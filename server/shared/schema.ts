@@ -36,6 +36,9 @@ export const chartSpecSchema = z.object({
   keyInsight: z.string().optional(), // Key insight about the chart
   /** When true, final enrichment must not rebuild series from full rawData (aggregated/agent charts). */
   _useAnalyticalDataOnly: z.boolean().optional(),
+  /** Agent tool call id or trace ref linking narrative to evidence (optional). */
+  _agentEvidenceRef: z.string().max(200).optional(),
+  _agentTurnId: z.string().max(80).optional(),
 });
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
@@ -65,6 +68,7 @@ export const agentWorkbenchEntryKindSchema = z.enum([
   "tool_result",
   "critic",
   "query_spec",
+  "handoff",
 ]);
 
 export const agentWorkbenchEntrySchema = z.object({
@@ -110,6 +114,18 @@ export const sessionAnalysisFactSchema = z.object({
   confidence: z.enum(["high", "medium", "low"]),
 });
 
+/** Compact digest from a successful analysis brief (Cosmos-safe; no full brief JSON). */
+export const analysisBriefDigestSchema = z.object({
+  at: z.string().max(40),
+  outcomeMetricColumn: z.string().max(200).optional(),
+  filterSummary: z.string().max(1500).optional(),
+  comparisonBaseline: z.string().max(80).optional(),
+  clarifyingQuestionCount: z.number().int().min(0).max(20).optional(),
+  epistemicNotePreview: z.string().max(500).optional(),
+});
+
+export type AnalysisBriefDigest = z.infer<typeof analysisBriefDigestSchema>;
+
 export const sessionAnalysisContextSchema = z.object({
   version: z.literal(1),
   dataset: z.object({
@@ -127,6 +143,7 @@ export const sessionAnalysisContextSchema = z.object({
     analysesDone: z.array(z.string().max(500)).max(30),
   }),
   suggestedFollowUps: z.array(z.string().max(300)).max(12),
+  analysisBriefDigest: analysisBriefDigestSchema.optional(),
   lastUpdated: z.object({
     reason: z.enum(["seed", "user_context", "assistant_turn", "mid_turn"]),
     at: z.string().max(40),
@@ -464,6 +481,37 @@ export interface SessionData {
   uploadedAt: number;
 }
 
+/** Structured intent for diagnostic / report-style questions (agent planner + verifier). */
+export const analysisBriefFilterSchema = z.object({
+  column: z.string().max(200),
+  op: z.enum(["in", "not_in"]),
+  values: z.array(z.string()).max(40),
+  match: z.enum(["exact", "case_insensitive"]).optional(),
+});
+
+export const analysisBriefSchema = z.object({
+  version: z.literal(1),
+  outcomeMetricColumn: z.string().max(200).optional(),
+  segmentationDimensions: z.array(z.string().max(200)).max(10).optional(),
+  filters: z.array(analysisBriefFilterSchema).max(12).optional(),
+  timeWindow: z
+    .object({
+      description: z.string().max(800),
+      grainPreference: z
+        .enum(["daily", "weekly", "monthly", "yearly", "unspecified"])
+        .optional(),
+    })
+    .optional(),
+  comparisonBaseline: z
+    .enum(["yoy", "prior_period", "vs_rest", "none", "unspecified"])
+    .optional(),
+  clarifyingQuestions: z.array(z.string().max(350)).max(6),
+  epistemicNotes: z.array(z.string().max(500)).max(8),
+  successCriteria: z.string().max(1200).optional(),
+});
+
+export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;
+
 // Dashboards
 export const dashboardTableSpecSchema = z.object({
   caption: z.string().min(1),
@@ -474,11 +522,46 @@ export const dashboardTableSpecSchema = z.object({
 
 export type DashboardTableSpec = z.infer<typeof dashboardTableSpecSchema>;
 
+export const dashboardGridItemSchema = z.object({
+  i: z.string().max(120),
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  minW: z.number().optional(),
+  minH: z.number().optional(),
+});
+
+export const dashboardGridLayoutsSchema = z.record(
+  z.string().max(8),
+  z.array(dashboardGridItemSchema)
+);
+
+export const dashboardNarrativeRoleSchema = z.enum([
+  "summary",
+  "limitations",
+  "recommendations",
+  "custom",
+]);
+
+export const dashboardNarrativeBlockSchema = z.object({
+  id: z.string().max(120),
+  role: dashboardNarrativeRoleSchema,
+  title: z.string().max(200),
+  body: z.string().max(20000),
+  order: z.number().optional(),
+});
+
+export type DashboardNarrativeBlock = z.infer<typeof dashboardNarrativeBlockSchema>;
+
 export const dashboardSheetSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   charts: z.array(chartSpecSchema),
   tables: z.array(dashboardTableSpecSchema).optional(),
+  narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+  /** react-grid-layout `layouts` keyed by breakpoint (lg, md, sm, xs, xxs). */
+  gridLayout: dashboardGridLayoutsSchema.optional(),
   order: z.number().optional(),
 });
 
@@ -535,6 +618,34 @@ export const removeTableFromDashboardRequestSchema = z.object({
 export const updateTableCaptionRequestSchema = z.object({
   caption: z.string().min(1),
   sheetId: z.string().optional(),
+});
+
+export const createReportDashboardRequestSchema = z.object({
+  name: z.string().min(1).max(200),
+  question: z.string().max(4000).optional(),
+  summaryBody: z.string().max(20000),
+  limitationsBody: z.string().max(10000).optional(),
+  recommendationsBody: z.string().max(10000).optional(),
+  charts: z.array(chartSpecSchema).max(24).optional().default([]),
+  table: dashboardTableSpecSchema.optional(),
+});
+
+export type CreateReportDashboardRequest = z.infer<
+  typeof createReportDashboardRequestSchema
+>;
+
+export const patchDashboardSheetRequestSchema = z
+  .object({
+    narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+    gridLayout: dashboardGridLayoutsSchema.optional(),
+  })
+  .refine(
+    (d) => d.narrativeBlocks !== undefined || d.gridLayout !== undefined,
+    { message: "Provide narrativeBlocks and/or gridLayout" }
+  );
+
+export const exportDashboardRequestSchema = z.object({
+  format: z.enum(["pdf", "pptx"]),
 });
 
 // ---------------------------

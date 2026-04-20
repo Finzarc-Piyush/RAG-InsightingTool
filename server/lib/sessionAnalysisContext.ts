@@ -1,7 +1,7 @@
 /**
  * Rolling session context: structured JSON, created and updated only via LLM (completeJson).
  */
-import type { DataSummary, DatasetProfile } from "../shared/schema.js";
+import type { AnalysisBrief, DataSummary, DatasetProfile } from "../shared/schema.js";
 import {
   sessionAnalysisContextSchema,
   type SessionAnalysisContext,
@@ -107,6 +107,35 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
   return out.data;
 }
 
+/** Programmatic merge after a successful analysis brief (bounded; no extra LLM). */
+export function applyAnalysisBriefDigestToSession(
+  ctx: SessionAnalysisContext,
+  brief: AnalysisBrief
+): SessionAnalysisContext {
+  const at = new Date().toISOString();
+  const filterSummary = (brief.filters ?? [])
+    .map((f) =>
+      `${f.column}:${f.op}:${f.values
+        .slice(0, 6)
+        .join(",")}${f.values.length > 6 ? "…" : ""}`
+    )
+    .join("; ")
+    .slice(0, 1500);
+  const digest = {
+    at,
+    outcomeMetricColumn: brief.outcomeMetricColumn,
+    filterSummary: filterSummary.trim() || undefined,
+    comparisonBaseline: brief.comparisonBaseline,
+    clarifyingQuestionCount: brief.clarifyingQuestions?.length,
+    epistemicNotePreview: brief.epistemicNotes?.[0]?.slice(0, 500) || undefined,
+  };
+  return sessionAnalysisContextSchema.parse({
+    ...ctx,
+    analysisBriefDigest: digest,
+    lastUpdated: { reason: "assistant_turn", at },
+  });
+}
+
 export async function mergeSessionAnalysisContextAssistantLLM(params: {
   previous: SessionAnalysisContext | undefined;
   assistantMessage: string;
@@ -177,6 +206,7 @@ export async function persistMergeAssistantSessionContext(params: {
   username: string;
   assistantMessage: string;
   agentTrace?: unknown;
+  analysisBrief?: AnalysisBrief;
 }): Promise<void> {
   const { getChatBySessionIdForUser, updateChatDocument } = await import(
     "../models/chat.model.js"
@@ -192,11 +222,14 @@ export async function persistMergeAssistantSessionContext(params: {
       /* ignore */
     }
   }
-  const next = await mergeSessionAnalysisContextAssistantLLM({
+  let next = await mergeSessionAnalysisContextAssistantLLM({
     previous: doc.sessionAnalysisContext,
     assistantMessage: params.assistantMessage,
     agentTraceSummary,
   });
+  if (params.analysisBrief) {
+    next = applyAnalysisBriefDigestToSession(next, params.analysisBrief);
+  }
   doc.sessionAnalysisContext = next;
   await updateChatDocument(doc);
 }

@@ -2,7 +2,14 @@
  * Dashboard Model
  * Handles all database operations for dashboards
  */
-import { ChartSpec, Dashboard, DashboardTableSpec } from "../shared/schema.js";
+import { randomUUID } from "crypto";
+import {
+  ChartSpec,
+  Dashboard,
+  DashboardTableSpec,
+  type CreateReportDashboardRequest,
+  type DashboardNarrativeBlock,
+} from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 
 /**
@@ -939,6 +946,146 @@ export const updateTableCaption = async (
 
   if (updates.caption !== undefined) {
     table.caption = updates.caption;
+  }
+
+  return updateDashboard(dashboard);
+};
+
+/**
+ * Create a two-sheet report dashboard (Summary narratives + Evidence charts/tables).
+ * Retries on duplicate dashboard name.
+ */
+export const createReportDashboardFromAnalysis = async (
+  username: string,
+  body: CreateReportDashboardRequest
+): Promise<Dashboard> => {
+  const baseName = body.name.trim().slice(0, 200);
+  let name = baseName;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const dashboard = await createDashboard(username, name, []);
+      const narrativeBlocks: DashboardNarrativeBlock[] = [
+        {
+          id: randomUUID(),
+          role: "summary",
+          title: "Executive summary",
+          body: body.summaryBody,
+          order: 0,
+        },
+      ];
+      if (body.limitationsBody?.trim()) {
+        narrativeBlocks.push({
+          id: randomUUID(),
+          role: "limitations",
+          title: "Limitations",
+          body: body.limitationsBody.trim(),
+          order: 1,
+        });
+      }
+      if (body.recommendationsBody?.trim()) {
+        narrativeBlocks.push({
+          id: randomUUID(),
+          role: "recommendations",
+          title: "Recommendations",
+          body: body.recommendationsBody.trim(),
+          order: 2,
+        });
+      }
+      if (body.question?.trim()) {
+        narrativeBlocks.push({
+          id: randomUUID(),
+          role: "custom",
+          title: "Original question",
+          body: body.question.trim(),
+          order: 3,
+        });
+      }
+      const charts = body.charts ?? [];
+      dashboard.sheets = [
+        {
+          id: "sheet_summary",
+          name: "Summary",
+          charts: [],
+          narrativeBlocks,
+          order: 0,
+        },
+        {
+          id: "sheet_evidence",
+          name: "Evidence",
+          charts: [...charts],
+          ...(body.table ? { tables: [body.table] } : {}),
+          order: 1,
+        },
+      ];
+      dashboard.charts = [...charts];
+      return updateDashboard(dashboard);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("already exists") && attempt < 7) {
+        name = `${baseName} (${attempt + 2})`;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Could not allocate a unique dashboard name.");
+};
+
+export const patchDashboardSheet = async (
+  id: string,
+  username: string,
+  sheetId: string,
+  patch: {
+    narrativeBlocks?: DashboardNarrativeBlock[];
+    gridLayout?: Record<
+      string,
+      { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }[]
+    >;
+  }
+): Promise<Dashboard> => {
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const normalizedUsername = username.toLowerCase();
+  const dashboardOwner = dashboard.username?.toLowerCase();
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    dashboard.sheets = [
+      {
+        id: "default",
+        name: "Overview",
+        charts: [...dashboard.charts],
+        order: 0,
+      },
+    ];
+  }
+  const sheet = dashboard.sheets.find((s) => s.id === sheetId);
+  if (!sheet) throw new Error(`Sheet with id ${sheetId} not found`);
+
+  if (patch.narrativeBlocks !== undefined) {
+    sheet.narrativeBlocks = patch.narrativeBlocks;
+  }
+  if (patch.gridLayout !== undefined) {
+    sheet.gridLayout = patch.gridLayout;
   }
 
   return updateDashboard(dashboard);

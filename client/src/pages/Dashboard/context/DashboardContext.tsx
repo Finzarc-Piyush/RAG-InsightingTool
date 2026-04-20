@@ -17,6 +17,14 @@ interface DashboardContextType {
   removeSheet: (dashboardId: string, sheetId: string) => Promise<DashboardData>;
   updateChartInsightOrRecommendation: (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) => Promise<DashboardData>;
   updateTableCaption: (dashboardId: string, tableIndex: number, updates: { caption?: string }, sheetId?: string) => Promise<DashboardData>;
+  patchSheetContent: (
+    dashboardId: string,
+    sheetId: string,
+    body: {
+      narrativeBlocks?: import('@/shared/schema').DashboardNarrativeBlock[];
+      gridLayout?: Record<string, unknown>;
+    }
+  ) => Promise<DashboardData>;
   getDashboardById: (dashboardId: string) => DashboardData | undefined;
   fetchDashboardById: (dashboardId: string) => Promise<DashboardData>;
   status: {

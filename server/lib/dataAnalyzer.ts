@@ -429,6 +429,7 @@ export async function answerQuestion(
   agentSuggestionHints?: string[];
   followUpPrompts?: string[];
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
+  analysisBrief?: import('../shared/schema.js').AnalysisBrief;
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -479,6 +480,7 @@ export async function answerQuestion(
           agentSuggestionHints: loopResult.agentSuggestionHints,
           ...(loopResult.followUpPrompts?.length ? { followUpPrompts: loopResult.followUpPrompts } : {}),
           lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
+          ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
@@ -512,6 +514,7 @@ export async function answerQuestion(
         agentSuggestionHints: loopResult?.agentSuggestionHints,
         ...(loopResult?.followUpPrompts?.length ? { followUpPrompts: loopResult.followUpPrompts } : {}),
         lastAnalyticalRowsForEnrichment: loopResult?.lastAnalyticalRowsForEnrichment,
+        ...(loopResult?.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
       };
     } catch (agenticErr) {
       const detail =

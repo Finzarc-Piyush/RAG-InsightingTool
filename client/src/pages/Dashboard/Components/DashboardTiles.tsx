@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState, lazy, Suspense } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { DashboardTile } from '@/pages/Dashboard/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Trash2, Edit2, Loader2 } from 'lucide-react';
 import { Responsive, WidthProvider, Layout, Layouts } from 'react-grid-layout';
@@ -20,6 +22,7 @@ const ChartRenderer = lazy(() => import('@/pages/Home/Components/ChartRenderer')
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -31,6 +34,12 @@ interface DashboardTilesProps {
   sheetId?: string;
   onUpdate?: () => void;
   canEdit?: boolean; // Whether the user can edit this dashboard
+  /** Server-persisted grid; when set, preferred over localStorage for initial layout. */
+  serverGridLayout?: Layouts | null;
+  onPersistServerGrid?: (layouts: Layouts) => void;
+  /** Immediate PATCH (no debounce) — used to seed Cosmos from localStorage once. */
+  onSeedLayoutFromLocalStorage?: (layouts: Layouts) => Promise<void>;
+  onNarrativeSave?: (blockId: string, title: string, body: string) => Promise<void>;
 }
 
 const COLS = { lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 } as const;
@@ -51,6 +60,7 @@ const TILE_CONFIG: Record<DashboardTile['kind'], TileConfig> = {
   insight: { w: 4, h: 7, minW: 2, minH: 2 },
   action: { w: 4, h: 7, minW: 2, minH: 2 }, // Kept for backward compatibility but no longer used
   table: { w: 4, h: 8, minW: 2, minH: 3 },
+  narrative: { w: 6, h: 10, minW: 3, minH: 4 },
 };
 
 const ResponsiveLayoutKeys = Object.keys(COLS) as Array<keyof typeof COLS>;
@@ -104,10 +114,13 @@ const generateLayouts = (tiles: DashboardTile[]): Layouts => {
   return baseLayouts;
 };
 
-const loadStoredLayouts = (dashboardId: string): Layouts | null => {
+const layoutStorageKey = (dashboardId: string, sheetId?: string) =>
+  `${STORAGE_PREFIX}${dashboardId}${sheetId ? `:${sheetId}` : ''}`;
+
+const loadStoredLayouts = (dashboardId: string, sheetId?: string): Layouts | null => {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(`${STORAGE_PREFIX}${dashboardId}`);
+    const raw = localStorage.getItem(layoutStorageKey(dashboardId, sheetId));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
@@ -119,10 +132,10 @@ const loadStoredLayouts = (dashboardId: string): Layouts | null => {
   return null;
 };
 
-const persistLayouts = (dashboardId: string, layouts: Layouts) => {
+const persistLayouts = (dashboardId: string, layouts: Layouts, sheetId?: string) => {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(`${STORAGE_PREFIX}${dashboardId}`, JSON.stringify(layouts));
+    localStorage.setItem(layoutStorageKey(dashboardId, sheetId), JSON.stringify(layouts));
   } catch (error) {
     console.warn('Failed to persist dashboard layout', error);
   }
@@ -197,6 +210,10 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   sheetId,
   onUpdate,
   canEdit = true, // Default to true for backward compatibility
+  serverGridLayout,
+  onPersistServerGrid,
+  onSeedLayoutFromLocalStorage,
+  onNarrativeSave,
 }) => {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenTiles(dashboardId));
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -205,6 +222,11 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   >(null);
   const [editingTile, setEditingTile] = useState<{ type: 'insight'; chartIndex: number; text: string } | null>(null);
   const [editingTable, setEditingTable] = useState<{ tableIndex: number; caption: string } | null>(null);
+  const [editingNarrative, setEditingNarrative] = useState<{
+    blockId: string;
+    title: string;
+    body: string;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
   const { updateChartInsightOrRecommendation, updateTableCaption } = useDashboardContext();
@@ -221,15 +243,63 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const fallbackLayouts = useMemo(() => generateLayouts(visibleTiles), [visibleTiles]);
   const [layouts, setLayouts] = useState<Layouts>(() => fallbackLayouts);
 
+  const layoutMigrateAttemptedRef = useRef(new Set<string>());
+
+  const serverGridIsEmpty = useMemo(() => {
+    if (!serverGridLayout || typeof serverGridLayout !== "object") return true;
+    return ResponsiveLayoutKeys.every(
+      (k) => !Array.isArray(serverGridLayout[k]) || serverGridLayout[k]!.length === 0
+    );
+  }, [serverGridLayout]);
+
   useEffect(() => {
-    const stored = loadStoredLayouts(dashboardId);
+    if (!canEdit || !sheetId || !onSeedLayoutFromLocalStorage) return;
+    if (!serverGridIsEmpty) return;
+    const migrateKey = `${dashboardId}:${sheetId}`;
+    if (layoutMigrateAttemptedRef.current.has(migrateKey)) return;
+    const stored = loadStoredLayouts(dashboardId, sheetId);
+    if (!stored) return;
+    const hasStoredLayout = ResponsiveLayoutKeys.some(
+      (k) => Array.isArray(stored[k]) && stored[k]!.length > 0
+    );
+    if (!hasStoredLayout) return;
+    layoutMigrateAttemptedRef.current.add(migrateKey);
+    const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts);
+    void onSeedLayoutFromLocalStorage(merged)
+      .then(() => {
+        try {
+          localStorage.removeItem(layoutStorageKey(dashboardId, sheetId));
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => {
+        layoutMigrateAttemptedRef.current.delete(migrateKey);
+      });
+  }, [
+    canEdit,
+    sheetId,
+    dashboardId,
+    serverGridIsEmpty,
+    onSeedLayoutFromLocalStorage,
+    visibleTiles,
+    fallbackLayouts,
+  ]);
+
+  useEffect(() => {
+    if (serverGridLayout && Object.keys(serverGridLayout).length > 0) {
+      const merged = ensureLayoutsForTiles(serverGridLayout, visibleTiles, fallbackLayouts);
+      setLayouts(merged);
+      return;
+    }
+    const stored = loadStoredLayouts(dashboardId, sheetId);
     if (stored) {
       const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts);
       setLayouts(merged);
     } else {
       setLayouts(fallbackLayouts);
     }
-  }, [dashboardId, fallbackLayouts, visibleTiles]);
+  }, [dashboardId, sheetId, serverGridLayout, fallbackLayouts, visibleTiles]);
 
   useEffect(() => {
     setLayouts((prev) => ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts));
@@ -239,9 +309,10 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     (_current: Layout[], allLayouts: Layouts) => {
       const sanitized = ensureLayoutsForTiles(allLayouts, visibleTiles, fallbackLayouts);
       setLayouts(sanitized);
-      persistLayouts(dashboardId, sanitized);
+      persistLayouts(dashboardId, sanitized, sheetId);
+      onPersistServerGrid?.(sanitized);
     },
-    [dashboardId, fallbackLayouts, visibleTiles]
+    [dashboardId, sheetId, fallbackLayouts, visibleTiles, onPersistServerGrid]
   );
 
   const handleHideTile = useCallback(
@@ -459,6 +530,44 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           </Card>
         );
       }
+      case 'narrative':
+        return (
+          <Card
+            className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group"
+            data-dashboard-tile="narrative"
+          >
+            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
+              <div className="flex items-center justify-between w-full gap-2">
+                <CardTitle className="text-base text-foreground flex-1 min-w-0">
+                  {tile.title}
+                </CardTitle>
+                {canEdit && onNarrativeSave && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 flex-shrink-0"
+                    aria-label="Edit narrative"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingNarrative({
+                        blockId: tile.block.id,
+                        title: tile.block.title,
+                        body: tile.block.body,
+                      });
+                    }}
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
+              <div className="text-sm text-foreground/90 leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+                <MarkdownRenderer content={tile.block.body} />
+              </div>
+            </CardContent>
+          </Card>
+        );
       case 'table': {
         return (
           <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="table">
@@ -546,7 +655,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
         compactType={null}
         preventCollision={false}
-        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button"
+        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input"
       >
         {visibleTiles.map((tile) => (
           <div key={tile.id} className="h-full w-full">
@@ -596,6 +705,75 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
               ) : (
                 'Delete'
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!editingNarrative}
+        onOpenChange={(open) => {
+          if (!open) setEditingNarrative(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit narrative</DialogTitle>
+            <DialogDescription>Update the section title and body. Saved to the dashboard.</DialogDescription>
+          </DialogHeader>
+          {editingNarrative && (
+            <div className="grid gap-3 py-2">
+              <Input
+                value={editingNarrative.title}
+                onChange={(e) =>
+                  setEditingNarrative((prev) =>
+                    prev ? { ...prev, title: e.target.value } : prev
+                  )
+                }
+                placeholder="Title"
+              />
+              <Textarea
+                value={editingNarrative.body}
+                onChange={(e) =>
+                  setEditingNarrative((prev) =>
+                    prev ? { ...prev, body: e.target.value } : prev
+                  )
+                }
+                className="min-h-[200px]"
+                placeholder="Body"
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingNarrative(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={isSaving || !onNarrativeSave || !editingNarrative?.body.trim()}
+              onClick={async () => {
+                if (!editingNarrative || !onNarrativeSave) return;
+                setIsSaving(true);
+                try {
+                  await onNarrativeSave(
+                    editingNarrative.blockId,
+                    editingNarrative.title.trim() || 'Section',
+                    editingNarrative.body.trim()
+                  );
+                  setEditingNarrative(null);
+                  toast({ title: 'Saved', description: 'Narrative updated.' });
+                  if (onUpdate) await onUpdate();
+                } catch (error: any) {
+                  toast({
+                    title: 'Error',
+                    description: error?.message || 'Save failed',
+                    variant: 'destructive',
+                  });
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+            >
+              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
             </Button>
           </DialogFooter>
         </DialogContent>

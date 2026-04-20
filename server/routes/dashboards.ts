@@ -4,9 +4,12 @@ import {
   addTableToDashboardController,
   addSheetToDashboardController,
   createDashboardController,
+  createReportDashboardController,
   deleteDashboardController,
+  exportDashboardController,
   getDashboardController,
   listDashboardsController,
+  patchDashboardSheetController,
   removeChartFromDashboardController,
   removeTableFromDashboardController,
   removeSheetFromDashboardController,
@@ -20,6 +23,7 @@ const router = Router();
 
 // Dashboards
 router.post('/dashboards', createDashboardController);
+router.post('/dashboards/from-analysis', createReportDashboardController);
 router.get('/dashboards', listDashboardsController);
 router.get('/dashboards/:dashboardId', getDashboardController);
 router.patch('/dashboards/:dashboardId', renameDashboardController);
@@ -39,6 +43,11 @@ router.patch('/dashboards/:dashboardId/tables/:tableIndex', updateTableCaptionCo
 router.post('/dashboards/:dashboardId/sheets', addSheetToDashboardController);
 router.delete('/dashboards/:dashboardId/sheets/:sheetId', removeSheetFromDashboardController);
 router.patch('/dashboards/:dashboardId/sheets/:sheetId', renameSheetController);
+router.patch(
+  '/dashboards/:dashboardId/sheets/:sheetId/content',
+  patchDashboardSheetController
+);
+router.post('/dashboards/:dashboardId/export', exportDashboardController);
 
 export default router;
 

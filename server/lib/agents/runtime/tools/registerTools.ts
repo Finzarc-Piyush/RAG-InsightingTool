@@ -60,6 +60,8 @@ import {
   isDuckDBAvailable,
 } from "../../../columnarStorage.js";
 import { metadataService } from "../../../metadataService.js";
+import { registerBreakdownRankingTool } from "./breakdownRankingTool.js";
+import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -1158,4 +1160,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       argsHelp: '{"reason"?: string} optional note only.',
     }
   );
+
+  registerBreakdownRankingTool(registry);
+  registerTwoSegmentCompareTool(registry);
 }

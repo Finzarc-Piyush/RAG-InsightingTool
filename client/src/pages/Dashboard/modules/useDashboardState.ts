@@ -317,6 +317,33 @@ export const useDashboardState = () => {
     },
   });
 
+  const patchSheetContentMutation = useMutation({
+    mutationFn: async ({
+      dashboardId,
+      sheetId,
+      narrativeBlocks,
+      gridLayout,
+    }: {
+      dashboardId: string;
+      sheetId: string;
+      narrativeBlocks?: import('@/shared/schema').DashboardNarrativeBlock[];
+      gridLayout?: Record<string, unknown>;
+    }) => {
+      const updated = await dashboardsApi.patchSheetContent(dashboardId, sheetId, {
+        narrativeBlocks,
+        gridLayout: gridLayout as import('react-grid-layout').Layouts | undefined,
+      });
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+  });
+
   const updateTableCaptionMutation = useMutation({
     mutationFn: async ({
       dashboardId,
@@ -358,6 +385,18 @@ export const useDashboardState = () => {
     [updateTableCaptionMutation]
   );
 
+  const patchSheetContent = useCallback(
+    (
+      dashboardId: string,
+      sheetId: string,
+      body: {
+        narrativeBlocks?: import('@/shared/schema').DashboardNarrativeBlock[];
+        gridLayout?: Record<string, unknown>;
+      }
+    ) => patchSheetContentMutation.mutateAsync({ dashboardId, sheetId, ...body }),
+    [patchSheetContentMutation]
+  );
+
   const status = useMemo(
     () => ({
       isLoading,
@@ -384,6 +423,7 @@ export const useDashboardState = () => {
     removeSheet,
     updateChartInsightOrRecommendation,
     updateTableCaption,
+    patchSheetContent,
     getDashboardById,
     fetchDashboardById,
     status,

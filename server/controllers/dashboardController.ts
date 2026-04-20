@@ -3,6 +3,9 @@ import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import {
   addChartToDashboardRequestSchema,
   createDashboardRequestSchema,
+  createReportDashboardRequestSchema,
+  exportDashboardRequestSchema,
+  patchDashboardSheetRequestSchema,
   removeChartFromDashboardRequestSchema,
 } from "../shared/schema.js";
 import {
@@ -25,7 +28,13 @@ import {
   addTableToDashboard,
   removeTableFromDashboard,
   updateTableCaption,
+  createReportDashboardFromAnalysis,
+  patchDashboardSheet,
 } from "../models/dashboard.model.js";
+import {
+  buildDashboardPdf,
+  buildDashboardPptx,
+} from "../services/dashboardExport.service.js";
 
 export const createDashboardController = async (req: Request, res: Response) => {
   try {
@@ -354,5 +363,75 @@ export const updateTableCaptionController = async (req: Request, res: Response) 
   }
 };
 
+export const createReportDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const parsed = createReportDashboardRequestSchema.parse(req.body);
+    const dashboard = await createReportDashboardFromAnalysis(username, parsed);
+    res.status(201).json(dashboard);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || "Failed to create report dashboard" });
+  }
+};
+
+export const patchDashboardSheetController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId, sheetId } = req.params as { dashboardId: string; sheetId: string };
+    const parsed = patchDashboardSheetRequestSchema.parse(req.body);
+    const updated = await patchDashboardSheet(dashboardId, username, sheetId, parsed);
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || "Failed to update sheet" });
+  }
+};
+
+export const exportDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = exportDashboardRequestSchema.parse(req.body);
+    const dashboard = await getDashboardById(dashboardId, username);
+    if (!dashboard) {
+      res.status(404).json({ error: "Dashboard not found" });
+      return;
+    }
+    const safeName = dashboard.name.replace(/[^\w\-]+/g, "_").slice(0, 80);
+    if (parsed.format === "pdf") {
+      const buf = await buildDashboardPdf(dashboard);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeName}.pdf"`
+      );
+      res.send(buf);
+      return;
+    }
+    const buf = await buildDashboardPptx(dashboard);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${safeName}.pptx"`
+    );
+    res.send(buf);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error?.message || "Export failed" });
+  }
+};
 
 

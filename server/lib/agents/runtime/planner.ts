@@ -374,7 +374,8 @@ export async function runPlanner(
   turnId: string,
   onLlmCall: () => void,
   priorObservationsText?: string,
-  workingMemoryBlock?: string
+  workingMemoryBlock?: string,
+  handoffDigest?: string
 ): Promise<PlannerRunResult> {
   const tools = registry.formatToolManifestForPlanner();
   const modeNote =
@@ -403,6 +404,8 @@ Rules:
 - Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column. Pass **dimensionFilters** when correlating within a segment so the tool uses **row-level turn-start data**, not a tiny aggregate frame left in ctx.data.
 - If the Dataset block includes **DIAGNOSTIC_ANALYSIS_HINT**, follow that playbook: row-level slice → breakdowns → correlation; avoid correlating on aggregate-only tables.
+- If **ANALYSIS_BRIEF_JSON** is present, treat outcomeMetricColumn, filters, segmentationDimensions, and timeWindow as authoritative intent: plan tools to validate or falsify that brief (execute_query_plan, run_breakdown_ranking, run_two_segment_compare for explicit A vs B contrasts, run_correlation with matching dimensionFilters, etc.). Do not contradict the brief without tool evidence.
+- For explicit **A vs B** cohort comparisons on the same metric (e.g. region slice vs the rest, treated vs control), use **run_two_segment_compare** with \`segment_a_filters\` and \`segment_b_filters\`, then **build_chart** if a simple bar comparison helps.
 - **run_segment_driver_analysis** (when listed in tools): optional one-shot driver path for a filtered segment + outcome column.
 - Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends). For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), **y must be the aggregated column name on the result rows** (e.g. \`Sales_sum\`), not \`Sales\`. **x** is the same groupBy column (bucket labels). Set \`aggregate\` \`none\` when there is exactly one row per x after bucketing; use sum|mean only when charting raw rows.
 - **Layered charts**: If execute_query_plan returns **long** rows (one row per x × second dimension, e.g. month × region) with a numeric measure column, use **build_chart** with \`type\` \`bar\` (stacked default) or \`line\`/\`area\` for trends; set \`seriesColumn\` to the **second dimension** when convenient—the server **chart compiler** will bind a second categorical column from the result if you omit it, as long as the result still includes that column (never rely on the chart layer to drop dimensions). Optional \`barLayout\`: \`stacked\`|\`grouped\`. For **two numeric metrics** over the same x (e.g. revenue vs profit over time), use \`y2\` instead of \`seriesColumn\`. Heatmaps: \`type\` \`heatmap\`, \`x\`/\`y\` as the two dimensions, \`z\` the numeric cell value.
@@ -424,7 +427,12 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       `Structured working memory (callId, suggestedColumns, slots — use for chained tool args):\n${workingMemoryBlock.trim().slice(0, 8000)}\n\n`
       : "";
 
-  const user = `User question:\n${ctx.question}\n\n${priorBlock}${memoryBlock}${summarizeContextForPrompt(ctx)}`;
+  const handoffBlock =
+    handoffDigest?.trim().length ?
+      `Coordinator handoff log (this turn — use to align the new plan with prior decisions):\n${handoffDigest.trim().slice(0, 12000)}\n\n`
+      : "";
+
+  const user = `User question:\n${ctx.question}\n\n${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,

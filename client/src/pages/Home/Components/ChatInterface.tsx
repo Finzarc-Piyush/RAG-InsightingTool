@@ -659,25 +659,6 @@ export function ChatInterface({
           </div>
         </div>
       )}
-      {isDatasetPreviewLoading && (
-        <div className="absolute left-0 right-0 top-0 z-40 px-4 pt-3">
-          <div className="mx-auto max-w-6xl rounded-xl border border-primary/25 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-sm">
-            <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">
-                  {enrichmentPoll?.phase === 'queued' ? 'Upload accepted, waiting to start' : 'Preparing your dataset preview'}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {previewSource === 'local'
-                    ? 'Showing local preview now. Server-backed preview will replace it automatically.'
-                    : enrichmentPoll?.phaseMessage || 'Building preview rows and column summary in the background.'}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {previewSource === 'local' && (
         <div className="absolute left-0 right-0 top-16 z-30 px-4">
           <div className="mx-auto max-w-6xl rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-foreground">
@@ -781,6 +762,34 @@ export function ChatInterface({
               return false;
             })();
             const allowPivotAutoShow = computeAllowPivotAutoShow(message);
+            const uploadPreviewThinking =
+              isDatasetPreviewLoading &&
+              isDatasetPreviewSystemMessage(message) &&
+              carriesDatasetPreview
+                ? {
+                    active: true as const,
+                    title:
+                      enrichmentPoll?.phase === 'queued'
+                        ? 'Upload accepted, waiting to start'
+                        : 'Preparing your dataset preview',
+                    details:
+                      previewSource === 'local'
+                        ? 'Showing local preview now. Server-backed preview will replace it automatically.'
+                        : enrichmentPoll?.phaseMessage ||
+                          'Building preview rows and column summary in the background.',
+                  }
+                : undefined;
+            let precedingUserQuestion: string | undefined;
+            if (message.role === "assistant") {
+              const start = originalIndex >= 0 ? originalIndex : idx;
+              for (let i = start - 1; i >= 0; i--) {
+                const m = messages[i];
+                if (m?.role === "user") {
+                  precedingUserQuestion = m.content;
+                  break;
+                }
+              }
+            }
             return (
               <div key={`${message.timestamp}-${message.role}-${idx}-wrap`}>
                 <MessageBubble
@@ -816,6 +825,8 @@ export function ChatInterface({
                   allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
                   allowPivotAutoShow={allowPivotAutoShow}
                   onAppendAssistantChart={onAppendAssistantChart}
+                  precedingUserQuestion={precedingUserQuestion}
+                  uploadPreviewThinking={uploadPreviewThinking}
                   ref={isLastMessage ? lastMessageRef : undefined}
                 />
                 {showLiveThinkingStrip && (

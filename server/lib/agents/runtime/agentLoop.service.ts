@@ -9,14 +9,19 @@ import type {
   ToolCallRecord,
   WorkingMemoryEntry,
 } from "./types.js";
-import { AGENT_TRACE_MAX_BYTES } from "./types.js";
+import { AGENT_TRACE_MAX_BYTES, isInterAgentPromptFeedbackEnabled } from "./types.js";
 import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
+import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { formatWorkingMemoryBlock } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
 import { agentLog } from "./agentLogger.js";
+import {
+  appendInterAgentMessage,
+  formatInterAgentHandoffsForPrompt,
+} from "./interAgentMessages.js";
 import { openai, MODEL } from "../../openai.js";
 import { getInsightModel, getInsightTemperatureConservative } from "../../insightSynthesis/insightModelConfig.js";
 import { completeJson } from "./llmJson.js";
@@ -91,6 +96,8 @@ type DeferredBuildChartTemplate = Pick<ChartSpec, "type" | "title" | "x" | "y" |
   z?: string;
   seriesColumn?: string;
   barLayout?: "stacked" | "grouped";
+  _agentEvidenceRef?: string;
+  _agentTurnId?: string;
 };
 
 function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplate {
@@ -105,6 +112,8 @@ function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplat
     ...(c.seriesColumn ? { seriesColumn: c.seriesColumn } : {}),
     ...(c.barLayout ? { barLayout: c.barLayout } : {}),
     ...(c.aggregate != null ? { aggregate: c.aggregate } : {}),
+    ...(c._agentEvidenceRef ? { _agentEvidenceRef: c._agentEvidenceRef } : {}),
+    ...(c._agentTurnId ? { _agentTurnId: c._agentTurnId } : {}),
   };
 }
 
@@ -195,6 +204,10 @@ function materializeDeferredBuildCharts(
         yLabel: spec.y,
         data: processed,
         ...smartDomains,
+        ...(tmpl._agentEvidenceRef ?
+          { _agentEvidenceRef: tmpl._agentEvidenceRef }
+        : {}),
+        ...(tmpl._agentTurnId ? { _agentTurnId: tmpl._agentTurnId } : {}),
       });
     } catch {
       /* skip invalid */
@@ -206,6 +219,24 @@ function materializeDeferredBuildCharts(
 function capAgentTrace(trace: AgentTrace): AgentTrace {
   const clone: AgentTrace = {
     ...trace,
+    interAgentMessages: trace.interAgentMessages?.length
+      ? trace.interAgentMessages.map((m) => ({
+          ...m,
+          intent: m.intent.slice(0, 400),
+          artifacts: m.artifacts?.slice(0, 12).map((a) => a.slice(0, 120)),
+          evidenceRefs: m.evidenceRefs?.slice(0, 12).map((r) => r.slice(0, 120)),
+          blockingQuestions: m.blockingQuestions
+            ?.slice(0, 2)
+            .map((q) => q.slice(0, 200)),
+          meta: m.meta
+            ? Object.fromEntries(
+                Object.entries(m.meta)
+                  .slice(0, 8)
+                  .map(([k, v]) => [k.slice(0, 48), v.slice(0, 160)])
+              )
+            : undefined,
+        }))
+      : undefined,
     toolCalls: trace.toolCalls.map((t) => ({
       ...t,
       resultSummary: t.resultSummary
@@ -215,11 +246,22 @@ function capAgentTrace(trace: AgentTrace): AgentTrace {
     criticRounds: trace.criticRounds.slice(-20),
   };
   let encoded = JSON.stringify(clone);
+  while (
+    encoded.length > AGENT_TRACE_MAX_BYTES &&
+    clone.interAgentMessages &&
+    clone.interAgentMessages.length > 4
+  ) {
+    clone.interAgentMessages = clone.interAgentMessages.slice(
+      -Math.max(4, Math.floor(clone.interAgentMessages.length * 0.55))
+    );
+    encoded = JSON.stringify(clone);
+  }
   if (encoded.length <= AGENT_TRACE_MAX_BYTES) {
     return clone;
   }
   return {
     ...clone,
+    interAgentMessages: clone.interAgentMessages?.slice(-8),
     toolCalls: clone.toolCalls.map((t) => ({
       ...t,
       resultSummary: t.resultSummary?.slice(0, 120),
@@ -403,7 +445,8 @@ async function runPlannerWithOneRetry(
   turnId: string,
   onLlmCall: () => void,
   priorObservationsText?: string,
-  workingMemoryBlock?: string
+  workingMemoryBlock?: string,
+  handoffDigest?: string
 ) {
   const first = await runPlanner(
     ctx,
@@ -411,7 +454,8 @@ async function runPlannerWithOneRetry(
     turnId,
     onLlmCall,
     priorObservationsText,
-    workingMemoryBlock
+    workingMemoryBlock,
+    handoffDigest
   );
   if (first.ok) return first;
   const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
@@ -427,7 +471,8 @@ async function runPlannerWithOneRetry(
     turnId,
     onLlmCall,
     priorObservationsText,
-    workingMemoryBlock
+    workingMemoryBlock,
+    handoffDigest
   );
 }
 
@@ -491,7 +536,18 @@ export async function runAgentTurn(
 
   const deadline = Date.now() + config.maxWallTimeMs;
 
-  const mergeStepArtifacts = (tool: string, result: ToolResult) => {
+  if (ctx.mode === "analysis") {
+    await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+  }
+
+  const briefOut = () =>
+    ctx.analysisBrief ? { analysisBrief: ctx.analysisBrief } : {};
+
+  const mergeStepArtifacts = (
+    tool: string,
+    result: ToolResult,
+    evidenceCallId?: string
+  ) => {
     if (result.ragHitCount !== undefined) {
       lastRagHitCount = result.ragHitCount;
     }
@@ -499,12 +555,20 @@ export async function runAgentTurn(
       lastNumeric = result.numericPayload;
     }
     if (result.charts?.length) {
+      const tag = (c: ChartSpec): ChartSpec => ({
+        ...c,
+        ...(evidenceCallId ?
+          { _agentEvidenceRef: evidenceCallId, _agentTurnId: turnId }
+        : {}),
+      });
       if (tool === "build_chart") {
         for (const c of result.charts) {
-          deferredPlanCharts.push(deferredTemplateFromBuiltChart(c as ChartSpec));
+          deferredPlanCharts.push(
+            deferredTemplateFromBuiltChart(tag(c as ChartSpec))
+          );
         }
       } else {
-        mergedCharts.push(...result.charts);
+        mergedCharts.push(...result.charts.map((c) => tag(c as ChartSpec)));
       }
     }
     if (result.insights?.length) {
@@ -558,13 +622,18 @@ export async function runAgentTurn(
           ? observations.join("\n\n---\n\n").slice(0, 12_000)
           : undefined;
       const workingMemoryBlock = formatWorkingMemoryBlock(workingMemory);
+      const handoffDigest =
+        isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
+          ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 4000)
+          : undefined;
       const planResult = await runPlannerWithOneRetry(
         ctx,
         registry,
         turnId,
         onLlmCall,
         priorForPlanner,
-        workingMemoryBlock || undefined
+        workingMemoryBlock || undefined,
+        handoffDigest
       );
       if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;
@@ -578,6 +647,19 @@ export async function runAgentTurn(
           .filter(Boolean)
           .join("|")
           .slice(0, 300);
+        appendInterAgentMessage(
+          trace,
+          {
+            from: "Planner",
+            to: "Coordinator",
+            intent: "plan_rejected",
+            evidenceRefs: planResult.stepId ? [String(planResult.stepId)] : undefined,
+            meta: {
+              reason: String(planResult.reason ?? "unknown").slice(0, 80),
+            },
+          },
+          safeEmit
+        );
         trace.endedAt = Date.now();
         agentLog("turn.abort", {
           phase: "planner",
@@ -596,6 +678,7 @@ export async function runAgentTurn(
           agentTrace: capAgentTrace(trace),
           agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
           lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+          ...briefOut(),
         };
       }
 
@@ -603,6 +686,18 @@ export async function runAgentTurn(
 
       trace.planRationale = plan.rationale;
       trace.steps = plan.steps;
+      appendInterAgentMessage(
+        trace,
+        {
+          from: "Planner",
+          to: "Coordinator",
+          intent: "plan_accepted",
+          artifacts: plan.steps.map((s) => s.id),
+          evidenceRefs: plan.steps.map((s) => s.id).slice(0, 12),
+          meta: { stepCount: String(plan.steps.length) },
+        },
+        safeEmit
+      );
       safeEmit("plan", {
         rationale: plan.rationale,
         steps: plan.steps.map((s) => ({
@@ -708,7 +803,18 @@ export async function runAgentTurn(
           }
 
           if (result.clarify) {
-            mergeStepArtifacts(step.tool, result);
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "Executor",
+                to: "Coordinator",
+                intent: "tool_requests_clarify",
+                evidenceRefs: [callId, step.id],
+                meta: { tool: step.tool, stepId: step.id },
+              },
+              safeEmit
+            );
+            mergeStepArtifacts(step.tool, result, callId);
             materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
             trace.endedAt = Date.now();
             return {
@@ -719,6 +825,7 @@ export async function runAgentTurn(
               operationResult,
               agentTrace: capAgentTrace(trace),
               lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+              ...briefOut(),
             };
           }
 
@@ -794,7 +901,26 @@ export async function runAgentTurn(
           break;
         }
 
-        mergeStepArtifacts(step.tool, stepResult);
+        {
+          const lv = lastVerdictForStep(trace, step.id);
+          appendInterAgentMessage(
+            trace,
+            {
+              from: "Verifier",
+              to: "Coordinator",
+              intent: "step_verdict",
+              artifacts: [step.id],
+              evidenceRefs: [finalCallId, step.id],
+              meta: {
+                tool: step.tool,
+                verdict: lv ?? "",
+              },
+            },
+            safeEmit
+          );
+        }
+
+        mergeStepArtifacts(step.tool, stepResult, finalCallId);
 
         if (
           stepResult.ok &&
@@ -898,6 +1024,10 @@ export async function runAgentTurn(
           slots: stepResult.memorySlots,
         });
 
+        const refDigest =
+          isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
+            ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 3500)
+            : undefined;
         const ref = await runReflector(
           ctx,
           {
@@ -911,9 +1041,25 @@ export async function runAgentTurn(
                 : undefined,
           },
           turnId,
-          onLlmCall
+          onLlmCall,
+          refDigest
         );
         trace.reflectorNotes.push(ref.action + (ref.note ? `: ${ref.note}` : ""));
+        appendInterAgentMessage(
+          trace,
+          {
+            from: "Reflector",
+            to: "Coordinator",
+            intent: `reflector_${ref.action}`,
+            evidenceRefs: [step.id, finalCallId],
+            meta: {
+              stepId: step.id,
+              tool: step.tool,
+              note: (ref.note ?? "").slice(0, 200),
+            },
+          },
+          safeEmit
+        );
 
         if (ref.action === "finish") {
           const remaining = plan.steps.length - si - 1;
@@ -924,6 +1070,18 @@ export async function runAgentTurn(
             break;
           }
         } else if (ref.action === "clarify" && ref.clarify_message) {
+          appendInterAgentMessage(
+            trace,
+            {
+              from: "Reflector",
+              to: "Coordinator",
+              intent: "clarify_user",
+              evidenceRefs: [step.id, finalCallId],
+              blockingQuestions: [ref.clarify_message.slice(0, 320)],
+              meta: { stepId: step.id },
+            },
+            safeEmit
+          );
           trace.endedAt = Date.now();
           materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
           return {
@@ -932,8 +1090,20 @@ export async function runAgentTurn(
             insights: mergedInsights.length ? mergedInsights : undefined,
             agentTrace: capAgentTrace(trace),
             lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+            ...briefOut(),
           };
         } else if (ref.action === "replan") {
+          appendInterAgentMessage(
+            trace,
+            {
+              from: "Reflector",
+              to: "Planner",
+              intent: "replan_requested",
+              evidenceRefs: [step.id, finalCallId],
+              meta: { afterStep: step.id, tool: step.tool },
+            },
+            safeEmit
+          );
           replans++;
           void maybeMidTurn({
             phase: "plan_replan",
@@ -973,6 +1143,20 @@ export async function runAgentTurn(
         const trimmedCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
         if (trimmedCtas.length) followUpPrompts = trimmedCtas;
         appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
+        appendInterAgentMessage(
+          trace,
+          {
+            from: "Synthesizer",
+            to: "Coordinator",
+            intent: "answer_drafted",
+            evidenceRefs: ["synthesis"],
+            meta: {
+              ctas: String(trimmedCtas.length),
+              approxLen: String(answer.length),
+            },
+          },
+          safeEmit
+        );
       } catch (synErr) {
         const msg = synErr instanceof Error ? synErr.message : String(synErr);
         agentLog("synthesis_error", { turnId, err: msg.slice(0, 300) });
@@ -1001,6 +1185,17 @@ export async function runAgentTurn(
     }
     if (visualExtra.charts.length) {
       mergedCharts.push(...visualExtra.charts);
+      appendInterAgentMessage(
+        trace,
+        {
+          from: "VisualPlanner",
+          to: "Coordinator",
+          intent: "extra_charts_added",
+          evidenceRefs: visualExtra.charts.map((_, i) => `chart_${i}`).slice(0, 8),
+          meta: { count: String(visualExtra.charts.length) },
+        },
+        safeEmit
+      );
       if (ctx.mode === "analysis") {
         void maybeMidTurn({
           phase: "post_visual",
@@ -1043,6 +1238,7 @@ export async function runAgentTurn(
         agentTrace: capAgentTrace(trace),
         agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+        ...briefOut(),
       };
     }
 
@@ -1091,6 +1287,23 @@ export async function runAgentTurn(
       break;
     }
 
+    {
+      const finalCritic = [...trace.criticRounds]
+        .reverse()
+        .find((c) => c.stepId === "final");
+      appendInterAgentMessage(
+        trace,
+        {
+          from: "Verifier",
+          to: "Coordinator",
+          intent: "final_verdict",
+          evidenceRefs: ["final", finalCritic?.verdict ?? "unknown"],
+          meta: { verdict: finalCritic?.verdict ?? "" },
+        },
+        safeEmit
+      );
+    }
+
     preservedAnswer = answer;
     trace.endedAt = Date.now();
     agentLog("turn_done", {
@@ -1112,6 +1325,7 @@ export async function runAgentTurn(
       agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+      ...briefOut(),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1138,6 +1352,7 @@ export async function runAgentTurn(
         operationResult,
         agentTrace: capAgentTrace(trace),
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+        ...briefOut(),
       };
     }
     trace.endedAt = Date.now();
@@ -1163,6 +1378,7 @@ export async function runAgentTurn(
       agentTrace: capAgentTrace(trace),
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+      ...briefOut(),
     };
   }
 }

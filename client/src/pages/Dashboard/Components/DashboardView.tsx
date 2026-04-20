@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardData } from '../modules/useDashboardState';
 import { useToast } from '@/hooks/use-toast';
 import * as htmlToImage from 'html-to-image';
 import PptxGenJS from 'pptxgenjs';
 import { DashboardSection, DashboardTile } from '../types';
+import type { Layouts } from 'react-grid-layout';
+import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
 import { DashboardTiles } from './DashboardTiles';
 import { ShareDashboardDialog } from './ShareDashboardDialog';
@@ -32,6 +34,7 @@ const PPT_LAYOUT = 'LAYOUT_16x9';
 
 export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
   const [isExporting, setIsExporting] = useState(false);
+  const [serverExportBusy, setServerExportBusy] = useState<"pdf" | "pptx" | null>(null);
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null);
   const [isSheetSidebarOpen, setIsSheetSidebarOpen] = useState(true);
   const [tileFilters, setTileFilters] = useState<Record<string, ActiveChartFilters>>({});
@@ -45,7 +48,14 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const [newSheetName, setNewSheetName] = useState('');
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const { toast } = useToast();
-  const { renameDashboard, renameSheet, addSheet, removeSheet, refetch: refetchDashboards } = useDashboardContext();
+  const {
+    renameDashboard,
+    renameSheet,
+    addSheet,
+    removeSheet,
+    refetch: refetchDashboards,
+    patchSheetContent,
+  } = useDashboardContext();
 
   // Determine permission: if not provided, check if user owns the dashboard or has edit permission on shared dashboard
   const canEdit = useMemo(() => {
@@ -100,7 +110,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
 
   const sections = useMemo<DashboardSection[]>(() => {
     if (!activeSheet) return [];
-    
+
+    const narrativeTiles: DashboardTile[] = (activeSheet.narrativeBlocks ?? [])
+      .slice()
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .map((block) => ({
+        kind: 'narrative' as const,
+        id: `narrative-${block.id}`,
+        title: block.title,
+        block,
+      }));
+
     const baseTiles: DashboardTile[] = activeSheet.charts.flatMap((chart, index) => {
       const chartId = `chart-${index}`;
       const tiles: DashboardTile[] = [
@@ -143,10 +163,83 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         id: activeSheet.id,
         title: activeSheet.name,
         description: `Charts and insights for ${activeSheet.name}`,
-        tiles: [...baseTiles, ...tableTiles],
+        tiles: [...narrativeTiles, ...baseTiles, ...tableTiles],
       },
     ];
   }, [activeSheet, dashboard.updatedAt]);
+
+  const persistGridTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePersistGrid = useCallback(
+    (layouts: Layouts) => {
+      if (!canEdit || !currentSheetId) return;
+      if (persistGridTimerRef.current) clearTimeout(persistGridTimerRef.current);
+      persistGridTimerRef.current = setTimeout(async () => {
+        try {
+          await patchSheetContent(dashboard.id, currentSheetId, {
+            gridLayout: layouts as Layouts,
+          });
+          if (onRefresh) await onRefresh();
+          await refetchDashboards();
+        } catch (e) {
+          console.error(e);
+          toast({
+            title: 'Could not save layout',
+            description: e instanceof Error ? e.message : 'Try again.',
+            variant: 'destructive',
+          });
+        }
+      }, 700);
+    },
+    [
+      canEdit,
+      currentSheetId,
+      dashboard.id,
+      onRefresh,
+      patchSheetContent,
+      refetchDashboards,
+      toast,
+    ]
+  );
+
+  const handleSeedLayoutFromLocal = useCallback(
+    async (layouts: Layouts) => {
+      if (!canEdit || !currentSheetId) return;
+      await patchSheetContent(dashboard.id, currentSheetId, {
+        gridLayout: layouts as Layouts,
+      });
+      if (onRefresh) await onRefresh();
+      await refetchDashboards();
+    },
+    [
+      canEdit,
+      currentSheetId,
+      dashboard.id,
+      onRefresh,
+      patchSheetContent,
+      refetchDashboards,
+    ]
+  );
+
+  const handleNarrativeSave = useCallback(
+    async (blockId: string, title: string, body: string) => {
+      if (!canEdit || !currentSheetId || !activeSheet?.narrativeBlocks?.length) return;
+      const next = activeSheet.narrativeBlocks.map((b) =>
+        b.id === blockId ? { ...b, title, body } : b
+      );
+      await patchSheetContent(dashboard.id, currentSheetId, { narrativeBlocks: next });
+      if (onRefresh) await onRefresh();
+      await refetchDashboards();
+    },
+    [
+      activeSheet?.narrativeBlocks,
+      canEdit,
+      currentSheetId,
+      dashboard.id,
+      onRefresh,
+      patchSheetContent,
+      refetchDashboards,
+    ]
+  );
 
   const chartTiles = useMemo(
     () => sections.flatMap((section) => section.tiles).filter((tile): tile is DashboardTile & { kind: 'chart' } => tile.kind === 'chart'),
@@ -261,8 +354,8 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
 
     // Get all charts from selected sheets
     const allCharts: Array<{ sheet: typeof sheets[0]; chartIndex: number; chart: any }> = [];
-    sheetsToExport.forEach(sheetId => {
-      const sheet = sheets.find(s => s.id === sheetId);
+    sheetsToExport.forEach((sheetId) => {
+      const sheet = sheets.find((s) => s.id === sheetId);
       if (sheet) {
         sheet.charts.forEach((chart, index) => {
           allCharts.push({ sheet, chartIndex: index, chart });
@@ -271,7 +364,11 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     });
 
     if (allCharts.length === 0) {
-      toast({ title: 'Nothing to export', description: 'Selected views have no content yet.' });
+      toast({
+        title: "No charts in selection",
+        description:
+          "Use “Report PDF” or “Report PPTX” below for narrative/table export, or pick views that contain charts.",
+      });
       setExportDialogOpen(false);
       return;
     }
@@ -679,6 +776,12 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                 <DashboardTiles
                   dashboardId={dashboard.id}
                   tiles={activeSection.tiles}
+                  serverGridLayout={
+                    (activeSheet?.gridLayout as Layouts | undefined) ?? null
+                  }
+                  onPersistServerGrid={handlePersistGrid}
+                  onSeedLayoutFromLocalStorage={handleSeedLayoutFromLocal}
+                  onNarrativeSave={handleNarrativeSave}
                   onDeleteChart={canEdit ? (chartIndex) => {
                     const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
                     console.log('Deleting chart:', { chartIndex, sheetId: sheetIdToUse, activeSheetId, sheets });
@@ -710,7 +813,13 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           <DialogHeader>
             <DialogTitle>Export Dashboard</DialogTitle>
             <DialogDescription>
-              Select which views you want to export to PowerPoint. You can select multiple views or export the entire dashboard.
+              Choose views, then pick an export path.{" "}
+              <span className="block pt-2 text-xs text-muted-foreground">
+                <strong>Report PDF / Report PPTX</strong> are generated on the server from the saved dashboard model
+                (narrative text, chart titles/axes, tables). For slides that include{" "}
+                <strong>rasterized chart images</strong>, use the blue primary export below (this browser captures the
+                grid with html-to-image — same idea as a visual deck).
+              </span>
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -755,7 +864,72 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
               </p>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!!serverExportBusy}
+                onClick={async () => {
+                  setServerExportBusy("pdf");
+                  try {
+                    await dashboardsApi.exportDashboard(dashboard.id, "pdf");
+                    toast({
+                      title: "Report PDF (server)",
+                      description:
+                        "Document-model PDF: narratives and tables as text; charts summarized by title/axes (no chart screenshots).",
+                    });
+                  } catch (e: any) {
+                    toast({
+                      title: "Export failed",
+                      description: e?.message || "Could not generate PDF.",
+                      variant: "destructive",
+                    });
+                  } finally {
+                    setServerExportBusy(null);
+                  }
+                }}
+              >
+                {serverExportBusy === "pdf" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Report PDF"
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!!serverExportBusy}
+                onClick={async () => {
+                  setServerExportBusy("pptx");
+                  try {
+                    await dashboardsApi.exportDashboard(dashboard.id, "pptx");
+                    toast({
+                      title: "Report PPTX (server)",
+                      description:
+                        "Structured text slides from the dashboard model — not embedded chart PNGs. Use the primary export for screenshot-based slides.",
+                    });
+                  } catch (e: any) {
+                    toast({
+                      title: "Export failed",
+                      description: e?.message || "Could not generate PPTX.",
+                      variant: "destructive",
+                    });
+                  } finally {
+                    setServerExportBusy(null);
+                  }
+                }}
+              >
+                {serverExportBusy === "pptx" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Report PPTX"
+                )}
+              </Button>
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto justify-end">
             <Button
               variant="outline"
               onClick={() => {
@@ -783,6 +957,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                 </>
               )}
             </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

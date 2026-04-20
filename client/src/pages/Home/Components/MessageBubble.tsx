@@ -15,6 +15,7 @@ import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { FilterAppliedMessage } from '@/components/FilterAppliedMessage';
@@ -29,11 +30,23 @@ import {
 } from '@/pages/Home/modules/uploadSystemMessages';
 import { chatPivotAnchorId } from '@/pages/Home/lib/chatPivotNav';
 import { splitAssistantFollowUpPrompts } from '@/lib/chat/splitAssistantFollowUpPrompts';
+import { dashboardsApi } from '@/lib/api/dashboards';
+import { useLocation } from 'wouter';
+import { userMessageHasReportIntent } from '@/lib/reportIntent';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
 
 const PREVIEW_SIGNATURE_SLICE = 3500;
+
+function stripAgentChartMeta(chart: ChartSpec): ChartSpec {
+  const c = chart as ChartSpec & {
+    _agentEvidenceRef?: string;
+    _agentTurnId?: string;
+  };
+  const { _agentEvidenceRef: _e, _agentTurnId: _t, ...rest } = c;
+  return rest as ChartSpec;
+}
 
 /** Stable signature for preview/summary arrays so memo re-renders when row content or keys change, not only length. */
 function tablePayloadSignature(payload: unknown[] | undefined): string {
@@ -158,6 +171,14 @@ interface MessageBubbleProps {
   /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
   allowPivotAutoShow?: boolean;
   onAppendAssistantChart?: (chart: ChartSpec) => void;
+  /** Last user message in this turn (for “save report dashboard”). */
+  precedingUserQuestion?: string;
+  /** Upload job: show live Thinking under data preview while server preview is loading. */
+  uploadPreviewThinking?: {
+    active: true;
+    title: string;
+    details?: string;
+  };
 }
 
 const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
@@ -189,7 +210,13 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   allowDatasetPreviewInAnswer = false,
   allowPivotAutoShow = false,
   onAppendAssistantChart,
+  precedingUserQuestion,
+  uploadPreviewThinking,
 }, ref) => {
+  const [savingReport, setSavingReport] = useState(false);
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+
   const isUser = message.role === 'user';
   const isPreviewSystemMessage = isDatasetPreviewSystemMessage(message);
   const isEnrichmentSystemMessage = isDatasetEnrichmentSystemMessage(message);
@@ -326,6 +353,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
     !isUser &&
     !!displayContent &&
     !isEnrichmentSystemMessage &&
+    !isPreviewSystemMessage &&
     !(
       message.isIntermediate &&
       (!String(displayContent).trim() || String(displayContent).trim() === "Preliminary results")
@@ -607,6 +635,25 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
                 />
+                {uploadPreviewThinking?.active && (
+                  <div className="mt-2">
+                    <ThinkingPanel
+                      variant="live"
+                      isStreaming
+                      steps={[
+                        {
+                          step: uploadPreviewThinking.title,
+                          status: 'active',
+                          timestamp: message.timestamp,
+                          ...(uploadPreviewThinking.details
+                            ? { details: uploadPreviewThinking.details }
+                            : {}),
+                        },
+                      ]}
+                      workbench={[]}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -665,6 +712,56 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 })}
               </div>
             )}
+
+            {!isUser &&
+              precedingUserQuestion &&
+              sessionId &&
+              userMessageHasReportIntent(precedingUserQuestion) &&
+              (message.charts?.length || (message.content && message.content.length > 80)) && (
+                <div className="mt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={savingReport}
+                    onClick={async () => {
+                      setSavingReport(true);
+                      try {
+                        const baseName =
+                          precedingUserQuestion.slice(0, 72).trim() || "Analysis report";
+                        const charts = (message.charts ?? []).map(stripAgentChartMeta);
+                        const d = await dashboardsApi.createFromAnalysis({
+                          name: baseName,
+                          question: precedingUserQuestion,
+                          summaryBody: message.content || "",
+                          limitationsBody:
+                            "Observational session data only. Segment movements show association, not proven causation. Validate material decisions with additional evidence or experiments.",
+                          recommendationsBody: (message.followUpPrompts ?? [])
+                            .slice(0, 6)
+                            .map((p) => `• ${p}`)
+                            .join("\n"),
+                          charts,
+                        });
+                        setLocation(`/dashboard?open=${encodeURIComponent(d.id)}`);
+                        toast({
+                          title: "Report dashboard created",
+                          description: `Opening “${d.name}” on the Dashboard page.`,
+                        });
+                      } catch (e: any) {
+                        toast({
+                          title: "Could not create report",
+                          description: e?.message || "Try again.",
+                          variant: "destructive",
+                        });
+                      } finally {
+                        setSavingReport(false);
+                      }
+                    }}
+                  >
+                    {savingReport ? "Saving…" : "Save as report dashboard"}
+                  </Button>
+                </div>
+              )}
             
             {/* Show loading placeholders for correlation charts being generated */}
             {thinkingSteps && thinkingSteps.some(step => 
@@ -802,6 +899,10 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     prevProps.sampleRows === nextProps.sampleRows &&
     prevProps.columns === nextProps.columns &&
     prevProps.temporalFacetColumns === nextProps.temporalFacetColumns &&
-    prevProps.onAppendAssistantChart === nextProps.onAppendAssistantChart
+    prevProps.onAppendAssistantChart === nextProps.onAppendAssistantChart &&
+    prevProps.precedingUserQuestion === nextProps.precedingUserQuestion &&
+    prevProps.uploadPreviewThinking?.active === nextProps.uploadPreviewThinking?.active &&
+    prevProps.uploadPreviewThinking?.title === nextProps.uploadPreviewThinking?.title &&
+    prevProps.uploadPreviewThinking?.details === nextProps.uploadPreviewThinking?.details
   );
 });

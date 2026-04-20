@@ -1,10 +1,18 @@
-import { ChartSpec, DashboardTableSpec } from '@/shared/schema';
+import { ChartSpec, DashboardNarrativeBlock, DashboardTableSpec } from '@/shared/schema';
 
 export type DashboardTile =
   | DashboardChartTile
   | DashboardInsightTile
   | DashboardTableTile
-  | DashboardActionTile;
+  | DashboardActionTile
+  | DashboardNarrativeTile;
+
+export interface DashboardNarrativeTile {
+  kind: 'narrative';
+  id: string;
+  title: string;
+  block: DashboardNarrativeBlock;
+}
 
 export interface DashboardChartTile {
   kind: 'chart';

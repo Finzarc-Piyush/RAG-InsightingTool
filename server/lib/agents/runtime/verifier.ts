@@ -1,4 +1,5 @@
 import type { AgentExecutionContext } from "./types.js";
+import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import type { VerifierResult, VerdictType } from "./types.js";
 import { verifierOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
@@ -62,9 +63,11 @@ course_correction: same enum as verdict (primary action)
 user_visible_note: optional string
 
 If evidence includes output from run_analytical_query (numeric/tabular results), treat those numbers as authoritative over retrieved RAG text snippets when they conflict. Use code NUMERIC_MISMATCH when the candidate contradicts analytical evidence.
-If evidence states zero rows with diagnostic distinct samples, pass verdict "pass" when the candidate explains that outcome and uses those samples (do not force revise_narrative for grounded empty-result explanations).`;
+If evidence states zero rows with diagnostic distinct samples, pass verdict "pass" when the candidate explains that outcome and uses those samples (do not force revise_narrative for grounded empty-result explanations).
+When ANALYSIS_BRIEF_JSON is provided, flag UNSUPPORTED_CAUSAL_CLAIM if the candidate states definitive root causes not backed by experimental design; prefer "consistent with" / "largest downward contribution" language aligned with epistemicNotes in the brief.`;
 
-  const user = `User question:\n${ctx.question}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 6000)}\n\nCandidate:\n${params.candidate.slice(0, 4000)}`;
+  const brief = formatAnalysisBriefForPrompt(ctx);
+  const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 6000)}\n\nCandidate:\n${params.candidate.slice(0, 4000)}`;
 
   const out = await completeJson(system, user, verifierOutputSchema, {
     turnId: params.turnId,

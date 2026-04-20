@@ -284,6 +284,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         username,
         assistantMessage: validated.answer,
         agentTrace: answerResult.agentTrace,
+        analysisBrief: answerResult.analysisBrief,
       });
     } catch (ctxErr) {
       console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
