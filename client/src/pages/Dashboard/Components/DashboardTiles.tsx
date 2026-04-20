@@ -25,6 +25,7 @@ import { ActiveChartFilters } from '@/lib/chartFilters';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { resolveLayoutsDropBySwap } from './dashboardGridLogic';
 import { useLayoutHistory } from '@/pages/Dashboard/hooks/useLayoutHistory';
+import { cn } from '@/lib/utils';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -332,6 +333,13 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const layoutsAtDragStartRef = useRef<Layouts | null>(null);
   const draggedIdRef = useRef<string | null>(null);
 
+  // Dashboard UX polish · keyboard move-mode.
+  // Tab to focus a tile; Space to grab; Arrow keys to nudge one grid cell;
+  // Space again to commit (reuses the same swap resolver as mouse drops);
+  // Escape to cancel and restore the pre-grab layout.
+  const [grabbedTileId, setGrabbedTileId] = useState<string | null>(null);
+  const layoutsAtGrabRef = useRef<Layouts | null>(null);
+
   // Dashboard UX polish · undo stack. Committed layouts are pushed after
   // every user-driven change (drag, resize); Cmd/Ctrl+Z restores the
   // previous snapshot via onUndo. Read-only dashboards (canEdit=false)
@@ -431,6 +439,128 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     onPersistServerGrid,
     tileNameById,
   ]);
+
+  // Dashboard UX polish · keyboard move handlers.
+  // Nudges operate on the `lg` breakpoint (12 cols). Narrower viewports
+  // are mouse-friendly by default; the tile is still Tab-focusable there
+  // so screen readers hear the tile's aria-label.
+  const LG_COLS = 12;
+
+  const nudgeGrabbedTile = useCallback(
+    (dx: number, dy: number) => {
+      if (!grabbedTileId) return;
+      setLayouts((prev) => {
+        const lgArr = prev.lg ?? [];
+        const target = lgArr.find((l) => l.i === grabbedTileId);
+        if (!target) return prev;
+        const maxX = Math.max(0, LG_COLS - target.w);
+        const nextX = Math.min(maxX, Math.max(0, target.x + dx));
+        const nextY = Math.max(0, target.y + dy);
+        if (nextX === target.x && nextY === target.y) return prev;
+        const nextLg = lgArr.map((l) =>
+          l.i === grabbedTileId ? { ...l, x: nextX, y: nextY } : l
+        );
+        return { ...prev, lg: nextLg };
+      });
+    },
+    [grabbedTileId]
+  );
+
+  const beginGrab = useCallback(
+    (tileId: string) => {
+      layoutsAtGrabRef.current = structuredClone(layouts);
+      setGrabbedTileId(tileId);
+      const name = tileNameById.get(tileId) ?? "Tile";
+      setLayoutAnnouncement(
+        `${name} grabbed. Use arrow keys to move, Space to drop, Escape to cancel.`
+      );
+    },
+    [layouts, tileNameById]
+  );
+
+  const commitGrab = useCallback(() => {
+    const before = layoutsAtGrabRef.current;
+    const id = grabbedTileId;
+    if (!before || !id) {
+      setGrabbedTileId(null);
+      return;
+    }
+    const resolved = resolveLayoutsDropBySwap(before, layouts, id);
+    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
+    setLayouts(sanitized);
+    persistLayouts(dashboardId, sanitized, sheetId);
+    onPersistServerGrid?.(sanitized);
+    layoutHistory.push(sanitized);
+    const name = tileNameById.get(id) ?? "Tile";
+    const lg = sanitized.lg ?? [];
+    const beforeDragged = (before.lg ?? []).find((l) => l.i === id);
+    const swappedWith =
+      beforeDragged &&
+      lg.find(
+        (l) => l.i !== id && l.x === beforeDragged.x && l.y === beforeDragged.y
+      );
+    if (swappedWith) {
+      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
+      setLayoutAnnouncement(`${name} placed. Swapped with ${otherName}.`);
+    } else {
+      setLayoutAnnouncement(`${name} placed.`);
+    }
+    setGrabbedTileId(null);
+    layoutsAtGrabRef.current = null;
+  }, [
+    grabbedTileId,
+    layouts,
+    visibleTiles,
+    fallbackLayouts,
+    dashboardId,
+    sheetId,
+    onPersistServerGrid,
+    layoutHistory,
+    tileNameById,
+  ]);
+
+  const cancelGrab = useCallback(() => {
+    const before = layoutsAtGrabRef.current;
+    if (before) {
+      setLayouts(before);
+    }
+    const name = grabbedTileId ? tileNameById.get(grabbedTileId) ?? "Tile" : "Tile";
+    setLayoutAnnouncement(`${name} move cancelled.`);
+    setGrabbedTileId(null);
+    layoutsAtGrabRef.current = null;
+  }, [grabbedTileId, tileNameById]);
+
+  const handleTileKeyDown = useCallback(
+    (tileId: string) =>
+      (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!canEdit) return;
+        // Space toggles grab-mode / commits a grab.
+        if (e.key === " " || e.key === "Spacebar") {
+          e.preventDefault();
+          if (grabbedTileId === tileId) commitGrab();
+          else if (grabbedTileId === null) beginGrab(tileId);
+          return;
+        }
+        if (grabbedTileId !== tileId) return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelGrab();
+          return;
+        }
+        const arrowMap: Record<string, [number, number]> = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        };
+        const delta = arrowMap[e.key];
+        if (delta) {
+          e.preventDefault();
+          nudgeGrabbedTile(delta[0], delta[1]);
+        }
+      },
+    [canEdit, grabbedTileId, beginGrab, commitGrab, cancelGrab, nudgeGrabbedTile]
+  );
 
   const handleHideTile = useCallback(
     (tileId: string) => {
@@ -776,17 +906,32 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         preventCollision={false}
         draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input"
       >
-        {visibleTiles.map((tile) => (
-          <div
-            key={tile.id}
-            className="h-full w-full"
-            role="group"
-            aria-roledescription="dashboard tile"
-            aria-label={tileNameById.get(tile.id) ?? tile.id}
-          >
-            {renderTileContent(tile)}
-          </div>
-        ))}
+        {visibleTiles.map((tile) => {
+          const isGrabbed = grabbedTileId === tile.id;
+          return (
+            <div
+              key={tile.id}
+              className={cn(
+                "h-full w-full rounded-brand-lg outline-none",
+                // Focus ring whenever the wrapper itself has focus.
+                "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                // Grab-mode ring — stronger and always visible while
+                // arrows are in play.
+                isGrabbed
+                  ? "ring-2 ring-primary/80 ring-offset-2 ring-offset-background shadow-elev-3"
+                  : undefined
+              )}
+              role="group"
+              aria-roledescription="dashboard tile"
+              aria-label={tileNameById.get(tile.id) ?? tile.id}
+              aria-grabbed={isGrabbed || undefined}
+              tabIndex={canEdit ? 0 : -1}
+              onKeyDown={handleTileKeyDown(tile.id)}
+            >
+              {renderTileContent(tile)}
+            </div>
+          );
+        })}
       </ResponsiveGridLayout>
 
       {/*
