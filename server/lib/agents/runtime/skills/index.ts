@@ -75,3 +75,4 @@ export function expandSkill(
 // `registerSkill(...)` at load time; the map is idempotent so re-imports
 // (HMR, tests) are safe.
 import "./varianceDecomposer.js";
+import "./driverDiscovery.js";
