@@ -581,6 +581,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             {(message as Message & { dashboardDraft?: unknown }).dashboardDraft ? (
               <DashboardDraftCard
                 draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+                sessionId={sessionId ?? undefined}
               />
             ) : null}
             {message.suggestedQuestions &&

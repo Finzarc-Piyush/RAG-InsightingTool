@@ -28,6 +28,14 @@ import { Loader2, LayoutDashboard, ArrowUpRight } from "lucide-react";
 interface DashboardDraftCardProps {
   /** Raw draft from `message.dashboardDraft` — record<unknown> on the wire. */
   draft: unknown;
+  /**
+   * Session this draft was produced in. Forwarded to
+   * `dashboardsApi.createFromSpec` so the server can stamp the chat
+   * session's `lastCreatedDashboardId`; the `patch_dashboard` agent
+   * tool uses that stamp to resolve "the dashboard we just built"
+   * on follow-up turns.
+   */
+  sessionId?: string;
 }
 
 function parseDraft(raw: unknown): DashboardSpec | null {
@@ -36,7 +44,7 @@ function parseDraft(raw: unknown): DashboardSpec | null {
   return out.success ? out.data : null;
 }
 
-export function DashboardDraftCard({ draft }: DashboardDraftCardProps) {
+export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps) {
   const parsed = useMemo(() => parseDraft(draft), [draft]);
   const [status, setStatus] = useState<
     | { kind: "idle" }
@@ -58,7 +66,7 @@ export function DashboardDraftCard({ draft }: DashboardDraftCardProps) {
   const handleCreate = async () => {
     setStatus({ kind: "creating" });
     try {
-      const dashboard = await dashboardsApi.createFromSpec(parsed);
+      const dashboard = await dashboardsApi.createFromSpec(parsed, sessionId);
       setStatus({ kind: "created", dashboardId: dashboard.id });
       toast({
         title: "Dashboard created",

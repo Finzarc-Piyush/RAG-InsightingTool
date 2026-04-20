@@ -58,9 +58,16 @@ export const dashboardsApi = {
     }),
   createFromAnalysis: (body: CreateReportDashboardRequest) =>
     api.post<Dashboard>("/api/dashboards/from-analysis", body),
-  /** Phase 2 — commit an agent-emitted DashboardSpec from the chat preview card. */
-  createFromSpec: (spec: DashboardSpec) =>
-    api.post<Dashboard>("/api/dashboards/from-spec", { spec }),
+  /**
+   * Phase 2 — commit an agent-emitted DashboardSpec from the chat preview card.
+   *
+   * `sessionId` (Phase 2.E) is optional but strongly recommended: the
+   * server stamps `chatDocument.lastCreatedDashboardId` so the
+   * `patch_dashboard` agent tool can resolve "the dashboard we just
+   * built" on follow-up turns without the user restating the id.
+   */
+  createFromSpec: (spec: DashboardSpec, sessionId?: string) =>
+    api.post<Dashboard>("/api/dashboards/from-spec", { spec, sessionId }),
   /** Phase 2.E — atomic follow-up edits to an existing dashboard. */
   patch: (dashboardId: string, patch: DashboardPatch) =>
     api.post<Dashboard>(`/api/dashboards/${dashboardId}/patch`, { patch }),
