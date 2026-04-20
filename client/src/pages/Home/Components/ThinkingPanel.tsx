@@ -189,14 +189,25 @@ export function ThinkingPanel({
   const lastWorkbenchIdx = workbench.length - 1;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mt-3 ml-11">
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="mt-3 ml-11"
+      // UX-8 · announce live thinking so screen readers know work is in flight.
+      aria-busy={variant === "live" && isStreaming ? true : undefined}
+      aria-live={variant === "live" ? "polite" : undefined}
+    >
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 rounded-2xl border px-4 py-2.5 text-left",
+          "flex w-full items-center gap-2 rounded-brand-lg border px-4 py-2.5 text-left",
           "border-border/80 bg-gradient-to-r from-primary/10 via-background to-primary/5",
           "backdrop-blur supports-[backdrop-filter]:bg-background/60",
-          "hover:border-primary/20 transition-all text-xs font-semibold text-foreground/90",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shadow-sm hover:shadow-md"
+          "hover:border-primary/20 transition-all duration-base ease-standard text-xs font-semibold text-foreground/90",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background shadow-elev-1 hover:shadow-elev-2",
+          // UX-8 · gentle breathe while the agent is actively streaming — a
+          // subtle, honest "still working" cue. Neutralised by the global
+          // prefers-reduced-motion guard on `.animate-brand-breathe`.
+          variant === "live" && isStreaming && "animate-brand-breathe"
         )}
         aria-expanded={open}
       >
