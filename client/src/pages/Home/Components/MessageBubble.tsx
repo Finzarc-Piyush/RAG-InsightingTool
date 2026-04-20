@@ -10,6 +10,7 @@ import {
 import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
+import { DashboardDraftCard } from './DashboardDraftCard';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
@@ -569,6 +570,11 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 </div>
               </div>
             )}
+            {(message as Message & { dashboardDraft?: unknown }).dashboardDraft ? (
+              <DashboardDraftCard
+                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+              />
+            ) : null}
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
               onSuggestedQuestionClick && (
@@ -893,6 +899,9 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
       (nextProps.message.suggestedQuestions?.length ?? 0) &&
     JSON.stringify(prevProps.message.followUpPrompts ?? []) ===
       JSON.stringify(nextProps.message.followUpPrompts ?? []) &&
+    // Phase 2: re-render when the inline dashboard draft appears/changes.
+    Boolean((prevProps.message as { dashboardDraft?: unknown }).dashboardDraft) ===
+      Boolean((nextProps.message as { dashboardDraft?: unknown }).dashboardDraft) &&
     prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
     prevProps.preEnrichmentPreviewSnapshot === nextProps.preEnrichmentPreviewSnapshot &&
     prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&

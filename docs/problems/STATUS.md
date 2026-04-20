@@ -83,6 +83,9 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | Phase-1 1.F | Verifier completeness codes (`INCOMPLETE_DRIVERS`, `MISSING_DECOMPOSITION`, `MISSING_MAGNITUDES`) | PR 1.F |
 | Phase-1 1.G | Rich envelope (`magnitudes`, `unexplained`) threaded synthesiser → persisted Message | PR 1.G |
 | Phase-1 1.H (insight_explorer) | Auto-exploration skill for open prompts | PR 1.H |
+| Phase-2 2.A | `DashboardSpec` schema + `POST /api/dashboards/from-spec` + client API | PR 2.A |
+| Phase-2 2.B | Brief `requestsDashboard` trigger + `buildDashboard` module + `dashboard_draft` SSE | PR 2.B |
+| Phase-2 2.C | Layout templates + inline `DashboardDraftCard` + "Create dashboard" CTA | PR 2.C |
 
 ## Partially addressed / deferred follow-ups
 

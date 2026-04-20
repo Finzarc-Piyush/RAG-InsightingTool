@@ -1,7 +1,16 @@
 # Phase 2 — Generate a dashboard from a chat answer
 
-**Status:** plan (Phase 2; follows Phase 1). **Feature flag:**
-`DASHBOARD_AUTOGEN_ENABLED` (default off).
+**Status:** 2.A / 2.B / 2.C shipped end-to-end on `claude/add-claude-documentation-PaA9h`. **Feature flag:** `DASHBOARD_AUTOGEN_ENABLED` (default off until rollout).
+
+## Progress
+
+| PR | Status | Summary |
+|----|--------|---------|
+| 2.A | ✅ shipped | `DashboardSpec` + `dashboardSpecSchema` (mirrored), `createDashboardFromSpec` model, `POST /api/dashboards/from-spec` endpoint, client `dashboardsApi.createFromSpec`. |
+| 2.B | ✅ shipped | `AnalysisBrief.requestsDashboard` + prompt, `buildDashboard` module (`shouldBuildDashboard` guard + `buildDashboardFromTurn` LLM call), agent-loop dispatch + `dashboard_draft` SSE, threaded through `AgentLoopResult → dataAnalyzer → Message`. |
+| 2.C | ✅ shipped | Deterministic grid-layout templates (`executive` / `deep_dive` / `monitoring`) via `dashboardTemplates.ts`; client `DashboardDraftCard` renders inline with "Create dashboard" CTA that POSTs `/from-spec` and navigates. |
+| 2.D | ⏳ | Rollout gating (staging 10% → 100%). |
+| 2.E | ⏳ stretch | `patch_dashboard` tool for follow-up edits. |
 
 ## Context
 

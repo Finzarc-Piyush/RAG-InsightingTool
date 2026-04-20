@@ -22,6 +22,7 @@ import {
 import type { AnalysisBrief as _ } from "../../../shared/schema.js";
 import { completeJson } from "./llmJson.js";
 import { agentLog } from "./agentLogger.js";
+import { applyDashboardTemplateLayout } from "./dashboardTemplates.js";
 
 /** Magnitudes live on AgentLoopResult; re-declared here so this module stays framework-agnostic. */
 type MagnitudeLike = AnswerMagnitude;
@@ -151,6 +152,10 @@ NOT invent numbers. Keep each narrativeBlock.body under 1500 chars.`;
     ) {
       spec.defaultSheetId = spec.sheets[0]?.id;
     }
+
+    // Apply a deterministic gridLayout based on the chosen template so the
+    // first render isn't a stack of equally-sized tiles.
+    applyDashboardTemplateLayout(spec);
 
     return spec;
   } catch (err) {
