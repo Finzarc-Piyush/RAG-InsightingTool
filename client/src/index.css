@@ -402,15 +402,51 @@
       transform 180ms var(--ease-standard);
   }
   .react-grid-placeholder {
-    background: transparent !important;
+    background: hsl(var(--primary) / 0.04) !important;
     border: 2px dashed hsl(var(--primary) / 0.4) !important;
     border-radius: 0.75rem !important;
     opacity: 1 !important;
+    position: relative;
+    /* Soft halo — breathes so the drop target reads as the active zone. */
+    animation: brand-drop-target 1400ms var(--ease-standard) infinite;
+  }
+  /*
+   * "Drop here" hint: a small uppercase pill centered in the
+   * placeholder using a CSS pseudo-element so no React render tree is
+   * touched. Visible only when the placeholder is ≥120×80px (tiny
+   * slots would look cluttered).
+   */
+  .react-grid-placeholder::after {
+    content: "Drop here";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: hsl(var(--primary) / 0.12);
+    color: hsl(var(--primary));
+    font: 600 10px/1 var(--font-sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  @keyframes brand-drop-target {
+    0%, 100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.18);
+    }
+    50% {
+      box-shadow: 0 0 0 6px hsl(var(--primary) / 0);
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .react-grid-item.react-draggable-dragging [data-dashboard-tile] {
       transform: none;
       transition: none;
+    }
+    .react-grid-placeholder {
+      animation: none !important;
     }
   }
 
