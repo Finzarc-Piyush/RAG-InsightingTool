@@ -370,13 +370,24 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     let provisionalPivotDefaults: Message["pivotDefaults"] | undefined;
     let parsedQueryForLoad: Record<string, unknown> | null = null;
 
+    // P-025: cap intermediate preview row count so an aggressive pivot cannot
+    // stream a 100k-row SSE frame. Explicit cap keeps the envelope <~1 MB.
+    const INTERMEDIATE_PREVIEW_ROW_CAP = Number(
+      process.env.AGENT_INTERMEDIATE_PREVIEW_ROW_CAP || 1000
+    );
+
     const flushIntermediateSegment = (
-      preview: Record<string, unknown>[],
+      rawPreview: Record<string, unknown>[],
       insight?: string,
       segmentPivotDefaults?: Message["pivotDefaults"]
     ) => {
-      if (!preview.length) return;
+      if (!rawPreview.length) return;
       if (!checkConnection()) return;
+      const preview =
+        rawPreview.length > INTERMEDIATE_PREVIEW_ROW_CAP
+          ? rawPreview.slice(0, INTERMEDIATE_PREVIEW_ROW_CAP)
+          : rawPreview;
+      const previewTruncated = preview.length < rawPreview.length;
       const priorTail = pendingIntermediates[pendingIntermediates.length - 1];
       if (
         !shouldEmitIntermediatePivotFlush({
@@ -413,6 +424,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           assistantTimestamp,
           ...(pivotDefaultsForSegment ? { pivotDefaults: pivotDefaultsForSegment } : {}),
           ...(insight ? { insight } : {}),
+          ...(previewTruncated
+            ? {
+                previewTruncated: true,
+                previewTotalRows: rawPreview.length,
+              }
+            : {}),
         })
       ) {
         return;
