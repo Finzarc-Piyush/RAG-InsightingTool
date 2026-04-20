@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useMsal } from '@azure/msal-react';
 import { AccountInfo, AuthenticationResult } from '@azure/msal-browser';
 import { setUserEmail, clearUserEmail } from '@/utils/userStorage';
+import { logger } from '@/lib/logger';
 
 interface AuthContextType {
   user: AccountInfo | null;
@@ -34,7 +35,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // Debug: Log authentication state changes
   useEffect(() => {
-    console.log('🔐 Auth state changed:', {
+    logger.log('🔐 Auth state changed:', {
       accountsCount: accounts.length,
       user: user?.username,
       isAuthenticated,
@@ -50,7 +51,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Store user email in localStorage when user is authenticated
       if (userAccount.username) {
         setUserEmail(userAccount.username);
-        console.log('✅ User email stored in localStorage:', userAccount.username);
+        logger.log('✅ User email stored in localStorage:', userAccount.username);
       }
 
       setIsLoading(false);
@@ -66,7 +67,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   useEffect(() => {
     if (!isLoading) return;
     const timer = setTimeout(() => {
-      console.warn('⚠️ AuthContext isLoading failsafe tripped after 5s');
+      logger.warn('⚠️ AuthContext isLoading failsafe tripped after 5s');
       setIsLoading(false);
     }, 5000);
     return () => clearTimeout(timer);
@@ -81,7 +82,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         prompt: 'select_account',
       });
     } catch (error) {
-      console.error('Login failed:', error);
+      logger.error('Login failed:', error);
       setIsLoading(false);
     }
   };
@@ -95,7 +96,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       clearUserEmail();
       
       const currentOrigin = window.location.origin;
-      console.log('🔧 Logout redirecting to:', currentOrigin);
+      logger.log('🔧 Logout redirecting to:', currentOrigin);
       
       // Use logoutRedirect with explicit postLogoutRedirectUri
       await instance.logoutRedirect({
@@ -104,7 +105,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       });
       
     } catch (error) {
-      console.error('Logout failed:', error);
+      logger.error('Logout failed:', error);
       // If logout fails, still redirect to home page
       setTimeout(() => {
         window.location.href = window.location.origin;
