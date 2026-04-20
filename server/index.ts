@@ -1,7 +1,10 @@
 // Main server file - load server.env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
 import './loadEnv.js';
 
-import { assertAgenticRagConfiguration } from "./lib/agents/runtime/assertAgenticRag.js";
+import {
+  assertAgenticRagConfiguration,
+  assertDashboardAutogenConfiguration,
+} from "./lib/agents/runtime/assertAgenticRag.js";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { corsConfig } from "./middleware/index.js";
@@ -33,6 +36,7 @@ const authPreflightLimiter = rateLimit({
 // Factory function to create the Express app
 export function createApp() {
   assertAgenticRagConfiguration();
+  assertDashboardAutogenConfiguration();
   const app = express();
   if (process.env.TRUST_PROXY === "true" || process.env.VERCEL) {
     app.set("trust proxy", 1);
