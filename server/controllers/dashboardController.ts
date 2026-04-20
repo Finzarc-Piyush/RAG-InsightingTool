@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import {
   addChartToDashboardRequestSchema,
+  createDashboardFromSpecRequestSchema,
   createDashboardRequestSchema,
   createReportDashboardRequestSchema,
   exportDashboardRequestSchema,
@@ -29,6 +30,7 @@ import {
   removeTableFromDashboard,
   updateTableCaption,
   createReportDashboardFromAnalysis,
+  createDashboardFromSpec,
   patchDashboardSheet,
 } from "../models/dashboard.model.js";
 import {
@@ -375,6 +377,30 @@ export const createReportDashboardController = async (req: Request, res: Respons
       return;
     }
     res.status(400).json({ error: error?.message || "Failed to create report dashboard" });
+  }
+};
+
+/**
+ * Phase 2 — atomic commit of an agent-emitted DashboardSpec.
+ * The chat preview card calls this when the user clicks "Create".
+ */
+export const createDashboardFromSpecController = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const username = requireUsername(req);
+    const parsed = createDashboardFromSpecRequestSchema.parse(req.body);
+    const dashboard = await createDashboardFromSpec(username, parsed.spec);
+    res.status(201).json(dashboard);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({
+      error: error?.message || "Failed to create dashboard from spec",
+    });
   }
 };
 

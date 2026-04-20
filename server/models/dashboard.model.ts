@@ -9,6 +9,8 @@ import {
   DashboardTableSpec,
   type CreateReportDashboardRequest,
   type DashboardNarrativeBlock,
+  type DashboardSpec,
+  type DashboardSheet,
 } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 
@@ -1018,6 +1020,60 @@ export const createReportDashboardFromAnalysis = async (
         },
       ];
       dashboard.charts = [...charts];
+      return updateDashboard(dashboard);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("already exists") && attempt < 7) {
+        name = `${baseName} (${attempt + 2})`;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Could not allocate a unique dashboard name.");
+};
+
+/**
+ * Phase 2 — atomic persistence of an agent-emitted DashboardSpec.
+ *
+ * The spec already carries the full sheet layout (charts, narrative blocks,
+ * tables, optional gridLayout). This helper just reshapes it onto the
+ * Cosmos Dashboard document type, honours unique-name allocation (same
+ * retry pattern as createReportDashboardFromAnalysis), and writes once.
+ */
+export const createDashboardFromSpec = async (
+  username: string,
+  spec: DashboardSpec
+): Promise<Dashboard> => {
+  const baseName = spec.name.trim().slice(0, 200) || "Analysis dashboard";
+  let name = baseName;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const dashboard = await createDashboard(username, name, []);
+      // Materialise sheets in the user-specified order; each sheet carries
+      // whatever structured content the agent chose (charts / narrative /
+      // tables / gridLayout). Stable sheet ids survive round-trips.
+      const sheets: DashboardSheet[] = spec.sheets.map((s, idx) => ({
+        id: s.id || `sheet_${idx}`,
+        name: s.name,
+        charts: s.charts ? [...s.charts] : [],
+        ...(s.tables && s.tables.length > 0 ? { tables: [...s.tables] } : {}),
+        ...(s.narrativeBlocks && s.narrativeBlocks.length > 0
+          ? { narrativeBlocks: [...s.narrativeBlocks] }
+          : {}),
+        ...(s.gridLayout ? { gridLayout: s.gridLayout } : {}),
+        order: typeof s.order === "number" ? s.order : idx,
+      }));
+
+      // Top-level `charts` stays populated with the union of sheet charts
+      // so the existing list view / export paths continue to work.
+      const unionCharts: ChartSpec[] = [];
+      for (const s of sheets) {
+        if (Array.isArray(s.charts)) unionCharts.push(...s.charts);
+      }
+
+      dashboard.sheets = sheets;
+      dashboard.charts = unionCharts;
       return updateDashboard(dashboard);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

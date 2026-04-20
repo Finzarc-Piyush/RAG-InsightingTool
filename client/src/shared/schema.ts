@@ -682,6 +682,48 @@ export type CreateReportDashboardRequest = z.infer<
   typeof createReportDashboardRequestSchema
 >;
 
+/**
+ * Phase 2 — agent-emitted dashboard spec. See server/shared/schema.ts for
+ * the canonical JSDoc.
+ */
+export const dashboardTemplateSchema = z.enum([
+  "executive",
+  "deep_dive",
+  "monitoring",
+]);
+
+export type DashboardTemplate = z.infer<typeof dashboardTemplateSchema>;
+
+export const dashboardSheetSpecSchema = z.object({
+  id: z.string().max(120),
+  name: z.string().min(1).max(200),
+  narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+  charts: z.array(chartSpecSchema).max(24).optional(),
+  tables: z.array(dashboardTableSpecSchema).max(8).optional(),
+  gridLayout: dashboardGridLayoutsSchema.optional(),
+  order: z.number().optional(),
+});
+
+export type DashboardSheetSpec = z.infer<typeof dashboardSheetSpecSchema>;
+
+export const dashboardSpecSchema = z.object({
+  name: z.string().min(1).max(200),
+  template: dashboardTemplateSchema,
+  sheets: z.array(dashboardSheetSpecSchema).min(1).max(6),
+  defaultSheetId: z.string().max(120).optional(),
+  question: z.string().max(4000).optional(),
+});
+
+export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
+
+export const createDashboardFromSpecRequestSchema = z.object({
+  spec: dashboardSpecSchema,
+});
+
+export type CreateDashboardFromSpecRequest = z.infer<
+  typeof createDashboardFromSpecRequestSchema
+>;
+
 export const patchDashboardSheetRequestSchema = z
   .object({
     narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),

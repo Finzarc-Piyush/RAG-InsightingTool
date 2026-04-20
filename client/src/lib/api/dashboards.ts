@@ -6,6 +6,7 @@ import {
   CreateReportDashboardRequest,
   Dashboard,
   DashboardNarrativeBlock,
+  DashboardSpec,
   DashboardTableSpec,
 } from "@/shared/schema";
 import type { Layouts } from "react-grid-layout";
@@ -56,6 +57,9 @@ export const dashboardsApi = {
     }),
   createFromAnalysis: (body: CreateReportDashboardRequest) =>
     api.post<Dashboard>("/api/dashboards/from-analysis", body),
+  /** Phase 2 — commit an agent-emitted DashboardSpec from the chat preview card. */
+  createFromSpec: (spec: DashboardSpec) =>
+    api.post<Dashboard>("/api/dashboards/from-spec", { spec }),
   patchSheetContent: (
     dashboardId: string,
     sheetId: string,

@@ -4,6 +4,7 @@ import {
   addTableToDashboardController,
   addSheetToDashboardController,
   createDashboardController,
+  createDashboardFromSpecController,
   createReportDashboardController,
   deleteDashboardController,
   exportDashboardController,
@@ -24,6 +25,8 @@ const router = Router();
 // Dashboards
 router.post('/dashboards', createDashboardController);
 router.post('/dashboards/from-analysis', createReportDashboardController);
+// Phase 2 — atomic commit of an agent-emitted DashboardSpec preview.
+router.post('/dashboards/from-spec', createDashboardFromSpecController);
 router.get('/dashboards', listDashboardsController);
 router.get('/dashboards/:dashboardId', getDashboardController);
 router.patch('/dashboards/:dashboardId', renameDashboardController);
