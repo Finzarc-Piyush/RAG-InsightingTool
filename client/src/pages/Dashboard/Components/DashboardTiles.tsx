@@ -24,6 +24,7 @@ const ResponsiveGridLayout = WidthProvider(Responsive);
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { resolveLayoutsDropBySwap } from './dashboardGridLogic';
+import { useLayoutHistory } from '@/pages/Dashboard/hooks/useLayoutHistory';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -316,6 +317,21 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const layoutsAtDragStartRef = useRef<Layouts | null>(null);
   const draggedIdRef = useRef<string | null>(null);
 
+  // Dashboard UX polish · undo stack. Committed layouts are pushed after
+  // every user-driven change (drag, resize); Cmd/Ctrl+Z restores the
+  // previous snapshot via onUndo. Read-only dashboards (canEdit=false)
+  // disable the hook so the global keybinding is free.
+  const layoutHistory = useLayoutHistory({
+    dashboardId,
+    sheetId,
+    enabled: canEdit,
+    onUndo: (previous) => {
+      setLayouts(previous);
+      persistLayouts(dashboardId, previous, sheetId);
+      onPersistServerGrid?.(previous);
+    },
+  });
+
   const handleLayoutChange = useCallback(
     (_current: Layout[], allLayouts: Layouts) => {
       const sanitized = ensureLayoutsForTiles(allLayouts, visibleTiles, fallbackLayouts);
@@ -325,8 +341,18 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       if (isDraggingRef.current) return;
       persistLayouts(dashboardId, sanitized, sheetId);
       onPersistServerGrid?.(sanitized);
+      // Record non-drag layout commits (resize, tile add/remove) in the
+      // undo stack. Drag commits are recorded from handleDragStop below.
+      layoutHistory.push(sanitized);
     },
-    [dashboardId, sheetId, fallbackLayouts, visibleTiles, onPersistServerGrid]
+    [
+      dashboardId,
+      sheetId,
+      fallbackLayouts,
+      visibleTiles,
+      onPersistServerGrid,
+      layoutHistory,
+    ]
   );
 
   const handleDragStart = useCallback(
@@ -348,6 +374,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     if (!before || !draggedId) {
       persistLayouts(dashboardId, layouts, sheetId);
       onPersistServerGrid?.(layouts);
+      layoutHistory.push(layouts);
       return;
     }
     const resolved = resolveLayoutsDropBySwap(before, layouts, draggedId);
@@ -355,11 +382,13 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     setLayouts(sanitized);
     persistLayouts(dashboardId, sanitized, sheetId);
     onPersistServerGrid?.(sanitized);
+    layoutHistory.push(sanitized);
   }, [
     dashboardId,
     sheetId,
     layouts,
     fallbackLayouts,
+    layoutHistory,
     visibleTiles,
     onPersistServerGrid,
   ]);
