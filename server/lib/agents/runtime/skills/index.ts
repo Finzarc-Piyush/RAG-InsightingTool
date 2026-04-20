@@ -70,3 +70,8 @@ export function expandSkill(
 ): SkillInvocation | null {
   return skill.plan(brief, ctx);
 }
+
+// Auto-register Phase-1 skills on first import. Each module calls
+// `registerSkill(...)` at load time; the map is idempotent so re-imports
+// (HMR, tests) are safe.
+import "./varianceDecomposer.js";

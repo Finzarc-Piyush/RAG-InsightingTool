@@ -6,6 +6,7 @@ import type {
   AgentLoopResult,
   AgentMidTurnSessionPayload,
   AgentTrace,
+  PlanStep,
   ToolCallRecord,
   WorkingMemoryEntry,
 } from "./types.js";
@@ -680,6 +681,17 @@ export async function runAgentTurn(
     });
   }
 
+  // Phase-1: when DEEP_ANALYSIS_SKILLS_ENABLED=true and a registered skill
+  // matches the brief, the first iteration bypasses the planner and runs
+  // the skill's pre-sequenced steps. Subsequent iterations (after reflector
+  // replan) fall back to the normal planner so replans still work.
+  let skillBypassUsed = false;
+  const {
+    isDeepAnalysisSkillsEnabled: skillsFlagOn,
+    selectSkill,
+    expandSkill,
+  } = await import("./skills/index.js");
+
   try {
     let replans = 0;
     // P-020: promoted to AgentConfig so operators can tune via AGENT_MAX_REPLANS_PER_STEP.
@@ -698,16 +710,78 @@ export async function runAgentTurn(
         isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
           ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 4000)
           : undefined;
-      const planResult = await runPlannerWithOneRetry(
-        ctx,
-        registry,
-        turnId,
-        onLlmCall,
-        priorForPlanner,
-        workingMemoryBlock || undefined,
-        handoffDigest,
-        upfrontRagHitsBlock
-      );
+
+      // Skill dispatch (first iteration only, flag-gated). When the skill
+      // expands into zero steps or throws, fall through to the planner.
+      let planResult:
+        | { ok: true; rationale: string; steps: PlanStep[] }
+        | Awaited<ReturnType<typeof runPlannerWithOneRetry>>
+        | null = null;
+      if (
+        !skillBypassUsed &&
+        replans === 0 &&
+        skillsFlagOn() &&
+        ctx.analysisBrief
+      ) {
+        try {
+          const skill = selectSkill(ctx.analysisBrief, ctx);
+          if (skill) {
+            const invocation = expandSkill(skill, ctx.analysisBrief, ctx);
+            if (invocation && invocation.steps.length > 0) {
+              skillBypassUsed = true;
+              safeEmit("skill_execution", {
+                skill: skill.name,
+                invocationId: invocation.id,
+                label: invocation.label,
+                stepCount: invocation.steps.length,
+                rationale: invocation.rationale,
+              });
+              appendInterAgentMessage(
+                trace,
+                {
+                  from: "Coordinator",
+                  to: "Planner",
+                  intent: `skill_dispatch:${skill.name}`,
+                  artifacts: invocation.steps.map((s) => s.id),
+                  meta: {
+                    skill: skill.name,
+                    invocationId: invocation.id,
+                  },
+                },
+                safeEmit
+              );
+              planResult = {
+                ok: true,
+                rationale:
+                  invocation.rationale ||
+                  `Skill ${skill.name} expanded into ${invocation.steps.length} step(s).`,
+                steps: invocation.steps,
+              } as unknown as Awaited<ReturnType<typeof runPlannerWithOneRetry>>;
+            }
+          }
+        } catch (skillErr) {
+          agentLog("skill.dispatch.failed", {
+            turnId,
+            error:
+              skillErr instanceof Error
+                ? skillErr.message
+                : String(skillErr),
+          });
+        }
+      }
+
+      if (!planResult) {
+        planResult = await runPlannerWithOneRetry(
+          ctx,
+          registry,
+          turnId,
+          onLlmCall,
+          priorForPlanner,
+          workingMemoryBlock || undefined,
+          handoffDigest,
+          upfrontRagHitsBlock
+        );
+      }
       if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;
         trace.plannerRejectReason = planResult.reason;
