@@ -24,14 +24,15 @@ export async function runReflector(
   interAgentDigest?: string
 ) {
   const system = `You are the reflector for a data agent. Decide the next strategic action.
-Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify","note":string optional,"clarify_message":string optional}
+Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify","note":string optional,"clarify_message":string optional,"spawnedQuestions":[...] optional}
 - continue: more planned steps should run
 - finish: we have enough to answer the user
 - replan: the plan is wrong (rare)
 - clarify: need user input (set clarify_message)
 If observations contain lines including [SYSTEM_VALIDATION], treat them as high-priority signals: prefer **continue** (if more steps can fix it) or **replan** (adjust dateAggregationPeriod, groupBy, filters, use derive_dimension_bucket, or add_computed_columns then re-aggregate) over **finish** when the mismatch would produce a misleading answer.
 Use Last analytical metadata when present: if run_analytical_query failed (ok=false) or appliedAggregation is false with output row count nearly equal to input row count, prefer continue or replan over finish until an aggregated result or a clear row-level answer exists. If outputRows=0 but inputRows is large, prefer replan (retry with dimensionFilters / case_insensitive / fewer dimensions) over finish or clarify — observations often include distinct value samples to fix filters. If a chart would help comparisons and none was produced yet, prefer continue.
-If "Columns explored so far" is present and the question asks about a dimension NOT in that list, prefer **replan** with a step that explicitly groups by or filters on the missing dimension.`;
+If "Columns explored so far" is present and the question asks about a dimension NOT in that list, prefer **replan** with a step that explicitly groups by or filters on the missing dimension.
+W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE ANOMALOUS pattern (a spike, drop, or outlier with specific numbers that is NOT explained by the current plan), emit up to 3 sub-questions as spawnedQuestions:[{"question":string,"spawnReason":string,"priority":"high"|"medium"|"low","suggestedColumns":[]}]. ONLY spawn for anomalies where a follow-up investigation would substantially improve the root answer. Do NOT spawn for routine findings, expected patterns, or when the question is already fully answered.`;
 
   const appendix = appendixForReflectorPrompt(ctx);
   const digestBlock =

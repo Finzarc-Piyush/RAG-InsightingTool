@@ -19,10 +19,23 @@ export const plannerOutputSchema = z.object({
 
 export type PlannerOutput = z.infer<typeof plannerOutputSchema>;
 
+export const spawnedQuestionSchema = z.object({
+  question: z.string(),
+  spawnReason: z.string(),
+  priority: z.enum(["high", "medium", "low"]),
+  suggestedColumns: z.array(z.string()).default([]),
+});
+
 export const reflectorOutputSchema = z.object({
   action: z.enum(["continue", "replan", "finish", "clarify"]),
   note: z.string().optional(),
   clarify_message: z.string().optional(),
+  /**
+   * W8: sub-questions to spawn when an anomalous or surprising finding
+   * warrants deeper investigation. Only populated when action="finish"
+   * and a concrete unexpected pattern was found. Empty otherwise.
+   */
+  spawnedQuestions: z.array(spawnedQuestionSchema).default([]),
 });
 
 export type ReflectorOutput = z.infer<typeof reflectorOutputSchema>;

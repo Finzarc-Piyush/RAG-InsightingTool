@@ -8,6 +8,7 @@ import type {
   SessionAnalysisContext,
 } from "../../../shared/schema.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
+import type { SpawnedQuestion } from "./investigationTree.js";
 
 export const AGENT_TRACE_MAX_BYTES = 48_000;
 
@@ -309,4 +310,6 @@ export interface AgentLoopResult {
   dashboardDraft?: import("../../../shared/schema.js").DashboardSpec;
   /** Populated blackboard from this turn's investigation (hypotheses + findings). */
   blackboard?: AnalyticalBlackboard;
+  /** W8: sub-questions emitted by the reflector when anomalous findings warrant deeper investigation. */
+  spawnedQuestions?: SpawnedQuestion[];
 }

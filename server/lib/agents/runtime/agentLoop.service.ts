@@ -584,6 +584,8 @@ export async function runAgentTurn(
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   let followUpPrompts: string[] | undefined;
+  // W8: accumulated sub-questions from reflector spawning decisions.
+  const accumulatedSpawnedQuestions: import("./investigationTree.js").SpawnedQuestion[] = [];
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
@@ -1390,6 +1392,13 @@ export async function runAgentTurn(
             refDigest
           );
           trace.reflectorNotes.push(ref.action + (ref.note ? `: ${ref.note}` : ""));
+          // W8: collect sub-questions emitted by the reflector.
+          if (ref.spawnedQuestions?.length) {
+            for (const sq of ref.spawnedQuestions) {
+              accumulatedSpawnedQuestions.push({ ...sq, suggestedColumns: sq.suggestedColumns ?? [] });
+            }
+            safeEmit("sub_question_spawned", { questions: ref.spawnedQuestions.map((q) => q.question) });
+          }
           appendInterAgentMessage(
             trace,
             {
@@ -1778,6 +1787,8 @@ export async function runAgentTurn(
       ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
       ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
       ...(dashboardDraft ? { dashboardDraft } : {}),
+      ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),
+      ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
     };
