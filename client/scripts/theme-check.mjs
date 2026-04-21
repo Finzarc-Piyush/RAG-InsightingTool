@@ -9,16 +9,15 @@ const temporaryDebtFiles = new Set([
   'src/pages/Dashboard/Components/DashboardList.tsx',
   'src/pages/Home/Components/ChartRenderer.tsx',
   'src/pages/Home/Components/DataSummaryModal.tsx',
-  'src/pages/Home/Components/DatasetEnrichmentLoader.tsx',
   'src/pages/Home/Home.tsx',
-  // UX-0 · grandfathered for the new gradient / rgb rules; UX-7 rebuilds
-  // the affected surfaces (StartAnalysisView hero, filter-applied banner,
-  // pivot grid sticky header) against the `--gradient-*` tokens.
-  'src/components/FilterAppliedMessage.tsx',
-  'src/pages/Home/Components/pivot/PivotGrid.tsx',
   // UX-4 · sole pre-existing violation is an intentional #FFFFFF for
   // html-to-image PDF/PNG export (paper white, not a UI colour).
   'src/pages/Dashboard/Components/DashboardView.tsx',
+  // Wave F4 of the audit-resolution plan migrated the three dark-mode-broken
+  // surfaces (DatasetEnrichmentLoader, FilterAppliedMessage, pivot/PivotGrid)
+  // to semantic tokens and removed them from this allowlist. The allowlist
+  // shrinks over time — add a new entry only with a written rationale and a
+  // linked follow-up task.
 ]);
 
 const forbiddenPatterns = [

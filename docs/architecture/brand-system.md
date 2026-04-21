@@ -99,4 +99,12 @@ bug Wave F4 resolves.
 
 ## Recent changes
 
+- **Wave F4** — migrated three dark-mode-broken surfaces to semantic
+  tokens and shrank the `temporaryDebtFiles` allowlist accordingly:
+  `client/src/components/FilterAppliedMessage.tsx`,
+  `client/src/pages/Home/Components/DatasetEnrichmentLoader.tsx`,
+  `client/src/pages/Home/Components/pivot/PivotGrid.tsx`. The
+  allowlist now carries only files with a written rationale (paper-white
+  export for dashboards, plus a handful of yet-untouched legacy
+  surfaces).
 - Initial seed of this doc.
