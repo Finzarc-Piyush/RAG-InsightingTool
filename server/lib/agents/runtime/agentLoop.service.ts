@@ -16,12 +16,14 @@ import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { generateHypotheses } from "./hypothesisPlanner.js";
-import { createBlackboard } from "./analyticalBlackboard.js";
+import { createBlackboard, addFinding, addOpenQuestion, resolveHypothesis, formatForNarrator } from "./analyticalBlackboard.js";
+import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
+import { buildFinalEvidence } from "./verifierHelpers.js";
 import { VERIFIER_VERDICT } from "./schemas.js";
 import { agentLog } from "./agentLogger.js";
 import {
@@ -47,6 +49,12 @@ import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
 import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
 import { sanitizeIntermediatePreviewRows } from "../../agentIntermediatePreviewSanitize.js";
+
+function detectSignificance(summary: string): Finding["significance"] {
+  if (/spike|anomal|outlier|unusual|unexpected/i.test(summary)) return "anomalous";
+  if (/\b\d{1,3}\.?\d*%|\bhighest\b|\blowest\b|\btop\b|\bbottom\b|\bdeclin|\bsurg|\bjump|\bdrop/i.test(summary)) return "notable";
+  return "routine";
+}
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -468,18 +476,7 @@ function buildPreSynthesisMidTurnSummary(
   ].join("\n\n");
 }
 
-function appendEnvelopeInsightWhenNoCharts(
-  mergedCharts: { length: number },
-  mergedInsights: Insight[],
-  keyInsight?: string
-) {
-  if (mergedCharts.length > 0 || !keyInsight?.trim()) return;
-  const text = keyInsight.trim();
-  const duplicate = mergedInsights.some((i) => i.text.slice(0, 50) === text.slice(0, 50));
-  if (duplicate) return;
-  const nextId = mergedInsights.reduce((m, i) => Math.max(m, i.id), 0) + 1;
-  mergedInsights.push({ id: nextId, text });
-}
+export { appendEnvelopeInsight } from "./insightHelpers.js";
 
 const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
   llm_json_invalid:
@@ -1182,6 +1179,7 @@ export async function runAgentTurn(
                 evidenceSummary: evidence,
                 stepId: step.id,
                 turnId,
+                blackboard: ctx.blackboard,
               },
               onLlmCall
             );
@@ -1348,6 +1346,30 @@ export async function runAgentTurn(
         } else {
           observations.push(`[${step.tool}] ${finalCandidate}`);
         }
+        // O5: prevent unbounded growth across replan loops.
+        if (observations.length > 80) observations.splice(0, observations.length - 80);
+
+        // O1: wire successful tool results into the shared blackboard so narrator,
+        // convergence check, and context-agent Round 2 all have structured evidence.
+        if (stepResult.ok && ctx.blackboard) {
+          const finding = addFinding(ctx.blackboard, {
+            sourceRef: finalCallId,
+            label: `${step.tool}: ${String(step.args?.metrics ?? step.args?.groupBy ?? step.args?.columns ?? "").slice(0, 80)}`.trim(),
+            detail: (stepResult.summary ?? "").slice(0, 800),
+            significance: detectSignificance(stepResult.summary ?? ""),
+            relatedColumns: stepResult.suggestedColumns ?? [],
+          });
+          // O2: if the planner bound this step to a hypothesis, resolve it now.
+          if (step.hypothesisId) {
+            const sig = finding.significance;
+            resolveHypothesis(
+              ctx.blackboard,
+              step.hypothesisId,
+              sig === "anomalous" ? "confirmed" : "partial",
+              finding.id
+            );
+          }
+        }
 
         workingMemory.push({
           callId: finalCallId,
@@ -1396,6 +1418,11 @@ export async function runAgentTurn(
           if (ref.spawnedQuestions?.length) {
             for (const sq of ref.spawnedQuestions) {
               accumulatedSpawnedQuestions.push({ ...sq, suggestedColumns: sq.suggestedColumns ?? [] });
+              // O1: persist spawned questions to the blackboard so convergence
+              // and context-agent Round 2 can see open investigative threads.
+              if (ctx.blackboard) {
+                addOpenQuestion(ctx.blackboard, sq.question, sq.spawnReason ?? "", { priority: sq.priority ?? "medium" });
+              }
             }
             safeEmit("sub_question_spawned", { questions: ref.spawnedQuestions.map((q) => q.question) });
           }
@@ -1468,6 +1495,39 @@ export async function runAgentTurn(
               ok: true,
             });
             break;
+          } else if (ref.action === "investigate_gap" && ref.gapFill) {
+            // W11: inject a targeted tool step to fill an uncovered hypothesis.
+            const gf = ref.gapFill;
+            const gapStepId = `gap_${gf.hypothesisId}_${Date.now()}`;
+            // W12a: use explicit args when provided; otherwise derive
+            // question_override from hypothesis text so the tool targets the
+            // specific gap rather than repeating the original question.
+            const gapHypothesis = ctx.blackboard?.hypotheses.find(
+              (h) => h.id === gf.hypothesisId
+            );
+            const fallbackGapArgs: Record<string, unknown> =
+              gf.tool === "execute_query_plan"
+                ? {}
+                : { question_override: gapHypothesis?.text ?? gf.rationale };
+            const gapStep: PlanStep = {
+              id: gapStepId,
+              tool: gf.tool,
+              args: gf.args ?? fallbackGapArgs,
+              hypothesisId: gf.hypothesisId,
+            };
+            plan.steps.splice(si + 1, 0, gapStep);
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "Reflector",
+                to: "Coordinator",
+                intent: "investigate_gap",
+                evidenceRefs: [step.id],
+                meta: { hypothesisId: gf.hypothesisId, tool: gf.tool, gapStepId },
+              },
+              safeEmit
+            );
+            trace.reflectorNotes.push(`investigate_gap: hypothesis=${gf.hypothesisId} via ${gf.tool}`);
           }
         }
       }
@@ -1520,9 +1580,14 @@ export async function runAgentTurn(
           }
         }
 
-        // Fallback: use existing synthesizer when narrator was skipped or returned null
+        // Fallback: use existing synthesizer when narrator was skipped or returned null.
+        // O4: prepend blackboard narrative block so synthesizer sees structured findings.
         if (!answer) {
-          const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
+          const synthObservations =
+            ctx.blackboard && ctx.blackboard.findings.length > 0
+              ? [`[BLACKBOARD]\n${formatForNarrator(ctx.blackboard).slice(0, 3000)}`, ...observations]
+              : observations;
+          const env = await synthesizeFinalAnswerEnvelope(ctx, synthObservations, turnId, onLlmCall);
           answer = env.answer;
           agentSuggestionHints = env.suggestionHints;
           envKeyInsight = env.keyInsight;
@@ -1545,7 +1610,7 @@ export async function runAgentTurn(
           envelopeUnexplained = envUnexplained;
           safeEmit("unexplained", { note: envUnexplained });
         }
-        appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, envKeyInsight ?? undefined);
+        appendEnvelopeInsight(mergedInsights, envKeyInsight ?? undefined);
         appendInterAgentMessage(
           trace,
           {
@@ -1701,7 +1766,12 @@ export async function runAgentTurn(
 
     let finalRound = 0;
     const chartTitles = mergedCharts.map((c) => `${c.title}:${c.x}/${c.y}`).join("; ");
-    const finalEvidence = `${observations.join("\n")}\nCharts: ${chartTitles}`.slice(0, 10000);
+    const finalEvidence = buildFinalEvidence(
+      observations,
+      chartTitles,
+      ctx.blackboard,
+      envelopeMagnitudes
+    );
 
     while (finalRound < config.maxVerifierRoundsFinal) {
       const fv = await runVerifier(
@@ -1711,6 +1781,7 @@ export async function runAgentTurn(
           evidenceSummary: finalEvidence,
           stepId: "final",
           turnId,
+          blackboard: ctx.blackboard,
         },
         onLlmCall
       );
