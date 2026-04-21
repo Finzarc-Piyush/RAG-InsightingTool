@@ -87,6 +87,8 @@ interface DataPreviewTableProps {
   };
   /** Shown above the analysis table when the agent emits an intermediate summary (e.g. tool row count). */
   analysisIntermediateInsight?: string;
+  /** Insight from the final answer envelope — shown in the Key insight box for non-intermediate pivot responses. */
+  pivotInsight?: string;
 }
 
 function inferNumericColumns(
@@ -167,6 +169,7 @@ export function DataPreviewTable({
   onChartAdded,
   pivotDefaults,
   analysisIntermediateInsight,
+  pivotInsight,
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
   const { toast } = useToast();
@@ -187,10 +190,10 @@ export function DataPreviewTable({
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
   const [pivotExpanded, setPivotExpanded] = useState(false);
   /** Chart subview inside expanded pivot (keeps `analysisView === 'pivot'` for server pivot queries). */
-  const [expandedWorkspaceTab, setExpandedWorkspaceTab] = useState<'pivot' | 'chart'>('pivot');
+  const [expandedWorkspaceTab, setExpandedWorkspaceTab] = useState<'pivot' | 'chart'>('chart');
   const pivotExpandButtonRef = useRef<HTMLButtonElement>(null);
   const pivotWasExpandedRef = useRef(false);
-  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('pivot');
+  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('chart');
   const [chartType, setChartType] = useState<PivotChartKind>('bar');
   const [chartTitle, setChartTitle] = useState('Pivot chart');
   const [chartXCol, setChartXCol] = useState('');
@@ -205,6 +208,8 @@ export function DataPreviewTable({
   const [chartPreviewLoading, setChartPreviewLoading] = useState(false);
   const [chartPreviewError, setChartPreviewError] = useState<string | null>(null);
   const chartPreviewRequestSeqRef = useRef(0);
+  /** Tracks the config hash at the time of the last successful chart-preview API call. */
+  const lastChartConfigRef = useRef<string>('');
   /** When true, do not overwrite chart axis fields from auto-recommendation. */
   const chartMappingManualRef = useRef(false);
   const [pivotTopN, setPivotTopN] = useState<number | null>(null);
@@ -545,7 +550,6 @@ export function DataPreviewTable({
     if (variant !== "analysis") return null;
     if (!sessionId) return null;
     if (!canPivot) return null;
-    if (analysisView === "flat") return null;
     if (!normalizedPivotConfig) return null;
 
     const rowFields = normalizedPivotConfig.rows;
@@ -585,7 +589,6 @@ export function DataPreviewTable({
     variant,
     sessionId,
     canPivot,
-    analysisView,
     normalizedPivotConfig,
     filterSelections,
   ]);
@@ -639,7 +642,7 @@ export function DataPreviewTable({
     setFilterSelections({});
     filterDistinctSnapshotRef.current = {};
     setCollapsedPivotGroups(new Set());
-    setAnalysisView('pivot');
+    setAnalysisView('chart');
     setServerPivotModel(null);
     setServerPivotMeta(null);
     setServerPivotError(null);
@@ -657,7 +660,8 @@ export function DataPreviewTable({
     setChartPreview(null);
     setChartPreviewError(null);
     setChartPreviewLoading(false);
-    setExpandedWorkspaceTab('pivot');
+    setExpandedWorkspaceTab('chart');
+    lastChartConfigRef.current = '';
   }, [variant, pivotDataSignature]);
 
   // Backend pivot query (Excel-like interaction loop)
@@ -752,7 +756,7 @@ export function DataPreviewTable({
       (pivotExpanded && expandedWorkspaceTab === 'chart'));
 
   useEffect(() => {
-    if (!pivotExpanded) setExpandedWorkspaceTab('pivot');
+    if (!pivotExpanded) setExpandedWorkspaceTab('chart');
   }, [pivotExpanded]);
 
   const chartLayoutForPreview = useMemo(() => {
@@ -798,6 +802,21 @@ export function DataPreviewTable({
       setChartType('bar');
     }
   }, [pivotQueryRequest, chartType]);
+
+  const chartConfigHash = useMemo(
+    () =>
+      JSON.stringify({
+        chartType,
+        chartXCol,
+        chartYCol,
+        chartZCol,
+        chartSeriesCol,
+        chartBarLayout,
+        chartTitle,
+        pivotQueryRequest,
+      }),
+    [chartType, chartXCol, chartYCol, chartZCol, chartSeriesCol, chartBarLayout, chartTitle, pivotQueryRequest]
+  );
 
   const pivotChartValueFieldOptions = useMemo(
     () => normalizedPivotConfig.values.map((v) => v.field).filter(Boolean) as string[],
@@ -1347,9 +1366,14 @@ export function DataPreviewTable({
     if (chartConfigValidationError) {
       setChartPreviewError(chartConfigValidationError);
       setChartPreview(null);
+      lastChartConfigRef.current = '';
       return;
     }
+    // Skip the API call when the chart is already rendered for this exact config
+    // (e.g. user toggled back to chart view without changing anything).
+    if (chartPreview !== null && chartConfigHash === lastChartConfigRef.current) return;
     const t = window.setTimeout(() => {
+      lastChartConfigRef.current = chartConfigHash;
       void runChartPreview();
     }, 280);
     return () => clearTimeout(t);
@@ -1357,15 +1381,8 @@ export function DataPreviewTable({
     chartUiActive,
     sessionId,
     chartConfigValidationError,
-    chartType,
-    chartXCol,
-    chartYCol,
-    chartZCol,
-    chartSeriesCol,
-    chartBarLayout,
-    chartTitle,
-    pivotFilterPayloadForChart,
-    pivotQueryRequest,
+    chartConfigHash,
+    chartPreview,
     runChartPreview,
   ]);
 
@@ -1432,12 +1449,12 @@ export function DataPreviewTable({
     canPivot &&
     normalizedPivotConfig.values.length > 0;
 
-  const trimmedAnalysisInsight = analysisIntermediateInsight?.trim() ?? "";
+  const trimmedAnalysisInsight = (analysisIntermediateInsight ?? pivotInsight)?.trim() ?? "";
   const toolPreviewRowCount = data.length;
   const pivotResultRowCount = serverPivotMeta?.rowCount;
   const showPivotVersusToolRowClarification =
     variant === "analysis" &&
-    Boolean(trimmedAnalysisInsight) &&
+    Boolean(analysisIntermediateInsight?.trim()) &&
     analysisView === "pivot" &&
     Boolean(sessionId) &&
     !serverPivotLoading &&
@@ -1705,30 +1722,21 @@ export function DataPreviewTable({
               <div className="flex rounded-lg border border-border/80 bg-muted/30 p-0.5">
                 <Button
                   type="button"
+                  variant={analysisView === 'chart' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="text-xs h-8 px-3"
+                  onClick={() => setAnalysisView('chart')}
+                >
+                  Chart
+                </Button>
+                <Button
+                  type="button"
                   variant={analysisView === 'pivot' ? 'secondary' : 'ghost'}
                   size="sm"
                   className="text-xs h-8 px-3"
                   onClick={() => setAnalysisView('pivot')}
                 >
                   Pivot
-                </Button>
-                <Button
-                  type="button"
-                  variant={analysisView === 'flat' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className="text-xs h-8 px-3"
-                  onClick={() => setAnalysisView('flat')}
-                >
-                  Flat table
-                </Button>
-                <Button
-                  type="button"
-                  variant={analysisView === 'chart' ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className="text-xs h-8 px-3"
-                  onClick={() => setAnalysisView('chart')}
-                >
-                  Generate chart
                 </Button>
               </div>
             )}

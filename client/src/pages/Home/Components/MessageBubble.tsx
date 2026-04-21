@@ -534,6 +534,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               analysisIntermediateInsight={
                 message.isIntermediate ? message.intermediateInsight : undefined
               }
+              pivotInsight={
+                !message.isIntermediate ? message.insights?.[0]?.text : undefined
+              }
             />
           </div>
         )}
@@ -843,7 +846,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </>
         )}
 
-        {!isUser && message.insights && message.insights.length > 0 && (
+        {!isUser && !hasAggPreview && message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />
           </div>
