@@ -155,6 +155,16 @@ Minimum critical path to working end-to-end: 17 waves.
 
 ## Recent changes
 
+- **W2** — `server/lib/wideFormat/metricVocabulary.ts` + test.
+  `matchMetric(token)` returns `{ canonical, confidence, raw }` for
+  the Nielsen metric catalog: Value / Volume Sales+Share, Weighted
+  / Numeric Distribution, ACV, TDP, Penetration, Loyalty,
+  Frequency, Average Price, Shopper Spend. Synonyms (e.g. "Val
+  Share", "Wtd Dist", "MS Val", "Rupee Sales", "All Commodity
+  Volume") map onto the canonical name so the melt output stays
+  consistent. 75-case test covers positive + negative ("Brand A",
+  "Region", period tokens must not match). Appended to server test
+  list.
 - **W1** — `server/lib/wideFormat/periodVocabulary.ts` + test.
   `matchPeriod(token)` returns `{ kind, iso, confidence, raw }` for
   months (Jan 2024, 2024-01, bare Jan), quarters (Q1 2024, 1Q24,
