@@ -155,6 +155,15 @@ Minimum critical path to working end-to-end: 17 waves.
 
 ## Recent changes
 
+- **W1** — `server/lib/wideFormat/periodVocabulary.ts` + test.
+  `matchPeriod(token)` returns `{ kind, iso, confidence, raw }` for
+  months (Jan 2024, 2024-01, bare Jan), quarters (Q1 2024, 1Q24,
+  bare Q1), years (2024, FY24), weeks (W12, Week 12, 2024-W12, WE
+  2024-03-17), and Nielsen specials (MAT Dec-24, YTD 2024,
+  L4W/L12W/L52W, P4W/P13W/P52W). Ambiguous cases (bare month, bare
+  quarter, plain year) match with `confidence < 0.7` so the
+  classifier can demote them. 41-case test appended to server test
+  list.
 - **W0** — subsystem doc seeded. Purpose, architectural decision,
   key-files roadmap, data contract preview, runtime flow, wave
   index, pitfalls. Zero code change.
