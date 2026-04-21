@@ -13,6 +13,7 @@ import {
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
+import { runDeepInvestigation, isDeepInvestigationEnabled } from './agents/runtime/investigationOrchestrator.js';
 import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 
 let agenticStrictDeprecationLogged = false;
@@ -470,7 +471,11 @@ export async function answerQuestion(
         onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
       });
-      const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
+      // W9: deep investigation path (DEEP_INVESTIGATION_ENABLED=true); falls back to single-turn.
+      const loopResult = isDeepInvestigationEnabled()
+        ? (await runDeepInvestigation(execCtx, agentOptions?.onAgentEvent)) ??
+          (await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent))
+        : await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
       if (loopResult?.answer?.trim()) {
         console.log('✅ Agentic loop returned answer');
         return {
