@@ -15,7 +15,7 @@ import {
 } from "../../models/chat.model.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
-import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
+import { sendSSE, setSSEHeaders, startSseKeepalive } from "../../utils/sse.helper.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
 import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
@@ -271,6 +271,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   // Set SSE headers
   setSSEHeaders(res);
 
+  // W10: keepalive comment every 15s to prevent proxy timeouts on long investigations.
+  const stopKeepalive = startSseKeepalive(res);
+
   // Track if client disconnected
   let clientDisconnected = false;
 
@@ -286,7 +289,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   // Set up connection close handlers
   res.on('close', () => {
     clientDisconnected = true;
-    console.log('🚫 Client disconnected from chat stream');
+    // res.writableEnded is true when the server called res.end() — that's an expected
+    // close, not a client abort. Only log when the client disconnected before we finished.
+    if (!res.writableEnded) {
+      console.log('🚫 Client disconnected from chat stream early');
+    }
   });
 
   res.on('error', (error: any) => {
@@ -1049,6 +1056,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if (!res.writableEnded && !res.destroyed) {
     res.end();
     }
+  } finally {
+    // W10: always clear the keepalive timer when the stream ends (success or error).
+    stopKeepalive();
   }
 }
 

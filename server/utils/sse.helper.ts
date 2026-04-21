@@ -65,3 +65,29 @@ export function setSSEHeaders(res: Response): void {
   res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for nginx
 }
 
+/**
+ * W10: Start a periodic SSE keepalive comment (": keepalive") to prevent
+ * proxies (Vercel, nginx) from closing long-running connections. Returns a
+ * stop function; call it when the stream ends.
+ *
+ * The interval is 15s — well below the 30–60s proxy idle timeout on most platforms.
+ */
+export function startSseKeepalive(res: Response, intervalMs = 15_000): () => void {
+  const timer = setInterval(() => {
+    if (isSseClosed(res)) {
+      clearInterval(timer);
+      return;
+    }
+    try {
+      res.write(': keepalive\n\n');
+      if (typeof (res as any).flush === 'function') {
+        (res as any).flush();
+      }
+    } catch {
+      clearInterval(timer);
+    }
+  }, intervalMs);
+
+  return () => clearInterval(timer);
+}
+
