@@ -105,6 +105,14 @@ export interface ChatDocument {
   enrichmentStatus?: "pending" | "in_progress" | "complete" | "failed";
   /** User message received while enrichment incomplete; processed after upload job finishes enrichment. */
   pendingUserMessage?: { content: string; timestamp: number };
+  /**
+   * Phase 2.E · Most recent dashboard the agent (or user) created from
+   * this session. Written by POST /api/dashboards/from-spec when a
+   * sessionId is supplied, read by the `patch_dashboard` agent tool so
+   * "add a margin chart to the dashboard we just built" resolves without
+   * the user re-stating the id.
+   */
+  lastCreatedDashboardId?: string;
 }
 
 /** Lightweight row for session list APIs (avoids loading messages/charts/rawData from Cosmos). */
@@ -979,6 +987,29 @@ export const setPendingUserMessageForSession = async (
   doc.pendingUserMessage = { content, timestamp: Date.now() };
   doc.lastUpdatedAt = Date.now();
   return updateChatDocument(doc);
+};
+
+/**
+ * Phase 2.E · Remember the dashboard the user just created so follow-up
+ * chat turns ("add a margin chart to the dashboard we just built") can
+ * resolve the target without the user re-stating the id. No-op + silent
+ * return when the session / chat doc isn't found, so the create-dashboard
+ * endpoint never fails just because the session lookup blinked.
+ */
+export const setLastCreatedDashboardForSession = async (
+  sessionId: string,
+  requesterEmail: string,
+  dashboardId: string
+): Promise<void> => {
+  try {
+    const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+    if (!doc) return;
+    doc.lastCreatedDashboardId = dashboardId;
+    doc.lastUpdatedAt = Date.now();
+    await updateChatDocument(doc);
+  } catch {
+    // Best-effort; memory is advisory — the dashboard already exists.
+  }
 };
 
 export const clearPendingUserMessage = async (

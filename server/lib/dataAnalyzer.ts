@@ -430,6 +430,9 @@ export async function answerQuestion(
   followUpPrompts?: string[];
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
   analysisBrief?: import('../shared/schema.js').AnalysisBrief;
+  magnitudes?: import('./agents/runtime/types.js').AnswerMagnitude[];
+  unexplained?: string;
+  dashboardDraft?: import('../shared/schema.js').DashboardSpec;
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -479,6 +482,9 @@ export async function answerQuestion(
           agentTrace: loopResult.agentTrace,
           agentSuggestionHints: loopResult.agentSuggestionHints,
           ...(loopResult.followUpPrompts?.length ? { followUpPrompts: loopResult.followUpPrompts } : {}),
+          ...(loopResult.magnitudes?.length ? { magnitudes: loopResult.magnitudes } : {}),
+          ...(loopResult.unexplained ? { unexplained: loopResult.unexplained } : {}),
+          ...(loopResult.dashboardDraft ? { dashboardDraft: loopResult.dashboardDraft } : {}),
           lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
           ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
         };

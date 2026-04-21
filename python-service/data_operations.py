@@ -1,7 +1,7 @@
 """Data operations using pandas"""
 import pandas as pd
 import numpy as np
-from typing import Any, Dict, List, Optional, Literal, Union
+from typing import Any, Dict, List, Optional, Literal, Tuple, Union
 from datetime import datetime
 import re
 
@@ -13,6 +13,30 @@ _TEMPORAL_FACET_HEADER_RE = re.compile(
 def _is_temporal_facet_column_key(key: str) -> bool:
     return key.startswith("__tf_") or bool(_TEMPORAL_FACET_HEADER_RE.match(key))
 from asteval import Interpreter
+
+
+def coerce_numeric_with_warning(
+    series: pd.Series, column: str
+) -> Tuple[pd.Series, Optional[Dict[str, Any]]]:
+    """
+    pd.to_numeric(errors='coerce') wrapper that reports how many values became
+    NaN as a result. Callers surface the warning in the response so users know
+    rows were silently dropped (addresses P-006).
+    """
+    before_nulls = series.isna().sum()
+    coerced = pd.to_numeric(series, errors="coerce")
+    after_nulls = coerced.isna().sum()
+    dropped = int(after_nulls - before_nulls)
+    if dropped > 0:
+        return coerced, {
+            "column": column,
+            "droppedCount": dropped,
+            "message": (
+                f"{dropped} value(s) in '{column}' could not be converted to numeric "
+                "and will be treated as null."
+            ),
+        }
+    return coerced, None
 
 
 def round_numeric_values_to_2_decimals(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1379,12 +1403,16 @@ def aggregate_data(
     # Build aggregation dictionary for pandas groupby
     agg_dict = {}
     rename_dict = {}  # For renaming aggregated columns
-    
-    # Convert numeric columns that are stored as objects to numeric type
+    coerce_warnings: List[Dict[str, Any]] = []
+
+    # Convert numeric columns that are stored as objects to numeric type.
+    # Surface how many values were dropped so the caller can warn the user
+    # instead of silently losing rows (P-006).
     for col in numeric_cols:
         if df[col].dtype == 'object':
-            # Convert to numeric
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col], warning = coerce_numeric_with_warning(df[col], col)
+            if warning is not None:
+                coerce_warnings.append(warning)
     
     # Process columns based on semantic type and user intent
     def get_default_func_for_column(col: str, col_type: str) -> str:
@@ -1616,7 +1644,8 @@ def aggregate_data(
     return {
         "data": result_data,
         "rows_before": int(rows_before),
-        "rows_after": int(rows_after)
+        "rows_after": int(rows_after),
+        "warnings": coerce_warnings,
     }
 
 

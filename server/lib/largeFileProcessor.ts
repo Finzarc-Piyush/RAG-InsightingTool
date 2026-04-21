@@ -103,10 +103,11 @@ export async function getDataForAnalysis(
   requiredColumns?: string[],
   limit?: number
 ): Promise<Record<string, any>[]> {
+  // Wrap initialize + query inside a single try so a failure during init also
+  // runs close(); close() must be idempotent / tolerant of partial init (P-024).
   const storage = new ColumnarStorageService({ sessionId });
-  await storage.initialize();
-
   try {
+    await storage.initialize();
     if (requiredColumns && requiredColumns.length > 0) {
       // Query only required columns - no limit by default (load all rows)
       const columnsStr = requiredColumns.map(col => `"${col}"`).join(', ');
@@ -123,7 +124,14 @@ export async function getDataForAnalysis(
       }
     }
   } finally {
-    await storage.close();
+    try {
+      await storage.close();
+    } catch (closeErr) {
+      console.warn(
+        `⚠️ Failed to close columnar storage for session ${sessionId}:`,
+        closeErr instanceof Error ? closeErr.message : closeErr
+      );
+    }
   }
 }
 

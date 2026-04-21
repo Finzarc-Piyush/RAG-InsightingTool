@@ -79,6 +79,8 @@ export interface AgentConfig {
   maxToolCalls: number;
   maxVerifierRoundsPerStep: number;
   maxVerifierRoundsFinal: number;
+  /** Max planner replans per step (was hardcoded as `replans <= 2`). */
+  maxReplansPerStep: number;
   maxTotalLlmCallsPerTurn: number;
   sampleRowsCap: number;
   observationMaxChars: number;
@@ -95,6 +97,8 @@ export function loadAgentConfigFromEnv(): AgentConfig {
     maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 20),
     maxVerifierRoundsPerStep: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_STEP, 2),
     maxVerifierRoundsFinal: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_FINAL, 2),
+    // Default of 2 preserves prior hardcoded behaviour (P-020).
+    maxReplansPerStep: num(process.env.AGENT_MAX_REPLANS_PER_STEP, 2),
     maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 40),
     sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
     observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 8000),
@@ -262,6 +266,21 @@ export interface VerifierResult {
   user_visible_note?: string;
 }
 
+/**
+ * Phase-1 rich-envelope extensions — populated by the synthesiser when the
+ * user's question has a questionShape (driver_discovery, variance_diagnostic,
+ * trend, comparison, exploration). All optional so existing consumers stay
+ * valid.
+ */
+export interface AnswerMagnitude {
+  /** What the magnitude measures, e.g. "East tech decline Mar→Apr". */
+  label: string;
+  /** Human-readable value — allows "-23.4%" or "$1.2M" without a numeric type. */
+  value: string;
+  /** Optional confidence bucket rendered in the UI as a chip. */
+  confidence?: "low" | "medium" | "high";
+}
+
 export interface AgentLoopResult {
   answer: string;
   charts?: ChartSpec[];
@@ -277,4 +296,10 @@ export interface AgentLoopResult {
   lastAnalyticalRowsForEnrichment?: Record<string, unknown>[];
   /** Structured brief from maybeRunAnalysisBrief when diagnostic/report intent ran. */
   analysisBrief?: AnalysisBrief;
+  /** Phase-1 magnitudes backing the main claim (2–4 entries). */
+  magnitudes?: AnswerMagnitude[];
+  /** Phase-1 concise note on what the tools couldn't determine and why. */
+  unexplained?: string;
+  /** Phase-2 agent-emitted dashboard draft; rendered as a chat preview card. */
+  dashboardDraft?: import("../../../shared/schema.js").DashboardSpec;
 }

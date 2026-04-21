@@ -9,6 +9,9 @@ import {
   DashboardTableSpec,
   type CreateReportDashboardRequest,
   type DashboardNarrativeBlock,
+  type DashboardSpec,
+  type DashboardSheet,
+  type DashboardPatch,
 } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 
@@ -1029,6 +1032,148 @@ export const createReportDashboardFromAnalysis = async (
     }
   }
   throw new Error("Could not allocate a unique dashboard name.");
+};
+
+/**
+ * Phase 2 — atomic persistence of an agent-emitted DashboardSpec.
+ *
+ * The spec already carries the full sheet layout (charts, narrative blocks,
+ * tables, optional gridLayout). This helper just reshapes it onto the
+ * Cosmos Dashboard document type, honours unique-name allocation (same
+ * retry pattern as createReportDashboardFromAnalysis), and writes once.
+ */
+export const createDashboardFromSpec = async (
+  username: string,
+  spec: DashboardSpec
+): Promise<Dashboard> => {
+  const baseName = spec.name.trim().slice(0, 200) || "Analysis dashboard";
+  let name = baseName;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const dashboard = await createDashboard(username, name, []);
+      // Materialise sheets in the user-specified order; each sheet carries
+      // whatever structured content the agent chose (charts / narrative /
+      // tables / gridLayout). Stable sheet ids survive round-trips.
+      const sheets: DashboardSheet[] = spec.sheets.map((s, idx) => ({
+        id: s.id || `sheet_${idx}`,
+        name: s.name,
+        charts: s.charts ? [...s.charts] : [],
+        ...(s.tables && s.tables.length > 0 ? { tables: [...s.tables] } : {}),
+        ...(s.narrativeBlocks && s.narrativeBlocks.length > 0
+          ? { narrativeBlocks: [...s.narrativeBlocks] }
+          : {}),
+        ...(s.gridLayout ? { gridLayout: s.gridLayout } : {}),
+        order: typeof s.order === "number" ? s.order : idx,
+      }));
+
+      // Top-level `charts` stays populated with the union of sheet charts
+      // so the existing list view / export paths continue to work.
+      const unionCharts: ChartSpec[] = [];
+      for (const s of sheets) {
+        if (Array.isArray(s.charts)) unionCharts.push(...s.charts);
+      }
+
+      dashboard.sheets = sheets;
+      dashboard.charts = unionCharts;
+      return updateDashboard(dashboard);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("already exists") && attempt < 7) {
+        name = `${baseName} (${attempt + 2})`;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("Could not allocate a unique dashboard name.");
+};
+
+/**
+ * Phase 2.E — apply a DashboardPatch to an existing dashboard atomically.
+ *
+ * Order of operations matters:
+ *   1. removeCharts   — index-based per sheet; higher indices drop first
+ *                        so lower indices stay valid while we splice.
+ *   2. addCharts      — append to the named sheet (or first chart sheet).
+ *   3. renameSheet    — rename + no-op when the id doesn't match.
+ *
+ * The top-level `dashboard.charts` array is kept in sync with the union
+ * of sheet charts so existing list views + exports keep working.
+ */
+export const patchDashboard = async (
+  id: string,
+  username: string,
+  patch: DashboardPatch
+): Promise<Dashboard> => {
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const normalizedUsername = username.toLowerCase();
+  const dashboardOwner = dashboard.username?.toLowerCase();
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+    if (!collaborator || collaborator.permission !== "edit") {
+      throw new Error("You do not have permission to edit this dashboard");
+    }
+  }
+
+  const sheets = Array.isArray(dashboard.sheets) ? [...dashboard.sheets] : [];
+
+  // 1. Removals — process highest-index first, per sheet, so lower indices
+  // stay valid as we splice. Unknown sheet ids / out-of-range indices are
+  // ignored rather than throwing; patches should be idempotent-ish.
+  if (patch.removeCharts && patch.removeCharts.length > 0) {
+    const bySheet = new Map<string, number[]>();
+    for (const r of patch.removeCharts) {
+      const arr = bySheet.get(r.sheetId) ?? [];
+      arr.push(r.chartIndex);
+      bySheet.set(r.sheetId, arr);
+    }
+    for (const [sheetId, indices] of bySheet) {
+      const sheet = sheets.find((s) => s.id === sheetId);
+      if (!sheet || !Array.isArray(sheet.charts)) continue;
+      const ordered = Array.from(new Set(indices)).sort((a, b) => b - a);
+      for (const idx of ordered) {
+        if (idx >= 0 && idx < sheet.charts.length) {
+          sheet.charts.splice(idx, 1);
+        }
+      }
+    }
+  }
+
+  // 2. Additions — default target is the first sheet that already has a
+  // `charts` array (the canonical "evidence" sheet in Phase-2 specs);
+  // fall back to sheet 0.
+  if (patch.addCharts && patch.addCharts.length > 0) {
+    const defaultSheet =
+      sheets.find((s) => Array.isArray(s.charts)) ?? sheets[0];
+    if (!defaultSheet) {
+      throw new Error("Dashboard has no sheets to add charts to");
+    }
+    for (const entry of patch.addCharts) {
+      const target = entry.sheetId
+        ? sheets.find((s) => s.id === entry.sheetId) ?? defaultSheet
+        : defaultSheet;
+      if (!Array.isArray(target.charts)) target.charts = [];
+      target.charts.push(entry.chart);
+    }
+  }
+
+  // 3. Rename — simple label change; idempotent when no match.
+  if (patch.renameSheet) {
+    const sheet = sheets.find((s) => s.id === patch.renameSheet!.sheetId);
+    if (sheet) {
+      sheet.name = patch.renameSheet.name.trim().slice(0, 200);
+    }
+  }
+
+  dashboard.sheets = sheets;
+  dashboard.charts = sheets.flatMap((s) =>
+    Array.isArray(s.charts) ? s.charts : []
+  );
+  return updateDashboard(dashboard);
 };
 
 export const patchDashboardSheet = async (

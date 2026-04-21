@@ -23,6 +23,9 @@ const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { resolveLayoutsDropBySwap } from './dashboardGridLogic';
+import { useLayoutHistory } from '@/pages/Dashboard/hooks/useLayoutHistory';
+import { cn } from '@/lib/utils';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -243,6 +246,21 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const fallbackLayouts = useMemo(() => generateLayouts(visibleTiles), [visibleTiles]);
   const [layouts, setLayouts] = useState<Layouts>(() => fallbackLayouts);
 
+  // Dashboard UX polish · aria-live announcements for keyboard + screen-reader
+  // users. Paired with an sr-only region rendered below the grid.
+  const [layoutAnnouncement, setLayoutAnnouncement] = useState<string>("");
+  const tileNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const tile of visibleTiles) {
+      const friendly =
+        (tile as { title?: string }).title ||
+        tile.id ||
+        tile.kind;
+      map.set(tile.id, friendly);
+    }
+    return map;
+  }, [visibleTiles]);
+
   const layoutMigrateAttemptedRef = useRef(new Set<string>());
 
   const serverGridIsEmpty = useMemo(() => {
@@ -305,14 +323,243 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     setLayouts((prev) => ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts));
   }, [visibleTiles, fallbackLayouts]);
 
+  // Drag-drop swap semantics (fixes cascade-push UX):
+  //  - Snapshot layouts when a drag begins.
+  //  - While dragging, update visuals but don't persist (drag emits many layout changes).
+  //  - On drag stop, resolve the final position via resolveLayoutsDropBySwap
+  //    which swaps overlapped tiles, cancels cascade pushes on non-dragged
+  //    tiles, and reverts on ambiguous drops.
+  const isDraggingRef = useRef(false);
+  const layoutsAtDragStartRef = useRef<Layouts | null>(null);
+  const draggedIdRef = useRef<string | null>(null);
+
+  // Dashboard UX polish · keyboard move-mode.
+  // Tab to focus a tile; Space to grab; Arrow keys to nudge one grid cell;
+  // Space again to commit (reuses the same swap resolver as mouse drops);
+  // Escape to cancel and restore the pre-grab layout.
+  const [grabbedTileId, setGrabbedTileId] = useState<string | null>(null);
+  const layoutsAtGrabRef = useRef<Layouts | null>(null);
+
+  // Dashboard UX polish · undo stack. Committed layouts are pushed after
+  // every user-driven change (drag, resize); Cmd/Ctrl+Z restores the
+  // previous snapshot via onUndo. Read-only dashboards (canEdit=false)
+  // disable the hook so the global keybinding is free.
+  const layoutHistory = useLayoutHistory({
+    dashboardId,
+    sheetId,
+    enabled: canEdit,
+    onUndo: (previous) => {
+      setLayouts(previous);
+      persistLayouts(dashboardId, previous, sheetId);
+      onPersistServerGrid?.(previous);
+      setLayoutAnnouncement("Reverted the last layout change.");
+    },
+  });
+
   const handleLayoutChange = useCallback(
     (_current: Layout[], allLayouts: Layouts) => {
       const sanitized = ensureLayoutsForTiles(allLayouts, visibleTiles, fallbackLayouts);
       setLayouts(sanitized);
+      // Defer persistence during an active drag; handleDragStop will apply
+      // the resolved layout once the gesture completes.
+      if (isDraggingRef.current) return;
       persistLayouts(dashboardId, sanitized, sheetId);
       onPersistServerGrid?.(sanitized);
+      // Record non-drag layout commits (resize, tile add/remove) in the
+      // undo stack. Drag commits are recorded from handleDragStop below.
+      layoutHistory.push(sanitized);
     },
-    [dashboardId, sheetId, fallbackLayouts, visibleTiles, onPersistServerGrid]
+    [
+      dashboardId,
+      sheetId,
+      fallbackLayouts,
+      visibleTiles,
+      onPersistServerGrid,
+      layoutHistory,
+    ]
+  );
+
+  const handleDragStart = useCallback(
+    (_layout: Layout[], _oldItem: Layout, newItem: Layout) => {
+      isDraggingRef.current = true;
+      draggedIdRef.current = newItem.i;
+      // Structured clone to avoid mutation from subsequent onLayoutChange calls.
+      layoutsAtDragStartRef.current = JSON.parse(JSON.stringify(layouts));
+    },
+    [layouts]
+  );
+
+  const handleDragStop = useCallback(() => {
+    const before = layoutsAtDragStartRef.current;
+    const draggedId = draggedIdRef.current;
+    isDraggingRef.current = false;
+    layoutsAtDragStartRef.current = null;
+    draggedIdRef.current = null;
+    if (!before || !draggedId) {
+      persistLayouts(dashboardId, layouts, sheetId);
+      onPersistServerGrid?.(layouts);
+      layoutHistory.push(layouts);
+      return;
+    }
+    const resolved = resolveLayoutsDropBySwap(before, layouts, draggedId);
+    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
+    setLayouts(sanitized);
+    persistLayouts(dashboardId, sanitized, sheetId);
+    onPersistServerGrid?.(sanitized);
+    layoutHistory.push(sanitized);
+    // Dashboard UX polish · announce the outcome so screen-reader users
+    // get the same feedback as the visual lift.
+    const draggedName = tileNameById.get(draggedId) ?? "Tile";
+    const breakpointKey =
+      (Object.keys(sanitized)[0] as keyof Layouts | undefined) ?? "lg";
+    const resolvedArr = sanitized[breakpointKey] ?? [];
+    const beforeArr = before[breakpointKey] ?? [];
+    const beforeDragged = beforeArr.find((l) => l.i === draggedId);
+    const swappedWith =
+      beforeDragged &&
+      resolvedArr.find(
+        (l) =>
+          l.i !== draggedId &&
+          l.x === beforeDragged.x &&
+          l.y === beforeDragged.y
+      );
+    if (swappedWith) {
+      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
+      setLayoutAnnouncement(`${draggedName} swapped with ${otherName}.`);
+    } else {
+      setLayoutAnnouncement(`${draggedName} moved.`);
+    }
+  }, [
+    dashboardId,
+    sheetId,
+    layouts,
+    fallbackLayouts,
+    layoutHistory,
+    visibleTiles,
+    onPersistServerGrid,
+    tileNameById,
+  ]);
+
+  // Dashboard UX polish · keyboard move handlers.
+  // Nudges operate on the `lg` breakpoint (12 cols). Narrower viewports
+  // are mouse-friendly by default; the tile is still Tab-focusable there
+  // so screen readers hear the tile's aria-label.
+  const LG_COLS = 12;
+
+  const nudgeGrabbedTile = useCallback(
+    (dx: number, dy: number) => {
+      if (!grabbedTileId) return;
+      setLayouts((prev) => {
+        const lgArr = prev.lg ?? [];
+        const target = lgArr.find((l) => l.i === grabbedTileId);
+        if (!target) return prev;
+        const maxX = Math.max(0, LG_COLS - target.w);
+        const nextX = Math.min(maxX, Math.max(0, target.x + dx));
+        const nextY = Math.max(0, target.y + dy);
+        if (nextX === target.x && nextY === target.y) return prev;
+        const nextLg = lgArr.map((l) =>
+          l.i === grabbedTileId ? { ...l, x: nextX, y: nextY } : l
+        );
+        return { ...prev, lg: nextLg };
+      });
+    },
+    [grabbedTileId]
+  );
+
+  const beginGrab = useCallback(
+    (tileId: string) => {
+      layoutsAtGrabRef.current = structuredClone(layouts);
+      setGrabbedTileId(tileId);
+      const name = tileNameById.get(tileId) ?? "Tile";
+      setLayoutAnnouncement(
+        `${name} grabbed. Use arrow keys to move, Space to drop, Escape to cancel.`
+      );
+    },
+    [layouts, tileNameById]
+  );
+
+  const commitGrab = useCallback(() => {
+    const before = layoutsAtGrabRef.current;
+    const id = grabbedTileId;
+    if (!before || !id) {
+      setGrabbedTileId(null);
+      return;
+    }
+    const resolved = resolveLayoutsDropBySwap(before, layouts, id);
+    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
+    setLayouts(sanitized);
+    persistLayouts(dashboardId, sanitized, sheetId);
+    onPersistServerGrid?.(sanitized);
+    layoutHistory.push(sanitized);
+    const name = tileNameById.get(id) ?? "Tile";
+    const lg = sanitized.lg ?? [];
+    const beforeDragged = (before.lg ?? []).find((l) => l.i === id);
+    const swappedWith =
+      beforeDragged &&
+      lg.find(
+        (l) => l.i !== id && l.x === beforeDragged.x && l.y === beforeDragged.y
+      );
+    if (swappedWith) {
+      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
+      setLayoutAnnouncement(`${name} placed. Swapped with ${otherName}.`);
+    } else {
+      setLayoutAnnouncement(`${name} placed.`);
+    }
+    setGrabbedTileId(null);
+    layoutsAtGrabRef.current = null;
+  }, [
+    grabbedTileId,
+    layouts,
+    visibleTiles,
+    fallbackLayouts,
+    dashboardId,
+    sheetId,
+    onPersistServerGrid,
+    layoutHistory,
+    tileNameById,
+  ]);
+
+  const cancelGrab = useCallback(() => {
+    const before = layoutsAtGrabRef.current;
+    if (before) {
+      setLayouts(before);
+    }
+    const name = grabbedTileId ? tileNameById.get(grabbedTileId) ?? "Tile" : "Tile";
+    setLayoutAnnouncement(`${name} move cancelled.`);
+    setGrabbedTileId(null);
+    layoutsAtGrabRef.current = null;
+  }, [grabbedTileId, tileNameById]);
+
+  const handleTileKeyDown = useCallback(
+    (tileId: string) =>
+      (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!canEdit) return;
+        // Space toggles grab-mode / commits a grab.
+        if (e.key === " " || e.key === "Spacebar") {
+          e.preventDefault();
+          if (grabbedTileId === tileId) commitGrab();
+          else if (grabbedTileId === null) beginGrab(tileId);
+          return;
+        }
+        if (grabbedTileId !== tileId) return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelGrab();
+          return;
+        }
+        const arrowMap: Record<string, [number, number]> = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        };
+        const delta = arrowMap[e.key];
+        if (delta) {
+          e.preventDefault();
+          nudgeGrabbedTile(delta[0], delta[1]);
+        }
+      },
+    [canEdit, grabbedTileId, beginGrab, commitGrab, cancelGrab, nudgeGrabbedTile]
   );
 
   const handleHideTile = useCallback(
@@ -446,7 +693,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     switch (tile.kind) {
       case 'chart':
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-background shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="chart">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-background shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="chart">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
             <div className="flex items-center justify-between w-full">
                 <CardTitle className="text-base text-foreground">
@@ -489,7 +736,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       case 'insight': {
         const chartIndex = tile.relatedChartId ? parseInt(tile.relatedChartId.replace('chart-', ''), 10) : -1;
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="insight">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="insight">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
               <div className="flex items-center justify-between w-full">
                 {tile.title && (
@@ -533,7 +780,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       case 'narrative':
         return (
           <Card
-            className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group"
+            className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group"
             data-dashboard-tile="narrative"
           >
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
@@ -570,7 +817,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         );
       case 'table': {
         return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-sm transition-shadow hover:shadow-md dashboard-tile-grab-area group" data-dashboard-tile="table">
+          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="table">
             <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
               <div className="flex items-center justify-between w-full">
                 <CardTitle className="text-sm font-semibold text-primary flex-1 min-w-0">
@@ -652,17 +899,54 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         isDraggable={canEdit}
         resizeHandles={canEdit ? ['s', 'e', 'n', 'w', 'se', 'sw', 'ne', 'nw'] : []}
         onLayoutChange={handleLayoutChange}
+        onDragStart={handleDragStart}
+        onDragStop={handleDragStop}
         draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
         compactType={null}
         preventCollision={false}
         draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input"
       >
-        {visibleTiles.map((tile) => (
-          <div key={tile.id} className="h-full w-full">
-            {renderTileContent(tile)}
-          </div>
-        ))}
+        {visibleTiles.map((tile) => {
+          const isGrabbed = grabbedTileId === tile.id;
+          return (
+            <div
+              key={tile.id}
+              className={cn(
+                "h-full w-full rounded-brand-lg outline-none",
+                // Focus ring whenever the wrapper itself has focus.
+                "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                // Grab-mode ring — stronger and always visible while
+                // arrows are in play.
+                isGrabbed
+                  ? "ring-2 ring-primary/80 ring-offset-2 ring-offset-background shadow-elev-3"
+                  : undefined
+              )}
+              role="group"
+              aria-roledescription="dashboard tile"
+              aria-label={tileNameById.get(tile.id) ?? tile.id}
+              aria-grabbed={isGrabbed || undefined}
+              tabIndex={canEdit ? 0 : -1}
+              onKeyDown={handleTileKeyDown(tile.id)}
+            >
+              {renderTileContent(tile)}
+            </div>
+          );
+        })}
       </ResponsiveGridLayout>
+
+      {/*
+        Dashboard UX polish · screen-reader announcer.
+        sr-only + aria-live="polite" so the surface stays invisible to
+        sighted users but AT announces tile moves, swaps, and undos.
+      */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {layoutAnnouncement}
+      </div>
 
       {hasHiddenTiles && (
         <div className="flex justify-end">

@@ -32,7 +32,21 @@ export async function maybeRunAnalysisBrief(
 Output JSON only matching the schema. Use ONLY column names that appear in the provided Columns line.
 If the question is ambiguous, put questions in clarifyingQuestions (do not invent column names).
 epistemicNotes must remind analysts to avoid claiming causation from observational data alone (attribution vs causation).
-filters: use op "in" or "not_in" with values[] when the user names literal segments (regions, categories).`;
+filters: use op "in" or "not_in" with values[] when the user names literal segments (regions, categories).
+
+questionShape classification (pick at most one; leave unset if unclear):
+- "driver_discovery" — user asks what drives / impacts / affects / correlates with an outcome. Example: "what impacts my sales the most?"
+- "variance_diagnostic" — user asks WHY a metric moved in a segment between two periods. Example: "why did east-region tech sales fall Mar-22 to Apr-25?"
+- "trend" — user asks how a metric evolved over time.
+- "comparison" — user contrasts two explicit segments / periods without asking "why".
+- "exploration" — open prompt like "show me something interesting / surprising".
+- "descriptive" — lookup/summary question ("what's my top region by revenue?").
+
+candidateDriverDimensions: only set for driver_discovery or variance_diagnostic. Propose up to 6 column names from the Columns line that might plausibly drive the outcomeMetricColumn (ordinarily categorical dimensions, region/category/segment-like columns). Must not overlap segmentationDimensions.
+
+requestsDashboard (Phase-2): set to true when the user explicitly asks to build / create / turn-into a dashboard, a report, or a monitoring view. Trigger phrases include "make me a dashboard", "turn this into a dashboard", "give me a dashboard for X", "build a report for X", "monitoring view". Do NOT set true for plain analytical questions even if they're broad.
+
+comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly contrasts two named time windows (e.g. "Mar-22 vs Apr-25", "Q3 vs Q4", "last year vs this year"). Each side is an array of analysisBriefFilterSchema that selects the period — typically a single filter on a date-like column whose values are the literal period labels the user named. Include short aLabel / bLabel (e.g. "Mar-22", "Apr-25") so downstream narrative reads naturally. Leave unset when the user gives a single window or no window at all.`;
 
   const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}`;
 

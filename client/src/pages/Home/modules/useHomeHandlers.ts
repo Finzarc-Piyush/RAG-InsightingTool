@@ -62,12 +62,12 @@ export const useHomeHandlers = ({
         }
       }
       
-      // Use setTimeout to ensure state update and ref sync before mutation
+      // P-047: capture the target timestamp synchronously and hand it to
+      // the mutation directly — no setTimeout race where the state update
+      // could land in a different order than the mutation call.
       const targetTimestamp = updated[messageIndex]?.timestamp;
-      setTimeout(() => {
-        chatMutation.mutate({ message: newContent, targetTimestamp });
-      }, 0);
-      
+      chatMutation.mutate({ message: newContent, targetTimestamp });
+
       return updated;
     });
   };

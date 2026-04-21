@@ -10,6 +10,8 @@ export {
 export {
   createDashboardController,
   createReportDashboardController,
+  createDashboardFromSpecController,
+  patchDashboardController,
   listDashboardsController,
   getDashboardController,
   deleteDashboardController,

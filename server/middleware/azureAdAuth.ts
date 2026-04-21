@@ -5,6 +5,14 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
+import { timingSafeEqual } from "crypto";
+
+function timingSafeStringEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const abuf = Buffer.from(a);
+  const bbuf = Buffer.from(b);
+  return timingSafeEqual(abuf, bbuf);
+}
 
 function getTokenFromRequest(req: Request): string | null {
   const auth = req.headers.authorization;
@@ -101,6 +109,28 @@ export async function requireAzureAdAuth(
   }
 
   if (process.env.DISABLE_AUTH === "true") {
+    // P-009: belt-and-braces guards against accidental production bypass.
+    // (1) refuse to honour the flag in production
+    if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+      console.error(
+        "DISABLE_AUTH=true is not honoured in production / Vercel; rejecting request"
+      );
+      res.status(500).json({ error: "Server authentication is not configured" });
+      return;
+    }
+    // (2) require a secondary dev-only sentinel header/env match
+    const expectedSentinel = process.env.AUTH_BYPASS_DEV_TOKEN?.trim();
+    if (expectedSentinel) {
+      const provided = req.headers["x-auth-bypass-dev-token"];
+      const providedStr = typeof provided === "string" ? provided.trim() : "";
+      const match =
+        providedStr.length === expectedSentinel.length &&
+        timingSafeStringEqual(providedStr, expectedSentinel);
+      if (!match) {
+        res.status(401).json({ error: "DISABLE_AUTH requires X-Auth-Bypass-Dev-Token" });
+        return;
+      }
+    }
     const raw = req.headers["x-user-email"];
     const email =
       typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : "";
@@ -108,6 +138,10 @@ export async function requireAzureAdAuth(
       res.status(401).json({ error: "Missing X-User-Email (DISABLE_AUTH=true)" });
       return;
     }
+    // (3) audit-log every bypassed request for forensic review
+    console.warn(
+      `⚠️ DISABLE_AUTH bypass: ${req.method} ${req.path} email=${email} ip=${req.ip}`
+    );
     req.auth = { email, claims: {} };
     next();
     return;

@@ -62,6 +62,7 @@ import {
 import { metadataService } from "../../../metadataService.js";
 import { registerBreakdownRankingTool } from "./breakdownRankingTool.js";
 import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
+import { registerPatchDashboardTool } from "./patchDashboardTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -1163,4 +1164,5 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
   registerBreakdownRankingTool(registry);
   registerTwoSegmentCompareTool(registry);
+  registerPatchDashboardTool(registry);
 }

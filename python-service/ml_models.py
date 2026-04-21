@@ -2740,9 +2740,10 @@ def train_lstm(
     except ImportError:
         raise ValueError("TensorFlow is not installed. Install it with: pip install tensorflow")
     
+    model = None
     try:
         X, y = _prepare_data(data, target_variable, features)
-        
+
         # Create sequences for LSTM
         def create_sequences(data, seq_length):
             X_seq, y_seq = [], []
@@ -2750,23 +2751,23 @@ def train_lstm(
                 X_seq.append(data[i:i+seq_length])
                 y_seq.append(data[i+seq_length])
             return np.array(X_seq), np.array(y_seq)
-        
+
         # Prepare data
         data_array = X.values
         X_seq, y_seq = create_sequences(data_array, sequence_length)
-        
+
         if len(X_seq) < 10:
             raise ValueError(f"Need at least {sequence_length + 10} samples for LSTM")
-        
+
         # Split data
         split_idx = int(len(X_seq) * (1 - test_size))
         X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
         y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
-        
+
         # Reshape for LSTM (samples, timesteps, features)
         X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], X_train.shape[2]))
         X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], X_test.shape[2]))
-        
+
         # Build model
         model = Sequential([
             LSTM(lstm_units, activation='relu', input_shape=(sequence_length, len(features))),
@@ -2774,7 +2775,7 @@ def train_lstm(
             Dense(1)
         ])
         model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
-        
+
         # Train model
         history = model.fit(
             X_train, y_train,
@@ -2783,15 +2784,16 @@ def train_lstm(
             validation_data=(X_test, y_test),
             verbose=0
         )
-        
+
         # Predictions
         y_train_pred = model.predict(X_train, verbose=0).flatten()
         y_test_pred = model.predict(X_test, verbose=0).flatten()
-        
+        predictions = model.predict(X_seq, verbose=0).flatten().tolist()
+
         # Metrics
         train_metrics = _calculate_regression_metrics(y_train, y_train_pred)
         test_metrics = _calculate_regression_metrics(y_test, y_test_pred)
-        
+
         return {
             "model_type": "lstm",
             "task_type": "time_series",
@@ -2805,7 +2807,7 @@ def train_lstm(
                 "test": test_metrics,
                 "cross_validation": {}
             },
-            "predictions": model.predict(X_seq, verbose=0).flatten().tolist(),
+            "predictions": predictions,
             "feature_importance": None,
             "n_samples": len(X_seq),
             "n_train": len(X_train),
@@ -2813,6 +2815,14 @@ def train_lstm(
         }
     except Exception as e:
         raise ValueError(f"Error training LSTM: {str(e)}")
+    finally:
+        # P-034: release the TF graph / variables once metrics have been extracted.
+        try:
+            if model is not None:
+                del model
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
 
 
 def train_gru(
@@ -2834,42 +2844,37 @@ def train_gru(
     except ImportError:
         raise ValueError("TensorFlow is not installed. Install it with: pip install tensorflow")
     
+    model = None
     try:
         X, y = _prepare_data(data, target_variable, features)
-        
-        # Create sequences for GRU
+
         def create_sequences(data, seq_length):
             X_seq, y_seq = [], []
             for i in range(len(data) - seq_length):
                 X_seq.append(data[i:i+seq_length])
                 y_seq.append(data[i+seq_length])
             return np.array(X_seq), np.array(y_seq)
-        
-        # Prepare data
+
         data_array = X.values
         X_seq, y_seq = create_sequences(data_array, sequence_length)
-        
+
         if len(X_seq) < 10:
             raise ValueError(f"Need at least {sequence_length + 10} samples for GRU")
-        
-        # Split data
+
         split_idx = int(len(X_seq) * (1 - test_size))
         X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
         y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
-        
-        # Reshape for GRU
+
         X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], X_train.shape[2]))
         X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], X_test.shape[2]))
-        
-        # Build model
+
         model = Sequential([
             GRU(gru_units, activation='relu', input_shape=(sequence_length, len(features))),
             Dropout(0.2),
             Dense(1)
         ])
         model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
-        
-        # Train model
+
         history = model.fit(
             X_train, y_train,
             epochs=epochs,
@@ -2877,15 +2882,14 @@ def train_gru(
             validation_data=(X_test, y_test),
             verbose=0
         )
-        
-        # Predictions
+
         y_train_pred = model.predict(X_train, verbose=0).flatten()
         y_test_pred = model.predict(X_test, verbose=0).flatten()
-        
-        # Metrics
+        predictions = model.predict(X_seq, verbose=0).flatten().tolist()
+
         train_metrics = _calculate_regression_metrics(y_train, y_train_pred)
         test_metrics = _calculate_regression_metrics(y_test, y_test_pred)
-        
+
         return {
             "model_type": "gru",
             "task_type": "time_series",
@@ -2899,7 +2903,7 @@ def train_gru(
                 "test": test_metrics,
                 "cross_validation": {}
             },
-            "predictions": model.predict(X_seq, verbose=0).flatten().tolist(),
+            "predictions": predictions,
             "feature_importance": None,
             "n_samples": len(X_seq),
             "n_train": len(X_train),
@@ -2907,6 +2911,14 @@ def train_gru(
         }
     except Exception as e:
         raise ValueError(f"Error training GRU: {str(e)}")
+    finally:
+        # P-034: release TF resources (graph + variables + session).
+        try:
+            if model is not None:
+                del model
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
 
 
 # ============================================================================

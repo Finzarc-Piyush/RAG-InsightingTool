@@ -2,9 +2,11 @@ import { Request, Response } from "express";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import {
   addChartToDashboardRequestSchema,
+  createDashboardFromSpecRequestSchema,
   createDashboardRequestSchema,
   createReportDashboardRequestSchema,
   exportDashboardRequestSchema,
+  patchDashboardRequestSchema,
   patchDashboardSheetRequestSchema,
   removeChartFromDashboardRequestSchema,
 } from "../shared/schema.js";
@@ -29,6 +31,8 @@ import {
   removeTableFromDashboard,
   updateTableCaption,
   createReportDashboardFromAnalysis,
+  createDashboardFromSpec,
+  patchDashboard,
   patchDashboardSheet,
 } from "../models/dashboard.model.js";
 import {
@@ -375,6 +379,64 @@ export const createReportDashboardController = async (req: Request, res: Respons
       return;
     }
     res.status(400).json({ error: error?.message || "Failed to create report dashboard" });
+  }
+};
+
+/**
+ * Phase 2 — atomic commit of an agent-emitted DashboardSpec.
+ * The chat preview card calls this when the user clicks "Create".
+ */
+export const createDashboardFromSpecController = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const username = requireUsername(req);
+    const parsed = createDashboardFromSpecRequestSchema.parse(req.body);
+    const dashboard = await createDashboardFromSpec(username, parsed.spec);
+    // Phase 2.E · Best-effort remember the dashboard so future agent
+    // turns can call patch_dashboard without the user restating the id.
+    if (parsed.sessionId) {
+      const { setLastCreatedDashboardForSession } = await import(
+        "../models/chat.model.js"
+      );
+      void setLastCreatedDashboardForSession(
+        parsed.sessionId,
+        username,
+        dashboard.id
+      );
+    }
+    res.status(201).json(dashboard);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({
+      error: error?.message || "Failed to create dashboard from spec",
+    });
+  }
+};
+
+/**
+ * Phase 2.E — atomic follow-up edits to an existing dashboard.
+ * Chat "add a margin chart to the dashboard we just built" calls this.
+ */
+export const patchDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = patchDashboardRequestSchema.parse(req.body);
+    const dashboard = await patchDashboard(dashboardId, username, parsed.patch);
+    res.json(dashboard);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({
+      error: error?.message || "Failed to patch dashboard",
+    });
   }
 };
 

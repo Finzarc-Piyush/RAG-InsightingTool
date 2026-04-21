@@ -86,7 +86,28 @@
   --font-sans: "Plus Jakarta Sans", Inter, system-ui, -apple-system, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: JetBrains Mono, Courier New, monospace;
+  /* UX-0 · Brand typography roles (loaded in client/index.html) */
+  --font-display: "Source Serif 4", ui-serif, Georgia, serif;
+  --font-metric: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
   --radius: .75rem;
+  /* UX-0 · Signature accent (single-use per view: magnitudes pill, sheet-tab underline, hero hairline) */
+  --accent-gold: 43 45% 55%;
+  --success: 152 55% 38%;
+  --warning: 32 92% 46%;
+  /* UX-0 · Brand gradients (replace hardcoded from-slate-* / from-blue-*) */
+  --gradient-canvas: linear-gradient(180deg, hsl(var(--background)) 0%, hsl(40 20% 96%) 100%);
+  --gradient-ink-soft: radial-gradient(120% 80% at 0% 0%, hsl(var(--primary) / 0.06), transparent 60%);
+  --gradient-elevate: linear-gradient(180deg, hsl(0 0% 100% / 1) 0%, hsl(40 18% 99% / 0.6) 100%);
+  /* UX-0 · Motion tokens — consumed via Tailwind theme extensions */
+  --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --duration-instant: 100ms;
+  --duration-quick: 160ms;
+  --duration-base: 220ms;
+  --duration-slow: 320ms;
+  --duration-decisive: 420ms;
   --shadow-2xs: 0px 1px 2px 0px hsl(240 6% 10% / 0.04);
   --shadow-xs: 0px 1px 3px 0px hsl(240 6% 10% / 0.06);
   --shadow-sm: 0px 2px 4px -1px hsl(240 6% 10% / 0.05), 0px 1px 2px -1px hsl(240 6% 10% / 0.04);
@@ -199,6 +220,14 @@
 
   --input: 240 4% 22%;
   --ring: 221 83% 58%;
+  /* UX-0 · Dark-mode parity for semantic + gradient tokens. Motion tokens
+     are mode-agnostic and already inherited from :root. */
+  --accent-gold: 43 55% 62%;
+  --success: 152 50% 52%;
+  --warning: 32 88% 58%;
+  --gradient-canvas: linear-gradient(180deg, hsl(var(--background)) 0%, hsl(240 6% 5%) 100%);
+  --gradient-ink-soft: radial-gradient(120% 80% at 0% 0%, hsl(var(--primary) / 0.12), transparent 60%);
+  --gradient-elevate: linear-gradient(180deg, hsl(240 5% 12% / 1) 0%, hsl(240 5% 10% / 0.6) 100%);
   /* Brighter series for dark surfaces */
   --chart-1: 217 85% 62%;
   --chart-2: 172 55% 54%;
@@ -263,6 +292,14 @@
     html {
       scroll-behavior: auto;
     }
+    /* UX-0 · Neutralize brand keyframes for users who opt out of motion. */
+    .animate-brand-settle,
+    .animate-brand-shimmer,
+    .animate-brand-breathe,
+    .animate-brand-underline,
+    .animate-brand-ring {
+      animation: none !important;
+    }
   }
 
   body {
@@ -314,7 +351,7 @@
   }
 
   .token-table-frame {
-    @apply rounded-md border border-border bg-card;
+    @apply rounded-brand-lg border border-border bg-card;
   }
 
   .token-table-head {
@@ -322,16 +359,95 @@
   }
 
   .token-table-row {
-    @apply border-b border-border transition-colors;
+    @apply border-b border-border transition-colors duration-quick ease-standard;
   }
 
   .token-table-row:hover {
     background-color: var(--surface-hover);
   }
 
+  /*
+   * UX-5 · Numeric cell class. Apply to any <td> whose column is
+   * numeric. Right-aligns, enables tabular numerics (digit widths
+   * aligned row-to-row), and uses the metric font family so a column
+   * of numbers reads as one figure at a glance.
+   */
+  .token-table-cell-numeric {
+    @apply font-metric text-right;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
   /* Hide ugly search cancel button in Chrome until we can style it properly */
   input[type="search"]::-webkit-search-cancel-button {
     @apply hidden;
+  }
+
+  /*
+   * UX-4 · Dashboard drag cues.
+   *
+   * react-grid-layout adds `.react-grid-item.react-draggable-dragging`
+   * while a tile is being dragged and paints a `.react-grid-placeholder`
+   * at the target slot. Two rules:
+   *   - dragging tile elevates to shadow-md + 4px lift;
+   *   - placeholder becomes a 2px dashed primary outline at 40% alpha.
+   */
+  .react-grid-item.react-draggable-dragging {
+    z-index: 30;
+  }
+  .react-grid-item.react-draggable-dragging [data-dashboard-tile] {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-4px);
+    transition: box-shadow 180ms var(--ease-standard),
+      transform 180ms var(--ease-standard);
+  }
+  .react-grid-placeholder {
+    background: hsl(var(--primary) / 0.04) !important;
+    border: 2px dashed hsl(var(--primary) / 0.4) !important;
+    border-radius: 0.75rem !important;
+    opacity: 1 !important;
+    position: relative;
+    /* Soft halo — breathes so the drop target reads as the active zone. */
+    animation: brand-drop-target 1400ms var(--ease-standard) infinite;
+  }
+  /*
+   * "Drop here" hint: a small uppercase pill centered in the
+   * placeholder using a CSS pseudo-element so no React render tree is
+   * touched. Visible only when the placeholder is ≥120×80px (tiny
+   * slots would look cluttered).
+   */
+  .react-grid-placeholder::after {
+    content: "Drop here";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 4px 10px;
+    border-radius: 9999px;
+    background: hsl(var(--primary) / 0.12);
+    color: hsl(var(--primary));
+    font: 600 10px/1 var(--font-sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  @keyframes brand-drop-target {
+    0%, 100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.18);
+    }
+    50% {
+      box-shadow: 0 0 0 6px hsl(var(--primary) / 0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .react-grid-item.react-draggable-dragging [data-dashboard-tile] {
+      transform: none;
+      transition: none;
+    }
+    .react-grid-placeholder {
+      animation: none !important;
+    }
   }
 
   /* Placeholder styling for contentEditable div */

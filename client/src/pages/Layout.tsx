@@ -142,24 +142,46 @@ export function Layout({
   }) => {
     const { item, isActive } = props;
     const Icon = item.icon;
+    // UX-6 · Nav item treatment.
+    // Active = bg-primary/10 + left-accent bar (2px pill) that glides in
+    // via animate-brand-underline. No more full-fill on the entire row
+    // (the sledgehammer effect); the active item reads as "you're here"
+    // without drowning the sidebar in primary.
     const button = (
       <Button
         id={`nav-${item.id}`}
         onClick={() => onNavigate(item.id)}
-        variant={isActive ? 'default' : 'ghost'}
+        variant="ghost"
         aria-current={isActive ? 'page' : undefined}
         aria-label={!sidebarOpen ? item.label : undefined}
         className={cn(
-          'min-h-11 w-full justify-start gap-3 rounded-xl px-3 py-2.5 transition-colors duration-200 motion-reduce:transition-none',
+          'relative min-h-11 w-full justify-start gap-3 rounded-brand-md px-3 py-2.5 transition-colors duration-quick ease-standard motion-reduce:transition-none',
           isActive
-            ? 'bg-primary text-primary-foreground shadow-sm'
+            ? 'bg-primary/10 text-foreground'
             : 'text-sidebar-foreground hover:bg-sidebar-accent/80',
           !sidebarOpen && 'justify-center px-0'
         )}
       >
-        <Icon className="h-5 w-5 shrink-0" aria-hidden />
+        {isActive ? (
+          <span
+            aria-hidden="true"
+            className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-primary animate-brand-underline origin-top"
+          />
+        ) : null}
+        <Icon
+          className={cn(
+            'h-5 w-5 shrink-0',
+            isActive ? 'text-primary' : undefined
+          )}
+          aria-hidden
+        />
         {sidebarOpen && (
-          <span className="min-w-0 truncate text-start font-medium leading-none">
+          <span
+            className={cn(
+              'min-w-0 truncate text-start font-medium leading-none',
+              isActive ? 'text-foreground' : undefined
+            )}
+          >
             {item.label}
           </span>
         )}
@@ -224,10 +246,13 @@ export function Layout({
         <div className="flex items-center justify-between gap-2 border-b border-sidebar-border/80 p-4">
           {sidebarOpen && (
             <div className="min-w-0">
-              <p className="truncate text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {/* UX-6 · Wordmark aligned with docs/brand/brand-guidebook.md §1.
+                  Eyebrow-style vendor label + display-serif product name,
+                  with a 1px hair-divider for rhythm between them. */}
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 Marico
               </p>
-              <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">
+              <h1 className="truncate font-display text-[22px] font-semibold leading-7 tracking-[-0.02em] text-foreground">
                 RAGAlytics
               </h1>
             </div>

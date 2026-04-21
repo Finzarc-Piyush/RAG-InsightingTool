@@ -180,6 +180,21 @@ export const messageSchema = z.object({
   suggestedQuestions: z.array(z.string()).optional(),
   /** Agent synthesis CTAs; rendered as clickable follow-up chips (max 3). */
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1: 2–4 numeric magnitudes that back the main claim. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  /** Phase-1: one-line note on what the tools could not determine. */
+  unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
+  dashboardDraft: z.record(z.unknown()).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
   /** Normalized agent activity blocks for the workbench UI (capped server-side) */
@@ -435,6 +450,20 @@ export const chatResponseSchema = z.object({
   insights: z.array(insightSchema).optional(),
   suggestions: z.array(z.string()).optional(),
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1 rich envelope — see messageSchema.magnitudes for details. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
+  dashboardDraft: z.record(z.unknown()).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;
@@ -489,6 +518,22 @@ export const analysisBriefFilterSchema = z.object({
   match: z.enum(["exact", "case_insensitive"]).optional(),
 });
 
+/**
+ * Coarse question-shape label that lets Phase-1 skills dispatch. Optional so
+ * existing briefs stay valid; defaults to undefined when the classifier
+ * isn't confident.
+ */
+export const questionShapeSchema = z.enum([
+  "driver_discovery",    // "what impacts X the most?"
+  "variance_diagnostic", // "why did X fall in segment Y between A and B?"
+  "trend",               // "how did X change over time?"
+  "comparison",          // "how does A compare to B?"
+  "exploration",         // "show me something interesting"
+  "descriptive",         // "what's my top segment by revenue?"
+]);
+
+export type QuestionShape = z.infer<typeof questionShapeSchema>;
+
 export const analysisBriefSchema = z.object({
   version: z.literal(1),
   outcomeMetricColumn: z.string().max(200).optional(),
@@ -508,6 +553,36 @@ export const analysisBriefSchema = z.object({
   clarifyingQuestions: z.array(z.string().max(350)).max(6),
   epistemicNotes: z.array(z.string().max(500)).max(8),
   successCriteria: z.string().max(1200).optional(),
+  /** Phase-1: coarse question-shape label that skills dispatch on. */
+  questionShape: questionShapeSchema.optional(),
+  /**
+   * Phase-1: dimensions that might plausibly drive the outcome metric.
+   * Distinct from segmentationDimensions (which the user has already named);
+   * this is the set the driver-discovery skill should test.
+   */
+  candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
+  /** Phase-2: user asked to turn this turn into a dashboard. */
+  requestsDashboard: z.boolean().optional(),
+  /**
+   * Phase-1 time_window_diff: two explicit filter sets the user named
+   * for a period-A vs period-B comparison (e.g. "Mar-22" filters vs
+   * "Apr-25" filters on a temporal facet column). Both sides required
+   * for the skill to dispatch; single-period questions use `filters`
+   * instead.
+   *
+   * Example: questionShape="comparison" + comparisonPeriods = {
+   *   a: [{ column:"Month · Order Date", op:"in", values:["2022-03"] }],
+   *   b: [{ column:"Month · Order Date", op:"in", values:["2025-04"] }],
+   * }
+   */
+  comparisonPeriods: z
+    .object({
+      a: z.array(analysisBriefFilterSchema).min(1).max(8),
+      b: z.array(analysisBriefFilterSchema).min(1).max(8),
+      aLabel: z.string().max(80).optional(),
+      bLabel: z.string().max(80).optional(),
+    })
+    .optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;
@@ -633,6 +708,106 @@ export const createReportDashboardRequestSchema = z.object({
 export type CreateReportDashboardRequest = z.infer<
   typeof createReportDashboardRequestSchema
 >;
+
+/**
+ * Phase 2 — agent-emitted dashboard spec.
+ *
+ * A self-contained proposal the chat renders inline as a preview card
+ * before the user commits. `POST /api/dashboards/from-spec` persists it
+ * in one Cosmos write via `createDashboardFromSpec`.
+ *
+ * Sheet shape mirrors the Cosmos `DashboardSheet` fields we support today
+ * (charts / narrative blocks / tables / gridLayout) so the persistence
+ * path is a thin reshape rather than a new data model.
+ */
+export const dashboardTemplateSchema = z.enum([
+  "executive",
+  "deep_dive",
+  "monitoring",
+]);
+
+export type DashboardTemplate = z.infer<typeof dashboardTemplateSchema>;
+
+export const dashboardSheetSpecSchema = z.object({
+  id: z.string().max(120),
+  name: z.string().min(1).max(200),
+  narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+  charts: z.array(chartSpecSchema).max(24).optional(),
+  tables: z.array(dashboardTableSpecSchema).max(8).optional(),
+  gridLayout: dashboardGridLayoutsSchema.optional(),
+  order: z.number().optional(),
+});
+
+export type DashboardSheetSpec = z.infer<typeof dashboardSheetSpecSchema>;
+
+export const dashboardSpecSchema = z.object({
+  name: z.string().min(1).max(200),
+  template: dashboardTemplateSchema,
+  sheets: z.array(dashboardSheetSpecSchema).min(1).max(6),
+  defaultSheetId: z.string().max(120).optional(),
+  /** Original user question — preserved for the "Original question" narrative block. */
+  question: z.string().max(4000).optional(),
+});
+
+export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
+
+export const createDashboardFromSpecRequestSchema = z.object({
+  spec: dashboardSpecSchema,
+  /**
+   * Phase 2.E · Optional session this dashboard was created from. When
+   * supplied, the server stamps `chatDocument.lastCreatedDashboardId`
+   * so the `patch_dashboard` agent tool can resolve follow-up edits
+   * without the user re-stating the dashboard id.
+   */
+  sessionId: z.string().max(200).optional(),
+});
+
+export type CreateDashboardFromSpecRequest = z.infer<
+  typeof createDashboardFromSpecRequestSchema
+>;
+
+/**
+ * Phase 2.E — atomic follow-up edits to an existing dashboard.
+ *
+ * Used by the chat "add a margin chart to the dashboard we just built"
+ * flow (server side only in this PR; agent tool wiring lands later).
+ * Server applies in order: remove → add → rename — so the caller never
+ * has to think about index shifts.
+ */
+export const dashboardPatchSchema = z.object({
+  addCharts: z
+    .array(
+      z.object({
+        chart: chartSpecSchema,
+        sheetId: z.string().max(120).optional(),
+      })
+    )
+    .max(8)
+    .optional(),
+  removeCharts: z
+    .array(
+      z.object({
+        sheetId: z.string().max(120),
+        chartIndex: z.number().int().min(0).max(200),
+      })
+    )
+    .max(20)
+    .optional(),
+  renameSheet: z
+    .object({
+      sheetId: z.string().max(120),
+      name: z.string().min(1).max(200),
+    })
+    .optional(),
+});
+
+export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;
+
+export const patchDashboardRequestSchema = z.object({
+  patch: dashboardPatchSchema,
+});
+
+export type PatchDashboardRequest = z.infer<typeof patchDashboardRequestSchema>;
 
 export const patchDashboardSheetRequestSchema = z
   .object({

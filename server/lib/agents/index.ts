@@ -1,6 +1,32 @@
 /**
- * Agent System Entry Point
- * Initializes and exports the orchestrator with all handlers registered
+ * Agent System Entry Point — LEGACY LAYER
+ * =======================================
+ *
+ * This file wires the LEGACY handler orchestrator. It is active only
+ * when `AGENTIC_LOOP_ENABLED=false`. In production we ship with
+ * `AGENTIC_LOOP_ENABLED=true`, which routes every chat turn through
+ * the agentic runtime at `server/lib/agents/runtime/agentLoop.service.ts`
+ * instead.
+ *
+ * DANGER — capability gap
+ * -----------------------
+ * The handlers registered below pre-date the Phase-1 skill catalog
+ * (`variance_decomposer`, `driver_discovery`, `insight_explorer`,
+ * `time_window_diff`) and Phase-2 dashboard autogen. Those features
+ * live ONLY in the agentic runtime. Disabling
+ * `AGENTIC_LOOP_ENABLED` as a hotfix therefore silently downgrades
+ * the product — Phase-1 questions fall through to the generic
+ * `GeneralHandler` and the user gets a shallow prose answer.
+ *
+ * If you need a hotfix knob:
+ *   - `AGENT_TOOL_TIMEOUT_MS` — bound individual tool wall-time.
+ *   - `AGENTIC_MAX_STEPS` — cap the plan length.
+ *   - `DEEP_ANALYSIS_SKILLS_ENABLED=false` — turn off skills without
+ *     leaving the agentic runtime.
+ *
+ * See:
+ *   - docs/architecture/agent-runtime.md "Legacy layer" + "Known pitfalls"
+ *   - docs/plans/agentic_only_rag_chat.md (no-legacy-fallback invariant)
  */
 
 import { getOrchestrator } from './orchestrator.js';

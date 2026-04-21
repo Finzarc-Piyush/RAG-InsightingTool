@@ -4,8 +4,10 @@ import {
   addTableToDashboardController,
   addSheetToDashboardController,
   createDashboardController,
+  createDashboardFromSpecController,
   createReportDashboardController,
   deleteDashboardController,
+  patchDashboardController,
   exportDashboardController,
   getDashboardController,
   listDashboardsController,
@@ -24,6 +26,10 @@ const router = Router();
 // Dashboards
 router.post('/dashboards', createDashboardController);
 router.post('/dashboards/from-analysis', createReportDashboardController);
+// Phase 2 — atomic commit of an agent-emitted DashboardSpec preview.
+router.post('/dashboards/from-spec', createDashboardFromSpecController);
+// Phase 2.E — atomic follow-up edits (add/remove charts, rename sheet).
+router.post('/dashboards/:dashboardId/patch', patchDashboardController);
 router.get('/dashboards', listDashboardsController);
 router.get('/dashboards/:dashboardId', getDashboardController);
 router.patch('/dashboards/:dashboardId', renameDashboardController);

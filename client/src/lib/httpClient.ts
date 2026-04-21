@@ -56,7 +56,11 @@ apiClient.interceptors.response.use(
       }
       try {
         if (error.config) {
-          return await apiClient.request(error.config);
+          // P-049: drop the (possibly already-aborted) signal before retrying so
+          // the retry isn't instantly cancelled by the original AbortController.
+          const retryConfig = { ...error.config };
+          delete (retryConfig as Record<string, unknown>).signal;
+          return await apiClient.request(retryConfig);
         }
       } catch (retryError) {
         if (import.meta.env.DEV) {

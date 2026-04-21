@@ -1,7 +1,10 @@
 // Main server file - load server.env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
 import './loadEnv.js';
 
-import { assertAgenticRagConfiguration } from "./lib/agents/runtime/assertAgenticRag.js";
+import {
+  assertAgenticRagConfiguration,
+  assertDashboardAutogenConfiguration,
+} from "./lib/agents/runtime/assertAgenticRag.js";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { corsConfig } from "./middleware/index.js";
@@ -18,9 +21,22 @@ const apiRateLimiter = rateLimit({
   skip: (req) => req.method === "OPTIONS" || req.path === "/health",
 });
 
+// P-031: Tight per-IP limiter dedicated to pre-auth paths. Unauthenticated
+// token-verify attempts force JWKS cache lookups; a noisy client can thrash
+// Azure AD round-trips. 20/min is plenty for legitimate cold starts.
+const AUTH_PREFLIGHT_BURST = Number(process.env.AUTH_PREFLIGHT_BURST || 20);
+const authPreflightLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: AUTH_PREFLIGHT_BURST,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+});
+
 // Factory function to create the Express app
 export function createApp() {
   assertAgenticRagConfiguration();
+  assertDashboardAutogenConfiguration();
   const app = express();
   if (process.env.TRUST_PROXY === "true" || process.env.VERCEL) {
     app.set("trust proxy", 1);
@@ -35,6 +51,9 @@ export function createApp() {
   app.use(corsConfig);
 
   app.use("/api", apiRateLimiter);
+  // Pre-auth throttle runs BEFORE Azure AD verification so failed-token attempts
+  // are rate-limited even when they never pass auth (P-031).
+  app.use("/api", authPreflightLimiter);
   app.use("/api", requireAzureAdAuth);
 
   // Health check endpoint

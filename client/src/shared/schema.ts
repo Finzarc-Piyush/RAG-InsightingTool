@@ -179,6 +179,21 @@ export const messageSchema = z.object({
   insights: z.array(insightSchema).optional(),
   suggestedQuestions: z.array(z.string()).optional(),
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1: 2–4 numeric magnitudes that back the main claim. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  /** Phase-1: one-line note on what the tools could not determine. */
+  unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
+  dashboardDraft: z.record(z.unknown()).optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(),
   agentWorkbench: agentWorkbenchSchema.optional(),
@@ -432,6 +447,20 @@ export const chatResponseSchema = z.object({
   insights: z.array(insightSchema).optional(),
   suggestions: z.array(z.string()).optional(),
   followUpPrompts: z.array(z.string()).max(3).optional(),
+  /** Phase-1 rich envelope — see messageSchema.magnitudes for details. */
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(140),
+        value: z.string().max(80),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(6)
+    .optional(),
+  unexplained: z.string().max(800).optional(),
+  /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
+  dashboardDraft: z.record(z.unknown()).optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;
@@ -485,6 +514,22 @@ export const analysisBriefFilterSchema = z.object({
   match: z.enum(["exact", "case_insensitive"]).optional(),
 });
 
+/**
+ * Coarse question-shape label that lets Phase-1 skills dispatch. Optional so
+ * existing briefs stay valid; defaults to undefined when the classifier
+ * isn't confident.
+ */
+export const questionShapeSchema = z.enum([
+  "driver_discovery",
+  "variance_diagnostic",
+  "trend",
+  "comparison",
+  "exploration",
+  "descriptive",
+]);
+
+export type QuestionShape = z.infer<typeof questionShapeSchema>;
+
 export const analysisBriefSchema = z.object({
   version: z.literal(1),
   outcomeMetricColumn: z.string().max(200).optional(),
@@ -504,6 +549,25 @@ export const analysisBriefSchema = z.object({
   clarifyingQuestions: z.array(z.string().max(350)).max(6),
   epistemicNotes: z.array(z.string().max(500)).max(8),
   successCriteria: z.string().max(1200).optional(),
+  /** Phase-1: coarse question-shape label that skills dispatch on. */
+  questionShape: questionShapeSchema.optional(),
+  /**
+   * Phase-1: dimensions that might plausibly drive the outcome metric.
+   * Distinct from segmentationDimensions (which the user has already named);
+   * this is the set the driver-discovery skill should test.
+   */
+  candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
+  /** Phase-2: user asked to turn this turn into a dashboard. */
+  requestsDashboard: z.boolean().optional(),
+  /** Phase-1 time_window_diff: see server/shared/schema.ts for details. */
+  comparisonPeriods: z
+    .object({
+      a: z.array(analysisBriefFilterSchema).min(1).max(8),
+      b: z.array(analysisBriefFilterSchema).min(1).max(8),
+      aLabel: z.string().max(80).optional(),
+      bLabel: z.string().max(80).optional(),
+    })
+    .optional(),
 });
 
 export type AnalysisBrief = z.infer<typeof analysisBriefSchema>;
@@ -632,6 +696,86 @@ export const createReportDashboardRequestSchema = z.object({
 export type CreateReportDashboardRequest = z.infer<
   typeof createReportDashboardRequestSchema
 >;
+
+/**
+ * Phase 2 — agent-emitted dashboard spec. See server/shared/schema.ts for
+ * the canonical JSDoc.
+ */
+export const dashboardTemplateSchema = z.enum([
+  "executive",
+  "deep_dive",
+  "monitoring",
+]);
+
+export type DashboardTemplate = z.infer<typeof dashboardTemplateSchema>;
+
+export const dashboardSheetSpecSchema = z.object({
+  id: z.string().max(120),
+  name: z.string().min(1).max(200),
+  narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+  charts: z.array(chartSpecSchema).max(24).optional(),
+  tables: z.array(dashboardTableSpecSchema).max(8).optional(),
+  gridLayout: dashboardGridLayoutsSchema.optional(),
+  order: z.number().optional(),
+});
+
+export type DashboardSheetSpec = z.infer<typeof dashboardSheetSpecSchema>;
+
+export const dashboardSpecSchema = z.object({
+  name: z.string().min(1).max(200),
+  template: dashboardTemplateSchema,
+  sheets: z.array(dashboardSheetSpecSchema).min(1).max(6),
+  defaultSheetId: z.string().max(120).optional(),
+  question: z.string().max(4000).optional(),
+});
+
+export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
+
+export const createDashboardFromSpecRequestSchema = z.object({
+  spec: dashboardSpecSchema,
+  /** Phase 2.E · See server/shared/schema.ts for why. */
+  sessionId: z.string().max(200).optional(),
+});
+
+export type CreateDashboardFromSpecRequest = z.infer<
+  typeof createDashboardFromSpecRequestSchema
+>;
+
+/** Phase 2.E — atomic follow-up edits to an existing dashboard. */
+export const dashboardPatchSchema = z.object({
+  addCharts: z
+    .array(
+      z.object({
+        chart: chartSpecSchema,
+        sheetId: z.string().max(120).optional(),
+      })
+    )
+    .max(8)
+    .optional(),
+  removeCharts: z
+    .array(
+      z.object({
+        sheetId: z.string().max(120),
+        chartIndex: z.number().int().min(0).max(200),
+      })
+    )
+    .max(20)
+    .optional(),
+  renameSheet: z
+    .object({
+      sheetId: z.string().max(120),
+      name: z.string().min(1).max(200),
+    })
+    .optional(),
+});
+
+export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;
+
+export const patchDashboardRequestSchema = z.object({
+  patch: dashboardPatchSchema,
+});
+
+export type PatchDashboardRequest = z.infer<typeof patchDashboardRequestSchema>;
 
 export const patchDashboardSheetRequestSchema = z
   .object({

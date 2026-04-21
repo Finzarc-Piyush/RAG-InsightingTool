@@ -51,6 +51,12 @@ const TableFooter = React.forwardRef<
 ))
 TableFooter.displayName = "TableFooter"
 
+/**
+ * UX-5 · TableRow — adopts the tokenised `surface-hover` utility and a
+ * 120ms colour transition. Selected state uses `surface-selected` so
+ * both modes (light / dark) stay legible. A `data-numeric-row="true"`
+ * attribute (opt-in) enables tabular-numerics across the row.
+ */
 const TableRow = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
@@ -58,7 +64,10 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "border-b border-border transition-colors duration-quick ease-standard",
+      "hover:surface-hover",
+      "data-[state=selected]:surface-selected",
+      "data-[numeric-row=true]:[font-variant-numeric:tabular-nums]",
       className
     )}
     {...props}
@@ -66,6 +75,11 @@ const TableRow = React.forwardRef<
 ))
 TableRow.displayName = "TableRow"
 
+/**
+ * UX-5 · TableHead — shorter (44px → matches the row density guideline
+ * in the brand guidebook §4), eyebrow-tracked caps for the label, and
+ * foreground (not muted) ink so headers read as first-class.
+ */
 const TableHead = React.forwardRef<
   HTMLTableCellElement,
   React.ThHTMLAttributes<HTMLTableCellElement>
@@ -73,7 +87,9 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+      "h-11 px-3 text-left align-middle font-semibold text-foreground",
+      "text-[11px] uppercase tracking-[0.06em]",
+      "[&:has([role=checkbox])]:pr-0",
       className
     )}
     {...props}
@@ -81,13 +97,22 @@ const TableHead = React.forwardRef<
 ))
 TableHead.displayName = "TableHead"
 
+/**
+ * UX-5 · TableCell — tighter vertical padding (12px) to hit the 44px
+ * row-height target; horizontal padding 12px for breathing room.
+ * Numeric cells should set `className="font-metric text-right"`.
+ */
 const TableCell = React.forwardRef<
   HTMLTableCellElement,
   React.TdHTMLAttributes<HTMLTableCellElement>
 >(({ className, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn("p-4 align-middle [&:has([role=checkbox])]:pr-0", className)}
+    className={cn(
+      "px-3 py-3 align-middle text-sm text-foreground",
+      "[&:has([role=checkbox])]:pr-0",
+      className
+    )}
     {...props}
   />
 ))

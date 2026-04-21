@@ -23,14 +23,17 @@ export const getQueryFn: <T>(options: {
     }
   };
 
+// P-014: previous defaults (staleTime: Infinity, no retry, no refetchOnWindowFocus)
+// meant users saw indefinitely-stale data and never recovered from transient
+// failures. Sane defaults below; individual queries can still opt out.
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
-      retry: false,
+      refetchOnWindowFocus: true,
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      retry: 1,
     },
     mutations: {
       retry: false,

@@ -129,12 +129,33 @@ function destroyAsync(connection: snowflake.Connection): Promise<void> {
 
 const MAX_IMPORT_ROWS = 500_000;
 
-// Single connection reused for all metadata (created once, no database/schema in login).
+/**
+ * Escape a Snowflake identifier (db / schema / table / column name) for safe
+ * interpolation into SQL. Always use double-quotes around the result.
+ * Consolidates ad-hoc replace() calls that previously differed per call site (P-030).
+ */
+export function sanitizeIdentifier(name: string): string {
+  return (name ?? '').trim().replace(/"/g, '""');
+}
+
+/**
+ * Escape a Snowflake string literal for safe interpolation into SQL. Always
+ * surround the result with single-quotes at the call site.
+ */
+export function sanitizeStringLiteral(value: string): string {
+  return (value ?? '').replace(/'/g, "''");
+}
+
+// Shared connection cache + single-flight guard on creation (P-004). The socket
+// logs in with empty database/schema; every query must be fully-qualified so
+// concurrent requests cannot alias contexts. The config key therefore only
+// needs to partition by identity (account|username|warehouse|role).
 let sharedConnection: snowflake.Connection | null = null;
 let sharedConnectionConfig: string | null = null;
+let sharedConnectionPromise: Promise<snowflake.Connection> | null = null;
 
 function connectionConfigKey(config: SnowflakeConnectionConfig): string {
-  return `${config.account}|${config.username}|${config.warehouse}`;
+  return `${config.account}|${config.username}|${config.warehouse}|${config.role ?? ''}`;
 }
 
 /**
@@ -146,20 +167,35 @@ async function getOrCreateConnection(config: SnowflakeConnectionConfig): Promise
   if (sharedConnection && sharedConnectionConfig === key) {
     return sharedConnection;
   }
-  if (sharedConnection) {
-    await destroyAsync(sharedConnection);
-    sharedConnection = null;
-    sharedConnectionConfig = null;
+  if (sharedConnectionPromise) {
+    // Another caller is already establishing the connection; piggy-back on it.
+    const conn = await sharedConnectionPromise;
+    if (sharedConnectionConfig === key) {
+      return conn;
+    }
+    // Identity changed under us — fall through and rebuild.
   }
-  const connection = createConnection({
-    ...config,
-    database: '',
-    schema: '',
-  });
-  await connectAsync(connection);
-  sharedConnection = connection;
-  sharedConnectionConfig = key;
-  return connection;
+  sharedConnectionPromise = (async () => {
+    if (sharedConnection) {
+      await destroyAsync(sharedConnection);
+      sharedConnection = null;
+      sharedConnectionConfig = null;
+    }
+    const connection = createConnection({
+      ...config,
+      database: '',
+      schema: '',
+    });
+    await connectAsync(connection);
+    sharedConnection = connection;
+    sharedConnectionConfig = key;
+    return connection;
+  })();
+  try {
+    return await sharedConnectionPromise;
+  } finally {
+    sharedConnectionPromise = null;
+  }
 }
 
 /**
@@ -207,7 +243,7 @@ export async function listSchemas(
     database: '',
     schema: '',
   });
-  const escapedDb = database.replace(/"/g, '""');
+  const escapedDb = sanitizeIdentifier(database);
   const rows = await executeAsync(connection, `SHOW SCHEMAS IN DATABASE "${escapedDb}"`);
   return rows.map((r) => {
     const row = r as Record<string, any>;
@@ -237,8 +273,8 @@ export async function listTablesInSchema(
     database: '',
     schema: '',
   });
-  const escapedDb = database.trim().replace(/"/g, '""');
-  const schemaEscapedForSql = schema.trim().replace(/'/g, "''");
+  const escapedDb = sanitizeIdentifier(database);
+  const schemaEscapedForSql = sanitizeStringLiteral(schema.trim());
   const sql = `SELECT TABLE_NAME AS "name", ROW_COUNT AS "row_count", BYTES AS "bytes"
     FROM "${escapedDb}"."INFORMATION_SCHEMA"."TABLES"
     WHERE TABLE_SCHEMA = '${schemaEscapedForSql}' AND TABLE_TYPE = 'BASE TABLE'
@@ -284,9 +320,9 @@ export async function fetchTableData(
     database: '',
     schema: '',
   });
-  const escapedDb = db.replace(/"/g, '""');
-  const escapedSchema = schema.replace(/"/g, '""');
-  const escapedTable = tableName.trim().replace(/"/g, '""');
+  const escapedDb = sanitizeIdentifier(db);
+  const escapedSchema = sanitizeIdentifier(schema);
+  const escapedTable = sanitizeIdentifier(tableName);
   const quotedTable = `"${escapedDb}"."${escapedSchema}"."${escapedTable}"`;
   const sql = `SELECT * FROM ${quotedTable} LIMIT ${MAX_IMPORT_ROWS}`;
   return executeAsync(connection, sql);

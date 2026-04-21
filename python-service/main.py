@@ -1,4 +1,5 @@
 """FastAPI application for Data Operations Service"""
+import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -67,6 +68,21 @@ app.add_middleware(
 )
 
 
+# P-037: Refuse to boot in a production-like environment without an API key.
+# Setting VERCEL or ENVIRONMENT=production flips this on. Local dev still
+# works with the key unset.
+if not config.INTERNAL_API_KEY:
+    _prod_markers = {
+        "VERCEL": os.getenv("VERCEL"),
+        "ENVIRONMENT": os.getenv("ENVIRONMENT", "").lower(),
+        "NODE_ENV": os.getenv("NODE_ENV", "").lower(),
+    }
+    if _prod_markers["VERCEL"] or _prod_markers["ENVIRONMENT"] == "production" or _prod_markers["NODE_ENV"] == "production":
+        raise RuntimeError(
+            "PYTHON_SERVICE_API_KEY must be set in production; refusing to start world-accessible."
+        )
+
+
 @app.middleware("http")
 async def internal_api_key_gate(request: Request, call_next):
     """Require X-Internal-Api-Key when PYTHON_SERVICE_API_KEY is set (Node must send the same value)."""
@@ -74,6 +90,52 @@ async def internal_api_key_gate(request: Request, call_next):
         if request.headers.get("X-Internal-Api-Key", "") != config.INTERNAL_API_KEY:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
+
+
+# P-010: Reject oversized request bodies before FastAPI parses JSON into memory.
+# Default 50 MB which comfortably covers the ~1M-row ceiling for our datasets.
+_MAX_BODY_BYTES = int(os.getenv("PYTHON_SERVICE_MAX_BODY_BYTES", str(50 * 1024 * 1024)))
+
+
+@app.middleware("http")
+async def body_size_limit(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            size = int(content_length)
+        except ValueError:
+            size = 0
+        if size > _MAX_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body exceeds {_MAX_BODY_BYTES} bytes"},
+            )
+    return await call_next(request)
+
+
+# P-010/P-035: cap concurrent training requests so a burst cannot saturate
+# every worker thread. Set TRAIN_CONCURRENCY=0 to disable the cap.
+import asyncio  # noqa: E402
+
+_TRAIN_CONCURRENCY = int(os.getenv("TRAIN_CONCURRENCY", "3"))
+_train_semaphore: Optional[asyncio.Semaphore] = (
+    asyncio.Semaphore(_TRAIN_CONCURRENCY) if _TRAIN_CONCURRENCY > 0 else None
+)
+
+
+async def _with_training_gate(coro_factory, timeout_s: int = 300):
+    """Run a blocking training coroutine under the concurrency + timeout gate."""
+    if _train_semaphore is None:
+        return await asyncio.wait_for(coro_factory(), timeout=timeout_s)
+    # Non-blocking acquire first so we can return 503 instead of hanging.
+    try:
+        await asyncio.wait_for(_train_semaphore.acquire(), timeout=1.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=503, detail="Training queue full; retry shortly")
+    try:
+        return await asyncio.wait_for(coro_factory(), timeout=timeout_s)
+    finally:
+        _train_semaphore.release()
 
 
 # Request/Response models

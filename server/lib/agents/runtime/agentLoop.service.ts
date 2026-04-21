@@ -6,6 +6,7 @@ import type {
   AgentLoopResult,
   AgentMidTurnSessionPayload,
   AgentTrace,
+  PlanStep,
   ToolCallRecord,
   WorkingMemoryEntry,
 } from "./types.js";
@@ -17,6 +18,7 @@ import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { formatWorkingMemoryBlock } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
+import { VERIFIER_VERDICT } from "./schemas.js";
 import { agentLog } from "./agentLogger.js";
 import {
   appendInterAgentMessage,
@@ -153,10 +155,30 @@ function materializeDeferredBuildCharts(
         ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
         ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
       };
-      if (!validateChartProposal(ctx, p)) continue;
+      if (!validateChartProposal(ctx, p)) {
+        // P-A5: don't silently drop; leave a breadcrumb so operators can trace
+        // charts that never rendered.
+        agentLog("deferredChart.dropped", {
+          reason: "validateChartProposal",
+          title: tmpl.title,
+          x: tmpl.x,
+          y: tmpl.y,
+        });
+        continue;
+      }
       const { rows, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
       const first = rows[0] as Record<string, unknown> | undefined;
-      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) continue;
+      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) {
+        agentLog("deferredChart.dropped", {
+          reason: "frameMissingColumns",
+          title: tmpl.title,
+          x: tmpl.x,
+          y: tmpl.y,
+          ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
+          availableKeys: Object.keys(first ?? {}).slice(0, 12),
+        });
+        continue;
+      }
       const spec = chartSpecSchema.parse({
         type: tmpl.type,
         title: tmpl.title,
@@ -270,10 +292,19 @@ function capAgentTrace(trace: AgentTrace): AgentTrace {
   };
 }
 
+/** PR 1.G — rich envelope for Phase-1 shapes. All new fields optional. */
+const magnitudeSchema = z.object({
+  label: z.string().min(1).max(140),
+  value: z.string().min(1).max(80),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+});
+
 const finalAnswerEnvelopeSchema = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
+  magnitudes: z.array(magnitudeSchema).max(6).optional(),
+  unexplained: z.string().max(800).optional(),
 });
 
 function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefined {
@@ -299,7 +330,14 @@ async function synthesizeFinalAnswerEnvelope(
   observations: string[],
   turnId: string,
   onLlmCall: () => void
-): Promise<{ answer: string; keyInsight?: string; ctas: string[]; suggestionHints: string[] }> {
+): Promise<{
+  answer: string;
+  keyInsight?: string;
+  ctas: string[];
+  suggestionHints: string[];
+  magnitudes?: z.infer<typeof magnitudeSchema>[];
+  unexplained?: string;
+}> {
   const sacBlock = ctx.sessionAnalysisContext
     ? `\n\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, 10000)}`
     : "";
@@ -308,13 +346,21 @@ async function synthesizeFinalAnswerEnvelope(
     : "";
   const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 12000)}`;
 
+  const phase1Shape = ctx.analysisBrief?.questionShape;
+  const phase1Block = phase1Shape
+    ? `\n\nPhase-1 rich envelope (REQUIRED when questionShape is set):
+- "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
+- "unexplained": one sentence (≤180 chars) on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
+Current questionShape: ${phase1Shape}.`
+    : "";
+
   const system = `You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
 - "body": main markdown answer (clear, concise). Do not duplicate the full key insight inside body; keep body focused on the direct answer.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions: segments, risk, opportunity, or “so what” for the business—using general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
-If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.`;
+If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.${phase1Block}`;
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
@@ -345,9 +391,16 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     return { answer: fallback, ctas: [], suggestionHints: [] };
   }
 
-  const { body, keyInsight, ctas } = out.data;
+  const { body, keyInsight, ctas, magnitudes, unexplained } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+  const cleanedMagnitudes =
+    Array.isArray(magnitudes) && magnitudes.length > 0
+      ? magnitudes
+          .filter((m) => m && m.label && m.value)
+          .slice(0, 6)
+      : undefined;
+  const cleanedUnexplained = unexplained?.trim()?.slice(0, 800) || undefined;
   let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null);
   let suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
 
@@ -383,7 +436,14 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     };
   }
 
-  return { answer, keyInsight: ki, ctas: ctaList, suggestionHints };
+  return {
+    answer,
+    keyInsight: ki,
+    ctas: ctaList,
+    suggestionHints,
+    ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
+    ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+  };
 }
 
 function buildPreSynthesisMidTurnSummary(
@@ -446,7 +506,8 @@ async function runPlannerWithOneRetry(
   onLlmCall: () => void,
   priorObservationsText?: string,
   workingMemoryBlock?: string,
-  handoffDigest?: string
+  handoffDigest?: string,
+  ragHitsBlock?: string
 ) {
   const first = await runPlanner(
     ctx,
@@ -455,7 +516,8 @@ async function runPlannerWithOneRetry(
     onLlmCall,
     priorObservationsText,
     workingMemoryBlock,
-    handoffDigest
+    handoffDigest,
+    ragHitsBlock
   );
   if (first.ok) return first;
   const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
@@ -472,7 +534,8 @@ async function runPlannerWithOneRetry(
     onLlmCall,
     priorObservationsText,
     workingMemoryBlock,
-    handoffDigest
+    handoffDigest,
+    ragHitsBlock
   );
 }
 
@@ -517,6 +580,13 @@ export async function runAgentTurn(
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   let followUpPrompts: string[] | undefined;
+  // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
+  let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
+  let envelopeUnexplained: string | undefined;
+  // PR 2.B — dashboard draft emitted when the brief flags requestsDashboard.
+  let dashboardDraft:
+    | import("../../../shared/schema.js").DashboardSpec
+    | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
@@ -538,6 +608,22 @@ export async function runAgentTurn(
 
   if (ctx.mode === "analysis") {
     await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+    // Phase-1 PR 1.A: publish a compact intent digest so the thinking panel
+    // can surface "what the model thinks the user asked for" before any tools
+    // run. Purely observational — no branching, no behavior change.
+    if (ctx.analysisBrief) {
+      const brief = ctx.analysisBrief;
+      safeEmit("intent_parsed", {
+        questionShape: brief.questionShape,
+        outcomeMetricColumn: brief.outcomeMetricColumn,
+        segmentationDimensions: brief.segmentationDimensions,
+        candidateDriverDimensions: brief.candidateDriverDimensions,
+        timeWindow: brief.timeWindow,
+        comparisonBaseline: brief.comparisonBaseline,
+        filters: brief.filters,
+        clarifyingQuestions: brief.clarifyingQuestions,
+      });
+    }
   }
 
   const briefOut = () =>
@@ -609,9 +695,66 @@ export async function runAgentTurn(
     return `Summary from tool output:\n\n${body.slice(0, 8000)}`;
   }
 
+  // P-A1: upfront RAG retrieval so the planner has semantic grounding on its
+  // first call. Retrieval failures are non-fatal — planner still works on the
+  // data summary alone; the block simply stays empty.
+  let upfrontRagHitsBlock: string | undefined;
+  try {
+    const { isRagEnabled } = await import("../../rag/config.js");
+    if (isRagEnabled()) {
+      const { retrieveRagHits, formatHitsForPrompt } = await import(
+        "../../rag/retrieve.js"
+      );
+      const { hits } = await retrieveRagHits({
+        sessionId: ctx.sessionId,
+        question: ctx.question,
+        summary: ctx.summary,
+        dataVersion: ctx.dataBlobVersion,
+      });
+      // Top few hits only; formatter already joins with separators.
+      const topHits = hits.slice(0, 3);
+      if (topHits.length > 0) {
+        upfrontRagHitsBlock = formatHitsForPrompt(topHits);
+        if (lastRagHitCount === undefined) {
+          lastRagHitCount = topHits.length;
+        }
+      }
+    }
+  } catch (err) {
+    agentLog("upfrontRag.failed", {
+      turnId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Phase-1: when DEEP_ANALYSIS_SKILLS_ENABLED=true and a registered skill
+  // matches the brief, the first iteration bypasses the planner and runs
+  // the skill's pre-sequenced steps. Subsequent iterations (after reflector
+  // replan) fall back to the normal planner so replans still work.
+  let skillBypassUsed = false;
+  const {
+    isDeepAnalysisSkillsEnabled: skillsFlagOn,
+    selectSkill,
+    expandSkill,
+  } = await import("./skills/index.js");
+  const { diagnosticMaxParallelBranches } = await import(
+    "../../diagnosticPipelineConfig.js"
+  );
+  const { preResolveParallelSteps } = await import(
+    "./skills/parallelResolve.js"
+  );
+  /**
+   * PR 1.E: cache of pre-resolved tool results. Populated when a
+   * parallelizable skill dispatches; the step loop consumes from this
+   * cache first and only falls back to registry.execute if the step has
+   * no entry. Keyed by step.id.
+   */
+  const preResolvedToolResults = new Map<string, ToolResult>();
+
   try {
     let replans = 0;
-    while (replans <= 2) {
+    // P-020: promoted to AgentConfig so operators can tune via AGENT_MAX_REPLANS_PER_STEP.
+    while (replans <= config.maxReplansPerStep) {
       if (Date.now() > deadline) {
         trace.budgetHits?.push("wall_time");
         break;
@@ -626,15 +769,123 @@ export async function runAgentTurn(
         isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
           ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 4000)
           : undefined;
-      const planResult = await runPlannerWithOneRetry(
-        ctx,
-        registry,
-        turnId,
-        onLlmCall,
-        priorForPlanner,
-        workingMemoryBlock || undefined,
-        handoffDigest
-      );
+
+      // Skill dispatch (first iteration only, flag-gated). When the skill
+      // expands into zero steps or throws, fall through to the planner.
+      let planResult:
+        | { ok: true; rationale: string; steps: PlanStep[] }
+        | Awaited<ReturnType<typeof runPlannerWithOneRetry>>
+        | null = null;
+      if (
+        !skillBypassUsed &&
+        replans === 0 &&
+        skillsFlagOn() &&
+        ctx.analysisBrief
+      ) {
+        try {
+          const skill = selectSkill(ctx.analysisBrief, ctx);
+          if (skill) {
+            const invocation = expandSkill(skill, ctx.analysisBrief, ctx);
+            if (invocation && invocation.steps.length > 0) {
+              skillBypassUsed = true;
+              safeEmit("skill_execution", {
+                skill: skill.name,
+                invocationId: invocation.id,
+                label: invocation.label,
+                stepCount: invocation.steps.length,
+                rationale: invocation.rationale,
+              });
+              appendInterAgentMessage(
+                trace,
+                {
+                  from: "Coordinator",
+                  to: "Planner",
+                  intent: `skill_dispatch:${skill.name}`,
+                  artifacts: invocation.steps.map((s) => s.id),
+                  meta: {
+                    skill: skill.name,
+                    invocationId: invocation.id,
+                  },
+                },
+                safeEmit
+              );
+              planResult = {
+                ok: true,
+                rationale:
+                  invocation.rationale ||
+                  `Skill ${skill.name} expanded into ${invocation.steps.length} step(s).`,
+                steps: invocation.steps,
+              } as unknown as Awaited<ReturnType<typeof runPlannerWithOneRetry>>;
+
+              // PR 1.E: when the skill opts into parallelism, pre-run the
+              // independent steps (no dependsOn) in parallel up to the
+              // diagnostic branch budget. The step loop picks these results
+              // out of preResolvedToolResults instead of re-executing; per
+              // -step reflector / verifier / state updates still run serial
+              // in plan order.
+              if (invocation.parallelizable === true) {
+                const maxParallel = diagnosticMaxParallelBranches();
+                try {
+                  const parallelOut = await preResolveParallelSteps(
+                    invocation,
+                    (step) => registry.execute(step.tool, step.args, toolCtx),
+                    maxParallel
+                  );
+                  if (parallelOut.stepIds.length > 0) {
+                    safeEmit("skill_parallel_batch", {
+                      invocationId: invocation.id,
+                      stepIds: parallelOut.stepIds,
+                      budget: maxParallel,
+                      elapsedMs: parallelOut.elapsedMs,
+                    });
+                    for (const [id, result] of parallelOut.resolved) {
+                      preResolvedToolResults.set(id, result);
+                    }
+                    agentLog("skill.parallel.resolved", {
+                      turnId,
+                      invocationId: invocation.id,
+                      count: parallelOut.stepIds.length,
+                      elapsedMs: parallelOut.elapsedMs,
+                    });
+                  }
+                } catch (parallelErr) {
+                  // Non-fatal: clear the cache and let the step loop
+                  // execute tools sequentially via registry.execute.
+                  preResolvedToolResults.clear();
+                  agentLog("skill.parallel.failed", {
+                    turnId,
+                    error:
+                      parallelErr instanceof Error
+                        ? parallelErr.message
+                        : String(parallelErr),
+                  });
+                }
+              }
+            }
+          }
+        } catch (skillErr) {
+          agentLog("skill.dispatch.failed", {
+            turnId,
+            error:
+              skillErr instanceof Error
+                ? skillErr.message
+                : String(skillErr),
+          });
+        }
+      }
+
+      if (!planResult) {
+        planResult = await runPlannerWithOneRetry(
+          ctx,
+          registry,
+          turnId,
+          onLlmCall,
+          priorForPlanner,
+          workingMemoryBlock || undefined,
+          handoffDigest,
+          upfrontRagHitsBlock
+        );
+      }
       if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;
         trace.plannerRejectReason = planResult.reason;
@@ -747,7 +998,17 @@ export async function runAgentTurn(
           safeEmit("tool_call", { id: callId, name: step.tool, args_summary: argsSummary });
 
           const t0 = Date.now();
-          const result = await registry.execute(step.tool, step.args, toolCtx);
+          // PR 1.E: consume the pre-resolved parallel-batch result if one
+          // was computed during skill dispatch. Only first-attempt steps
+          // use the cache — retries always hit registry.execute so a
+          // transient failure isn't replayed from the cached failure.
+          const cachedResult =
+            attempt === 0 ? preResolvedToolResults.get(step.id) : undefined;
+          if (cachedResult) {
+            preResolvedToolResults.delete(step.id);
+          }
+          const result =
+            cachedResult ?? (await registry.execute(step.tool, step.args, toolCtx));
           const t1 = Date.now();
           toolCallsDone++;
 
@@ -866,12 +1127,12 @@ export async function runAgentTurn(
               course_correction: verdict.course_correction,
             });
 
-            if (verdict.verdict === "pass") {
+            if (verdict.verdict === VERIFIER_VERDICT.pass) {
               break;
             }
             if (
-              verdict.verdict === "revise_narrative" ||
-              verdict.course_correction === "revise_narrative"
+              verdict.verdict === VERIFIER_VERDICT.reviseNarrative ||
+              verdict.course_correction === VERIFIER_VERDICT.reviseNarrative
             ) {
               const issuesText = verdict.issues.map((i) => i.description).join("; ");
               candidate = await rewriteNarrative(
@@ -890,7 +1151,7 @@ export async function runAgentTurn(
           finalCandidate = candidate;
 
           const lastV = lastVerdictForStep(trace, step.id);
-          if (lastV === "retry_tool" && attempt < 1) {
+          if (lastV === VERIFIER_VERDICT.retryTool && attempt < 1) {
             trace.reflectorNotes.push(`retry_tool: re-exec ${step.tool}`);
             continue attemptLoop;
           }
@@ -1028,6 +1289,15 @@ export async function runAgentTurn(
           isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
             ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 3500)
             : undefined;
+        // P-A3: aggregate distinct suggested columns from prior successful
+        // tool calls so the reflector can see what's already been explored.
+        const workingMemorySuggestedColumns = Array.from(
+          new Set(
+            workingMemory
+              .filter((e) => e.ok && Array.isArray(e.suggestedColumns))
+              .flatMap((e) => e.suggestedColumns ?? [])
+          )
+        );
         const ref = await runReflector(
           ctx,
           {
@@ -1039,6 +1309,7 @@ export async function runAgentTurn(
               step.tool === "execute_query_plan"
                 ? stepResult.analyticalMeta
                 : undefined,
+            workingMemorySuggestedColumns,
           },
           turnId,
           onLlmCall,
@@ -1142,6 +1413,15 @@ export async function runAgentTurn(
         agentSuggestionHints = env.suggestionHints;
         const trimmedCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
         if (trimmedCtas.length) followUpPrompts = trimmedCtas;
+        // PR 1.G — capture Phase-1 rich fields when the synthesiser produced them.
+        if (env.magnitudes && env.magnitudes.length > 0) {
+          envelopeMagnitudes = env.magnitudes;
+          safeEmit("magnitudes", { items: env.magnitudes });
+        }
+        if (env.unexplained) {
+          envelopeUnexplained = env.unexplained;
+          safeEmit("unexplained", { note: env.unexplained });
+        }
         appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
         appendInterAgentMessage(
           trace,
@@ -1218,6 +1498,60 @@ export async function runAgentTurn(
       }
     }
 
+    // PR 2.B — emit a DashboardSpec draft when the user asked for a dashboard
+    // and at least one chart exists. Non-fatal: failures leave dashboardDraft
+    // unset and the normal answer still streams to the client.
+    try {
+      const { shouldBuildDashboard, buildDashboardFromTurn } = await import(
+        "./buildDashboard.js"
+      );
+      if (
+        answer?.trim() &&
+        shouldBuildDashboard({
+          brief: ctx.analysisBrief,
+          charts: mergedCharts,
+        })
+      ) {
+        const spec = await buildDashboardFromTurn({
+          question: ctx.question,
+          answerBody: answer,
+          keyInsight: mergedInsights[0]?.body,
+          charts: mergedCharts,
+          magnitudes: envelopeMagnitudes,
+          brief: ctx.analysisBrief,
+          turnId,
+          onLlmCall,
+        });
+        if (spec) {
+          dashboardDraft = spec;
+          safeEmit("dashboard_draft", {
+            name: spec.name,
+            template: spec.template,
+            sheetCount: spec.sheets.length,
+            chartCount: mergedCharts.length,
+          });
+          appendInterAgentMessage(
+            trace,
+            {
+              from: "Synthesizer",
+              to: "Coordinator",
+              intent: "dashboard_drafted",
+              meta: {
+                template: spec.template,
+                sheetCount: String(spec.sheets.length),
+              },
+            },
+            safeEmit
+          );
+        }
+      }
+    } catch (dashErr) {
+      agentLog("buildDashboard.dispatch_failed", {
+        turnId,
+        error: dashErr instanceof Error ? dashErr.message : String(dashErr),
+      });
+    }
+
     if (!answer?.trim()) {
       trace.endedAt = Date.now();
       agentLog("turn.abort", {
@@ -1269,10 +1603,13 @@ export async function runAgentTurn(
         issue_codes: fv.issues.map((i) => i.code),
         course_correction: fv.course_correction,
       });
-      if (fv.verdict === "pass") {
+      if (fv.verdict === VERIFIER_VERDICT.pass) {
         break;
       }
-      if (fv.verdict === "revise_narrative" || fv.course_correction === "revise_narrative") {
+      if (
+        fv.verdict === VERIFIER_VERDICT.reviseNarrative ||
+        fv.course_correction === VERIFIER_VERDICT.reviseNarrative
+      ) {
         const issuesText = fv.issues.map((i) => i.description).join("; ");
         answer = await rewriteNarrative(
           ctx,
@@ -1324,6 +1661,9 @@ export async function runAgentTurn(
       agentTrace: capAgentTrace(trace),
       agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
+      ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
+      ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
+      ...(dashboardDraft ? { dashboardDraft } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
     };

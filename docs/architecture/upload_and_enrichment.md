@@ -25,3 +25,34 @@ Do **not** add external queues or workers until there is a concrete signal:
 ## Principle
 
 **Boring first:** prove single-node preview → enrichment → flush under realistic load; externalize jobs only when an observed failure mode justifies it.
+
+## `enrichmentStatus` writers (v1 — single function)
+
+The field has **one writer** in practice: `processUploadJob` inside
+[`server/utils/uploadQueue.ts`](../../server/utils/uploadQueue.ts).
+The transitions inside that function are:
+
+| Stage | Line ≈ | Target status | What else is written |
+|---|---:|---|---|
+| Preview persisted | 451 | `in_progress` | `dataSummary`, `sampleRows`, `selectedSheetName` |
+| Understanding checkpoint | 573 | `complete` | `dataSummary`, `datasetProfile`, `sessionAnalysisContext` |
+| Full enrichment (update path) | 830 | `complete` | ~15 fields: rawData, sampleRows, profile, blob info, analysisMetadata, etc. |
+| Full enrichment (create path fixup) | 867 | `complete` | `selectedSheetName`, `columnarStoragePath` |
+| Failure | 938 | `failed` | only the status + `lastUpdatedAt` |
+
+Plus one creation writer at `server/models/chat.model.ts:434` which
+initialises new chats at `enrichmentStatus: "pending"`.
+
+### Why no single-writer helper (Wave F9 retracted)
+
+A naive `setEnrichmentStatus(sessionId, status)` helper using a
+Cosmos patch would **either** drop the rich business state each
+writer carries **or** add a second round-trip per transition. The
+current layout keeps all mutations inside one function that already
+runs serially in-process, so there is no concurrent-writer race to
+eliminate. The real risk is forgetting which transition is legal at
+which stage; the table above is the canonical reference.
+
+If a future change introduces a writer OUTSIDE `processUploadJob`,
+revisit this decision: the moment two functions mutate the field
+independently is when the single-writer helper earns its keep.

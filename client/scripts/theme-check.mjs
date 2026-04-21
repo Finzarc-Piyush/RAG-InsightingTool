@@ -9,8 +9,15 @@ const temporaryDebtFiles = new Set([
   'src/pages/Dashboard/Components/DashboardList.tsx',
   'src/pages/Home/Components/ChartRenderer.tsx',
   'src/pages/Home/Components/DataSummaryModal.tsx',
-  'src/pages/Home/Components/DatasetEnrichmentLoader.tsx',
   'src/pages/Home/Home.tsx',
+  // UX-4 · sole pre-existing violation is an intentional #FFFFFF for
+  // html-to-image PDF/PNG export (paper white, not a UI colour).
+  'src/pages/Dashboard/Components/DashboardView.tsx',
+  // Wave F4 of the audit-resolution plan migrated the three dark-mode-broken
+  // surfaces (DatasetEnrichmentLoader, FilterAppliedMessage, pivot/PivotGrid)
+  // to semantic tokens and removed them from this allowlist. The allowlist
+  // shrinks over time — add a new entry only with a written rationale and a
+  // linked follow-up task.
 ]);
 
 const forbiddenPatterns = [
@@ -20,6 +27,15 @@ const forbiddenPatterns = [
   { name: 'border-gray-*', regex: /\bborder-gray-\d{2,3}(?:\/\d+)?\b/g },
   { name: 'hover:bg-gray-*', regex: /\bhover:bg-gray-\d{2,3}(?:\/\d+)?\b/g },
   { name: 'hardcoded hex color', regex: /#[0-9a-fA-F]{3,8}\b/g },
+  // UX-0 · bans ad-hoc gradient shortcuts; use bg-gradient-canvas /
+  // bg-gradient-ink-soft / bg-gradient-elevate or inline `var(--gradient-*)`.
+  { name: 'from-slate-*', regex: /\bfrom-slate-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'to-slate-*', regex: /\bto-slate-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'from-blue-*', regex: /\bfrom-blue-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'from-zinc-*', regex: /\bfrom-zinc-\d{2,3}(?:\/\d+)?\b/g },
+  { name: 'to-white', regex: /\bto-white(?:\/\d+)?\b/g },
+  // UX-0 · raw rgb()/rgba() inside JSX/TSX should be a token instead.
+  { name: 'raw rgb() color', regex: /\brgba?\(\s*\d/g },
 ];
 
 function walk(dir) {

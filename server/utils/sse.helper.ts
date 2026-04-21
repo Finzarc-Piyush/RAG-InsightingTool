@@ -10,9 +10,23 @@ import { Response } from "express";
  */
 const ENABLE_SSE_LOGGING = process.env.ENABLE_SSE_LOGGING === 'true';
 
+// Track when a given response has already been observed as closed so callers
+// can short-circuit without every call site having to read a boolean (P-026).
+const closedResponses = new WeakSet<Response>();
+
+/** True once sendSSE has observed this response as closed. */
+export function isSseClosed(res: Response): boolean {
+  if (closedResponses.has(res)) return true;
+  if (res.writableEnded || res.destroyed || !res.writable) {
+    closedResponses.add(res);
+    return true;
+  }
+  return false;
+}
+
 export function sendSSE(res: Response, event: string, data: any): boolean {
   // Check if connection is still writable
-  if (res.writableEnded || res.destroyed || !res.writable) {
+  if (isSseClosed(res)) {
     return false;
   }
 
@@ -31,11 +45,12 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
   } catch (error: any) {
     // Ignore errors from client disconnections (ECONNRESET, EPIPE are expected)
     if (error.code === 'ECONNRESET' || error.code === 'EPIPE' || error.code === 'ECONNABORTED') {
-      // Client disconnected - this is normal, don't log as error
+      closedResponses.add(res);
       return false;
     }
     // Log unexpected errors
     console.error('Error sending SSE event:', error);
+    closedResponses.add(res);
     return false;
   }
 }

@@ -126,11 +126,11 @@ export function DatasetEnrichmentLoader({
     <div
       className={
         inline
-          ? 'overflow-hidden rounded-xl border border-slate-200/80 shadow-[0_8px_30px_-18px_rgba(15,23,42,0.25)]'
-          : 'absolute top-0 left-0 right-0 z-40 overflow-hidden border-b border-white/40 shadow-[0_8px_30px_-12px_rgba(15,23,42,0.25)]'
+          ? 'overflow-hidden rounded-xl border border-border/80 shadow-lg'
+          : 'absolute top-0 left-0 right-0 z-40 overflow-hidden border-b border-border/40 shadow-lg'
       }
     >
-      <div className="relative bg-white/70 backdrop-blur-xl">
+      <div className="relative bg-card/70 backdrop-blur-xl">
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.55]"
           style={{
@@ -166,15 +166,17 @@ export function DatasetEnrichmentLoader({
 
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <h3 className="font-serif text-base font-semibold tracking-tight text-slate-900 sm:text-lg">
+                <h3 className="font-serif text-base font-semibold tracking-tight text-foreground sm:text-lg">
                   Enriching your data understanding
                 </h3>
                 {enrichmentPhase === 'waiting' && (
-                  <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Queued</span>
+                  <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Queued
+                  </span>
                 )}
               </div>
 
-              <div className="relative min-h-[2.5rem] text-sm leading-relaxed text-slate-600">
+              <div className="relative min-h-[2.5rem] text-sm leading-relaxed text-muted-foreground">
                 <AnimatePresence mode="wait">
                   <motion.p
                     key={activeLine}
@@ -189,25 +191,25 @@ export function DatasetEnrichmentLoader({
                 </AnimatePresence>
               </div>
 
-              <p className="text-xs leading-relaxed text-slate-500">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 We are improving dataset understanding and preparing suggested analysis questions. You can type below; we will answer after enrichment.
               </p>
             </div>
 
-            <div className="shrink-0 space-y-2 rounded-xl border border-slate-200/80 bg-white/60 px-4 py-3 text-xs text-slate-600 shadow-sm backdrop-blur-sm sm:min-w-[11rem]">
-              <div className="font-medium text-slate-800">Typical time</div>
+            <div className="shrink-0 space-y-2 rounded-xl border border-border/80 bg-card/60 px-4 py-3 text-xs text-muted-foreground shadow-sm backdrop-blur-sm sm:min-w-[11rem]">
+              <div className="font-medium text-foreground">Typical time</div>
               <div>
                 Usually about{' '}
-                <span className="tabular-nums font-semibold text-slate-900">
+                <span className="tabular-nums font-semibold text-foreground">
                   {low}–{high}s
                 </span>
               </div>
               {startedAtMs != null && (
-                <div className="tabular-nums text-slate-500">So far {formatSeconds(elapsed)}</div>
+                <div className="tabular-nums text-muted-foreground">So far {formatSeconds(elapsed)}</div>
               )}
               {progressVisual != null && (
                 <div className="pt-1">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200/90">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted/90">
                     <motion.div
                       className="h-full rounded-full bg-primary/80"
                       initial={false}

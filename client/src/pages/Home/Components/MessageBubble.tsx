@@ -10,6 +10,9 @@ import {
 import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
+import { DashboardDraftCard } from './DashboardDraftCard';
+import { MagnitudesRow, type MagnitudeItem } from './MagnitudesRow';
+import { Settle } from '@/components/ui/motion';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
@@ -542,13 +545,19 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         )}
 
         {showMarkdownBlock && (
-          <div
-            className="rounded-xl border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-sm"
+          <Settle
+            className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
             data-testid={`message-content-${message.role}`}
           >
-            <div className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+            <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
               <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
             </div>
+            {/* UX-3 · Phase-1 magnitudes row — renders nothing when the field is empty. */}
+            <MagnitudesRow
+              items={
+                (message as Message & { magnitudes?: MagnitudeItem[] }).magnitudes
+              }
+            />
             {assistantMarkdownParts.followUpChips.length > 0 && onSuggestedQuestionClick && (
               <div className="mt-4">
                 <p className="text-sm font-semibold text-foreground mb-2">You might try:</p>
@@ -569,6 +578,12 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 </div>
               </div>
             )}
+            {(message as Message & { dashboardDraft?: unknown }).dashboardDraft ? (
+              <DashboardDraftCard
+                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+                sessionId={sessionId ?? undefined}
+              />
+            ) : null}
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
               onSuggestedQuestionClick && (
@@ -588,7 +603,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   ))}
                 </div>
               )}
-          </div>
+          </Settle>
         )}
 
         {!isUser && allowDatasetPreviewInAnswer && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
@@ -893,6 +908,12 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
       (nextProps.message.suggestedQuestions?.length ?? 0) &&
     JSON.stringify(prevProps.message.followUpPrompts ?? []) ===
       JSON.stringify(nextProps.message.followUpPrompts ?? []) &&
+    // Phase 2: re-render when the inline dashboard draft appears/changes.
+    Boolean((prevProps.message as { dashboardDraft?: unknown }).dashboardDraft) ===
+      Boolean((nextProps.message as { dashboardDraft?: unknown }).dashboardDraft) &&
+    // UX-3: re-render when magnitudes arrive (Phase-1 rich envelope).
+    JSON.stringify((prevProps.message as { magnitudes?: unknown }).magnitudes ?? null) ===
+      JSON.stringify((nextProps.message as { magnitudes?: unknown }).magnitudes ?? null) &&
     prevProps.onSuggestedQuestionClick === nextProps.onSuggestedQuestionClick &&
     prevProps.preEnrichmentPreviewSnapshot === nextProps.preEnrichmentPreviewSnapshot &&
     prevProps.postEnrichmentPreviewSnapshot === nextProps.postEnrichmentPreviewSnapshot &&

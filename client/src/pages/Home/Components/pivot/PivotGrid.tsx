@@ -111,25 +111,25 @@ export function PivotGrid({
 
   const shellClass =
     layout === 'expanded'
-      ? 'overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full border border-gray-200/90 rounded-lg bg-white/60 shadow-inner'
-      : 'overflow-x-auto max-h-[500px] overflow-y-auto border border-gray-200/90 rounded-lg bg-white/60 shadow-inner';
+      ? 'overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full border border-border/80 rounded-lg bg-card/60 shadow-inner'
+      : 'overflow-x-auto max-h-[500px] overflow-y-auto border border-border/80 rounded-lg bg-card/60 shadow-inner';
 
   return (
     <div className={shellClass}>
       {columnFieldTruncated && model.columnFields[0] && (
-        <p className="text-[11px] text-muted-foreground px-3 py-1.5 border-b border-gray-100 bg-amber-50/50">
+        <p className="text-[11px] text-muted-foreground px-3 py-1.5 border-b border-border/40 bg-amber-50/50">
           Multiple column fields: using the first (
           {fieldLabel(model.columnFields[0], temporalFacetColumns)}) for the matrix.
         </p>
       )}
       <table className="w-max min-w-full border-collapse text-sm">
-        <thead className="sticky top-0 z-10 bg-gradient-to-b from-slate-50 to-slate-50/95 backdrop-blur-sm">
+        <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur-sm">
           {hasMatrix ? (
             <>
-              <tr className="border-b border-gray-200">
+              <tr className="border-b border-border">
                 <th
                   rowSpan={valueSpecs.length > 1 ? 2 : 1}
-                  className="px-3 py-2.5 text-left font-semibold text-gray-800 whitespace-nowrap align-bottom min-w-[10rem]"
+                  className="px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap align-bottom min-w-[10rem]"
                 >
                   <div className="flex items-center gap-2 flex-wrap">
                     <span>Row labels</span>
@@ -178,7 +178,7 @@ export function PivotGrid({
                   <th
                     key={ck}
                     colSpan={Math.max(1, valueSpecs.length)}
-                    className="px-3 py-2 text-center font-semibold text-gray-700 border-l border-gray-200/80 whitespace-nowrap"
+                    className="px-3 py-2 text-center font-semibold text-foreground/90 border-l border-border/70 whitespace-nowrap"
                   >
                     <div className="inline-flex items-center justify-center gap-1 flex-wrap">
                       <span>
@@ -187,7 +187,7 @@ export function PivotGrid({
                       {sliceFilter?.colField && onHideColumnMember ? (
                         <button
                           type="button"
-                          className="rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          className="rounded p-0.5 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                           title="Hide this column"
                           aria-label={`Hide column ${ck || '(blank)'}`}
                           onClick={(e) => {
@@ -203,12 +203,12 @@ export function PivotGrid({
                 ))}
               </tr>
               {valueSpecs.length > 1 && (
-                <tr className="border-b border-gray-200">
+                <tr className="border-b border-border">
                   {colKeys.map((ck) =>
                     valueSpecs.map((spec) => (
                       <th
                         key={`${ck}-${spec.id}`}
-                        className="px-2 py-1.5 text-center text-xs font-medium text-gray-600 border-l border-gray-200/80 whitespace-nowrap"
+                        className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground border-l border-border/70 whitespace-nowrap"
                       >
                         <div className="flex items-center justify-center gap-1">
                           <span>{valueHeader(spec)}</span>
@@ -230,8 +230,8 @@ export function PivotGrid({
               )}
             </>
           ) : (
-            <tr className="border-b border-gray-200">
-              <th className="px-3 py-2.5 text-left font-semibold text-gray-800 whitespace-nowrap min-w-[10rem]">
+            <tr className="border-b border-border">
+              <th className="px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap min-w-[10rem]">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span>Row labels</span>
                   {sliceFilter?.rowField ? (
@@ -258,7 +258,7 @@ export function PivotGrid({
               {valueSpecs.map((spec) => (
                 <th
                   key={spec.id}
-                  className="px-3 py-2.5 text-left font-semibold text-gray-700 border-l border-gray-100 whitespace-nowrap"
+                  className="px-3 py-2.5 text-left font-semibold text-foreground/90 border-l border-border/40 whitespace-nowrap"
                 >
                   <div className="flex items-center gap-2">
                     <span>{valueHeader(spec)}</span>
@@ -293,17 +293,17 @@ export function PivotGrid({
               <tr
                 key={`${row.pathKey}-${row.kind}`}
                 className={cn(
-                  'border-b border-gray-100/90 transition-colors',
-                  row.kind === 'grand' && 'border-t-2 border-t-gray-300 bg-slate-50/90',
-                  row.kind === 'subtotal' && 'bg-slate-50/70 font-medium',
-                  isCollapsedRow && 'bg-slate-50/40',
-                  !isStrong && 'hover:bg-gray-50/80'
+                  'border-b border-border/50 transition-colors',
+                  row.kind === 'grand' && 'border-t-2 border-t-border bg-muted/80',
+                  row.kind === 'subtotal' && 'bg-muted/60 font-medium',
+                  isCollapsedRow && 'bg-muted/40',
+                  !isStrong && 'hover:bg-muted/50'
                 )}
               >
                 <td
                   className={cn(
-                    'px-3 py-2 text-gray-800 align-middle',
-                    isStrong && 'font-semibold text-gray-900'
+                    'px-3 py-2 text-foreground align-middle',
+                    isStrong && 'font-semibold text-foreground'
                   )}
                   style={{ paddingLeft: pad }}
                 >
@@ -312,7 +312,7 @@ export function PivotGrid({
                       <button
                         type="button"
                         onClick={() => onToggleCollapse(row.pathKey)}
-                        className="rounded p-0.5 text-gray-500 hover:text-gray-900 hover:bg-gray-200/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                        className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                         aria-expanded={row.kind === 'header'}
                         aria-label={row.kind === 'header' ? 'Collapse group' : 'Expand group'}
                       >
@@ -329,7 +329,7 @@ export function PivotGrid({
                 {row.kind === 'header' || !row.values ? (
                   <td
                     colSpan={valueColSpan}
-                    className="border-l border-gray-100/40 bg-slate-50/10"
+                    className="border-l border-border/30 bg-muted/20"
                   />
                 ) : hasMatrix ? (
                   colKeys.flatMap((ck) =>
@@ -339,7 +339,7 @@ export function PivotGrid({
                         <td
                           key={`${row.pathKey}-${ck}-${spec.id}`}
                           className={cn(
-                            'px-3 py-2 text-right tabular-nums text-gray-800 border-l border-gray-100/80 whitespace-nowrap',
+                            'px-3 py-2 text-right tabular-nums text-foreground border-l border-border/45 whitespace-nowrap',
                             isStrong && 'font-semibold'
                           )}
                           onClick={() => {
@@ -370,7 +370,7 @@ export function PivotGrid({
                       <td
                         key={`${row.pathKey}-${spec.id}`}
                         className={cn(
-                          'px-3 py-2 text-right tabular-nums text-gray-800 border-l border-gray-100/80 whitespace-nowrap',
+                          'px-3 py-2 text-right tabular-nums text-foreground border-l border-border/45 whitespace-nowrap',
                           isStrong && 'font-semibold'
                         )}
                         onClick={() => {

@@ -1,5 +1,6 @@
 import { Configuration, PopupRequest } from '@azure/msal-browser';
 import { checkEnvironmentVariables } from './envCheck';
+import { logger } from '@/lib/logger';
 
 // Check environment variables on import
 checkEnvironmentVariables();
@@ -7,10 +8,10 @@ checkEnvironmentVariables();
 // MSAL configuration factory - creates config at runtime
 export const createMsalConfig = (): Configuration => {
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-  
-  console.log('🔧 Creating MSAL config with origin:', currentOrigin);
-  console.log('🔧 Environment VITE_AZURE_POST_LOGOUT_REDIRECT_URI:', import.meta.env.VITE_AZURE_POST_LOGOUT_REDIRECT_URI);
-  console.log('🔧 Final postLogoutRedirectUri:', import.meta.env.VITE_AZURE_POST_LOGOUT_REDIRECT_URI || currentOrigin);
+
+  logger.log('🔧 Creating MSAL config with origin:', currentOrigin);
+  logger.log('🔧 Environment VITE_AZURE_POST_LOGOUT_REDIRECT_URI:', import.meta.env.VITE_AZURE_POST_LOGOUT_REDIRECT_URI);
+  logger.log('🔧 Final postLogoutRedirectUri:', import.meta.env.VITE_AZURE_POST_LOGOUT_REDIRECT_URI || currentOrigin);
   
   return {
     auth: {
@@ -21,7 +22,7 @@ export const createMsalConfig = (): Configuration => {
     },
     cache: {
       cacheLocation: 'sessionStorage', // This configures where your cache will be stored
-      storeAuthStateInCookie: false, // Set this to "true" if you are having issues on IE11 or Edge
+      storeAuthStateInCookie: false,
     },
     system: {
       loggerOptions: {
@@ -31,16 +32,16 @@ export const createMsalConfig = (): Configuration => {
           }
           switch (level) {
             case 0: // LogLevel.Error
-              console.error(message);
+              logger.error(message);
               return;
             case 1: // LogLevel.Warning
-              console.warn(message);
+              logger.warn(message);
               return;
             case 2: // LogLevel.Info
-              console.info(message);
+              logger.info(message);
               return;
             case 3: // LogLevel.Verbose
-              console.debug(message);
+              logger.debug(message);
               return;
             default:
               return;

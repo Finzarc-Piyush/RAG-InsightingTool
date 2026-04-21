@@ -21,3 +21,20 @@ export function assertAgenticRagConfiguration(): void {
     process.exit(1);
   }
 }
+
+/**
+ * Phase 2.D · When dashboard autogen is on, the agentic loop must be on.
+ * buildDashboard only fires inside runAgentTurn, so enabling autogen
+ * without AGENTIC_LOOP_ENABLED=true would be silently dead configuration.
+ */
+export function assertDashboardAutogenConfiguration(): void {
+  if (process.env.DASHBOARD_AUTOGEN_ENABLED !== "true") {
+    return;
+  }
+  if (!isAgenticLoopEnabled()) {
+    console.error(
+      "FATAL: DASHBOARD_AUTOGEN_ENABLED=true requires AGENTIC_LOOP_ENABLED=true (the dashboard draft is emitted from the agent loop). Either turn the agent loop on or unset DASHBOARD_AUTOGEN_ENABLED."
+    );
+    process.exit(1);
+  }
+}

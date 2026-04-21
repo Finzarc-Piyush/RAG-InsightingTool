@@ -89,9 +89,13 @@ function Router() {
     setLocation('/analysis');
   };
 
-  // Redirect root and old routes to /analysis
+  // Redirect root and old (/data-ops, /modeling) routes to /analysis.
+  // Guard against re-invoking setLocation when already on target (P-045).
+  // Legacy paths kept for bookmark-compat (P-072).
   useEffect(() => {
-    if (location === '/' || location === '/data-ops' || location === '/modeling') {
+    const isLegacy =
+      location === '/' || location === '/data-ops' || location === '/modeling';
+    if (isLegacy && location !== '/analysis') {
       setLocation('/analysis');
     }
   }, [location, setLocation]);
@@ -148,23 +152,15 @@ function Router() {
   );
 }
 
-// Component to handle authentication redirects
+// Component to handle authentication redirects. P-065: compute the redirect
+// flag synchronously from the URL so we never flash both branches while an
+// async setState settles.
 function AuthRedirectHandler() {
-  const [isHandlingRedirect, setIsHandlingRedirect] = useState(true);
-
-  useEffect(() => {
-    // Check if we're handling a redirect
+  const isHandlingRedirect = (() => {
+    if (typeof window === 'undefined') return false;
     const urlParams = new URLSearchParams(window.location.search);
-    const isRedirect = urlParams.has('code') || urlParams.has('error');
-    
-    if (isRedirect) {
-      // We're in a redirect flow, show the callback component
-      setIsHandlingRedirect(true);
-    } else {
-      // Normal app flow
-      setIsHandlingRedirect(false);
-    }
-  }, []);
+    return urlParams.has('code') || urlParams.has('error');
+  })();
 
   if (isHandlingRedirect) {
     return <AuthCallback />;
@@ -177,11 +173,20 @@ function AuthRedirectHandler() {
   );
 }
 
-// Create MSAL instance with dynamic config
-const msalInstance = new PublicClientApplication(createMsalConfig());
-registerMsalInstance(msalInstance);
+// P-016: Lazy singleton instead of top-level construction. Module re-parse
+// during HMR (or second import via code-split chunks) previously instantiated
+// a second MSAL client and silently invalidated cached auth state.
+let cachedMsalInstance: PublicClientApplication | null = null;
+function getMsalInstance(): PublicClientApplication {
+  if (!cachedMsalInstance) {
+    cachedMsalInstance = new PublicClientApplication(createMsalConfig());
+    registerMsalInstance(cachedMsalInstance);
+  }
+  return cachedMsalInstance;
+}
 
 function App() {
+  const msalInstance = getMsalInstance();
   return (
     <ErrorBoundary>
       <ThemeProvider>
