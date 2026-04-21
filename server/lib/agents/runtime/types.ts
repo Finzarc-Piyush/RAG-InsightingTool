@@ -7,6 +7,7 @@ import type {
   Message,
   SessionAnalysisContext,
 } from "../../../shared/schema.js";
+import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 
 export const AGENT_TRACE_MAX_BYTES = 48_000;
 
@@ -166,6 +167,8 @@ export interface AgentExecutionContext {
   onMidTurnSessionContext?: (payload: AgentMidTurnSessionPayload) => Promise<void>;
   /** Set when analytical tools replace ctx.data; used for chart validation and enrichment fallbacks. */
   lastAnalyticalTable?: LastAnalyticalTable;
+  /** Shared evidence store for all agents in this turn / investigation node. */
+  blackboard?: AnalyticalBlackboard;
   /** Emit a preliminary table to the chat stream (segmented thinking UX). */
   onIntermediateArtifact?: (payload: {
     preview: Record<string, unknown>[];
@@ -304,4 +307,6 @@ export interface AgentLoopResult {
   unexplained?: string;
   /** Phase-2 agent-emitted dashboard draft; rendered as a chat preview card. */
   dashboardDraft?: import("../../../shared/schema.js").DashboardSpec;
+  /** Populated blackboard from this turn's investigation (hypotheses + findings). */
+  blackboard?: AnalyticalBlackboard;
 }
