@@ -18,6 +18,7 @@ import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { generateHypotheses } from "./hypothesisPlanner.js";
 import { createBlackboard } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
+import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -1488,30 +1489,63 @@ export async function runAgentTurn(
     let answer = delegateAnswer || "";
     if (!answer && observations.length > 0) {
       try {
-        const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
-        answer = env.answer;
-        agentSuggestionHints = env.suggestionHints;
-        const trimmedCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
-        if (trimmedCtas.length) followUpPrompts = trimmedCtas;
-        // PR 1.G — capture Phase-1 rich fields when the synthesiser produced them.
-        if (env.magnitudes && env.magnitudes.length > 0) {
-          envelopeMagnitudes = env.magnitudes;
-          safeEmit("magnitudes", { items: env.magnitudes });
+        // W5: narrator-first path when the blackboard has structured findings;
+        // falls back to the existing synthesizer when blackboard is empty.
+        const useNarrator =
+          ctx.blackboard && shouldUseNarrator(ctx.blackboard) && ctx.mode === "analysis";
+
+        let envKeyInsight: string | null | undefined;
+        let envCtas: string[] = [];
+        let envMagnitudes: typeof envelopeMagnitudes;
+        let envUnexplained: string | undefined;
+
+        if (useNarrator) {
+          const narResult = await runNarrator(ctx, ctx.blackboard!, turnId, onLlmCall);
+          if (narResult) {
+            // formatAnswerFromEnvelope signature is already in scope
+            answer = formatAnswerFromEnvelope(narResult.body ?? "", narResult.keyInsight ?? null);
+            envKeyInsight = narResult.keyInsight ?? undefined;
+            envCtas = (narResult.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+            envMagnitudes = narResult.magnitudes;
+            envUnexplained = narResult.unexplained;
+          }
         }
-        if (env.unexplained) {
-          envelopeUnexplained = env.unexplained;
-          safeEmit("unexplained", { note: env.unexplained });
+
+        // Fallback: use existing synthesizer when narrator was skipped or returned null
+        if (!answer) {
+          const env = await synthesizeFinalAnswerEnvelope(ctx, observations, turnId, onLlmCall);
+          answer = env.answer;
+          agentSuggestionHints = env.suggestionHints;
+          envKeyInsight = env.keyInsight;
+          envCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+          envMagnitudes = env.magnitudes;
+          envUnexplained = env.unexplained;
         }
-        appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, env.keyInsight);
+
+        if (envCtas.length) followUpPrompts = envCtas;
+        if (!agentSuggestionHints.length) {
+          agentSuggestionHints = [...envCtas, ...(envKeyInsight ? [envKeyInsight] : [])];
+        }
+
+        // PR 1.G — capture Phase-1 rich fields.
+        if (envMagnitudes && envMagnitudes.length > 0) {
+          envelopeMagnitudes = envMagnitudes;
+          safeEmit("magnitudes", { items: envMagnitudes });
+        }
+        if (envUnexplained) {
+          envelopeUnexplained = envUnexplained;
+          safeEmit("unexplained", { note: envUnexplained });
+        }
+        appendEnvelopeInsightWhenNoCharts(mergedCharts, mergedInsights, envKeyInsight ?? undefined);
         appendInterAgentMessage(
           trace,
           {
             from: "Synthesizer",
             to: "Coordinator",
             intent: "answer_drafted",
-            evidenceRefs: ["synthesis"],
+            evidenceRefs: [useNarrator ? "narrator" : "synthesis"],
             meta: {
-              ctas: String(trimmedCtas.length),
+              ctas: String(envCtas.length),
               approxLen: String(answer.length),
             },
           },

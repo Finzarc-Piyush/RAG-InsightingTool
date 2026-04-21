@@ -179,6 +179,16 @@ export function addDomainContext(
   return e;
 }
 
+// ─── Narrator gate ──────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the blackboard has enough content to drive the narrator
+ * (at least one finding AND at least one hypothesis).
+ */
+export function shouldUseNarrator(bb: AnalyticalBlackboard): boolean {
+  return bb.findings.length > 0 && bb.hypotheses.length > 0;
+}
+
 // ─── Convergence heuristic ──────────────────────────────────────────────────
 
 /**
