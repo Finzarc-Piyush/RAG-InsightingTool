@@ -38,3 +38,9 @@ export function diagnosticSliceRowCap(): number {
 export function diagnosticMaxParallelBranches(): number {
   return Math.min(8, Math.max(1, num(process.env.DIAGNOSTIC_MAX_PARALLEL, 3)));
 }
+
+/** W7: master switch for the BFS investigation tree (self-questioning mode). */
+export function isDeepInvestigationEnabled(): boolean {
+  const v = process.env.DEEP_INVESTIGATION_ENABLED;
+  return v === "true" || v === "1";
+}
