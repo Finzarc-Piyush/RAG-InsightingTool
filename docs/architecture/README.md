@@ -32,6 +32,8 @@ automate the check.
    the canonical doc for the upload/enrichment pipeline.
 8. [`ci-and-env.md`](./ci-and-env.md) — CI matrix, env-file quirks,
    critical flags.
+9. [`wide-format.md`](./wide-format.md) — detect + reshape for
+   Nielsen-style wide-format uploads (in progress).
 
 Additional subsystem docs are added as each wave touches a new area;
 the current tree is intentionally small so nothing grows stale.
@@ -48,6 +50,7 @@ the current tree is intentionally small so nothing grows stale.
 | `server/services/upload/**` · `server/utils/uploadQueue.ts` | `upload_and_enrichment.md` |
 | `client/src/index.css` · `client/tailwind.config.ts` · `client/scripts/theme-check.mjs` | `brand-system.md` |
 | `.github/workflows/*` · `server/loadEnv.ts` · `client/vite.config.ts` · `client/vitest.config.ts` · server/client `.env.example` | `ci-and-env.md` |
+| `server/lib/wideFormat/**` · `server/tests/fixtures/wideFormat/**` · `python-service/*melt*` · `server/lib/dataOps/melt.ts` · `client/**/WideFormatConfirmModal*` | `wide-format.md` |
 
 ## Doc skeleton (copy when adding a new subsystem)
 
