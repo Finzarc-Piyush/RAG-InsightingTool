@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working cadence — tiny waves
+
+Every unit of work — audit fix, feature wave, refactor — is sized to
+**one file class** (pure fn OR schema mirror OR one route OR one UI
+component OR one polish fix) plus its test plus one doc line. Target
+~100–200 LOC per wave, reviewable in under 30 minutes, shippable in
+a single session. Planning documents (under `docs/plans/` or
+`/root/.claude/plans/`) express the full feature as a dependency
+graph of tiny waves; each wave ships on its own commit with a
+subject line `Wave W<n> · <subject>`.
+
+The cadence exists to combat rate limits and idle timeouts on long
+agent sessions, and to keep diffs reviewable. Never bundle unrelated
+concerns inside a wave; split waves by file class (pure fn → schema
+→ python → TS shim → wiring → UI → polish).
+
+When a request spans more than one wave, plan explicitly: list the
+waves, mark dependencies, ship in order, update
+`docs/architecture/*.md` "Recent changes" per wave.
+
 ## Repository layout
 
 Monorepo with three deployable services. No top-level `package.json` — each service has its own dependencies and is run from its own directory.
