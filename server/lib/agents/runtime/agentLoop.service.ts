@@ -15,6 +15,8 @@ import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief } from "./analysisBrief.js";
+import { generateHypotheses } from "./hypothesisPlanner.js";
+import { createBlackboard } from "./analyticalBlackboard.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -693,6 +695,16 @@ export async function runAgentTurn(
     const body = observations.join("\n\n---\n\n").trim();
     if (!body) return "";
     return `Summary from tool output:\n\n${body.slice(0, config.observationMaxChars)}`;
+  }
+
+  // W2/W3: initialise the shared analytical blackboard for this turn.
+  const blackboard = ctx.blackboard ?? createBlackboard();
+  ctx.blackboard = blackboard;
+
+  // W3: generate investigation hypotheses before the first planner call.
+  // Non-fatal — planner works without hypotheses if LLM call fails.
+  if (ctx.mode === "analysis") {
+    await generateHypotheses(ctx, blackboard, turnId, onLlmCall);
   }
 
   // P-A1: upfront RAG retrieval so the planner has semantic grounding on its

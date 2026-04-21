@@ -5,6 +5,7 @@ import { completeJson } from "./llmJson.js";
 import { summarizeContextForPrompt } from "./context.js";
 import type { ToolRegistry } from "./toolRegistry.js";
 import { sortPlanStepsByDependency } from "./workingMemory.js";
+import { formatForPlanner } from "./analyticalBlackboard.js";
 import { agentLog } from "./agentLogger.js";
 import { formatSkillsManifestForPlanner } from "./skills/index.js";
 import {
@@ -445,7 +446,14 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 1500)}\n\n`
       : "";
 
-  const user = `User question:\n${ctx.question}\n\n${ragBlock}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  const hypothesisBlock = ctx.blackboard
+    ? formatForPlanner(ctx.blackboard).trim()
+    : "";
+  const hypoSection = hypothesisBlock
+    ? `### INVESTIGATION_HYPOTHESES (test these; mark evidence in tool args):\n${hypothesisBlock}\n\n`
+    : "";
+
+  const user = `User question:\n${ctx.question}\n\n${ragBlock}${hypoSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,
