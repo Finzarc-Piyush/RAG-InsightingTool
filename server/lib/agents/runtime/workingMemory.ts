@@ -2,7 +2,7 @@ import type { WorkingMemoryEntry } from "./types.js";
 import type { PlanStep } from "./types.js";
 
 const MAX_ENTRIES = 12;
-const SUMMARY_PREVIEW = 480;
+const SUMMARY_PREVIEW = 1_500;
 
 /**
  * Compact block for the planner: ids, tools, ok, suggested columns, slots, summary preview.
@@ -28,6 +28,29 @@ export function formatWorkingMemoryBlock(entries: WorkingMemoryEntry[]): string 
     i++;
   }
   return lines.join("\n");
+}
+
+/**
+ * Converts a dependency-sorted flat step list into execution groups.
+ * Consecutive steps that share the same parallelGroup run concurrently;
+ * steps without a parallelGroup are singletons. Call after sortPlanStepsByDependency.
+ */
+export function groupSortedStepsForExecution(sorted: PlanStep[]): PlanStep[][] {
+  if (sorted.length === 0) return [];
+  const groups: PlanStep[][] = [];
+  let current: PlanStep[] = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const step = sorted[i];
+    const prev = sorted[i - 1];
+    if (step.parallelGroup && prev.parallelGroup === step.parallelGroup) {
+      current.push(step);
+    } else {
+      groups.push(current);
+      current = [step];
+    }
+  }
+  groups.push(current);
+  return groups;
 }
 
 /**

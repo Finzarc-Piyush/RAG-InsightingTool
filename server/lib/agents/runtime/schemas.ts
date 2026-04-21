@@ -8,6 +8,8 @@ export const planStepSchema = z.object({
     z.record(z.any())
   ),
   dependsOn: z.string().optional(),
+  /** Steps sharing the same parallelGroup execute concurrently when no dependsOn links exist. */
+  parallelGroup: z.string().optional(),
 });
 
 export const plannerOutputSchema = z.object({

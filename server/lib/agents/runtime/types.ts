@@ -14,7 +14,7 @@ export const AGENT_TRACE_MAX_BYTES = 48_000;
 export const AGENT_WORKBENCH_MAX_BYTES = 48_000;
 
 /** Max characters per workbench block code field. */
-export const AGENT_WORKBENCH_ENTRY_CODE_MAX = 12_000;
+export const AGENT_WORKBENCH_ENTRY_CODE_MAX = 24_000;
 
 /** Payload for throttled Cosmos merges during runAgentTurn (tool + plan milestones). */
 export type AgentMidTurnSessionPayload = {
@@ -92,16 +92,16 @@ export function loadAgentConfigFromEnv(): AgentConfig {
     return Number.isFinite(n) ? n : d;
   };
   return {
-    maxSteps: num(process.env.AGENT_MAX_STEPS, 12),
-    maxWallTimeMs: num(process.env.AGENT_MAX_WALL_MS, 120_000),
-    maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 20),
+    maxSteps: num(process.env.AGENT_MAX_STEPS, 30),
+    maxWallTimeMs: num(process.env.AGENT_MAX_WALL_MS, 600_000),
+    maxToolCalls: num(process.env.AGENT_MAX_TOOL_CALLS, 60),
     maxVerifierRoundsPerStep: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_STEP, 2),
     maxVerifierRoundsFinal: num(process.env.AGENT_MAX_VERIFIER_ROUNDS_FINAL, 2),
     // Default of 2 preserves prior hardcoded behaviour (P-020).
     maxReplansPerStep: num(process.env.AGENT_MAX_REPLANS_PER_STEP, 2),
-    maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 40),
+    maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 100),
     sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
-    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 8000),
+    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 20_000),
   };
 }
 
@@ -181,6 +181,8 @@ export interface PlanStep {
   args: Record<string, unknown>;
   /** Optional id of another step in the same plan that must run first (outputs inform this step). */
   dependsOn?: string;
+  /** Steps sharing the same parallelGroup (with no dependsOn on each other) execute concurrently. */
+  parallelGroup?: string;
 }
 
 export interface ToolCallRecord {

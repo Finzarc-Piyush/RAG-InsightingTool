@@ -417,9 +417,10 @@ Rules:
 - Compose multiple tools instead of a single catch-all; there is no legacy "delegate" tool.
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
 - If "Prior tool observations" or "Structured working memory" are present, use them for later-step args (columns, filters). Do not ignore successful tool output. If a prior step failed or returned a near–full-table result without useful summary, replan with a clearer question_override or add a follow-up tool.
-- At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan).
+- At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan), optional parallelGroup (string).
+- **parallelGroup**: assign the same string to independent steps that investigate different dimensions simultaneously (e.g. "pg1" for steps querying Region breakdown and Category breakdown at the same time). Steps in the same parallelGroup MUST NOT have dependsOn pointing to each other. Use parallelGroup when two or more steps have no data dependency and would benefit from running concurrently (e.g. separate breakdowns, correlation + trend). Cap at 3 steps per group.
 ${formatSkillsManifestForPlanner()}
-Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string}]}`;
+Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string}]}`;
 
   const priorBlock =
     priorObservationsText?.trim().length ?
@@ -470,6 +471,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     tool: s.tool,
     args: s.args as Record<string, unknown>,
     dependsOn: s.dependsOn,
+    parallelGroup: s.parallelGroup,
   }));
 
   if (stepsWithMeta.length === 0) {

@@ -15,7 +15,7 @@ import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief } from "./analysisBrief.js";
-import { formatWorkingMemoryBlock } from "./workingMemory.js";
+import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
 import { VERIFIER_VERDICT } from "./schemas.js";
@@ -175,7 +175,7 @@ function materializeDeferredBuildCharts(
           x: tmpl.x,
           y: tmpl.y,
           ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
-          availableKeys: Object.keys(first ?? {}).slice(0, 12),
+          availableKeys: Object.keys(first ?? {}).slice(0, 12).join(", "),
         });
         continue;
       }
@@ -344,7 +344,7 @@ async function synthesizeFinalAnswerEnvelope(
   const permBlock = ctx.permanentContext?.trim().length
     ? `\n\nUser notes:\n${ctx.permanentContext.trim().slice(0, 4000)}`
     : "";
-  const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 12000)}`;
+  const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 20_000)}`;
 
   const phase1Shape = ctx.analysisBrief?.questionShape;
   const phase1Block = phase1Shape
@@ -425,7 +425,7 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     if (chatFallback) {
       return { answer: chatFallback, ctas: [], suggestionHints: [] };
     }
-    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 8000);
+    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 20_000);
     return {
       answer:
         deterministic ?
@@ -692,7 +692,7 @@ export async function runAgentTurn(
   function observationsFallbackAnswer(): string {
     const body = observations.join("\n\n---\n\n").trim();
     if (!body) return "";
-    return `Summary from tool output:\n\n${body.slice(0, 8000)}`;
+    return `Summary from tool output:\n\n${body.slice(0, config.observationMaxChars)}`;
   }
 
   // P-A1: upfront RAG retrieval so the planner has semantic grounding on its
@@ -762,7 +762,7 @@ export async function runAgentTurn(
 
       const priorForPlanner =
         observations.length > 0
-          ? observations.join("\n\n---\n\n").slice(0, 12_000)
+          ? observations.join("\n\n---\n\n").slice(0, config.observationMaxChars)
           : undefined;
       const workingMemoryBlock = formatWorkingMemoryBlock(workingMemory);
       const handoffDigest =
@@ -968,6 +968,63 @@ export async function runAgentTurn(
 
       let stopEarly = false;
 
+      // W1: Track which steps should skip their individual reflector call because they
+      // are non-terminal members of a parallel group. The last step in the group still
+      // runs the reflector with all accumulated observations from the whole group.
+      const skipReflectorStepIds = new Set<string>();
+
+      // W1: Clear stale pre-resolved results from a prior replan iteration, then
+      // pre-resolve independent steps that share a parallelGroup concurrently.
+      // Results land in preResolvedToolResults; the step loop consumes them normally.
+      if (replans > 0) preResolvedToolResults.clear();
+      {
+        const MAX_PARALLEL_TOOLS = 3;
+        const groups = groupSortedStepsForExecution(plan.steps);
+        for (const group of groups) {
+          if (group.length < 2) continue;
+          const parallelSteps = group.slice(0, MAX_PARALLEL_TOOLS);
+          const t0 = Date.now();
+          const settled = await Promise.all(
+            parallelSteps.map(async (step) => {
+              if (preResolvedToolResults.has(step.id)) return null; // already resolved by skill dispatch
+              try {
+                const r = await registry.execute(step.tool, step.args, toolCtx);
+                return { id: step.id, result: r };
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                  id: step.id,
+                  result: { ok: false, summary: `Parallel pre-resolve error: ${msg}` } as ToolResult,
+                };
+              }
+            })
+          );
+          let addedCount = 0;
+          for (const s of settled) {
+            if (s) {
+              preResolvedToolResults.set(s.id, s.result);
+              addedCount++;
+            }
+          }
+          if (addedCount >= 2) {
+            for (const step of parallelSteps.slice(0, -1)) {
+              skipReflectorStepIds.add(step.id);
+            }
+            agentLog("parallel.group.resolved", {
+              turnId,
+              parallelGroup: group[0].parallelGroup,
+              count: addedCount,
+              elapsedMs: Date.now() - t0,
+            });
+            safeEmit("parallel_group_resolved", {
+              parallelGroup: group[0].parallelGroup,
+              stepIds: parallelSteps.map((s) => s.id),
+              count: addedCount,
+            });
+          }
+        }
+      }
+
       stepLoop: for (let si = 0; si < plan.steps.length; si++) {
         const step = plan.steps[si];
         if (Date.now() > deadline) {
@@ -1019,7 +1076,7 @@ export async function runAgentTurn(
             ok: result.ok,
             startedAt: t0,
             endedAt: t1,
-            resultSummary: result.summary.slice(0, 800),
+            resultSummary: result.summary.slice(0, 2_500),
           };
           trace.toolCalls.push(record);
 
@@ -1285,106 +1342,110 @@ export async function runAgentTurn(
           slots: stepResult.memorySlots,
         });
 
-        const refDigest =
-          isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
-            ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 3500)
-            : undefined;
-        // P-A3: aggregate distinct suggested columns from prior successful
-        // tool calls so the reflector can see what's already been explored.
-        const workingMemorySuggestedColumns = Array.from(
-          new Set(
-            workingMemory
-              .filter((e) => e.ok && Array.isArray(e.suggestedColumns))
-              .flatMap((e) => e.suggestedColumns ?? [])
-          )
-        );
-        const ref = await runReflector(
-          ctx,
-          {
-            observations,
-            lastTool: step.tool,
-            lastOk: stepResult.ok,
-            lastAnalyticalMeta:
-              step.tool === "run_analytical_query" ||
-              step.tool === "execute_query_plan"
-                ? stepResult.analyticalMeta
-                : undefined,
-            workingMemorySuggestedColumns,
-          },
-          turnId,
-          onLlmCall,
-          refDigest
-        );
-        trace.reflectorNotes.push(ref.action + (ref.note ? `: ${ref.note}` : ""));
-        appendInterAgentMessage(
-          trace,
-          {
-            from: "Reflector",
-            to: "Coordinator",
-            intent: `reflector_${ref.action}`,
-            evidenceRefs: [step.id, finalCallId],
-            meta: {
-              stepId: step.id,
-              tool: step.tool,
-              note: (ref.note ?? "").slice(0, 200),
+        // W1: Skip the per-step reflector for non-terminal parallel group members.
+        // The last step in the group runs the reflector with all accumulated observations.
+        if (!skipReflectorStepIds.has(step.id)) {
+          const refDigest =
+            isInterAgentPromptFeedbackEnabled() && trace.interAgentMessages?.length
+              ? formatInterAgentHandoffsForPrompt(trace.interAgentMessages, 3500)
+              : undefined;
+          // P-A3: aggregate distinct suggested columns from prior successful
+          // tool calls so the reflector can see what's already been explored.
+          const workingMemorySuggestedColumns = Array.from(
+            new Set(
+              workingMemory
+                .filter((e) => e.ok && Array.isArray(e.suggestedColumns))
+                .flatMap((e) => e.suggestedColumns ?? [])
+            )
+          );
+          const ref = await runReflector(
+            ctx,
+            {
+              observations,
+              lastTool: step.tool,
+              lastOk: stepResult.ok,
+              lastAnalyticalMeta:
+                step.tool === "run_analytical_query" ||
+                step.tool === "execute_query_plan"
+                  ? stepResult.analyticalMeta
+                  : undefined,
+              workingMemorySuggestedColumns,
             },
-          },
-          safeEmit
-        );
-
-        if (ref.action === "finish") {
-          const remaining = plan.steps.length - si - 1;
-          if (remaining > 0) {
-            trace.reflectorNotes.push(`finish_overridden: ${remaining} step(s) remain`);
-          } else {
-            stopEarly = true;
-            break;
-          }
-        } else if (ref.action === "clarify" && ref.clarify_message) {
+            turnId,
+            onLlmCall,
+            refDigest
+          );
+          trace.reflectorNotes.push(ref.action + (ref.note ? `: ${ref.note}` : ""));
           appendInterAgentMessage(
             trace,
             {
               from: "Reflector",
               to: "Coordinator",
-              intent: "clarify_user",
+              intent: `reflector_${ref.action}`,
               evidenceRefs: [step.id, finalCallId],
-              blockingQuestions: [ref.clarify_message.slice(0, 320)],
-              meta: { stepId: step.id },
+              meta: {
+                stepId: step.id,
+                tool: step.tool,
+                note: (ref.note ?? "").slice(0, 200),
+              },
             },
             safeEmit
           );
-          trace.endedAt = Date.now();
-          materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
-          return {
-            answer: ref.clarify_message,
-            charts: mergedCharts.length ? mergedCharts : undefined,
-            insights: mergedInsights.length ? mergedInsights : undefined,
-            agentTrace: capAgentTrace(trace),
-            lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
-            ...briefOut(),
-          };
-        } else if (ref.action === "replan") {
-          appendInterAgentMessage(
-            trace,
-            {
-              from: "Reflector",
-              to: "Planner",
-              intent: "replan_requested",
-              evidenceRefs: [step.id, finalCallId],
-              meta: { afterStep: step.id, tool: step.tool },
-            },
-            safeEmit
-          );
-          replans++;
-          void maybeMidTurn({
-            phase: "plan_replan",
-            summary: `Replanned after step ${step.id} (${step.tool}). Observations: ${observations.length}. Note: ${ref.note ?? "(none)"}`.slice(
-              0,
-              4000
-            ),
-            ok: true,
-          });
-          break;
+
+          if (ref.action === "finish") {
+            const remaining = plan.steps.length - si - 1;
+            if (remaining > 0) {
+              trace.reflectorNotes.push(`finish_overridden: ${remaining} step(s) remain`);
+            } else {
+              stopEarly = true;
+              break;
+            }
+          } else if (ref.action === "clarify" && ref.clarify_message) {
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "Reflector",
+                to: "Coordinator",
+                intent: "clarify_user",
+                evidenceRefs: [step.id, finalCallId],
+                blockingQuestions: [ref.clarify_message.slice(0, 320)],
+                meta: { stepId: step.id },
+              },
+              safeEmit
+            );
+            trace.endedAt = Date.now();
+            materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
+            return {
+              answer: ref.clarify_message,
+              charts: mergedCharts.length ? mergedCharts : undefined,
+              insights: mergedInsights.length ? mergedInsights : undefined,
+              agentTrace: capAgentTrace(trace),
+              lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+              ...briefOut(),
+            };
+          } else if (ref.action === "replan") {
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "Reflector",
+                to: "Planner",
+                intent: "replan_requested",
+                evidenceRefs: [step.id, finalCallId],
+                meta: { afterStep: step.id, tool: step.tool },
+              },
+              safeEmit
+            );
+            replans++;
+            void maybeMidTurn({
+              phase: "plan_replan",
+              summary: `Replanned after step ${step.id} (${step.tool}). Observations: ${observations.length}. Note: ${ref.note ?? "(none)"}`.slice(
+                0,
+                4000
+              ),
+              ok: true,
+            });
+            break;
+          }
         }
       }
 
@@ -1515,7 +1576,7 @@ export async function runAgentTurn(
         const spec = await buildDashboardFromTurn({
           question: ctx.question,
           answerBody: answer,
-          keyInsight: mergedInsights[0]?.body,
+          keyInsight: mergedInsights[0]?.text,
           charts: mergedCharts,
           magnitudes: envelopeMagnitudes,
           brief: ctx.analysisBrief,
@@ -1682,7 +1743,7 @@ export async function runAgentTurn(
       const partial =
         delegateAnswer ||
         (observations.length > 0
-          ? observations.join("\n\n").slice(0, 8000)
+          ? observations.join("\n\n").slice(0, config.observationMaxChars)
           : "Agent LLM budget exceeded for this turn.");
       return {
         answer: partial,
