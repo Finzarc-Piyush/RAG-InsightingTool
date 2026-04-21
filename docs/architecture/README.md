@@ -30,6 +30,8 @@ automate the check.
    `theme-check` gate, the tempDebt allowlist.
 7. [`upload_and_enrichment.md`](./upload_and_enrichment.md) — already
    the canonical doc for the upload/enrichment pipeline.
+8. [`ci-and-env.md`](./ci-and-env.md) — CI matrix, env-file quirks,
+   critical flags.
 
 Additional subsystem docs are added as each wave touches a new area;
 the current tree is intentionally small so nothing grows stale.
@@ -45,6 +47,7 @@ the current tree is intentionally small so nothing grows stale.
 | `server/shared/schema.ts` · `client/src/shared/schema.ts` | `schemas.md` |
 | `server/services/upload/**` · `server/utils/uploadQueue.ts` | `upload_and_enrichment.md` |
 | `client/src/index.css` · `client/tailwind.config.ts` · `client/scripts/theme-check.mjs` | `brand-system.md` |
+| `.github/workflows/*` · `server/loadEnv.ts` · `client/vite.config.ts` · `client/vitest.config.ts` · server/client `.env.example` | `ci-and-env.md` |
 
 ## Doc skeleton (copy when adding a new subsystem)
 
