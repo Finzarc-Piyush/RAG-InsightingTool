@@ -17,7 +17,7 @@
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief, DataSummary } from "../../../../shared/schema.js";
 import type { AnalysisSkill, SkillInvocation } from "./types.js";
-import { registerSkill } from "./index.js";
+import { registerSkill } from "./registry.js";
 
 const SKILL_NAME = "insight_explorer";
 

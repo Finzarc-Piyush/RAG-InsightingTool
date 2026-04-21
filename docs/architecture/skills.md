@@ -101,4 +101,14 @@ Canonical priorities (see source for the authoritative value):
 
 ## Recent changes
 
+- **Wave F1** — `selectSkill` is priority-ordered (see
+  `skills/registry.ts`); `time_window_diff` carries `priority: 10` so
+  it beats `variance_decomposer` on briefs that carry
+  `comparisonPeriods`. Test:
+  `server/tests/skillSelectionPriority.test.ts`.
+- **Wave F1 prerequisite** — extracted `registry.ts` out of `index.ts`
+  so the skill modules import `registerSkill` from a leaf module. The
+  previous layout formed a cycle
+  (`index.ts` → `varianceDecomposer.ts` → `index.ts`) that triggered a
+  TDZ `ReferenceError` at module load in every skill-related test.
 - Initial seed of this doc.

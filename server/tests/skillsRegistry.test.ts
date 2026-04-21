@@ -53,8 +53,20 @@ describe("skills registry behavior", () => {
   const originalAllowlist = process.env.DEEP_ANALYSIS_SKILL_ALLOWLIST;
 
   afterEach(() => {
-    process.env.DEEP_ANALYSIS_SKILLS_ENABLED = originalEnabled;
-    process.env.DEEP_ANALYSIS_SKILL_ALLOWLIST = originalAllowlist;
+    // `process.env.X = undefined` sets the env to the STRING "undefined"
+    // rather than deleting. Guard against that so allowlist leakage
+    // does not poison subsequent tests (and subsequent test files, which
+    // share this process under node:test).
+    if (originalEnabled === undefined) {
+      delete process.env.DEEP_ANALYSIS_SKILLS_ENABLED;
+    } else {
+      process.env.DEEP_ANALYSIS_SKILLS_ENABLED = originalEnabled;
+    }
+    if (originalAllowlist === undefined) {
+      delete process.env.DEEP_ANALYSIS_SKILL_ALLOWLIST;
+    } else {
+      process.env.DEEP_ANALYSIS_SKILL_ALLOWLIST = originalAllowlist;
+    }
   });
 
   it("returns empty manifest when flag is off", () => {

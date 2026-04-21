@@ -18,7 +18,7 @@
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";
 import type { AnalysisSkill, SkillInvocation } from "./types.js";
-import { registerSkill } from "./index.js";
+import { registerSkill } from "./registry.js";
 
 const SKILL_NAME = "time_window_diff";
 
@@ -47,6 +47,9 @@ const skill: AnalysisSkill = {
   description:
     "For 'period A vs period B' questions (e.g. 'Mar-22 vs Apr-25', 'Q3 vs Q4'): package a two-segment compare + per-period breakdowns + bar chart so the synthesiser can explain the delta with magnitudes.",
   handles: ["comparison", "variance_diagnostic"],
+  // Narrower than variance_decomposer — needs comparisonPeriods on the
+  // brief. Priority ensures we win the selection when both match.
+  priority: 10,
 
   appliesTo(brief, _ctx): boolean {
     if (!brief.outcomeMetricColumn) return false;

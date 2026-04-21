@@ -38,6 +38,13 @@ export interface AnalysisSkill {
   plan(brief: AnalysisBrief, ctx: AgentExecutionContext): SkillInvocation | null;
   /** Question shapes this skill nominally handles (for hinting). */
   handles: QuestionShape[];
+  /**
+   * Selection priority. Higher wins when multiple skills match the same
+   * brief. Narrow skills (that require strictly more of the brief — e.g.
+   * `comparisonPeriods` present) should carry a higher priority so they
+   * shadow broader siblings when their preconditions are met. Default 0.
+   */
+  priority?: number;
 }
 
 export function isDeepAnalysisSkillsEnabled(): boolean {
