@@ -32,15 +32,37 @@ export const verifierIssueSchema = z.object({
   evidence_refs: z.array(z.string()).default([]),
 });
 
+/**
+ * Single source of truth for verifier verdict strings. Keep the
+ * `VERIFIER_VERDICT` object and the zod enum tuple in lockstep — the
+ * type system will flag any drift. Callers that compare verdict
+ * values (`agentLoop.service.ts`) MUST reference `VERIFIER_VERDICT.*`
+ * rather than string literals so a typo is a compile error, not a
+ * silently-missed retry branch.
+ */
+export const VERIFIER_VERDICT = {
+  pass: "pass",
+  reviseNarrative: "revise_narrative",
+  retryTool: "retry_tool",
+  replan: "replan",
+  askUser: "ask_user",
+  abortPartial: "abort_partial",
+} as const;
+
+export type VerifierVerdict =
+  (typeof VERIFIER_VERDICT)[keyof typeof VERIFIER_VERDICT];
+
+const verifierVerdictValues = [
+  VERIFIER_VERDICT.pass,
+  VERIFIER_VERDICT.reviseNarrative,
+  VERIFIER_VERDICT.retryTool,
+  VERIFIER_VERDICT.replan,
+  VERIFIER_VERDICT.askUser,
+  VERIFIER_VERDICT.abortPartial,
+] as const;
+
 export const verifierOutputSchema = z.object({
-  verdict: z.enum([
-    "pass",
-    "revise_narrative",
-    "retry_tool",
-    "replan",
-    "ask_user",
-    "abort_partial",
-  ]),
+  verdict: z.enum(verifierVerdictValues),
   scores: z
     .object({
       goal_alignment: z.number().min(0).max(1).optional(),
@@ -49,14 +71,7 @@ export const verifierOutputSchema = z.object({
     })
     .optional(),
   issues: z.array(verifierIssueSchema).default([]),
-  course_correction: z.enum([
-    "pass",
-    "revise_narrative",
-    "retry_tool",
-    "replan",
-    "ask_user",
-    "abort_partial",
-  ]),
+  course_correction: z.enum(verifierVerdictValues),
   user_visible_note: z.string().optional(),
 });
 

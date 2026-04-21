@@ -134,5 +134,10 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave F3** — verdict string literals replaced with the exported
+  `VERIFIER_VERDICT` constant from `runtime/schemas.ts`. One source of
+  truth for the enum tuple; typos in `agentLoop.service.ts` or
+  `verifier.ts` are now compile errors, not silently-missed retry
+  branches.
 - Initial seed of this doc — captures the runtime as of the
   `claude/add-claude-documentation-PaA9h` branch.

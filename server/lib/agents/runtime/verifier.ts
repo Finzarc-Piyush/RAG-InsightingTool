@@ -1,7 +1,7 @@
 import type { AgentExecutionContext } from "./types.js";
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import type { VerifierResult, VerdictType } from "./types.js";
-import { verifierOutputSchema } from "./schemas.js";
+import { verifierOutputSchema, VERIFIER_VERDICT } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 
@@ -25,7 +25,7 @@ function chartPrecheck(
   if (!p || !p.success) return null;
   if (!allow.has(p.data.x) || !allow.has(p.data.y)) {
     return {
-      verdict: "revise_narrative",
+      verdict: VERIFIER_VERDICT.reviseNarrative,
       issues: [
         {
           code: "BAD_CHART_AXIS",
@@ -34,7 +34,7 @@ function chartPrecheck(
           evidenceRefs: [],
         },
       ],
-      course_correction: "revise_narrative",
+      course_correction: VERIFIER_VERDICT.reviseNarrative,
     };
   }
   return null;
@@ -83,9 +83,9 @@ Prefer course_correction "revise_narrative" for completeness issues (evidence is
   });
   if (!out.ok) {
     return {
-      verdict: "pass",
+      verdict: VERIFIER_VERDICT.pass,
       issues: [],
-      course_correction: "pass",
+      course_correction: VERIFIER_VERDICT.pass,
     };
   }
   const j = out.data;

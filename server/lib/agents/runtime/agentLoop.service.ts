@@ -18,6 +18,7 @@ import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { formatWorkingMemoryBlock } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
+import { VERIFIER_VERDICT } from "./schemas.js";
 import { agentLog } from "./agentLogger.js";
 import {
   appendInterAgentMessage,
@@ -1126,12 +1127,12 @@ export async function runAgentTurn(
               course_correction: verdict.course_correction,
             });
 
-            if (verdict.verdict === "pass") {
+            if (verdict.verdict === VERIFIER_VERDICT.pass) {
               break;
             }
             if (
-              verdict.verdict === "revise_narrative" ||
-              verdict.course_correction === "revise_narrative"
+              verdict.verdict === VERIFIER_VERDICT.reviseNarrative ||
+              verdict.course_correction === VERIFIER_VERDICT.reviseNarrative
             ) {
               const issuesText = verdict.issues.map((i) => i.description).join("; ");
               candidate = await rewriteNarrative(
@@ -1150,7 +1151,7 @@ export async function runAgentTurn(
           finalCandidate = candidate;
 
           const lastV = lastVerdictForStep(trace, step.id);
-          if (lastV === "retry_tool" && attempt < 1) {
+          if (lastV === VERIFIER_VERDICT.retryTool && attempt < 1) {
             trace.reflectorNotes.push(`retry_tool: re-exec ${step.tool}`);
             continue attemptLoop;
           }
@@ -1602,10 +1603,13 @@ export async function runAgentTurn(
         issue_codes: fv.issues.map((i) => i.code),
         course_correction: fv.course_correction,
       });
-      if (fv.verdict === "pass") {
+      if (fv.verdict === VERIFIER_VERDICT.pass) {
         break;
       }
-      if (fv.verdict === "revise_narrative" || fv.course_correction === "revise_narrative") {
+      if (
+        fv.verdict === VERIFIER_VERDICT.reviseNarrative ||
+        fv.course_correction === VERIFIER_VERDICT.reviseNarrative
+      ) {
         const issuesText = fv.issues.map((i) => i.description).join("; ");
         answer = await rewriteNarrative(
           ctx,
