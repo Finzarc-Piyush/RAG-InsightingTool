@@ -155,6 +155,13 @@ Minimum critical path to working end-to-end: 17 waves.
 
 ## Recent changes
 
+- **W3** — `server/lib/wideFormat/tokenize.ts` + test. `tokenize`
+  splits on whitespace/hyphen/underscore/pipe/paren/bracket/slash/
+  comma, preserving apostrophes so "Dec'24" stays one token.
+  `ngrams(tokens, sizes=[3,2,1])` emits contiguous n-grams joined
+  by a single space so the classifier (W4) can scan most-specific
+  first ("Value Sales" before "Value", "Sales"). 18-case test.
+  Appended to server test list.
 - **W2** — `server/lib/wideFormat/metricVocabulary.ts` + test.
   `matchMetric(token)` returns `{ canonical, confidence, raw }` for
   the Nielsen metric catalog: Value / Volume Sales+Share, Weighted
