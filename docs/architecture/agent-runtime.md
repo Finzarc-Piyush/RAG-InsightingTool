@@ -50,8 +50,41 @@ capabilities.
 - `server/lib/agents/orchestrator.ts` — `AgentOrchestrator.processQuery`.
 - `server/lib/agents/index.ts` — dispatcher registering 7 handlers
   (Conversational, DataOps, MLModel, Statistical, Comparison,
-  Correlation, General). Order matters.
+  Correlation, General). Order matters. Carries a `DANGER — capability
+  gap` banner at the top of the file.
 - `server/lib/agents/handlers/**` — individual handlers.
+
+**Capability gap (important):**
+
+The legacy handlers were frozen before Phase-1 skills and Phase-2
+dashboard autogen landed, so they can only serve:
+
+| Capability | Legacy | Agentic |
+|---|:---:|:---:|
+| Conversational replies | ✅ | ✅ |
+| Statistical / ML handlers (correlation, modelling, etc.) | ✅ | ✅ (via tools) |
+| Data-ops (filter / aggregate / pivot) | ✅ | ✅ |
+| Generic "tell me about this dataset" prose | ✅ | ✅ |
+| `variance_decomposer` skill | ❌ | ✅ |
+| `driver_discovery` skill | ❌ | ✅ |
+| `insight_explorer` skill | ❌ | ✅ |
+| `time_window_diff` skill | ❌ | ✅ |
+| Dashboard autogen (draft → from-spec → patch_dashboard tool) | ❌ | ✅ |
+| RAG-backed retrieval | partial | ✅ |
+| `agentTrace` / workbench SSE | ❌ | ✅ |
+
+**Do not** disable `AGENTIC_LOOP_ENABLED` as a hotfix. Use these
+narrower knobs instead:
+
+- `AGENT_TOOL_TIMEOUT_MS` — bound individual tool wall-time.
+- `AGENTIC_MAX_STEPS` — cap the plan length.
+- `DEEP_ANALYSIS_SKILLS_ENABLED=false` — turn off skills without
+  leaving the agentic runtime; the planner falls back to ad-hoc
+  tool plans.
+
+The invariant "no legacy fallback when agentic is on" is declared
+in `docs/plans/agentic_only_rag_chat.md` and enforced at boot by
+`runtime/assertAgenticRag.ts`.
 
 ## Data contracts
 
@@ -134,6 +167,11 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave F6** — documented the capability gap between the legacy
+  orchestrator and the agentic runtime; added a `DANGER — capability
+  gap` banner at the top of `server/lib/agents/index.ts` spelling out
+  the hotfix knobs to use instead of disabling
+  `AGENTIC_LOOP_ENABLED`.
 - **Wave F3** — verdict string literals replaced with the exported
   `VERIFIER_VERDICT` constant from `runtime/schemas.ts`. One source of
   truth for the enum tuple; typos in `agentLoop.service.ts` or

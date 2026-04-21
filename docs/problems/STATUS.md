@@ -107,12 +107,12 @@ Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
 | P-053 | deferred | a11y audit pass (aria labels, focus restoration) |
 | P-056 | deferred | Negative-path tests for chart compiler / RAG retrieve / Snowflake / SSE flusher |
 | P-058 | partial | CSV diagnostics surface malformed rows; strict-first fallback not yet implemented |
-| P-059 | partial | Drift-check script landed; CI wiring blocks on real reconciliation (`agentTrace` is client-only today) |
+| P-059 | partial | Drift-check script landed; CI wiring blocks on real reconciliation. (`agentTrace` note was stale — both `server/shared/schema.ts:206` and `client/src/shared/schema.ts:201` declare it today as `z.record(z.unknown()).optional()`. Strict typing remains a future improvement.) |
 | P-061 | deferred | Per-batch CSV schema revalidation |
 | P-062 | deferred | Vitest + `test` script in `client/` (new tooling) |
 | P-063 | deferred | `postcss.config.js` vs Tailwind v4 assumptions |
 | P-064 | deferred | Recharts chunk split (perf polish) |
-| P-073 | partial | Auth-path swept; remaining DashboardModal / DataSummaryModal / DatasetEnrichmentLoader sweeps left |
+| P-073 | partial | Auth-path swept; DatasetEnrichmentLoader / FilterAppliedMessage / PivotGrid migrated to semantic tokens in Wave F4 of the audit-resolution plan. Remaining: DashboardModal / DataSummaryModal sweeps. |
 | P-074 | done (verified already narrow) | `httpClient.ts` already logs method + route + status + request-id only |
 | P-075 | deferred | Context value memoization |
 | P-076 | deferred | `useSessionLoader` dep stabilization |
