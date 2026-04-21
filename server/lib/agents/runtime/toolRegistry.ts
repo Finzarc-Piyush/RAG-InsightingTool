@@ -58,6 +58,25 @@ type RegisteredTool = {
   argsHelp: string;
 };
 
+/**
+ * Thrown when `ToolRegistry.register` is called with a name that is
+ * already registered. The registry is meant to be populated once at boot
+ * (via `registerTools`), so a duplicate indicates a merge conflict or a
+ * double-import — either way the run should fail loud, not swap
+ * implementations at runtime.
+ */
+export class ToolAlreadyRegisteredError extends Error {
+  readonly toolName: string;
+  constructor(toolName: string) {
+    super(
+      `Tool "${toolName}" is already registered. Tools are registered once at boot; ` +
+        `a duplicate usually means a merge landed two implementations. Remove one or rename it.`
+    );
+    this.name = "ToolAlreadyRegisteredError";
+    this.toolName = toolName;
+  }
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
 
@@ -67,6 +86,9 @@ export class ToolRegistry {
     run: ToolExecutor,
     meta: ToolManifestEntry
   ) {
+    if (this.tools.has(name)) {
+      throw new ToolAlreadyRegisteredError(name);
+    }
     this.tools.set(name, { input, run, description: meta.description, argsHelp: meta.argsHelp });
   }
 

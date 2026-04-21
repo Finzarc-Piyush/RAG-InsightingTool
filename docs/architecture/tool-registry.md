@@ -88,4 +88,11 @@ the loop runs them through `ToolRegistry.execute`.
 
 ## Recent changes
 
+- **Wave F2** — `ToolRegistry.register` throws
+  `ToolAlreadyRegisteredError` when the tool name is taken. Boot-time
+  registration runs once per process; a collision means a merge
+  conflict landed two implementations. Test:
+  `server/tests/toolRegistryDuplicateGuard.test.ts`. Skill registry
+  stays idempotent on purpose (HMR, test re-imports) — the asymmetry
+  is documented in `skills.md` "Known pitfalls".
 - Initial seed of this doc.
