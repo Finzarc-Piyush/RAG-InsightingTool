@@ -155,6 +155,15 @@ Minimum critical path to working end-to-end: 17 waves.
 
 ## Recent changes
 
+- **W4** — `server/lib/wideFormat/tagColumn.ts` + test. Composes
+  W1+W2+W3 into a per-header tag: `id | period | metric | compound |
+  ambiguous`. Scans the raw header first (so "MAT Dec-24" matches
+  with its separators intact), then n-grams from the tokenizer,
+  keeping the highest-confidence period + metric per header.
+  "compound" = both present; "id" = short text, no year tokens, no
+  period/metric signal; "ambiguous" = everything else.
+  `tagColumns(headers[])` batches + preserves order. 34-case test
+  appended to server test list.
 - **W3** — `server/lib/wideFormat/tokenize.ts` + test. `tokenize`
   splits on whitespace/hyphen/underscore/pipe/paren/bracket/slash/
   comma, preserving apostrophes so "Dec'24" stays one token.
