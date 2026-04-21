@@ -17,6 +17,7 @@ import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief } from "./analysisBrief.js";
 import { generateHypotheses } from "./hypothesisPlanner.js";
 import { createBlackboard } from "./analyticalBlackboard.js";
+import { runContextAgentRound2 } from "./contextAgent.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -1469,6 +1470,12 @@ export async function runAgentTurn(
         continue;
       }
       break;
+    }
+
+    // W4: RAG Round 2 — derive queries from blackboard findings and retrieve
+    // additional domain context before synthesis. Non-fatal; runs once per turn.
+    if (ctx.blackboard && ctx.mode === "analysis") {
+      await runContextAgentRound2(ctx, ctx.blackboard, turnId);
     }
 
     await maybeMidTurn({
