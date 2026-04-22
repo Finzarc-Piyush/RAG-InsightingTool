@@ -87,7 +87,8 @@ export function createApp() {
     }).catch((error) => {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.warn("⚠️ Snowflake: startup check failed, continuing without it:", errorMessage);
-    })
+    }),
+    import("./lib/columnarStorage.js").then(m => m.initDuckDBEager()).catch(() => {})
   ]).catch(() => {
     // Ignore - services are optional
   });

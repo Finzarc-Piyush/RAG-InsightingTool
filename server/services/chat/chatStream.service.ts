@@ -974,6 +974,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               ).dashboardDraft,
             }
           : {}),
+        ...((result as { appliedFilters?: Array<{ column: string; op: 'in' | 'not_in'; values: string[]; match?: 'exact' | 'case_insensitive' | 'contains' }> }).appliedFilters?.length
+          ? {
+              appliedFilters: (
+                result as { appliedFilters: Array<{ column: string; op: 'in' | 'not_in'; values: string[]; match?: 'exact' | 'case_insensitive' | 'contains' }> }
+              ).appliedFilters,
+            }
+          : {}),
       };
 
       await addMessagesBySessionId(sessionId, [

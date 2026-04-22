@@ -119,3 +119,29 @@ describe("sortPlanStepsByDependency with parallelGroup", () => {
     assert.strictEqual(sorted![1].parallelGroup, "pg1");
   });
 });
+
+describe("O2: hypothesisId round-trips through PlanStep", () => {
+  it("hypothesisId is preserved when set", () => {
+    const s = step("s1", { hypothesisId: "h1" });
+    assert.strictEqual(s.hypothesisId, "h1");
+    const sorted = sortPlanStepsByDependency([s]);
+    assert.ok(sorted !== null);
+    assert.strictEqual(sorted![0].hypothesisId, "h1");
+  });
+
+  it("hypothesisId is undefined when omitted", () => {
+    const s = step("s1");
+    assert.strictEqual(s.hypothesisId, undefined);
+  });
+
+  it("multiple steps can carry different hypothesisIds", () => {
+    const steps = [
+      step("a", { parallelGroup: "pg1", hypothesisId: "h1" }),
+      step("b", { parallelGroup: "pg1", hypothesisId: "h2" }),
+    ];
+    const sorted = sortPlanStepsByDependency(steps);
+    assert.ok(sorted !== null);
+    assert.strictEqual(sorted![0].hypothesisId, "h1");
+    assert.strictEqual(sorted![1].hypothesisId, "h2");
+  });
+});

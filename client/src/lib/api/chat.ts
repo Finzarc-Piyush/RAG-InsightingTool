@@ -236,6 +236,13 @@ function dispatchEvent(
         payload as { entry?: AgentWorkbenchEntry }
       );
       break;
+    // W12: deep investigation tree events
+    case "sub_question_spawned":
+    case "investigation_progress":
+    case "node_started":
+    case "node_answered":
+      callbacks.onAgentEvent?.(eventType, payload);
+      break;
     default:
       break;
   }

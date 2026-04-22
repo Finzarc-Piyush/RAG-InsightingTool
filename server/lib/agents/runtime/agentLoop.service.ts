@@ -632,6 +632,18 @@ export async function runAgentTurn(
   const briefOut = () =>
     ctx.analysisBrief ? { analysisBrief: ctx.analysisBrief } : {};
 
+  const appliedFiltersOut = () =>
+    ctx.inferredFilters?.length
+      ? {
+          appliedFilters: ctx.inferredFilters.map((f) => ({
+            column: f.column,
+            op: f.op,
+            values: f.values,
+            match: f.match,
+          })),
+        }
+      : {};
+
   const mergeStepArtifacts = (
     tool: string,
     result: ToolResult,
@@ -943,6 +955,7 @@ export async function runAgentTurn(
           agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
           lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
           ...briefOut(),
+      ...appliedFiltersOut(),
         };
       }
 
@@ -1157,6 +1170,7 @@ export async function runAgentTurn(
               agentTrace: capAgentTrace(trace),
               lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
               ...briefOut(),
+      ...appliedFiltersOut(),
             };
           }
 
@@ -1180,6 +1194,7 @@ export async function runAgentTurn(
                 stepId: step.id,
                 turnId,
                 blackboard: ctx.blackboard,
+                planSteps: plan.steps,
               },
               onLlmCall
             );
@@ -1472,6 +1487,7 @@ export async function runAgentTurn(
               agentTrace: capAgentTrace(trace),
               lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
               ...briefOut(),
+      ...appliedFiltersOut(),
             };
           } else if (ref.action === "replan") {
             appendInterAgentMessage(
@@ -1761,6 +1777,7 @@ export async function runAgentTurn(
         agentSuggestionHints: agentSuggestionHints.length ? agentSuggestionHints : undefined,
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         ...briefOut(),
+      ...appliedFiltersOut(),
       };
     }
 
@@ -1782,6 +1799,7 @@ export async function runAgentTurn(
           stepId: "final",
           turnId,
           blackboard: ctx.blackboard,
+          planSteps: trace.steps,
         },
         onLlmCall
       );
@@ -1862,6 +1880,7 @@ export async function runAgentTurn(
       ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
+      ...appliedFiltersOut(),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -1889,6 +1908,7 @@ export async function runAgentTurn(
         agentTrace: capAgentTrace(trace),
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         ...briefOut(),
+      ...appliedFiltersOut(),
       };
     }
     trace.endedAt = Date.now();
@@ -1915,6 +1935,7 @@ export async function runAgentTurn(
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
+      ...appliedFiltersOut(),
     };
   }
 }

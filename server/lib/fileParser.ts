@@ -7,7 +7,7 @@ import {
   parseFlexibleDate,
   sanitizeDateStringForParse,
 } from './dateUtils.js';
-import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
+import { isLikelyIdentifierColumnName, isIdentifierLikeNumericColumn } from './columnIdHeuristics.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 import type { DatasetProfile } from './datasetProfile.js';
@@ -346,7 +346,19 @@ function formatLocalYMD(d: Date): string {
 /** Prefer YYYY-MM-DD when the source has no explicit time; otherwise full ISO UTC. */
 function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
   if (raw instanceof Date) {
-    return isLocalMidnight(parsed) ? formatLocalYMD(parsed) : parsed.toISOString();
+    // Excel date cells have no time component. xlsx parses them as Date objects
+    // at UTC midnight (00:00 UTC). On non-UTC servers isLocalMidnight() returns
+    // false, causing toISOString() to be used ("2018-01-03T00:00:00.000Z").
+    // DuckDB cannot TRY_CAST that form directly to DATE → inline SQL returns null.
+    // Treat UTC midnight as date-only too so DuckDB always gets "YYYY-MM-DD".
+    const isUtcMidnight =
+      parsed.getUTCHours() === 0 &&
+      parsed.getUTCMinutes() === 0 &&
+      parsed.getUTCSeconds() === 0 &&
+      parsed.getUTCMilliseconds() === 0;
+    return isLocalMidnight(parsed) || isUtcMidnight
+      ? formatLocalYMD(parsed)
+      : parsed.toISOString();
   }
   const t = sanitizeDateStringForParse(String(raw));
   const hasExplicitTime = /T\d{2}:\d{2}/.test(t) || /\b\d{1,2}:\d{2}:\d{2}\b/.test(t);
@@ -570,7 +582,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       }
     }
 
-    if (isNumeric) {
+    if (isNumeric && !isIdentifierLikeNumericColumn(col, nonNullValues)) {
       type = 'number';
       numericColumns.push(col);
     } else if (isDate) {

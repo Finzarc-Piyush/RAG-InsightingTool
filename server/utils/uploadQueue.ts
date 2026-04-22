@@ -174,7 +174,7 @@ class UploadQueue {
    * Process a single job
    */
   private async processJob(job: UploadJob): Promise<void> {
-    const JOB_TIMEOUT = 30 * 60 * 1000; // 30 minutes timeout for large files
+    const JOB_TIMEOUT = 120 * 60 * 1000; // 120 minutes timeout for large files
     const timeoutId = setTimeout(() => {
       if (job.status !== 'completed' && job.status !== 'failed') {
         job.status = 'failed';
@@ -515,44 +515,68 @@ class UploadQueue {
           data = finalPrep.data;
           summary = finalPrep.summary;
         }
+        // Always build heuristic context immediately so the understanding checkpoint
+        // can unblock chat without waiting for the LLM seed round-trips.
+        const { emptySessionAnalysisContext, seedSessionAnalysisContextLLM } = await import(
+          '../lib/sessionAnalysisContext.js'
+        );
+        const { suggestedFollowUpsFromDataSummary } = await import(
+          '../lib/suggestedFollowUpsFromSummary.js'
+        );
+        const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
+          fileLabel: job.fileName,
+        });
+        // LLM-generated questions win; hardcoded template list only used if LLM
+        // output is empty (fast-path / failure fallback).
+        const mergedFollowUps = mergeSuggestedQuestions(
+          datasetProfile.suggestedQuestions,
+          derivedFollowUps
+        );
+        const baseCtx = emptySessionAnalysisContext();
+        const caveats: string[] = [];
+        if (datasetProfile.notes?.trim()) {
+          caveats.push(datasetProfile.notes.trim().slice(0, 500));
+        }
+        sessionAnalysisContext = {
+          ...baseCtx,
+          suggestedFollowUps: mergedFollowUps.slice(0, 12),
+          dataset: {
+            ...baseCtx.dataset,
+            shortDescription: datasetProfile.shortDescription || '',
+            grainGuess: datasetProfile.grainGuess,
+            columnRoles: [],
+            caveats,
+          },
+          lastUpdated: { reason: 'seed', at: new Date().toISOString() },
+        };
+
         const fastUploadCtx =
           process.env.FAST_UPLOAD_SESSION_CONTEXT === 'true' ||
           process.env.FAST_UPLOAD_SESSION_CONTEXT === '1';
-        if (fastUploadCtx) {
-          const { emptySessionAnalysisContext } = await import('../lib/sessionAnalysisContext.js');
-          const { suggestedFollowUpsFromDataSummary } = await import(
-            '../lib/suggestedFollowUpsFromSummary.js'
-          );
-          const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
-            fileLabel: job.fileName,
-          });
-          const mergedFollowUps = mergeSuggestedQuestions(
-            derivedFollowUps,
-            datasetProfile.suggestedQuestions
-          );
-          const baseCtx = emptySessionAnalysisContext();
-          const caveats: string[] = [];
-          if (datasetProfile.notes?.trim()) {
-            caveats.push(datasetProfile.notes.trim().slice(0, 500));
-          }
-          sessionAnalysisContext = {
-            ...baseCtx,
-            suggestedFollowUps: mergedFollowUps.slice(0, 12),
-            dataset: {
-              ...baseCtx.dataset,
-              shortDescription: datasetProfile.shortDescription || '',
-              grainGuess: datasetProfile.grainGuess,
-              columnRoles: [],
-              caveats,
-            },
-            lastUpdated: { reason: 'seed', at: new Date().toISOString() },
-          };
-        } else {
-          const { seedSessionAnalysisContextLLM } = await import('../lib/sessionAnalysisContext.js');
-          sessionAnalysisContext = await seedSessionAnalysisContextLLM({
-            datasetProfile,
-            dataSummary: summary,
-          });
+        if (!fastUploadCtx) {
+          // Fire-and-forget: upgrade stored context via LLM seed after chat is already unblocked.
+          void (async () => {
+            try {
+              const seededCtx = await seedSessionAnalysisContextLLM({
+                datasetProfile,
+                dataSummary: summary,
+              });
+              const doc = await getChatBySessionIdEfficient(job.sessionId);
+              if (!doc) return;
+              // If the user already saved context while we were seeding, their merged
+              // sessionAnalysisContext is authoritative — do not clobber it.
+              if (doc.permanentContext?.trim()) {
+                return;
+              }
+              await updateChatDocument({
+                ...doc,
+                sessionAnalysisContext: seededCtx,
+                lastUpdatedAt: Date.now(),
+              });
+            } catch {
+              // best-effort — heuristic context already persisted
+            }
+          })();
         }
       }
 
@@ -564,12 +588,29 @@ class UploadQueue {
       // Understanding checkpoint: make summary/context available immediately for UX,
       // while non-critical finalization work continues in this job.
       try {
+        const { buildInitialAssistantContentFromContext } = await import('../lib/sessionAnalysisContext.js');
         const existingDoc = (await getChatBySessionIdEfficient(job.sessionId)) || previewDoc;
+        // If the user saved context while we were enriching, their merged
+        // sessionAnalysisContext is authoritative — preserve it over the local heuristic one.
+        const ctxForInitial =
+          existingDoc?.permanentContext?.trim() && existingDoc?.sessionAnalysisContext
+            ? existingDoc.sessionAnalysisContext
+            : sessionAnalysisContext;
+        const initialContent = buildInitialAssistantContentFromContext(summary, ctxForInitial);
+        const initialMessage = {
+          role: 'assistant' as const,
+          content: initialContent,
+          timestamp: Date.now(),
+          suggestedQuestions: ctxForInitial.suggestedFollowUps.slice(0, 6),
+        };
+        const existingMessages = existingDoc?.messages ?? [];
+        const messages = existingMessages.length === 0 ? [initialMessage] : existingMessages;
         await updateChatDocument({
           ...existingDoc,
           dataSummary: summary,
           datasetProfile,
-          sessionAnalysisContext,
+          sessionAnalysisContext: ctxForInitial,
+          messages,
           enrichmentStatus: "complete",
           lastUpdatedAt: Date.now(),
         });
@@ -738,6 +779,12 @@ class UploadQueue {
       warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
       // Step 9: Materialize authoritative DuckDB table for all upload paths.
+      // Apply temporal facet columns to full data so DuckDB has Month · X, Year · X, etc.
+      // (sampleRows already received applyTemporalFacetColumns above; this mirrors that for DuckDB.)
+      if (summary.dateColumns.length > 0 && !useLargeFileProcessing) {
+        const { applyTemporalFacetColumns: applyFacets } = await import('../lib/temporalFacetColumns.js');
+        applyFacets(data, summary.dateColumns);
+      }
       job.status = 'saving';
       job.progress = 88;
       let columnarReadyMarker: string | undefined;
@@ -809,7 +856,7 @@ class UploadQueue {
           if (useLargeFileProcessing) {
             console.log(`📊 Large file: Data stored in columnar format at ${storagePath}. Only sampleRows stored in CosmosDB.`);
           } else if (!shouldStoreRawData) {
-            console.log(`⚠️ Large dataset detected (${data.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB). Storing only sampleRows in CosmosDB.`);
+            console.log(`ℹ️ Large dataset (${data.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB): full data materialized to DuckDB columnar storage; CosmosDB holds sampleRows only (CosmosDB 4 MB limit).`);
           }
           
           chatDocument = {

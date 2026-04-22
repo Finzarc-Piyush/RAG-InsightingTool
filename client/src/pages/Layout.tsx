@@ -36,6 +36,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { RagContextPanel } from '@/components/RagContextPanel';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -324,6 +325,10 @@ export function Layout({
                 </CollapsibleContent>
               </Collapsible>
             )}
+
+          {sidebarOpen && sessionId && currentPage === 'home' && (
+            <RagContextPanel sessionId={sessionId} sidebarOpen={sidebarOpen} />
+          )}
 
           <NavButton
             key="dashboard"

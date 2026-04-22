@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { format as formatDate } from 'date-fns';
 import { ChartSpec } from '@/shared/schema';
 import { ChartModal } from './ChartModal';
@@ -40,7 +40,6 @@ import {
 import {
   ActiveChartFilters,
   applyChartFilters,
-  CHART_SERIES_VISIBILITY_FILTER_KEY,
   deriveChartFilterDefinitions,
   hasActiveFilters,
   ChartFilterDefinition,
@@ -228,8 +227,9 @@ export function ChartRenderer({
     }
     if (specSeriesKeys?.length) {
       for (const sk of specSeriesKeys) {
-        if (!forceNumericKeys.includes(sk)) {
-          forceNumericKeys.push(sk);
+        // Exclude series keys from filter UI — legend handles series visibility
+        if (!excludeKeys.includes(sk)) {
+          excludeKeys.push(sk);
         }
       }
     }
@@ -270,29 +270,6 @@ export function ChartRenderer({
       forceNumericKeys,
       forceDateKeys,
     });
-
-    if (
-      specSeriesKeys &&
-      specSeriesKeys.length > 1 &&
-      (type === 'line' || type === 'bar' || type === 'area')
-    ) {
-      const seriesLabel = chart.seriesColumn?.trim()
-        ? chart.seriesColumn.replace(/\s*·\s*/g, ' · ')
-        : 'Series';
-      const seriesFilter: ChartFilterDefinition = {
-        key: CHART_SERIES_VISIBILITY_FILTER_KEY,
-        label: seriesLabel,
-        type: 'categorical',
-        options: specSeriesKeys.map((k) => ({
-          value: k,
-          label: k
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, (c) => c.toUpperCase()),
-          count: originalData.length,
-        })),
-      };
-      return [...base, seriesFilter].sort((a, b) => a.label.localeCompare(b.label));
-    }
 
     return base;
   }, [enableFilters, originalData, x, y, specSeriesKeys, type, chart.seriesColumn]);
@@ -370,6 +347,9 @@ export function ChartRenderer({
     () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
     [specSeriesKeys, effectiveFilters]
   );
+
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeys?.join(',')]); // reset on chart change
 
   const filteredData = useMemo(() => {
     if (!enableFilters) return originalData;
@@ -596,6 +576,18 @@ export function ChartRenderer({
     [updateFilters]
   );
 
+  const handleToggleSeriesLegend = useCallback((key: string) => {
+    setHiddenSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleToggleAllSeriesLegend = useCallback((showAll: boolean) => {
+    setHiddenSeries(showAll ? new Set() : new Set(specSeriesKeys ?? []));
+  }, [specSeriesKeys]);
+
   const handleToggleCategoricalOption = useCallback(
     (key: string, option: string, checked: boolean) => {
       updateFilters((prev) => {
@@ -788,6 +780,7 @@ export function ChartRenderer({
           );
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
+            <>
             <ResponsiveContainer
               width="100%"
               height={fillParent ? '100%' : isSingleChart ? 400 : 250}
@@ -835,13 +828,9 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
-                <Legend
-                  wrapperStyle={{ paddingTop: 4 }}
-                  iconType="line"
-                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
-                />
-                {lineMultiKeys.map((k, i) => {
+                {(specSeriesKeys ?? []).map((k, i) => {
                   const c = COLORS[i % COLORS.length];
+                  const isHidden = hiddenSeries.has(k);
                   return (
                     <Line
                       key={k}
@@ -850,14 +839,25 @@ export function ChartRenderer({
                       name={k}
                       stroke={c}
                       strokeWidth={2}
-                      dot={showDots ? { r: 4, fill: c } : false}
-                      activeDot={{ r: 4 }}
+                      strokeOpacity={isHidden ? 0 : 1}
+                      dot={false}
+                      activeDot={isHidden ? false : { r: 4 }}
                     />
                   );
                 })}
               </LineChart>
             </ResponsiveContainer>
-          );
+            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'line' as const }))}
+                iconType="line"
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+          </>
+        );
         }
 
         // Dual-axis (y2) or single-series line
@@ -1024,6 +1024,7 @@ export function ChartRenderer({
             : [];
         const stacked = barLayout !== 'grouped';
         return (
+          <>
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
             <BarChart data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 120 : isSingleChart ? 100 : 80 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -1051,25 +1052,36 @@ export function ChartRenderer({
               <Tooltip formatter={rechartsTooltipValueFormatter} />
               {multiKeys.length > 0 ? (
                 <>
-                  <Legend
-                    wrapperStyle={{ paddingTop: 8 }}
-                    content={(props) => <RechartsWideLegendContent {...props} />}
-                  />
-                  {multiKeys.map((k, i) => (
-                    <Bar
-                      key={k}
-                      dataKey={k}
-                      stackId={stacked ? 'stack' : undefined}
-                      fill={COLORS[i % COLORS.length]}
-                      radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
-                    />
-                  ))}
+                  {(specSeriesKeys ?? []).map((k, i) => {
+                    const isHidden = hiddenSeries.has(k);
+                    return (
+                      <Bar
+                        key={k}
+                        dataKey={k}
+                        stackId={stacked ? 'stack' : undefined}
+                        fill={COLORS[i % COLORS.length]}
+                        fillOpacity={isHidden ? 0 : 1}
+                        radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                      />
+                    );
+                  })}
                 </>
               ) : (
                 <Bar dataKey={y} fill={chartColor} radius={[4, 4, 0, 0]} />
               )}
             </BarChart>
           </ResponsiveContainer>
+          {multiKeys.length > 0 && (
+            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'rect' as const }))}
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+          )}
+          </>
         );
       }
 
@@ -1406,6 +1418,7 @@ export function ChartRenderer({
           );
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
+            <>
             <ResponsiveContainer
               width="100%"
               height={fillParent ? '100%' : isSingleChart ? 400 : 250}
@@ -1452,13 +1465,9 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
-                <Legend
-                  wrapperStyle={{ paddingTop: 8 }}
-                  iconType="line"
-                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
-                />
-                {areaMultiKeys.map((k, i) => {
+                {(specSeriesKeys ?? []).map((k, i) => {
                   const c = COLORS[i % COLORS.length];
+                  const isHidden = hiddenSeries.has(k);
                   return (
                     <Area
                       key={k}
@@ -1468,13 +1477,24 @@ export function ChartRenderer({
                       stackId={stackedArea ? 'areaStack' : undefined}
                       stroke={c}
                       fill={c}
-                      fillOpacity={stackedArea ? 0.55 : 0.3}
+                      strokeOpacity={isHidden ? 0 : 1}
+                      fillOpacity={isHidden ? 0 : stackedArea ? 0.55 : 0.3}
                       strokeWidth={2}
                     />
                   );
                 })}
               </AreaChart>
             </ResponsiveContainer>
+            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'line' as const }))}
+                iconType="line"
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+            </>
           );
         }
 

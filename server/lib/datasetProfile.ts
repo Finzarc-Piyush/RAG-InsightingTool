@@ -43,7 +43,7 @@ Return ONLY a JSON object with these keys:
 - shortDescription: 1–3 sentences describing what the dataset is about.
 - dateColumns: every column that holds dates, datetimes, or business period labels that represent time (exact header names from "columns"). Include messy string encodings (e.g. "Q1 27-Feb '25", "H1 Q1", fiscal labels). If none, use []. Do not include identifier columns (row id, order id, etc.).
 - dirtyStringDateColumns: subset of dateColumns where values in the sample are mostly plain strings (or mixed) and are NOT already ISO/standard datetimes or native timestamps in the sample — i.e. the column needs a cleaned parse pass. Columns where every non-null sample value is already an ISO-like datetime string or unambiguous standard format should NOT be listed here. If none need cleaning, use [].
-- suggestedQuestions: 5–8 short, concrete questions the user might ask about this data.
+- suggestedQuestions: 5–8 short, concrete analytical questions a user might ask. Do NOT include questions about identifier or key columns (those in idColumns — they are row keys, not dimensions). Do NOT ask "how does [date column] trend over time" — date columns are time axes; instead ask how a numeric metric changes over the date column.
 - measureColumns: names of numeric metric columns (revenue, quantity, etc.), subset of "columns".
 - idColumns: identifier columns (customer id, order id, etc.), subset of "columns".
 - grainGuess: optional short phrase (e.g. "daily orders", "monthly revenue").

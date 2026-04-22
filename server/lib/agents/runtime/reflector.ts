@@ -2,6 +2,7 @@ import type { AgentExecutionContext } from "./types.js";
 import { reflectorOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
 import { appendixForReflectorPrompt } from "./context.js";
+import { formatForPlanner } from "./analyticalBlackboard.js";
 
 export async function runReflector(
   ctx: AgentExecutionContext,
@@ -24,11 +25,12 @@ export async function runReflector(
   interAgentDigest?: string
 ) {
   const system = `You are the reflector for a data agent. Decide the next strategic action.
-Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify","note":string optional,"clarify_message":string optional,"spawnedQuestions":[...] optional}
+Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify"|"investigate_gap","note":string optional,"clarify_message":string optional,"spawnedQuestions":[...] optional,"gapFill":{...} optional}
 - continue: more planned steps should run
 - finish: we have enough to answer the user
 - replan: the plan is wrong (rare)
 - clarify: need user input (set clarify_message)
+- investigate_gap (W11): an open hypothesis in INVESTIGATION_HYPOTHESES has NO evidence yet and the current plan will not cover it — add a targeted tool call. Set gapFill={"hypothesisId":string,"tool":string,"rationale":string,"args"?:object}. args MUST include real tool arguments (e.g. {"question_override":"sum of Sales by Region"} for run_analytical_query). Without args the step repeats the original question with no new evidence. Only use when the gap would materially affect answer quality and there are steps remaining or budget available.
 If observations contain lines including [SYSTEM_VALIDATION], treat them as high-priority signals: prefer **continue** (if more steps can fix it) or **replan** (adjust dateAggregationPeriod, groupBy, filters, use derive_dimension_bucket, or add_computed_columns then re-aggregate) over **finish** when the mismatch would produce a misleading answer.
 Use Last analytical metadata when present: if run_analytical_query failed (ok=false) or appliedAggregation is false with output row count nearly equal to input row count, prefer continue or replan over finish until an aggregated result or a clear row-level answer exists. If outputRows=0 but inputRows is large, prefer replan (retry with dimensionFilters / case_insensitive / fewer dimensions) over finish or clarify — observations often include distinct value samples to fix filters. If a chart would help comparisons and none was produced yet, prefer continue.
 If "Columns explored so far" is present and the question asks about a dimension NOT in that list, prefer **replan** with a step that explicitly groups by or filters on the missing dimension.
@@ -47,7 +49,9 @@ W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE
     payload.workingMemorySuggestedColumns && payload.workingMemorySuggestedColumns.length > 0
       ? `Columns explored so far (from prior tool suggestedColumns): ${payload.workingMemorySuggestedColumns.slice(0, 20).join(", ")}\n`
       : "";
-  const head = `Question: ${ctx.question}${appendix}\n${digestBlock}${metaLine}${columnsLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
+  // W11: inject blackboard hypothesis state so the reflector can identify uncovered hypotheses.
+  const bbBlock = ctx.blackboard ? `${formatForPlanner(ctx.blackboard).slice(0, 2000)}\n\n` : "";
+  const head = `Question: ${ctx.question}${appendix}\n${digestBlock}${bbBlock}${metaLine}${columnsLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
   // P-A3: bump observation cap so the reflector can reason on real error/summary text.
   const obsMax = Math.max(0, 12000 - head.length);
   const user = `${head}${payload.observations.join("\n---\n").slice(0, obsMax)}`;

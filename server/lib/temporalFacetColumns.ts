@@ -46,7 +46,7 @@ const GRAINS: TemporalFacetGrain[] = [
   "year",
 ];
 
-const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
+export const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
   date: "day",
   week: "week",
   month: "month",
@@ -79,6 +79,22 @@ const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
 export function isTemporalFacetColumnKey(name: string): boolean {
   if (name.startsWith(TEMPORAL_FACET_PREFIX)) return true;
   return DISPLAY_FACET_HEADER_RE.test(name);
+}
+
+/**
+ * Split a display facet key like `Month · Order Date` into its underlying source
+ * column and grain. Returns null for legacy `__tf_*` keys and non-facet names.
+ * Used by in-JS aggregation when the physical row lacks the facet column and the
+ * bucket must be computed from the source date on the fly.
+ */
+export function parseTemporalFacetDisplayKey(
+  key: string
+): { sourceColumn: string; grain: TemporalFacetGrain } | null {
+  const m = key.match(/^(Day|Week|Month|Quarter|Half-year|Year) · (.+)$/);
+  if (!m) return null;
+  const grain = LABEL_TO_GRAIN_TOKEN[m[1]!] as TemporalFacetGrain | undefined;
+  if (!grain) return null;
+  return { sourceColumn: m[2]!, grain };
 }
 
 export function slugifyColumnKeyForFacet(sourceColumn: string): string {
@@ -161,6 +177,58 @@ export function duckPhysicalColumnName(
   const leg = displayToLegacy.get(logical);
   if (leg && tableColumns.has(leg)) return leg;
   return logical;
+}
+
+/**
+ * W13: Return a DuckDB SQL expression that computes a temporal facet column's
+ * value inline from its source date column. Callers should use this instead of
+ * the materialized facet column when the source date column is present in the
+ * table, because materialized values can be null when date parsing failed during
+ * the upload/enrichment pipeline.
+ *
+ * The expressions produce the same format as `normalizeDateToPeriod`:
+ *   year       → "2016"
+ *   month      → "2016-01"
+ *   quarter    → "2016-Q1"
+ *   half_year  → "2016-H1"
+ *   day        → "2016-01-15"
+ *   week       → "2016-W03"  (ISO week)
+ *
+ * Returns null when `logical` is not a display facet column name, or when the
+ * source date column is absent from `tableColumns`.
+ */
+export function facetColumnInlineDuckDbExpr(
+  logical: string,
+  tableColumns: Set<string>
+): string | null {
+  const m = logical.match(/^(Day|Week|Month|Quarter|Half-year|Year) · (.+)$/);
+  if (!m) return null;
+  const grainLabel = m[1]!;
+  const sourceCol = m[2]!;
+  if (!tableColumns.has(sourceCol)) return null;
+  const grain = LABEL_TO_GRAIN_TOKEN[grainLabel] as TemporalFacetGrain | undefined;
+  if (!grain) return null;
+  const q = `"${sourceCol.replace(/"/g, '""')}"`;
+  // COALESCE: try direct DATE cast first (works for "YYYY-MM-DD"), then fall
+  // back through TIMESTAMP for ISO datetime strings like "2018-01-03T00:00:00.000Z"
+  // that DuckDB cannot auto-cast straight to DATE.
+  const src = `COALESCE(TRY_CAST(${q} AS DATE), CAST(TRY_CAST(${q} AS TIMESTAMP) AS DATE))`;
+  switch (grain) {
+    case "year":
+      return `strftime('%Y', ${src})`;
+    case "month":
+      return `strftime('%Y-%m', ${src})`;
+    case "quarter":
+      return `printf('%d-Q%d', YEAR(${src}), QUARTER(${src}))`;
+    case "half_year":
+      return `printf('%d-H%d', YEAR(${src}), CASE WHEN MONTH(${src}) <= 6 THEN 1 ELSE 2 END)`;
+    case "date":
+      return `strftime('%Y-%m-%d', ${src})`;
+    case "week":
+      return `printf('%d-W%02d', date_part('isoyear', ${src}), date_part('week', ${src}))`;
+    default:
+      return null;
+  }
 }
 
 /** Remap legacy `__tf_*` keys on rows to display facet keys (old DuckDB / sessions). */

@@ -14,6 +14,7 @@ import { isIdColumn, getCountNameForIdColumn } from "./columnIdHeuristics.js";
 import {
   buildDisplayToLegacyFacetMap,
   duckPhysicalColumnName,
+  facetColumnInlineDuckDbExpr,
 } from "./temporalFacetColumns.js";
 
 const DATA_TABLE = "data";
@@ -26,13 +27,17 @@ function escapeSqlStringLiteral(v: string): string {
   return `'${v.replace(/'/g, "''")}'`;
 }
 
-/** Dimension filter cell expression for SQL (exact / case_insensitive). */
+/** Dimension filter cell expression for SQL (exact / case_insensitive / contains). */
 function dimensionMatchExpr(column: string, match?: string): string {
   const q = quoteIdent(column);
-  if (match === "case_insensitive") {
+  if (match === "case_insensitive" || match === "contains") {
     return `LOWER(TRIM(CAST(${q} AS VARCHAR)))`;
   }
   return `TRIM(CAST(${q} AS VARCHAR))`;
+}
+
+function escapeLikePattern(v: string): string {
+  return v.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
 function buildWhereClause(
@@ -44,20 +49,33 @@ function buildWhereClause(
   for (const filter of plan.dimensionFilters ?? []) {
     if (!filter.column || !filter.values?.length) continue;
     const mode = filter.match || "exact";
-    if (mode === "contains") {
-      return { sql: "", descriptions: [] };
-    }
     const physCol = physicalOf(filter.column);
     const expr = dimensionMatchExpr(physCol, mode);
-    const vals = filter.values.map((v) => {
-      const t = v.trim();
-      return mode === "case_insensitive" ? t.toLowerCase() : t;
-    });
-    const list = vals.map((v) => escapeSqlStringLiteral(v)).join(", ");
-    const pred =
-      filter.op === "in"
-        ? `${expr} IN (${list})`
-        : `NOT (${expr} IN (${list}))`;
+
+    let pred: string;
+    if (mode === "contains") {
+      const likeParts = filter.values
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+        .map(
+          (v) =>
+            `${expr} LIKE ${escapeSqlStringLiteral(`%${escapeLikePattern(v)}%`)} ESCAPE '\\'`
+        );
+      if (likeParts.length === 0) continue;
+      const matchAny = likeParts.length > 1 ? `(${likeParts.join(" OR ")})` : likeParts[0]!;
+      pred = filter.op === "in" ? matchAny : `NOT ${matchAny}`;
+    } else {
+      const vals = filter.values.map((v) => {
+        const t = v.trim();
+        return mode === "case_insensitive" ? t.toLowerCase() : t;
+      });
+      const list = vals.map((v) => escapeSqlStringLiteral(v)).join(", ");
+      pred =
+        filter.op === "in"
+          ? `${expr} IN (${list})`
+          : `NOT (${expr} IN (${list}))`;
+    }
+
     parts.push(pred);
     const descVals = filter.values.join(", ");
     descriptions.push(
@@ -77,14 +95,14 @@ function aggregationSqlExpr(
   const q = quoteIdent(columnPhysical);
   switch (operation) {
     case "sum":
-      return `SUM(CAST(${q} AS DOUBLE))`;
+      return `SUM(TRY_CAST(${q} AS DOUBLE))`;
     case "mean":
     case "avg":
-      return `AVG(CAST(${q} AS DOUBLE))`;
+      return `AVG(TRY_CAST(${q} AS DOUBLE))`;
     case "min":
-      return `MIN(CAST(${q} AS DOUBLE))`;
+      return `MIN(TRY_CAST(${q} AS DOUBLE))`;
     case "max":
-      return `MAX(CAST(${q} AS DOUBLE))`;
+      return `MAX(TRY_CAST(${q} AS DOUBLE))`;
     case "count":
       if (isIdColumn(columnLogical)) {
         return `COUNT(DISTINCT ${q})`;
@@ -116,9 +134,7 @@ export function canExecuteQueryPlanOnDuckDb(plan: QueryPlanBody): boolean {
   for (const a of p.aggregations) {
     if (a.operation === "median" || a.operation === "percent_change") return false;
   }
-  for (const f of p.dimensionFilters ?? []) {
-    if ((f.match || "exact") === "contains") return false;
-  }
+  // Wave W5: `contains` is now handled via LIKE in buildWhereClause; no longer a fallback trigger.
   return true;
 }
 
@@ -161,8 +177,24 @@ export function buildQueryPlanDuckdbSql(
   const groupParts: string[] = [];
 
   for (const g of groupBy) {
-    const phys = physicalOf(g);
     const qLog = quoteIdent(g);
+    // W13 (revised): prefer the materialized temporal facet column when it
+    // exists in the DuckDB table — it was computed correctly by the upload
+    // pipeline. Only fall back to an inline SQL expression when the column is
+    // absent (old sessions / failed uploads), because the inline TRY_CAST can
+    // silently return null when Order Date is stored as an ISO datetime string
+    // that DuckDB cannot auto-cast to DATE, collapsing all rows to one null group.
+    const materializedExists = ctx?.tableColumns.has(g);
+    const inlineExpr =
+      !materializedExists && ctx
+        ? facetColumnInlineDuckDbExpr(g, ctx.tableColumns)
+        : null;
+    if (inlineExpr) {
+      selectParts.push(`${inlineExpr} AS ${qLog}`);
+      groupParts.push(inlineExpr);
+      continue;
+    }
+    const phys = physicalOf(g);
     if (phys === g) {
       selectParts.push(`${qLog} AS ${qLog}`);
       groupParts.push(qLog);

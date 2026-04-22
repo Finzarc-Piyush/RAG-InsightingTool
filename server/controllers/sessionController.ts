@@ -575,6 +575,19 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
       permanentContext || ''
     );
     
+    // Return regenerated starter questions so the client can swap chips without
+    // a refetch race.
+    const regeneratedQuestions =
+      updatedSession.sessionAnalysisContext?.suggestedFollowUps ?? [];
+    const initialMessage = updatedSession.messages?.[0];
+    const initialAssistantMessage =
+      initialMessage?.role === "assistant"
+        ? {
+            content: initialMessage.content,
+            suggestedQuestions: initialMessage.suggestedQuestions ?? [],
+          }
+        : undefined;
+
     res.json({
       success: true,
       message: `Session context updated successfully`,
@@ -583,7 +596,9 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
         sessionId: updatedSession.sessionId,
         permanentContext: updatedSession.permanentContext,
         lastUpdatedAt: updatedSession.lastUpdatedAt,
-      }
+      },
+      suggestedQuestions: regeneratedQuestions,
+      initialAssistantMessage,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {
@@ -617,6 +632,31 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
     res.status(500).json({
       error: errorMessage
     });
+  }
+};
+
+// Get the rolling session analysis context (lightweight — no messages/charts)
+export const getSessionAnalysisContextEndpoint = async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    const email = requireUsername(req);
+    if (!sessionId) return res.status(400).json({ error: "Session ID is required" });
+
+    const session = await getChatBySessionIdForUser(sessionId, email);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    return res.json({
+      sessionAnalysisContext: session.sessionAnalysisContext ?? null,
+      suggestedQuestions: session.sessionAnalysisContext?.suggestedFollowUps ?? [],
+      enrichmentStatus: session.enrichmentStatus ?? null,
+      lastUpdatedAt: session.lastUpdatedAt,
+    });
+  } catch (err: any) {
+    if (err instanceof AuthenticationError || err?.statusCode === 403) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    console.error("getSessionAnalysisContextEndpoint error:", err);
+    return res.status(500).json({ error: "Failed to load session context" });
   }
 };
 

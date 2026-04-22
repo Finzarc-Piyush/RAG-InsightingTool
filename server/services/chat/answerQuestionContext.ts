@@ -74,11 +74,12 @@ export async function resolveAnswerQuestionDataLoad(params: {
     }
   }
 
-  // Agentic loop fallback: if no authoritative precomputed columns were provided,
-  // widen to full schema to avoid missing dimensions on follow-ups.
+  // Agentic loop: always widen to the full schema so ctx.exec.data matches
+  // ctx.exec.summary. The streaming path supplies `precomputed` to skip the
+  // expensive classifyIntent calls above, but that must not prevent us from
+  // loading every column — the agent's own tools pick what to query.
   if (
     isAgenticLoopEnabled() &&
-    !precomputed &&
     chatDocument.dataSummary?.columns?.length
   ) {
     const allNames = chatDocument.dataSummary.columns.map((c) => c.name);

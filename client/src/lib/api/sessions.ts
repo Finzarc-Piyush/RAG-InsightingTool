@@ -42,6 +42,9 @@ export const sessionsApi = {
     api.patch(`/api/sessions/${sessionId}/context`, { permanentContext }),
 
   deleteSession: (sessionId: string) => api.delete(`/api/sessions/${sessionId}`),
+
+  getSessionAnalysisContext: (sessionId: string) =>
+    api.get(`/api/sessions/${sessionId}/analysis-context`),
 };
 
 

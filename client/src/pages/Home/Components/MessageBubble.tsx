@@ -11,6 +11,7 @@ import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
+import { AnalyticalDashboardResponse } from './AnalyticalDashboardResponse';
 import { MagnitudesRow, type MagnitudeItem } from './MagnitudesRow';
 import { Settle } from '@/components/ui/motion';
 import { DataPreview } from './DataPreview';
@@ -362,6 +363,13 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
       (!String(displayContent).trim() || String(displayContent).trim() === "Preliminary results")
     );
 
+  const isDashboardMode =
+    !isUser &&
+    !message.isIntermediate &&
+    (message.charts?.length ?? 0) >= 1 &&
+    !isPreviewSystemMessage &&
+    !isEnrichmentSystemMessage;
+
   const assistantMarkdownParts = useMemo(() => {
     if (isUser || !displayContent) {
       return { markdownBody: displayContent, followUpChips: [] as string[] };
@@ -547,7 +555,21 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {showMarkdownBlock && (
+        {isDashboardMode ? (
+          <AnalyticalDashboardResponse
+            message={message}
+            sessionId={sessionId}
+            precedingUserQuestion={precedingUserQuestion}
+            onSuggestedQuestionClick={onSuggestedQuestionClick}
+            sampleRows={sampleRows}
+            columns={columns}
+            numericColumns={numericColumns}
+            dateColumns={dateColumns}
+            temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+            temporalFacetColumns={temporalFacetColumns}
+            thinkingSteps={thinkingSteps}
+          />
+        ) : showMarkdownBlock ? (
           <Settle
             className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
             data-testid={`message-content-${message.role}`}
@@ -572,7 +594,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                       variant="outline"
                       size="sm"
                       className="text-xs rounded-full h-auto py-1.5 px-3"
-                      aria-label={`Add to message: ${q}`}
+                      aria-label={`Use suggestion: ${q}`}
                       onClick={() => onSuggestedQuestionClick(q)}
                     >
                       {q}
@@ -598,7 +620,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                       variant="outline"
                       size="sm"
                       className="text-xs rounded-full h-auto py-1.5 px-3"
-                      aria-label={`Add to message: ${q}`}
+                      aria-label={`Use suggestion: ${q}`}
                       onClick={() => onSuggestedQuestionClick(q)}
                     >
                       {q}
@@ -607,7 +629,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 </div>
               )}
           </Settle>
-        )}
+        ) : null}
 
         {!isUser && allowDatasetPreviewInAnswer && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
           <div className="mt-3">
@@ -691,7 +713,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {!isUser && (
+        {!isUser && !isDashboardMode && (
           <>
             {/* Show existing charts */}
             {message.charts && message.charts.length > 0 && (
@@ -846,7 +868,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </>
         )}
 
-        {!isUser && !hasAggPreview && message.insights && message.insights.length > 0 && (
+        {!isUser && !isDashboardMode && !hasAggPreview && message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />
           </div>

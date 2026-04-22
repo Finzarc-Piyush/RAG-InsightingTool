@@ -4,19 +4,15 @@ import { openai } from './openai.js';
 import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { generateStreamingCorrelationChart } from './streamingCorrelationAnalyzer.js';
+import {
+  toNumber,
+  type CorrelationResult,
+  calculateCorrelations,
+  calculateEtaSquared,
+  calculateCategoricalCorrelations,
+} from './correlationMath.js';
 
-// Helper to clean numeric values (strip %, commas, etc.)
-function toNumber(value: any): number {
-  if (value === null || value === undefined || value === '') return NaN;
-  const cleaned = String(value).replace(/[%,]/g, '').trim();
-  return Number(cleaned);
-}
-
-interface CorrelationResult {
-  variable: string;
-  correlation: number;
-  nPairs?: number;
-}
+export { calculateCorrelations, calculateEtaSquared, calculateCategoricalCorrelations };
 
 // Calculate linear regression (slope and intercept) for trend line
 function linearRegression(xValues: number[], yValues: number[]): { slope: number; intercept: number } | null {
@@ -53,17 +49,31 @@ export async function analyzeCorrelations(
   maxResults?: number,
   onProgress?: (message: string, processed?: number, total?: number) => void,
   sessionId?: string,
-  generateCharts: boolean = true // New parameter to control chart generation
+  generateCharts: boolean = true,
+  categoricalColumns?: string[]
 ): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
   console.log('=== CORRELATION ANALYSIS DEBUG ===');
   console.log('Target variable:', targetVariable);
   console.log('Numeric columns to analyze:', numericColumns);
+  console.log('Categorical columns to analyze:', categoricalColumns ?? []);
   console.log('Data rows:', data.length);
-  
+
   // Redis cache removed - proceed with calculation
-  
-  // Calculate correlations
-  const correlations = calculateCorrelations(data, targetVariable, numericColumns);
+
+  // Pearson correlations for numeric columns
+  const numericCorrelations = calculateCorrelations(data, targetVariable, numericColumns);
+
+  // Correlation ratio (η) for categorical columns
+  const catCorrelations = categoricalColumns?.length
+    ? calculateCategoricalCorrelations(data, targetVariable, categoricalColumns)
+    : [];
+
+  // Merge and sort by |correlation| descending
+  const correlations = [...numericCorrelations, ...catCorrelations]
+    .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+
+  const categoricalSet = new Set(categoricalColumns ?? []);
+
   console.log('Correlations calculated:', correlations);
   console.log('=== RAW CORRELATION VALUES DEBUG ===');
   correlations.forEach((corr, idx) => {
@@ -122,7 +132,9 @@ export async function analyzeCorrelations(
     // Generate scatter plots for top 3 correlations using streaming computation
     // IMPORTANT: For correlation/impact questions, target variable ALWAYS goes on Y-axis
     // X-axis = factor variable (what we can change), Y-axis = target variable (what we want to improve)
-    const scatterChartsPromises = topCorrelations.slice(0, 3).map(async (corr, idx) => {
+    // Only generate scatter plots for numeric (Pearson) correlations — categorical X can't scatter
+    const numericTopCorrelations = topCorrelations.filter(c => !categoricalSet.has(c.variable));
+    const scatterChartsPromises = numericTopCorrelations.slice(0, 3).map(async (corr, idx) => {
     // Helper function to convert Date objects to strings for schema validation
     const convertValueForSchema = (value: any): string | number | null => {
       if (value === null || value === undefined) return null;
@@ -139,7 +151,7 @@ export async function analyzeCorrelations(
       onProgress(chartTitle, 0, data.length);
     }
     console.log(`📊 ${chartTitle}`);
-    
+
     const chart = await generateStreamingCorrelationChart(
       data,
       targetVariable,
@@ -154,7 +166,7 @@ export async function analyzeCorrelations(
         }
       }
     );
-    
+
     if (onProgress) {
       onProgress(`Completed correlation chart ${idx + 1}/3`, data.length, data.length);
     }
@@ -163,7 +175,7 @@ export async function analyzeCorrelations(
     // This ensures consistency with the correlation ranking
     const metadata = (chart as any)._correlationMetadata || {};
     console.log(`Scatter chart ${idx}: ${corr.variable} vs ${targetVariable}, correlation: ${corr.correlation.toFixed(2)}, total pairs: ${corr.nPairs}, visualization points: ${chart.data?.length || 0}`);
-    
+
     return {
       ...chart,
       title: `${corr.variable} vs ${targetVariable} (r=${corr.correlation.toFixed(2)})`,
@@ -265,7 +277,7 @@ export async function analyzeCorrelations(
     dateColumns: [],
   } as unknown as DataSummary;
   // Pass topCorrelations (same as used in charts) to ensure insights match what's displayed
-  const insights = await generateCorrelationInsights(targetVariable, topCorrelations, data, summaryStub, filter);
+  const insights = await generateCorrelationInsights(targetVariable, topCorrelations, data, summaryStub, filter, categoricalSet);
 
   const result = { charts, insights };
 
@@ -274,68 +286,13 @@ export async function analyzeCorrelations(
   return result;
 }
 
-export function calculateCorrelations(
-  data: Record<string, any>[],
-  targetVariable: string,
-  numericColumns: string[]
-): CorrelationResult[] {
-  const correlations: CorrelationResult[] = [];
-
-  // Precompute target values (keep row alignment; NA preserved as NaN)
-  const targetValuesAllRows = data.map((row) => toNumber(row[targetVariable]));
-  const hasAnyTarget = targetValuesAllRows.some((v) => !isNaN(v));
-  if (!hasAnyTarget) return [];
-
-  for (const col of numericColumns) {
-    if (col === targetVariable) continue;
-
-    // Build row-aligned pairs; skip rows where either side is NA (pairwise deletion)
-    const x: number[] = []; // target
-    const y: number[] = []; // column
-    for (let i = 0; i < data.length; i++) {
-      const tv = targetValuesAllRows[i];
-      const cv = toNumber(data[i][col]);
-      if (!isNaN(tv) && !isNaN(cv)) {
-        x.push(tv);
-        y.push(cv);
-      }
-    }
-
-    if (x.length === 0) continue;
-
-    // Calculate Pearson correlation on paired arrays
-    const correlation = pearsonCorrelation(x, y);
-
-    if (!isNaN(correlation)) {
-      correlations.push({ variable: col, correlation, nPairs: x.length });
-    }
-  }
-
-  return correlations;
-}
-
-function pearsonCorrelation(x: number[], y: number[]): number {
-  const n = Math.min(x.length, y.length);
-  if (n === 0) return NaN;
-
-  const sumX = x.slice(0, n).reduce((a, b) => a + b, 0);
-  const sumY = y.slice(0, n).reduce((a, b) => a + b, 0);
-  const sumXY = x.slice(0, n).reduce((sum, xi, i) => sum + xi * y[i], 0);
-  const sumX2 = x.slice(0, n).reduce((sum, xi) => sum + xi * xi, 0);
-  const sumY2 = y.slice(0, n).reduce((sum, yi) => sum + yi * yi, 0);
-
-  const numerator = n * sumXY - sumX * sumY;
-  const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-
-  return denominator === 0 ? NaN : numerator / denominator;
-}
-
 async function generateCorrelationInsights(
   targetVariable: string,
   correlations: CorrelationResult[],
   data?: Record<string, any>[],
   summary?: DataSummary,
-  filter: 'all' | 'positive' | 'negative' = 'all'
+  filter: 'all' | 'positive' | 'negative' = 'all',
+  categoricalSet?: Set<string>
 ): Promise<Insight[]> {
   // Ensure filter is defined (defensive check)
   const correlationFilter: 'all' | 'positive' | 'negative' = filter || 'all';
@@ -355,6 +312,34 @@ async function generateCorrelationInsights(
         .map(row => Number(String(row[targetVariable]).replace(/[%,,]/g, '')))
         .filter(v => !isNaN(v));
       
+      // Categorical variable: compute group means for the target
+      if (factorValues.length === 0 && categoricalSet?.has(corr.variable)) {
+        const groupMeans = new Map<string, { sum: number; count: number }>();
+        for (const row of data) {
+          const g = row[corr.variable];
+          const v = toNumber(row[targetVariable]);
+          if (g != null && !isNaN(v)) {
+            const key = String(g);
+            if (!groupMeans.has(key)) groupMeans.set(key, { sum: 0, count: 0 });
+            const entry = groupMeans.get(key)!;
+            entry.sum += v;
+            entry.count += 1;
+          }
+        }
+        if (groupMeans.size > 0) {
+          const sorted = Array.from(groupMeans.entries())
+            .map(([g, { sum, count }]) => ({ group: g, mean: sum / count }))
+            .sort((a, b) => b.mean - a.mean);
+          const top3 = sorted.slice(0, 3).map(x => `${x.group}: ${x.mean.toFixed(0)}`).join(', ');
+          const bot3 = sorted.slice(-3).reverse().map(x => `${x.group}: ${x.mean.toFixed(0)}`).join(', ');
+          quantifiedStats += `\n${corr.variable} (η=${corr.correlation.toFixed(3)}, categorical):\n`;
+          quantifiedStats += `- Avg ${targetVariable} by group (top): ${top3}\n`;
+          if (sorted.length > 3) quantifiedStats += `- Avg ${targetVariable} by group (bottom): ${bot3}\n`;
+          quantifiedStats += `- Groups: ${sorted.length}\n`;
+        }
+        continue;
+      }
+
       if (factorValues.length > 0 && targetValues.length > 0) {
         const factorAvg = factorValues.reduce((a, b) => a + b, 0) / factorValues.length;
         // Calculate min/max without spread operator to avoid stack overflow
@@ -443,8 +428,11 @@ ${optimalFactorRange ? `- Optimal ${corr.variable} range for top ${targetVariabl
     ? '\nIMPORTANT: The user specifically requested ONLY NEGATIVE correlations. All correlations shown are negative. Focus your insights on these negative relationships only.'
     : '';
 
-  const prompt = `Analyze these correlations with ${targetVariable}.${filterContext}
+  const hasCategorical = categoricalSet && categoricalSet.size > 0 &&
+    correlations.some(c => categoricalSet.has(c.variable));
 
+  const prompt = `Analyze these correlations with ${targetVariable}.${filterContext}
+${hasCategorical ? '\nNOTE: Variables marked (η) are categorical. Their coefficient is the correlation ratio η = √(SS_between/SS_total), range 0–1. It measures how much of the variance in ' + targetVariable + ' is explained by that category grouping. It is NOT Pearson r and cannot be negative.\n' : ''}
 DATA HANDLING RULES (must follow exactly):
 - Pearson correlation using pairwise deletion: if either value is NA on a row, exclude that row; do not impute.
 - Use the EXACT signed correlation values provided; never change the sign.
@@ -452,18 +440,24 @@ DATA HANDLING RULES (must follow exactly):
 ${correlationFilter === 'positive' ? '- All correlations shown are POSITIVE (user filtered out negative ones).' : ''}
 ${correlationFilter === 'negative' ? '- All correlations shown are NEGATIVE (user filtered out positive ones).' : ''}
 
-VALUES (variable: r, nPairs):
-${correlations.map((c) => `- ${c.variable}: ${c.correlation.toFixed(3)}, n=${c.nPairs ?? 'NA'}`).join('\n')}
+VALUES (variable: coefficient, nPairs):
+${correlations.map((c) => {
+  const isCat = categoricalSet?.has(c.variable);
+  const label = isCat ? `${c.variable} (η)` : c.variable;
+  return `- ${label}: ${c.correlation.toFixed(3)}, n=${c.nPairs ?? 'NA'}`;
+}).join('\n')}
 ${quantifiedStats}
 
 CONTEXT:
 - ${targetVariable} is the outcome (Y). Listed variables are factors (X).
-- For each factor, explain what the sign and strength of r suggest in plain language, tie in numbers from QUANTIFIED STATISTICS when present, and give a practical “what to try next” or “what to validate” that respects that correlation ≠ causation.
+- For numeric variables (Pearson r): explain sign and strength in plain language.
+- For categorical variables (η): explain what proportion of variance is explained and which groups drive the differences.
+- Tie in numbers from QUANTIFIED STATISTICS when present, and give a practical “what to try next” or “what to validate” that respects that correlation ≠ causation.
 - Vary prose structure across insights; avoid repeating the same bullet template every time.
 
-Write exactly ${insightCount} insights (one per variable, strongest correlation first). End each insight with a short line: "Reminder: Correlation does not imply causation."
+Write exactly ${insightCount} insights (one per variable, strongest correlation first). End each insight with a short line: “Reminder: Correlation does not imply causation.”
 
-Return JSON only: {"insights":[{"text":"..."}, ...]} with exactly ${insightCount} items.`;
+Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${insightCount} items.`;
 
   const response = await openai.chat.completions.create({
     model: getInsightModel(),

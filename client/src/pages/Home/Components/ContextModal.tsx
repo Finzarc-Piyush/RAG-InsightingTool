@@ -44,8 +44,8 @@ export function ContextModal({ isOpen, onClose, onSave, isLoading = false }: Con
             Add Context for Your Data
           </DialogTitle>
           <DialogDescription>
-            Provide any additional context about your data that will help the AI better understand and analyze it. 
-            This context will be included with every message you send. You can skip this step if you prefer.
+            Your data is loading in the background — tell us what you're trying to learn so we can tailor your starter questions.
+            Your notes become part of this analysis permanently and are sent with every message. You can skip this step if you prefer.
           </DialogDescription>
         </DialogHeader>
         
@@ -58,7 +58,7 @@ export function ContextModal({ isOpen, onClose, onSave, isLoading = false }: Con
             disabled={isLoading}
           />
           <p className="text-sm text-muted-foreground">
-            This context will be permanently associated with this session and sent to the AI with each of your messages.
+            This context is saved permanently with this analysis, indexed for retrieval, and sent with every message.
           </p>
         </div>
 

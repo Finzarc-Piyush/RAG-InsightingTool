@@ -10,6 +10,8 @@ export const planStepSchema = z.object({
   dependsOn: z.string().optional(),
   /** Steps sharing the same parallelGroup execute concurrently when no dependsOn links exist. */
   parallelGroup: z.string().optional(),
+  /** O2: ID of the hypothesis (from INVESTIGATION_HYPOTHESES) this step primarily tests. */
+  hypothesisId: z.string().optional(),
 });
 
 export const plannerOutputSchema = z.object({
@@ -26,8 +28,21 @@ export const spawnedQuestionSchema = z.object({
   suggestedColumns: z.array(z.string()).default([]),
 });
 
+/**
+ * W11: Intra-node gap-fill tool call for investigate_gap action.
+ * Points to a specific open hypothesis and the tool to run to address it.
+ */
+export const gapFillSchema = z.object({
+  hypothesisId: z.string(),
+  tool: z.string(),
+  rationale: z.string(),
+  // W12a: real tool args (e.g. {question_override:…} for run_analytical_query).
+  // When absent the agent loop derives a question_override from hypothesis.text.
+  args: z.record(z.unknown()).optional(),
+});
+
 export const reflectorOutputSchema = z.object({
-  action: z.enum(["continue", "replan", "finish", "clarify"]),
+  action: z.enum(["continue", "replan", "finish", "clarify", "investigate_gap"]),
   note: z.string().optional(),
   clarify_message: z.string().optional(),
   /**
@@ -36,6 +51,11 @@ export const reflectorOutputSchema = z.object({
    * and a concrete unexpected pattern was found. Empty otherwise.
    */
   spawnedQuestions: z.array(spawnedQuestionSchema).default([]),
+  /**
+   * W11: populated when action="investigate_gap" — identifies which open
+   * hypothesis still has no evidence and which tool should address it.
+   */
+  gapFill: gapFillSchema.optional(),
 });
 
 export type ReflectorOutput = z.infer<typeof reflectorOutputSchema>;

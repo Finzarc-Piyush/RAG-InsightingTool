@@ -1,6 +1,7 @@
 /**
  * Rolling session context: structured JSON, created and updated only via LLM (completeJson).
  */
+import { z } from "zod";
 import type { AnalysisBrief, DataSummary, DatasetProfile } from "../shared/schema.js";
 import {
   sessionAnalysisContextSchema,
@@ -34,21 +35,42 @@ export function emptySessionAnalysisContext(): SessionAnalysisContext {
   };
 }
 
+const NESTED_FIELD_TYPES = `
+Nested field types (all required — do not deviate):
+  columnRoles items  : { "name": "<string>", "role": "<string>", "notes": "<string|omit>" }
+  facts items        : { "statement": "<string>", "source": "user"|"assistant"|"data", "confidence": "high"|"medium"|"low" }
+  analysesDone items : plain strings, NOT objects
+  interpretedConstraints items: plain strings, NOT objects
+  lastUpdated.reason : exactly one of "seed" | "user_context" | "assistant_turn" | "mid_turn"`;
+
 const SEED_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 Build the initial session analysis context from the provided dataset profile and numeric summary.
 Populate dataset.* from the profile and column list. Leave userIntent mostly empty unless the input includes user notes.
-Add suggestedFollowUps (short questions) inferred from the data — do not copy a fixed template; base them on actual columns and description.
-Set lastUpdated.reason to "seed" and lastUpdated.at to the current ISO-8601 timestamp.`;
+Add suggestedFollowUps (short analytical questions) inferred from the data — do not copy a fixed template; base them on actual columns and description. Do NOT suggest questions about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend".
+Set lastUpdated.reason to "seed" and lastUpdated.at to the current ISO-8601 timestamp.
+
+Required top-level shape (all fields mandatory, no extras at the top level):
+{
+  "version": 1,
+  "dataset": { "shortDescription": "...", "columnRoles": [], "caveats": [] },
+  "userIntent": { "interpretedConstraints": [] },
+  "sessionKnowledge": { "facts": [], "analysesDone": [] },
+  "suggestedFollowUps": ["...", "..."],
+  "lastUpdated": { "reason": "seed", "at": "<ISO-8601 timestamp>" }
+}
+${NESTED_FIELD_TYPES}`;
 
 const MERGE_USER_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 You receive PREVIOUS_JSON and new USER_NOTES (verbatim). Merge USER_NOTES into userIntent and sessionKnowledge; refine interpretedConstraints and facts as appropriate.
 Preserve dataset.* unless the user clearly corrects domain facts. Cap array lengths per schema.
-Set lastUpdated.reason to "user_context" and lastUpdated.at to current ISO-8601.`;
+Set lastUpdated.reason to "user_context" and lastUpdated.at to current ISO-8601.
+${NESTED_FIELD_TYPES}`;
 
 const MERGE_ASSISTANT_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 You receive PREVIOUS_JSON and ASSISTANT_MESSAGE (and optional TOOL_TRACE_SUMMARY). Update sessionKnowledge.facts and analysesDone with durable takeaways from the assistant reply. You may prune or merge duplicate/stale entries in sessionKnowledge and shorten suggestedFollowUps when the list is noisy; keep only high-value follow-ups.
 Copy dataset.* forward unless the message clearly corrects domain facts. Do NOT modify userIntent in any way (it is merged only from user messages).
-Set lastUpdated.reason to "assistant_turn" for full assistant replies, or "mid_turn" when ASSISTANT_MESSAGE starts with "[mid_turn]", and lastUpdated.at to current ISO-8601.`;
+Set lastUpdated.reason to "assistant_turn" for full assistant replies, or "mid_turn" when ASSISTANT_MESSAGE starts with "[mid_turn]", and lastUpdated.at to current ISO-8601.
+${NESTED_FIELD_TYPES}`;
 
 function compactSummaryForPrompt(summary: DataSummary) {
   return {
@@ -78,6 +100,50 @@ export async function seedSessionAnalysisContextLLM(params: {
     return emptySessionAnalysisContext();
   }
   return out.data;
+}
+
+const REGENERATE_STARTER_QUESTIONS_SYSTEM = `You output only a JSON object of the exact shape { "suggestedFollowUps": ["..."] }.
+You will be given DATASET_PROFILE, DATA_SUMMARY, and USER_NOTES describing the analyst's goals/domain context.
+Produce 5–8 short, concrete analytical questions that an analyst with these goals would actually want answered from this data. Tailor the questions to the user's stated intent.
+Do NOT copy a fixed template. Do NOT ask about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend".
+Questions must be answerable from the columns present in DATA_SUMMARY.`;
+
+const starterQuestionsSchema = z.object({
+  suggestedFollowUps: z.array(z.string()).max(12),
+});
+
+/**
+ * Regenerate starter questions when the user adds context. Runs as a follow-up
+ * pass — the initial welcome message is produced by the upload pipeline
+ * without waiting for user input (see `seedSessionAnalysisContextLLM`).
+ */
+export async function regenerateStarterQuestionsLLM(params: {
+  datasetProfile: DatasetProfile;
+  dataSummary: DataSummary;
+  permanentContext: string;
+}): Promise<string[]> {
+  const userText = params.permanentContext.trim();
+  if (!userText) return [];
+  const user = JSON.stringify({
+    DATASET_PROFILE: params.datasetProfile,
+    DATA_SUMMARY: compactSummaryForPrompt(params.dataSummary),
+    USER_NOTES: userText.slice(0, 8000),
+  });
+  const out = await completeJson(
+    REGENERATE_STARTER_QUESTIONS_SYSTEM,
+    user,
+    starterQuestionsSchema,
+    {
+      turnId: "starter_questions_regen",
+      maxTokens: 1024,
+      temperature: 0.3,
+    }
+  );
+  if (!out.ok) {
+    console.warn("⚠️ regenerateStarterQuestionsLLM failed:", out.error);
+    return [];
+  }
+  return out.data.suggestedFollowUps.filter((q) => q?.trim()).slice(0, 8);
 }
 
 export async function mergeSessionAnalysisContextUserLLM(params: {
@@ -183,20 +249,43 @@ export async function persistMidTurnAssistantSessionContext(params: {
   });
 }
 
-/** Initial assistant message body: stats from summary + LLM shortDescription only (no hardcoded prompts). */
+/**
+ * Initial assistant message shown after enrichment.
+ * Includes everything the LLM understood about the dataset so the user can
+ * verify the context before asking questions.
+ */
 export function buildInitialAssistantContentFromContext(
   summary: DataSummary,
   ctx: SessionAnalysisContext
 ): string {
-  const lines = [
-    `${summary.rowCount} rows · ${summary.columnCount} columns`,
-    `${summary.numericColumns.length} numeric columns`,
-    `${summary.dateColumns.length} date columns`,
-  ];
+  const lines: string[] = [];
+
+  // ── Dataset overview ──────────────────────────────────────────────────────
+  lines.push(`**${summary.rowCount.toLocaleString()} rows · ${summary.columnCount} columns** (${summary.numericColumns.length} numeric, ${summary.dateColumns.length} date)`);
+
   const desc = ctx.dataset.shortDescription?.trim();
-  if (desc) {
-    lines.push("", desc);
+  if (desc) lines.push("", desc);
+
+  if (ctx.dataset.grainGuess) lines.push("", `**Row grain:** ${ctx.dataset.grainGuess}`);
+
+  // ── Column roles ─────────────────────────────────────────────────────────
+  if (ctx.dataset.columnRoles.length > 0) {
+    lines.push("", "**Column roles understood:**");
+    for (const col of ctx.dataset.columnRoles) {
+      const note = col.notes ? ` — ${col.notes}` : "";
+      lines.push(`• ${col.name} *(${col.role})*${note}`);
+    }
   }
+
+  // ── Caveats ───────────────────────────────────────────────────────────────
+  if (ctx.dataset.caveats.length > 0) {
+    lines.push("", "**Data caveats:**");
+    for (const c of ctx.dataset.caveats) lines.push(`• ${c}`);
+  }
+
+  // Suggested questions are rendered as clickable pills in the UI (see
+  // MessageBubble.tsx), so we intentionally omit them from the markdown body.
+
   return lines.join("\n");
 }
 

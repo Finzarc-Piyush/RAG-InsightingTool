@@ -20,6 +20,7 @@ import {
 import {
   repairExecuteQueryPlanDimensionFilters,
   repairExecuteQueryPlanSort,
+  ensureInferredFiltersOnStep,
 } from "./planArgRepairs.js";
 
 /** Args whose string values must be real column names from DataSummary. */
@@ -408,20 +409,23 @@ Rules:
 - Decide tools from **what the user is trying to learn**, not from specific words they must say. Use run_analytical_query or execute_query_plan whenever computed results from the dataset (filters, summaries, comparisons, rankings) are needed; prefer its numbers over RAG text when both exist.
 - Use run_correlation when the user asks what drives/affects/correlates with a numeric column. Pass **dimensionFilters** when correlating within a segment so the tool uses **row-level turn-start data**, not a tiny aggregate frame left in ctx.data.
 - If the Dataset block includes **DIAGNOSTIC_ANALYSIS_HINT**, follow that playbook: row-level slice → breakdowns → correlation; avoid correlating on aggregate-only tables.
-- If **ANALYSIS_BRIEF_JSON** is present, treat outcomeMetricColumn, filters, segmentationDimensions, and timeWindow as authoritative intent: plan tools to validate or falsify that brief (execute_query_plan, run_breakdown_ranking, run_two_segment_compare for explicit A vs B contrasts, run_correlation with matching dimensionFilters, etc.). Do not contradict the brief without tool evidence.
-- For explicit **A vs B** cohort comparisons on the same metric (e.g. region slice vs the rest, treated vs control), use **run_two_segment_compare** with \`segment_a_filters\` and \`segment_b_filters\`, then **build_chart** if a simple bar comparison helps.
+- If **ANALYSIS_BRIEF_JSON** is present, treat outcomeMetricColumn, filters, segmentationDimensions, and timeWindow as authoritative intent: plan tools to validate or falsify that brief (execute_query_plan with dimensionFilters, run_segment_driver_analysis to find which dimensions explain variance, run_correlation with matching dimensionFilters, etc.). Do not contradict the brief without tool evidence. Do NOT invent tool names.
+- For explicit **A vs B** cohort comparisons on the same metric (e.g. region slice vs the rest): use **run_analytical_query** or **execute_query_plan** twice with different dimensionFilters (one step per segment, assign the same parallelGroup), then **build_chart** with both result sets. Or use **run_segment_driver_analysis** if the question is "what's driving the difference".
 - **run_segment_driver_analysis** (when listed in tools): optional one-shot driver path for a filtered segment + outcome column.
 - **patch_dashboard**: use ONLY when the user refers to a dashboard that already exists (e.g. "add a margin chart to the dashboard we just built", "rename the Evidence sheet"). Args: addCharts / removeCharts / renameSheet, plus optional dashboardId. When the user says "the dashboard we just built" without a name, leave dashboardId empty — the server resolves it from the session's last-created dashboard. Never use this tool to create a new dashboard.
 - Use build_chart when a visualization would make comparisons or magnitudes clearer (e.g. breakdowns, trends). For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), **y must be the aggregated column name on the result rows** (e.g. \`Sales_sum\`), not \`Sales\`. **x** is the same groupBy column (bucket labels). Set \`aggregate\` \`none\` when there is exactly one row per x after bucketing; use sum|mean only when charting raw rows.
 - **Layered charts**: If execute_query_plan returns **long** rows (one row per x × second dimension, e.g. month × region) with a numeric measure column, use **build_chart** with \`type\` \`bar\` (stacked default) or \`line\`/\`area\` for trends; set \`seriesColumn\` to the **second dimension** when convenient—the server **chart compiler** will bind a second categorical column from the result if you omit it, as long as the result still includes that column (never rely on the chart layer to drop dimensions). Optional \`barLayout\`: \`stacked\`|\`grouped\`. For **two numeric metrics** over the same x (e.g. revenue vs profit over time), use \`y2\` instead of \`seriesColumn\`. Heatmaps: \`type\` \`heatmap\`, \`x\`/\`y\` as the two dimensions, \`z\` the numeric cell value.
+- **CRITICAL — Chart type for temporal X**: NEVER use \`type: "bar"\` when x is a date, month, quarter, year, or derived time-bucket column. ALWAYS use \`type: "line"\` or \`type: "area"\` for time-series trends. Bar charts imply a category ranking, not temporal progression.
+- **CRITICAL — Series cardinality**: When using \`seriesColumn\`, it MUST have ≤15 distinct values for readable output. If the column has higher cardinality (e.g. 50 states, 200 customers), do NOT use it as seriesColumn. Instead: (a) set \`max_series: 10\` to automatically cap and merge excess into "Others"; (b) use a single-series bar chart sorted by y showing top N items; or (c) use a heatmap. Never produce a chart with dozens of overlapping lines or bars.
 - Use clarify_user if critical information is missing.
 - Compose multiple tools instead of a single catch-all; there is no legacy "delegate" tool.
 - Multi-step: if step B needs outputs from step A (e.g. discover columns via RAG/schema then chart), set step B's dependsOn to step A's id (same plan). Tools run in dependency order.
 - If "Prior tool observations" or "Structured working memory" are present, use them for later-step args (columns, filters). Do not ignore successful tool output. If a prior step failed or returned a near–full-table result without useful summary, replan with a clearer question_override or add a follow-up tool.
-- At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan), optional parallelGroup (string).
-- **parallelGroup**: assign the same string to independent steps that investigate different dimensions simultaneously (e.g. "pg1" for steps querying Region breakdown and Category breakdown at the same time). Steps in the same parallelGroup MUST NOT have dependsOn pointing to each other. Use parallelGroup when two or more steps have no data dependency and would benefit from running concurrently (e.g. separate breakdowns, correlation + trend). Cap at 3 steps per group.
+- At most 6 steps. Each step: id (unique string), tool (exact name), args (object, use {} if none), optional dependsOn (id string referencing another step in this plan), optional parallelGroup (string), optional hypothesisId (string).
+- **parallelGroup EFFICIENCY RULE**: when your plan has 3+ independent breakdowns (e.g. Region analysis, Category analysis, Salesman analysis), assign them all to the SAME parallelGroup string — they run concurrently and count as ONE step in your 6-step budget. This is the primary way to get breadth within the step cap. Steps in the same parallelGroup MUST NOT have dependsOn pointing to each other. Cap at 3 steps per group.
+- **hypothesisId**: if INVESTIGATION_HYPOTHESES is present, set this to the id of the hypothesis this step primarily tests. Used to mark that hypothesis as resolved when the step produces evidence.
 ${formatSkillsManifestForPlanner()}
-Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string}]}`;
+Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string, "hypothesisId"?: string}]}`;
 
   const priorBlock =
     priorObservationsText?.trim().length ?
@@ -478,6 +482,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     id: s.id,
     tool: s.tool,
     args: s.args as Record<string, unknown>,
+    hypothesisId: s.hypothesisId,
     dependsOn: s.dependsOn,
     parallelGroup: s.parallelGroup,
   }));
@@ -518,6 +523,12 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     // execute_query_plan.dimensionFilters[].op) before Zod validation.
     repairExecuteQueryPlanDimensionFilters(step);
     repairExecuteQueryPlanSort(step);
+    const injected = ensureInferredFiltersOnStep(step, ctx.inferredFilters);
+    if (injected.length) {
+      console.warn(
+        `[planner] injected inferred filters into ${step.tool} step ${step.id}: ${injected.join(", ")}`
+      );
+    }
   }
 
   for (const step of stepsWithMeta) {

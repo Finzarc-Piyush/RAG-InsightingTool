@@ -9,6 +9,7 @@ import type {
 } from "../../../shared/schema.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import type { SpawnedQuestion } from "./investigationTree.js";
+import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 
 export const AGENT_TRACE_MAX_BYTES = 48_000;
 
@@ -150,6 +151,14 @@ export interface AgentExecutionContext {
   analysisSpec?: AnalysisSpecForAgent | null;
   /** Structured NL → metrics/dimensions; set by maybeRunAnalysisBrief before planning. */
   analysisBrief?: AnalysisBrief;
+  /**
+   * Deterministic pre-planner resolution of user-named segment values to column
+   * filters (e.g. "furniture sales by region" → Category=Furniture). Seeded
+   * once in `buildAgentExecutionContext` from `DataSummary.topValues` via
+   * `inferFiltersFromQuestion`. Surfaced to the planner prompt and the
+   * analysis brief; enforced by the verifier's `MISSING_INFERRED_FILTER` rule.
+   */
+  inferredFilters?: InferredFilter[];
   summary: DataSummary;
   chatHistory: Message[];
   chatInsights?: Insight[];
@@ -187,6 +196,8 @@ export interface PlanStep {
   dependsOn?: string;
   /** Steps sharing the same parallelGroup (with no dependsOn on each other) execute concurrently. */
   parallelGroup?: string;
+  /** O2: ID of the hypothesis (from INVESTIGATION_HYPOTHESES) this step primarily tests. */
+  hypothesisId?: string;
 }
 
 export interface ToolCallRecord {
@@ -312,4 +323,15 @@ export interface AgentLoopResult {
   blackboard?: AnalyticalBlackboard;
   /** W8: sub-questions emitted by the reflector when anomalous findings warrant deeper investigation. */
   spawnedQuestions?: SpawnedQuestion[];
+  /**
+   * W6: filters the agent applied to this turn's analysis (mirrors
+   * `ctx.inferredFilters`). Persisted onto the assistant message so the UI
+   * can render "Filters: Category = Furniture" chips above the chart cards.
+   */
+  appliedFilters?: Array<{
+    column: string;
+    op: "in" | "not_in";
+    values: string[];
+    match?: "exact" | "case_insensitive" | "contains";
+  }>;
 }

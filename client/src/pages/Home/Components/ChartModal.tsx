@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -367,6 +367,21 @@ export function ChartModal({
     [specSeriesKeys, effectiveFilters]
   );
 
+  const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
+  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeys?.join(',')]); // reset on chart change
+
+  const handleToggleSeriesLegend = useCallback((key: string) => {
+    setHiddenSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleToggleAllSeriesLegend = useCallback((showAll: boolean) => {
+    setHiddenSeries(showAll ? new Set() : new Set(specSeriesKeys ?? []));
+  }, [specSeriesKeys]);
+
   const optimizedScatterData = useMemo(() => {
     if (type !== 'scatter' || processedScatterData.length <= MAX_RENDER_POINTS) {
       return processedScatterData;
@@ -388,6 +403,7 @@ export function ChartModal({
           const combinedVals = lineMultiKeys.flatMap((k) => getNumericValues(lineRows, k));
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
+            <>
             <ResponsiveContainer width="100%" height={440}>
               <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -431,13 +447,9 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend
-                  wrapperStyle={{ paddingTop: 4 }}
-                  iconType="line"
-                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
-                />
-                {lineMultiKeys.map((k, i) => {
+                {(specSeriesKeys ?? []).map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                  const isHidden = hiddenSeries.has(k);
                   return (
                     <Line
                       key={k}
@@ -446,13 +458,24 @@ export function ChartModal({
                       name={k}
                       stroke={c}
                       strokeWidth={2}
-                      dot={showDots ? { r: 4, fill: c } : false}
-                      activeDot={{ r: 8 }}
+                      strokeOpacity={isHidden ? 0 : 1}
+                      dot={isHidden ? false : showDots ? { r: 4, fill: c } : false}
+                      activeDot={isHidden ? false : { r: 8 }}
                     />
                   );
                 })}
               </LineChart>
             </ResponsiveContainer>
+            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'line' as const }))}
+                iconType="line"
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+            </>
           );
         }
 
@@ -582,6 +605,7 @@ export function ChartModal({
           specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
         const stacked = barLayout !== 'grouped';
         return (
+          <>
           <ResponsiveContainer width="100%" height={440}>
             <BarChart data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -620,27 +644,38 @@ export function ChartModal({
                 labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                 itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
               />
-              {multiKeys.length > 0 ? (
+              {(specSeriesKeys?.length ?? 0) > 0 ? (
                 <>
-                  <Legend
-                    wrapperStyle={{ paddingTop: 8 }}
-                    content={(props) => <RechartsWideLegendContent {...props} />}
-                  />
-                  {multiKeys.map((k, i) => (
-                    <Bar
-                      key={k}
-                      dataKey={k}
-                      stackId={stacked ? 'stack' : undefined}
-                      fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
-                      radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
-                    />
-                  ))}
+                  {(specSeriesKeys ?? []).map((k, i) => {
+                    const isHidden = hiddenSeries.has(k);
+                    return (
+                      <Bar
+                        key={k}
+                        dataKey={k}
+                        stackId={stacked ? 'stack' : undefined}
+                        fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
+                        fillOpacity={isHidden ? 0 : 1}
+                        radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                      />
+                    );
+                  })}
                 </>
               ) : (
                 <Bar dataKey={y} fill={chartColor} radius={[6, 6, 0, 0]} maxBarSize={60} />
               )}
             </BarChart>
           </ResponsiveContainer>
+          {(specSeriesKeys?.length ?? 0) > 0 && (
+            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'rect' as const }))}
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+          )}
+          </>
         );
       }
 
@@ -853,6 +888,7 @@ export function ChartModal({
           const combinedVals = areaMultiKeys.flatMap((k) => getNumericValues(areaRows, k));
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
+            <>
             <ResponsiveContainer width="100%" height={440}>
               <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -896,13 +932,9 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                <Legend
-                  wrapperStyle={{ paddingTop: 8 }}
-                  iconType="line"
-                  content={(props) => <RechartsWideLegendContent {...props} iconType="line" />}
-                />
-                {areaMultiKeys.map((k, i) => {
+                {(specSeriesKeys ?? []).map((k, i) => {
                   const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                  const isHidden = hiddenSeries.has(k);
                   return (
                     <Area
                       key={k}
@@ -912,13 +944,24 @@ export function ChartModal({
                       stackId={stackedArea ? 'areaStack' : undefined}
                       stroke={c}
                       fill={c}
-                      fillOpacity={stackedArea ? 0.55 : 0.3}
+                      strokeOpacity={isHidden ? 0 : 1}
+                      fillOpacity={isHidden ? 0 : stackedArea ? 0.55 : 0.3}
                       strokeWidth={2}
                     />
                   );
                 })}
               </AreaChart>
             </ResponsiveContainer>
+            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+              <RechartsWideLegendContent
+                payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'line' as const }))}
+                iconType="line"
+                hiddenSeries={hiddenSeries}
+                onToggleSeries={handleToggleSeriesLegend}
+                onToggleAll={handleToggleAllSeriesLegend}
+              />
+            </div>
+            </>
           );
         }
 
@@ -1398,19 +1441,63 @@ export function ChartModal({
           </div>
         </DialogHeader>
         
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden gap-2">
+          {/* Active filter chips row */}
+          {enableFilters && filtersApplied && filterDefinitions.length > 0 && (
+            <div className="flex flex-wrap gap-2 shrink-0">
+              {filterDefinitions.map((definition) => {
+                const selection = effectiveFilters[definition.key];
+                if (!selection) return null;
+                let label = '';
+                if (selection.type === 'categorical' && selection.values?.length) {
+                  label = `${definition.label}: ${selection.values.join(', ')}`;
+                } else if (selection.type === 'date') {
+                  const parts: string[] = [];
+                  if (selection.start) parts.push(`from ${selection.start}`);
+                  if (selection.end) parts.push(`to ${selection.end}`);
+                  if (!parts.length) return null;
+                  label = `${definition.label}: ${parts.join(' ')}`;
+                } else if (selection.type === 'numeric') {
+                  const parts: string[] = [];
+                  if (selection.min !== undefined) parts.push(`≥ ${selection.min}`);
+                  if (selection.max !== undefined) parts.push(`≤ ${selection.max}`);
+                  if (!parts.length) return null;
+                  label = `${definition.label}: ${parts.join(' & ')}`;
+                } else {
+                  return null;
+                }
+                return (
+                  <Badge
+                    key={definition.key}
+                    variant="secondary"
+                    className="flex items-center gap-2 rounded-full px-2.5 py-1 text-xs"
+                  >
+                    <span className="max-w-[200px] truncate">{label}</span>
+                    <button
+                      type="button"
+                      className="text-muted-foreground/80 transition hover:text-destructive"
+                      onClick={() => handleClearFilterKey?.(definition.key)}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex gap-6 flex-1 min-h-0">
-            {/* Left side - Chart (scroll to see full rotated x-axis labels) */}
+            {/* Left side - Chart */}
             <div className="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden">
-              <div className="w-full min-h-[480px] pb-6">
+              <div className="w-full pt-1">
                 {renderChart()}
               </div>
             </div>
-            
-            {/* Right side - Insights */}
-            <div className="flex h-full min-h-0 w-80 max-w-[min(100%,20rem)] flex-shrink-0 flex-col">
-              <div className="flex min-h-0 flex-1 flex-col gap-4">
-                {(displayKeyInsight || keyInsightLoading || keyInsightError) && (
+
+            {/* Right side - Insights (only rendered when there is content) */}
+            {(displayKeyInsight || keyInsightLoading || keyInsightError) && (
+              <div className="flex h-full min-h-0 w-72 max-w-[min(100%,18rem)] flex-shrink-0 flex-col">
+                <div className="flex min-h-0 flex-1 flex-col gap-4">
                   <div className="flex min-h-0 max-h-full flex-col rounded-lg border border-blue-200/90 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/25">
                     <div className="flex shrink-0 items-start gap-3 p-4 pb-2">
                       <div className="mt-1 h-3 w-3 shrink-0 rounded-full bg-blue-500" />
@@ -1442,9 +1529,9 @@ export function ChartModal({
                       ) : null}
                     </div>
                   </div>
-                )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </DialogContent>

@@ -1,6 +1,7 @@
 import { analysisBriefSchema, type AnalysisBrief } from "../../../shared/schema.js";
 import type { AgentExecutionContext } from "./types.js";
 import { userMessageHasReportIntent } from "../../reportIntent.js";
+import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 
 function shouldBuildAnalysisBrief(ctx: AgentExecutionContext): boolean {
   if (ctx.mode !== "analysis") return false;
@@ -48,7 +49,11 @@ requestsDashboard (Phase-2): set to true when the user explicitly asks to build 
 
 comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly contrasts two named time windows (e.g. "Mar-22 vs Apr-25", "Q3 vs Q4", "last year vs this year"). Each side is an array of analysisBriefFilterSchema that selects the period — typically a single filter on a date-like column whose values are the literal period labels the user named. Include short aLabel / bLabel (e.g. "Mar-22", "Apr-25") so downstream narrative reads naturally. Leave unset when the user gives a single window or no window at all.`;
 
-  const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}`;
+  const inferredBlock = ctx.inferredFilters?.length
+    ? `\n\nDeterministically inferred filters (from user-named values in topValues — include these verbatim in the brief's \`filters\` unless the user asked for an unfiltered view):\n${JSON.stringify(ctx.inferredFilters.map(stripInternalFields)).slice(0, 1500)}`
+    : "";
+
+  const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}${inferredBlock}`;
 
   const { completeJson } = await import("./llmJson.js");
   const out = await completeJson(system, user, analysisBriefSchema, {
@@ -58,7 +63,39 @@ comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly 
     onLlmCall,
   });
   if (!out.ok) return;
-  ctx.analysisBrief = out.data;
+  ctx.analysisBrief = mergeInferredFiltersIntoBrief(out.data, ctx.inferredFilters);
+}
+
+function stripInternalFields(f: InferredFilter) {
+  return { column: f.column, op: f.op, values: f.values, match: f.match };
+}
+
+/**
+ * Union inferred filters into the brief's `filters`. Brief-emitted filters for a
+ * given (column, op) take precedence; inferred filters fill the gap when the
+ * brief LLM omitted a user-named segment.
+ */
+export function mergeInferredFiltersIntoBrief(
+  brief: AnalysisBrief,
+  inferred: InferredFilter[] | undefined
+): AnalysisBrief {
+  if (!inferred?.length) return brief;
+  const existingKeys = new Set<string>();
+  for (const f of brief.filters ?? []) {
+    existingKeys.add(`${f.column}|${f.op}`);
+  }
+  const merged: NonNullable<AnalysisBrief["filters"]> = [...(brief.filters ?? [])];
+  for (const f of inferred) {
+    const key = `${f.column}|${f.op}`;
+    if (existingKeys.has(key)) continue;
+    merged.push({
+      column: f.column,
+      op: f.op,
+      values: f.values,
+      match: f.match,
+    });
+  }
+  return { ...brief, filters: merged };
 }
 
 export function formatAnalysisBriefForPrompt(ctx: AgentExecutionContext): string {

@@ -1,9 +1,12 @@
-import type { AgentExecutionContext } from "./types.js";
+import type { AgentExecutionContext, PlanStep } from "./types.js";
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import type { VerifierResult, VerdictType } from "./types.js";
 import { verifierOutputSchema, VERIFIER_VERDICT } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
+import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
+import { checkInferredFilterFidelity } from "./verifierHelpers.js";
+export { checkInferredFilterFidelity };
 
 function chartPrecheck(
   candidate: string,
@@ -37,8 +40,50 @@ function chartPrecheck(
       course_correction: VERIFIER_VERDICT.reviseNarrative,
     };
   }
+  // Guard: bar chart with a temporal X axis → should be line/area
+  const isTemporalX =
+    ctx.summary.dateColumns.includes(p.data.x) ||
+    /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(p.data.x);
+  if (p.data.type === "bar" && isTemporalX) {
+    return {
+      verdict: VERIFIER_VERDICT.reviseNarrative,
+      issues: [
+        {
+          code: "BAR_ON_TEMPORAL_X",
+          severity: "medium",
+          description: `x='${p.data.x}' is a temporal column — use type 'line' or 'area' instead of 'bar' for trend charts`,
+          evidenceRefs: [],
+        },
+      ],
+      course_correction: VERIFIER_VERDICT.reviseNarrative,
+    };
+  }
+  // Guard: high-cardinality seriesColumn → charts become unreadable
+  if (p.data.seriesColumn) {
+    const seriesColMeta = ctx.summary.columns.find((c) => c.name === p.data.seriesColumn);
+    // topValues is only populated for low-cardinality columns; absent = high cardinality
+    const topValCount = seriesColMeta?.topValues?.length ?? 99;
+    if (topValCount > 15) {
+      return {
+        verdict: VERIFIER_VERDICT.reviseNarrative,
+        issues: [
+          {
+            code: "HIGH_SERIES_CARDINALITY",
+            severity: "medium",
+            description: `seriesColumn '${p.data.seriesColumn}' has >15 distinct values — set max_series (≤15) or use a single-series bar chart sorted by y`,
+            evidenceRefs: [],
+          },
+        ],
+        course_correction: VERIFIER_VERDICT.reviseNarrative,
+      };
+    }
+  }
   return null;
 }
+
+// O4: re-exported from verifierHelpers so the pure fn is testable without the OpenAI dep.
+export { checkMissingFindings } from "./verifierHelpers.js";
+import { checkMissingFindings } from "./verifierHelpers.js";
 
 export async function runVerifier(
   ctx: AgentExecutionContext,
@@ -47,12 +92,38 @@ export async function runVerifier(
     evidenceSummary: string;
     stepId: string;
     turnId: string;
+    blackboard?: AnalyticalBlackboard;
+    /** Current plan steps — used to detect inferred filters that never reached execution. */
+    planSteps?: PlanStep[];
   },
   onLlmCall: () => void
 ): Promise<VerifierResult> {
   const pre = chartPrecheck(params.candidate, ctx);
   if (pre) {
     return pre;
+  }
+
+  if (params.planSteps?.length) {
+    const missing = checkInferredFilterFidelity(ctx, params.planSteps);
+    if (missing.length) {
+      return {
+        verdict: VERIFIER_VERDICT.replan,
+        issues: missing,
+        course_correction: VERIFIER_VERDICT.replan,
+      };
+    }
+  }
+
+  // O4: flag anomalous blackboard findings that the narrative didn't cite.
+  if (params.blackboard) {
+    const missingIssues = checkMissingFindings(params.candidate, params.blackboard);
+    if (missingIssues.length > 0) {
+      return {
+        verdict: VERIFIER_VERDICT.reviseNarrative,
+        issues: missingIssues,
+        course_correction: VERIFIER_VERDICT.reviseNarrative,
+      };
+    }
   }
 
   const system = `You are a verifier, not an assistant. Assume the draft may be wrong.

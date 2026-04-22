@@ -19,7 +19,7 @@ export function formatWorkingMemoryBlock(entries: WorkingMemoryEntry[]): string 
       e.suggestedColumns?.length ? ` suggestedColumns=[${e.suggestedColumns.join(", ")}]` : "";
     const slots =
       e.slots && Object.keys(e.slots).length
-        ? ` slots=${JSON.stringify(e.slots).slice(0, 400)}`
+        ? ` slots=${JSON.stringify(e.slots).slice(0, 1600)}`
         : "";
     const sum = e.summaryPreview.replace(/\s+/g, " ").slice(0, SUMMARY_PREVIEW);
     lines.push(

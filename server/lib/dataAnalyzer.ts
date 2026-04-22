@@ -434,6 +434,12 @@ export async function answerQuestion(
   magnitudes?: import('./agents/runtime/types.js').AnswerMagnitude[];
   unexplained?: string;
   dashboardDraft?: import('../shared/schema.js').DashboardSpec;
+  appliedFilters?: Array<{
+    column: string;
+    op: 'in' | 'not_in';
+    values: string[];
+    match?: 'exact' | 'case_insensitive' | 'contains';
+  }>;
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -492,6 +498,7 @@ export async function answerQuestion(
           ...(loopResult.dashboardDraft ? { dashboardDraft: loopResult.dashboardDraft } : {}),
           lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
           ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
+          ...(loopResult.appliedFilters?.length ? { appliedFilters: loopResult.appliedFilters } : {}),
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');

@@ -1,4 +1,100 @@
 import type { PlanStep } from "./types.js";
+import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
+
+/** Tools that accept `dimensionFilters` at args[plan].dimensionFilters. */
+const NESTED_PLAN_TOOLS = new Set(["execute_query_plan"]);
+/** Tools that accept `dimensionFilters` at the top level of args. */
+const TOP_LEVEL_FILTER_TOOLS = new Set([
+  "run_correlation",
+  "run_segment_driver_analysis",
+  "breakdown_ranking",
+  "run_two_segment_compare",
+]);
+
+function dimensionFilterHost(step: PlanStep): Record<string, unknown> | null {
+  if (NESTED_PLAN_TOOLS.has(step.tool)) {
+    const plan = step.args?.plan;
+    return plan && typeof plan === "object" ? (plan as Record<string, unknown>) : null;
+  }
+  if (TOP_LEVEL_FILTER_TOOLS.has(step.tool)) {
+    return (step.args as Record<string, unknown>) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Inject inferred filters into any step that accepts dimensionFilters but
+ * didn't emit one for an inferred column. Brief-emitted or planner-emitted
+ * filters for the same (column, op) are preserved — this only fills gaps.
+ * Returns the list of columns that were injected (for logging / tests).
+ */
+export function ensureInferredFiltersOnStep(
+  step: PlanStep,
+  inferredFilters: InferredFilter[] | undefined
+): string[] {
+  if (!inferredFilters?.length) return [];
+  const host = dimensionFilterHost(step);
+  if (!host) return [];
+
+  const existing = Array.isArray(host.dimensionFilters)
+    ? (host.dimensionFilters as Array<Record<string, unknown>>)
+    : [];
+  const injected: string[] = [];
+  const seen = new Set<string>();
+  for (const f of existing) {
+    if (!f || typeof f !== "object") continue;
+    const col = typeof f.column === "string" ? f.column : null;
+    const op = typeof f.op === "string" ? f.op : "in";
+    if (col) seen.add(`${col}|${op}`);
+  }
+  const next = [...existing];
+  for (const f of inferredFilters) {
+    const key = `${f.column}|${f.op}`;
+    if (seen.has(key)) continue;
+    next.push({
+      column: f.column,
+      op: f.op,
+      values: f.values,
+      match: f.match,
+    });
+    injected.push(f.column);
+  }
+  if (injected.length) host.dimensionFilters = next;
+  return injected;
+}
+
+/**
+ * Pure check used by the verifier backstop: returns the names of inferred
+ * filter columns that are absent from every step that could accept them.
+ * Empty array means all inferred filters are represented somewhere in the
+ * plan (or no inferred filters exist).
+ */
+export function checkMissingInferredFilters(
+  steps: PlanStep[],
+  inferredFilters: InferredFilter[] | undefined
+): string[] {
+  if (!inferredFilters?.length) return [];
+  const covered = new Set<string>();
+  const applicableStepCount = steps.reduce(
+    (n, s) => n + (dimensionFilterHost(s) ? 1 : 0),
+    0
+  );
+  if (applicableStepCount === 0) return [];
+  for (const s of steps) {
+    const host = dimensionFilterHost(s);
+    if (!host) continue;
+    const filters = Array.isArray(host.dimensionFilters)
+      ? (host.dimensionFilters as Array<Record<string, unknown>>)
+      : [];
+    for (const f of filters) {
+      if (!f || typeof f !== "object") continue;
+      if (typeof f.column === "string") covered.add(f.column);
+    }
+  }
+  return inferredFilters
+    .map((f) => f.column)
+    .filter((col) => !covered.has(col));
+}
 
 /**
  * Repairs common planner schema drift for execute_query_plan.

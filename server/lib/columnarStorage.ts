@@ -45,6 +45,15 @@ export function isDuckDBAvailable(): boolean {
   return duckdbAvailable === true;
 }
 
+export async function initDuckDBEager(): Promise<void> {
+  try {
+    await loadDuckDB();
+    console.log('✅ DuckDB ready');
+  } catch (err) {
+    console.warn('⚠️ DuckDB unavailable:', err instanceof Error ? err.message : String(err));
+  }
+}
+
 export interface ColumnarStorageOptions {
   sessionId: string;
   tempDir?: string;

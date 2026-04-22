@@ -71,6 +71,8 @@ interface ChatInterfaceProps {
   onEditMessage?: (messageIndex: number, newContent: string) => void;
   thinkingSteps?: ThinkingStep[];
   agentWorkbenchLive?: AgentWorkbenchEntry[];
+  /** W12: sub-questions spawned during deep investigation (streamed live). */
+  spawnedSubQuestions?: string[];
   thinkingTargetTimestamp?: number | null;
   /** Message timestamp after which the live thinking strip is rendered while streaming. */
   thinkingLiveAnchorTimestamp?: number | null;
@@ -137,6 +139,7 @@ export function ChatInterface({
   onEditMessage,
   thinkingSteps,
   agentWorkbenchLive = [],
+  spawnedSubQuestions = [],
   thinkingTargetTimestamp,
   thinkingLiveAnchorTimestamp = null,
   aiSuggestions,
@@ -490,10 +493,9 @@ export function ChatInterface({
       const trimmed = suggestion.trim();
       if (!trimmed) return;
 
-      setInputValue((prev) => {
-        const next = prev.trim() === '' ? trimmed : `${prev}\n\n${trimmed}`;
-        pendingComposerCaretRef.current = next.length;
-        return next;
+      setInputValue(() => {
+        pendingComposerCaretRef.current = trimmed.length;
+        return trimmed;
       });
 
       setTimeout(() => {
@@ -835,6 +837,7 @@ export function ChatInterface({
                       variant="live"
                       steps={thinkingSteps ?? []}
                       workbench={agentWorkbenchLive}
+                      spawnedSubQuestions={spawnedSubQuestions}
                       isStreaming
                     />
                   </div>

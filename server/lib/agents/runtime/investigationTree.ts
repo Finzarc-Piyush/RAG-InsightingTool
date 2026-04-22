@@ -83,20 +83,24 @@ export interface InvestigationTree {
   blackboard: AnalyticalBlackboard;
   totalBudgetUsed: { llmCalls: number; wallMs: number };
   startedAt: number;
+  /** O5: request-scoped prefix embedded in all node IDs to prevent collisions. */
+  idPrefix: string;
 }
 
 // ─── Creation ────────────────────────────────────────────────────────────────
 
 let _nodeSeq = 0;
-function nextNodeId(): string {
-  return `node-${++_nodeSeq}`;
+function nextNodeId(prefix = ""): string {
+  return `${prefix}node-${++_nodeSeq}`;
 }
 
 export function createTree(
   rootQuestion: string,
-  blackboard: AnalyticalBlackboard
+  blackboard: AnalyticalBlackboard,
+  /** O5: request-scoped prefix to prevent node ID collisions in concurrent investigations. */
+  idPrefix = ""
 ): InvestigationTree {
-  const rootId = nextNodeId();
+  const rootId = nextNodeId(idPrefix);
   return {
     rootId,
     nodes: {
@@ -115,6 +119,7 @@ export function createTree(
     blackboard,
     totalBudgetUsed: { llmCalls: 0, wallMs: 0 },
     startedAt: Date.now(),
+    idPrefix,
   };
 }
 
@@ -142,7 +147,7 @@ export function addChildNode(
 ): InvestigationNode | null {
   const parent = tree.nodes[parentId];
   if (!parent) return null;
-  const id = nextNodeId();
+  const id = nextNodeId(tree.idPrefix);
   const node: InvestigationNode = {
     id,
     question: sq.question,

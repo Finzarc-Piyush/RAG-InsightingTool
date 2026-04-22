@@ -3,11 +3,13 @@ import type { ChatDocument } from "../../models/chat.model.js";
 
 export interface RagChunk {
   chunkId: string;
-  chunkType: "summary" | "sample" | "rows" | "duckdb_sample";
+  chunkType: "summary" | "sample" | "rows" | "duckdb_sample" | "user_context";
   content: string;
   rowStart?: number;
   rowEnd?: number;
 }
+
+export const USER_CONTEXT_CHUNK_ID = "user_context";
 
 const ROWS_PER_CHUNK = 50;
 const MAX_ROW_CHUNKS = 40;
@@ -66,6 +68,14 @@ function duckdbSampleChunk(sample: Record<string, any>[]): RagChunk {
   };
 }
 
+export function userContextChunk(permanentContext: string): RagChunk {
+  return {
+    chunkId: USER_CONTEXT_CHUNK_ID,
+    chunkType: "user_context",
+    content: `User-provided analysis context:\n${permanentContext.trim()}`,
+  };
+}
+
 /**
  * Build tiered chunks for indexing. Caller supplies optional full data or DuckDB sample rows.
  */
@@ -77,7 +87,14 @@ export function buildChunksForSession(params: {
   duckdbSampleRows?: Record<string, any>[];
 }): RagChunk[] {
   const { doc, dataRows, duckdbSampleRows } = params;
-  const chunks: RagChunk[] = [summaryChunk(doc.dataSummary)];
+  const chunks: RagChunk[] = [];
+
+  // Prepend user-provided context so it ranks reliably in retrieval.
+  if (doc.permanentContext?.trim()) {
+    chunks.push(userContextChunk(doc.permanentContext));
+  }
+
+  chunks.push(summaryChunk(doc.dataSummary));
 
   if (doc.sampleRows?.length) {
     chunks.push(sampleChunk(doc.sampleRows));

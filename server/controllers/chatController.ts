@@ -17,7 +17,7 @@ import { sendSSE, setSSEHeaders } from "../utils/sse.helper.js";
  * open indefinitely; this is the outer backstop (P-008).
  */
 const STREAM_CHAT_HARD_TIMEOUT_MS = Number(
-  process.env.STREAM_CHAT_HARD_TIMEOUT_MS || 150_000
+  process.env.STREAM_CHAT_HARD_TIMEOUT_MS || 600_000
 );
 
 /**

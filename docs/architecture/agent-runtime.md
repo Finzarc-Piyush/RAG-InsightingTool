@@ -167,6 +167,80 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **`user_context` RAG chunk + starter-question regeneration** —
+  `ChatDocument.permanentContext` is now indexed as a `user_context`
+  chunk (prepended in `buildChunksForSession`), so planner/reflector
+  retrieval includes user-stated goals alongside data chunks. A new
+  `regenerateStarterQuestionsLLM` helper in `sessionAnalysisContext.ts`
+  is called from `updateSessionPermanentContext` to tailor the initial
+  welcome message's `suggestedQuestions` to the user's context — but
+  the initial seed (`seedSessionAnalysisContextLLM`) keeps its original
+  signature and never waits on user input, so the welcome message is
+  produced from dataset understanding alone. `mergeSuggestedQuestions`
+  uses strict primary/fallback semantics: LLM-generated questions are
+  returned as-is when non-empty; hardcoded column-name templates are
+  used only when the LLM list is empty (skip/failure fallback).
+- **Wave W6 · `appliedFilters` chips above chart cards** — both
+  `messageSchema` and `chatResponseSchema` carry an optional
+  `appliedFilters` array (mirror of `analysisBriefFilterSchema`).
+  `AgentLoopResult.appliedFilters` is populated from
+  `ctx.inferredFilters` via `appliedFiltersOut()` in
+  `agentLoop.service.ts`, threaded through `dataAnalyzer.answerQuestion`,
+  and saved onto the assistant message in both `chat.service.ts` and
+  `chatStream.service.ts`. Client renders a `Filters applied: Category
+  = Furniture` chip row above the charts tab in
+  `AnalyticalDashboardResponse.tsx` using semantic tokens only
+  (`bg-muted`, `border-border`, `text-muted-foreground`,
+  `text-foreground`).
+- **Wave W5 · contains filter now LIKE-compiled, no more silent drop** —
+  `queryPlanDuckdbExecutor.buildWhereClause` previously short-circuited
+  with empty SQL when any `dimensionFilter.match === "contains"`,
+  silently dropping the entire plan; `canExecuteQueryPlanOnDuckDb`
+  forced the whole query off the DuckDB path for the same reason. Both
+  are fixed: `contains` filters now compile to
+  `LOWER(TRIM(CAST(col AS VARCHAR))) LIKE '%v%' ESCAPE '\\'` with
+  proper `% _` escaping, multiple values OR together, and `not_in`
+  inverts to `NOT (...)`. `case_insensitive` / `exact` SQL is
+  unchanged.
+- **Wave W4 · inferred-filter plan enforcement** —
+  `ensureInferredFiltersOnStep` (in `planArgRepairs.ts`) auto-injects
+  any missing inferred filter into `execute_query_plan.plan.dimensionFilters`
+  and the top-level `dimensionFilters` arg on `run_correlation`,
+  `run_segment_driver_analysis`, `breakdown_ranking`, and
+  `run_two_segment_compare`. The planner runs this repair in the same
+  loop as the existing `repairExecuteQueryPlanDimensionFilters` pass.
+  Backstop: `checkInferredFilterFidelity` (pure helper in
+  `verifierHelpers.ts`) emits `MISSING_INFERRED_FILTER` with verdict
+  `replan` when the plan still doesn't reference an inferred column
+  after repair — wired into both per-step and final `runVerifier`
+  invocations in `agentLoop.service.ts` via the new `planSteps`
+  parameter.
+- **Wave W3 · inferred filters wired to planner + analysis brief** —
+  `buildAgentExecutionContext` now runs `inferFiltersFromQuestion`
+  once per turn and stashes the result on `ctx.inferredFilters`.
+  `summarizeContextForPrompt` surfaces an `INFERRED_FILTERS_JSON`
+  block to the planner; `maybeRunAnalysisBrief` forwards the same
+  signal to the brief LLM and `mergeInferredFiltersIntoBrief` unions
+  any inferred filters the brief LLM dropped back into
+  `ctx.analysisBrief.filters`.
+- **Wave W2 · categoricalValues in planner prompt** —
+  `summarizeContextForPrompt` now emits a bounded
+  `categoricalValues:` block (≤ 8 values per column, ≤ 2000 chars
+  total, skipping numeric/date columns and those without
+  `topValues`). Teaches the planner upfront which tokens exist as
+  segment values, so bare qualifiers like "furniture" can be bound to
+  `dimensionFilters` on the first planning pass without requiring a
+  separate `get_schema_summary` tool call.
+- **Wave W1 · `inferFiltersFromQuestion`** — new pure helper at
+  `server/lib/agents/utils/inferFiltersFromQuestion.ts` that
+  deterministically resolves 1–3-word candidates from the user
+  question against `DataSummary.topValues` / `sampleValues` using the
+  existing `findUniqueValueColumnMatch`. Returns ready-to-use
+  `InferredFilter[]` (column / op: "in" / canonical values / match
+  mode / matched tokens). First half of the fix for the bug where
+  pointed qualifiers ("furniture sales by region") were dropped
+  because the planner never saw categorical values upfront and no
+  pre-planner pass resolved bare tokens to column filters.
 - **Wave F6** — documented the capability gap between the legacy
   orchestrator and the agentic runtime; added a `DANGER — capability
   gap` banner at the top of `server/lib/agents/index.ts` spelling out

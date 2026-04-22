@@ -259,3 +259,38 @@ describe("isDeepInvestigationEnabled", () => {
     delete process.env.DEEP_INVESTIGATION_ENABLED;
   });
 });
+
+describe("O5: idPrefix namespacing prevents node ID collisions", () => {
+  it("two trees with different prefixes produce non-colliding node IDs", () => {
+    const bb1 = createBlackboard();
+    const bb2 = createBlackboard();
+    const treeA = createTree("question A", bb1, "sessionA_");
+    const treeB = createTree("question B", bb2, "sessionB_");
+    assert.notStrictEqual(treeA.rootId, treeB.rootId);
+    assert.ok(treeA.rootId.startsWith("sessionA_"));
+    assert.ok(treeB.rootId.startsWith("sessionB_"));
+  });
+
+  it("child nodes inherit the parent tree idPrefix", () => {
+    const bb = createBlackboard();
+    const tree = createTree("root question", bb, "pfx_");
+    const sq: SpawnedQuestion = {
+      question: "child question",
+      spawnReason: "anomaly found",
+      priority: "high",
+      suggestedColumns: [],
+    };
+    const config = loadDeepInvestigationConfig();
+    assert.ok(canAddNode(tree, tree.rootId, config));
+    const child = addChildNode(tree, tree.rootId, sq);
+    assert.ok(child !== null);
+    assert.ok(child!.id.startsWith("pfx_"));
+  });
+
+  it("trees with no prefix still work (empty prefix)", () => {
+    const bb = createBlackboard();
+    const tree = createTree("question", bb);
+    assert.ok(tree.rootId.startsWith("node-"));
+    assert.strictEqual(tree.idPrefix, "");
+  });
+});

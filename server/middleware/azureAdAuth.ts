@@ -5,7 +5,22 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHash } from "crypto";
+
+const MAX_CACHE_TTL_MS = 5 * 60 * 1000; // revoked tokens valid for at most 5 min
+
+interface CachedAuth {
+  email: string;
+  oid: string | undefined;
+  claims: jwt.JwtPayload;
+  expiresAt: number;
+}
+const tokenCache = new Map<string, CachedAuth>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of tokenCache) if (v.expiresAt <= now) tokenCache.delete(k);
+}, 10 * 60 * 1000).unref();
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -161,6 +176,14 @@ export async function requireAzureAdAuth(
     return;
   }
 
+  const tokenKey = createHash("sha256").update(token).digest("hex");
+  const cached = tokenCache.get(tokenKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    req.auth = { email: cached.email, oid: cached.oid, claims: cached.claims };
+    next();
+    return;
+  }
+
   try {
     const claims = await verifyToken(token, tenantId, audience);
     const email = pickEmail(claims);
@@ -169,6 +192,8 @@ export async function requireAzureAdAuth(
       return;
     }
     const oid = typeof claims.oid === "string" ? claims.oid : undefined;
+    const tokenExp = typeof claims.exp === "number" ? claims.exp * 1000 : Infinity;
+    tokenCache.set(tokenKey, { email, oid, claims, expiresAt: Math.min(tokenExp, Date.now() + MAX_CACHE_TTL_MS) });
     req.auth = { email, oid, claims };
     next();
   } catch {

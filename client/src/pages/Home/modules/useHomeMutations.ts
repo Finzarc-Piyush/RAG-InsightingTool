@@ -97,6 +97,8 @@ export const useHomeMutations = ({
   const earlyAssistantReplyTsRef = useRef<number | null>(null);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [agentWorkbenchLive, setAgentWorkbenchLive] = useState<AgentWorkbenchEntry[]>([]);
+  // W12: live sub-questions spawned during deep investigation
+  const [spawnedSubQuestions, setSpawnedSubQuestions] = useState<string[]>([]);
   const [thinkingTargetTimestamp, setThinkingTargetTimestamp] = useState<number | null>(null);
   const [thinkingLiveAnchorTimestamp, setThinkingLiveAnchorTimestamp] = useState<number | null>(null);
   const hadIntermediateSegmentsRef = useRef(false);
@@ -601,6 +603,7 @@ export const useHomeMutations = ({
       hadIntermediateSegmentsRef.current = false;
       setThinkingSteps([]);
       setAgentWorkbenchLive([]);
+      setSpawnedSubQuestions([]);
       setThinkingTargetTimestamp(null);
       setThinkingLiveAnchorTimestamp(null);
       
@@ -681,14 +684,21 @@ export const useHomeMutations = ({
               });
             },
             onAgentEvent: (event: string, data: unknown) => {
-              if (event !== 'workbench') return;
-              const entry = (data as { entry?: AgentWorkbenchEntry }).entry;
-              if (!entry) return;
-              setAgentWorkbenchLive((prev) => {
-                const next = [...prev, entry];
-                turnTraceRef.current = { ...turnTraceRef.current, workbench: next };
-                return next;
-              });
+              if (event === 'workbench') {
+                const entry = (data as { entry?: AgentWorkbenchEntry }).entry;
+                if (!entry) return;
+                setAgentWorkbenchLive((prev) => {
+                  const next = [...prev, entry];
+                  turnTraceRef.current = { ...turnTraceRef.current, workbench: next };
+                  return next;
+                });
+              } else if (event === 'sub_question_spawned') {
+                // W12: track spawned sub-questions for ThinkingPanel display
+                const questions = (data as { questions?: string[] }).questions;
+                if (questions?.length) {
+                  setSpawnedSubQuestions((prev) => [...prev, ...questions]);
+                }
+              }
             },
             onIntermediate: (payload: StreamIntermediatePayload) => {
               hadIntermediateSegmentsRef.current = true;
@@ -1095,6 +1105,7 @@ export const useHomeMutations = ({
     cancelChatRequest,
     thinkingSteps,
     agentWorkbenchLive,
+    spawnedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
   };

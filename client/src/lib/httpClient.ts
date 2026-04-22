@@ -70,6 +70,25 @@ apiClient.interceptors.response.use(
       }
     }
 
+    if (error.response?.status === 401) {
+      const cfg = error.config as (typeof error.config) & { _authRetry?: boolean };
+      if (cfg && !cfg._authRetry) {
+        cfg._authRetry = true;
+        try {
+          const freshAuth = await getAuthorizationHeader();
+          if (freshAuth.Authorization) {
+            Object.assign(cfg.headers as Record<string, unknown>, freshAuth);
+            return await apiClient.request(cfg);
+          }
+        } catch {
+          // fresh token acquisition failed — fall through to error below
+        }
+        // Both original and refreshed token rejected: fire the auth-failed event
+        // so the UI can surface "session expired, sign in again".
+        window.dispatchEvent(new CustomEvent("auth:token-failed", { detail: { reason: "401" } }));
+      }
+    }
+
     if (error.response) {
       const errorData = error.response.data as any;
       const message =

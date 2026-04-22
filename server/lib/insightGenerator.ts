@@ -36,8 +36,14 @@ export async function generateChartInsights(
   const y2Variable = (chartSpec as any).y2;
   const y2Label = (chartSpec as any).y2Label || y2Variable;
 
+  // Multi-series charts pivot data: each series key IS a data column, chartSpec.y is a display label only
+  const seriesKeys = Array.isArray(chartSpec.seriesKeys) && chartSpec.seriesKeys.length > 0
+    ? chartSpec.seriesKeys : null;
+
   const xValues = chartData.map(row => row[chartSpec.x]).filter(v => v !== null && v !== undefined);
-  const yValues = chartData.map(row => row[chartSpec.y]).filter(v => v !== null && v !== undefined);
+  const yValues = seriesKeys
+    ? seriesKeys.flatMap(k => chartData.map(row => row[k]).filter(v => v !== null && v !== undefined))
+    : chartData.map(row => row[chartSpec.y]).filter(v => v !== null && v !== undefined);
   const y2Values = isDualAxis ? chartData.map(row => row[y2Variable]).filter(v => v !== null && v !== undefined) : [];
 
   const numericX: number[] = xValues.map(v => Number(String(v).replace(/[%,,]/g, ''))).filter(v => !isNaN(v));
@@ -87,18 +93,34 @@ export async function generateChartInsights(
     return Math.sqrt(variance);
   };
 
-  // Find top/bottom performers
+  const parseNum = (v: any): number => Number(String(v ?? '').replace(/[%,,]/g, ''));
+
+  // Find top/bottom performers — for multi-series charts, rank series by aggregate sum
   const findTopPerformers = (data: Record<string, any>[], yKey: string, limit: number = 3): Array<{x: any, y: number}> => {
+    if (seriesKeys) {
+      return seriesKeys
+        .map(k => ({ x: k, y: data.reduce((s, r) => s + (isNaN(parseNum(r[k])) ? 0 : parseNum(r[k])), 0) }))
+        .filter(item => !isNaN(item.y))
+        .sort((a, b) => b.y - a.y)
+        .slice(0, limit);
+    }
     return data
-      .map(row => ({ x: row[chartSpec.x], y: Number(String(row[yKey]).replace(/[%,,]/g, '')) }))
+      .map(row => ({ x: row[chartSpec.x], y: parseNum(row[yKey]) }))
       .filter(item => !isNaN(item.y))
       .sort((a, b) => b.y - a.y)
       .slice(0, limit);
   };
 
   const findBottomPerformers = (data: Record<string, any>[], yKey: string, limit: number = 3): Array<{x: any, y: number}> => {
+    if (seriesKeys) {
+      return seriesKeys
+        .map(k => ({ x: k, y: data.reduce((s, r) => s + (isNaN(parseNum(r[k])) ? 0 : parseNum(r[k])), 0) }))
+        .filter(item => !isNaN(item.y))
+        .sort((a, b) => a.y - b.y)
+        .slice(0, limit);
+    }
     return data
-      .map(row => ({ x: row[chartSpec.x], y: Number(String(row[yKey]).replace(/[%,,]/g, '')) }))
+      .map(row => ({ x: row[chartSpec.x], y: parseNum(row[yKey]) }))
       .filter(item => !isNaN(item.y))
       .sort((a, b) => a.y - b.y)
       .slice(0, limit);
@@ -173,12 +195,12 @@ export async function generateChartInsights(
   const cv = avgY !== 0 ? (yStdDev / Math.abs(avgY)) * 100 : 0;
   const variability = cv > 30 ? 'high' : cv > 15 ? 'moderate' : 'low';
 
-  // For bar/pie charts with categorical X, identify top categories
+  // For bar/pie charts with categorical X, identify top categories (skip for multi-series — top performers already covers it)
   const isCategoricalX = numericX.length === 0;
   let topCategories = '';
-  if (isCategoricalX && chartData.length > 0) {
+  if (!seriesKeys && isCategoricalX && chartData.length > 0) {
     const categoryStats = chartData
-      .map(row => ({ x: row[chartSpec.x], y: Number(String(row[chartSpec.y]).replace(/[%,,]/g, '')) }))
+      .map(row => ({ x: row[chartSpec.x], y: parseNum(row[chartSpec.y]) }))
       .filter(item => !isNaN(item.y))
       .sort((a, b) => b.y - a.y)
       .slice(0, 3);

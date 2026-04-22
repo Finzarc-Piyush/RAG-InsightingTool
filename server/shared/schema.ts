@@ -76,7 +76,7 @@ export const agentWorkbenchEntrySchema = z.object({
   kind: agentWorkbenchEntryKindSchema,
   title: z.string().max(500),
   /** Display text (JSON, pseudo-code, etc.); cap enforced when appending server-side */
-  code: z.string().max(12000),
+  code: z.string().max(24000),
   language: z.string().max(32).optional(),
 });
 
@@ -212,6 +212,24 @@ export const messageSchema = z.object({
   intermediateInsight: z.string().optional(),
   /** Query-derived default pivot fields for auto-shown analysis tables. */
   pivotDefaults: pivotDefaultsSchema.optional(),
+  /**
+   * W6 — filters the agent applied to this turn's analysis, surfaced in the
+   * UI as chips above the chart cards so the user can confirm the scope.
+   * Typically populated from `ctx.inferredFilters`, but the schema is the
+   * same as `analysisBriefFilterSchema` so brief-emitted filters can be saved
+   * here verbatim.
+   */
+  appliedFilters: z
+    .array(
+      z.object({
+        column: z.string().max(200),
+        op: z.enum(["in", "not_in"]),
+        values: z.array(z.string()).max(40),
+        match: z.enum(["exact", "case_insensitive", "contains"]).optional(),
+      })
+    )
+    .max(12)
+    .optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;
@@ -464,6 +482,18 @@ export const chatResponseSchema = z.object({
   unexplained: z.string().max(800).optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
   dashboardDraft: z.record(z.unknown()).optional(),
+  /** W6 — filters the agent applied to the turn, mirrored in messageSchema.appliedFilters. */
+  appliedFilters: z
+    .array(
+      z.object({
+        column: z.string().max(200),
+        op: z.enum(["in", "not_in"]),
+        values: z.array(z.string()).max(40),
+        match: z.enum(["exact", "case_insensitive", "contains"]).optional(),
+      })
+    )
+    .max(12)
+    .optional(),
 });
 
 export type ChatResponse = z.infer<typeof chatResponseSchema>;
@@ -843,8 +873,13 @@ export const pivotAggRowSchema = z.object({
 });
 export type PivotAggRow = z.infer<typeof pivotAggRowSchema>;
 
+// Explicit types needed so TypeScript can resolve the mutual recursion between group/leaf nodes.
+type _PivotLeafNode = { type: "leaf"; depth: number; label: string; pathKey: string; values: PivotAggRow };
+type _PivotGroupNode = { type: "group"; depth: number; label: string; pathKey: string; children: _PivotTreeNode[]; subtotal: PivotAggRow };
+type _PivotTreeNode = _PivotLeafNode | _PivotGroupNode;
+
 // Recursive pivot tree nodes (group/leaf).
-export const pivotLeafNodeSchema = z.lazy(() =>
+export const pivotLeafNodeSchema: z.ZodType<_PivotLeafNode> = z.lazy(() =>
   z.object({
     type: z.literal("leaf"),
     depth: z.number(),
@@ -854,7 +889,7 @@ export const pivotLeafNodeSchema = z.lazy(() =>
   })
 );
 
-export const pivotGroupNodeSchema = z.lazy(() =>
+export const pivotGroupNodeSchema: z.ZodType<_PivotGroupNode> = z.lazy(() =>
   z.object({
     type: z.literal("group"),
     depth: z.number(),
@@ -865,7 +900,7 @@ export const pivotGroupNodeSchema = z.lazy(() =>
   })
 );
 
-export const pivotTreeNodeSchema = z.union([pivotLeafNodeSchema, pivotGroupNodeSchema]);
+export const pivotTreeNodeSchema: z.ZodType<_PivotTreeNode> = z.union([pivotLeafNodeSchema, pivotGroupNodeSchema]);
 
 export const pivotTreeSchema = z.object({
   nodes: z.array(pivotTreeNodeSchema),

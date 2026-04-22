@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { 
+import {
   getAllSessionsEndpoint,
   getSessionsPaginatedEndpoint,
   getSessionsFilteredEndpoint,
@@ -10,6 +10,7 @@ import {
   updateSessionContextEndpoint,
   deleteSessionEndpoint,
   getDataSummaryEndpoint,
+  getSessionAnalysisContextEndpoint,
   postChartPreviewEndpoint,
   postChartKeyInsightEndpoint
 } from "../controllers/sessionController.js";
@@ -36,6 +37,9 @@ router.get('/sessions/user/:username', getSessionsByUserEndpoint);
 
 // Get data summary for a session (must come before /sessions/:sessionId routes)
 router.get('/sessions/:sessionId/data-summary', getDataSummaryEndpoint);
+
+// Get the rolling session analysis context (lightweight)
+router.get('/sessions/:sessionId/analysis-context', getSessionAnalysisContextEndpoint);
 router.post('/sessions/:sessionId/chart-preview', postChartPreviewEndpoint);
 router.post('/sessions/:sessionId/chart-key-insight', postChartKeyInsightEndpoint);
 

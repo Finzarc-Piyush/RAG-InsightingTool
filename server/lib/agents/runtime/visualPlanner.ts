@@ -39,10 +39,11 @@ const SYSTEM = `You are a visualization advisor. Given the user question, column
 Rules:
 - Use ONLY exact column names from AVAILABLE_COLUMNS and/or ANALYTICAL_RESULT_COLUMNS when the latter is present.
 - If ANALYTICAL_RESULT_COLUMNS is present, prefer charting those columns (aggregated metrics, bucket labels). Do not revert to raw grain metrics (e.g. per-order Sales) when the analytical frame already has sums or aliases unless necessary.
-- Prefer **bar** for categorical X vs numeric sum. Prefer **line** or **area** when X is a date column or temporal bucket labels—**never** propose **bar** for “distribution across dates” or long date sequences (many distinct dates): bar sorts by magnitude by default and misreads as a ranking, not a time trend.
+- **MANDATORY**: ALWAYS use type 'line' or 'area' when X is a date column, month, quarter, year, or any temporal bucket label (patterns like “Month · ...”, “Quarter · ...”, “Year · ...”). NEVER use 'bar' for time-series trends — bar charts imply category rankings, not temporal progression. This rule has no exceptions.
 - If dateColumns contains the proposed X and the analytical table has **more than ~50 rows**, do **not** add a second **bar** on that date X; use **line/area** or skip the extra chart if it duplicates the primary trend.
-- If no useful pair exists, return {"addCharts":[]}.
+- If no useful pair exists, return {“addCharts”:[]}.
 - When ANALYTICAL_RESULT_COLUMNS list **multiple categorical dimensions** plus a measure, prefer **bar** (or line/area for time-like X) so the server can bind a breakdown; you may omit \`seriesColumn\`—the chart compiler will bind a second dimension from the result rows.
+- **Series cardinality**: only propose seriesColumn when the column has ≤15 distinct values. For high-cardinality columns (states, customers, SKUs), use a single-series bar chart sorted by y (top N items) instead of multi-series.
 Output JSON only matching the schema.`;
 
 export async function proposeAndBuildExtraCharts(

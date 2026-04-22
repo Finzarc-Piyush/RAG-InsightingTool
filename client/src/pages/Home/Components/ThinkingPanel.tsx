@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Circle,
   Copy,
+  GitBranch,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,8 @@ interface ThinkingPanelProps {
   isStreaming: boolean;
   /** live = collapsible stream panel; archived = saved segment, starts collapsed. */
   variant?: "live" | "archived";
+  /** W12: sub-questions the agent spawned during deep investigation. */
+  spawnedSubQuestions?: string[];
 }
 
 function StepRow({ step }: { step: ThinkingStep }) {
@@ -149,6 +152,7 @@ export function ThinkingPanel({
   workbench,
   isStreaming,
   variant = "live",
+  spawnedSubQuestions = [],
 }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
   const prevStreaming = useRef(false);
@@ -181,9 +185,10 @@ export function ThinkingPanel({
   }
 
   const totalItems = stepOrder.length + workbench.length;
+  const subQCount = spawnedSubQuestions.length;
   const summary =
-    totalItems > 0
-      ? `${totalItems} activit${totalItems === 1 ? "y" : "ies"}`
+    totalItems > 0 || subQCount > 0
+      ? `${totalItems} activit${totalItems === 1 ? "y" : "ies"}${subQCount > 0 ? ` · ${subQCount} sub-question${subQCount === 1 ? "" : "s"}` : ""}`
       : "Details";
 
   const lastWorkbenchIdx = workbench.length - 1;
@@ -240,6 +245,25 @@ export function ThinkingPanel({
                   entry={entry}
                   isLatest={isStreaming && idx === lastWorkbenchIdx}
                 />
+              ))}
+            </div>
+          </div>
+        )}
+        {spawnedSubQuestions.length > 0 && (
+          <div className="space-y-1.5 pl-0.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              <GitBranch className="h-3 w-3" />
+              Investigating further
+            </div>
+            <div className="space-y-1">
+              {spawnedSubQuestions.map((q, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground/80"
+                >
+                  <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary/60" />
+                  <span>{q}</span>
+                </div>
               ))}
             </div>
           </div>

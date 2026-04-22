@@ -14,7 +14,11 @@ import { normalizeDateToPeriod, DatePeriod, parseFlexibleDate } from './dateUtil
 import { agentLog } from './agents/runtime/agentLogger.js';
 import { isIdColumn, getCountNameForIdColumn } from './columnIdHeuristics.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
-import { isTemporalFacetColumnKey } from './temporalFacetColumns.js';
+import {
+  isTemporalFacetColumnKey,
+  parseTemporalFacetDisplayKey,
+  GRAIN_TO_PERIOD,
+} from './temporalFacetColumns.js';
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -449,7 +453,14 @@ function sampleDateParseableRatio(data: Record<string, any>[], col: string): num
   return nonNull === 0 ? 0 : ok / nonNull;
 }
 
-export type DateBucketResolution = { mode: DateBucketMode; readColumn: string };
+export type DateBucketResolution = {
+  mode: DateBucketMode;
+  readColumn: string;
+  /** Period derived from a display facet key (e.g. `Month · Order Date`). When
+   * set, callers bucket through this even if no `dateAggregationPeriod` was
+   * requested, because the groupBy key itself encodes the grain. */
+  facetPeriod?: DatePeriod;
+};
 
 /**
  * Decide whether to apply calendar bucketing for groupBy + dateAggregationPeriod.
@@ -461,6 +472,26 @@ export function resolveDateBucketForGroupBy(
   data: Record<string, any>[],
   dateAggregationPeriod: DatePeriod | null | undefined
 ): DateBucketResolution {
+  // Display facet keys (`Month · Order Date`, `Year · Order Date`, …) carry
+  // their grain in the name and must be bucketed from the source date column
+  // regardless of `dateAggregationPeriod`. The facet column itself is virtual
+  // (not materialised into columnar storage), so we decompose only when the
+  // source date column is physically present on the row data — otherwise the
+  // legacy `__tf_*`/pre-bucketed path below handles it.
+  if (data.length) {
+    const facet = parseTemporalFacetDisplayKey(col);
+    if (
+      facet &&
+      Object.prototype.hasOwnProperty.call(data[0] ?? {}, facet.sourceColumn)
+    ) {
+      return {
+        mode: "schema",
+        readColumn: facet.sourceColumn,
+        facetPeriod: GRAIN_TO_PERIOD[facet.grain],
+      };
+    }
+  }
+
   if (!dateAggregationPeriod || !data.length) {
     return { mode: "none", readColumn: col };
   }
@@ -632,20 +663,21 @@ function applyAggregations(
   const bucketModes: DateBucketMode[] = [];
 
   for (const col of groupBy) {
-    const { mode, readColumn } = resolveDateBucketForGroupBy(
+    const { mode, readColumn, facetPeriod } = resolveDateBucketForGroupBy(
       col,
       summary,
       data,
       dateAggregationPeriod
     );
     bucketModes.push(mode);
-    if (mode !== "none" && dateAggregationPeriod) {
-      const normalizedCol = `${col}_${dateAggregationPeriod}`;
+    const effectivePeriod = facetPeriod ?? dateAggregationPeriod ?? null;
+    if (mode !== "none" && effectivePeriod) {
+      const normalizedCol = `${col}_${effectivePeriod}`;
       normalizedGroupBy.push(normalizedCol);
       dateColumnMap.set(normalizedCol, {
         original: col,
         readColumn,
-        period: dateAggregationPeriod,
+        period: effectivePeriod,
       });
     } else {
       normalizedGroupBy.push(col);

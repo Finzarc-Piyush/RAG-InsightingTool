@@ -3,7 +3,7 @@ import { ToolRegistry, type ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
 import { AGENT_WORKBENCH_ENTRY_CODE_MAX, isAgenticLoopEnabled } from "../types.js";
 import { executeAnalyticalQuery } from "../../../analyticalQueryExecutor.js";
-import type { DimensionFilter, ParsedQuery } from "../../../shared/queryTypes.js";
+import type { DimensionFilter, ParsedQuery } from "../../../../shared/queryTypes.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
 import {
   diagnosticSliceRowCap,
@@ -107,6 +107,7 @@ const chartArgs = z
     y2: z.string().optional(),
     title: z.string().optional(),
     aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
+    max_series: z.number().int().min(3).max(20).optional(),
   })
   .strict();
 const clarifyArgs = z
@@ -233,7 +234,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       const { retrieveRagHits, formatHitsForPrompt } = await import("../../../rag/retrieve.js");
       const params = {
         sessionId: ctx.exec.sessionId,
-        question: args.query,
+        question: args.query as string,
         summary: ctx.exec.summary,
         dataVersion: ctx.exec.dataBlobVersion,
       };
@@ -302,6 +303,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
         lines.push(`dimension_top_values=${dimHints.join("; ").slice(0, 4000)}`);
       }
       const colNames = s.columns.map((c) => c.name).join(",");
+      if (ctx.exec.data.length > 0) {
+        const dataKeys = new Set(Object.keys(ctx.exec.data[0]));
+        const missing = s.columns
+          .map((c) => c.name)
+          .filter((n) => !dataKeys.has(n) && !n.startsWith("__tf_"));
+        if (missing.length > 0) {
+          lines.push(
+            `⚠️ schema_columns_not_in_loaded_frame=${missing.slice(0, 20).join(",")}`
+          );
+        }
+      }
       return {
         ok: true,
         summary: lines.join("\n"),
@@ -322,7 +334,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     sampleRowsArgs,
     async (ctx, args) => {
       const limit = Math.min(
-        args.limit ?? ctx.config.sampleRowsCap,
+        (args.limit as number | undefined) ?? ctx.config.sampleRowsCap,
         ctx.config.sampleRowsCap
       );
       const rows = ctx.exec.data.slice(0, limit);
@@ -358,6 +370,93 @@ export function registerDefaultTools(registry: ToolRegistry) {
           summary: "Analytical intent but query could not be executed (low parse confidence or error).",
         };
       }
+
+      // When columnar storage is active, attempt to upgrade the in-memory result
+      // to a full-dataset DuckDB execution (same data source as the pivot).
+      // Guard: only when the parsed query has aggregations AND no filter types that
+      // have no QueryPlanBody equivalent (timeFilters, valueFilters, exclusionFilters)
+      // — dropping those silently would produce wrong results.
+      if (
+        ctx.exec.columnarStoragePath &&
+        ctx.exec.sessionId &&
+        isDuckDBAvailable() &&
+        res.parsedQuery?.aggregations?.length &&
+        !res.parsedQuery.timeFilters?.length &&
+        !res.parsedQuery.valueFilters?.length &&
+        !res.parsedQuery.exclusionFilters?.length
+      ) {
+        const plan = {
+          groupBy: res.parsedQuery.groupBy,
+          aggregations: res.parsedQuery.aggregations,
+          dimensionFilters: res.parsedQuery.dimensionFilters,
+          dateAggregationPeriod: res.parsedQuery.dateAggregationPeriod ?? undefined,
+          sort: res.parsedQuery.sort,
+          limit: res.parsedQuery.limit,
+        };
+        const validated = normalizeAndValidateQueryPlanBody(ctx.exec.summary, plan);
+        if (validated.ok && canExecuteQueryPlanOnDuckDb(validated.normalizedPlan)) {
+          try {
+            const duck = await executeQueryPlanOnDuckDb(
+              ctx.exec.sessionId,
+              validated.normalizedPlan,
+              ctx.exec.summary,
+              ctx.exec.chatDocument
+            );
+            if (duck.ok) {
+              const duckRows = duck.rows as Record<string, any>[];
+              const duckInputCount = duck.inputRowCount;
+              const duckOutputCount = duckRows.length;
+              // Sum/mean guard still applies.
+              if (
+                questionImpliesSumAggregation(q) &&
+                res.parsedQuery.aggregations?.length
+              ) {
+                const ops = res.parsedQuery.aggregations.map((a) => a.operation);
+                if (!ops.some((o) => o === "sum") && ops.every((o) => o === "mean" || o === "avg")) {
+                  agentLog("tool_verifier_reject", { tool: "run_analytical_query", reason: "total_requires_sum_not_mean" });
+                  return {
+                    ok: false,
+                    summary: `The question asks for a total/sum but the parsed query only used mean/average. Replan with question_override that explicitly requests SUM (e.g. "sum of [numeric column] by [breakdown column]") using exact column names.`,
+                    analyticalMeta: { inputRowCount: duckInputCount, outputRowCount: duckOutputCount, appliedAggregation: true },
+                    memorySlots: { analytical_snippet: "total_requires_sum_not_mean" },
+                  };
+                }
+              }
+              const duckDesc = duck.descriptions.length ? duck.descriptions.join("; ") : "Query executed on full dataset.";
+              const duckFormatted = JSON.stringify(duckRows.slice(0, 200), null, 2);
+              const prev = duckFormatted.length > 2000 ? duckFormatted.slice(0, 2000) + "…" : duckFormatted;
+              const duckCols = duckRows.length > 0 ? Object.keys(duckRows[0]!) : [];
+              const duckMeta = { inputRowCount: duckInputCount, outputRowCount: duckOutputCount, appliedAggregation: true };
+              let workbenchArtifact: AgentWorkbenchEntry | undefined;
+              if (res.parsedQuery) {
+                const code = JSON.stringify(res.parsedQuery, null, 2);
+                workbenchArtifact = {
+                  id: `pq-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                  kind: "query_spec",
+                  title: "Parsed analytical query (full dataset)",
+                  code: code.slice(0, AGENT_WORKBENCH_ENTRY_CODE_MAX),
+                  language: "json",
+                };
+              }
+              logAnalyticalToolMeta("run_analytical_query", ctx.exec.summary, res.parsedQuery);
+              return {
+                ok: true,
+                summary: `${duckDesc}\n${prev}`,
+                numericPayload: duckFormatted.slice(0, 8_000),
+                analyticalMeta: duckMeta,
+                queryPlanParsed: res.parsedQuery ?? null,
+                table: { rows: duckRows, columns: duckCols, rowCount: duckOutputCount },
+                memorySlots: { analytical_snippet: duckFormatted.replace(/\s+/g, " ").slice(0, 800) },
+                workbenchArtifact,
+              };
+            }
+          } catch {
+            // Fall through to in-memory result.
+          }
+        }
+      }
+
+      // In-memory fallback (or primary path when columnar is not active).
       const { formattedResults, summary: rs, data: resultRows } = res.queryResults;
       const inputRowCount = ctx.exec.data.length;
       const outputRowCount = resultRows.length;
@@ -407,8 +506,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
           analyticalMeta,
           memorySlots: {
             zero_row_diagnostic: "1",
-            analytical_snippet: diag.join(" ").slice(0, 320),
-          },
+            analytical_snippet: diag.join(" ").slice(0, 800),
+          } as Record<string, string>,
           workbenchArtifact,
         };
       }
@@ -478,7 +577,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return {
         ok: true,
         summary: `${rs}\n${prev}`,
-        numericPayload: formattedResults.slice(0, 4000),
+        numericPayload: formattedResults.slice(0, 8_000),
         analyticalMeta,
         queryPlanParsed: res.parsedQuery ?? null,
         table: {
@@ -487,14 +586,14 @@ export function registerDefaultTools(registry: ToolRegistry) {
           rowCount: outputRowCount,
         },
         memorySlots: {
-          analytical_snippet: formattedResults.replace(/\s+/g, " ").slice(0, 320),
+          analytical_snippet: formattedResults.replace(/\s+/g, " ").slice(0, 800),
         },
         workbenchArtifact,
       };
     },
     {
       description:
-        "Run NL analytical query for aggregates, filters, totals (authoritative numbers).",
+        "Run NL analytical query for aggregates, filters, totals (authoritative numbers). Uses full dataset via DuckDB when columnar storage is active.",
       argsHelp:
         '{"question_override"?: string} optional. Never use key "query" — that belongs only on retrieve_semantic_context.',
     }
@@ -680,12 +779,12 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return {
         ok: true,
         summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}\nSample:\n${formattedResults.length > 3500 ? formattedResults.slice(0, 3500) + "…" : formattedResults}`,
-        numericPayload: formattedResults.slice(0, 4000),
+        numericPayload: formattedResults.slice(0, 8_000),
         analyticalMeta,
         queryPlanParsed: parsed,
         table: { rows: resultRows, columns: cols, rowCount: outputRowCount },
         memorySlots: {
-          analytical_snippet: formattedResults.replace(/\s+/g, " ").slice(0, 320),
+          analytical_snippet: formattedResults.replace(/\s+/g, " ").slice(0, 800),
         },
         workbenchArtifact,
       };
@@ -900,6 +999,36 @@ export function registerDefaultTools(registry: ToolRegistry) {
       if (!pre.ok) {
         return { ok: false, summary: pre.error };
       }
+
+      // When a columnar session is available, run the SQL directly against the
+      // full persistent DuckDB session table (same source as the pivot) so that
+      // all rows are scanned — not just the 5 000-row in-memory sample.
+      if (
+        ctx.exec.columnarStoragePath &&
+        ctx.exec.sessionId &&
+        isDuckDBAvailable()
+      ) {
+        const sessionSql = pre.sql.replace(/\bdataset\b/gi, '"data"');
+        const storage = new ColumnarStorageService({ sessionId: ctx.exec.sessionId });
+        try {
+          await storage.initialize();
+          await storage.assertTableExists("data");
+          const rows = await storage.executeQuery<Record<string, any>>(sessionSql);
+          const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
+          const formatted = JSON.stringify(rows.slice(0, 100), null, 2);
+          return {
+            ok: true,
+            summary: `run_readonly_sql (full dataset, ${rows.length} rows): columns: ${columns.join(", ")}. Sample:\n${formatted.slice(0, 4000)}`,
+            table: { rows, columns, rowCount: rows.length },
+            memorySlots: { readonly_sql: "full_dataset" },
+          };
+        } catch (e) {
+          // Fall through to in-memory path on any DuckDB error.
+        } finally {
+          await storage.close().catch(() => { /* ignore */ });
+        }
+      }
+
       const exec = await executeReadonlySqlOnFrame(ctx.exec.data, sql);
       if (!exec.ok) {
         return { ok: false, summary: exec.error };
@@ -918,7 +1047,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Advanced: single SELECT only against ephemeral table \"dataset\" (current frame, row-capped). No DDL/DML. Prefer execute_query_plan when possible.",
+        "Advanced: single SELECT only against table \"dataset\" (full session data when columnar storage is active, otherwise current frame). No DDL/DML. Prefer execute_query_plan when possible.",
       argsHelp: '{"sql": string} — e.g. SELECT bucket, SUM(CAST("Sales" AS DOUBLE)) FROM dataset GROUP BY 1',
     }
   );
@@ -927,15 +1056,30 @@ export function registerDefaultTools(registry: ToolRegistry) {
     "run_correlation",
     correlationArgs,
     async (ctx, args) => {
-      const err = assertColumns(ctx, [args.targetVariable]);
+      const targetVariable = args.targetVariable as string;
+      const err = assertColumns(ctx, [targetVariable]);
       if (err) return { ok: false, summary: err };
       const numeric = ctx.exec.summary.numericColumns;
-      if (!numeric.includes(args.targetVariable)) {
+      if (!numeric.includes(targetVariable)) {
         return {
           ok: false,
-          summary: `Target ${args.targetVariable} is not a numeric column.`,
+          summary: `Target ${targetVariable} is not a numeric column.`,
         };
       }
+
+      // Derive categorical columns: low-to-medium cardinality string columns not already in numericColumns/dateColumns
+      const dateColSet = new Set(ctx.exec.summary.dateColumns ?? []);
+      const numericSet = new Set(numeric);
+      const allColNames = ctx.exec.data.length > 0 ? Object.keys(ctx.exec.data[0]) : [];
+      const MAX_CAT_CARDINALITY = 100;
+      const sampleForCardinality = ctx.exec.data.slice(0, 2000);
+      const categoricalCols = allColNames.filter(col => {
+        if (numericSet.has(col)) return false;
+        if (dateColSet.has(col)) return false;
+        if (col.startsWith('__')) return false;
+        const uniq = new Set(sampleForCardinality.map(r => r[col])).size;
+        return uniq >= 2 && uniq <= MAX_CAT_CARDINALITY;
+      });
 
       const rawFilters = (args as { dimensionFilters?: DimensionFilter[] }).dimensionFilters;
       let frame = ctx.exec.data;
@@ -959,15 +1103,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
       const { charts, insights } = await analyzeCorrelations(
         frame,
-        args.targetVariable,
+        targetVariable,
         numeric,
-        args.filter ?? "all",
+        (args.filter as "all" | "positive" | "negative" | undefined) ?? "all",
         undefined,
         ctx.exec.chatInsights,
         25,
         undefined,
         ctx.exec.sessionId,
-        true
+        true,
+        categoricalCols
       );
       return {
         ok: true,
@@ -978,7 +1123,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Correlation / drivers for a numeric target column. Optional dimensionFilters apply to **row-level turn-start data** (not aggregated frames).",
+        "Correlation / drivers for a numeric target column. Automatically includes categorical variables via correlation ratio η (measures how much variance in the target each category explains). Optional dimensionFilters apply to **row-level turn-start data** (not aggregated frames).",
       argsHelp:
         '{"targetVariable": string, "filter"?: "all"|"positive"|"negative", "dimensionFilters"?: [{"column": string, "op": "in"|"not_in", "values": string[], "match"?: "exact"|"case_insensitive"|"contains"}]}',
     }
@@ -1011,28 +1156,29 @@ export function registerDefaultTools(registry: ToolRegistry) {
     "build_chart",
     chartArgs,
     async (ctx, args) => {
+      const a = args as z.infer<typeof chartArgs>;
       const names = [
-        args.x,
-        args.y,
-        ...(args.y2 ? [args.y2] : []),
-        ...(args.type === "heatmap" && args.z ? [args.z] : []),
-        ...(args.seriesColumn ? [args.seriesColumn] : []),
+        a.x,
+        a.y,
+        ...(a.y2 ? [a.y2] : []),
+        ...(a.type === "heatmap" && a.z ? [a.z] : []),
+        ...(a.seriesColumn ? [a.seriesColumn] : []),
       ];
       const colErr = assertChartColumns(ctx, names);
       if (colErr) return { ok: false, summary: colErr };
       const explicitAgg =
-        args.aggregate !== undefined && args.aggregate !== null;
+        a.aggregate !== undefined && a.aggregate !== null;
       const compileProposal = {
-        type: args.type,
-        x: args.x,
-        y: args.y,
-        ...(args.type === "heatmap" && args.z ? { z: args.z } : {}),
-        seriesColumn: args.seriesColumn,
-        barLayout: args.barLayout,
-        ...(args.aggregate !== undefined && args.aggregate !== null
-          ? { aggregate: args.aggregate }
+        type: a.type,
+        x: a.x,
+        y: a.y,
+        ...(a.type === "heatmap" && a.z ? { z: a.z } : {}),
+        seriesColumn: a.seriesColumn,
+        barLayout: a.barLayout,
+        ...(a.aggregate !== undefined && a.aggregate !== null
+          ? { aggregate: a.aggregate }
           : {}),
-        ...(args.y2 ? { y2: args.y2 } : {}),
+        ...(a.y2 ? { y2: a.y2 } : {}),
       };
       const { merged: compiled } = compileChartSpec(
         ctx.exec.data as Record<string, unknown>[],
@@ -1053,14 +1199,14 @@ export function registerDefaultTools(registry: ToolRegistry) {
         compiled.y,
         ...(compiled.type === "heatmap" && compiled.z ? [compiled.z] : []),
         ...(compiled.seriesColumn ? [compiled.seriesColumn] : []),
-        ...(args.y2 ? [args.y2] : []),
+        ...(a.y2 ? [a.y2] : []),
       ];
       const colErr2 = assertChartColumns(ctx, postNames);
       if (colErr2) return { ok: false, summary: colErr2 };
 
       const defaultAgg =
         explicitAgg
-          ? (args.aggregate as "sum" | "mean" | "count" | "none")
+          ? (a.aggregate as "sum" | "mean" | "count" | "none")
           : compiled.seriesColumn &&
               (compiled.type === "bar" ||
                 compiled.type === "line" ||
@@ -1072,7 +1218,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
                 : "none");
       const spec = chartSpecSchema.parse({
         type: compiled.type,
-        title: args.title || `${compiled.y} by ${compiled.x}`,
+        title: a.title || `${compiled.y} by ${compiled.x}`,
         x: compiled.x,
         y: compiled.y,
         ...(compiled.type === "heatmap" && compiled.z ? { z: compiled.z } : {}),
@@ -1080,7 +1226,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ...(compiled.seriesColumn && compiled.barLayout
           ? { barLayout: compiled.barLayout }
           : {}),
-        ...(args.y2 ? { y2: args.y2 } : {}),
+        ...(a.y2 ? { y2: a.y2 } : {}),
         aggregate: defaultAgg,
       });
       let processed = processChartData(
@@ -1103,16 +1249,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
       const zNote = spec.type === "heatmap" && spec.z ? `, z=${spec.z}` : "";
       return {
         ok: true,
-        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${args.y2 ? `, y2=${args.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.`,
+        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${a.y2 ? `, y2=${a.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.`,
         charts: [full],
         memorySlots: { chart_x: spec.x, chart_y: spec.y },
       };
     },
     {
       description:
-        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). Use aggregate none when one row per x already. For breakdowns (e.g. sales by month AND region), use bar or line/area with seriesColumn = the second dimension column (long-format rows: one row per x×series with y numeric); default aggregate sum then applies per series cell. For two numeric metrics over the same x (e.g. Revenue and Profit over time), use y2 instead of seriesColumn. Heatmap: type heatmap, x=row dim, y=col dim, z=numeric measure.",
+        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). Use aggregate none when one row per x already. For breakdowns (e.g. sales by month AND region), use bar or line/area with seriesColumn = the second dimension column (long-format rows: one row per x×series with y numeric); default aggregate sum then applies per series cell. For two numeric metrics over the same x (e.g. Revenue and Profit over time), use y2 instead of seriesColumn. Heatmap: type heatmap, x=row dim, y=col dim, z=numeric measure. CRITICAL RULES: (1) ALWAYS use type 'line' or 'area' when x is a date, month, quarter, or year column — NEVER use 'bar' for temporal trends. (2) Use seriesColumn only when the column has ≤15 distinct values; if higher cardinality, either set max_series (3–20) to auto-merge excess into 'Others', or use a single-series bar sorted by y instead. (3) For geographic/state/country breakdowns with many values, prefer a single-series bar chart sorted by y rather than multi-series.",
       argsHelp:
-        '{"type": "line"|"bar"|"scatter"|"pie"|"area"|"heatmap", "x": string, "y": string, "z"?: string (heatmap cell value), "seriesColumn"?: string (second category for stacked/grouped bar or multi-series line/area), "barLayout"?: "stacked"|"grouped", "y2"?: string (second numeric series, dual-axis line), "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none"} — after execute_query_plan, y must match result column names (e.g. Sales_sum). With seriesColumn, omit aggregate or use sum/mean to roll up raw rows per x×series.',
+        '{"type": "line"|"bar"|"scatter"|"pie"|"area"|"heatmap", "x": string, "y": string, "z"?: string (heatmap cell value), "seriesColumn"?: string (second category for stacked/grouped bar or multi-series line/area), "barLayout"?: "stacked"|"grouped", "y2"?: string (second numeric series, dual-axis line), "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none", "max_series"?: number (3–20, cap series count and merge remainder into Others)} — after execute_query_plan, y must match result column names (e.g. Sales_sum). With seriesColumn, omit aggregate or use sum/mean to roll up raw rows per x×series. When seriesColumn cardinality >15, set max_series to 10.',
     }
   );
 
@@ -1123,7 +1269,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return {
         ok: true,
         summary: "Clarification requested.",
-        clarify: args.message,
+        clarify: args.message as string,
       };
     },
     {

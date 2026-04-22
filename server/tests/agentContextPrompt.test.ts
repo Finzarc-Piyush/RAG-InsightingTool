@@ -93,6 +93,99 @@ describe("summarizeContextForPrompt", () => {
     assert.match(text, /Sales/);
   });
 
+  it("includes categoricalValues block when columns have topValues", () => {
+    const summary: DataSummary = {
+      rowCount: 100,
+      columnCount: 3,
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [1] },
+        {
+          name: "Category",
+          type: "string",
+          sampleValues: [],
+          topValues: [
+            { value: "Furniture", count: 30 },
+            { value: "Office Supplies", count: 50 },
+            { value: "Technology", count: 20 },
+          ],
+        },
+        { name: "Note", type: "string", sampleValues: ["x"] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "q",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    assert.match(text, /categoricalValues/);
+    assert.match(text, /Category=\[Furniture\|Office Supplies\|Technology\]/);
+    assert.doesNotMatch(text, /Sales=\[/);
+    assert.doesNotMatch(text, /Note=\[/);
+  });
+
+  it("omits the categoricalValues block when no column has topValues", () => {
+    const summary: DataSummary = {
+      rowCount: 2,
+      columnCount: 2,
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [1] },
+        { name: "Note", type: "string", sampleValues: ["x"] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "q",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    assert.doesNotMatch(text, /categoricalValues/);
+  });
+
+  it("caps each categorical column to 8 topValues", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      value: `v${i.toString().padStart(2, "0")}`,
+      count: 20 - i,
+    }));
+    const summary: DataSummary = {
+      rowCount: 100,
+      columnCount: 2,
+      columns: [
+        { name: "Sales", type: "number", sampleValues: [] },
+        { name: "Big", type: "string", sampleValues: [], topValues: many },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    };
+    const ctx = {
+      sessionId: "s1",
+      question: "q",
+      data: [],
+      summary,
+      chatHistory: [],
+      mode: "analysis" as const,
+    } satisfies AgentExecutionContext;
+
+    const text = summarizeContextForPrompt(ctx);
+    const m = text.match(/Big=\[([^\]]+)\]/);
+    assert.ok(m, "expected Big=[...]");
+    const vals = m![1]!.split("|");
+    assert.equal(vals.length, 8);
+    assert.deepEqual(vals, ["v00", "v01", "v02", "v03", "v04", "v05", "v06", "v07"]);
+  });
+
   it("includes ANALYSIS_BRIEF_JSON when ctx.analysisBrief is set", () => {
     const summary: DataSummary = {
       rowCount: 2,

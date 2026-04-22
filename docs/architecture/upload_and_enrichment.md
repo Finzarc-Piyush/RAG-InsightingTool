@@ -56,3 +56,33 @@ which stage; the table above is the canonical reference.
 If a future change introduces a writer OUTSIDE `processUploadJob`,
 revisit this decision: the moment two functions mutate the field
 independently is when the single-writer helper earns its keep.
+
+## Recent changes
+
+- **Context-first modal + regeneration** — The "Add Context" modal now
+  opens immediately after the upload returns a `sessionId`, not after
+  the preview loads. Background preview + enrichment continue behind the
+  modal. The initial welcome message is generated from dataset
+  understanding alone (`seedSessionAnalysisContextLLM`, unchanged
+  signature) so the app is usable even if the user skips. When the user
+  saves context, `updateSessionPermanentContext` re-reads the doc after
+  the slow LLM merge (to avoid clobbering the upload pipeline's
+  understanding-checkpoint write), calls the new
+  `regenerateStarterQuestionsLLM` helper, and rewrites
+  `messages[0].suggestedQuestions` + `content` when the initial
+  welcome is still the sole assistant message. The fire-and-forget seed
+  at [`server/utils/uploadQueue.ts:554-578`](../../server/utils/uploadQueue.ts)
+  no-ops when `permanentContext` is now set.
+- **`user_context` RAG chunk** — `ChatDocument.permanentContext` is now
+  indexed into Azure AI Search as a dedicated `user_context` chunk
+  (prepended by [`buildChunksForSession`](../../server/lib/rag/chunking.ts)).
+  `scheduleUpsertUserContextChunk` in
+  [`server/lib/rag/indexSession.ts`](../../server/lib/rag/indexSession.ts)
+  performs a targeted single-doc upsert on context save (no full
+  re-index unless the initial index isn't ready yet).
+- **LLM-first starter questions** — `mergeSuggestedQuestions`
+  ([`server/lib/suggestedQuestions.ts`](../../server/lib/suggestedQuestions.ts))
+  now uses strict `primary`/`fallback` semantics: when the LLM-generated
+  list is non-empty, the hardcoded column-name template list is
+  ignored entirely (no padding). Templates only surface in the fast/skip
+  path when LLM output is empty.

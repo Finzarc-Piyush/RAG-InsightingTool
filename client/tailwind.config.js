@@ -160,8 +160,8 @@ export default {
           "100%": { backgroundPosition: "200% 0" },
         },
         "brand-breathe": {
-          "0%, 100%": { transform: "scale(1)", opacity: "0.9" },
-          "50%": { transform: "scale(1.02)", opacity: "1" },
+          "0%, 100%": { opacity: "0.75" },
+          "50%": { opacity: "1" },
         },
         "brand-underline": {
           from: { transform: "scaleX(0)" },
@@ -177,7 +177,7 @@ export default {
         "accordion-up": "accordion-up 0.2s ease-out",
         "brand-settle": "brand-settle 320ms cubic-bezier(0.16, 1, 0.3, 1) both",
         "brand-shimmer": "brand-shimmer 1500ms linear infinite",
-        "brand-breathe": "brand-breathe 1800ms cubic-bezier(0.4, 0, 0.2, 1) infinite",
+        "brand-breathe": "brand-breathe 3000ms ease-in-out infinite",
         "brand-underline": "brand-underline 260ms cubic-bezier(0.2, 0, 0, 1) both",
         "brand-ring": "brand-ring 900ms cubic-bezier(0.4, 0, 0.2, 1) both",
       },

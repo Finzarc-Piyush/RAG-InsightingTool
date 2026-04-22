@@ -271,6 +271,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         ...(validated.followUpPrompts?.length
           ? { followUpPrompts: validated.followUpPrompts }
           : {}),
+        ...(answerResult.appliedFilters?.length
+          ? { appliedFilters: answerResult.appliedFilters }
+          : {}),
       },
     ]);
     console.log(`✅ Messages saved to chat: ${chatDocument.id}`);

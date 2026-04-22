@@ -1,6 +1,6 @@
 import { getChatBySessionIdEfficient, updateChatDocument, type ChatDocument } from "../../models/chat.model.js";
 import { isRagEnabled, getEmbeddingDimensions } from "./config.js";
-import { buildChunksForSession } from "./chunking.js";
+import { buildChunksForSession, userContextChunk, USER_CONTEXT_CHUNK_ID } from "./chunking.js";
 import { embedTexts } from "./embeddings.js";
 import {
   upsertRagDocuments,
@@ -114,5 +114,72 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
 export function scheduleIndexSessionRag(sessionId: string): void {
   setImmediate(() => {
     indexSessionRag(sessionId).catch((e) => console.error("scheduleIndexSessionRag:", e));
+  });
+}
+
+/**
+ * Upsert a single `user_context` chunk for a session without re-indexing everything.
+ * Falls back to a full index if initial indexing hasn't produced a ready state yet
+ * (because a concurrent full reindex would delete our targeted doc).
+ */
+export async function upsertUserContextChunk(
+  sessionId: string,
+  permanentContext: string
+): Promise<void> {
+  if (!isRagEnabled()) return;
+  const text = permanentContext?.trim();
+  if (!text) return;
+
+  const doc = await getChatBySessionIdEfficient(sessionId);
+  if (!doc?.dataSummary) {
+    // Session not yet enriched — upload pipeline will index naturally later.
+    return;
+  }
+
+  const status = doc.ragIndex?.status;
+  if (status !== "ready") {
+    // If the initial full index is still pending or running, let it pick up
+    // permanentContext (via buildChunksForSession) instead of racing it.
+    scheduleIndexSessionRag(sessionId);
+    return;
+  }
+
+  const ver = doc.currentDataBlob?.version ?? 1;
+  const chunk = userContextChunk(text);
+
+  try {
+    const vectors = await embedTexts([chunk.content]);
+    const dim = getEmbeddingDimensions();
+    let v = vectors[0];
+    if (!v || v.length !== dim) {
+      v = v?.length ? v : new Array(dim).fill(0);
+    }
+    const ragDoc: RagSearchDocument = {
+      id: `${sessionId}__${USER_CONTEXT_CHUNK_ID}`.replace(/[^\w-]/g, "_"),
+      sessionId,
+      chunkId: chunk.chunkId,
+      chunkType: chunk.chunkType,
+      dataVersion: ver,
+      content: chunk.content.slice(0, 32000),
+      contentVector: v,
+    };
+    await upsertRagDocuments([ragDoc]);
+    console.log(`✅ RAG user_context upserted for session ${sessionId}`);
+  } catch (e) {
+    console.error("❌ upsertUserContextChunk failed:", e);
+  }
+}
+
+/**
+ * Fire-and-forget variant of `upsertUserContextChunk`.
+ */
+export function scheduleUpsertUserContextChunk(
+  sessionId: string,
+  permanentContext: string
+): void {
+  setImmediate(() => {
+    upsertUserContextChunk(sessionId, permanentContext).catch((e) =>
+      console.error("scheduleUpsertUserContextChunk:", e)
+    );
   });
 }

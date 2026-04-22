@@ -110,8 +110,11 @@ export async function runDeepInvestigation(
   let tree: InvestigationTree;
   const threads = await decomposeQuestion(ctx, `di_${Date.now()}`, () => {});
 
+  // O5: derive a request-scoped prefix to prevent node ID collisions in concurrent investigations.
+  const idPrefix = `${(ctx.sessionId ?? "").slice(-6)}_${Date.now().toString(36)}_`;
+
   if (threads && threads.length > 0) {
-    tree = createTree(ctx.question, blackboard);
+    tree = createTree(ctx.question, blackboard, idPrefix);
     // Replace the single root with one child node per thread
     // (root stays as the original question; threads are depth-1 children)
     for (const t of threads) {
@@ -128,7 +131,7 @@ export async function runDeepInvestigation(
     // Mark root as answered with a stub so its children become ready
     markNodeAnswered(tree, tree.rootId, ctx.question, { llmCalls: 1, wallMs: 0 });
   } else {
-    tree = createTree(ctx.question, blackboard);
+    tree = createTree(ctx.question, blackboard, idPrefix);
   }
 
   agentLog("investigationOrchestrator.start", {

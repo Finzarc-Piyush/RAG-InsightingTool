@@ -9,6 +9,7 @@ import type { AgentExecutionContext, AnalysisSpecForAgent, StreamPreAnalysis } f
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
 import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
+import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
 
 type MidTurnPersist = AgentExecutionContext["onMidTurnSessionContext"];
 
@@ -32,6 +33,10 @@ export function buildAgentExecutionContext(params: {
   onMidTurnSessionContext?: MidTurnPersist;
   onIntermediateArtifact?: AgentExecutionContext["onIntermediateArtifact"];
 }): AgentExecutionContext {
+  const inferredFilters = inferFiltersFromQuestion(
+    params.question,
+    params.summary
+  );
   return {
     sessionId: params.sessionId,
     username: params.username,
@@ -52,6 +57,7 @@ export function buildAgentExecutionContext(params: {
     streamPreAnalysis: params.streamPreAnalysis,
     onMidTurnSessionContext: params.onMidTurnSessionContext,
     onIntermediateArtifact: params.onIntermediateArtifact,
+    inferredFilters: inferredFilters.length ? inferredFilters : undefined,
   };
 }
 
@@ -76,6 +82,45 @@ export function appendixForReflectorPrompt(ctx: AgentExecutionContext): string {
     maxUserChars: 2000,
     maxJsonChars: 5000,
   });
+}
+
+function formatCategoricalValuesBlock(summary: DataSummary): string {
+  const numeric = new Set(summary.numericColumns ?? []);
+  const dates = new Set(summary.dateColumns ?? []);
+  const perColumnValueCap = 8;
+  const totalCharCap = 2000;
+  const lines: string[] = [];
+  for (const col of summary.columns) {
+    if (numeric.has(col.name) || dates.has(col.name)) continue;
+    if (col.type === "number") continue;
+    if (!col.topValues || col.topValues.length === 0) continue;
+    const values = col.topValues
+      .slice(0, perColumnValueCap)
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    if (!values.length) continue;
+    lines.push(`  ${col.name}=[${values.join("|")}]`);
+  }
+  if (!lines.length) return "";
+  let body = lines.join("\n");
+  if (body.length > totalCharCap) {
+    body = `${body.slice(0, totalCharCap)}\n  ... (truncated)`;
+  }
+  return `\ncategoricalValues (verbatim values by column; when the user names one of these in the question, include it as a dimensionFilter on the matching column — use op:"in", match:"case_insensitive" and pass the value verbatim):\n${body}`;
+}
+
+function formatInferredFiltersBlock(ctx: AgentExecutionContext): string {
+  const fs = ctx.inferredFilters;
+  if (!fs?.length) return "";
+  const payload = fs.map((f) => ({
+    column: f.column,
+    op: f.op,
+    values: f.values,
+    match: f.match,
+    matchedTokens: f.matchedTokens,
+  }));
+  const json = JSON.stringify(payload).slice(0, 2000);
+  return `\nINFERRED_FILTERS_JSON (deterministically resolved from the user question against categorical topValues — treat as authoritative and include verbatim in execute_query_plan.dimensionFilters, run_correlation.dimensionFilters, breakdown_ranking.dimensionFilters, and any other tool that accepts dimensionFilters, unless the user's phrasing explicitly asks for the unfiltered view):\n${json}`;
 }
 
 function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
@@ -121,6 +166,8 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
     ? `\nTemporal intent from question: use dateAggregationPeriod=${temporal} when bucketing a raw date column, or groupBy the matching derived time-bucket column (same name as in the list above, e.g. \`Month · …\`) and omit date bucketing in the plan. For vague temporal questions (no explicit grain), prefer sorting on the raw date column over forcing yearly buckets.`
     : "";
   const facetBlock = formatDerivedTemporalFacetsBlock(ctx.summary);
+  const categoricalBlock = formatCategoricalValuesBlock(ctx.summary);
+  const inferredBlock = formatInferredFiltersBlock(ctx);
   const diag =
     ctx.analysisSpec?.mode === "diagnostic" ?
       `\nDIAGNOSTIC_ANALYSIS_HINT: User question matches driver/factor/deep-dive intent. Prefer: (1) execute_query_plan with dimensionFilters only (no aggregations) OR run_readonly_sql on row-level \`dataset\` to slice the segment; (2) breakdowns (groupBy + sum) **on the sliced frame**; (3) run_correlation with **dimensionFilters** matching the slice and **targetVariable** = numeric outcome (e.g. Sales)—do **not** run correlation only on small aggregate tables from step (1) if that table has one row per group already. When **run_segment_driver_analysis** is available and the question is clearly about drivers in a segment, you may use it as one step. Independent post-slice queries may be planned as parallel-friendly separate steps with the same dependsOn parent if the executor supports it; otherwise keep a short linear plan.\nSuggested outcome column (hint only): ${ctx.analysisSpec.outcomeColumn ?? "(infer from question)"}`
@@ -128,6 +175,6 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const briefBlock = formatAnalysisBriefForPrompt(ctx);
   return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.
 dateColumns: ${dates}
-numericColumns: ${numerics}${facetBlock}${hints}${atMentionNote}${temporalLine}
-Mode: ${ctx.mode}${diag}${briefBlock}${blocks}`;
+numericColumns: ${numerics}${facetBlock}${categoricalBlock}${hints}${atMentionNote}${temporalLine}
+Mode: ${ctx.mode}${inferredBlock}${diag}${briefBlock}${blocks}`;
 }

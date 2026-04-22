@@ -13,6 +13,31 @@ import {
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
 
+// ─── Short-lived CosmosDB read caches ────────────────────────────────────────
+// Each unique session document is fetched from Cosmos at most once per TTL
+// window; writes (upsert / create / delete) always invalidate immediately.
+
+const SESSION_DOC_CACHE_TTL_MS = 5_000;
+const SESSION_LIST_CACHE_TTL_MS = 5_000;
+const ACCESS_CACHE_TTL_MS = 30_000;
+
+const sessionDocCache = new Map<string, { doc: ChatDocument | null; expiresAt: number }>();
+const sessionListCache = new Map<string, { sessions: SessionListSummary[]; expiresAt: number }>();
+const accessResultCache = new Map<string, { expiresAt: number }>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of sessionDocCache) if (v.expiresAt <= now) sessionDocCache.delete(k);
+  for (const [k, v] of sessionListCache) if (v.expiresAt <= now) sessionListCache.delete(k);
+  for (const [k, v] of accessResultCache) if (v.expiresAt <= now) accessResultCache.delete(k);
+}, 60_000).unref();
+
+function invalidateSessionDoc(sessionId: string) { sessionDocCache.delete(sessionId); }
+function invalidateSessionList(username: string) {
+  sessionListCache.delete(username.toLowerCase());
+  sessionListCache.delete(""); // clear any all-users cached query
+}
+
 // Chat document interface
 export interface ChatDocument {
   id: string; // Unique chat ID (fileName + timestamp)
@@ -277,18 +302,8 @@ export const createChatDocument = async (
   
   const chatId = `${uniqueFileName.replace(/[^a-zA-Z0-9]/g, '_')}_${timestamp}`;
   
-  // Estimate document size (rough calculation)
-  // CosmosDB has a 4MB limit per document
-  const estimatedSize = JSON.stringify(rawData).length;
-  const MAX_DOCUMENT_SIZE = 3 * 1024 * 1024; // 3MB safety margin (leave room for other fields)
-  
-  // For large datasets, don't store rawData in CosmosDB - it's already in blob storage
-  // Only store sampleRows for preview
-  const shouldStoreRawData = estimatedSize < MAX_DOCUMENT_SIZE && rawData.length < 10000;
-  
-  if (!shouldStoreRawData) {
-    console.log(`⚠️ Large dataset detected (${rawData.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB). Storing only sampleRows in CosmosDB. Full data is in blob storage.`);
-  }
+  // rawData is never stored in CosmosDB — full data lives in blob/columnar storage,
+  // only sampleRows are kept for preview to stay well under the 4MB document limit.
   
   // Check if charts should be stored in blob (if they have large data arrays)
   let chartsToStore: ChartSpec[] = [];
@@ -335,7 +350,7 @@ export const createChatDocument = async (
     chartReferences: chartReferences.length > 0 ? chartReferences : undefined,
     insights: insights,
     sessionId,
-    rawData: shouldStoreRawData ? rawData : [], // Only store rawData if it's small enough
+    rawData: [],
     sampleRows,
     columnStatistics,
     dataSummaryStatistics, // Pre-computed data summary statistics
@@ -354,7 +369,7 @@ export const createChatDocument = async (
   try {
     const containerInstance = await waitForContainer();
     const { resource } = await containerInstance.items.create(chatDocument);
-    console.log(`✅ Created chat document: ${chatId} (rawData stored: ${shouldStoreRawData ? 'yes' : 'no, using blob storage'})`);
+    console.log(`✅ Created chat document: ${chatId}`);
     return resource as ChatDocument;
   } catch (error: any) {
     // Check if error is due to document size
@@ -437,6 +452,8 @@ export const createPlaceholderSession = async (
   try {
     const containerInstance = await waitForContainer();
     const { resource } = await containerInstance.items.create(placeholderDocument);
+    invalidateSessionDoc(sessionId);
+    invalidateSessionList(normalizedUsername);
     console.log(`✅ Created placeholder session: ${chatId} for sessionId: ${sessionId}`);
     return resource as ChatDocument;
   } catch (error: any) {
@@ -538,8 +555,11 @@ export const updateChatDocument = async (chatDocument: ChatDocument): Promise<Ch
 
     chatDocument.lastUpdatedAt = Date.now();
     const { resource } = await containerInstance.items.upsert(chatDocument);
+    const result = resource as unknown as ChatDocument;
+    // Repopulate cache with the freshly-written doc so reads immediately after a write hit the cache.
+    sessionDocCache.set(result.sessionId, { doc: result, expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS });
     console.log(`✅ Updated chat document: ${chatDocument.id}`);
-    return resource as unknown as ChatDocument;
+    return result;
   } catch (error) {
     console.error("❌ Failed to update chat document:", error);
     throw error;
@@ -910,10 +930,13 @@ const retryOnConnectionError = async <T>(
 };
 
 export const getChatBySessionIdEfficient = async (sessionId: string): Promise<ChatDocument | null> => {
-  return retryOnConnectionError(async () => {
+  const hit = sessionDocCache.get(sessionId);
+  if (hit && hit.expiresAt > Date.now()) return hit.doc;
+
+  const doc = await retryOnConnectionError(async () => {
     try {
       const containerInstance = await waitForContainer();
-      
+
       const query =
         "SELECT * FROM c WHERE c.sessionId = @sessionId ORDER BY c.lastUpdatedAt DESC";
       // Enable cross-partition query since sessionId is not the partition key
@@ -926,19 +949,21 @@ export const getChatBySessionIdEfficient = async (sessionId: string): Promise<Ch
           `⚠️ Multiple chat documents (${resources.length}) for sessionId ${sessionId}; using latest by lastUpdatedAt`
         );
       }
-      const doc = (resources && resources.length > 0) ? resources[0] : null;
-      if (!doc) {
+      const d = (resources && resources.length > 0) ? resources[0] : null;
+      if (!d) {
         console.warn("⚠️ No chat document found for sessionId:", sessionId);
       } else {
-        console.log("🔎 Found chat document by sessionId:", doc.id, "username:", doc.username);
-        ensureCollaborators(doc as ChatDocument);
+        ensureCollaborators(d as ChatDocument);
       }
-      return doc as unknown as ChatDocument | null;
+      return d as unknown as ChatDocument | null;
     } catch (error) {
       console.error("❌ Failed to get chat by session ID:", error);
       throw error;
     }
   }, 3, "getChatBySessionIdEfficient");
+
+  sessionDocCache.set(sessionId, { doc, expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS });
+  return doc;
 };
 
 /**
@@ -954,23 +979,28 @@ export const getChatBySessionIdForUser = async (
     return null;
   }
 
-  const collaborators = ensureCollaborators(chatDocument);
   const normalizedRequester = normalizeEmail(requesterEmail);
-  
-  console.log(`🔍 Access check for session ${sessionId}:`);
-  console.log(`   Requester: "${requesterEmail}" -> normalized: "${normalizedRequester}"`);
-  console.log(`   Session owner: "${chatDocument.username}"`);
-  console.log(`   Collaborators: [${collaborators.join(', ')}]`);
-  console.log(`   Is requester in collaborators: ${collaborators.includes(normalizedRequester || '')}`);
-  
-  if (!normalizedRequester || !collaborators.includes(normalizedRequester)) {
+  if (!normalizedRequester) {
+    const error = new Error("Unauthorized to access this session");
+    (error as any).statusCode = 403;
+    throw error;
+  }
+
+  const cacheKey = `${sessionId}:${normalizedRequester}`;
+  const cached = accessResultCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return chatDocument;
+  }
+
+  const collaborators = ensureCollaborators(chatDocument);
+  if (!collaborators.includes(normalizedRequester)) {
     console.warn(`⚠️ Unauthorized access attempt: "${normalizedRequester}" not in collaborators for session ${sessionId}`);
     const error = new Error("Unauthorized to access this session");
     (error as any).statusCode = 403;
     throw error;
   }
 
-  console.log(`✅ Access granted for session ${sessionId}`);
+  accessResultCache.set(cacheKey, { expiresAt: Date.now() + ACCESS_CACHE_TTL_MS });
   return chatDocument;
 };
 
@@ -1079,24 +1109,41 @@ export const updateSessionPermanentContext = async (
   permanentContext: string
 ): Promise<ChatDocument> => {
   try {
-    const chatDocument = await getChatBySessionIdEfficient(sessionId);
-    
-    if (!chatDocument) {
+    // Initial read for authorization check only.
+    const authDoc = await getChatBySessionIdEfficient(sessionId);
+    if (!authDoc) {
       throw new Error(`Session not found for sessionId: ${sessionId}`);
     }
-    
-    // Verify the username matches
     const normalizedUsername = normalizeEmail(username) || username;
-    const collaborators = ensureCollaborators(chatDocument);
-    
+    const collaborators = ensureCollaborators(authDoc);
     if (!collaborators.includes(normalizedUsername)) {
       throw new Error('Unauthorized: Session does not belong to this user');
     }
-    
-    // Keep permanent context additive and idempotent so user-provided details
-    // are retained across future updates/resumes.
+
     const incoming = permanentContext.trim();
-    const existing = (chatDocument.permanentContext || "").trim();
+
+    // Run the slow LLM merge before re-reading, using the best-known previous snapshot.
+    let mergedCtx = authDoc.sessionAnalysisContext;
+    if (incoming.length > 0) {
+      try {
+        const { mergeSessionAnalysisContextUserLLM } = await import(
+          "../lib/sessionAnalysisContext.js"
+        );
+        mergedCtx = await mergeSessionAnalysisContextUserLLM({
+          previous: authDoc.sessionAnalysisContext,
+          userText: incoming,
+        });
+      } catch (e) {
+        console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+      }
+    }
+
+    // Re-read the doc *after* the slow LLM call so concurrent writes (upload
+    // pipeline's understanding checkpoint, fire-and-forget seed) are preserved.
+    const freshDoc = (await getChatBySessionIdEfficient(sessionId)) ?? authDoc;
+
+    // Keep permanent context additive and idempotent — use the freshest snapshot.
+    const existing = (freshDoc.permanentContext || "").trim();
     const combined =
       incoming.length === 0
         ? existing
@@ -1105,25 +1152,68 @@ export const updateSessionPermanentContext = async (
           : existing.includes(incoming)
             ? existing
             : `${existing}\n\n${incoming}`;
-    chatDocument.permanentContext = combined;
+    freshDoc.permanentContext = combined;
 
-    if (incoming.length > 0) {
+    if (incoming.length > 0 && mergedCtx) {
+      // Only overwrite sessionAnalysisContext if we actually produced a merge.
+      freshDoc.sessionAnalysisContext = mergedCtx;
+    }
+
+    // W5: regenerate starter questions + rewrite initial welcome message when
+    // the conversation is still at the initial assistant-only state.
+    if (incoming.length > 0 && freshDoc.dataSummary && freshDoc.datasetProfile) {
       try {
-        const { mergeSessionAnalysisContextUserLLM } = await import(
-          "../lib/sessionAnalysisContext.js"
-        );
-        chatDocument.sessionAnalysisContext = await mergeSessionAnalysisContextUserLLM({
-          previous: chatDocument.sessionAnalysisContext,
-          userText: incoming,
+        const {
+          regenerateStarterQuestionsLLM,
+          buildInitialAssistantContentFromContext,
+        } = await import("../lib/sessionAnalysisContext.js");
+        const fresh = await regenerateStarterQuestionsLLM({
+          datasetProfile: freshDoc.datasetProfile,
+          dataSummary: freshDoc.dataSummary,
+          permanentContext: combined,
         });
+        if (fresh.length > 0 && freshDoc.sessionAnalysisContext) {
+          freshDoc.sessionAnalysisContext = {
+            ...freshDoc.sessionAnalysisContext,
+            suggestedFollowUps: fresh.slice(0, 12),
+          };
+          const msgs = freshDoc.messages ?? [];
+          const onlyInitial =
+            msgs.length === 1 && msgs[0]?.role === "assistant";
+          if (onlyInitial) {
+            const newContent = buildInitialAssistantContentFromContext(
+              freshDoc.dataSummary,
+              freshDoc.sessionAnalysisContext
+            );
+            freshDoc.messages = [
+              {
+                ...msgs[0],
+                content: newContent,
+                suggestedQuestions: fresh.slice(0, 6),
+              },
+            ];
+          }
+        }
       } catch (e) {
-        console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+        console.warn("⚠️ starter-question regeneration skipped:", e);
       }
     }
 
-    // Update the document
-    const updated = await updateChatDocument(chatDocument);
+    const updated = await updateChatDocument(freshDoc);
     console.log(`✅ Updated session permanent context: ${sessionId}`);
+
+    // W2/W3: index the user context into RAG (fire-and-forget).
+    if (combined.length > 0) {
+      try {
+        const { scheduleUpsertUserContextChunk } = await import(
+          "../lib/rag/indexSession.js"
+        );
+        scheduleUpsertUserContextChunk(sessionId, combined);
+      } catch (e) {
+        console.warn("⚠️ RAG user_context upsert scheduling failed:", e);
+      }
+    }
+
     return updated;
   } catch (error) {
     console.error("❌ Failed to update session permanent context:", error);
@@ -1165,6 +1255,8 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
     for (const pkValue of possiblePartitionKeys) {
       try {
         await containerInstance.item(chatId, pkValue).delete();
+        invalidateSessionDoc(sessionId);
+        invalidateSessionList(chatDocument.username);
         console.log(`✅ Successfully deleted session: ${sessionId} (chatId: ${chatId}, partitionKey: ${pkValue})`);
         return;
       } catch (pkError: any) {
@@ -1188,7 +1280,11 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
  * Uses a narrow projection (no messages/charts/rawData) to keep payloads small and avoid timeouts.
  */
 export const getAllSessions = async (username?: string): Promise<SessionListSummary[]> => {
-  return retryOnConnectionError(async () => {
+  const cacheKey = username ? (normalizeEmail(username) || username).toLowerCase() : "";
+  const hit = sessionListCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now()) return hit.sessions;
+
+  const sessions = await retryOnConnectionError(async () => {
     try {
       const containerInstance = await waitForContainer();
 
@@ -1227,6 +1323,9 @@ export const getAllSessions = async (username?: string): Promise<SessionListSumm
       throw error;
     }
   }, 3, "getAllSessions");
+
+  sessionListCache.set(cacheKey, { sessions, expiresAt: Date.now() + SESSION_LIST_CACHE_TTL_MS });
+  return sessions;
 };
 
 /**

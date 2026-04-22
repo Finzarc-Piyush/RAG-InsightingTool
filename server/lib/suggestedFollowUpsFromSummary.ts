@@ -1,3 +1,4 @@
+import { isLikelyIdentifierColumnName } from "./columnIdHeuristics.js";
 import type { DataSummary } from "../shared/schema.js";
 
 /**
@@ -22,16 +23,13 @@ export function suggestedFollowUpsFromDataSummary(
   );
   const otherCols = summary.columns
     .map((c) => c.name)
-    .filter((n) => !numericSet.has(n) && !dateSet.has(n));
+    .filter((n) => !numericSet.has(n) && !dateSet.has(n) && !isLikelyIdentifierColumnName(n));
 
   const out: string[] = [];
   const fileHint = options?.fileLabel?.trim();
 
   for (const col of numeric.slice(0, 3)) {
     out.push(`What are the main statistics and outliers for ${col}?`);
-  }
-  for (const col of dates.slice(0, 2)) {
-    out.push(`How does ${col} trend over time?`);
   }
   if (dates.length > 0 && numeric.length > 0) {
     out.push(

@@ -119,6 +119,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     cancelChatRequest,
     thinkingSteps,
     agentWorkbenchLive,
+    spawnedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
   } = useHomeMutations({
@@ -437,44 +438,64 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     fetchCollaborators();
   }, [sessionId]);
 
-  // Show context modal after preview is available (not during full-screen preview loading).
+  // Open context modal immediately after upload (or on resume when no context
+  // has been saved yet). Preview + enrichment continue behind the modal so the
+  // user can type while background work runs — the welcome message is produced
+  // from dataset understanding alone and never waits for user input.
   useEffect(() => {
-    const sessionReadyForContext =
-      !isDatasetPreviewLoading && (messages.length > 0 || !isDatasetEnriching);
-    if (!sessionId || !sessionReadyForContext || contextModalShownRef.current.has(sessionId)) {
+    if (!sessionId || contextModalShownRef.current.has(sessionId)) return;
+    // For resumed sessions, loadedSessionData carries the stored permanentContext.
+    // If it's already set, there's nothing to ask — mark shown and skip.
+    const resumedSession = loadedSessionData?.session ?? loadedSessionData;
+    if (resumedSession?.permanentContext?.trim()) {
+      contextModalShownRef.current.add(sessionId);
       return;
     }
-    const checkAndShowModal = async () => {
-      try {
-        const data = await sessionsApi.getSessionDetails(sessionId);
-        const sessionData = data.session || data;
-        if (!sessionData.permanentContext) {
-          setContextModalSessionId(sessionId);
-          setShowContextModal(true);
-          contextModalShownRef.current.add(sessionId);
-        }
-      } catch (e) {
-        logger.error('Failed to check session context:', e);
-        setContextModalSessionId(sessionId);
-        setShowContextModal(true);
-        contextModalShownRef.current.add(sessionId);
-      }
-    };
-    checkAndShowModal();
-  }, [sessionId, isDatasetPreviewLoading, isDatasetEnriching, messages.length]);
+    setContextModalSessionId(sessionId);
+    setShowContextModal(true);
+    contextModalShownRef.current.add(sessionId);
+  }, [sessionId, loadedSessionData]);
 
   // Handle saving context
   const handleSaveContext = async (context: string) => {
     if (!contextModalSessionId) return;
-    
+
     setIsSavingContext(true);
     try {
-      await sessionsApi.updateSessionContext(contextModalSessionId, context);
+      const response: any = await sessionsApi.updateSessionContext(
+        contextModalSessionId,
+        context
+      );
       setShowContextModal(false);
       setContextModalSessionId(null);
+
+      // W7: consume regenerated starter questions + rewritten welcome message
+      // from the PATCH response so chips refresh without a refetch race.
+      const fresh: string[] = Array.isArray(response?.suggestedQuestions)
+        ? response.suggestedQuestions
+        : [];
+      const initial = response?.initialAssistantMessage;
+      if (fresh.length > 0) {
+        setSuggestions(fresh);
+      }
+      if (initial && messages.length === 1 && messages[0]?.role === 'assistant') {
+        setMessages([
+          {
+            ...messages[0],
+            content: initial.content ?? messages[0].content,
+            suggestedQuestions: Array.isArray(initial.suggestedQuestions)
+              ? initial.suggestedQuestions
+              : messages[0].suggestedQuestions,
+          },
+        ]);
+      }
+
       toast({
         title: 'Context Saved',
-        description: 'Your context has been saved and will be included with each message.',
+        description:
+          fresh.length > 0
+            ? 'Context saved — starter questions updated.'
+            : 'Your context has been saved and will be included with each message.',
       });
     } catch (error) {
       logger.error('Failed to save context:', error);
@@ -639,6 +660,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onEditMessage={handleEditMessage}
         thinkingSteps={thinkingSteps}
         agentWorkbenchLive={agentWorkbenchLive}
+        spawnedSubQuestions={spawnedSubQuestions}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
         thinkingLiveAnchorTimestamp={thinkingLiveAnchorTimestamp}
         aiSuggestions={suggestions}

@@ -73,8 +73,6 @@ function getOpenAIEmbeddingsClient(): OpenAI {
     return openaiEmbeddingsInstance;
   }
 
-  console.log("🔧 Initializing Azure OpenAI Embeddings client...");
-
   // Check for required Azure OpenAI environment variables
   // Use separate embedding endpoint if provided, otherwise use the main endpoint
   const embeddingEndpoint = process.env.AZURE_OPENAI_EMBEDDING_ENDPOINT || process.env.AZURE_OPENAI_ENDPOINT;
@@ -99,13 +97,6 @@ function getOpenAIEmbeddingsClient(): OpenAI {
 
   // Get embedding deployment name (default to text-embedding-3-small)
   const embeddingDeployment = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME || 'text-embedding-3-small';
-  
-  console.log(`📊 Embedding Client Configuration:`);
-  console.log(`   AZURE_OPENAI_EMBEDDING_ENDPOINT: ${process.env.AZURE_OPENAI_EMBEDDING_ENDPOINT || 'not set (using AZURE_OPENAI_ENDPOINT)'}`);
-  console.log(`   Using endpoint: ${embeddingEndpoint}`);
-  console.log(`   AZURE_OPENAI_EMBEDDING_API_KEY: ${process.env.AZURE_OPENAI_EMBEDDING_API_KEY ? '***set***' : 'not set (using AZURE_OPENAI_API_KEY)'}`);
-  console.log(`   AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME: ${process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME || 'not set (using default)'}`);
-  console.log(`   Resolved embedding deployment: ${embeddingDeployment}`);
 
   // Validate embedding model name
   if (embeddingDeployment.includes('gpt-4') || embeddingDeployment.includes('gpt-3.5')) {
@@ -114,8 +105,6 @@ function getOpenAIEmbeddingsClient(): OpenAI {
     const fallbackDeployment = 'text-embedding-3-small';
     
     const baseURL = `${embeddingEndpoint}/openai/deployments/${fallbackDeployment}`;
-    console.log(`   Creating embeddings client with baseURL: ${baseURL}`);
-    
     const apiVersion = process.env.AZURE_OPENAI_EMBEDDING_API_VERSION || process.env.AZURE_OPENAI_API_VERSION || '2023-05-15';
     
     openaiEmbeddingsInstance = new OpenAI({
@@ -132,16 +121,7 @@ function getOpenAIEmbeddingsClient(): OpenAI {
     // Create Azure OpenAI client for embeddings with embedding deployment
     const baseURL = `${embeddingEndpoint}/openai/deployments/${embeddingDeployment}`;
     const apiVersion = process.env.AZURE_OPENAI_EMBEDDING_API_VERSION || process.env.AZURE_OPENAI_API_VERSION || '2023-05-15';
-    
-    console.log(`   Creating embeddings client with baseURL: ${baseURL}`);
-    console.log(`   API Version: ${apiVersion}`);
-    console.log(`   ⚠️ IMPORTANT: Ensure this endpoint matches where your deployment was created!`);
-    console.log(`   ⚠️ If you see "DeploymentNotFound" error, check:`);
-    console.log(`      1. The endpoint (AZURE_OPENAI_EMBEDDING_ENDPOINT or AZURE_OPENAI_ENDPOINT) matches the Azure resource where deployment exists`);
-    console.log(`      2. The API key (AZURE_OPENAI_EMBEDDING_API_KEY or AZURE_OPENAI_API_KEY) is correct for this resource`);
-    console.log(`      3. The deployment name "${embeddingDeployment}" matches exactly (case-sensitive)`);
-    console.log(`      4. The deployment is in "Succeeded" state in Azure Portal`);
-    
+
     openaiEmbeddingsInstance = new OpenAI({
       apiKey: embeddingApiKey!,
       baseURL: baseURL,
@@ -154,10 +134,7 @@ function getOpenAIEmbeddingsClient(): OpenAI {
     });
   }
 
-  console.log("✅ Azure OpenAI Embeddings client initialized");
-  console.log(`   Embedding Deployment: ${embeddingDeployment}`);
-  console.log(`   Base URL: ${openaiEmbeddingsInstance.baseURL}`);
-  console.log(`   Expected full embeddings URL: ${openaiEmbeddingsInstance.baseURL}/embeddings?api-version=${process.env.AZURE_OPENAI_EMBEDDING_API_VERSION || process.env.AZURE_OPENAI_API_VERSION || '2023-05-15'}`);
+  console.log(`✅ Azure OpenAI Embeddings client initialized (deployment: ${embeddingDeployment})`);
 
   return openaiEmbeddingsInstance;
 }
