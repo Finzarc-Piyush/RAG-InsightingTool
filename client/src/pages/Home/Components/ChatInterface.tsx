@@ -685,7 +685,19 @@ export function ChatInterface({
           ref={messagesContainerRef}
           className="flex-1 overflow-y-auto"
         >
-        <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+        {/*
+          W10 · expose the conversation as an aria-live region so screen
+          readers announce new assistant messages as they stream in.
+          `polite` (not `assertive`) lets the user finish reading the
+          previous message before being interrupted.
+        */}
+        <div
+          className="max-w-6xl mx-auto px-4 py-4 space-y-4"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions text"
+          aria-label="Conversation messages"
+        >
           {/* Header with Filter dropdown */}
           {(sessionId || messages.length > 0) && collaborators.length > 0 && (
             <div className="flex justify-end items-center mb-2">

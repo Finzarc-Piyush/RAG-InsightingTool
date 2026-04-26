@@ -35,6 +35,13 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
       },
+      // W5 · `client/src/shared/schema.ts` re-exports from
+      // `../../../server/shared/schema.ts` so the schema lives in one file.
+      // Vite's default fs.allow is the project root; widen it to the repo root
+      // so the dev server can resolve the cross-package import.
+      fs: {
+        allow: [path.resolve(__dirname, "..")],
+      },
     },
     build: {
       outDir: "dist",

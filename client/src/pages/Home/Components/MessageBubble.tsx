@@ -11,6 +11,11 @@ import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
+import { FeedbackButtons } from './FeedbackButtons';
+import { AnswerCard } from './AnswerCard';
+import { MessageActionsBar } from './MessageActionsBar';
+import { SourcePillRow } from './SourcePillRow';
+import { StreamingIndicator } from './StreamingIndicator';
 import { AnalyticalDashboardResponse } from './AnalyticalDashboardResponse';
 import { MagnitudesRow, type MagnitudeItem } from './MagnitudesRow';
 import { Settle } from '@/components/ui/motion';
@@ -492,12 +497,26 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         {isUser &&
           ((thinkingPanelSteps?.length ?? 0) > 0 ||
             (thinkingPanelWorkbench?.length ?? 0) > 0) && (
-            <ThinkingPanel
-              variant="archived"
-              steps={thinkingPanelSteps ?? []}
-              workbench={thinkingPanelWorkbench ?? []}
-              isStreaming={!!thinkingPanelStreaming}
-            />
+            <>
+              {/* W10 · elapsed-time chip during live streaming so the user
+                  can tell long correlation runs from a stuck request. */}
+              {thinkingPanelStreaming && (
+                <div className="mt-2">
+                  <StreamingIndicator
+                    running
+                    label={
+                      thinkingPanelSteps?.find((s) => s.status === "active")?.step
+                    }
+                  />
+                </div>
+              )}
+              <ThinkingPanel
+                variant="archived"
+                steps={thinkingPanelSteps ?? []}
+                workbench={thinkingPanelWorkbench ?? []}
+                isStreaming={!!thinkingPanelStreaming}
+              />
+            </>
           )}
 
         {!isUser &&
@@ -574,9 +593,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
             data-testid={`message-content-${message.role}`}
           >
-            <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
-              <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
-            </div>
+            {/*
+              W7 · render structured AnswerCard when the narrator emitted an
+              `answerEnvelope`; fall back to the legacy markdown-only block
+              otherwise. The supplementaryMarkdown prop carries any narrator
+              prose that shouldn't be lost when the envelope provides headlines.
+            */}
+            {(message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> }).answerEnvelope ? (
+              <AnswerCard
+                message={message as Message}
+                onSuggestedQuestionClick={onSuggestedQuestionClick}
+                supplementaryMarkdown={assistantMarkdownParts.markdownBody}
+              />
+            ) : (
+              <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
+                <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
+              </div>
+            )}
             {/* UX-3 · Phase-1 magnitudes row — renders nothing when the field is empty. */}
             <MagnitudesRow
               items={
@@ -609,6 +642,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 sessionId={sessionId ?? undefined}
               />
             ) : null}
+            {/* W7 · message-level actions (Copy now; Regenerate added in W9). */}
+            <MessageActionsBar
+              message={message}
+              precedingUserQuestion={precedingUserQuestion ?? undefined}
+            />
+            {/* W5.5b · thumbs up/down feeds the cache invalidation + golden corpus.
+                Only rendered when we have the turnId from the agent trace. */}
+            {sessionId &&
+              (message.agentTrace as { turnId?: string } | undefined)?.turnId && (
+                <FeedbackButtons
+                  sessionId={sessionId}
+                  turnId={(message.agentTrace as { turnId: string }).turnId}
+                  initial={
+                    (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
+                  }
+                />
+              )}
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
               onSuggestedQuestionClick && (
@@ -730,24 +780,28 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                     : { isLoading: false };
                   
                   return (
-                    <Suspense 
-                      key={idx}
-                      fallback={
-                        <div className="flex h-[250px] w-full items-center justify-center rounded-lg border border-border/80 bg-muted/30">
-                          <Skeleton className="h-full w-full" />
-                        </div>
-                      }
-                    >
-                      <ChartRenderer 
-                        chart={chart} 
-                        index={idx}
-                        isSingleChart={message.charts!.length === 1}
-                        enableFilters
-                        isLoading={chartLoadingState.isLoading}
-                        loadingProgress={chartLoadingState.progress}
-                        keyInsightSessionId={sessionId ?? null}
-                      />
-                    </Suspense>
+                    <div key={idx} className="flex flex-col gap-1.5">
+                      <Suspense
+                        fallback={
+                          <div className="flex h-[250px] w-full items-center justify-center rounded-lg border border-border/80 bg-muted/30">
+                            <Skeleton className="h-full w-full" />
+                          </div>
+                        }
+                      >
+                        <ChartRenderer
+                          chart={chart}
+                          index={idx}
+                          isSingleChart={message.charts!.length === 1}
+                          enableFilters
+                          isLoading={chartLoadingState.isLoading}
+                          loadingProgress={chartLoadingState.progress}
+                          keyInsightSessionId={sessionId ?? null}
+                        />
+                      </Suspense>
+                      {/* W8 · Perplexity-style provenance pill (rows / cols / tools).
+                          Renders nothing when the agent didn't emit _agentProvenance. */}
+                      <SourcePillRow chart={chart} />
+                    </div>
                   );
                 })}
               </div>

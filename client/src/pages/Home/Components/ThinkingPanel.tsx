@@ -162,7 +162,14 @@ export function ThinkingPanel({
       return;
     }
     if (isStreaming) {
-      setOpen(true);
+      // W10 · on mobile (<768px) the thinking panel dominates the viewport
+      // and pushes the answer off-screen. Keep it collapsed; the user can
+      // tap the trigger to inspect the live trace.
+      const isMobile =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 767px)").matches;
+      setOpen(!isMobile);
     } else if (prevStreaming.current) {
       setOpen(false);
     }
