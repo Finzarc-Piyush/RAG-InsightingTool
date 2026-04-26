@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-/** Keep in sync with client/src/shared/schema.ts */
+/**
+ * W5 · single source-of-truth for the message / chart / dashboard / agent
+ * contracts. The client re-exports this file via `client/src/shared/schema.ts`
+ * (one-line re-export, enabled by Vite's `server.fs.allow`). Do not duplicate
+ * types in the client copy; edit them here.
+ */
 export const chartTypeSchema = z.enum([
   "line",
   "bar",
@@ -39,6 +44,45 @@ export const chartSpecSchema = z.object({
   /** Agent tool call id or trace ref linking narrative to evidence (optional). */
   _agentEvidenceRef: z.string().max(200).optional(),
   _agentTurnId: z.string().max(80).optional(),
+  /**
+   * W7.2 · Provenance: which tool calls produced this chart's data, with row
+   * counts and (when applicable) a SQL-equivalent string. Lets the UI show a
+   * "where did these numbers come from" popover so managers can trust the
+   * dashboard. Capped to a few entries so chart payloads stay light.
+   */
+  _agentProvenance: z
+    .object({
+      toolCalls: z
+        .array(
+          z.object({
+            id: z.string().max(80),
+            tool: z.string().max(80),
+            rowsIn: z.number().int().nonnegative().optional(),
+            rowsOut: z.number().int().nonnegative().optional(),
+          })
+        )
+        .max(8),
+      sqlEquivalent: z.string().max(2000).optional(),
+      sources: z.array(z.string().max(120)).max(8).optional(),
+      // W8 · expose the columns and range filters that produced this chart so
+      // the SourceDrawer can answer "which columns and which slice of the
+      // dataset was used". Both fields are optional — the UI degrades gracefully
+      // when the runtime doesn't populate them.
+      columnsUsed: z.array(z.string().max(120)).max(20).optional(),
+      rangeFilters: z
+        .array(
+          z.object({
+            column: z.string().max(120),
+            op: z.string().max(20),
+            value: z.string().max(200).optional(),
+            min: z.string().max(60).optional(),
+            max: z.string().max(60).optional(),
+          })
+        )
+        .max(12)
+        .optional(),
+    })
+    .optional(),
 });
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
@@ -193,6 +237,34 @@ export const messageSchema = z.object({
     .optional(),
   /** Phase-1: one-line note on what the tools could not determine. */
   unexplained: z.string().max(800).optional(),
+  /**
+   * W3 · structured AnswerEnvelope. Optional — when present, the client renders
+   * a headline-first AnswerCard (TL;DR pill, findings list, methodology in a
+   * collapsible, caveats card, next-steps as outline buttons). When absent the
+   * client falls back to rendering `content` as markdown unchanged.
+   *
+   * Fields are intentionally optional — narrator may emit any subset, and the
+   * synthesizer fallback path emits none. Caveats and findings are arrays so
+   * their order matters; renderers must preserve it.
+   */
+  answerEnvelope: z
+    .object({
+      tldr: z.string().max(280).optional(),
+      findings: z
+        .array(
+          z.object({
+            headline: z.string().max(200),
+            evidence: z.string().max(600),
+            magnitude: z.string().max(80).optional(),
+          })
+        )
+        .max(5)
+        .optional(),
+      methodology: z.string().max(500).optional(),
+      caveats: z.array(z.string().max(200)).max(3).optional(),
+      nextSteps: z.array(z.string().max(200)).max(3).optional(),
+    })
+    .optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
   dashboardDraft: z.record(z.unknown()).optional(),
   timestamp: z.number(),
@@ -963,4 +1035,91 @@ export const pivotQueryResponseSchema = z.object({
     .optional(),
 });
 export type PivotQueryResponse = z.infer<typeof pivotQueryResponseSchema>;
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* W2.1 · Past-analysis records                                                */
+/*                                                                             */
+/* Written fire-and-forget after every successful turn. Source-of-truth lives  */
+/* in Cosmos (container `past_analyses`). A parallel doc goes into AI Search   */
+/* `past-analyses` index with an embedding of `normalizedQuestion` for the     */
+/* semantic question cache (W5). The `questionEmbedding` is intentionally NOT  */
+/* stored in Cosmos — at 3072 dims that would be ~24KB per row.                */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+export const pastAnalysisToolCallSchema = z.object({
+  id: z.string(),
+  tool: z.string(),
+  /** Opaque hash of tool args — used only for dedup heuristics, never parsed back. */
+  argsHash: z.string(),
+  ok: z.boolean(),
+});
+export type PastAnalysisToolCall = z.infer<typeof pastAnalysisToolCallSchema>;
+
+export const pastAnalysisOutcomeSchema = z.enum([
+  "ok",
+  "verifier_failed",
+  "budget_exceeded",
+  "tool_error",
+]);
+export type PastAnalysisOutcome = z.infer<typeof pastAnalysisOutcomeSchema>;
+
+export const pastAnalysisFeedbackSchema = z.enum(["up", "down", "none"]);
+export type PastAnalysisFeedback = z.infer<typeof pastAnalysisFeedbackSchema>;
+
+/**
+ * W9 · structured reasons attached to a thumbs-down. The set is closed so
+ * downstream analytics can pivot reliably; "other" lets the user write a
+ * free-text comment without polluting the categorical bucket.
+ */
+export const pastAnalysisFeedbackReasonSchema = z.enum([
+  "vague",
+  "wrong_numbers",
+  "missing_context",
+  "too_long",
+  "too_short",
+  "format",
+  "other",
+]);
+export type PastAnalysisFeedbackReason = z.infer<typeof pastAnalysisFeedbackReasonSchema>;
+
+export const pastAnalysisDocSchema = z.object({
+  /** `${sessionId}__${turnId}` — deterministic, no random suffix so a replay overwrites. */
+  id: z.string(),
+  /** Partition key in Cosmos. */
+  sessionId: z.string(),
+  /** Normalized email. */
+  userId: z.string(),
+  turnId: z.string(),
+  /** Monotonic version of the session's underlying data; bumps invalidate caches. */
+  dataVersion: z.number().int().nonnegative(),
+  /** Raw user message. */
+  question: z.string(),
+  /** Lowercased + punctuation-stripped for the exact-match cache lookup (W5.2). */
+  normalizedQuestion: z.string(),
+  answer: z.string(),
+  charts: z.array(chartSpecSchema).optional(),
+  toolCalls: z.array(pastAnalysisToolCallSchema).default([]),
+  /** Sum of `llm_usage.costUsd` across this turn. */
+  costUsd: z.number().nonnegative(),
+  /** Wall-clock total, ms. */
+  latencyMs: z.number().nonnegative(),
+  tokenTotals: z.object({
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+  }),
+  outcome: pastAnalysisOutcomeSchema,
+  /** Mutated by the thumbs UI (W5.5). Defaults `"none"` on write. */
+  feedback: pastAnalysisFeedbackSchema.default("none"),
+  /**
+   * W9 · structured reasons supplied with a thumbs-down. Empty array on a
+   * thumbs-up or before any vote. Allows ops to slice "what was wrong" by
+   * category without re-reading every free-text comment.
+   */
+  feedbackReasons: z.array(pastAnalysisFeedbackReasonSchema).max(7).default([]),
+  /** Optional free-text the user typed when picking "other". Capped to keep doc light. */
+  feedbackComment: z.string().max(500).optional(),
+  /** ms epoch. */
+  createdAt: z.number(),
+});
+export type PastAnalysisDoc = z.infer<typeof pastAnalysisDocSchema>;
 

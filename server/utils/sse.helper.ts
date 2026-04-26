@@ -3,12 +3,18 @@
  * Utility functions for handling SSE connections
  */
 import { Response } from "express";
+import { validateSseEvent, isKnownSseEventKind } from "../shared/sseEvents.js";
 
 /**
  * Send SSE event to client
  * Safely handles client disconnections
  */
 const ENABLE_SSE_LOGGING = process.env.ENABLE_SSE_LOGGING === 'true';
+// W6 · validate SSE payloads in dev mode against the registered Zod schemas.
+// Production stays unvalidated for zero overhead; dev catches shape regressions
+// at the emit site instead of silently breaking the client.
+const VALIDATE_SSE_DEV =
+  process.env.NODE_ENV !== "production" && process.env.SSE_VALIDATE !== "0";
 
 // Track when a given response has already been observed as closed so callers
 // can short-circuit without every call site having to read a boolean (P-026).
@@ -28,6 +34,20 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
   // Check if connection is still writable
   if (isSseClosed(res)) {
     return false;
+  }
+
+  // W6 · dev-mode contract validation. Warn-and-pass: if an emit shape drifts,
+  // the warning surfaces at the call site so the dev fixes it before the
+  // client crashes on parse. Production paths skip the check (zero overhead).
+  if (VALIDATE_SSE_DEV && isKnownSseEventKind(event)) {
+    const v = validateSseEvent(event, data);
+    if (!v.ok) {
+      console.warn(
+        `⚠️  SSE event '${event}' failed schema validation. ` +
+          `Update server/shared/sseEvents.ts or fix the emit site. ` +
+          `Error: ${v.error.slice(0, 400)}`
+      );
+    }
   }
 
   try {

@@ -3,6 +3,8 @@ import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import type { VerifierResult, VerdictType } from "./types.js";
 import { verifierOutputSchema, VERIFIER_VERDICT } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
+import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { checkInferredFilterFidelity } from "./verifierHelpers.js";
@@ -84,6 +86,18 @@ function chartPrecheck(
 // O4: re-exported from verifierHelpers so the pure fn is testable without the OpenAI dep.
 export { checkMissingFindings } from "./verifierHelpers.js";
 import { checkMissingFindings } from "./verifierHelpers.js";
+// W7.5 · narrative-vs-numbers prefilter (pure logic, no LLM cost).
+import { verifyNarrativeAgainstCharts } from "./verifyNarrativeNumbers.js";
+import type { ChartSpec } from "../../../shared/schema.js";
+
+/**
+ * W7.5 · Tunable thresholds for the narrative-vs-numbers prefilter:
+ *  - Need at least N unsupported claims AND at least P% of total claims unsupported
+ *    before we early-return revise_narrative. Both gates protect against
+ *    single-outlier false positives (e.g. a rounded year mistakenly extracted).
+ */
+const NARRATIVE_FABRICATION_MIN_COUNT = 2;
+const NARRATIVE_FABRICATION_MIN_FRACTION = 0.5;
 
 export async function runVerifier(
   ctx: AgentExecutionContext,
@@ -95,6 +109,8 @@ export async function runVerifier(
     blackboard?: AnalyticalBlackboard;
     /** Current plan steps — used to detect inferred filters that never reached execution. */
     planSteps?: PlanStep[];
+    /** W7.5 · Charts produced this turn; powers the narrative-vs-numbers check. */
+    charts?: ChartSpec[];
   },
   onLlmCall: () => void
 ): Promise<VerifierResult> {
@@ -126,7 +142,42 @@ export async function runVerifier(
     }
   }
 
-  const system = `You are a verifier, not an assistant. Assume the draft may be wrong.
+  // W7.5 · Catch numerical fabrication (the agent quoted a figure no chart
+  // supports). Cheap pure-logic check — fires only when there's actual chart
+  // data to anchor against AND multiple unsupported claims (single outliers
+  // could be a rounding artefact, the regex catching a date, etc.).
+  if (params.charts && params.charts.length > 0) {
+    const verdict = verifyNarrativeAgainstCharts(params.candidate, params.charts);
+    const total = verdict.totalClaims;
+    const unsupported = verdict.unsupported.length;
+    if (
+      unsupported >= NARRATIVE_FABRICATION_MIN_COUNT &&
+      total > 0 &&
+      unsupported / total >= NARRATIVE_FABRICATION_MIN_FRACTION
+    ) {
+      const offending = verdict.unsupported
+        .slice(0, 6)
+        .map((c) => c.raw)
+        .join(", ");
+      return {
+        verdict: VERIFIER_VERDICT.reviseNarrative,
+        issues: [
+          {
+            code: "UNSUPPORTED_NUMERIC_CLAIM",
+            severity: "medium",
+            description: `Narrative cites ${unsupported}/${total} numbers that no chart row or keyInsight supports within 2% tolerance: ${offending}. Either remove these figures or replace them with values from the chart data.`,
+            evidenceRefs: [],
+          },
+        ],
+        course_correction: VERIFIER_VERDICT.reviseNarrative,
+      };
+    }
+  }
+
+  // W4.2 · ANALYST_PREAMBLE prefix → cache eligibility (>1024 tokens). Below
+  // is purely static; everything dynamic (question, brief, evidence, candidate)
+  // lives in the user message.
+  const system = `${ANALYST_PREAMBLE}You are a verifier, not an assistant. Assume the draft may be wrong.
 Compare the candidate answer fragment to the user question and evidence. Output JSON only with:
 verdict: pass | revise_narrative | retry_tool | replan | ask_user | abort_partial
 issues: array of {code, severity, description, evidence_refs}
@@ -144,13 +195,17 @@ Phase-1 completeness checks (only when ANALYSIS_BRIEF_JSON.questionShape is set)
 Prefer course_correction "revise_narrative" for completeness issues (evidence is usually present; the narrative just didn't surface it). Only escalate to "replan" when the required evidence is actually absent from the tool output.`;
 
   const brief = formatAnalysisBriefForPrompt(ctx);
-  const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 6000)}\n\nCandidate:\n${params.candidate.slice(0, 4000)}`;
+  // W4 · evidence cap 6000 → 16000, candidate cap 4000 → 8000. Deep verifier
+  // runs on Claude Opus 4.7 (per W2 routing); expanding the window catches
+  // numeric-fabrication errors that hide past truncation boundaries.
+  const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 16_000)}\n\nCandidate:\n${params.candidate.slice(0, 8_000)}`;
 
   const out = await completeJson(system, user, verifierOutputSchema, {
     turnId: params.turnId,
     temperature: 0.1,
     maxTokens: 800,
     onLlmCall,
+    purpose: LLM_PURPOSE.VERIFIER_DEEP,
   });
   if (!out.ok) {
     return {
@@ -182,26 +237,37 @@ export async function rewriteNarrative(
   evidenceSummary?: string
 ): Promise<string> {
   onLlmCall();
-  const { openai, MODEL } = await import("../../openai.js");
+  const { MODEL } = await import("../../openai.js");
+  const { callLlm } = await import("./callLlm.js");
+  // W4 · evidence cap 6000 → 16000 to match the deep verifier's window.
   const evBlock =
     evidenceSummary?.trim().length ?
-      `\nEvidence (tool output; cite only facts supported here):\n${evidenceSummary.trim().slice(0, 6000)}\n`
+      `\nEvidence (tool output; cite only facts supported here):\n${evidenceSummary.trim().slice(0, 16_000)}\n`
       : "";
-  const res = await openai.chat.completions.create({
-    model: MODEL as string,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Rewrite the draft to fix the listed issues. Be concise and grounded in evidence when provided; do not invent numbers not in evidence. No markdown code fences.",
-      },
-      {
-        role: "user",
-        content: `Question: ${ctx.question}\nIssues:\n${issues}${evBlock}\nDraft:\n${bad}`,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: 800,
-  });
+  const res = await callLlm(
+    {
+      model: MODEL as string,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Rewrite the draft to fix the listed issues. Be concise and grounded in evidence when provided; do not invent numbers not in evidence. No markdown code fences.",
+        },
+        {
+          role: "user",
+          content: `Question: ${ctx.question}\nIssues:\n${issues}${evBlock}\nDraft:\n${bad}`,
+        },
+      ],
+      temperature: 0.3,
+      // W4 · 800 → 2000. This is a narrative rewrite, not chart-JSON repair —
+      // 800 was clipping multi-paragraph answers mid-sentence.
+      max_tokens: 2000,
+    },
+    // W4 · was LLM_PURPOSE.CHART_JSON_REPAIR (a copy-paste from the chart
+    // repair path). VERIFIER_DEEP routes through W2 to Claude Opus 4.7 and
+    // matches the model that produced the verdict, keeping the rewrite as
+    // analytically careful as the critique that prompted it.
+    { purpose: LLM_PURPOSE.VERIFIER_DEEP }
+  );
   return res.choices[0]?.message?.content?.trim() || bad;
 }

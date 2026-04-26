@@ -30,7 +30,10 @@ import {
   appendInterAgentMessage,
   formatInterAgentHandoffsForPrompt,
 } from "./interAgentMessages.js";
-import { openai, MODEL } from "../../openai.js";
+import { MODEL } from "../../openai.js";
+import { callLlm } from "./callLlm.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
+import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { getInsightModel, getInsightTemperatureConservative } from "../../insightSynthesis/insightModelConfig.js";
 import { completeJson } from "./llmJson.js";
 import { proposeAndBuildExtraCharts } from "./visualPlanner.js";
@@ -356,23 +359,28 @@ async function synthesizeFinalAnswerEnvelope(
   const permBlock = ctx.permanentContext?.trim().length
     ? `\n\nUser notes:\n${ctx.permanentContext.trim().slice(0, 4000)}`
     : "";
-  const user = `Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 20_000)}`;
-
   const phase1Shape = ctx.analysisBrief?.questionShape;
-  const phase1Block = phase1Shape
-    ? `\n\nPhase-1 rich envelope (REQUIRED when questionShape is set):
-- "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
-- "unexplained": one sentence (≤180 chars) on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
-Current questionShape: ${phase1Shape}.`
-    : "";
+  const phase1Line = phase1Shape
+    ? `questionShape: ${phase1Shape}\n`
+    : `questionShape: none\n`;
+  const user = `${phase1Line}Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 20_000)}`;
 
-  const system = `You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
+  // W4.2 · system is byte-stable across calls: the phase-1 envelope template
+  // is unconditionally present, the per-call questionShape is in the user
+  // message above. ANALYST_PREAMBLE pushes the prefix over Azure's 1024-token
+  // cache threshold for the 50% input discount.
+  const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
 - "body": main markdown answer (clear, concise). Do not duplicate the full key insight inside body; keep body focused on the direct answer.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions: segments, risk, opportunity, or “so what” for the business—using general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
-If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.${phase1Block}`;
+If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.
+
+Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
+- "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
+- "unexplained": one sentence (≤180 chars) on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
+When the user message says "questionShape: none" you may omit magnitudes and unexplained.`;
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
@@ -380,23 +388,27 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
     temperature: getInsightTemperatureConservative(),
     model: getInsightModel(),
     onLlmCall,
+    purpose: LLM_PURPOSE.FINAL_ANSWER,
   });
 
   if (!out.ok) {
     onLlmCall();
-    const res = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: "system",
+    const res = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: "system",
             content:
-            "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
-        },
-        { role: "user", content: user },
-      ],
-      temperature: 0.35,
-      max_tokens: 2000,
-    });
+              "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
+          },
+          { role: "user", content: user },
+        ],
+        temperature: 0.35,
+        max_tokens: 2000,
+      },
+      { purpose: LLM_PURPOSE.FINAL_ANSWER }
+    );
     const fallback =
       res.choices[0]?.message?.content?.trim() ||
       "I could not produce an answer from the available data.";
@@ -418,19 +430,22 @@ If observations mention zero analytical results, "0 rows", or "Diagnostic:" with
 
   if (!answer.trim()) {
     onLlmCall();
-    const res = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
-        },
-        { role: "user", content: user },
-      ],
-      temperature: 0.35,
-      max_tokens: 2000,
-    });
+    const res = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
+          },
+          { role: "user", content: user },
+        ],
+        temperature: 0.35,
+        max_tokens: 2000,
+      },
+      { purpose: LLM_PURPOSE.FINAL_ANSWER }
+    );
     const chatFallback =
       res.choices[0]?.message?.content?.trim() ||
       "";
@@ -566,6 +581,14 @@ export async function runAgentTurn(
   const onLlmCall = () => {
     llmCalls++;
     if (llmCalls > config.maxTotalLlmCallsPerTurn) {
+      // W6.5 · Cap-hit telemetry. The throw is the existing brake; the log is
+      // new so admin dashboards / Sentry sinks can flag turns that pin the
+      // budget and need investigation (broken replan loop, runaway tool call).
+      agentLog("agent.llm_budget_hit", {
+        turnId,
+        cap: config.maxTotalLlmCallsPerTurn,
+        observed: llmCalls,
+      });
       throw new Error("AGENT_LLM_BUDGET");
     }
   };
@@ -586,6 +609,12 @@ export async function runAgentTurn(
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
+  // W3 · structured AnswerEnvelope emitted by narrator (optional). Threaded
+  // through the agent return → chatStream → assistantSave → Cosmos so the
+  // client can render an AnswerCard.
+  let envelopeAnswerEnvelope:
+    | import("../../../shared/schema.js").Message["answerEnvelope"]
+    | undefined;
   // PR 2.B — dashboard draft emitted when the brief flags requestsDashboard.
   let dashboardDraft:
     | import("../../../shared/schema.js").DashboardSpec
@@ -656,11 +685,28 @@ export async function runAgentTurn(
       lastNumeric = result.numericPayload;
     }
     if (result.charts?.length) {
+      // W7.2 · Provenance: every chart records the tool call that produced it
+      // plus row counts when the tool exposes them via `analyticalMeta`. Lets
+      // the UI show a "where did this come from" popover for trust.
+      const meta = (result as { analyticalMeta?: { inputRowCount?: number; outputRowCount?: number } }).analyticalMeta;
+      const provenance = evidenceCallId
+        ? {
+            toolCalls: [
+              {
+                id: evidenceCallId,
+                tool,
+                ...(typeof meta?.inputRowCount === "number" ? { rowsIn: meta.inputRowCount } : {}),
+                ...(typeof meta?.outputRowCount === "number" ? { rowsOut: meta.outputRowCount } : {}),
+              },
+            ],
+          }
+        : undefined;
       const tag = (c: ChartSpec): ChartSpec => ({
         ...c,
         ...(evidenceCallId ?
           { _agentEvidenceRef: evidenceCallId, _agentTurnId: turnId }
         : {}),
+        ...(provenance ? { _agentProvenance: provenance } : {}),
       });
       if (tool === "build_chart") {
         for (const c of result.charts) {
@@ -1195,6 +1241,7 @@ export async function runAgentTurn(
                 turnId,
                 blackboard: ctx.blackboard,
                 planSteps: plan.steps,
+                charts: mergedCharts,
               },
               onLlmCall
             );
@@ -1593,6 +1640,16 @@ export async function runAgentTurn(
             envCtas = (narResult.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
             envMagnitudes = narResult.magnitudes;
             envUnexplained = narResult.unexplained;
+            // W3 · capture the structured AnswerEnvelope. Each field is optional;
+            // we keep the envelope even when sparsely populated so the UI can
+            // render whatever the narrator produced (TL;DR alone is valuable).
+            const env: NonNullable<import("../../../shared/schema.js").Message["answerEnvelope"]> = {};
+            if (narResult.tldr) env.tldr = narResult.tldr;
+            if (narResult.findings?.length) env.findings = narResult.findings;
+            if (narResult.methodology) env.methodology = narResult.methodology;
+            if (narResult.caveats?.length) env.caveats = narResult.caveats;
+            if (envCtas.length) env.nextSteps = envCtas;
+            if (Object.keys(env).length) envelopeAnswerEnvelope = env;
           }
         }
 
@@ -1714,6 +1771,7 @@ export async function runAgentTurn(
         shouldBuildDashboard({
           brief: ctx.analysisBrief,
           charts: mergedCharts,
+          userKey: ctx.username,
         })
       ) {
         const spec = await buildDashboardFromTurn({
@@ -1800,6 +1858,7 @@ export async function runAgentTurn(
           turnId,
           blackboard: ctx.blackboard,
           planSteps: trace.steps,
+          charts: mergedCharts,
         },
         onLlmCall
       );
@@ -1823,6 +1882,52 @@ export async function runAgentTurn(
         fv.course_correction === VERIFIER_VERDICT.reviseNarrative
       ) {
         const issuesText = fv.issues.map((i) => i.description).join("; ");
+        // W4 · narrator-repair branch.
+        // When the blackboard exists AND the original synthesis path used
+        // the narrator, send the issues back into runNarrator so the rewrite
+        // happens with full structured-evidence context (and on Claude Opus
+        // 4.7 per W2 routing). Caps at 1 narrator-repair attempt; subsequent
+        // rounds (or non-narrator turns) fall through to rewriteNarrative.
+        const canRetryWithNarrator =
+          ctx.blackboard &&
+          shouldUseNarrator(ctx.blackboard) &&
+          ctx.mode === "analysis" &&
+          finalRound === 0;
+        if (canRetryWithNarrator) {
+          const narRepair = await runNarrator(
+            ctx,
+            ctx.blackboard!,
+            turnId,
+            onLlmCall,
+            {
+              issues: issuesText,
+              priorDraft: answer,
+              courseCorrection: fv.course_correction ?? undefined,
+            }
+          );
+          if (narRepair && narRepair.body?.trim()) {
+            answer = formatAnswerFromEnvelope(narRepair.body, narRepair.keyInsight ?? null);
+            // Re-derive envelope surfaces — the repair may have updated them.
+            const env: NonNullable<import("../../../shared/schema.js").Message["answerEnvelope"]> = {};
+            if (narRepair.tldr) env.tldr = narRepair.tldr;
+            if (narRepair.findings?.length) env.findings = narRepair.findings;
+            if (narRepair.methodology) env.methodology = narRepair.methodology;
+            if (narRepair.caveats?.length) env.caveats = narRepair.caveats;
+            if (narRepair.ctas?.length) {
+              const repairedCtas = narRepair.ctas.map((c) => c.trim()).filter(Boolean).slice(0, 3);
+              if (repairedCtas.length) {
+                env.nextSteps = repairedCtas;
+                followUpPrompts = repairedCtas;
+              }
+            }
+            if (Object.keys(env).length) envelopeAnswerEnvelope = env;
+            if (narRepair.magnitudes?.length) envelopeMagnitudes = narRepair.magnitudes;
+            if (narRepair.unexplained) envelopeUnexplained = narRepair.unexplained;
+            finalRound++;
+            continue;
+          }
+          // narrator returned null — fall through to legacy rewrite.
+        }
         answer = await rewriteNarrative(
           ctx,
           answer,
@@ -1875,6 +1980,7 @@ export async function runAgentTurn(
       ...(followUpPrompts?.length ? { followUpPrompts } : {}),
       ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
       ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
+      ...(envelopeAnswerEnvelope ? { answerEnvelope: envelopeAnswerEnvelope } : {}),
       ...(dashboardDraft ? { dashboardDraft } : {}),
       ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),
       ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),

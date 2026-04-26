@@ -33,6 +33,18 @@ import {
 } from "./agentWorkbench.util.js";
 import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
 import { derivePivotDefaultsFromExecutionMerged } from "../../lib/pivotDefaultsFromExecution.js";
+import { upsertPastAnalysisDoc } from "../../models/pastAnalysis.model.js";
+import type { PastAnalysisDoc, PastAnalysisOutcome, ChartSpec } from "../../shared/schema.js";
+import { takeTurnTotals } from "../../lib/telemetry/turnUsageAggregator.js";
+import { indexPastAnalysis } from "../../lib/rag/pastAnalysesStore.js";
+import { normalizeQuestionForCache } from "../../lib/cache/normalizeQuestion.js";
+import { recordTurnSpend } from "../../models/userBudget.model.js";
+import { recordAndCheckTurn as recordAndCheckCostAnomaly } from "../../lib/telemetry/costAnomalyDetector.js";
+import {
+  tryExactQuestionCacheHit,
+  trySemanticQuestionCacheHit,
+  type CacheHit,
+} from "../../lib/cache/questionCacheLookup.js";
 import { normalizePivotValueFieldForBaseTable } from "../../lib/pivotDefaultsFromPreview.js";
 import type { DimensionFilter } from "../../shared/queryTypes.js";
 import {
@@ -58,6 +70,190 @@ export interface ProcessStreamChatParams {
   res: Response;
   /** @deprecated Ignored for routing — classifyMode always runs. Accepted for backward compatibility. */
   mode?: 'general' | 'analysis' | 'dataOps' | 'modeling';
+}
+
+
+/**
+ * W5.2 · Short-circuit the chat-stream handler when an exact cache match exists.
+ * Sends the cached answer over SSE, persists the user/assistant pair, and
+ * returns `true` when served; returns `false` on miss (caller continues with
+ * the normal agent path).
+ *
+ * Why this sits here: we want zero LLM cost when a cache hit is found.
+ * Placing the check after chatDocument load but before classifyMode /
+ * schemaBind / answerQuestion means the hit-path performs no LLM calls.
+ */
+async function serveCachedExactAnswer(params: {
+  hit: CacheHit;
+  res: Response;
+  sessionId: string;
+  username: string;
+  userMessage: string;
+  chatDocument: ChatDocument;
+}): Promise<void> {
+  const { hit, res, sessionId, username, userMessage, chatDocument } = params;
+  const cachedAnswer = hit.doc.answer || "";
+
+  // Informational SSE for telemetry / UI — purely additive, clients can ignore.
+  sendSSE(res, "cache_hit", {
+    source: hit.source,
+    ageMs: hit.ageMs,
+    sourceTurnId: hit.doc.turnId,
+    dataVersion: hit.doc.dataVersion,
+  });
+
+  // Build a minimal response envelope. Clients that already handle the non-
+  // cached shape render this correctly — unused fields are simply empty.
+  sendSSE(res, "response", {
+    answer: cachedAnswer,
+    charts: [],
+    suggestions: [],
+    cached: true,
+    cachedAgeMs: hit.ageMs,
+    cachedSourceTurnId: hit.doc.turnId,
+  });
+  sendSSE(res, "done", {});
+
+  // Persist the pair of messages so the session history stays correct across
+  // cache hits. Missing charts/insights on the assistant row are acceptable —
+  // the original doc still exists in past_analyses + Cosmos for audit.
+  try {
+    const nowMs = Date.now();
+    await addMessagesBySessionId(sessionId, [
+      { role: "user" as const, content: userMessage, timestamp: nowMs - 1 },
+      {
+        role: "assistant" as const,
+        content: cachedAnswer,
+        timestamp: nowMs,
+      },
+    ]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`⚠️ cache-hit message persist failed for ${chatDocument.id}: ${msg}`);
+  }
+
+  if (!res.writableEnded && !res.destroyed) {
+    res.end();
+  }
+  // Identity hint in the log for rollup dashboards.
+  console.log(
+    `💡 served from ${hit.source} cache (ageMs=${hit.ageMs}, sourceTurnId=${hit.doc.turnId}, user=${username})`
+  );
+}
+
+function hashArgs(args: unknown): string {
+  try {
+    const s = JSON.stringify(args) ?? "";
+    // Simple FNV-1a 32-bit — cheap, deterministic, good enough for dedup.
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16);
+  } catch {
+    return "";
+  }
+}
+
+function classifyTurnOutcome(
+  transformedResponse: { answer?: unknown; error?: unknown }
+): PastAnalysisOutcome {
+  const answer = typeof transformedResponse.answer === "string" ? transformedResponse.answer : "";
+  if (/^The analysis agent encountered an error/i.test(answer)) return "verifier_failed";
+  if (transformedResponse.error) return "tool_error";
+  return "ok";
+}
+
+/**
+ * Fire-and-forget writer for the `past_analyses` row after a completed turn.
+ * Swallows every error internally — telemetry / cache data must never affect
+ * the live turn's response path.
+ */
+function maybeWritePastAnalysisDoc(params: {
+  sessionId: string;
+  userId: string;
+  question: string;
+  transformedResponse: any;
+  chatDocument: ChatDocument;
+  turnStartedAt: number;
+}): void {
+  if (process.env.PAST_ANALYSIS_WRITER_ENABLED === "false") return;
+  try {
+    const turnId: string | undefined = params.transformedResponse?.agentTrace?.turnId;
+    if (!turnId) return; // non-agentic paths (legacy) — skip for now
+    const totals = takeTurnTotals(turnId);
+    const answer = typeof params.transformedResponse.answer === "string"
+      ? params.transformedResponse.answer
+      : "";
+    const charts = Array.isArray(params.transformedResponse.charts)
+      ? (params.transformedResponse.charts as ChartSpec[])
+      : undefined;
+    const toolCalls: PastAnalysisDoc["toolCalls"] = (params.transformedResponse?.agentTrace?.toolCalls || [])
+      .slice(0, 40) // cap to keep Cosmos row small
+      .map((tc: any) => ({
+        id: String(tc?.id ?? ""),
+        tool: String(tc?.tool ?? ""),
+        argsHash: hashArgs(tc?.args),
+        ok: Boolean(tc?.ok ?? true),
+      }));
+    const dataVersion =
+      params.chatDocument.currentDataBlob?.version ??
+      params.chatDocument.ragIndex?.dataVersion ??
+      0;
+    const doc: PastAnalysisDoc = {
+      id: `${params.sessionId}__${turnId}`,
+      sessionId: params.sessionId,
+      userId: params.userId.toLowerCase(),
+      turnId,
+      dataVersion,
+      question: params.question,
+      normalizedQuestion: normalizeQuestionForCache(params.question),
+      answer,
+      charts,
+      toolCalls,
+      costUsd: totals?.costUsd ?? 0,
+      latencyMs: Date.now() - params.turnStartedAt,
+      tokenTotals: {
+        input: totals?.tokensInput ?? 0,
+        output: totals?.tokensOutput ?? 0,
+      },
+      outcome: classifyTurnOutcome(params.transformedResponse),
+      feedback: "none",
+      createdAt: Date.now(),
+    };
+    // W6.2 · accumulate cost/tokens against today's user budget. Fire-and-forget;
+    // recordTurnSpend swallows its own errors. Done in parallel with the
+    // past_analyses write so neither blocks the other.
+    void recordTurnSpend({
+      userEmail: params.userId,
+      costUsd: totals?.costUsd ?? 0,
+      tokensInput: totals?.tokensInput ?? 0,
+      tokensOutput: totals?.tokensOutput ?? 0,
+    });
+    // W6.3 · check the per-turn cost ceiling. Fires only on outliers above
+    // COST_ALERT_PER_TURN_USD; persists to cost_alerts container + console.error.
+    void recordAndCheckCostAnomaly({
+      turnId,
+      userEmail: params.userId,
+      sessionId: params.sessionId,
+    });
+    void upsertPastAnalysisDoc(doc)
+      .then(() => {
+        // W2.4 · mirror into the AI Search index for the semantic cache.
+        // Gated by PAST_ANALYSES_INDEX_ENABLED (default off until the index
+        // exists and has been created via `npm run create-past-analyses-index`).
+        if (process.env.PAST_ANALYSES_INDEX_ENABLED !== "true") return;
+        return indexPastAnalysis(doc);
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`⚠️ past_analyses persist failed for turn ${turnId}: ${msg}`);
+      });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`⚠️ past_analyses write preflight failed: ${msg}`);
+  }
 }
 
 function readDimensionFiltersFromParsed(
@@ -353,7 +549,49 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       res.end();
       return;
     }
-    
+
+    // W5.2 · exact-match question cache. No LLM calls on a hit — the cached
+    // answer streams back and we persist the user/assistant pair. Feature-
+    // flagged via QUESTION_CACHE_EXACT_ENABLED; returns null + no-ops when off.
+    const cacheDataVersion =
+      chatDocument.currentDataBlob?.version ??
+      chatDocument.ragIndex?.dataVersion ??
+      0;
+    const exactHit = await tryExactQuestionCacheHit({
+      sessionId,
+      dataVersion: cacheDataVersion,
+      question: message,
+    });
+    if (exactHit) {
+      await serveCachedExactAnswer({
+        hit: exactHit,
+        res,
+        sessionId,
+        username,
+        userMessage: message,
+        chatDocument,
+      });
+      return;
+    }
+    // W5.3 · semantic-similarity cache. Runs only after exact missed so we
+    // never pay the embedding call when the cheaper lookup already answered.
+    const semanticHit = await trySemanticQuestionCacheHit({
+      sessionId,
+      dataVersion: cacheDataVersion,
+      question: message,
+    });
+    if (semanticHit) {
+      await serveCachedExactAnswer({
+        hit: semanticHit,
+        res,
+        sessionId,
+        username,
+        userMessage: message,
+        chatDocument,
+      });
+      return;
+    }
+
     // Get chat-level insights
     const chatLevelInsights = chatDocument.insights && Array.isArray(chatDocument.insights) && chatDocument.insights.length > 0
       ? chatDocument.insights
@@ -729,6 +967,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           }
         : { chatDocument };
 
+    const turnStartedAt = Date.now();
     const result = await answerQuestion(
       latestData,
       message,
@@ -967,6 +1206,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 .unexplained,
             }
           : {}),
+        // W3 · structured AnswerEnvelope from narrator (TL;DR, findings,
+        // methodology, caveats, nextSteps). Optional — absent on synthesizer
+        // fallback turns; the client gracefully falls back to markdown.
+        ...((transformedResponse as { answerEnvelope?: Record<string, unknown> }).answerEnvelope
+          ? {
+              answerEnvelope: (
+                transformedResponse as { answerEnvelope: NonNullable<typeof assistantSave.answerEnvelope> }
+              ).answerEnvelope,
+            }
+          : {}),
         ...((transformedResponse as { dashboardDraft?: Record<string, unknown> }).dashboardDraft
           ? {
               dashboardDraft: (
@@ -1013,6 +1262,18 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if (!checkConnection()) {
       return;
     }
+
+    // W2.3 · fire-and-forget persist of the completed turn for the semantic
+    // cache (W5) and feedback loop (W5.5). Never awaited — response latency
+    // must not depend on Cosmos / AI Search round-trips.
+    maybeWritePastAnalysisDoc({
+      sessionId,
+      userId: username,
+      question: message,
+      transformedResponse,
+      chatDocument,
+      turnStartedAt,
+    });
 
     // Agentic: emit answer first, then charts so the client can render text before heavy chart payloads.
     const splitCharts =

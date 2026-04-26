@@ -104,7 +104,9 @@ export function loadAgentConfigFromEnv(): AgentConfig {
     maxReplansPerStep: num(process.env.AGENT_MAX_REPLANS_PER_STEP, 2),
     maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 100),
     sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
-    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 20_000),
+    // W4 · 20_000 → 24_000. Claude Opus 4.7 has plenty of context headroom;
+    // earlier truncations dropped late-arriving tool observations from synthesis.
+    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 24_000),
   };
 }
 
