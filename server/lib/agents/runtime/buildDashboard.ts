@@ -21,6 +21,7 @@ import {
 } from "../../../shared/schema.js";
 import type { AnalysisBrief as _ } from "../../../shared/schema.js";
 import { completeJson } from "./llmJson.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { agentLog } from "./agentLogger.js";
 import { applyDashboardTemplateLayout } from "./dashboardTemplates.js";
 
@@ -38,19 +39,15 @@ export interface BuildDashboardArgs {
   onLlmCall: () => void;
 }
 
-export function isDashboardAutogenEnabled(): boolean {
-  return process.env.DASHBOARD_AUTOGEN_ENABLED === "true";
-}
-
-export function shouldBuildDashboard(args: {
-  brief?: AnalysisBrief;
-  charts: ChartSpec[];
-}): boolean {
-  if (!isDashboardAutogenEnabled()) return false;
-  if (!args.brief?.requestsDashboard) return false;
-  if (!Array.isArray(args.charts) || args.charts.length === 0) return false;
-  return true;
-}
+// W7.6 · Pure-logic gating moved to ./dashboardAutogenGate.ts so it can be
+// unit-tested without loading the openai module. Re-exported here for
+// backward compatibility with the existing call sites.
+export {
+  isDashboardAutogenEnabled,
+  dashboardAutogenRolloutPct,
+  isUserEnrolledInDashboardAutogenRollout,
+  shouldBuildDashboard,
+} from "./dashboardAutogenGate.js";
 
 /**
  * Produce a DashboardSpec from the current turn's artifacts. Never throws —
@@ -104,6 +101,7 @@ NOT invent numbers. Keep each narrativeBlock.body under 1500 chars.`;
       temperature: 0.2,
       maxTokens: 2200,
       onLlmCall: args.onLlmCall,
+      purpose: LLM_PURPOSE.BUILD_DASHBOARD,
     });
     if (!out.ok) {
       agentLog("buildDashboard.parse_failed", {

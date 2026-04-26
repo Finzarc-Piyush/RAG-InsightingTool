@@ -26,6 +26,8 @@ import { AppLoadingScreen } from "@/components/AppLoadingScreen";
 const Home = lazy(() => import("@/pages/Home/Home"));
 const Dashboard = lazy(() => import("@/pages/Dashboard/Dashboard"));
 const Analysis = lazy(() => import("@/pages/Analysis/Analysis"));
+const AdminCosts = lazy(() => import("@/pages/Admin/AdminCosts"));
+const AdminContextPacks = lazy(() => import("@/pages/Admin/AdminContextPacks"));
 const NotFound = lazy(() => import("@/pages/NotFound/not-found"));
 
 const RouteLoadingFallback = () => (
@@ -141,6 +143,12 @@ function Router() {
                 loadedSessionData={loadedSessionData}
                 onSessionChange={handleSessionChange}
               />
+            </Route>
+            <Route path="/admin/costs">
+              <AdminCosts />
+            </Route>
+            <Route path="/admin/context-packs">
+              <AdminContextPacks />
             </Route>
             <Route>
               <NotFound />

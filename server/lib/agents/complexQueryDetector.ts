@@ -3,7 +3,8 @@
  * Uses AI to detect complex multi-condition queries that require special handling
  */
 import { z } from 'zod';
-import { openai } from '../openai.js';
+import { callLlm } from './runtime/callLlm.js';
+import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';
 import { getModelForTask } from './models.js';
 import { DataSummary, Message } from '../../shared/schema.js';
 
@@ -226,22 +227,25 @@ Set confidence to 0.9+ if clearly complex, 0.7-0.9 if somewhat complex, <0.7 if 
     try {
       const model = getModelForTask('intent');
       
-      const response = await openai.chat.completions.create({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a query complexity analyzer. Output only valid JSON. Be precise in determining query complexity.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.2, // Lower temperature for more consistent detection
-        max_tokens: 300,
-      });
+      const response = await callLlm(
+        {
+          model,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a query complexity analyzer. Output only valid JSON. Be precise in determining query complexity.',
+            },
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.2, // Lower temperature for more consistent detection
+          max_tokens: 300,
+        },
+        { purpose: LLM_PURPOSE.COMPLEX_QUERY_SCORE }
+      );
 
       const content = response.choices[0].message.content;
       if (!content) {

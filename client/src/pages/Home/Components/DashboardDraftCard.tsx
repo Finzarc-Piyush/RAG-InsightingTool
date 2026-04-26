@@ -23,7 +23,9 @@ import { dashboardsApi } from "@/lib/api/dashboards";
 import { dashboardSpecSchema, type DashboardSpec } from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, LayoutDashboard, ArrowUpRight } from "lucide-react";
+import { Loader2, LayoutDashboard, ArrowUpRight, Share2 } from "lucide-react";
+// W7.7 · share the just-created dashboard via the existing analysis-share dialog.
+import { ShareAnalysisDialog } from "@/pages/Analysis/ShareAnalysisDialog";
 
 interface DashboardDraftCardProps {
   /** Raw draft from `message.dashboardDraft` — record<unknown> on the wire. */
@@ -54,6 +56,7 @@ export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps
   >({ kind: "idle" });
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [shareOpen, setShareOpen] = useState(false);
 
   if (!parsed) return null;
 
@@ -116,15 +119,31 @@ export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps
 
         <div className="flex items-center gap-2">
           {status.kind === "created" ? (
-            <Button
-              size="sm"
-              variant="default"
-              onClick={goToDashboard}
-              aria-label="Open the newly created dashboard"
-            >
-              <ArrowUpRight className="h-4 w-4 mr-1" />
-              Open dashboard
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={goToDashboard}
+                aria-label="Open the newly created dashboard"
+              >
+                <ArrowUpRight className="h-4 w-4 mr-1" />
+                Open dashboard
+              </Button>
+              {/* W7.7 · share the saved dashboard with teammates. The existing
+                  ShareAnalysisDialog reads the user's dashboards by sessionId
+                  so the just-created one is pre-listed for selection. */}
+              {sessionId ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShareOpen(true)}
+                  aria-label="Share this dashboard with teammates"
+                >
+                  <Share2 className="h-4 w-4 mr-1" />
+                  Share
+                </Button>
+              ) : null}
+            </>
           ) : (
             <Button
               size="sm"
@@ -145,6 +164,14 @@ export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps
           )}
         </div>
       </CardContent>
+      {sessionId ? (
+        <ShareAnalysisDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          sessionId={sessionId}
+          fileName={parsed.name}
+        />
+      ) : null}
     </Card>
   );
 }

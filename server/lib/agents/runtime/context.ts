@@ -23,6 +23,7 @@ export function buildAgentExecutionContext(params: {
   chatInsights?: Insight[];
   mode: "analysis" | "dataOps" | "modeling";
   permanentContext?: string;
+  domainContext?: string;
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;
   chatDocument?: ChatDocument;
@@ -49,6 +50,7 @@ export function buildAgentExecutionContext(params: {
     chatInsights: params.chatInsights,
     mode: params.mode,
     permanentContext: params.permanentContext,
+    domainContext: params.domainContext,
     sessionAnalysisContext: params.sessionAnalysisContext,
     columnarStoragePath: params.columnarStoragePath,
     chatDocument: params.chatDocument,
@@ -64,11 +66,19 @@ export function buildAgentExecutionContext(params: {
 /** Shared user notes + session JSON blocks (used by planner summary and reflector). */
 export function formatUserAndSessionJsonBlocks(
   ctx: AgentExecutionContext,
-  opts: { maxUserChars: number; maxJsonChars: number }
+  opts: { maxUserChars: number; maxJsonChars: number; maxDomainChars?: number }
 ): string {
   let s = "";
   if (ctx.permanentContext?.trim().length) {
     s += `\nUser-provided notes (verbatim):\n${ctx.permanentContext.trim().slice(0, opts.maxUserChars)}`;
+  }
+  if (ctx.domainContext?.trim().length) {
+    const cap = opts.maxDomainChars ?? 12000;
+    s +=
+      `\nDomain knowledge (Marico/FMCG; authored background context — ` +
+      `treat as orientation only, never as numeric evidence; tool output and ` +
+      `RAG citations remain authoritative for any figure):\n` +
+      ctx.domainContext.trim().slice(0, cap);
   }
   if (ctx.sessionAnalysisContext) {
     s += `\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, opts.maxJsonChars)}`;
@@ -81,6 +91,7 @@ export function appendixForReflectorPrompt(ctx: AgentExecutionContext): string {
   return formatUserAndSessionJsonBlocks(ctx, {
     maxUserChars: 2000,
     maxJsonChars: 5000,
+    maxDomainChars: 6000,
   });
 }
 
@@ -160,6 +171,7 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const blocks = formatUserAndSessionJsonBlocks(ctx, {
     maxUserChars: 6000,
     maxJsonChars: 12000,
+    maxDomainChars: 12000,
   });
   const temporal = detectPeriodFromQuery(ctx.question);
   const temporalLine = temporal

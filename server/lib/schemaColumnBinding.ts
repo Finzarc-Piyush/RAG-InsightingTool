@@ -3,7 +3,9 @@
  * to exact DataSummary column names (no row filtering — fast path).
  */
 import type { DataSummary, Message } from "../shared/schema.js";
-import { openai, MODEL } from "./openai.js";
+import { MODEL } from "./openai.js";
+import { callLlm } from "./agents/runtime/callLlm.js";
+import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
 import { resolveToSchemaColumn } from "./agents/runtime/plannerColumnResolve.js";
 
 export interface SchemaColumnBindingResult {
@@ -102,20 +104,23 @@ OUTPUT FORMAT (JSON only):
 Output ONLY valid JSON.`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You map analytical questions to dataset columns. Output only valid JSON. Every column name must appear in AVAILABLE COLUMNS.",
-        },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.1,
-      max_tokens: 900,
-      response_format: { type: "json_object" },
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You map analytical questions to dataset columns. Output only valid JSON. Every column name must appear in AVAILABLE COLUMNS.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 900,
+        response_format: { type: "json_object" },
+      },
+      { purpose: LLM_PURPOSE.SCHEMA_BIND }
+    );
 
     const content = response.choices[0]?.message?.content;
     if (!content) {

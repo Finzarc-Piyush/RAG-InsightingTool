@@ -110,6 +110,20 @@ export async function runDeepInvestigation(
   let tree: InvestigationTree;
   const threads = await decomposeQuestion(ctx, `di_${Date.now()}`, () => {});
 
+  if (threads && threads.length > 0) {
+    try {
+      onAgentEvent?.("flow_decision", {
+        layer: "coordinator-decompose",
+        chosen: "multi-thread",
+        overriddenBy: "coordinatorAgent",
+        reason: `Decomposed root question into ${threads.length} parallel thread(s) (single-turn plan abandoned).`.slice(0, 500),
+        candidates: threads.slice(0, 8).map((t) => t.question.slice(0, 200)),
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
   // O5: derive a request-scoped prefix to prevent node ID collisions in concurrent investigations.
   const idPrefix = `${(ctx.sessionId ?? "").slice(-6)}_${Date.now().toString(36)}_`;
 

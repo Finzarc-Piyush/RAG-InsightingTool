@@ -1,6 +1,8 @@
 import type { AgentExecutionContext } from "./types.js";
 import { reflectorOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
+import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { appendixForReflectorPrompt } from "./context.js";
 import { formatForPlanner } from "./analyticalBlackboard.js";
 
@@ -24,7 +26,11 @@ export async function runReflector(
   onLlmCall: () => void,
   interAgentDigest?: string
 ) {
-  const system = `You are the reflector for a data agent. Decide the next strategic action.
+  // W4.2 · ANALYST_PREAMBLE prepended (~520 tokens) so this system string clears
+  // Azure OpenAI's 1024-token cache threshold. Below the preamble is purely
+  // static text — every dynamic bit (question, observations, blackboard) is in
+  // the user message.
+  const system = `${ANALYST_PREAMBLE}You are the reflector for a data agent. Decide the next strategic action.
 Output JSON only: {"action":"continue"|"replan"|"finish"|"clarify"|"investigate_gap","note":string optional,"clarify_message":string optional,"spawnedQuestions":[...] optional,"gapFill":{...} optional}
 - continue: more planned steps should run
 - finish: we have enough to answer the user
@@ -60,6 +66,7 @@ W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE
     turnId,
     temperature: 0.2,
     onLlmCall,
+    purpose: LLM_PURPOSE.REFLECTOR,
   });
   if (!out.ok) {
     return { action: "continue" as const, note: "reflector_parse_failed" };

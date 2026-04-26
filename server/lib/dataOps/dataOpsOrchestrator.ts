@@ -6,7 +6,8 @@ import { Message, DataSummary } from '../../shared/schema.js';
 import { removeNulls, getDataPreview, getDataSummary, convertDataType, createDerivedColumn, trainMLModel, aggregateData, createPivotTable, identifyOutliers, treatOutliers } from './pythonService.js';
 import { saveModifiedData } from './dataPersistence.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
-import { openai } from '../openai.js';
+import { callLlm } from '../agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from '../agents/runtime/llmCallPurpose.js';
 import { getFileFromBlob } from '../blobStorage.js';
 import { parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
 import {
@@ -2069,19 +2070,22 @@ Return ONLY valid JSON, no other text.`;
     console.log(`🤖 Sending AI prompt for intent detection. Message: "${message}"`);
     console.log(`📋 Available columns (${availableColumns.length}): ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
     
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: 'You are an expert data operations assistant. You must return ONLY valid JSON. Match column names EXACTLY as they appear in the available columns list. Never truncate your response - always return complete JSON.' 
-        },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.2, // Lower temperature for more consistent, accurate responses
-      max_tokens: 600, // Increased from 200 to prevent truncation
-      response_format: { type: 'json_object' }, // Force JSON output format
-    });
+    const response = await callLlm(
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data operations assistant. You must return ONLY valid JSON. Match column names EXACTLY as they appear in the available columns list. Never truncate your response - always return complete JSON.'
+          },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2, // Lower temperature for more consistent, accurate responses
+        max_tokens: 600, // Increased from 200 to prevent truncation
+        response_format: { type: 'json_object' }, // Force JSON output format
+      },
+      { purpose: LLM_PURPOSE.DATAOPS_INTENT }
+    );
     
     console.log(`🤖 AI response received, parsing...`);
 
@@ -2772,15 +2776,18 @@ Return JSON:
   "defaultValue": "value" | number | boolean | null
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You extract column names and default values from natural language. Return only valid JSON.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 200,
-    });
+    const response = await callLlm(
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You extract column names and default values from natural language. Return only valid JSON.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 200,
+      },
+      { purpose: LLM_PURPOSE.DATAOPS_DEFAULTS }
+    );
 
     const content = response.choices[0]?.message?.content?.trim();
     if (!content) return null;
@@ -2969,15 +2976,18 @@ Return JSON:
   "features": ["Column1", "Column2", "Column3"]
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You extract ML model parameters from natural language. Return only valid JSON.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 300,
-    });
+    const response = await callLlm(
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You extract ML model parameters from natural language. Return only valid JSON.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 300,
+      },
+      { purpose: LLM_PURPOSE.DATAOPS_ML_PARAMS }
+    );
 
     const content = response.choices[0]?.message?.content?.trim();
     if (!content) return null;
@@ -3220,18 +3230,21 @@ Return JSON:
   "expression": "[Column1] + [Column2]" or "np.where([Column1] > [Column1].mean(), 'value1', 'value2')"
 }`;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: 'You are an expert data analyst who understands business metrics, financial calculations, and statistical measures. You intelligently infer formulas from metric names using your knowledge. Return only valid JSON.' 
-        },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 500,
-    });
+    const response = await callLlm(
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data analyst who understands business metrics, financial calculations, and statistical measures. You intelligently infer formulas from metric names using your knowledge. Return only valid JSON.'
+          },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 500,
+      },
+      { purpose: LLM_PURPOSE.DATAOPS_COMPUTED_COL }
+    );
 
     const content = response.choices[0]?.message?.content?.trim();
     if (!content) return null;

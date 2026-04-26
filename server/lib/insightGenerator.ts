@@ -1,5 +1,6 @@
 import { ChartSpec, DataSummary, Insight } from '../shared/schema.js';
-import { openai } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import type { ChartInsightSynthesisContext } from './insightSynthesis/types.js';
 import { formatSessionAnalysisContextForInsight } from './insightSynthesis/formatSessionContext.js';
 import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
@@ -407,19 +408,22 @@ OUTPUT JSON (exact keys only):
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: getInsightModel() as string,
-      messages: [
-        {
-          role: 'system',
-          content: `You are a senior analyst. Output JSON with a single key "keyInsight": 1–3 sentences interpreting the chart using ONLY provided numbers. Connect metrics to implications (segments, concentration, tradeoffs, what to test next) where justified. Never use percentile shorthand like P75 or P90—use numeric values. No markdown bold/headers in the string.`,
-        },
-        { role: 'user', content: prompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: getInsightTemperature(),
-      max_tokens: 900,
-    });
+    const response = await callLlm(
+      {
+        model: getInsightModel() as string,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a senior analyst. Output JSON with a single key "keyInsight": 1–3 sentences interpreting the chart using ONLY provided numbers. Connect metrics to implications (segments, concentration, tradeoffs, what to test next) where justified. Never use percentile shorthand like P75 or P90—use numeric values. No markdown bold/headers in the string.`,
+          },
+          { role: 'user', content: prompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: getInsightTemperature(),
+        max_tokens: 900,
+      },
+      { purpose: LLM_PURPOSE.INSIGHT_GEN }
+    );
 
     const content = response.choices[0].message.content || '{}';
     const result = JSON.parse(content);

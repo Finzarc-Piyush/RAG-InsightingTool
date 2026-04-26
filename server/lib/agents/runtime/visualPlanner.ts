@@ -4,6 +4,7 @@
 import { z } from "zod";
 import type { AgentExecutionContext } from "./types.js";
 import { completeJson } from "./llmJson.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
@@ -230,6 +231,7 @@ export async function proposeAndBuildExtraCharts(
     maxTokens: 600,
     temperature: 0.25,
     onLlmCall,
+    purpose: LLM_PURPOSE.VISUAL_PLANNER,
   });
 
   if (!out.ok) {

@@ -3,6 +3,7 @@ import {
   type DatasetProfile,
 } from '../shared/schema.js';
 import { completeJson } from './agents/runtime/llmJson.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 
 export type { DatasetProfile };
 export { datasetProfileSchema };
@@ -77,7 +78,7 @@ export async function inferDatasetProfile(
       SYSTEM_PROMPT,
       userContent,
       datasetProfileSchema,
-      { maxTokens: 2048, temperature: 0.2, turnId: 'dataset_profile' }
+      { maxTokens: 2048, temperature: 0.2, turnId: 'dataset_profile', purpose: LLM_PURPOSE.DATASET_PROFILE }
     );
     if (!result.ok) {
       console.warn('⚠️ inferDatasetProfile: LLM parse failed:', result.error);

@@ -8,6 +8,7 @@ import {
   type SessionAnalysisContext,
 } from "../shared/schema.js";
 import { completeJson } from "./agents/runtime/llmJson.js";
+import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
 import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
 import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
 
@@ -94,6 +95,7 @@ export async function seedSessionAnalysisContextLLM(params: {
     turnId: "session_ctx_seed",
     maxTokens: 4096,
     temperature: 0.2,
+    purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
     console.warn("⚠️ seedSessionAnalysisContextLLM failed:", out.error);
@@ -137,6 +139,7 @@ export async function regenerateStarterQuestionsLLM(params: {
       turnId: "starter_questions_regen",
       maxTokens: 1024,
       temperature: 0.3,
+      purpose: LLM_PURPOSE.SUGGEST_FOLLOW_UPS,
     }
   );
   if (!out.ok) {
@@ -165,6 +168,7 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
     turnId: "session_ctx_user",
     maxTokens: 4096,
     temperature: 0.2,
+    purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
     console.warn("⚠️ mergeSessionAnalysisContextUserLLM failed:", out.error);
@@ -217,6 +221,7 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     turnId: "session_ctx_assistant",
     maxTokens: 4096,
     temperature: 0.2,
+    purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
     console.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);

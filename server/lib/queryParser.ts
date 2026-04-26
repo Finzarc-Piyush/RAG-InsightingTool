@@ -1,4 +1,6 @@
-import { openai, MODEL } from './openai.js';
+import { MODEL } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import {
   ParsedQuery,
   TimeFilter,
@@ -563,16 +565,19 @@ Output valid JSON with the following structure:
 }
 Ensure the JSON is strict and contains no comments.`;
 
-  const response = await openai.chat.completions.create({
-    model: MODEL as string,
-    messages: [
-      { role: 'system', content: 'You convert natural language questions into structured filter objects for data analysis.' },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0,
-    max_tokens: 1000,
-    response_format: { type: 'json_object' },
-  });
+  const response = await callLlm(
+    {
+      model: MODEL as string,
+      messages: [
+        { role: 'system', content: 'You convert natural language questions into structured filter objects for data analysis.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0,
+      max_tokens: 1000,
+      response_format: { type: 'json_object' },
+    },
+    { purpose: LLM_PURPOSE.QUERY_PARSE }
+  );
 
   const content = response.choices[0]?.message?.content;
   if (!content) {

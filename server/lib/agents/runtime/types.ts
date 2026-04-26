@@ -166,6 +166,13 @@ export interface AgentExecutionContext {
   chatInsights?: Insight[];
   mode: "analysis" | "dataOps" | "modeling";
   permanentContext?: string;
+  /**
+   * WD7 · Composed domain knowledge (Marico/FMCG packs) — emitted into the
+   * planner and reflector user-message context. Authored background only;
+   * never used as numeric evidence (verifier still demands tool/RAG support
+   * for figures).
+   */
+  domainContext?: string;
   /** Rolling LLM JSON context (seed + user + assistant merges). */
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;

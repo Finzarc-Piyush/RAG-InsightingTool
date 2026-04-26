@@ -135,6 +135,7 @@ flowchart LR
 **Shared schema** (message fields)
 
 - [server/shared/schema.ts](../server/shared/schema.ts) and [client/src/shared/schema.ts](../client/src/shared/schema.ts) — `agentWorkbench`, `AgentWorkbenchEntry`, thinking / trace shapes.
+- **Flow visibility (Wave W1)**: `AgentWorkbenchEntry` now supports `kind: "flow_decision"` with a structured `flowDecision: { layer, chosen, overriddenBy?, reason?, confidence?, candidates? }` payload. Used to surface routing decisions and silent overrides (mode-vs-intent, reflector replan, verifier rewriteNarrative, coordinator decompose) so users can see which flow won.
 
 **Client**
 

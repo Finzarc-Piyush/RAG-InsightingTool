@@ -1,6 +1,7 @@
 import { ChartSpec, Insight, DataSummary } from '../shared/schema.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
-import { openai } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { generateStreamingCorrelationChart } from './streamingCorrelationAnalyzer.js';
@@ -459,22 +460,25 @@ Write exactly ${insightCount} insights (one per variable, strongest correlation 
 
 Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${insightCount} items.`;
 
-  const response = await openai.chat.completions.create({
-    model: getInsightModel(),
-    messages: [
-      {
-        role: 'system',
-        content: `You are a senior data analyst. Return valid JSON: {"insights":[{"text":"..."}]}. Each text must include r and n, interpretation grounded in the provided stats, and end with "Reminder: Correlation does not imply causation." Do not use P75/P90 shorthand—use numeric values from the prompt.`,
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: getBatchInsightTemperature(),
-    max_tokens: Math.min(2000 + Math.max(0, (insightCount - 7) * 200), 10000),
-  });
+  const response = await callLlm(
+    {
+      model: getInsightModel(),
+      messages: [
+        {
+          role: 'system',
+          content: `You are a senior data analyst. Return valid JSON: {"insights":[{"text":"..."}]}. Each text must include r and n, interpretation grounded in the provided stats, and end with "Reminder: Correlation does not imply causation." Do not use P75/P90 shorthand—use numeric values from the prompt.`,
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: getBatchInsightTemperature(),
+      max_tokens: Math.min(2000 + Math.max(0, (insightCount - 7) * 200), 10000),
+    },
+    { purpose: LLM_PURPOSE.CORRELATION_INSIGHT }
+  );
 
   const content = response.choices[0].message.content || '{}';
   console.log('📝 Raw AI response for correlation insights (first 1000 chars):', content.substring(0, 1000));

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { openai } from '../openai.js';
+import { callLlm } from './runtime/callLlm.js';
+import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';
 import { getModelForTask } from './models.js';
 import { DataSummary, Message } from '../../shared/schema.js';
 
@@ -342,22 +343,25 @@ OUTPUT FORMAT (JSON only, no markdown):
     try {
       const model = getModelForTask('intent');
       
-      const response = await openai.chat.completions.create({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an intent classifier. Output only valid JSON. Be precise and extract all relevant information from the user query.',
-          },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.3, // Lower temperature for more consistent classification
-        max_tokens: 500,
-      });
+      const response = await callLlm(
+        {
+          model,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an intent classifier. Output only valid JSON. Be precise and extract all relevant information from the user query.',
+            },
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.3, // Lower temperature for more consistent classification
+          max_tokens: 500,
+        },
+        { purpose: LLM_PURPOSE.INTENT_CLASSIFY }
+      );
 
       const content = response.choices[0].message.content;
       if (!content) {

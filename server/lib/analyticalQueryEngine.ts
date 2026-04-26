@@ -4,7 +4,9 @@
  * User Question → Azure OpenAI (Execution Plan) → Python Engine → Results → Azure OpenAI (Explanation)
  */
 
-import { openai, MODEL } from './openai.js';
+import { MODEL } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { DataSummary, Message } from '../shared/schema.js';
 import { checkPythonServiceHealth } from './dataOps/pythonService.js';
 
@@ -249,22 +251,25 @@ Question: "Which categories crossed ₹1 crore in revenue in a single month, cou
 Output ONLY valid JSON, no markdown, no explanations:`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert data analyst who identifies relevant columns from datasets. Output only valid JSON.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 1000,
-      response_format: { type: 'json_object' },
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data analyst who identifies relevant columns from datasets. Output only valid JSON.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 1000,
+        response_format: { type: 'json_object' },
+      },
+      { purpose: LLM_PURPOSE.COLUMN_MATCH }
+    );
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
@@ -574,22 +579,25 @@ Output ONLY valid JSON, no markdown, no explanations:
 `;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert data analyst who creates execution plans for analytical queries. Output only valid JSON.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 2000,
-      response_format: { type: 'json_object' },
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data analyst who creates execution plans for analytical queries. Output only valid JSON.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' },
+      },
+      { purpose: LLM_PURPOSE.SQL_GEN }
+    );
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
@@ -1034,22 +1042,25 @@ OUTPUT FORMAT (JSON only):
 Output ONLY valid JSON, no markdown, no explanations:`;
 
   try {
-    const columnResponse = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an expert data analyst who identifies relevant columns from datasets. Output only valid JSON.',
-        },
-        {
-          role: 'user',
-          content: columnIdentificationPrompt,
-        },
-      ],
-      temperature: 0.1,
-      max_tokens: 1000,
-      response_format: { type: 'json_object' },
-    });
+    const columnResponse = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert data analyst who identifies relevant columns from datasets. Output only valid JSON.',
+          },
+          {
+            role: 'user',
+            content: columnIdentificationPrompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 1000,
+        response_format: { type: 'json_object' },
+      },
+      { purpose: LLM_PURPOSE.COLUMN_MATCH }
+    );
 
     const columnContent = columnResponse.choices[0]?.message?.content;
     if (!columnContent) {
@@ -1133,21 +1144,24 @@ GUIDELINES:
 Answer:`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a helpful data analyst assistant who explains query results in a clear, conversational way.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      temperature: 0.7,
-      max_tokens: 1000,
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a helpful data analyst assistant who explains query results in a clear, conversational way.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 1000,
+      },
+      { purpose: LLM_PURPOSE.INSIGHT_GEN }
+    );
 
     return response.choices[0]?.message?.content || 'Unable to generate explanation.';
   } catch (error) {

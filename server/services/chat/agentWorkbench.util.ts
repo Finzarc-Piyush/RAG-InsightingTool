@@ -143,6 +143,51 @@ export function agentSseEventToWorkbenchEntries(
     return out;
   }
 
+  if (event === "flow_decision" && data && typeof data === "object") {
+    const f = data as {
+      layer?: string;
+      chosen?: string;
+      overriddenBy?: string;
+      reason?: string;
+      confidence?: number;
+      candidates?: string[];
+    };
+    const layer = (f.layer || "unknown").slice(0, 80);
+    const chosen = (f.chosen || "?").slice(0, 120);
+    const overriddenBy = f.overriddenBy ? f.overriddenBy.slice(0, 120) : undefined;
+    const title = overriddenBy
+      ? `Override: ${layer} → ${chosen}`
+      : `Routed: ${layer} → ${chosen}`;
+    const lines = [
+      `layer: ${layer}`,
+      `chosen: ${chosen}`,
+      overriddenBy ? `overriddenBy: ${overriddenBy}` : "",
+      typeof f.confidence === "number" ? `confidence: ${f.confidence.toFixed(2)}` : "",
+      f.candidates?.length ? `candidates: ${f.candidates.slice(0, 8).join(", ")}` : "",
+      f.reason ? `reason: ${f.reason}` : "",
+    ].filter(Boolean);
+    out.push({
+      id: `fd-${ts}-${Math.random().toString(36).slice(2, 10)}`,
+      kind: "flow_decision",
+      title: title.slice(0, 500),
+      code: truncateCode(lines.join("\n")),
+      language: "text",
+      flowDecision: {
+        layer,
+        chosen,
+        ...(overriddenBy ? { overriddenBy } : {}),
+        ...(typeof f.confidence === "number" && f.confidence >= 0 && f.confidence <= 1
+          ? { confidence: f.confidence }
+          : {}),
+        ...(f.candidates?.length
+          ? { candidates: f.candidates.slice(0, 8).map((c) => String(c).slice(0, 200)) }
+          : {}),
+        ...(f.reason ? { reason: String(f.reason).slice(0, 500) } : {}),
+      },
+    });
+    return out;
+  }
+
   if (event === "critic_verdict" && data && typeof data === "object") {
     const c = data as CriticSse;
     // Per-step critic still runs server-side; workbench shows only final synthesis review by default.

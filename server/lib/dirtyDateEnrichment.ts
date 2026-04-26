@@ -94,6 +94,7 @@ async function defaultMapBatch(args: {
   values: string[];
 }): Promise<{ ok: true; map: Map<string, string | null> } | { ok: false; error: string }> {
   const { completeJson } = await import('./agents/runtime/llmJson.js');
+  const { LLM_PURPOSE } = await import('./agents/runtime/llmCallPurpose.js');
   const user = JSON.stringify({
     fileName: args.fileName,
     sourceColumn: args.sourceColumn,
@@ -103,6 +104,7 @@ async function defaultMapBatch(args: {
     maxTokens: 2048,
     temperature: 0.1,
     turnId: 'dirty_date_map_batch',
+    purpose: LLM_PURPOSE.DATE_ENRICH,
   });
   if (!out.ok) return { ok: false, error: out.error };
   const map = new Map<string, string | null>();

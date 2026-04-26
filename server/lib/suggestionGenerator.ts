@@ -1,4 +1,6 @@
-import { openai, MODEL } from './openai.js';
+import { MODEL } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { Message, DataSummary } from '../shared/schema.js';
 
 function normalizeForDedup(s: string): string {
@@ -79,22 +81,25 @@ Output JSON only:
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a helpful data analyst assistant. Generate concise, actionable follow-up questions based on conversation context. Output valid JSON only.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7,
-      max_tokens: 200,
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a helpful data analyst assistant. Generate concise, actionable follow-up questions based on conversation context. Output valid JSON only.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.7,
+        max_tokens: 200,
+      },
+      { purpose: LLM_PURPOSE.SUGGEST_FOLLOW_UPS }
+    );
 
     const content = response.choices[0].message.content || '{}';
     const parsed = JSON.parse(content);

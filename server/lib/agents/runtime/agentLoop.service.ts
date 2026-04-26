@@ -1268,6 +1268,7 @@ export async function runAgentTurn(
               verdict.course_correction === VERIFIER_VERDICT.reviseNarrative
             ) {
               const issuesText = verdict.issues.map((i) => i.description).join("; ");
+              const _origLen = candidate.length;
               candidate = await rewriteNarrative(
                 ctx,
                 candidate,
@@ -1275,6 +1276,13 @@ export async function runAgentTurn(
                 onLlmCall,
                 evidence
               );
+              safeEmit("flow_decision", {
+                layer: "verifier-rewrite-step",
+                chosen: "rewritten",
+                overriddenBy: "verifier",
+                reason: `${issuesText.slice(0, 400)} | ${_origLen}→${candidate.length} chars`.slice(0, 500),
+                candidates: verdict.issues.map((i) => i.code).slice(0, 8),
+              });
               vRound++;
               continue;
             }
@@ -1548,6 +1556,13 @@ export async function runAgentTurn(
               },
               safeEmit
             );
+            safeEmit("flow_decision", {
+              layer: "reflector-replan",
+              chosen: "new-plan",
+              overriddenBy: "reflector",
+              reason: (ref.note ?? `replan after ${step.tool}`).slice(0, 500),
+              candidates: plan.steps.slice(0, 8).map((s) => `${s.id}:${s.tool}`),
+            });
             replans++;
             void maybeMidTurn({
               phase: "plan_replan",
@@ -1928,6 +1943,7 @@ export async function runAgentTurn(
           }
           // narrator returned null — fall through to legacy rewrite.
         }
+        const _finalOrigLen = answer.length;
         answer = await rewriteNarrative(
           ctx,
           answer,
@@ -1935,6 +1951,13 @@ export async function runAgentTurn(
           onLlmCall,
           finalEvidence
         );
+        safeEmit("flow_decision", {
+          layer: "verifier-rewrite-final",
+          chosen: "rewritten",
+          overriddenBy: "verifier",
+          reason: `${issuesText.slice(0, 400)} | ${_finalOrigLen}→${answer.length} chars`.slice(0, 500),
+          candidates: fv.issues.map((i) => i.code).slice(0, 8),
+        });
         finalRound++;
         continue;
       }

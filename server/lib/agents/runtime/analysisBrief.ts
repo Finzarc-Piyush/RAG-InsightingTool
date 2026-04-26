@@ -56,11 +56,13 @@ comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly 
   const user = `Question:\n${ctx.question.slice(0, 4000)}\n\nColumns:\n${columnListForBrief(ctx)}\n\nNumeric columns: ${(ctx.summary.numericColumns || []).join(", ")}\nDate columns: ${(ctx.summary.dateColumns || []).join(", ")}${inferredBlock}`;
 
   const { completeJson } = await import("./llmJson.js");
+  const { LLM_PURPOSE } = await import("./llmCallPurpose.js");
   const out = await completeJson(system, user, analysisBriefSchema, {
     turnId,
     temperature: 0.15,
     maxTokens: 1200,
     onLlmCall,
+    purpose: LLM_PURPOSE.ANALYSIS_BRIEF,
   });
   if (!out.ok) return;
   ctx.analysisBrief = mergeInferredFiltersIntoBrief(out.data, ctx.inferredFilters);

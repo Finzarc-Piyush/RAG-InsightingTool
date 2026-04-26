@@ -55,6 +55,14 @@ router.patch(
 );
 router.post('/dashboards/:dashboardId/export', exportDashboardController);
 
+// W7.3 / W7.4 — XLSX + PPTX downloadable exports of a saved dashboard.
+import {
+  exportDashboardXlsxController,
+  exportDashboardPptxController,
+} from "../controllers/dashboardExportController.js";
+router.get('/dashboards/:id/export/xlsx', exportDashboardXlsxController);
+router.get('/dashboards/:id/export/pptx', exportDashboardPptxController);
+
 export default router;
 
 

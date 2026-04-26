@@ -10,6 +10,8 @@ import rateLimit from "express-rate-limit";
 import { corsConfig } from "./middleware/index.js";
 import { requireAzureAdAuth } from "./middleware/azureAdAuth.js";
 import { registerRoutes } from "./routes/index.js";
+import { startDefaultLlmUsageSink } from "./lib/telemetry/llmUsageSink.js";
+import { logDomainContextStartup } from "./lib/domainContext/loadEnabledDomainContext.js";
 
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
 
@@ -37,6 +39,11 @@ const authPreflightLimiter = rateLimit({
 export function createApp() {
   assertAgenticRagConfiguration();
   assertDashboardAutogenConfiguration();
+  // W1.3 · subscribe the telemetry sink to the LLM usage emitter. Idempotent;
+  // no-op when LLM_USAGE_TELEMETRY_ENABLED=false.
+  startDefaultLlmUsageSink();
+  // WD7 · log enabled domain-context packs at boot (best-effort; never blocks)
+  void logDomainContextStartup();
   const app = express();
   if (process.env.TRUST_PROXY === "true" || process.env.VERCEL) {
     app.set("trust proxy", 1);

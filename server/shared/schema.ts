@@ -113,7 +113,25 @@ export const agentWorkbenchEntryKindSchema = z.enum([
   "critic",
   "query_spec",
   "handoff",
+  "flow_decision",
 ]);
+
+/**
+ * Structured payload for `kind: "flow_decision"` entries. Used to surface routing
+ * & override decisions (agentic vs legacy, mode vs intent, reflector replan,
+ * verifier rewriteNarrative, coordinator decompose) in the workbench timeline so
+ * users can see which flow won and why.
+ */
+export const flowDecisionDetailSchema = z.object({
+  layer: z.string().max(80),
+  chosen: z.string().max(120),
+  overriddenBy: z.string().max(120).optional(),
+  reason: z.string().max(500).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  candidates: z.array(z.string().max(200)).max(8).optional(),
+});
+
+export type FlowDecisionDetail = z.infer<typeof flowDecisionDetailSchema>;
 
 export const agentWorkbenchEntrySchema = z.object({
   id: z.string().max(200),
@@ -122,6 +140,8 @@ export const agentWorkbenchEntrySchema = z.object({
   /** Display text (JSON, pseudo-code, etc.); cap enforced when appending server-side */
   code: z.string().max(24000),
   language: z.string().max(32).optional(),
+  /** Present only for `kind: "flow_decision"`; structured routing/override payload. */
+  flowDecision: flowDecisionDetailSchema.optional(),
 });
 
 export type AgentWorkbenchEntry = z.infer<typeof agentWorkbenchEntrySchema>;

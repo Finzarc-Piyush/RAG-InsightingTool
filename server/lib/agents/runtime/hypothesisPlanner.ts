@@ -9,6 +9,8 @@
 
 import { z } from "zod";
 import { completeJson } from "./llmJson.js";
+import { LLM_PURPOSE } from "./llmCallPurpose.js";
+import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { agentLog } from "./agentLogger.js";
 import {
   addHypothesis,
@@ -60,7 +62,10 @@ export async function generateHypotheses(
   turnId: string,
   onLlmCall: () => void
 ): Promise<boolean> {
-  const system = `You are an investigation planner for a data analysis assistant.
+  // W4.2 · ANALYST_PREAMBLE prefix → cache eligibility (>1024 tokens). System
+  // is purely static; the per-turn dataset/question/brief lives in user via
+  // buildUserBlock(ctx).
+  const system = `${ANALYST_PREAMBLE}You are an investigation planner for a data analysis assistant.
 Given a user question and dataset schema, generate 3 to 5 concise testable hypotheses
 that would, if confirmed or refuted by the data, fully explain the user's question.
 
@@ -79,6 +84,7 @@ Rules:
     temperature: 0.3,
     turnId,
     onLlmCall,
+    purpose: LLM_PURPOSE.HYPOTHESIS,
   });
 
   if (!result.ok) {

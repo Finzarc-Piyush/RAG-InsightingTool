@@ -12,6 +12,8 @@ import sharedDashboardRoutes from "./sharedDashboards.js";
 import dataOpsRoutes from "./dataOps.js";
 import dataApiRoutes from "./dataApi.js";
 import snowflakeRoutes from "./snowflake.js";
+import feedbackRoutes from "./feedback.js";
+import adminRoutes from "./admin.js";
 
 export function registerRoutes(app: Express): Server | void {
   // Register route modules
@@ -27,6 +29,8 @@ export function registerRoutes(app: Express): Server | void {
   app.use('/api', sharedDashboardRoutes);
   app.use('/api', dataOpsRoutes);
   app.use('/api/data', dataApiRoutes);
+  app.use('/api', feedbackRoutes);
+  app.use('/api', adminRoutes);
 
   // For Vercel, we don't need to create HTTP server
   if (process.env.VERCEL) {

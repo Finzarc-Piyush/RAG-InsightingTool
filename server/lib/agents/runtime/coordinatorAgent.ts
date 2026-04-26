@@ -103,11 +103,13 @@ Columns (${ctx.summary.columns.length} total): ${cols}
 ${ctx.analysisBrief ? `Question shape: ${ctx.analysisBrief.questionShape ?? "unknown"}` : ""}`;
 
   const { completeJson } = await import("./llmJson.js");
+  const { LLM_PURPOSE } = await import("./llmCallPurpose.js");
   const result = await completeJson(system, user, coordinatorOutputSchema, {
     turnId: `${turnId}_coordinator`,
     maxTokens: 800,
     temperature: 0.2,
     onLlmCall,
+    purpose: LLM_PURPOSE.COORDINATOR,
   });
 
   if (!result.ok) {

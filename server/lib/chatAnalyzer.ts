@@ -4,7 +4,9 @@
  * This replaces RegEx-based analysis with AI-powered understanding
  */
 
-import { openai, MODEL } from './openai.js';
+import { MODEL } from './openai.js';
+import { callLlm } from './agents/runtime/callLlm.js';
+import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { DataSummary } from '../shared/schema.js';
 
 export interface ChatAnalysisResult {
@@ -77,22 +79,25 @@ IMPORTANT:
 - Every name in relevantColumns must be spelled exactly as in AVAILABLE COLUMNS (case-sensitive).`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL as string,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a data analysis assistant. Analyze user messages to understand their intent and identify relevant columns. Always return valid JSON.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7,
-      max_tokens: 1000,
-    });
+    const response = await callLlm(
+      {
+        model: MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a data analysis assistant. Analyze user messages to understand their intent and identify relevant columns. Always return valid JSON.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.7,
+        max_tokens: 1000,
+      },
+      { purpose: LLM_PURPOSE.INTENT_CLASSIFY }
+    );
 
     const content = response.choices[0].message.content || '{}';
     const parsed = JSON.parse(content);

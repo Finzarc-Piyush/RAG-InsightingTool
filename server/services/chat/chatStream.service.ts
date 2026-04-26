@@ -890,52 +890,55 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         },
       });
 
+    // Hoisted so flow_decision events fire on both agentic and legacy paths.
+    const onAgentEvent = (event: string, data: unknown) => {
+      if (!checkConnection()) return;
+      if (event === "workbench") {
+        const payload = data as { entry?: AgentWorkbenchEntry };
+        if (payload.entry) {
+          const stored = appendWorkbenchEntry(agentWorkbench, payload.entry);
+          sendSSE(res, "workbench", { entry: stored });
+        }
+        return;
+      }
+      // High-level thinking lines so the panel shows progress before heavy workbench payloads
+      const now = Date.now();
+      if (event === "plan" && data && typeof data === "object") {
+        const p = data as { rationale?: string };
+        const r = (p.rationale || "").trim();
+        onThinkingStep({
+          step: "Agent plan",
+          status: "completed",
+          timestamp: now,
+          details: r || undefined,
+        });
+      } else if (event === "tool_call" && data && typeof data === "object") {
+        const t = data as { name?: string };
+        onThinkingStep({
+          step: `Running tool: ${t.name || "tool"}`,
+          status: "completed",
+          timestamp: now,
+        });
+      } else if (event === "critic_verdict" && data && typeof data === "object") {
+        const c = data as { stepId?: string };
+        if (c.stepId === "final") {
+          onThinkingStep({
+            step: "Reviewing answer",
+            status: "completed",
+            timestamp: now,
+          });
+        }
+      }
+      sendSSE(res, event, data);
+      for (const entry of agentSseEventToWorkbenchEntries(event, data)) {
+        const stored = appendWorkbenchEntry(agentWorkbench, entry);
+        sendSSE(res, "workbench", { entry: stored });
+      }
+    };
+
     const agentOptions = isAgenticLoopEnabled()
         ? {
-            onAgentEvent: (event: string, data: unknown) => {
-              if (!checkConnection()) return;
-              if (event === "workbench") {
-                const payload = data as { entry?: AgentWorkbenchEntry };
-                if (payload.entry) {
-                  const stored = appendWorkbenchEntry(agentWorkbench, payload.entry);
-                  sendSSE(res, "workbench", { entry: stored });
-                }
-                return;
-              }
-              // High-level thinking lines so the panel shows progress before heavy workbench payloads
-              const now = Date.now();
-              if (event === "plan" && data && typeof data === "object") {
-                const p = data as { rationale?: string };
-                const r = (p.rationale || "").trim();
-                onThinkingStep({
-                  step: "Agent plan",
-                  status: "completed",
-                  timestamp: now,
-                  details: r || undefined,
-                });
-              } else if (event === "tool_call" && data && typeof data === "object") {
-                const t = data as { name?: string };
-                onThinkingStep({
-                  step: `Running tool: ${t.name || "tool"}`,
-                  status: "completed",
-                  timestamp: now,
-                });
-              } else if (event === "critic_verdict" && data && typeof data === "object") {
-                const c = data as { stepId?: string };
-                if (c.stepId === "final") {
-                  onThinkingStep({
-                    step: "Reviewing answer",
-                    status: "completed",
-                    timestamp: now,
-                  });
-                }
-              }
-              sendSSE(res, event, data);
-              for (const entry of agentSseEventToWorkbenchEntries(event, data)) {
-                const stored = appendWorkbenchEntry(agentWorkbench, entry);
-                sendSSE(res, "workbench", { entry: stored });
-              }
-            },
+            onAgentEvent,
             streamPreAnalysis: {
               intentLabel: chatAnalysis.intent,
               analysis: chatAnalysis.analysis,
@@ -965,7 +968,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               );
             },
           }
-        : { chatDocument };
+        : { chatDocument, onAgentEvent };
 
     const turnStartedAt = Date.now();
     const result = await answerQuestion(
