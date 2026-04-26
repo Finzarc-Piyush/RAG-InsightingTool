@@ -1,4 +1,9 @@
+import { useEffect } from 'react';
 import { Message } from '@/shared/schema';
+import {
+  REGENERATE_EVENT,
+  type RegenerateEventDetail,
+} from '@/lib/chat/regeneratePrompt';
 
 interface UseHomeHandlersProps {
   sessionId: string | null;
@@ -71,6 +76,24 @@ export const useHomeHandlers = ({
       return updated;
     });
   };
+
+  // W9 follow-up · listen for `rag:regenerate` events emitted by the per-
+  // message RegenerateButton dropdown. The event payload carries the
+  // already-rebuilt question (with the constraint phrasing prepended), so
+  // we just submit it as a fresh user message — same flow as Send.
+  useEffect(() => {
+    if (!sessionId) return;
+    const onRegenerate = (e: Event) => {
+      const detail = (e as CustomEvent<RegenerateEventDetail>).detail;
+      if (!detail?.questionToSubmit?.trim()) return;
+      handleSendMessage(detail.questionToSubmit);
+    };
+    window.addEventListener(REGENERATE_EVENT, onRegenerate);
+    return () => window.removeEventListener(REGENERATE_EVENT, onRegenerate);
+    // handleSendMessage closes over sessionId/setMessages/chatMutation, so
+    // re-subscribe whenever sessionId changes (a new chat session).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   return {
     handleFileSelect,
