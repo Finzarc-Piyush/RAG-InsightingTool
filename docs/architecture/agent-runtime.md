@@ -167,6 +167,19 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W20 · end-to-end agent turn smoke test** —
+  `tests/agentTurnE2EW20.test.ts` runs `runAgentTurn` end-to-end
+  against a 60-row Marico-shaped fixture with every LLM call stubbed
+  via the W18 harness. Asserts the *combined* shape that waves
+  W7–W19 produce: answer body length, decision-grade envelope
+  (≥2 implications + ≥2 recommendations + domainLens citing the pack
+  id), investigation summary (hypotheses + findings), magnitudes,
+  trace shape. Failure here = regression in any of those waves.
+  Drove out two latent bugs: `appendEnvelopeInsight` was re-exported
+  but never imported into `agentLoop.service.ts` (the synthesis catch
+  swallowed the `ReferenceError`); `cache.ts`'s 5-minute cleanup
+  `setInterval` was not `.unref()`'d, holding the event loop open in
+  tests. Both fixed in this wave.
 - **Wave W19 · per-step LLM-enriched insights (env-gated)** — new
   `lib/agents/runtime/enrichStepInsights.ts` is a single-batched LLM
   call (cheap insight model) that ties each meaningful workbench step

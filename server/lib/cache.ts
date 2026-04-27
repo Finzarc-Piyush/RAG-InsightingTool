@@ -144,10 +144,13 @@ class QueryCache {
 // Singleton instance
 const queryCache = new QueryCache();
 
-// Clean expired entries every 5 minutes
-setInterval(() => {
+// Clean expired entries every 5 minutes. Unref'd so the timer doesn't keep
+// the Node event loop alive in tests / one-shot scripts (matches the pattern
+// used in `lib/telemetry/llmUsageSink.ts` and `turnUsageAggregator.ts`).
+const cacheCleanupTimer = setInterval(() => {
   queryCache.cleanExpired();
 }, 5 * 60 * 1000);
+cacheCleanupTimer.unref?.();
 
 export default queryCache;
 

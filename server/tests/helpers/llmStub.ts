@@ -52,12 +52,16 @@ export type StubHandlerMap = Partial<Record<LlmCallPurpose, StubHandler>>;
  */
 export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   // ── Reasoning / synthesis ──
-  [LLM_PURPOSE.HYPOTHESIS]: () => ({ hypotheses: [] }),
+  // Hypothesis schema requires min(1); emit one stub so the validator passes.
+  [LLM_PURPOSE.HYPOTHESIS]: () => ({
+    hypotheses: [{ text: "Stub hypothesis 1", targetColumn: undefined }],
+  }),
   [LLM_PURPOSE.PLANNER]: () => ({
     rationale: "stub planner",
     steps: [{ id: "s1", tool: "get_schema_summary", args: {} }],
   }),
-  [LLM_PURPOSE.REFLECTOR]: () => ({ verdict: "continue", reason: "stub" }),
+  // Reflector schema requires `action` field, not `verdict`.
+  [LLM_PURPOSE.REFLECTOR]: () => ({ action: "finish", reasoning: "stub" }),
   [LLM_PURPOSE.VERIFIER_DEEP]: () => ({
     verdict: "pass",
     issues: [],
@@ -95,7 +99,8 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
     candidateDriverDimensions: [],
     epistemicNotes: "stub",
   }),
-  [LLM_PURPOSE.VISUAL_PLANNER]: () => ({ charts: [] }),
+  // Visual planner schema requires `addCharts: array` (not `charts`).
+  [LLM_PURPOSE.VISUAL_PLANNER]: () => ({ addCharts: [] }),
   [LLM_PURPOSE.BUILD_DASHBOARD]: () => ({ tiles: [] }),
   [LLM_PURPOSE.SQL_GEN]: () => ({ sql: "SELECT 1" }),
   [LLM_PURPOSE.SESSION_CONTEXT]: () => ({}),

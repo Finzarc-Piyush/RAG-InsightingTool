@@ -669,7 +669,14 @@ function buildPreSynthesisMidTurnSummary(
   ].join("\n\n");
 }
 
-export { appendEnvelopeInsight } from "./insightHelpers.js";
+// W20 fix · `appendEnvelopeInsight` was previously only re-exported from
+// this module, which meant the local references below were unbound (TS
+// flagged this all along — the synthesis catch silently swallowed the
+// `ReferenceError` until the W20 e2e test ran the path with a real call).
+// Import explicitly so the local binding exists; keep the re-export so
+// downstream consumers continue to import via the agent loop.
+import { appendEnvelopeInsight } from "./insightHelpers.js";
+export { appendEnvelopeInsight };
 
 const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
   llm_json_invalid:
