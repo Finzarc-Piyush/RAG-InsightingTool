@@ -334,7 +334,12 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         insights: validated.insights,
         preview: validated.preview || undefined, // Save preview data for data operations
         summary: validated.summary || undefined, // Save summary data for data operations
-        agentTrace: answerResult.agentTrace,
+        // W27 · messageSchema's agentTrace field is `Record<string, unknown>`
+        // for Cosmos compatibility; AgentTrace lacks the index signature. The
+        // runtime payload is JSON-serialisable either way — an unchecked cast
+        // here matches what the streaming path already does and avoids
+        // touching Message's schema (which other code paths depend on).
+        agentTrace: answerResult.agentTrace as unknown as Record<string, unknown> | undefined,
         timestamp: assistantMessageTimestamp,
         ...(mergedSuggestedQuestions.length > 0
           ? { suggestedQuestions: mergedSuggestedQuestions }
@@ -364,7 +369,12 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         sessionId,
         username,
         assistantMessage: validated.answer,
-        agentTrace: answerResult.agentTrace,
+        // W27 · messageSchema's agentTrace field is `Record<string, unknown>`
+        // for Cosmos compatibility; AgentTrace lacks the index signature. The
+        // runtime payload is JSON-serialisable either way — an unchecked cast
+        // here matches what the streaming path already does and avoids
+        // touching Message's schema (which other code paths depend on).
+        agentTrace: answerResult.agentTrace as unknown as Record<string, unknown> | undefined,
         analysisBrief: answerResult.analysisBrief,
         // W21 · push prior-turn investigation digest so next turn's planner
         // sees what was confirmed / refuted / left open.

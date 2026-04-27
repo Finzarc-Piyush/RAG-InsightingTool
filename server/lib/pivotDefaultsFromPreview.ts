@@ -5,7 +5,9 @@
  * Pivot queries always read the base DuckDB `data` table, so value fields must be real
  * numeric schema columns (e.g. `Sales`), not SQL aliases like `Total_Revenue` or `Sales_sum`.
  */
-import type { DataSummary } from "../../shared/schema.js";
+// W27 · path was off by one segment (file lives in `server/lib/`, schema in
+// `server/shared/`). Pre-existing typecheck noise; pure import-path fix.
+import type { DataSummary } from "../shared/schema.js";
 import { resolveMetricAliasToSchemaColumn } from "./agents/runtime/plannerColumnResolve.js";
 import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.js";

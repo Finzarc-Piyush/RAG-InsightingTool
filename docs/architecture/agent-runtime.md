@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W27 · typecheck cleanup (low-risk only)** — knocked
+  pre-existing typecheck noise from 127 → 116 errors with four
+  surgical fixes that change zero runtime semantics: `pivotDefaultsFromPreview.ts`
+  import path was off by one segment; `chatStream.service.ts`
+  callback params (`onMidTurnSessionContext`, `onIntermediateArtifact`)
+  gained explicit annotations; `chat.service.ts` `agentTrace` cast
+  matches the streaming-path pattern; `req.on(...)` calls are now
+  cast through `IncomingMessage` so tsc resolves the listener API.
+  Higher-risk errors (`uploadQueue.ts` use-before-assign,
+  `chatStream.service.ts` schema mismatches) deferred to scoped
+  investigation. 130 wave-related tests still pass.
 - **Wave W26 · PriorInvestigationsBanner UI** — surfaces the W21
   `priorInvestigations` digest as a collapsed pill above the chat
   message list ("📚 N earlier turns" with confirmed/refuted/open

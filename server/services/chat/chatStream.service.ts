@@ -951,7 +951,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             username,
             chatDocument,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
-            onMidTurnSessionContext: async (p) => {
+            // W27 · explicit annotations on the callback params so tsc can
+            // type-check the body. Parameter shapes match the runtime
+            // payloads emitted by the agent loop (see types.ts).
+            onMidTurnSessionContext: async (
+              p: import("../../lib/agents/runtime/types.js").AgentMidTurnSessionPayload
+            ) => {
               await persistMidTurnAssistantSessionContext({
                 sessionId,
                 username,
@@ -961,7 +966,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 phase: p.phase,
               });
             },
-            onIntermediateArtifact: ({ preview, insight, pivotDefaults: segmentPivotDefaults }) => {
+            onIntermediateArtifact: (payload: {
+              preview: Record<string, unknown>[];
+              insight?: string;
+              pivotDefaults?: import("../../shared/schema.js").Message["pivotDefaults"];
+            }) => {
+              const { preview, insight, pivotDefaults: segmentPivotDefaults } = payload;
               flushIntermediateSegment(
                 preview as Record<string, unknown>[],
                 insight,
@@ -1668,14 +1678,18 @@ export async function streamChatMessages(sessionId: string, username: string, re
       // Ignore errors when ending already closed connection
     }
 
-    // Clean up on client disconnect (though connection should already be closed)
-    req.on('close', () => {
+    // Clean up on client disconnect (though connection should already be closed).
+    // W27 · cast through IncomingMessage so tsc resolves `.on()` — Express's
+    // Request extends IncomingMessage at runtime but the express-types
+    // package strips the listener API in some module-resolution paths.
+    const reqAsStream = req as unknown as import("http").IncomingMessage;
+    reqAsStream.on('close', () => {
       // Connection already closed, just log
       console.log('🚫 Client disconnected from SSE (initial analysis stream)');
     });
 
     // Handle errors - only log unexpected errors
-    req.on('error', (error: any) => {
+    reqAsStream.on('error', (error: any) => {
       // ECONNRESET is expected when clients disconnect normally
       if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
         console.error('SSE connection error:', error);
