@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W39 · merged hypothesis + analysis-brief LLM call (env-
+  gated)** — pre-W39 a typical analytical turn fired TWO sequential
+  pre-planner LLM calls: `generateHypotheses` (always) +
+  `maybeRunAnalysisBrief` (when diagnostic-intent). Both consume the
+  same dataset summary + question. New
+  `lib/agents/runtime/runHypothesisAndBrief.ts` merges them into a
+  single LLM call with a unified schema
+  `{ hypotheses, brief: AnalysisBrief | null }`. Cuts ~one network
+  round-trip + 30–40% of pre-planner tokens per analytical turn.
+  Falls back to per-task calls on any failure (parse, schema,
+  network) so the merged option is strictly safer than the per-task
+  path. Reuses the existing `analysisBriefSchema` + the original
+  hypothesis shape — no schema divergence. Gated by
+  `MERGED_PRE_PLANNER=true` (default off — opt-in for A/B).
+  `shouldBuildAnalysisBrief` exported from `analysisBrief.ts` so the
+  merged path applies the same gating logic.
 - **Wave W38 · streaming narrator output** — new
   `completeJsonStreaming` in `lib/agents/runtime/llmJson.ts` calls
   `openai.chat.completions.create({stream: true})` directly,

@@ -14,8 +14,12 @@ import { AGENT_TRACE_MAX_BYTES, isInterAgentPromptFeedbackEnabled } from "./type
 import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
-import { maybeRunAnalysisBrief } from "./analysisBrief.js";
+import { maybeRunAnalysisBrief, shouldBuildAnalysisBrief } from "./analysisBrief.js";
 import { generateHypotheses } from "./hypothesisPlanner.js";
+import {
+  isMergedPrePlannerEnabled,
+  runHypothesisAndBriefMerged,
+} from "./runHypothesisAndBrief.js";
 import { createBlackboard, addFinding, addOpenQuestion, resolveHypothesis, formatForNarrator } from "./analyticalBlackboard.js";
 import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
@@ -829,7 +833,12 @@ export async function runAgentTurn(
   const deadline = Date.now() + config.maxWallTimeMs;
 
   if (ctx.mode === "analysis") {
-    await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+    // W39 · when MERGED_PRE_PLANNER=true, fold the analysisBrief and
+    // hypothesisPlanner LLM calls into a single round-trip below.
+    // Otherwise keep the per-task analysisBrief call here unchanged.
+    if (!isMergedPrePlannerEnabled()) {
+      await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+    }
     // Phase-1 PR 1.A: publish a compact intent digest so the thinking panel
     // can surface "what the model thinks the user asked for" before any tools
     // run. Purely observational — no branching, no behavior change.
@@ -955,8 +964,32 @@ export async function runAgentTurn(
 
   // W3: generate investigation hypotheses before the first planner call.
   // Non-fatal — planner works without hypotheses if LLM call fails.
+  // W39: when MERGED_PRE_PLANNER=true, the merged call (hypothesis +
+  // brief) runs HERE instead of the two separate calls. The merged path
+  // mutates blackboard + ctx.analysisBrief in-place, mirroring the
+  // per-task post-processing. On any failure it falls back to the
+  // per-task path (so the merged option is always strictly safer).
   if (ctx.mode === "analysis") {
-    await generateHypotheses(ctx, blackboard, turnId, onLlmCall);
+    if (isMergedPrePlannerEnabled()) {
+      const mergedShouldBuildBrief = shouldBuildAnalysisBrief(ctx);
+      const merged = await runHypothesisAndBriefMerged(
+        ctx,
+        blackboard,
+        turnId,
+        onLlmCall,
+        mergedShouldBuildBrief
+      );
+      if (!merged.ok) {
+        // Fallback path mirrors the non-merged ordering exactly: brief
+        // first (gated), then hypotheses.
+        if (mergedShouldBuildBrief) {
+          await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+        }
+        await generateHypotheses(ctx, blackboard, turnId, onLlmCall);
+      }
+    } else {
+      await generateHypotheses(ctx, blackboard, turnId, onLlmCall);
+    }
   }
 
   // P-A1: upfront RAG retrieval so the planner has semantic grounding on its

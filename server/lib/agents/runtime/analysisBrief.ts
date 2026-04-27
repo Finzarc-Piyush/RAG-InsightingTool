@@ -3,7 +3,9 @@ import type { AgentExecutionContext } from "./types.js";
 import { userMessageHasReportIntent } from "../../reportIntent.js";
 import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 
-function shouldBuildAnalysisBrief(ctx: AgentExecutionContext): boolean {
+// W39 · exported so the merged-pre-planner path can apply the same gate
+// the per-task analysisBrief call uses, keeping behaviour identical.
+export function shouldBuildAnalysisBrief(ctx: AgentExecutionContext): boolean {
   if (ctx.mode !== "analysis") return false;
   if (ctx.analysisSpec?.mode === "diagnostic") return true;
   if (userMessageHasReportIntent(ctx.question)) return true;
