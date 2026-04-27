@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W15 · agent-path chart commentary** — extends W12's
+  per-chart `businessCommentary` to the agentic correlation paths.
+  `analyzeCorrelations` gains an optional
+  `synthesisContext: ChartInsightSynthesisContext` parameter that
+  flows through to `generateChartInsights`; the agent's
+  `analyze_correlations` tool and the segment-driver-analysis tool
+  both pass `ctx.exec.domainContext` (already populated upstream),
+  so correlation/scatter charts emitted via the agent path now carry
+  the same FMCG/Marico framing as charts enriched on the
+  chatStream path. Back-compat: existing callers that omit the
+  context still work and produce keyInsight-only output.
 - **Wave W14 · `web_search` tool (env-gated, planner-callable)** —
   fills the last remaining "world wide web" gap from the original
   ask. New `lib/agents/runtime/tools/webSearchTool.ts` registers a

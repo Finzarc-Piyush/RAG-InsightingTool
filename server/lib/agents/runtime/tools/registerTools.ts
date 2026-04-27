@@ -1113,7 +1113,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
         undefined,
         ctx.exec.sessionId,
         true,
-        categoricalCols
+        categoricalCols,
+        // W15 · pipe domain context + user/session signals through so the
+        // agent-path correlation charts can render `businessCommentary`,
+        // matching the W12 chatStream path.
+        {
+          userQuestion: ctx.exec.question,
+          sessionAnalysisContext: ctx.exec.sessionAnalysisContext,
+          permanentContext: ctx.exec.permanentContext,
+          domainContext: ctx.exec.domainContext,
+        }
       );
       return {
         ok: true,

@@ -51,7 +51,11 @@ export async function analyzeCorrelations(
   onProgress?: (message: string, processed?: number, total?: number) => void,
   sessionId?: string,
   generateCharts: boolean = true,
-  categoricalColumns?: string[]
+  categoricalColumns?: string[],
+  // W15 · optional synthesis context so per-chart insight generation can also
+  // produce `businessCommentary` (FMCG/Marico framing). Backwards-compatible:
+  // pre-W15 callers still work and produce keyInsight only.
+  synthesisContext?: import("./insightSynthesis/types.js").ChartInsightSynthesisContext
 ): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
   console.log('=== CORRELATION ANALYSIS DEBUG ===');
   console.log('Target variable:', targetVariable);
@@ -259,8 +263,20 @@ export async function analyzeCorrelations(
 
     const chartsWithInsights = await Promise.all(
       charts.map(async (c) => {
-        const chartInsights = await generateChartInsights(c, c.data || [], summaryStub, chatInsights);
-        return { ...c, keyInsight: chartInsights.keyInsight } as ChartSpec;
+        const chartInsights = await generateChartInsights(
+          c,
+          c.data || [],
+          summaryStub,
+          chatInsights,
+          synthesisContext
+        );
+        return {
+          ...c,
+          keyInsight: chartInsights.keyInsight,
+          ...(chartInsights.businessCommentary
+            ? { businessCommentary: chartInsights.businessCommentary }
+            : {}),
+        } as ChartSpec;
       })
     );
     charts.splice(0, charts.length, ...chartsWithInsights);

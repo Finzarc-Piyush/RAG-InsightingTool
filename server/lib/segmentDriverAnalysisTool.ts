@@ -169,7 +169,17 @@ export async function runSegmentDriverAnalysisTool(
       20,
       undefined,
       exec.sessionId,
-      true
+      true,
+      undefined,
+      // W15 · same context bundle the chatStream path uses, so segment-driver
+      // correlation charts also carry `businessCommentary` when domain packs
+      // are enabled.
+      {
+        userQuestion: exec.question,
+        sessionAnalysisContext: exec.sessionAnalysisContext,
+        permanentContext: exec.permanentContext,
+        domainContext: exec.domainContext,
+      }
     );
     return {
       kind: "correlation" as const,
