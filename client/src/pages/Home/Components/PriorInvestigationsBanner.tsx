@@ -32,24 +32,49 @@ import {
   CircleDashed,
 } from "lucide-react";
 
-interface PriorInvestigationsBannerProps {
-  sessionAnalysisContext: SessionAnalysisContext | undefined;
-  /** Default open state. Defaults to false (the banner is opt-in detail). */
-  defaultOpen?: boolean;
-}
-
 type PriorEntry = NonNullable<
   SessionAnalysisContext["sessionKnowledge"]["priorInvestigations"]
 >[number];
 
+interface PriorInvestigationsBannerProps {
+  /**
+   * W26 mode: live current-state array, read from the chat-document's
+   * `sessionAnalysisContext.sessionKnowledge.priorInvestigations`. Banner
+   * mounts at the top of the chat and refreshes via the W31 SSE event.
+   * When BOTH modes' inputs are absent, banner renders null.
+   */
+  sessionAnalysisContext?: SessionAnalysisContext;
+  /**
+   * W37 mode: per-message snapshot from `message.priorInvestigationsSnapshot`
+   * (the W30 field). Banner mounts inside the assistant message bubble and
+   * shows what the agent knew AT THE TIME of this turn — distinct from
+   * the live current-state array. Mutually substitutable with the W26
+   * mode at the prop level; UX label adapts to the mode.
+   */
+  priorInvestigations?: ReadonlyArray<PriorEntry>;
+  /** Default open state. Defaults to false (the banner is opt-in detail). */
+  defaultOpen?: boolean;
+}
+
 export function PriorInvestigationsBanner({
   sessionAnalysisContext,
+  priorInvestigations,
   defaultOpen = false,
 }: PriorInvestigationsBannerProps) {
   const [open, setOpen] = useState(defaultOpen);
-  const prior =
-    sessionAnalysisContext?.sessionKnowledge?.priorInvestigations ?? [];
+  // W37 · resolve from explicit snapshot first, fall back to SAC live array.
+  // The two are mutually substitutable; picking explicit-first lets a
+  // per-message mount override the session-level state when both are present.
+  const prior: ReadonlyArray<PriorEntry> =
+    priorInvestigations ??
+    sessionAnalysisContext?.sessionKnowledge?.priorInvestigations ??
+    [];
   if (prior.length === 0) return null;
+  // Label adapts to the mode so the user knows whether they're seeing
+  // live state or a historical snapshot.
+  const headerLabel = priorInvestigations
+    ? "What we knew at the time of this turn"
+    : "What we already learned in this session";
 
   const totalConfirmed = prior.reduce((n, p) => n + (p.hypothesesConfirmed?.length ?? 0), 0);
   const totalRefuted = prior.reduce((n, p) => n + (p.hypothesesRefuted?.length ?? 0), 0);
@@ -58,7 +83,7 @@ export function PriorInvestigationsBanner({
   return (
     <section
       className="mx-auto mb-2 w-full max-w-3xl rounded-brand-md border border-border/60 bg-card"
-      aria-label="What we already learned in this session"
+      aria-label={headerLabel}
     >
       <button
         type="button"
@@ -74,9 +99,7 @@ export function PriorInvestigationsBanner({
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           )}
           <BookOpenCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-          <span className="truncate">
-            What we already learned in this session
-          </span>
+          <span className="truncate">{headerLabel}</span>
           <span className="shrink-0 rounded-full bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
             {prior.length} earlier turn{prior.length === 1 ? "" : "s"}
           </span>

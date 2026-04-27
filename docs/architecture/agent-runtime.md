@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W37 · per-message PriorInvestigationsBanner (W30 UI
+  surface)** — closes the half-built W30 promise. `PriorInvestigationsBanner`
+  refactored to accept EITHER `sessionAnalysisContext` (W26 mode —
+  live current state at top of chat) OR `priorInvestigations`
+  (W37 mode — historical snapshot from a single message). Header
+  label adapts: "What we already learned in this session" vs.
+  "What we knew at the time of this turn". Mounted inside
+  `MessageBubble.tsx` directly under the W13 InvestigationSummaryCard
+  for analytical assistant messages where
+  `priorInvestigationsSnapshot.length > 0`. Default-collapsed to
+  stay subordinate to W13 and avoid noise. Legacy / chatty turns
+  render unchanged.
 - **Wave W36 · `web_search` hit URL-dedup** — closes the cleanup
   deferred from W16. Before adding new hits to the analytical
   blackboard, the tool now extracts URLs from existing

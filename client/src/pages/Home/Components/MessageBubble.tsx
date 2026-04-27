@@ -24,6 +24,7 @@ import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
 import { StepByStepInsightsPanel } from './StepByStepInsightsPanel';
 import { InvestigationSummaryCard } from './InvestigationSummaryCard';
+import { PriorInvestigationsBanner } from './PriorInvestigationsBanner';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -632,6 +633,22 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         {!isUser && !message.isIntermediate && (
           <InvestigationSummaryCard summary={message.investigationSummary} />
         )}
+
+        {/* W37 · per-message PriorInvestigationsBanner. Renders the W30
+            `priorInvestigationsSnapshot` field — what the agent knew BEFORE
+            this turn ran. Only mounts on analytical messages (those with
+            an investigationSummary AND at least one snapshot entry) so it
+            stays visually subordinate to W13 and avoids noise on chatty
+            turns. Default-collapsed; reuses the W26 banner component in
+            its W37 mode (per-message snapshot, header label adapts). */}
+        {!isUser &&
+          !message.isIntermediate &&
+          message.investigationSummary &&
+          (message.priorInvestigationsSnapshot?.length ?? 0) > 0 && (
+            <PriorInvestigationsBanner
+              priorInvestigations={message.priorInvestigationsSnapshot}
+            />
+          )}
 
         {/* W11 · post-pivot "Step-by-step interpretation" panel. Renders only
             when this message has workbench entries with W10 insight lines.
