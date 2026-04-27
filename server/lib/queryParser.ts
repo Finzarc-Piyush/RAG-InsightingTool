@@ -17,7 +17,11 @@ import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.
 import { repairMisassignedDimensionFilters } from './dimensionFilterRepair.js';
 import { sanitisePivotColumnDimensionsInput } from './pivotLayoutFromDimensions.js';
 
-interface QueryParserResult extends ParsedQuery {
+// W32 · exported so callers (e.g. chatStream.service.ts) can declare
+// variables with the full structural type instead of falling back to
+// `Record<string, unknown>`. `confidence` is added by the parser; not
+// part of the generic `ParsedQuery` contract.
+export interface QueryParserResult extends ParsedQuery {
   confidence: number;
 }
 

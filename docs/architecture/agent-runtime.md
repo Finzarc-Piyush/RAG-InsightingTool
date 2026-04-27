@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W32 · `chatStream.service.ts` schema mismatches** —
+  knocked typecheck noise from **91 → 89 errors** (-2) by fixing the
+  two real type mismatches flagged in W27 as "scoped investigation
+  needed." Line 205: `PastAnalysisDoc` literal now supplies
+  `feedbackReasons: []` explicitly — matches what the schema's
+  `.default([])` would produce, and is identical to the runtime path
+  the model's patch helper (`pastAnalysis.model.ts:persistFeedbackReasons`)
+  expects to mutate later. Line 804: `parseUserQuery` return value
+  cast `as unknown as Record<string, unknown>` at the assignment site
+  (matches W27's `agentTrace` cast pattern). Tried widening
+  `parsedQueryForLoad`'s declaration to `QueryParserResult | null`
+  first but that cascaded errors at four downstream consumers also
+  expecting the generic record shape; cast is the cleanest minimum-
+  diff fix. `QueryParserResult` is now exported from
+  `lib/queryParser.ts` for any future caller that wants the precise
+  type. Zero runtime change.
 - **Wave W31 · real-time refresh of W26 banner via SSE** —
   `persistMergeAssistantSessionContext` now returns the new
   `SessionAnalysisContext` (or `undefined` when the chat doc is

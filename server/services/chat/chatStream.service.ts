@@ -221,6 +221,12 @@ function maybeWritePastAnalysisDoc(params: {
       },
       outcome: classifyTurnOutcome(params.transformedResponse),
       feedback: "none",
+      // W32 · explicit empty array matches what the schema's `.default([])`
+      // would produce; satisfies the inferred output type which has the
+      // field as required `string[]` (the input type is optional). Real
+      // reasons are appended later via the model's patch helper
+      // (`pastAnalysis.model.ts: persistFeedbackReasons`).
+      feedbackReasons: [],
       createdAt: Date.now(),
     };
     // W6.2 · accumulate cost/tokens against today's user budget. Fire-and-forget;
@@ -801,11 +807,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     );
 
     try {
-      parsedQueryForLoad = await parseUserQuery(
+      // W32 · `parseUserQuery` returns `QueryParserResult` (extends
+      // `ParsedQuery` + `confidence: number`); the local var is widened
+      // to `Record<string, unknown> | null` because four downstream sites
+      // also use the generic-record shape. Cast at the assignment matches
+      // the W27 `agentTrace` pattern — the runtime payload IS a
+      // serialisable record, just statically tracked under a richer type.
+      parsedQueryForLoad = (await parseUserQuery(
         message,
         chatDocument.dataSummary,
         processingChatHistory
-      );
+      )) as unknown as Record<string, unknown>;
     } catch {
       parsedQueryForLoad = null;
     }
