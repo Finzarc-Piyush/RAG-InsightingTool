@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W17 · verifier requires decision-grade sections** — new
+  pure helper `lib/agents/runtime/checkEnvelopeCompleteness.ts` is a
+  deterministic pre-LLM gate that returns `{ ok: false,
+  MISSING_DECISION_GRADE_SECTIONS, courseCorrection }` when an
+  analytical narrator envelope is missing implications (≥2),
+  recommendations (≥2), or `domainLens` (when domain context was
+  supplied). The agent loop runs this check between synthesis and the
+  deep verifier, and on failure re-runs `runNarrator` with a
+  `NarratorRepairContext` (issues + course correction + prior draft)
+  for up to `config.maxVerifierRoundsFinal` rounds. This is
+  intentionally separate from the deep verifier's single-flow policy
+  (which suppresses LLM-judged narrative rewrites): completeness
+  here is objective, not opinion. Conversational turns
+  (`questionShape` undefined) skip the check; fallback path (no
+  envelope) skips too. Telemetry: `envelope_repair` agent log on each
+  retry; `flow_decision` SSE event for the workbench timeline.
 - **Wave W16 · web-search hits surface in the W7 RAG bundle** —
   `DomainContextEntry["source"]` enum gains `"web"` alongside
   `rag_round1` / `rag_round2` / `injected`. The `web_search` tool now

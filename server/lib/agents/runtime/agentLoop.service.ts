@@ -25,6 +25,7 @@ import {
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
+import { checkEnvelopeCompleteness } from "./checkEnvelopeCompleteness.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -1986,6 +1987,75 @@ export async function runAgentTurn(
         answerSource = "fallback";
       }
     }
+
+    // W17 · deterministic envelope-completeness retry. Sits BEFORE the deep
+    // verifier loop and is independent of the single-flow policy that
+    // suppresses LLM-judged narrative rewrites — completeness here is
+    // objective (e.g. `implications.length < 2` is a fact, not an opinion).
+    // Bounded by `maxVerifierRoundsFinal` so a stuck narrator can't loop.
+    // questionShape is one of the analytical shapes when set; "none" is only
+    // a sentinel inside the synthesis prompt (not the brief schema). Presence
+    // alone is sufficient to flag the turn as analytical.
+    if (
+      answerSource === "narrator" &&
+      ctx.blackboard &&
+      envelopeAnswerEnvelope &&
+      ctx.analysisBrief?.questionShape
+    ) {
+      const domainSupplied = Boolean(ctx.domainContext?.trim());
+      let completenessRound = 0;
+      while (completenessRound < config.maxVerifierRoundsFinal) {
+        const gap = checkEnvelopeCompleteness(
+          envelopeAnswerEnvelope,
+          ctx.analysisBrief.questionShape,
+          domainSupplied
+        );
+        if (gap.ok) break;
+        completenessRound++;
+        agentLog("envelope_repair", {
+          turnId,
+          round: completenessRound,
+          missing: gap.description.slice(0, 200),
+        });
+        safeEmit("flow_decision", {
+          layer: "envelope-completeness",
+          chosen: `repair-round-${completenessRound}`,
+          reason: gap.description.slice(0, 300),
+          candidates: [gap.code],
+        });
+        const repaired = await runNarrator(ctx, ctx.blackboard, turnId, onLlmCall, {
+          issues: gap.description,
+          priorDraft: answer,
+          courseCorrection: gap.courseCorrection,
+        });
+        if (!repaired) break;
+        // Rebuild answer + envelope from the repaired narrator output. Mirror
+        // the assembly in the initial narrator branch above so all envelope
+        // fields ride through.
+        answer = formatAnswerFromEnvelope(repaired.body ?? "", repaired.keyInsight ?? null);
+        if (!answer.trim()) break;
+        const envFresh: NonNullable<
+          import("../../../shared/schema.js").Message["answerEnvelope"]
+        > = {};
+        if (repaired.tldr) envFresh.tldr = repaired.tldr;
+        if (repaired.findings?.length) envFresh.findings = repaired.findings;
+        if (repaired.methodology) envFresh.methodology = repaired.methodology;
+        if (repaired.caveats?.length) envFresh.caveats = repaired.caveats;
+        const repairedCtas = (repaired.ctas ?? [])
+          .map((c) => c.trim())
+          .filter(Boolean)
+          .slice(0, 3);
+        if (repairedCtas.length) envFresh.nextSteps = repairedCtas;
+        if (repaired.implications?.length) envFresh.implications = repaired.implications;
+        if (repaired.recommendations?.length) envFresh.recommendations = repaired.recommendations;
+        if (repaired.domainLens) envFresh.domainLens = repaired.domainLens;
+        if (Object.keys(envFresh).length) envelopeAnswerEnvelope = envFresh;
+        if (repaired.magnitudes?.length) envelopeMagnitudes = repaired.magnitudes;
+        if (repaired.unexplained) envelopeUnexplained = repaired.unexplained;
+        if (repairedCtas.length) followUpPrompts = repairedCtas;
+      }
+    }
+
     preservedAnswer = answer;
 
     materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
