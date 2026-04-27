@@ -2099,44 +2099,76 @@ export async function runAgentTurn(
         // W35 · numerical-fabrication check on `magnitudes`. Same repair
         // pipeline as W17/W22; passes when fewer than 2 magnitudes are
         // unsupported (rounding-artefact tolerance baked in).
-        const magnitudesGap =
-          completenessGap.ok && citationGap.ok
-            ? checkMagnitudesAgainstObservations(envelopeMagnitudes, {
-                observations,
-                ragBlock: upfrontRagHitsBlock,
-                domainContext: ctx.domainContext,
-              })
-            : { ok: true as const };
+        // W43 · this fires whenever completeness passed (no longer
+        // requires citation to pass too) so citation + magnitudes can
+        // batch into one composite repair via the same round. Still
+        // gated by completenessGap.ok because checking magnitudes on a
+        // fields-missing envelope produces noise.
+        const magnitudesGap = completenessGap.ok
+          ? checkMagnitudesAgainstObservations(envelopeMagnitudes, {
+              observations,
+              ragBlock: upfrontRagHitsBlock,
+              domainContext: ctx.domainContext,
+            })
+          : { ok: true as const };
         if (completenessGap.ok && citationGap.ok && magnitudesGap.ok) break;
-        const gap = !completenessGap.ok
-          ? completenessGap
-          : !citationGap.ok
-            ? citationGap
-            : magnitudesGap;
-        // TS narrowing: `gap` is the first non-ok result.
-        if (gap.ok) break; // unreachable; guard for narrowing
+        // W43 · batch ALL failed checks into a single composite repair so
+        // a draft missing implications + citing a fake pack id + with a
+        // fabricated magnitude triggers ONE narrator call instead of
+        // three. Behaviour-equivalent on single-issue cases (composite is
+        // just the one issue). Per-check ordering preserved (completeness
+        // is short-circuited first to avoid cascading false positives;
+        // when it fails, citation/magnitudes are skipped and only its
+        // gap fires).
+        // Common failed-gap shape (each check's failure variant has the
+        // same three string fields we need here). Lifting to this shape
+        // sidesteps a TS recursive-type-reference issue when storing
+        // the union directly in an array.
+        interface FailedGap {
+          code: string;
+          description: string;
+          courseCorrection: string;
+        }
+        const failedGaps: FailedGap[] = [];
+        if (!completenessGap.ok) failedGaps.push(completenessGap);
+        if (!citationGap.ok) failedGaps.push(citationGap);
+        if (!magnitudesGap.ok) failedGaps.push(magnitudesGap);
+        if (failedGaps.length === 0) break; // unreachable; guard
         completenessRound++;
+        const failedCodes = failedGaps.map((g) => g.code);
+        const composite = {
+          description: failedGaps.map((g) => g.description).join("\n\n"),
+          courseCorrection:
+            failedGaps.length === 1
+              ? failedGaps[0].courseCorrection
+              : failedGaps
+                  .map((g, i) => `(${i + 1}) ${g.courseCorrection}`)
+                  .join("\n\n"),
+        };
         agentLog("envelope_repair", {
           turnId,
           round: completenessRound,
-          code: gap.code,
-          missing: gap.description.slice(0, 200),
+          codes: failedCodes.join(","),
+          issueCount: failedCodes.length,
+          missing: composite.description.slice(0, 200),
         });
         safeEmit("flow_decision", {
           layer:
-            gap.code === "HALLUCINATED_DOMAIN_CITATION"
-              ? "envelope-citations"
-              : gap.code === "FABRICATED_MAGNITUDES"
-                ? "envelope-magnitudes"
-                : "envelope-completeness",
+            failedCodes.length === 1
+              ? failedCodes[0] === "HALLUCINATED_DOMAIN_CITATION"
+                ? "envelope-citations"
+                : failedCodes[0] === "FABRICATED_MAGNITUDES"
+                  ? "envelope-magnitudes"
+                  : "envelope-completeness"
+              : "envelope-multi-issue",
           chosen: `repair-round-${completenessRound}`,
-          reason: gap.description.slice(0, 300),
-          candidates: [gap.code],
+          reason: composite.description.slice(0, 300),
+          candidates: failedCodes,
         });
         const repaired = await runNarrator(ctx, ctx.blackboard, turnId, onLlmCall, {
-          issues: gap.description,
+          issues: composite.description,
           priorDraft: answer,
-          courseCorrection: gap.courseCorrection,
+          courseCorrection: composite.courseCorrection,
         });
         if (!repaired) break;
         // Rebuild answer + envelope from the repaired narrator output. Mirror

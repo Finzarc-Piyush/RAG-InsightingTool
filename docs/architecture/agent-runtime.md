@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W43 · batched repair issues** — pre-W43 a draft missing
+  implications + citing a fake pack id + with a fabricated magnitude
+  triggered THREE separate narrator repair calls (~6000 tokens
+  each). Now W17/W22/W35 gaps are collected into a single composite
+  course correction and ONE narrator call addresses all of them.
+  Behaviour-equivalent on single-issue cases (composite is the one
+  issue without numbering). The completeness short-circuit is
+  preserved — when completeness fails, citation/magnitudes still
+  skip (avoid noise), only completeness fires. When completeness
+  passes, citation AND magnitudes can BOTH fire and batch into the
+  same round. New `flow_decision` SSE layer
+  `envelope-multi-issue` for workbench timeline visibility on
+  multi-issue rounds. Telemetry: `envelope_repair` log line gains
+  comma-joined `codes` and `issueCount` fields.
 - **Wave W42 · streaming preview UX surface** — pairs with W41 to
   finally make the W38 streaming feature visible to users. New
   `client/src/pages/Home/Components/StreamingPreviewCard.tsx`
