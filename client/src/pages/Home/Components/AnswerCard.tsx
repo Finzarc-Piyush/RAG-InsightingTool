@@ -14,13 +14,21 @@
  *   - Next-steps as outline buttons — actionable
  *
  * Styling uses semantic tokens only (per client/THEMING.md): bg-card,
- * bg-primary/5, text-foreground, text-muted-foreground, border-border. No
- * raw hex / gray-* / bg-white. Verified against light + dark.
+ * bg-primary/5, text-foreground, text-muted-foreground, border-border.
+ * No raw hex / Tailwind palette literals. Verified against light + dark.
  */
 import { useState } from "react";
 import type { Message } from "@/shared/schema";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronRight, Lightbulb, AlertTriangle } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Lightbulb,
+  AlertTriangle,
+  BookOpen,
+  Sparkles,
+  Target,
+} from "lucide-react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 
 interface AnswerCardProps {
@@ -29,6 +37,20 @@ interface AnswerCardProps {
   /** Optional supplementary markdown body — rendered after the structured envelope. */
   supplementaryMarkdown?: string;
 }
+
+type Horizon = "now" | "this_quarter" | "strategic";
+const HORIZON_LABEL: Record<Horizon, string> = {
+  now: "Do now",
+  this_quarter: "This quarter",
+  strategic: "Strategic",
+};
+const HORIZON_ORDER: Horizon[] = ["now", "this_quarter", "strategic"];
+
+const CONFIDENCE_TONE: Record<NonNullable<NonNullable<Message["answerEnvelope"]>["implications"]>[number]["confidence"] & string, string> = {
+  high: "border-primary/40 bg-primary/10 text-primary",
+  medium: "border-border bg-muted/40 text-foreground",
+  low: "border-border bg-muted/20 text-muted-foreground",
+};
 
 export function AnswerCard({
   message,
@@ -40,8 +62,44 @@ export function AnswerCard({
 
   if (!env) return null;
 
+  // W9 · group recommendations by horizon for the "Do now / This quarter /
+  // Strategic" sections. Recommendations without a horizon fall under "Other"
+  // so nothing is silently dropped.
+  const recsByHorizon = (() => {
+    const groups = new Map<Horizon | "other", NonNullable<typeof env.recommendations>>();
+    for (const r of env.recommendations ?? []) {
+      const key = (r.horizon as Horizon | undefined) ?? "other";
+      const list = groups.get(key) ?? [];
+      list.push(r);
+      groups.set(key, list);
+    }
+    return groups;
+  })();
+
   return (
     <div className="space-y-4">
+      {env.domainLens && (
+        <div
+          className="rounded-brand-md border border-border/60 bg-muted/30 px-4 py-2.5"
+          aria-label="Industry context"
+        >
+          <div className="flex items-start gap-2">
+            <BookOpen
+              className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                Industry context
+              </p>
+              <p className="text-[13px] italic leading-[20px] text-foreground">
+                {env.domainLens}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {env.tldr && (
         <div
           className="rounded-brand-md border border-primary/30 bg-primary/10 px-4 py-3"
@@ -104,6 +162,75 @@ export function AnswerCard({
               </li>
             ))}
           </ol>
+        </section>
+      )}
+
+      {env.implications && env.implications.length > 0 && (
+        <section aria-label="What this means">
+          <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+            What this means
+          </h3>
+          <ul className="space-y-2">
+            {env.implications.map((imp, i) => (
+              <li
+                key={i}
+                className="rounded-brand-md border border-border/60 bg-card px-4 py-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[13px] leading-[20px] text-foreground">
+                    {imp.statement}
+                  </p>
+                  {imp.confidence && (
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        CONFIDENCE_TONE[imp.confidence] ?? CONFIDENCE_TONE.medium
+                      }`}
+                      aria-label={`Confidence: ${imp.confidence}`}
+                    >
+                      {imp.confidence}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1.5 text-[13px] leading-[20px] text-muted-foreground">
+                  <span className="font-semibold text-foreground">So what: </span>
+                  {imp.soWhat}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {env.recommendations && env.recommendations.length > 0 && (
+        <section aria-label="Recommended actions">
+          <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+            <Target className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+            Recommended actions
+          </h3>
+          <div className="space-y-3">
+            {[...HORIZON_ORDER, "other" as const]
+              .filter((h) => (recsByHorizon.get(h) ?? []).length > 0)
+              .map((h) => {
+                const items = recsByHorizon.get(h) ?? [];
+                const heading = h === "other" ? "Other" : HORIZON_LABEL[h];
+                return (
+                  <div key={h} className="rounded-brand-md border border-border/60 bg-card px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
+                      {heading}
+                    </p>
+                    <ol className="space-y-2 list-decimal list-inside marker:text-muted-foreground">
+                      {items.map((r, i) => (
+                        <li key={i} className="text-[13px] leading-[20px] text-foreground">
+                          <span className="font-medium">{r.action}</span>
+                          <span className="ml-1 text-muted-foreground">— {r.rationale}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                );
+              })}
+          </div>
         </section>
       )}
 

@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W9 · AnswerCard renders W8 envelope sections** — the
+  client-side `AnswerCard` (`client/src/pages/Home/Components/AnswerCard.tsx`)
+  now renders three new sections from `message.answerEnvelope`:
+  - `domainLens` as a muted "Industry context" preamble pill at the top
+    (italic, with a `BookOpen` icon), so the FMCG/Marico framing is
+    visible before the user reads the body.
+  - `implications` as a numbered card list, each entry pairing the
+    observed `statement` with a bold "**So what:**" `soWhat` line and a
+    confidence pill (high → primary tone, medium → muted, low → muted).
+  - `recommendations` grouped by horizon ("Do now", "This quarter",
+    "Strategic", "Other"), each card containing an ordered list of
+    `action — rationale` entries.
+  Existing TL;DR / findings / methodology / caveats / next-steps blocks
+  are unchanged. Semantic tokens only (`bg-card`, `bg-muted/30`,
+  `bg-primary/10`, `text-foreground`, `text-muted-foreground`,
+  `text-primary`); `npm run theme:check` clean.
 - **Wave W8 · synthesis prompt overhaul + decision-grade envelope** —
   the narrator (`runNarrator`) and synthesizer
   (`synthesizeFinalAnswerEnvelope`) both now consume the W7
