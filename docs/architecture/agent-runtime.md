@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W7 · `buildSynthesisContext` shared bundle** — pure helper at
+  `lib/agents/runtime/buildSynthesisContext.ts` composes four labelled
+  blocks (data understanding, user context, RAG, FMCG/Marico domain
+  packs) for consumption by both the narrator and the synthesizer.
+  Pre-W7 the writers received only the raw `sessionAnalysisContext`
+  JSON and never saw `ctx.domainContext` or upfront RAG hits; W7
+  centralises the bundle so future signals (web search, etc.) wire
+  into both writers in one place. `formatSynthesisContextBundle`
+  emits markdown sections; empty signals collapse to "" so the prompt
+  stays minimal. Caps (6k domain, 4k RAG, 20 column roles, 2k user
+  notes) keep the user-message byte-stable for prompt-cache hits.
 - **`user_context` RAG chunk + starter-question regeneration** —
   `ChatDocument.permanentContext` is now indexed as a `user_context`
   chunk (prepended in `buildChunksForSession`), so planner/reflector
