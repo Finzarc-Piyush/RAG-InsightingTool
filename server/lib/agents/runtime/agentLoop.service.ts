@@ -35,6 +35,7 @@ import {
   extractSuppliedPackIds,
 } from "./checkEnvelopeCompleteness.js";
 import { checkMagnitudesAgainstObservations } from "./checkMagnitudesAgainstObservations.js";
+import { JsonFieldStreamExtractor } from "./jsonFieldStreamExtractor.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -1886,12 +1887,23 @@ export async function runAgentTurn(
         let envUnexplained: string | undefined;
 
         if (useNarrator) {
-          // W38 · attach a streaming hook so the narrator can stream the
-          // partial response to the client via `answer_chunk` SSE events.
-          // The hook fires only when STREAMING_NARRATOR_ENABLED=true (gated
-          // inside `completeJsonStreaming`); otherwise the call falls
-          // through to non-streaming with zero behaviour change. Repair
-          // calls (W17/W22) never receive the hook — they stay non-stream.
+          // W38 + W41 · attach a streaming hook so the narrator can
+          // stream the partial response to the client via `answer_chunk`
+          // SSE events. The hook fires only when
+          // STREAMING_NARRATOR_ENABLED=true (gated inside
+          // `completeJsonStreaming`); otherwise the call falls through
+          // to non-streaming with zero behaviour change. Repair calls
+          // (W17/W22/W35/W43) never receive the hook — they stay
+          // non-stream.
+          //
+          // W41 · the hook now runs each delta through a
+          // `JsonFieldStreamExtractor` keyed on the narrator's `body`
+          // field. The client receives ONLY the decoded prose text,
+          // not the surrounding JSON tokens. The extractor is safe by
+          // design — it never throws and emits "" on any confusion,
+          // so the W38 fallback to non-streaming on schema-failure is
+          // still the correctness backstop.
+          const bodyExtractor = new JsonFieldStreamExtractor("body");
           const narResult = await runNarrator(
             ctx,
             ctx.blackboard!,
@@ -1901,7 +1913,8 @@ export async function runAgentTurn(
             {
               onPartial: ({ delta }) => {
                 if (!delta) return;
-                safeEmit("answer_chunk", { delta });
+                const cleaned = bodyExtractor.process(delta);
+                if (cleaned) safeEmit("answer_chunk", { delta: cleaned });
               },
             }
           );

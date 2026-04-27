@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W41 · streaming narrator `body`-field extraction** — closes
+  the W38 "shipped-but-unusable" gap. New
+  `lib/agents/runtime/jsonFieldStreamExtractor.ts` is a pure state
+  machine that consumes streaming JSON chunks and emits ONLY the
+  decoded text content of a single named string field (`body`).
+  Decodes JSON escapes (`\\\"`, `\\n`, `\\t`, `\\\\`) to plain text;
+  passes `\\uXXXX` through as raw 6 chars (rare in narrator output;
+  decode in a follow-up wave). The agent loop's narrator hook now
+  runs each delta through the extractor, so the client receives
+  clean readable prose via `answer_chunk` SSE events instead of raw
+  JSON tokens. Robustness contract: extractor NEVER throws — every
+  malformed-input case stays silent or transitions to `done`. The
+  W38 schema-validation fallback at end-of-stream is the
+  authoritative correctness gate; extraction is best-effort UX.
 - **Wave W40 · per-session mutex on `persistMergeAssistantSessionContext`** —
   closes the race-condition edge case identified in the audit.
   Pre-W40, two concurrent turns on the same session (e.g. duplicated
