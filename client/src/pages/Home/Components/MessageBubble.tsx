@@ -22,6 +22,7 @@ import { Settle } from '@/components/ui/motion';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
+import { StepByStepInsightsPanel } from './StepByStepInsightsPanel';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -45,9 +46,9 @@ import { userMessageHasReportIntent } from '@/lib/reportIntent';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
-// WC9 · v1→v2 shim. Routes through PremiumChart when the per-mark
-// feature flag (chart.premium.<type>) is set; otherwise legacy.
-import { ChartShim } from '@/components/charts/ChartShim';
+// WC9 · v1→v2 shim sits inside InteractiveChartCard; chat charts route through
+// the toolbar wrapper so users can switch mark / stacked-grouped without a roundtrip.
+import { InteractiveChartCard } from '@/components/charts/InteractiveChartCard';
 
 const PREVIEW_SIGNATURE_SLICE = 3500;
 
@@ -622,6 +623,14 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
+        {/* W11 · post-pivot "Step-by-step interpretation" panel. Renders only
+            when this message has workbench entries with W10 insight lines.
+            Default-collapsed so the answer card stays the primary focus, but
+            the user can expand to see what each phase actually contributed. */}
+        {!isUser && !message.isIntermediate && (
+          <StepByStepInsightsPanel workbench={message.agentWorkbench} />
+        )}
+
         {isDashboardMode ? (
           <AnalyticalDashboardResponse
             message={message}
@@ -847,12 +856,12 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                           </div>
                         }
                       >
-                        <ChartShim
-                          spec={chart}
+                        <InteractiveChartCard
+                          chart={chart}
                           keyInsightSessionId={sessionId ?? null}
-                          legacy={() => (
+                          renderLegacy={(localSpec) => (
                             <ChartRenderer
-                              chart={chart}
+                              chart={localSpec}
                               index={idx}
                               isSingleChart={message.charts!.length === 1}
                               enableFilters

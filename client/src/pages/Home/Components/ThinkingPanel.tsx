@@ -174,6 +174,14 @@ function WorkbenchActivityRow({
         {copied && (
           <div className="text-[10px] text-primary">Copied</div>
         )}
+        {/* W11 · per-step insight (deterministic, populated server-side in W10).
+            Italic line on a left accent border so it reads as commentary, not
+            output. Hidden when the entry has no insight (older Cosmos rows). */}
+        {entry.insight && (
+          <p className="border-l-2 border-primary/40 pl-2 text-[11px] italic leading-snug text-foreground/80">
+            {entry.insight}
+          </p>
+        )}
         {code.length > 0 && (
           <pre
             className={cn(

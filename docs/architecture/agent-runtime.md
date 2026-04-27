@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W11 · workbench rendering + post-pivot interpretation panel** —
+  `WorkbenchActivityRow` (in `client/src/pages/Home/Components/ThinkingPanel.tsx`)
+  now renders `entry.insight` as an italic line on a left accent border
+  directly beneath the title, so each step in the live thinking panel
+  carries a "what this means" annotation. New
+  `StepByStepInsightsPanel.tsx` mounts in `MessageBubble` after the
+  auto-pivot block (and before the markdown / AnswerCard) for the final
+  assistant message — a default-collapsed card listing every meaningful
+  workbench entry with its insight, one per row, with a kind-specific
+  icon. No-op `flow_decision` rows (no insight, no override, no reason)
+  are filtered out so the panel stays signal-dense. Hidden entirely
+  when no entry carries an insight (legacy turns).
 - **Wave W10 · workbench-entry `insight` field** —
   `agentWorkbenchEntrySchema` gains an optional `insight: z.string().max(400)`
   field (back-compat: legacy Cosmos rows without it parse cleanly).
