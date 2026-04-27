@@ -1988,7 +1988,23 @@ export async function runAgentTurn(
       envelopeMagnitudes
     );
 
-    while (finalRound < config.maxVerifierRoundsFinal) {
+    // W4 · The final verifier critiques narrative quality. When the answer
+    // came from the deterministic fallback renderer (renderFallbackAnswer),
+    // there is no narrative — only a markdown render of tool data — so the
+    // verifier would always flag MISSING_MAGNITUDES / MISSING_NARRATIVE and
+    // single-flow would lock the placeholder in place. Skip it instead and
+    // emit a flow_decision so the trace remains transparent.
+    if (answerSource === "fallback") {
+      safeEmit("flow_decision", {
+        layer: "verifier-rewrite-final",
+        chosen: "fallback-skipped",
+        reason:
+          "Synthesis fallback used; verifier skipped because there is no narrative to critique.",
+        candidates: [],
+      });
+    }
+
+    while (answerSource !== "fallback" && finalRound < config.maxVerifierRoundsFinal) {
       const fv = await runVerifier(
         ctx,
         {
