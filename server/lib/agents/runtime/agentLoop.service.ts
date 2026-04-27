@@ -314,8 +314,12 @@ const magnitudeSchema = z.object({
   confidence: z.enum(["low", "medium", "high"]).optional(),
 });
 
+// W2 · `body` MUST be non-empty. Without `.min(1)` the LLM was free to
+// return `{ body: "", ctas: [...], magnitudes: [...] }`, which validated
+// silently and cascaded through every downstream check until the final
+// answer became the deterministic observation dump.
 const finalAnswerEnvelopeSchema = z.object({
-  body: z.string(),
+  body: z.string().min(1),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
   magnitudes: z.array(magnitudeSchema).max(6).optional(),
@@ -340,6 +344,17 @@ function formatAnswerFromEnvelope(body: string, keyInsight: string | null | unde
   return parts.join("\n").trim();
 }
 
+/**
+ * W2 · `source` tags which path produced `answer`. Downstream (W3/W4) uses
+ * this to decide whether the answer is a real LLM-authored narrative or a
+ * deterministic placeholder — the verifier is skipped for `fallback_dump`.
+ */
+type SynthesisSource =
+  | "json_envelope"
+  | "narrative_retry"
+  | "plain_text_retry"
+  | "fallback_dump";
+
 async function synthesizeFinalAnswerEnvelope(
   ctx: AgentExecutionContext,
   observations: string[],
@@ -352,6 +367,7 @@ async function synthesizeFinalAnswerEnvelope(
   suggestionHints: string[];
   magnitudes?: z.infer<typeof magnitudeSchema>[];
   unexplained?: string;
+  source: SynthesisSource;
 }> {
   const sacBlock = ctx.sessionAnalysisContext
     ? `\n\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, 10000)}`
@@ -391,28 +407,40 @@ When the user message says "questionShape: none" you may omit magnitudes and une
     purpose: LLM_PURPOSE.FINAL_ANSWER,
   });
 
+  // W2 · when JSON-mode synthesis fails (or returns empty body — now caught
+  // by `body: z.string().min(1)` so this path also fires for the previously-
+  // silent empty-body case), run a stricter plain-text retry that is
+  // structurally hard to short-circuit. Only after this also fails do we
+  // fall to the deterministic dump.
   if (!out.ok) {
-    onLlmCall();
-    const res = await callLlm(
-      {
-        model: MODEL as string,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
-          },
-          { role: "user", content: user },
-        ],
-        temperature: 0.35,
-        max_tokens: 2000,
-      },
-      { purpose: LLM_PURPOSE.FINAL_ANSWER }
-    );
-    const fallback =
-      res.choices[0]?.message?.content?.trim() ||
-      "I could not produce an answer from the available data.";
-    return { answer: fallback, ctas: [], suggestionHints: [] };
+    const narrativeRetry = await runNarrativeRetry(user, onLlmCall);
+    if (narrativeRetry) {
+      return {
+        answer: narrativeRetry,
+        ctas: [],
+        suggestionHints: [],
+        source: "narrative_retry",
+      };
+    }
+    const softRetry = await runPlainTextRetry(user, onLlmCall);
+    if (softRetry) {
+      return {
+        answer: softRetry,
+        ctas: [],
+        suggestionHints: [],
+        source: "plain_text_retry",
+      };
+    }
+    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 20_000);
+    return {
+      answer:
+        deterministic ?
+          `Summary from tool output:\n\n${deterministic}`
+        : "I could not produce an answer from the available data.",
+      ctas: [],
+      suggestionHints: [],
+      source: "fallback_dump",
+    };
   }
 
   const { body, keyInsight, ctas, magnitudes, unexplained } = out.data;
@@ -425,32 +453,24 @@ When the user message says "questionShape: none" you may omit magnitudes and une
           .slice(0, 6)
       : undefined;
   const cleanedUnexplained = unexplained?.trim()?.slice(0, 800) || undefined;
-  let answer = formatAnswerFromEnvelope(body ?? "", ki ?? null);
-  let suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
+  // `body.min(1)` in the schema means `body` is guaranteed non-empty here,
+  // but `formatAnswerFromEnvelope` is the same fn used by the narrator
+  // elsewhere — keeping the empty-trim guard as a defence costs us nothing
+  // and protects against future schema relaxations.
+  const answer = formatAnswerFromEnvelope(body ?? "", ki ?? null);
+  const suggestionHints = [...ctaList, ...(ki ? [ki] : [])];
 
   if (!answer.trim()) {
-    onLlmCall();
-    const res = await callLlm(
-      {
-        model: MODEL as string,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
-          },
-          { role: "user", content: user },
-        ],
-        temperature: 0.35,
-        max_tokens: 2000,
-      },
-      { purpose: LLM_PURPOSE.FINAL_ANSWER }
-    );
-    const chatFallback =
-      res.choices[0]?.message?.content?.trim() ||
-      "";
-    if (chatFallback) {
-      return { answer: chatFallback, ctas: [], suggestionHints: [] };
+    const narrativeRetry = await runNarrativeRetry(user, onLlmCall);
+    if (narrativeRetry) {
+      return {
+        answer: narrativeRetry,
+        ctas: ctaList,
+        suggestionHints,
+        ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
+        ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+        source: "narrative_retry",
+      };
     }
     const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 20_000);
     return {
@@ -460,6 +480,7 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         : "I could not produce an answer from the available data.",
       ctas: [],
       suggestionHints: [],
+      source: "fallback_dump",
     };
   }
 
@@ -470,7 +491,80 @@ When the user message says "questionShape: none" you may omit magnitudes and une
     suggestionHints,
     ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
     ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+    source: "json_envelope",
   };
+}
+
+/**
+ * W2 · "guaranteed narrative" retry — a stricter prompt than the legacy chat
+ * retry. Designed to be structurally incapable of returning an empty answer
+ * or echoing the deterministic-fallback prefix. Returns the trimmed prose
+ * on success, or `null` if the model still produces nothing usable.
+ */
+async function runNarrativeRetry(
+  user: string,
+  onLlmCall: () => void
+): Promise<string | null> {
+  onLlmCall();
+  const { MODEL } = await import("../../openai.js");
+  const res = await callLlm(
+    {
+      model: MODEL as string,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a data analyst. The previous attempt returned an empty answer. " +
+            "Write 2–4 sentences of plain prose that directly answer the user's question " +
+            "using the observations below. You MUST cite at least two specific numbers from " +
+            "the observations. Do NOT output JSON. Do NOT use code fences. Do NOT begin with " +
+            "'Summary from' or echo the observations verbatim. Begin with the direct answer.",
+        },
+        { role: "user", content: user },
+      ],
+      temperature: 0.4,
+      max_tokens: 800,
+    },
+    { purpose: LLM_PURPOSE.FINAL_ANSWER }
+  );
+  const text = res.choices[0]?.message?.content?.trim() ?? "";
+  if (!text) return null;
+  // Hard guard against the model parroting the deterministic-fallback prefix.
+  if (text.toLowerCase().startsWith("summary from")) return null;
+  return text;
+}
+
+/**
+ * W2 · the original chat-mode retry kept as a softer second attempt. Less
+ * strict than `runNarrativeRetry` so a model that refuses the strict prompt
+ * still has a chance to produce something usable before we fall to the dump.
+ */
+async function runPlainTextRetry(
+  user: string,
+  onLlmCall: () => void
+): Promise<string | null> {
+  onLlmCall();
+  const { MODEL } = await import("../../openai.js");
+  const res = await callLlm(
+    {
+      model: MODEL as string,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a data analyst. Answer using ONLY tool observations. If results are empty, cite diagnostics and distinct samples from observations; do not give vague clarifying questions when the user was specific.",
+        },
+        { role: "user", content: user },
+      ],
+      temperature: 0.35,
+      max_tokens: 2000,
+    },
+    { purpose: LLM_PURPOSE.FINAL_ANSWER }
+  );
+  const text = res.choices[0]?.message?.content?.trim() ?? "";
+  if (!text) return null;
+  if (text.toLowerCase().startsWith("summary from")) return null;
+  return text;
 }
 
 function buildPreSynthesisMidTurnSummary(
