@@ -7,7 +7,7 @@ import {
   TemporalDisplayGrain,
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
-import { User, Bot, Edit2, Check, X as XIcon } from 'lucide-react';
+import { User, Bot, Edit2, Check, X as XIcon, Info } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
@@ -45,8 +45,56 @@ import { userMessageHasReportIntent } from '@/lib/reportIntent';
 
 // Lazy load ChartRenderer to reduce initial bundle size (includes heavy recharts dependency)
 const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ default: module.ChartRenderer })));
+// WC9 · v1→v2 shim. Routes through PremiumChart when the per-mark
+// feature flag (chart.premium.<type>) is set; otherwise legacy.
+import { ChartShim } from '@/components/charts/ChartShim';
 
 const PREVIEW_SIGNATURE_SLICE = 3500;
+
+/**
+ * W6 · Detect a legacy server-side fallback dump that ever slips past the
+ * server's W3 clean renderer. Server should never emit this; the client
+ * guard exists purely to avoid a regression rendering raw observation
+ * prefixes as primary answer prose.
+ */
+function isLegacySynthesisDump(content: string): boolean {
+  if (!content) return false;
+  const head = content.trimStart().slice(0, 30).toLowerCase();
+  return head.startsWith('summary from tool output:');
+}
+
+interface SynthesisFallbackCalloutProps {
+  content: string;
+  messageId?: string;
+}
+
+function SynthesisFallbackCallout({
+  content,
+  messageId,
+}: SynthesisFallbackCalloutProps) {
+  useEffect(() => {
+    // Surfacing this in console so client telemetry can pick it up; the
+    // server-side W3 renderer is the real fix, this branch is a tripwire.
+    console.warn(
+      '[MessageBubble] Legacy synthesis dump reached client',
+      { messageId }
+    );
+  }, [messageId]);
+  return (
+    <div
+      className="rounded-md border border-border bg-muted/40 p-3 text-[14px] leading-[22px] text-muted-foreground"
+      data-testid="synthesis-fallback-callout"
+    >
+      <div className="mb-1 flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+        <Info className="h-3.5 w-3.5" />
+        <span>Synthesis fallback</span>
+      </div>
+      <div className="whitespace-pre-wrap">
+        <MarkdownRenderer content={content} />
+      </div>
+    </div>
+  );
+}
 
 function stripAgentChartMeta(chart: ChartSpec): ChartSpec {
   const c = chart as ChartSpec & {
@@ -605,6 +653,17 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 onSuggestedQuestionClick={onSuggestedQuestionClick}
                 supplementaryMarkdown={assistantMarkdownParts.markdownBody}
               />
+            ) : isLegacySynthesisDump(assistantMarkdownParts.markdownBody) ? (
+              // W6 · Defence in depth: server-side W3 replaces the legacy
+              // `Summary from tool output:` dump with a clean rendered table,
+              // but if a future regression ever lets that prefix slip through
+              // we render it as a muted "Synthesis fallback" callout rather
+              // than as primary answer prose. Logs a console.warn so it shows
+              // up in client telemetry.
+              <SynthesisFallbackCallout
+                content={assistantMarkdownParts.markdownBody}
+                messageId={(message as Message & { id?: string }).id}
+              />
             ) : (
               <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
                 <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
@@ -788,14 +847,20 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                           </div>
                         }
                       >
-                        <ChartRenderer
-                          chart={chart}
-                          index={idx}
-                          isSingleChart={message.charts!.length === 1}
-                          enableFilters
-                          isLoading={chartLoadingState.isLoading}
-                          loadingProgress={chartLoadingState.progress}
+                        <ChartShim
+                          spec={chart}
                           keyInsightSessionId={sessionId ?? null}
+                          legacy={() => (
+                            <ChartRenderer
+                              chart={chart}
+                              index={idx}
+                              isSingleChart={message.charts!.length === 1}
+                              enableFilters
+                              isLoading={chartLoadingState.isLoading}
+                              loadingProgress={chartLoadingState.progress}
+                              keyInsightSessionId={sessionId ?? null}
+                            />
+                          )}
                         />
                       </Suspense>
                       {/* W8 · Perplexity-style provenance pill (rows / cols / tools).
