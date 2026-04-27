@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W30 · per-turn `priorInvestigationsSnapshot` on the
+  message** — refactored the W21 `priorInvestigations` per-entry
+  shape into a canonical `priorInvestigationItemSchema` defined in
+  `shared/schema.ts` and re-exported from
+  `lib/agents/runtime/priorInvestigations.ts` (avoids the
+  schema-imports-lib circular). Reused by both
+  `sessionAnalysisContextSchema.sessionKnowledge.priorInvestigations`
+  (live array) AND the new optional `messageSchema.priorInvestigationsSnapshot`
+  field — single source of truth, no schema drift. Both
+  `chatStream.service.ts` and `chat.service.ts` snapshot the
+  in-memory `chatDocument.sessionAnalysisContext` array BEFORE
+  `persistMergeAssistantSessionContext` runs (where the W21 append
+  fires), so the snapshot represents what the agent knew at the
+  start of THIS turn — distinct from the live current-state array.
+  Optional + back-compat: legacy messages parse cleanly. No client
+  UI surface this wave; per-message rendering is a future UX wave.
 - **Wave W29 · `uploadQueue.ts` typecheck cleanup** — knocked
   pre-existing typecheck noise from **127 → 91 errors** (-36) with
   two surgical zero-runtime-change fixes: `let data:

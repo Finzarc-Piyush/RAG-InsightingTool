@@ -357,6 +357,15 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         ...(answerResult.investigationSummary
           ? { investigationSummary: answerResult.investigationSummary }
           : {}),
+        // W30 · snapshot priorInvestigations as they were BEFORE this turn
+        // (the W21 append in persistMergeAssistantSessionContext fires
+        // AFTER this save, so the in-memory chatDocument is still BEFORE-
+        // state).
+        ...((chatDocument.sessionAnalysisContext?.sessionKnowledge?.priorInvestigations?.length ?? 0) > 0
+          ? {
+              priorInvestigationsSnapshot: chatDocument.sessionAnalysisContext!.sessionKnowledge!.priorInvestigations,
+            }
+          : {}),
       },
     ]);
     console.log(`✅ Messages saved to chat: ${chatDocument.id}`);

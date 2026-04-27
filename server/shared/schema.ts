@@ -637,6 +637,24 @@ export const insightSchema = z.object({
  * blackboard so Cosmos document size stays bounded and the client doesn't
  * need to know about evidence-ref bookkeeping.
  */
+/**
+ * W30 · canonical per-entry shape for the prior-investigations digest.
+ * Reused by `sessionAnalysisContextSchema.sessionKnowledge.priorInvestigations`
+ * (the live array) AND `messageSchema.priorInvestigationsSnapshot` (per-
+ * message snapshot — added in W30 to let historical messages show what
+ * the agent knew at THAT turn). Single source of truth eliminates drift.
+ */
+export const priorInvestigationItemSchema = z.object({
+  at: z.string().max(40),
+  question: z.string().max(280),
+  hypothesesConfirmed: z.array(z.string().max(200)).max(5),
+  hypothesesRefuted: z.array(z.string().max(200)).max(5),
+  hypothesesOpen: z.array(z.string().max(200)).max(5),
+  headlineFinding: z.string().max(280).optional(),
+});
+
+export type PriorInvestigationItem = z.infer<typeof priorInvestigationItemSchema>;
+
 export const investigationSummarySchema = z.object({
   hypotheses: z
     .array(
@@ -796,17 +814,13 @@ export const sessionAnalysisContextSchema = z.object({
      * already established. Capped at 5 entries to keep Cosmos doc size in
      * check; oldest dropped first.
      */
+    // W30 · uses the canonical priorInvestigationItemSchema exported from
+    // `lib/agents/runtime/priorInvestigations.ts` so the per-message
+    // snapshot (added below) and the live SAC array share a single source
+    // of truth. Inline-defined here originally; refactored into the
+    // exported schema with no shape change.
     priorInvestigations: z
-      .array(
-        z.object({
-          at: z.string().max(40),
-          question: z.string().max(280),
-          hypothesesConfirmed: z.array(z.string().max(200)).max(5),
-          hypothesesRefuted: z.array(z.string().max(200)).max(5),
-          hypothesesOpen: z.array(z.string().max(200)).max(5),
-          headlineFinding: z.string().max(280).optional(),
-        })
-      )
+      .array(priorInvestigationItemSchema)
       .max(5)
       .optional(),
   }),
@@ -950,6 +964,18 @@ export const messageSchema = z.object({
    * questions. Optional + back-compat (legacy turns parse cleanly).
    */
   investigationSummary: investigationSummarySchema.optional(),
+  /**
+   * W30 · snapshot of `sessionKnowledge.priorInvestigations` AS IT WAS
+   * BEFORE this turn ran. Lets historical messages show what the agent
+   * knew at the time, distinct from the live current-state array on
+   * `sessionAnalysisContext.sessionKnowledge.priorInvestigations`.
+   * Capped at 5 entries (matches the live array cap). Optional + back-
+   * compat — legacy messages render unchanged.
+   */
+  priorInvestigationsSnapshot: z
+    .array(priorInvestigationItemSchema)
+    .max(5)
+    .optional(),
   /**
    * W6 — filters the agent applied to this turn's analysis, surfaced in the
    * UI as chips above the chart cards so the user can confirm the scope.

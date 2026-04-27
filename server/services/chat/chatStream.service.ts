@@ -1303,6 +1303,14 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               ).investigationSummary,
             }
           : {}),
+        // W30 · snapshot priorInvestigations AS THEY WERE BEFORE this turn
+        // ran. The W21 append happens later in `persistMergeAssistantSessionContext`,
+        // so the in-memory chatDocument array still holds the BEFORE state.
+        ...((chatDocument.sessionAnalysisContext?.sessionKnowledge?.priorInvestigations?.length ?? 0) > 0
+          ? {
+              priorInvestigationsSnapshot: chatDocument.sessionAnalysisContext!.sessionKnowledge!.priorInvestigations,
+            }
+          : {}),
       };
 
       await addMessagesBySessionId(sessionId, [

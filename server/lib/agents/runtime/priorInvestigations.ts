@@ -21,6 +21,18 @@ import type {
   SessionAnalysisContext,
 } from "../../../shared/schema.js";
 
+/**
+ * W30 · re-export the canonical per-entry schema (defined in
+ * `shared/schema.ts` to avoid a circular import — the lib layer imports
+ * schema, not the other way round). Callers that already imported
+ * priorInvestigations.ts continue to work; the schema's single source of
+ * truth lives in `shared/schema.ts`.
+ */
+export {
+  priorInvestigationItemSchema,
+  type PriorInvestigationItem,
+} from "../../../shared/schema.js";
+
 const MAX_PRIOR = 5;
 const MAX_HYPOTHESIS_TEXT = 200;
 const MAX_QUESTION_TEXT = 280;
