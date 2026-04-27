@@ -167,6 +167,14 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W23 · chat.service parity for W12 chart commentary** —
+  the non-streaming `chat.service.ts` now loads enabled FMCG/Marico
+  domain packs and threads them through `enrichCharts` so chart
+  `businessCommentary` lights up on this code path too. Closes the
+  W12 gap (only the streaming path was wired before). The
+  non-streaming path doesn't accumulate a workbench, so W19 per-step
+  enrichment doesn't apply there — this wave only addresses chart
+  parity.
 - **Wave W22 · domainLens citation anti-hallucination check** — new
   pure helper `checkDomainLensCitations` extracts backtick-quoted
   pack-id-shaped tokens from `envelope.domainLens` and verifies each

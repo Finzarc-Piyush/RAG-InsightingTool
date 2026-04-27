@@ -161,6 +161,21 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   // Enrich charts with data and insights
   if (answerResult.charts && Array.isArray(answerResult.charts)) {
+    // W23 · parity with the chatStream path: load enabled FMCG/Marico
+    // domain packs once and pass them down so chart insight generation can
+    // fill `businessCommentary` on this non-streaming code path too. Loader
+    // is process-cached; failures are non-fatal.
+    let domainContextForCharts: string | undefined;
+    try {
+      const { loadEnabledDomainContext } = await import(
+        "../../lib/domainContext/loadEnabledDomainContext.js"
+      );
+      const { text } = await loadEnabledDomainContext();
+      if (text?.trim()) domainContextForCharts = text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`W23 · domain context load for chart commentary failed: ${msg}`);
+    }
     answerResult.charts = await enrichCharts(
       answerResult.charts,
       chatDocument,
@@ -170,6 +185,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         userQuestion: message,
         sessionAnalysisContext: chatDocument.sessionAnalysisContext,
         permanentContext,
+        domainContext: domainContextForCharts,
       }
     );
   }
