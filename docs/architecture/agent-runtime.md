@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W35 · `magnitudes` numerical fabrication check** — new
+  `checkMagnitudesAgainstObservations` extracts every numeric token
+  from each magnitude's `value` (and `label` as fallback) and
+  confirms each appears within ±2% in the supplied evidence pool:
+  tool observations, the W7 RAG block, AND the composed
+  FMCG/Marico domain context. Reuses W7.5's
+  `extractNumbersFromNarrative` helper. Fires `revise_narrative`
+  with code `FABRICATED_MAGNITUDES` when ≥2 magnitudes cite
+  unsupported numbers (single-magnitude flag is rounding-artefact
+  tolerance). Wired into the agent loop's repair block alongside
+  W17/W22, sharing the same `maxVerifierRoundsFinal` budget. Pure
+  deterministic check; zero new LLM calls.
 - **Wave W34 · single-load domain context per turn** —
   `chat.service.ts` (non-streaming path) was loading
   `loadEnabledDomainContext` twice per turn — once for chart

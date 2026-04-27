@@ -30,6 +30,7 @@ import {
   checkDomainLensCitations,
   extractSuppliedPackIds,
 } from "./checkEnvelopeCompleteness.js";
+import { checkMagnitudesAgainstObservations } from "./checkMagnitudesAgainstObservations.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -2031,8 +2032,23 @@ export async function runAgentTurn(
         const citationGap = completenessGap.ok
           ? checkDomainLensCitations(envelopeAnswerEnvelope, suppliedPackIds)
           : { ok: true as const };
-        if (completenessGap.ok && citationGap.ok) break;
-        const gap = !completenessGap.ok ? completenessGap : citationGap;
+        // W35 · numerical-fabrication check on `magnitudes`. Same repair
+        // pipeline as W17/W22; passes when fewer than 2 magnitudes are
+        // unsupported (rounding-artefact tolerance baked in).
+        const magnitudesGap =
+          completenessGap.ok && citationGap.ok
+            ? checkMagnitudesAgainstObservations(envelopeMagnitudes, {
+                observations,
+                ragBlock: upfrontRagHitsBlock,
+                domainContext: ctx.domainContext,
+              })
+            : { ok: true as const };
+        if (completenessGap.ok && citationGap.ok && magnitudesGap.ok) break;
+        const gap = !completenessGap.ok
+          ? completenessGap
+          : !citationGap.ok
+            ? citationGap
+            : magnitudesGap;
         // TS narrowing: `gap` is the first non-ok result.
         if (gap.ok) break; // unreachable; guard for narrowing
         completenessRound++;
@@ -2046,7 +2062,9 @@ export async function runAgentTurn(
           layer:
             gap.code === "HALLUCINATED_DOMAIN_CITATION"
               ? "envelope-citations"
-              : "envelope-completeness",
+              : gap.code === "FABRICATED_MAGNITUDES"
+                ? "envelope-magnitudes"
+                : "envelope-completeness",
           chosen: `repair-round-${completenessRound}`,
           reason: gap.description.slice(0, 300),
           candidates: [gap.code],
