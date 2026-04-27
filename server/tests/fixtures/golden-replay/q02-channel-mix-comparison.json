@@ -1,0 +1,9 @@
+{
+  "id": "q02-channel-mix-comparison",
+  "question": "How does Saffola's MT performance compare with Parachute across Q3?",
+  "questionShape": "comparison",
+  "minBodyChars": 400,
+  "minEnvelopeFields": 1,
+  "expectInvestigationSummary": true,
+  "expectAnswerSourceIn": ["narrator", "synthesizer", "delegate"]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "q03-trend",
+  "question": "Show me the volume trend over the last quarter",
+  "questionShape": "trend",
+  "minBodyChars": 200,
+  "minEnvelopeFields": 0,
+  "expectInvestigationSummary": false,
+  "expectAnswerSourceIn": ["narrator", "synthesizer", "delegate", "fallback"]
+}

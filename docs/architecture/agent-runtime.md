@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W28 · live-LLM golden replay (env-gated)** — new
+  `tests/liveLlmGoldenReplayW28.test.ts` runs the real agent
+  pipeline against three curated FMCG fixtures
+  (`tests/fixtures/golden-replay/q01..q03.json`) and asserts SHAPE
+  only — minBodyChars, populated envelope fields, investigation
+  summary present — never exact text. Catches prompt-quality drift
+  that mock-only tests (W18/W20/W24) cannot. Double-gated by
+  `LIVE_LLM_REPLAY=true` AND `AZURE_OPENAI_API_KEY`. With either
+  unset, the test is a single trivially-passing skip. Cost ~$3 /
+  replay run; intended for nightly CI or pre-release smoke, never
+  per-commit. Per-fixture timeout 90s. Documented in
+  `server/.env.example`.
 - **Wave W27 · typecheck cleanup (low-risk only)** — knocked
   pre-existing typecheck noise from 127 → 116 errors with four
   surgical fixes that change zero runtime semantics: `pivotDefaultsFromPreview.ts`

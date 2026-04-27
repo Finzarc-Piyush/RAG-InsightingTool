@@ -1,0 +1,9 @@
+{
+  "id": "q01-saffola-mt-share",
+  "question": "Why did Saffola lose share in MT in Q3?",
+  "questionShape": "driver_discovery",
+  "minBodyChars": 400,
+  "minEnvelopeFields": 1,
+  "expectInvestigationSummary": true,
+  "expectAnswerSourceIn": ["narrator", "synthesizer", "delegate"]
+}
