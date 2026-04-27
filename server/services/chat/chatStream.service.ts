@@ -1021,6 +1021,34 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           domainContext: domainContextForCharts,
         }
       );
+      // W19 · per-step LLM-enriched insights (env-gated, default off). Single
+      // batched LLM call that ties each workbench step to the analysis arc.
+      // Mutates `agentWorkbench` in place; persistence picks up the enriched
+      // entries automatically. Failures are non-fatal — deterministic W10
+      // insights stay as the fallback.
+      try {
+        const { enrichStepInsights, isRichStepInsightsEnabled } = await import(
+          "../../lib/agents/runtime/enrichStepInsights.js"
+        );
+        if (isRichStepInsightsEnabled() && agentWorkbench.length > 0) {
+          const enrichResult = await enrichStepInsights({
+            workbench: agentWorkbench,
+            finalAnswer: result.answer ?? "",
+            sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+            domainContext: domainContextForCharts,
+            turnId: (result.agentTrace as { turnId?: string } | undefined)?.turnId ?? sessionId,
+          });
+          if (enrichResult.ok && enrichResult.enrichedCount > 0) {
+            // Push a final replacement event so the live UI updates in place.
+            // The persisted message will carry the enriched workbench too via
+            // the existing assistantSave path.
+            sendSSE(res, "workbench_enriched", { entries: agentWorkbench });
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`W19 · enrichStepInsights failed: ${msg}`);
+      }
       // WC7 · auto-attach analytical layers (reference lines / trend / forecast /
       // outliers / comparison) inferred from the user's question. The legacy
       // ChartRenderer ignores `_autoLayers`; the v2 ChartShim forwards them

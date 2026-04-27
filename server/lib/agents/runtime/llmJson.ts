@@ -64,7 +64,10 @@ export async function completeJson<T>(
         // and re-emit below with the correct `attempt` index.
         skipGlobalEmit: true,
         turnId: options.turnId,
-        // Already resolved the model above; skip redundant purpose routing in callLlm.
+        // W18 · purpose forwarded so the test stub resolver (in callLlm) can
+        // route by purpose. Production cost is one extra `resolveModelFor`
+        // call per attempt — idempotent, negligible.
+        purpose: options.purpose,
       }
     );
     const text = res.choices[0]?.message?.content || "{}";

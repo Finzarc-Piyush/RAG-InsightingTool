@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W19 · per-step LLM-enriched insights (env-gated)** — new
+  `lib/agents/runtime/enrichStepInsights.ts` is a single-batched LLM
+  call (cheap insight model) that ties each meaningful workbench step
+  to the analysis arc — 1–2 sentences per step on top of the W10
+  deterministic insight, citing the FMCG/Marico pack id when
+  relevant. Mutates the workbench in place; deterministic insights
+  stay as the fallback for entries the LLM omits or when the call
+  fails. Wired in `chatStream.service.ts` after chart enrichment;
+  emits a final `workbench_enriched` SSE event so the client live-
+  refreshes the StepByStepInsightsPanel via `useHomeMutations`.
+  Gated by `RICH_STEP_INSIGHTS_ENABLED=true` (default off — opt-in
+  due to ~2–5s latency). Also: `llmJson.completeJson` now forwards
+  `purpose` to `callLlm` so the W18 stub resolver fires for tests
+  (cost: one idempotent re-resolve per attempt — negligible).
 - **Wave W18 · LLM stub harness for tests** — `callLlm` gains a tiny
   optional resolver hook (`__setLlmStubResolver`) gated by a nullable
   pointer check. Production never sets it; tests install a stub via

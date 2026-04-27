@@ -692,6 +692,20 @@ export const useHomeMutations = ({
                   turnTraceRef.current = { ...turnTraceRef.current, workbench: next };
                   return next;
                 });
+              } else if (event === 'workbench_enriched') {
+                // W19 · single-batched end-of-turn enrichment replaces the
+                // entire workbench with entries whose `insight` field has
+                // been backfilled by an LLM call. The client just swaps the
+                // array reference; StepByStepInsightsPanel + ThinkingPanel
+                // re-render with richer commentary.
+                const entries = (data as { entries?: AgentWorkbenchEntry[] }).entries;
+                if (Array.isArray(entries) && entries.length > 0) {
+                  setAgentWorkbenchLive(entries);
+                  turnTraceRef.current = {
+                    ...turnTraceRef.current,
+                    workbench: entries,
+                  };
+                }
               } else if (event === 'sub_question_spawned') {
                 // W12: track spawned sub-questions for ThinkingPanel display
                 const questions = (data as { questions?: string[] }).questions;
