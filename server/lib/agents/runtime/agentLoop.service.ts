@@ -26,6 +26,7 @@ import { runVerifier, rewriteNarrative } from "./verifier.js";
 import { buildFinalEvidence } from "./verifierHelpers.js";
 import { VERIFIER_VERDICT } from "./schemas.js";
 import { agentLog } from "./agentLogger.js";
+import { renderFallbackAnswer } from "./synthesisFallback.js";
 import {
   appendInterAgentMessage,
   formatInterAgentHandoffsForPrompt,
@@ -431,12 +432,13 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         source: "plain_text_retry",
       };
     }
-    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 20_000);
+    // W3 · Replace the legacy `Summary from tool output:` dump with a clean
+    // markdown render of the latest tool's Sample[] block, or a one-line
+    // apology if no parseable Sample exists. The literal observation
+    // prefixes (`[execute_query_plan]`, etc.) must never reach the user.
+    const fallback = renderFallbackAnswer(observations);
     return {
-      answer:
-        deterministic ?
-          `Summary from tool output:\n\n${deterministic}`
-        : "I could not produce an answer from the available data.",
+      answer: fallback.content,
       ctas: [],
       suggestionHints: [],
       source: "fallback_dump",
@@ -472,12 +474,13 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         source: "narrative_retry",
       };
     }
-    const deterministic = observations.join("\n\n---\n\n").trim().slice(0, 20_000);
+    // W3 · Replace the legacy `Summary from tool output:` dump with a clean
+    // markdown render of the latest tool's Sample[] block, or a one-line
+    // apology if no parseable Sample exists. The literal observation
+    // prefixes (`[execute_query_plan]`, etc.) must never reach the user.
+    const fallback = renderFallbackAnswer(observations);
     return {
-      answer:
-        deterministic ?
-          `Summary from tool output:\n\n${deterministic}`
-        : "I could not produce an answer from the available data.",
+      answer: fallback.content,
       ctas: [],
       suggestionHints: [],
       source: "fallback_dump",
@@ -844,10 +847,13 @@ export async function runAgentTurn(
   /** Survives catch if a post-synthesis step throws (e.g. visual planner). */
   let preservedAnswer = "";
 
+  // W3 · clean fallback render — never echoes raw observation prefixes
+  // (`[execute_query_plan]`, `Sample: [...]`, etc.) to the user. Returns
+  // empty string when there are no observations at all so callers can fall
+  // through to whatever upstream emergency-message they prefer.
   function observationsFallbackAnswer(): string {
-    const body = observations.join("\n\n---\n\n").trim();
-    if (!body) return "";
-    return `Summary from tool output:\n\n${body.slice(0, config.observationMaxChars)}`;
+    if (observations.length === 0) return "";
+    return renderFallbackAnswer(observations).content;
   }
 
   // W2/W3: initialise the shared analytical blackboard for this turn.
@@ -1732,6 +1738,14 @@ export async function runAgentTurn(
       summary: buildPreSynthesisMidTurnSummary(ctx, trace, observations, mergedCharts),
     });
 
+    // W3 · `answerSource` flags whether `answer` is a real LLM-authored
+    // narrative (`narrator` / `synthesizer`) or a deterministic placeholder
+    // (`fallback`). W4 uses this to skip the final verifier on placeholders;
+    // W5 logs it as telemetry. Default to `delegate` because that's the
+    // tool-handed-off case (delegateAnswer non-empty above this block).
+    let answerSource: "delegate" | "narrator" | "synthesizer" | "fallback" =
+      "delegate";
+
     let answer = delegateAnswer || "";
     if (!answer && observations.length > 0) {
       try {
@@ -1754,6 +1768,7 @@ export async function runAgentTurn(
             envCtas = (narResult.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
             envMagnitudes = narResult.magnitudes;
             envUnexplained = narResult.unexplained;
+            if (answer.trim()) answerSource = "narrator";
             // W3 · capture the structured AnswerEnvelope. Each field is optional;
             // we keep the envelope even when sparsely populated so the UI can
             // render whatever the narrator produced (TL;DR alone is valuable).
@@ -1781,6 +1796,11 @@ export async function runAgentTurn(
           envCtas = (env.ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
           envMagnitudes = env.magnitudes;
           envUnexplained = env.unexplained;
+          // W3 · `fallback_dump` means the LLM paths all failed and the
+          // clean renderer produced a markdown table. Anything else
+          // (json_envelope, narrative_retry, plain_text_retry) is a real
+          // synthesized narrative.
+          answerSource = env.source === "fallback_dump" ? "fallback" : "synthesizer";
         }
 
         if (envCtas.length) followUpPrompts = envCtas;
@@ -1816,6 +1836,7 @@ export async function runAgentTurn(
         const msg = synErr instanceof Error ? synErr.message : String(synErr);
         agentLog("synthesis_error", { turnId, err: msg.slice(0, 300) });
         answer = observationsFallbackAnswer();
+        answerSource = "fallback";
       }
     }
     preservedAnswer = answer;
@@ -1865,6 +1886,7 @@ export async function runAgentTurn(
       if (fb) {
         answer = fb;
         preservedAnswer = fb;
+        answerSource = "fallback";
         agentLog("synthesis_empty_fallback", {
           turnId,
           observationsCount: observations.length,
