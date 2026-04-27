@@ -224,6 +224,30 @@ export function AnswerCard({
                         <li key={i} className="text-[13px] leading-[20px] text-foreground">
                           <span className="font-medium">{r.action}</span>
                           <span className="ml-1 text-muted-foreground">— {r.rationale}</span>
+                          {/* W44 · "Try this" button. Only renders when
+                              `onSuggestedQuestionClick` is wired (matches
+                              the existing `nextSteps` pattern). Click
+                              spawns a new chat turn with a templated
+                              prompt that re-frames the recommendation as
+                              an analytical follow-up question. */}
+                          {onSuggestedQuestionClick && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="ml-2 h-auto rounded-full px-2 py-0.5 text-[11px] text-primary hover:bg-primary/10"
+                              aria-label={`Ask a follow-up about: ${r.action}`}
+                              onClick={() =>
+                                onSuggestedQuestionClick(
+                                  `Help me with: ${r.action}.${
+                                    r.rationale ? ` Specifically: ${r.rationale}` : ""
+                                  } Show me the relevant analysis.`
+                                )
+                              }
+                            >
+                              Try this →
+                            </Button>
+                          )}
                         </li>
                       ))}
                     </ol>

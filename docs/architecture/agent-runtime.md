@@ -167,6 +167,16 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W44 · clickable recommendation actions** — pre-W44 the W9
+  `recommendations` rendered as static text, forcing users to retype
+  each action as a follow-up question. Each recommendation now has a
+  small "Try this →" ghost button rendered only when
+  `onSuggestedQuestionClick` is wired (matches the existing
+  `nextSteps` pattern). Click spawns a new chat turn with a
+  templated prompt: `"Help me with: <action>. Specifically:
+  <rationale>. Show me the relevant analysis."` Pure additive UI;
+  legacy renders are unchanged when the prop is absent. Semantic
+  tokens only; theme:check clean.
 - **Wave W43 · batched repair issues** — pre-W43 a draft missing
   implications + citing a fake pack id + with a fabricated magnitude
   triggered THREE separate narrator repair calls (~6000 tokens
