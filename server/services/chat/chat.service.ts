@@ -177,23 +177,25 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     agentOpts
   );
 
+  // W34 · single load of the FMCG/Marico domain pack text per turn.
+  // Pre-W34 the non-streaming path loaded it twice (once for chart
+  // commentary, once for step-insight enrichment). The loader is
+  // process-memoised so the cached text is fetched in O(1), but the
+  // dynamic `await import(...)` chain ran twice — pure waste.
+  let perTurnDomainContext: string | undefined;
+  try {
+    const { loadEnabledDomainContext } = await import(
+      "../../lib/domainContext/loadEnabledDomainContext.js"
+    );
+    const { text } = await loadEnabledDomainContext();
+    if (text?.trim()) perTurnDomainContext = text;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`W34 · domain context load failed: ${msg}`);
+  }
+
   // Enrich charts with data and insights
   if (answerResult.charts && Array.isArray(answerResult.charts)) {
-    // W23 · parity with the chatStream path: load enabled FMCG/Marico
-    // domain packs once and pass them down so chart insight generation can
-    // fill `businessCommentary` on this non-streaming code path too. Loader
-    // is process-cached; failures are non-fatal.
-    let domainContextForCharts: string | undefined;
-    try {
-      const { loadEnabledDomainContext } = await import(
-        "../../lib/domainContext/loadEnabledDomainContext.js"
-      );
-      const { text } = await loadEnabledDomainContext();
-      if (text?.trim()) domainContextForCharts = text;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`W23 · domain context load for chart commentary failed: ${msg}`);
-    }
     answerResult.charts = await enrichCharts(
       answerResult.charts,
       chatDocument,
@@ -203,39 +205,24 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         userQuestion: message,
         sessionAnalysisContext: chatDocument.sessionAnalysisContext,
         permanentContext,
-        domainContext: domainContextForCharts,
+        domainContext: perTurnDomainContext,
       }
     );
   }
 
   // W25 · per-step LLM-enriched insights on the non-streaming path. Same
   // gate / behaviour as the streaming path (W19); failures are non-fatal
-  // and leave deterministic W10 insights as the fallback. The non-streaming
-  // path doesn't push live SSE updates, so the enrichment lands on the
-  // workbench BEFORE persistence — the user sees the enriched insights on
-  // initial load.
+  // and leave deterministic W10 insights as the fallback.
   try {
     const { enrichStepInsights, isRichStepInsightsEnabled } = await import(
       "../../lib/agents/runtime/enrichStepInsights.js"
     );
     if (isRichStepInsightsEnabled() && agentWorkbench.length > 0) {
-      // Re-load domain context for the enrichment prompt; same memoised
-      // loader the chart-enrichment block above uses.
-      let dc: string | undefined;
-      try {
-        const { loadEnabledDomainContext } = await import(
-          "../../lib/domainContext/loadEnabledDomainContext.js"
-        );
-        const { text } = await loadEnabledDomainContext();
-        if (text?.trim()) dc = text;
-      } catch {
-        /* non-fatal */
-      }
       await enrichStepInsights({
         workbench: agentWorkbench,
         finalAnswer: answerResult.answer ?? "",
         sessionAnalysisContext: chatDocument.sessionAnalysisContext,
-        domainContext: dc,
+        domainContext: perTurnDomainContext,
         turnId:
           (answerResult.agentTrace as { turnId?: string } | undefined)?.turnId ?? sessionId,
       });

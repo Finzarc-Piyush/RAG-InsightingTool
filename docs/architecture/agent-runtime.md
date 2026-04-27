@@ -167,6 +167,16 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W34 · single-load domain context per turn** —
+  `chat.service.ts` (non-streaming path) was loading
+  `loadEnabledDomainContext` twice per turn — once for chart
+  commentary (W23) and again for step-insight enrichment (W25). The
+  loader is process-memoised so the cached text is fetched in O(1),
+  but the dynamic `await import(...)` chain ran twice. Hoisted the
+  load to a single per-turn `perTurnDomainContext` variable that
+  both consumers reuse. `chatStream.service.ts` was already correct
+  (one load, two consumers) — no change needed there. Pure
+  refactor; zero runtime behaviour change.
 - **Wave W33 · W28 fixture expansion + recording mode** — added two
   new fixtures: `q04-citation-check.json` exercises the W22 `domainLens`
   citation gate (asserts the LLM cites a real pack id via regex);
