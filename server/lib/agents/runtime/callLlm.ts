@@ -55,6 +55,28 @@ export interface CallLlmOptions {
 }
 
 /**
+ * W18 · TEST-ONLY stub resolver. Production code never sets this; it is only
+ * imported by `tests/helpers/llmStub.ts`. When set, `callLlm` consults the
+ * resolver before hitting the real provider; if it returns a `ChatCompletion`,
+ * that response short-circuits the network call. Returning `undefined` means
+ * "no stub for this call — fall through to the real path."
+ *
+ * Kept tiny (≤20 LOC) and isolated so production cost is zero (one nullable
+ * pointer check per call). Setter has a `__` prefix so the test-only intent
+ * is unambiguous to readers.
+ */
+type LlmStubResolver = (
+  params: ChatCompletionCreateParamsNonStreaming,
+  opts: CallLlmOptions
+) => ChatCompletion | undefined;
+let __llmStubResolver: LlmStubResolver | null = null;
+
+/** Test-only: install a stub resolver. Pass `null` to clear. */
+export function __setLlmStubResolver(fn: LlmStubResolver | null): void {
+  __llmStubResolver = fn;
+}
+
+/**
  * Drop-in replacement for `openai.chat.completions.create(params)` that emits
  * usage telemetry. Preserves return type; does not retry, does not translate
  * errors — just measures.
@@ -74,6 +96,14 @@ export async function callLlm(
     effectiveModel === params.model
       ? params
       : { ...params, model: effectiveModel };
+  // W18 · test-only stub short-circuit. Production never sets the resolver;
+  // when set (by installLlmStub in tests), it can return a canned response
+  // keyed off `opts.purpose` and the system prompt. Returning `undefined`
+  // means "no stub for this call" → fall through to the real path.
+  if (__llmStubResolver) {
+    const stubbed = __llmStubResolver(effectiveParams, opts);
+    if (stubbed) return stubbed;
+  }
   // W1 · dispatch by model-name prefix. Claude routes through the Anthropic
   // /v1/messages adapter, which returns an OpenAI-shaped ChatCompletion so
   // every downstream caller (completeJson, direct callers) is unaffected.

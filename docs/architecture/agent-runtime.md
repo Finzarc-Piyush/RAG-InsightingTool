@@ -167,6 +167,14 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W18 · LLM stub harness for tests** — `callLlm` gains a tiny
+  optional resolver hook (`__setLlmStubResolver`) gated by a nullable
+  pointer check. Production never sets it; tests install a stub via
+  `installLlmStub({ [purpose]: handler })`. Default handlers cover
+  every member of `LLM_PURPOSE` with a minimum-valid response so
+  unstubbed purposes don't crash the pipeline. Foundation for W19
+  per-step insight tests and W20 e2e smoke. Production cost: zero
+  (one nullable pointer check per call).
 - **Wave W17 · verifier requires decision-grade sections** — new
   pure helper `lib/agents/runtime/checkEnvelopeCompleteness.ts` is a
   deterministic pre-LLM gate that returns `{ ok: false,
