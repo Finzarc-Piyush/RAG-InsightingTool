@@ -167,6 +167,23 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W21 · prior-turn investigation carry-over** — the agent now
+  builds knowledge across turns instead of starting fresh.
+  `sessionAnalysisContext.sessionKnowledge` gains an optional
+  `priorInvestigations` array carrying compact digests of recent turns
+  (question + hypotheses confirmed/refuted/open + headline finding,
+  capped at 5 entries with FIFO eviction). New
+  `lib/agents/runtime/priorInvestigations.ts` distils a turn's W13
+  investigation summary into the digest shape and renders the array
+  as a labelled `PRIOR_INVESTIGATIONS` block emitted from
+  `formatUserAndSessionJsonBlocks` so the planner sees it as a
+  first-class signal, not buried in the session-context JSON dump.
+  `persistMergeAssistantSessionContext` now accepts the turn's
+  question + investigationSummary and appends the digest after the
+  LLM merge runs. Wired in both `chatStream.service.ts` and
+  `chat.service.ts`. Backwards-compatible: schema field is optional;
+  legacy contexts without it parse cleanly. Block is byte-stable for
+  prefix-cache friendliness.
 - **Wave W20 · end-to-end agent turn smoke test** —
   `tests/agentTurnE2EW20.test.ts` runs `runAgentTurn` end-to-end
   against a 60-row Marico-shaped fixture with every LLM call stubbed

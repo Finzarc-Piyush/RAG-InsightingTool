@@ -10,6 +10,7 @@ import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
 import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
 import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
+import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
 
 type MidTurnPersist = AgentExecutionContext["onMidTurnSessionContext"];
 
@@ -79,6 +80,13 @@ export function formatUserAndSessionJsonBlocks(
       `treat as orientation only, never as numeric evidence; tool output and ` +
       `RAG citations remain authoritative for any figure):\n` +
       ctx.domainContext.trim().slice(0, cap);
+  }
+  // W21 · prior-turn investigation digest, emitted as a labelled block so
+  // the planner sees it as a first-class signal rather than buried inside
+  // the session-context JSON dump. Empty array → empty string.
+  const priorBlock = formatPriorInvestigationsForPlanner(ctx.sessionAnalysisContext);
+  if (priorBlock) {
+    s += `\n${priorBlock}`;
   }
   if (ctx.sessionAnalysisContext) {
     s += `\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, opts.maxJsonChars)}`;

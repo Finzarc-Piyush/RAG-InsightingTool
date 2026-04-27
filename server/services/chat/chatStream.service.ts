@@ -1313,6 +1313,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           agentTrace: transformedResponse.agentTrace,
           analysisBrief: (result as { analysisBrief?: import("../../shared/schema.js").AnalysisBrief })
             .analysisBrief,
+          // W21 · feed the turn's question + investigation digest so the
+          // session-context merge appends a `priorInvestigation` entry the
+          // next turn's planner can chain off of.
+          question: message,
+          investigationSummary: (result as {
+            investigationSummary?: import("../../shared/schema.js").InvestigationSummary;
+          }).investigationSummary,
         });
       } catch (ctxErr) {
         console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);

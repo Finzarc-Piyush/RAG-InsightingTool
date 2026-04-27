@@ -789,6 +789,26 @@ export const sessionAnalysisContextSchema = z.object({
   sessionKnowledge: z.object({
     facts: z.array(sessionAnalysisFactSchema).max(50),
     analysesDone: z.array(z.string().max(500)).max(30),
+    /**
+     * W21 · compact digest of the last few turns' investigations. Lets the
+     * planner chain hypotheses across turns: pick up open questions, avoid
+     * re-running settled ones, weight the new question against what's
+     * already established. Capped at 5 entries to keep Cosmos doc size in
+     * check; oldest dropped first.
+     */
+    priorInvestigations: z
+      .array(
+        z.object({
+          at: z.string().max(40),
+          question: z.string().max(280),
+          hypothesesConfirmed: z.array(z.string().max(200)).max(5),
+          hypothesesRefuted: z.array(z.string().max(200)).max(5),
+          hypothesesOpen: z.array(z.string().max(200)).max(5),
+          headlineFinding: z.string().max(280).optional(),
+        })
+      )
+      .max(5)
+      .optional(),
   }),
   suggestedFollowUps: z.array(z.string().max(300)).max(12),
   analysisBriefDigest: analysisBriefDigestSchema.optional(),

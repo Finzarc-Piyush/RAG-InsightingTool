@@ -258,6 +258,14 @@ export async function persistMidTurnAssistantSessionContext(params: {
  * Initial assistant message shown after enrichment.
  * Includes everything the LLM understood about the dataset so the user can
  * verify the context before asking questions.
+ *
+ * Robustness: the LLM-derived `columnRoles` / `caveats` are populated by a
+ * fire-and-forget `seedSessionAnalysisContextLLM` after upload, so the
+ * initial message often runs against a sparse heuristic context. In that
+ * case we synthesize a "Columns at a glance" section directly from
+ * `summary` so the message always has substance — never just one stat
+ * line. See feedback memory: non-blocking startup must produce visible
+ * artifacts from automatic understanding alone.
  */
 export function buildInitialAssistantContentFromContext(
   summary: DataSummary,
@@ -274,11 +282,56 @@ export function buildInitialAssistantContentFromContext(
   if (ctx.dataset.grainGuess) lines.push("", `**Row grain:** ${ctx.dataset.grainGuess}`);
 
   // ── Column roles ─────────────────────────────────────────────────────────
+  // When the LLM seed has landed we render the structured column roles. When
+  // it hasn't (heuristic-only state on a fresh upload) we fall back to a
+  // deterministic columns-at-a-glance breakdown derived from `summary` so the
+  // user still sees what we understood about the dataset.
   if (ctx.dataset.columnRoles.length > 0) {
     lines.push("", "**Column roles understood:**");
     for (const col of ctx.dataset.columnRoles) {
       const note = col.notes ? ` — ${col.notes}` : "";
       lines.push(`• ${col.name} *(${col.role})*${note}`);
+    }
+  } else {
+    const numericNames = summary.numericColumns;
+    const dateNames = summary.dateColumns;
+    const dateNameSet = new Set(dateNames);
+    const numericNameSet = new Set(numericNames);
+    const otherNames = summary.columns
+      .map((c) => c.name)
+      .filter((n) => !numericNameSet.has(n) && !dateNameSet.has(n));
+
+    // Date columns gain calendar grains via hidden __tf_* facet columns; surface
+    // those as a capability hint per source date column ("order_date — year,
+    // quarter, month") rather than exposing the internal column names.
+    // Source: summary.temporalFacetColumns metadata + agent prompt at
+    // server/lib/dataOps/dataOpsOrchestrator.ts:1755-1764 which tells the agent
+    // to group by these for "by year/quarter/month" requests.
+    const grainsBySource = new Map<string, string[]>();
+    for (const tf of summary.temporalFacetColumns ?? []) {
+      const list = grainsBySource.get(tf.sourceColumn) ?? [];
+      if (!list.includes(tf.grain)) list.push(tf.grain);
+      grainsBySource.set(tf.sourceColumn, list);
+    }
+    const formatDateName = (name: string): string => {
+      const grains = grainsBySource.get(name);
+      if (!grains?.length) return name;
+      return `${name} *(can group by ${grains.join(", ")})*`;
+    };
+
+    const sections: Array<{ label: string; names: string[]; format?: (n: string) => string }> = [];
+    if (numericNames.length > 0) sections.push({ label: "Numeric", names: numericNames });
+    if (dateNames.length > 0) sections.push({ label: "Date", names: dateNames, format: formatDateName });
+    if (otherNames.length > 0) sections.push({ label: "Categorical", names: otherNames });
+
+    if (sections.length > 0) {
+      lines.push("", "**Columns at a glance:**");
+      for (const s of sections) {
+        const formatter = s.format ?? ((n: string) => n);
+        const shown = s.names.slice(0, 6).map(formatter).join(", ");
+        const more = s.names.length > 6 ? ` *(+${s.names.length - 6} more)*` : "";
+        lines.push(`• ${s.label}: ${shown}${more}`);
+      }
     }
   }
 
@@ -301,6 +354,14 @@ export async function persistMergeAssistantSessionContext(params: {
   assistantMessage: string;
   agentTrace?: unknown;
   analysisBrief?: AnalysisBrief;
+  /**
+   * W21 · question + InvestigationSummary for the turn that just shipped.
+   * When provided AND the digest has any meaningful content, we append a
+   * `PriorInvestigation` entry to `sessionKnowledge.priorInvestigations`
+   * so the next turn's planner can chain hypotheses across turns.
+   */
+  question?: string;
+  investigationSummary?: import("../shared/schema.js").InvestigationSummary;
 }): Promise<void> {
   const { getChatBySessionIdForUser, updateChatDocument } = await import(
     "../models/chat.model.js"
@@ -323,6 +384,18 @@ export async function persistMergeAssistantSessionContext(params: {
   });
   if (params.analysisBrief) {
     next = applyAnalysisBriefDigestToSession(next, params.analysisBrief);
+  }
+  // W21 · push a prior-investigation digest onto sessionKnowledge so the
+  // next turn's planner sees what was confirmed / refuted / left open.
+  // Skipped silently when the question or summary is empty.
+  if (params.question && params.investigationSummary) {
+    const { appendPriorInvestigation, buildPriorInvestigationDigest } =
+      await import("./agents/runtime/priorInvestigations.js");
+    const digest = buildPriorInvestigationDigest(
+      params.question,
+      params.investigationSummary
+    );
+    if (digest) next = appendPriorInvestigation(next, digest);
   }
   doc.sessionAnalysisContext = next;
   await updateChatDocument(doc);

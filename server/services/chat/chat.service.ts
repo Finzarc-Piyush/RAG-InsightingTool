@@ -292,6 +292,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         assistantMessage: validated.answer,
         agentTrace: answerResult.agentTrace,
         analysisBrief: answerResult.analysisBrief,
+        // W21 · push prior-turn investigation digest so next turn's planner
+        // sees what was confirmed / refuted / left open.
+        question: message,
+        investigationSummary: answerResult.investigationSummary,
       });
     } catch (ctxErr) {
       console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
