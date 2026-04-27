@@ -666,6 +666,13 @@ export const agentWorkbenchEntrySchema = z.object({
   language: z.string().max(32).optional(),
   /** Present only for `kind: "flow_decision"`; structured routing/override payload. */
   flowDecision: flowDecisionDetailSchema.optional(),
+  /**
+   * W10 · short human-readable "what this step means" line, computed
+   * deterministically from the SSE payload at emission time (no LLM). Lets
+   * the UI show commentary alongside each entry without spawning extra LLM
+   * calls. Optional + back-compat — pre-W10 Cosmos rows parse cleanly.
+   */
+  insight: z.string().max(400).optional(),
 });
 
 export type AgentWorkbenchEntry = z.infer<typeof agentWorkbenchEntrySchema>;

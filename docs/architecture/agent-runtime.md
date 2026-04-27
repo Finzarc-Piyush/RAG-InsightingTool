@@ -167,6 +167,15 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W10 · workbench-entry `insight` field** —
+  `agentWorkbenchEntrySchema` gains an optional `insight: z.string().max(400)`
+  field (back-compat: legacy Cosmos rows without it parse cleanly).
+  `agentSseEventToWorkbenchEntries` now populates it deterministically
+  per kind — first sentence of `rationale`/`summary`/`course_correction`,
+  or a templated line built from `tool name + arg preview`,
+  `from → to: intent`, etc. **Zero new LLM calls** — the helper is pure
+  string manipulation. Sets the foundation for W11's per-step rendering
+  in the workbench timeline and the post-pivot interpretation panel.
 - **Wave W9 · AnswerCard renders W8 envelope sections** — the
   client-side `AnswerCard` (`client/src/pages/Home/Components/AnswerCard.tsx`)
   now renders three new sections from `message.answerEnvelope`:
