@@ -1769,6 +1769,21 @@ export async function runAgentTurn(
             envMagnitudes = narResult.magnitudes;
             envUnexplained = narResult.unexplained;
             if (answer.trim()) answerSource = "narrator";
+            // W5 · synthesis telemetry — narrator branch.
+            agentLog("synthesis_result", {
+              turnId,
+              source: "narrator",
+              answerLen: answer.length,
+              keyInsightLen: narResult.keyInsight?.length ?? 0,
+              ctaCount: narResult.ctas?.length ?? 0,
+              magnitudesCount: narResult.magnitudes?.length ?? 0,
+              questionShape: ctx.analysisBrief?.questionShape ?? "none",
+              observationsCount: observations.length,
+              observationsTotalLen: observations.reduce(
+                (n, o) => n + (o?.length ?? 0),
+                0
+              ),
+            });
             // W3 · capture the structured AnswerEnvelope. Each field is optional;
             // we keep the envelope even when sparsely populated so the UI can
             // render whatever the narrator produced (TL;DR alone is valuable).
@@ -1801,6 +1816,23 @@ export async function runAgentTurn(
           // (json_envelope, narrative_retry, plain_text_retry) is a real
           // synthesized narrative.
           answerSource = env.source === "fallback_dump" ? "fallback" : "synthesizer";
+          // W5 · synthesis telemetry. When a fallback fires in production we
+          // need to know which retry path failed and what the LLM produced
+          // (or didn't) to fix the prompt at its source.
+          agentLog("synthesis_result", {
+            turnId,
+            source: env.source,
+            answerLen: env.answer.length,
+            keyInsightLen: env.keyInsight?.length ?? 0,
+            ctaCount: env.ctas?.length ?? 0,
+            magnitudesCount: env.magnitudes?.length ?? 0,
+            questionShape: ctx.analysisBrief?.questionShape ?? "none",
+            observationsCount: synthObservations.length,
+            observationsTotalLen: synthObservations.reduce(
+              (n, o) => n + (o?.length ?? 0),
+              0
+            ),
+          });
         }
 
         if (envCtas.length) followUpPrompts = envCtas;
