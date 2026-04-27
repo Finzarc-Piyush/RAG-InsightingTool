@@ -167,6 +167,16 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W24 · multi-turn e2e — proves W21 carry-over** — new
+  `tests/agentTurnMultiTurnE2EW24.test.ts` runs two consecutive
+  `runAgentTurn` calls and asserts that turn 2's planner user prompt
+  receives the labelled `PRIOR_INVESTIGATIONS` block built from turn
+  1's investigation summary, including turn-1's question text and at
+  least one hypothesis text echoed verbatim. No Cosmos: between
+  turns the test applies `buildPriorInvestigationDigest` +
+  `appendPriorInvestigation` in-process — the same operations
+  `persistMergeAssistantSessionContext` performs sans I/O. Pure
+  test; zero production-runtime change.
 - **Wave W23 · chat.service parity for W12 chart commentary** —
   the non-streaming `chat.service.ts` now loads enabled FMCG/Marico
   domain packs and threads them through `enrichCharts` so chart
