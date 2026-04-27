@@ -103,7 +103,7 @@ flowchart LR
 | [server/lib/agents/runtime/agentLoop.service.ts](../server/lib/agents/runtime/agentLoop.service.ts) | **`runAgentTurn`**: main loop, budgets, synthesis, SSE callbacks |
 | [server/lib/agents/runtime/planner.ts](../server/lib/agents/runtime/planner.ts) | Structured planning (`runPlanner`) |
 | [server/lib/agents/runtime/reflector.ts](../server/lib/agents/runtime/reflector.ts) | Post-tool **continue / replan / finish / clarify** |
-| [server/lib/agents/runtime/verifier.ts](../server/lib/agents/runtime/verifier.ts) | **Verifier** + `rewriteNarrative` |
+| [server/lib/agents/runtime/verifier.ts](../server/lib/agents/runtime/verifier.ts) | **Verifier** + `rewriteNarrative`. Step-level invocation in `agentLoop.service.ts` is gated on `result.answerFragment` (W1) — analytical tools whose `result.summary` is a structured digest do not invoke the verifier, since the verifier critiques narrative quality and a digest is not a narrative draft. |
 | [server/lib/agents/runtime/tools/registerTools.ts](../server/lib/agents/runtime/tools/registerTools.ts) | Default tool registration |
 | [server/lib/agents/runtime/toolRegistry.ts](../server/lib/agents/runtime/toolRegistry.ts) | Tool registry types / dispatch |
 | [server/lib/agents/runtime/types.ts](../server/lib/agents/runtime/types.ts) | `AgentExecutionContext`, `AgentTrace`, `AgentConfig`, flags |
@@ -136,6 +136,7 @@ flowchart LR
 
 - [server/shared/schema.ts](../server/shared/schema.ts) and [client/src/shared/schema.ts](../client/src/shared/schema.ts) — `agentWorkbench`, `AgentWorkbenchEntry`, thinking / trace shapes.
 - **Flow visibility (Wave W1)**: `AgentWorkbenchEntry` now supports `kind: "flow_decision"` with a structured `flowDecision: { layer, chosen, overriddenBy?, reason?, confidence?, candidates? }` payload. Used to surface routing decisions and silent overrides (mode-vs-intent, reflector replan, verifier rewriteNarrative, coordinator decompose) so users can see which flow won.
+- **Single-flow policy (W11–W13)**: the agent loop no longer silently overrides the planned flow. Specifically: (a) reflector `replan` is suppressed — the original plan runs to completion and the reflector's note is captured in trace + emitted as `flow_decision { chosen: "continue-as-planned" }`; (b) verifier `reviseNarrative` no longer triggers `rewriteNarrative` or narrator-repair — the original narrative is preserved and the verdict is emitted as `critic_verdict` + `flow_decision { chosen: "kept-original" }`; (c) `runDeepInvestigation` / `coordinatorAgent.decomposeQuestion` are no longer called from `dataAnalyzer.ts:answerQuestion` — single-turn agentic only. The underlying capabilities (reflector, verifier, narrator, deep investigation, coordinator decompose) all still exist as standalone code under `runtime/` and can be re-wired behind feature flags if needed.
 
 **Client**
 

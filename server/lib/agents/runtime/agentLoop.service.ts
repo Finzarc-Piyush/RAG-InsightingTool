@@ -1220,6 +1220,15 @@ export async function runAgentTurn(
             };
           }
 
+          // W1 · The step-level verifier critiques narrative quality. Tool
+          // summaries from analytical tools (execute_query_plan,
+          // run_analytical_query, etc.) are evidence digests, not narrative
+          // drafts — running the verifier on them produced false-positive
+          // MISSING_NARRATIVE / MISSING_MAGNITUDES verdicts and noisy
+          // verifier-rewrite-step flow_decisions. Gate on whether the tool
+          // actually emitted a prose answerFragment.
+          const hasNarrativeCandidate = Boolean(result.answerFragment?.trim());
+
           let candidate =
             result.answerFragment ||
             result.summary ||
@@ -1230,63 +1239,58 @@ export async function runAgentTurn(
 
           const evidence = `${result.summary}\n${lastNumeric || ""}`.slice(0, 8000);
 
-          let vRound = 0;
-          while (vRound < config.maxVerifierRoundsPerStep) {
-            const verdict = await runVerifier(
-              ctx,
-              {
-                candidate,
-                evidenceSummary: evidence,
+          if (hasNarrativeCandidate) {
+            let vRound = 0;
+            while (vRound < config.maxVerifierRoundsPerStep) {
+              const verdict = await runVerifier(
+                ctx,
+                {
+                  candidate,
+                  evidenceSummary: evidence,
+                  stepId: step.id,
+                  turnId,
+                  blackboard: ctx.blackboard,
+                  planSteps: plan.steps,
+                  charts: mergedCharts,
+                },
+                onLlmCall
+              );
+
+              trace.criticRounds.push({
                 stepId: step.id,
-                turnId,
-                blackboard: ctx.blackboard,
-                planSteps: plan.steps,
-                charts: mergedCharts,
-              },
-              onLlmCall
-            );
+                verdict: verdict.verdict,
+                issueCodes: verdict.issues.map((i) => i.code),
+                courseCorrection: verdict.course_correction,
+              });
 
-            trace.criticRounds.push({
-              stepId: step.id,
-              verdict: verdict.verdict,
-              issueCodes: verdict.issues.map((i) => i.code),
-              courseCorrection: verdict.course_correction,
-            });
+              safeEmit("critic_verdict", {
+                stepId: step.id,
+                verdict: verdict.verdict,
+                issue_codes: verdict.issues.map((i) => i.code),
+                course_correction: verdict.course_correction,
+              });
 
-            safeEmit("critic_verdict", {
-              stepId: step.id,
-              verdict: verdict.verdict,
-              issue_codes: verdict.issues.map((i) => i.code),
-              course_correction: verdict.course_correction,
-            });
-
-            if (verdict.verdict === VERIFIER_VERDICT.pass) {
+              if (verdict.verdict === VERIFIER_VERDICT.pass) {
+                break;
+              }
+              if (
+                verdict.verdict === VERIFIER_VERDICT.reviseNarrative ||
+                verdict.course_correction === VERIFIER_VERDICT.reviseNarrative
+              ) {
+                // Single-flow policy: rewriteNarrative is suppressed. Verifier's
+                // verdict is still emitted as a critic_verdict SSE event (visible
+                // in the workbench) so the user can see what the verifier flagged
+                // without having the synthesized narrative silently swapped out.
+                const issuesText = verdict.issues.map((i) => i.description).join("; ");
+                safeEmit("flow_decision", {
+                  layer: "verifier-rewrite-step",
+                  chosen: "kept-original",
+                  reason: `Rewrite suppressed (single-flow policy); ${issuesText.slice(0, 400)}`.slice(0, 500),
+                  candidates: verdict.issues.map((i) => i.code).slice(0, 8),
+                });
+              }
               break;
             }
-            if (
-              verdict.verdict === VERIFIER_VERDICT.reviseNarrative ||
-              verdict.course_correction === VERIFIER_VERDICT.reviseNarrative
-            ) {
-              const issuesText = verdict.issues.map((i) => i.description).join("; ");
-              const _origLen = candidate.length;
-              candidate = await rewriteNarrative(
-                ctx,
-                candidate,
-                issuesText,
-                onLlmCall,
-                evidence
-              );
-              safeEmit("flow_decision", {
-                layer: "verifier-rewrite-step",
-                chosen: "rewritten",
-                overriddenBy: "verifier",
-                reason: `${issuesText.slice(0, 400)} | ${_origLen}→${candidate.length} chars`.slice(0, 500),
-                candidates: verdict.issues.map((i) => i.code).slice(0, 8),
-              });
-              vRound++;
-              continue;
-            }
-            break;
           }
 
           finalCandidate = candidate;
@@ -1304,22 +1308,28 @@ export async function runAgentTurn(
         }
 
         {
+          // W1 · skip the Verifier→Coordinator handoff message when the
+          // step-level verifier did not actually run (analytical tools with
+          // no narrative candidate). Without this gate the trace shows a
+          // fake "step_verdict" inter-agent message with an empty verdict.
           const lv = lastVerdictForStep(trace, step.id);
-          appendInterAgentMessage(
-            trace,
-            {
-              from: "Verifier",
-              to: "Coordinator",
-              intent: "step_verdict",
-              artifacts: [step.id],
-              evidenceRefs: [finalCallId, step.id],
-              meta: {
-                tool: step.tool,
-                verdict: lv ?? "",
+          if (lv) {
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "Verifier",
+                to: "Coordinator",
+                intent: "step_verdict",
+                artifacts: [step.id],
+                evidenceRefs: [finalCallId, step.id],
+                meta: {
+                  tool: step.tool,
+                  verdict: lv,
+                },
               },
-            },
-            safeEmit
-          );
+              safeEmit
+            );
+          }
         }
 
         mergeStepArtifacts(step.tool, stepResult, finalCallId);
@@ -1545,34 +1555,29 @@ export async function runAgentTurn(
       ...appliedFiltersOut(),
             };
           } else if (ref.action === "replan") {
+            // Single-flow policy: replan is suppressed; continue with the
+            // original plan. Reflector's note is preserved in the trace and
+            // emitted as a flow_decision so the suggestion is still visible.
             appendInterAgentMessage(
               trace,
               {
                 from: "Reflector",
                 to: "Planner",
-                intent: "replan_requested",
+                intent: "replan_suggested_suppressed",
                 evidenceRefs: [step.id, finalCallId],
-                meta: { afterStep: step.id, tool: step.tool },
+                meta: { afterStep: step.id, tool: step.tool, policy: "single-flow" },
               },
               safeEmit
             );
             safeEmit("flow_decision", {
               layer: "reflector-replan",
-              chosen: "new-plan",
-              overriddenBy: "reflector",
-              reason: (ref.note ?? `replan after ${step.tool}`).slice(0, 500),
+              chosen: "continue-as-planned",
+              reason: `Replan suggested but suppressed (single-flow policy). Reflector note: ${(
+                ref.note ?? "(none)"
+              ).slice(0, 350)}`.slice(0, 500),
               candidates: plan.steps.slice(0, 8).map((s) => `${s.id}:${s.tool}`),
             });
-            replans++;
-            void maybeMidTurn({
-              phase: "plan_replan",
-              summary: `Replanned after step ${step.id} (${step.tool}). Observations: ${observations.length}. Note: ${ref.note ?? "(none)"}`.slice(
-                0,
-                4000
-              ),
-              ok: true,
-            });
-            break;
+            trace.reflectorNotes.push(`replan_suppressed: ${ref.note ?? "(none)"}`);
           } else if (ref.action === "investigate_gap" && ref.gapFill) {
             // W11: inject a targeted tool step to fill an uncovered hypothesis.
             const gf = ref.gapFill;
@@ -1789,6 +1794,9 @@ export async function runAgentTurn(
           userKey: ctx.username,
         })
       ) {
+        const intermediateSummaries = trace.toolCalls
+          .filter((t) => t.ok && t.resultSummary)
+          .map((t) => `${t.name}: ${t.resultSummary}`);
         const spec = await buildDashboardFromTurn({
           question: ctx.question,
           answerBody: answer,
@@ -1798,6 +1806,7 @@ export async function runAgentTurn(
           brief: ctx.analysisBrief,
           turnId,
           onLlmCall,
+          intermediateSummaries,
         });
         if (spec) {
           dashboardDraft = spec;
@@ -1896,70 +1905,17 @@ export async function runAgentTurn(
         fv.verdict === VERIFIER_VERDICT.reviseNarrative ||
         fv.course_correction === VERIFIER_VERDICT.reviseNarrative
       ) {
+        // Single-flow policy: narrator-repair and rewriteNarrative are both
+        // suppressed. The verifier's verdict is still emitted as critic_verdict
+        // (visible in workbench) so users see what was flagged without having
+        // the synthesized answer silently swapped out.
         const issuesText = fv.issues.map((i) => i.description).join("; ");
-        // W4 · narrator-repair branch.
-        // When the blackboard exists AND the original synthesis path used
-        // the narrator, send the issues back into runNarrator so the rewrite
-        // happens with full structured-evidence context (and on Claude Opus
-        // 4.7 per W2 routing). Caps at 1 narrator-repair attempt; subsequent
-        // rounds (or non-narrator turns) fall through to rewriteNarrative.
-        const canRetryWithNarrator =
-          ctx.blackboard &&
-          shouldUseNarrator(ctx.blackboard) &&
-          ctx.mode === "analysis" &&
-          finalRound === 0;
-        if (canRetryWithNarrator) {
-          const narRepair = await runNarrator(
-            ctx,
-            ctx.blackboard!,
-            turnId,
-            onLlmCall,
-            {
-              issues: issuesText,
-              priorDraft: answer,
-              courseCorrection: fv.course_correction ?? undefined,
-            }
-          );
-          if (narRepair && narRepair.body?.trim()) {
-            answer = formatAnswerFromEnvelope(narRepair.body, narRepair.keyInsight ?? null);
-            // Re-derive envelope surfaces — the repair may have updated them.
-            const env: NonNullable<import("../../../shared/schema.js").Message["answerEnvelope"]> = {};
-            if (narRepair.tldr) env.tldr = narRepair.tldr;
-            if (narRepair.findings?.length) env.findings = narRepair.findings;
-            if (narRepair.methodology) env.methodology = narRepair.methodology;
-            if (narRepair.caveats?.length) env.caveats = narRepair.caveats;
-            if (narRepair.ctas?.length) {
-              const repairedCtas = narRepair.ctas.map((c) => c.trim()).filter(Boolean).slice(0, 3);
-              if (repairedCtas.length) {
-                env.nextSteps = repairedCtas;
-                followUpPrompts = repairedCtas;
-              }
-            }
-            if (Object.keys(env).length) envelopeAnswerEnvelope = env;
-            if (narRepair.magnitudes?.length) envelopeMagnitudes = narRepair.magnitudes;
-            if (narRepair.unexplained) envelopeUnexplained = narRepair.unexplained;
-            finalRound++;
-            continue;
-          }
-          // narrator returned null — fall through to legacy rewrite.
-        }
-        const _finalOrigLen = answer.length;
-        answer = await rewriteNarrative(
-          ctx,
-          answer,
-          issuesText,
-          onLlmCall,
-          finalEvidence
-        );
         safeEmit("flow_decision", {
           layer: "verifier-rewrite-final",
-          chosen: "rewritten",
-          overriddenBy: "verifier",
-          reason: `${issuesText.slice(0, 400)} | ${_finalOrigLen}→${answer.length} chars`.slice(0, 500),
+          chosen: "kept-original",
+          reason: `Rewrite suppressed (single-flow policy); ${issuesText.slice(0, 400)}`.slice(0, 500),
           candidates: fv.issues.map((i) => i.code).slice(0, 8),
         });
-        finalRound++;
-        continue;
       }
       break;
     }
