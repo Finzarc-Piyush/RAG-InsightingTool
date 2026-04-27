@@ -167,6 +167,15 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W29 · `uploadQueue.ts` typecheck cleanup** — knocked
+  pre-existing typecheck noise from **127 → 91 errors** (-36) with
+  two surgical zero-runtime-change fixes: `let data:
+  Record<string, any>[];` initialised to `[]` (production-proven
+  safe — every reachable path assigns before reading; empty default
+  is a no-op), and `enrichmentStatus: 'value'` literals annotated
+  with `as const` so they satisfy the narrow union `"pending" |
+  "complete" | "in_progress" | "failed"` on `ChatDocument`. All 39
+  upload-related tests still pass; runtime semantics unchanged.
 - **Wave W28 · live-LLM golden replay (env-gated)** — new
   `tests/liveLlmGoldenReplayW28.test.ts` runs the real agent
   pipeline against three curated FMCG fixtures

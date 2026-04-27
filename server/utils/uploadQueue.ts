@@ -212,7 +212,11 @@ class UploadQueue {
       const { saveChartsToBlob, uploadFileToBlob } = await import('../lib/blobStorage.js');
       const queryCache = (await import('../lib/cache.js')).default;
 
-      let data: Record<string, any>[];
+      // W29 · initialise to `[]` so tsc's flow analysis (which can't prove
+      // every branch assigns) stops complaining. Production-proven safe:
+      // every reachable path assigns before reading. The empty default is a
+      // no-op in those paths.
+      let data: Record<string, any>[] = [];
       let summary: ReturnType<typeof createDataSummary>;
       let datasetProfile: ReturnType<typeof emptyDatasetProfile>;
       let storagePath: string | undefined;
@@ -448,7 +452,7 @@ class UploadQueue {
         dataSummary: previewSummary,
         sampleRows: previewSample,
         selectedSheetName: job.sheetName,
-        enrichmentStatus: 'in_progress',
+        enrichmentStatus: 'in_progress' as const,
         lastUpdatedAt: Date.now(),
       });
       job.status = 'preview_ready';
@@ -611,7 +615,7 @@ class UploadQueue {
           datasetProfile,
           sessionAnalysisContext: ctxForInitial,
           messages,
-          enrichmentStatus: "complete",
+          enrichmentStatus: "complete" as const,
           lastUpdatedAt: Date.now(),
         });
         job.understandingReady = true;
@@ -874,7 +878,7 @@ class UploadQueue {
             dataSummaryStatistics,
             insights,
             sessionAnalysisContext,
-            enrichmentStatus: 'complete',
+            enrichmentStatus: 'complete' as const,
             analysisMetadata: {
               totalProcessingTime: processingTime,
               aiModelUsed: 'gpt-4o',
@@ -911,7 +915,7 @@ class UploadQueue {
           );
           chatDocument = await updateChatDocument({
             ...chatDocument,
-            enrichmentStatus: 'complete',
+            enrichmentStatus: 'complete' as const,
             selectedSheetName: job.sheetName,
             columnarStoragePath: columnarReadyMarker,
             lastUpdatedAt: Date.now(),
@@ -982,7 +986,7 @@ class UploadQueue {
         if (doc) {
           await updateChatDocument({
             ...doc,
-            enrichmentStatus: 'failed',
+            enrichmentStatus: 'failed' as const,
             lastUpdatedAt: Date.now(),
           });
         }
