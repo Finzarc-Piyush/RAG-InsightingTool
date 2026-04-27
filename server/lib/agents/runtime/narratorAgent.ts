@@ -19,6 +19,10 @@ import {
   formatForNarrator,
   type AnalyticalBlackboard,
 } from "./analyticalBlackboard.js";
+import {
+  buildSynthesisContext,
+  formatSynthesisContextBundle,
+} from "./buildSynthesisContext.js";
 import type { AgentExecutionContext } from "./types.js";
 
 export { shouldUseNarrator } from "./analyticalBlackboard.js";
@@ -26,7 +30,11 @@ export { shouldUseNarrator } from "./analyticalBlackboard.js";
 const narratorOutputSchema = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
-  ctas: z.array(z.string()).default([]),
+  // W8 · `.default([])` produced a TS input/output type mismatch when read via
+  // `z.infer` after the W8 schema additions. Switching to `.optional()` keeps
+  // the same runtime behaviour (callers already coerce `undefined → []`) and
+  // makes the inferred return type compatible with `runNarrator`'s signature.
+  ctas: z.array(z.string()).optional(),
   /** 2–4 entries backing the main claim: {label, value, confidence?} */
   magnitudes: z
     .array(
@@ -54,6 +62,34 @@ const narratorOutputSchema = z.object({
     .optional(),
   methodology: z.string().max(500).optional(),
   caveats: z.array(z.string().max(200)).max(3).optional(),
+  // W8 · "So what" reading of the headline findings. Each entry pairs an
+  // observed `statement` with its business `soWhat`, framed against the
+  // FMCG/Marico domain context when the bundle includes one.
+  implications: z
+    .array(
+      z.object({
+        statement: z.string().max(280),
+        soWhat: z.string().max(280),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  // W8 · concrete next actions, grouped by horizon for the AnswerCard's
+  // "Do now / This quarter / Strategic" sections.
+  recommendations: z
+    .array(
+      z.object({
+        action: z.string().max(200),
+        rationale: z.string().max(280),
+        horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  // W8 · one-paragraph framing of the findings against FMCG/Marico priors.
+  // Cite the pack id (e.g. `marico-haircare-portfolio`) when referenced.
+  domainLens: z.string().max(500).optional(),
 });
 
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
@@ -87,12 +123,13 @@ export async function runNarrator(
   const blackboardBlock = formatForNarrator(blackboard);
   if (!blackboardBlock.trim()) return null;
 
-  const sacBlock = ctx.sessionAnalysisContext
-    ? `\n\nSessionContext:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, 6000)}`
-    : "";
-  const permBlock = ctx.permanentContext?.trim().length
-    ? `\n\nUser notes:\n${ctx.permanentContext.trim().slice(0, 2000)}`
-    : "";
+  // W8 · the W7 bundle replaces the old raw-JSON sessionContext + truncated
+  // user-notes blocks. It carries data understanding, user identity, RAG
+  // hits (including blackboard round-2 entries), and FMCG/Marico domain
+  // packs in stable byte-order so the prefix cache holds across calls.
+  const synthBundleBlock = formatSynthesisContextBundle(
+    buildSynthesisContext(ctx, { blackboard })
+  );
   const phase1Shape = ctx.analysisBrief?.questionShape;
 
   // W4.2 · system is now byte-stable across calls — the phase-1 envelope
@@ -101,14 +138,20 @@ export async function runNarrator(
   // 1024-token prefix-cache threshold.
   const system = `${ANALYST_PREAMBLE}You are a senior data analyst presenting the results of a completed investigation.
 You have access to a structured blackboard: the hypotheses that were tested, their outcomes
-(confirmed / refuted / partial / open), and the findings that emerged.
+(confirmed / refuted / partial / open), and the findings that emerged. The user message also
+carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT,
+RELATED CONTEXT (RAG), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to make the answer
+substantive and decision-grade. Do NOT use the bundle as numeric evidence — figures still
+come only from the blackboard / observations.
 
 Your job: narrate the investigation clearly in the following JSON format:
 - "body": main markdown answer. Lead with the most important finding. For each confirmed
   hypothesis, cite the supporting evidence. For refuted hypotheses, say what was ruled out.
   Do not repeat the user question verbatim.
-  LENGTH: aim for 250–600 words for analytical questions, 80–150 words for simple/conversational
-  questions. Do not pad. Do not bullet-spam — prefer 2–4 paragraphs of grounded prose.
+  LENGTH: aim for 600–1200 words for analytical questions, 80–150 words for simple/
+  conversational questions. Do not pad with filler — every paragraph must add either a
+  finding, a numeric claim, an interpretation grounded in the domain context, or a
+  recommendation. Prefer 4–7 paragraphs of grounded prose over bullet-spam.
 - "keyInsight": 1–3 sentences on what the findings imply for decisions (the "so what").
   Use null if nothing beyond the body adds value.
 - "ctas": 0 to 3 actionable follow-up prompts (empty array if none fit).
@@ -127,6 +170,19 @@ when not applicable:
   no JSON. Helps the reader judge the answer's reliability.
 - "caveats": 0–3 short bullets on what limits the conclusion (sample-size,
   missing-data, ambiguous definitions, etc.). Omit when nothing material is missing.
+
+W8 · Decision-grade extensions — REQUIRED for analytical questions:
+- "implications": 2–4 entries, each {statement, soWhat, confidence?}. \`statement\` is the
+  observed fact (one sentence, grounded in findings); \`soWhat\` is the business meaning
+  for an FMCG operator — a buyer, brand manager, channel head — framed using DOMAIN
+  KNOWLEDGE when relevant. Confidence is "low" / "medium" / "high".
+- "recommendations": 2–4 entries, each {action, rationale, horizon?}. \`action\` is a
+  concrete next step the team can take; \`rationale\` ties it to a specific finding and
+  the domain context. \`horizon\` is "now" (this week), "this_quarter", or "strategic".
+- "domainLens": ≤500 chars, one paragraph framing the findings against the relevant
+  FMCG/Marico domain context. Cite the pack id verbatim when you reference it (e.g.
+  "Per \`marico-haircare-portfolio\`, …"). Omit when no domain pack is relevant.
+  Treat domain packs as orientation only — never invent domain facts.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
 - "magnitudes": 2–4 entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent.
@@ -147,14 +203,16 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         repair.priorDraft ? `\n\nPrior draft (rewrite, do not repeat verbatim):\n${repair.priorDraft.slice(0, 2000)}` : ""
       }`
     : "";
-  const user = `${phase1Line}Question: ${ctx.question}${permBlock}${sacBlock}\n\n${blackboardBlock}${repairBlock}`;
+  const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${bundleSection}${repairBlock}`;
 
   const result = await completeJson(system, user, narratorOutputSchema, {
     turnId: `${turnId}_narrator${repair ? "_repair" : ""}`,
-    // W3 · 2600 → 4000. Claude Opus 4.7 (and GPT-4o) have plenty of headroom
-    // for the structured envelope plus 2–4 paragraphs; the previous cap was
-    // sometimes hit on richer investigations and silently truncated findings.
-    maxTokens: 4000,
+    // W8 · 4000 → 6000. The W8 prompt now requires implications,
+    // recommendations, and a domainLens paragraph on top of the existing
+    // envelope — earlier we sometimes hit the 4k cap and silently truncated
+    // late findings. 6k still leaves ~2k headroom for prose.
+    maxTokens: 6000,
     temperature: 0.25,
     onLlmCall,
     purpose: LLM_PURPOSE.NARRATOR,

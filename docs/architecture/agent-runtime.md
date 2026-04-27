@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W8 · synthesis prompt overhaul + decision-grade envelope** —
+  the narrator (`runNarrator`) and synthesizer
+  (`synthesizeFinalAnswerEnvelope`) both now consume the W7
+  context bundle (data understanding, user, RAG, FMCG/Marico packs)
+  inside their user prompt. Length targets bumped from 250–600 → **600–
+  1200 words** for analytical questions; narrator `maxTokens` 4000 →
+  6000, synthesizer 2600 → 4500. `narratorOutputSchema` and the
+  persisted `messageSchema.answerEnvelope` gain three optional fields:
+  `implications` (statement → soWhat with confidence), `recommendations`
+  (action + rationale + horizon), and `domainLens` (one-paragraph
+  framing citing the domain pack id). The synthesizer branch now also
+  builds an `answerEnvelope` so the AnswerCard renders the same shape
+  regardless of which writer ran. `synthesis_result` telemetry adds
+  `bodyWordCount`, `implicationsCount`, `recommendationsCount`,
+  `domainLensLen` so we can verify post-rollout that the new sections
+  are actually being produced.
 - **Wave W7 · `buildSynthesisContext` shared bundle** — pure helper at
   `lib/agents/runtime/buildSynthesisContext.ts` composes four labelled
   blocks (data understanding, user context, RAG, FMCG/Marico domain

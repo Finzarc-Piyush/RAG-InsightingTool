@@ -20,6 +20,10 @@ import { createBlackboard, addFinding, addOpenQuestion, resolveHypothesis, forma
 import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
+import {
+  buildSynthesisContext,
+  formatSynthesisContextBundle,
+} from "./buildSynthesisContext.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -325,6 +329,30 @@ const finalAnswerEnvelopeSchema = z.object({
   ctas: z.array(z.string()).max(3),
   magnitudes: z.array(magnitudeSchema).max(6).optional(),
   unexplained: z.string().max(800).optional(),
+  // W8 · decision-grade extensions, mirrored from the narrator schema so the
+  // synthesizer fallback path produces the same envelope shape and the
+  // AnswerCard renders identical sections regardless of which writer ran.
+  implications: z
+    .array(
+      z.object({
+        statement: z.string().max(280),
+        soWhat: z.string().max(280),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  recommendations: z
+    .array(
+      z.object({
+        action: z.string().max(200),
+        rationale: z.string().max(280),
+        horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  domainLens: z.string().max(500).optional(),
 });
 
 function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefined {
@@ -334,6 +362,17 @@ function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefin
     }
   }
   return undefined;
+}
+
+/**
+ * W8 · word-count helper for `synthesis_result` telemetry. Whitespace-split
+ * is good enough for tracking whether the new 600–1200-word body target is
+ * being hit; we don't need locale-aware tokenisation here.
+ */
+function countWords(s: string): number {
+  const trimmed = s?.trim() ?? "";
+  if (!trimmed) return 0;
+  return trimmed.split(/\s+/).length;
 }
 
 function formatAnswerFromEnvelope(body: string, keyInsight: string | null | undefined): string {
@@ -360,7 +399,8 @@ async function synthesizeFinalAnswerEnvelope(
   ctx: AgentExecutionContext,
   observations: string[],
   turnId: string,
-  onLlmCall: () => void
+  onLlmCall: () => void,
+  upfrontRagHitsBlock?: string
 ): Promise<{
   answer: string;
   keyInsight?: string;
@@ -368,31 +408,45 @@ async function synthesizeFinalAnswerEnvelope(
   suggestionHints: string[];
   magnitudes?: z.infer<typeof magnitudeSchema>[];
   unexplained?: string;
+  implications?: z.infer<typeof finalAnswerEnvelopeSchema>["implications"];
+  recommendations?: z.infer<typeof finalAnswerEnvelopeSchema>["recommendations"];
+  domainLens?: string;
   source: SynthesisSource;
 }> {
-  const sacBlock = ctx.sessionAnalysisContext
-    ? `\n\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, 10000)}`
-    : "";
-  const permBlock = ctx.permanentContext?.trim().length
-    ? `\n\nUser notes:\n${ctx.permanentContext.trim().slice(0, 4000)}`
-    : "";
+  // W8 · the W7 bundle replaces the previous raw SessionAnalysisContext JSON
+  // dump and per-call user-notes block. It carries data understanding, user
+  // identity, RAG hits (round 1 + round 2), and FMCG/Marico domain packs.
+  const synthBundleBlock = formatSynthesisContextBundle(
+    buildSynthesisContext(ctx, {
+      upfrontRagHitsBlock,
+      blackboard: ctx.blackboard,
+    })
+  );
   const phase1Shape = ctx.analysisBrief?.questionShape;
   const phase1Line = phase1Shape
     ? `questionShape: ${phase1Shape}\n`
     : `questionShape: none\n`;
-  const user = `${phase1Line}Question: ${ctx.question}${permBlock}${sacBlock}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 20_000)}`;
+  const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
+  const user = `${phase1Line}Question: ${ctx.question}${bundleSection}\n\nObservations:\n${observations.join("\n\n---\n\n").slice(0, 20_000)}`;
 
   // W4.2 · system is byte-stable across calls: the phase-1 envelope template
   // is unconditionally present, the per-call questionShape is in the user
   // message above. ANALYST_PREAMBLE pushes the prefix over Azure's 1024-token
   // cache threshold for the 50% input discount.
-  const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools, produce JSON with:
-- "body": main markdown answer (clear, concise). Do not duplicate the full key insight inside body; keep body focused on the direct answer.
-- "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions: segments, risk, opportunity, or “so what” for the business—using general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
+  const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools (figures and quoted facts), produce JSON. The user message also carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT, RELATED CONTEXT (RAG), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to enrich interpretation, but figures still come only from observations.
+
+Required:
+- "body": main markdown answer. Lead with the direct answer; expand into 4–7 paragraphs of grounded prose. LENGTH: 600–1200 words for analytical questions, 80–150 words for purely conversational ones. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Do not duplicate the full keyInsight inside body.
+- "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions — segments, risk, opportunity, or "so what" for the business. Use general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
-If data is insufficient, say what is missing in body and use minimal ctas. Respect SessionAnalysisContextJSON and user notes when they do not contradict the data.
+If data is insufficient, say what is missing in body and use minimal ctas. Respect the CONTEXT BUNDLE when it does not contradict the data.
 If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.
+
+W8 · Decision-grade extensions — REQUIRED for analytical questions, omit each independently when not applicable:
+- "implications": 2–4 entries, each {statement, soWhat, confidence?}. \`statement\` is the observed fact; \`soWhat\` is the business meaning for an FMCG operator (buyer, brand manager, channel head), framed using DOMAIN KNOWLEDGE when relevant.
+- "recommendations": 2–4 entries, each {action, rationale, horizon?}. \`action\` is concrete; \`rationale\` ties it to a finding and the domain context; \`horizon\` ∈ {now, this_quarter, strategic}.
+- "domainLens": ≤500 chars, one paragraph framing the findings against the relevant FMCG/Marico context. Cite the pack id verbatim when referenced (e.g. "Per \`marico-haircare-portfolio\`, …"). Treat domain packs as orientation only — never invent domain facts.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
 - "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
@@ -401,7 +455,10 @@ When the user message says "questionShape: none" you may omit magnitudes and une
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
-    maxTokens: 2600,
+    // W8 · 2600 → 4500. Synthesizer now produces implications, recommendations,
+    // domainLens on top of the existing envelope and 600–1200-word body. The
+    // previous 2600-token cap was hit on richer turns and silently truncated.
+    maxTokens: 4500,
     temperature: getInsightTemperatureConservative(),
     model: getInsightModel(),
     onLlmCall,
@@ -445,7 +502,7 @@ When the user message says "questionShape: none" you may omit magnitudes and une
     };
   }
 
-  const { body, keyInsight, ctas, magnitudes, unexplained } = out.data;
+  const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, domainLens } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
   const cleanedMagnitudes =
@@ -455,6 +512,22 @@ When the user message says "questionShape: none" you may omit magnitudes and une
           .slice(0, 6)
       : undefined;
   const cleanedUnexplained = unexplained?.trim()?.slice(0, 800) || undefined;
+  // W8 · scrub empty/blank entries the model occasionally returns so the UI
+  // doesn't render half-empty rows. The schema caps but never enforces non-
+  // empty fields (other than body), so we filter here.
+  const cleanedImplications =
+    Array.isArray(implications) && implications.length > 0
+      ? implications
+          .filter((i) => i && i.statement?.trim() && i.soWhat?.trim())
+          .slice(0, 4)
+      : undefined;
+  const cleanedRecommendations =
+    Array.isArray(recommendations) && recommendations.length > 0
+      ? recommendations
+          .filter((r) => r && r.action?.trim() && r.rationale?.trim())
+          .slice(0, 4)
+      : undefined;
+  const cleanedDomainLens = domainLens?.trim()?.slice(0, 500) || undefined;
   // `body.min(1)` in the schema means `body` is guaranteed non-empty here,
   // but `formatAnswerFromEnvelope` is the same fn used by the narrator
   // elsewhere — keeping the empty-trim guard as a defence costs us nothing
@@ -471,6 +544,9 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         suggestionHints,
         ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
         ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+        ...(cleanedImplications ? { implications: cleanedImplications } : {}),
+        ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
+        ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
         source: "narrative_retry",
       };
     }
@@ -494,6 +570,9 @@ When the user message says "questionShape: none" you may omit magnitudes and une
     suggestionHints,
     ...(cleanedMagnitudes ? { magnitudes: cleanedMagnitudes } : {}),
     ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
+    ...(cleanedImplications ? { implications: cleanedImplications } : {}),
+    ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
+    ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
     source: "json_envelope",
   };
 }
@@ -1769,14 +1848,21 @@ export async function runAgentTurn(
             envMagnitudes = narResult.magnitudes;
             envUnexplained = narResult.unexplained;
             if (answer.trim()) answerSource = "narrator";
-            // W5 · synthesis telemetry — narrator branch.
+            // W5 + W8 · synthesis telemetry — narrator branch. W8 adds
+            // bodyWordCount / implicationsCount / recommendationsCount /
+            // domainLensLen so we can confirm the new envelope sections are
+            // actually being produced post-rollout.
             agentLog("synthesis_result", {
               turnId,
               source: "narrator",
               answerLen: answer.length,
+              bodyWordCount: countWords(narResult.body ?? ""),
               keyInsightLen: narResult.keyInsight?.length ?? 0,
               ctaCount: narResult.ctas?.length ?? 0,
               magnitudesCount: narResult.magnitudes?.length ?? 0,
+              implicationsCount: narResult.implications?.length ?? 0,
+              recommendationsCount: narResult.recommendations?.length ?? 0,
+              domainLensLen: narResult.domainLens?.length ?? 0,
               questionShape: ctx.analysisBrief?.questionShape ?? "none",
               observationsCount: observations.length,
               observationsTotalLen: observations.reduce(
@@ -1784,15 +1870,18 @@ export async function runAgentTurn(
                 0
               ),
             });
-            // W3 · capture the structured AnswerEnvelope. Each field is optional;
-            // we keep the envelope even when sparsely populated so the UI can
-            // render whatever the narrator produced (TL;DR alone is valuable).
+            // W3 + W8 · capture the structured AnswerEnvelope. W8 adds
+            // implications, recommendations, and domainLens so the AnswerCard
+            // can render decision-grade sections.
             const env: NonNullable<import("../../../shared/schema.js").Message["answerEnvelope"]> = {};
             if (narResult.tldr) env.tldr = narResult.tldr;
             if (narResult.findings?.length) env.findings = narResult.findings;
             if (narResult.methodology) env.methodology = narResult.methodology;
             if (narResult.caveats?.length) env.caveats = narResult.caveats;
             if (envCtas.length) env.nextSteps = envCtas;
+            if (narResult.implications?.length) env.implications = narResult.implications;
+            if (narResult.recommendations?.length) env.recommendations = narResult.recommendations;
+            if (narResult.domainLens) env.domainLens = narResult.domainLens;
             if (Object.keys(env).length) envelopeAnswerEnvelope = env;
           }
         }
@@ -1804,7 +1893,13 @@ export async function runAgentTurn(
             ctx.blackboard && ctx.blackboard.findings.length > 0
               ? [`[BLACKBOARD]\n${formatForNarrator(ctx.blackboard).slice(0, 3000)}`, ...observations]
               : observations;
-          const env = await synthesizeFinalAnswerEnvelope(ctx, synthObservations, turnId, onLlmCall);
+          const env = await synthesizeFinalAnswerEnvelope(
+            ctx,
+            synthObservations,
+            turnId,
+            onLlmCall,
+            upfrontRagHitsBlock
+          );
           answer = env.answer;
           agentSuggestionHints = env.suggestionHints;
           envKeyInsight = env.keyInsight;
@@ -1816,16 +1911,35 @@ export async function runAgentTurn(
           // (json_envelope, narrative_retry, plain_text_retry) is a real
           // synthesized narrative.
           answerSource = env.source === "fallback_dump" ? "fallback" : "synthesizer";
-          // W5 · synthesis telemetry. When a fallback fires in production we
+          // W8 · synthesizer also produces decision-grade envelope sections —
+          // capture them so the AnswerCard renders the same shape regardless
+          // of which writer ran. Skipped on `fallback_dump` (deterministic
+          // markdown table; no envelope to surface).
+          if (env.source !== "fallback_dump") {
+            const synthEnv: NonNullable<
+              import("../../../shared/schema.js").Message["answerEnvelope"]
+            > = {};
+            if (envCtas.length) synthEnv.nextSteps = envCtas;
+            if (env.implications?.length) synthEnv.implications = env.implications;
+            if (env.recommendations?.length) synthEnv.recommendations = env.recommendations;
+            if (env.domainLens) synthEnv.domainLens = env.domainLens;
+            if (Object.keys(synthEnv).length) envelopeAnswerEnvelope = synthEnv;
+          }
+          // W5 + W8 · synthesis telemetry. When a fallback fires in production we
           // need to know which retry path failed and what the LLM produced
-          // (or didn't) to fix the prompt at its source.
+          // (or didn't) to fix the prompt at its source. W8 adds the same
+          // depth-of-answer counters as the narrator branch.
           agentLog("synthesis_result", {
             turnId,
             source: env.source,
             answerLen: env.answer.length,
+            bodyWordCount: countWords(env.answer),
             keyInsightLen: env.keyInsight?.length ?? 0,
             ctaCount: env.ctas?.length ?? 0,
             magnitudesCount: env.magnitudes?.length ?? 0,
+            implicationsCount: env.implications?.length ?? 0,
+            recommendationsCount: env.recommendations?.length ?? 0,
+            domainLensLen: env.domainLens?.length ?? 0,
             questionShape: ctx.analysisBrief?.questionShape ?? "none",
             observationsCount: synthObservations.length,
             observationsTotalLen: synthObservations.reduce(

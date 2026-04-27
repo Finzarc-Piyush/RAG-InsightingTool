@@ -45,6 +45,46 @@ export const chartSpecSchema = z.object({
   _agentEvidenceRef: z.string().max(200).optional(),
   _agentTurnId: z.string().max(80).optional(),
   /**
+   * WC7 · server-attached analytical layers (forwarded into ChartSpecV2.layers
+   * by the client ChartShim). Opaque to the legacy renderer.
+   */
+  _autoLayers: z
+    .array(
+      z.object({
+        type: z.enum([
+          "reference-line",
+          "trend",
+          "forecast",
+          "outliers",
+          "annotation",
+          "comparison",
+        ]),
+        on: z.enum(["x", "y"]).optional(),
+        value: z.union([z.number(), z.string()]).optional(),
+        label: z.string().max(120).optional(),
+        method: z.enum(["linear", "poly", "log", "exp-smoothing"]).optional(),
+        horizon: z.number().int().min(1).max(64).optional(),
+        ci: z.number().min(0).max(0.99).optional(),
+        threshold: z.number().min(0).max(10).optional(),
+        style: z.string().max(40).optional(),
+        text: z.string().max(500).optional(),
+        x: z.union([z.string(), z.number()]).optional(),
+        against: z.literal("prior-period").optional(),
+      })
+    )
+    .max(8)
+    .optional(),
+  /** WC7 · server-suggested alternative marks (forwarded to <SuggestedAlts>). */
+  _suggestedAlts: z
+    .array(
+      z.object({
+        mark: z.string().max(40),
+        reason: z.string().max(300),
+      })
+    )
+    .max(3)
+    .optional(),
+  /**
    * W7.2 · Provenance: which tool calls produced this chart's data, with row
    * counts and (when applicable) a SQL-equivalent string. Lets the UI show a
    * "where did these numbers come from" popover so managers can trust the
@@ -86,6 +126,490 @@ export const chartSpecSchema = z.object({
 });
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
+
+// =====================================================================
+// ChartSpec v2 (grammar of graphics)
+// =====================================================================
+// Mark + encoding + transform + layers + source + config. Lives
+// side-by-side with v1 — the client `<ChartShim>` adapter detects v1
+// shape and converts. No v1 callers are required to migrate.
+//
+// See plan: /Users/tida/.claude/plans/are-2-things-ever-deep-duckling.md
+// See contract: docs/architecture/charting.md
+// =====================================================================
+
+/** v2 mark catalog: 16 visx (primary) + 9 ECharts (lazy specialty). */
+export const chartV2MarkSchema = z.enum([
+  // visx (primary, non-lazy)
+  "point",
+  "line",
+  "area",
+  "bar",
+  "arc",
+  "rect",
+  "rule",
+  "text",
+  "box",
+  "errorbar",
+  "regression",
+  "combo",
+  "waterfall",
+  "funnel",
+  "bubble",
+  "radar",
+  // echarts (lazy specialty bundles)
+  "treemap",
+  "sunburst",
+  "sankey",
+  "parallel",
+  "calendar",
+  "choropleth",
+  "candlestick",
+  "gauge",
+  "kpi",
+]);
+export type ChartV2Mark = z.infer<typeof chartV2MarkSchema>;
+
+/** Field type system: quantitative, nominal, ordinal, temporal. */
+export const chartFieldTypeSchema = z.enum(["q", "n", "o", "t"]);
+export type ChartFieldType = z.infer<typeof chartFieldTypeSchema>;
+
+/** Aggregation operators usable in transforms and per-encoding. */
+export const chartAggOpSchema = z.enum([
+  "sum",
+  "mean",
+  "count",
+  "median",
+  "min",
+  "max",
+  "p25",
+  "p50",
+  "p75",
+  "p95",
+  "stdev",
+  "variance",
+  "distinct",
+]);
+export type ChartAggOp = z.infer<typeof chartAggOpSchema>;
+
+export const chartTimeUnitSchema = z.enum([
+  "year",
+  "quarter",
+  "month",
+  "week",
+  "day",
+  "hour",
+  "minute",
+  "yearmonth",
+  "yearquarter",
+  "yearweek",
+]);
+export type ChartTimeUnit = z.infer<typeof chartTimeUnitSchema>;
+
+export const chartSortSpecSchema = z.union([
+  z.enum(["ascending", "descending"]),
+  z.object({
+    field: z.string().max(200),
+    op: chartAggOpSchema.optional(),
+    order: z.enum(["ascending", "descending"]).optional(),
+  }),
+]);
+
+export const chartBinSpecSchema = z.object({
+  maxbins: z.number().int().positive().max(100).optional(),
+  step: z.number().optional(),
+  extent: z.tuple([z.number(), z.number()]).optional(),
+});
+
+export const chartScaleConfigSchema = z.object({
+  type: z
+    .enum([
+      "linear",
+      "log",
+      "pow",
+      "sqrt",
+      "time",
+      "band",
+      "ordinal",
+      "point",
+    ])
+    .optional(),
+  domain: z.array(z.union([z.number(), z.string()])).optional(),
+  range: z.array(z.union([z.number(), z.string()])).optional(),
+  zero: z.boolean().optional(),
+  nice: z.boolean().optional(),
+  padding: z.number().optional(),
+});
+
+export const chartAxisConfigSchema = z.object({
+  title: z.string().max(200).optional(),
+  /** d3-format string ('$.2s', '.0%') or shortcut: 'currency'|'percent'|'kmb'|'date'. */
+  format: z.string().max(40).optional(),
+  labelAngle: z.number().optional(),
+  grid: z.boolean().optional(),
+  ticks: z.number().int().min(0).max(50).optional(),
+  orient: z.enum(["top", "bottom", "left", "right"]).optional(),
+});
+
+export const chartLegendConfigSchema = z.object({
+  title: z.string().max(200).optional(),
+  orient: z.enum(["top", "bottom", "left", "right", "none"]).optional(),
+  type: z.enum(["symbol", "gradient"]).optional(),
+});
+
+/** Base encoding channel — every encoding extends this. */
+const baseEncodingChannelShape = {
+  field: z.string().max(200),
+  type: chartFieldTypeSchema,
+  aggregate: chartAggOpSchema.optional(),
+  bin: chartBinSpecSchema.optional(),
+  timeUnit: chartTimeUnitSchema.optional(),
+  sort: chartSortSpecSchema.optional(),
+  axis: chartAxisConfigSchema.optional(),
+  scale: chartScaleConfigSchema.optional(),
+  legend: chartLegendConfigSchema.optional(),
+  /** Per-channel format shortcut overriding axis.format. */
+  format: z.string().max(40).optional(),
+};
+
+export const chartEncodingChannelSchema = z.object(baseEncodingChannelShape);
+export type ChartEncodingChannel = z.infer<typeof chartEncodingChannelSchema>;
+
+export const chartColorEncodingSchema = z.object({
+  ...baseEncodingChannelShape,
+  scheme: z.enum(["qualitative", "sequential", "diverging"]).optional(),
+});
+
+export const chartSizeEncodingSchema = z.object({
+  ...baseEncodingChannelShape,
+  range: z.tuple([z.number(), z.number()]).optional(),
+});
+
+export const chartFacetEncodingSchema = z.object({
+  ...baseEncodingChannelShape,
+  /** Wrap N facets per row (`facetCol`) or column (`facetRow`). */
+  columns: z.number().int().positive().max(20).optional(),
+});
+
+export const chartOpacityEncodingSchema = z.union([
+  chartEncodingChannelSchema,
+  z.object({ value: z.number().min(0).max(1) }),
+]);
+
+export const chartTooltipChannelSchema = z
+  .array(
+    z.object({
+      field: z.string().max(200),
+      format: z.string().max(40).optional(),
+      title: z.string().max(200).optional(),
+    })
+  )
+  .max(20);
+
+export const chartEncodingSchema = z.object({
+  x: chartEncodingChannelSchema.optional(),
+  y: chartEncodingChannelSchema.optional(),
+  /** Range-end channel (e.g. for boxplot, errorbar, candlestick). */
+  x2: chartEncodingChannelSchema.optional(),
+  y2: chartEncodingChannelSchema.optional(),
+  /**
+   * Multiple secondary-axis series. When non-empty, line/combo charts
+   * render each as an independent line on the right axis, with dash
+   * patterns + colors cycled from chart-2..N. y2 (single) and y2Series
+   * (array) can both be populated; y2Series wins when provided.
+   */
+  y2Series: z.array(chartEncodingChannelSchema).max(8).optional(),
+  color: chartColorEncodingSchema.optional(),
+  size: chartSizeEncodingSchema.optional(),
+  shape: chartEncodingChannelSchema.optional(),
+  /**
+   * Pattern encoding — categorical field maps to one of 8 SVG fill
+   * patterns (solid / horizontal / vertical / diagonal / cross-hatch
+   * / dots / dense-dots / checkers). Independent of color, so users
+   * can encode TWO categorical dimensions at once on a single bar.
+   * Critical for accessibility (color-blind) and for high-dim charts.
+   */
+  pattern: chartEncodingChannelSchema.optional(),
+  opacity: chartOpacityEncodingSchema.optional(),
+  facetRow: chartFacetEncodingSchema.optional(),
+  facetCol: chartFacetEncodingSchema.optional(),
+  detail: chartEncodingChannelSchema.optional(),
+  text: chartEncodingChannelSchema.optional(),
+  tooltip: chartTooltipChannelSchema.optional(),
+  order: chartEncodingChannelSchema.optional(),
+});
+export type ChartEncoding = z.infer<typeof chartEncodingSchema>;
+
+/** Transforms applied to source rows before encoding. Order matters. */
+export const chartTransformSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("filter"), expr: z.string().max(2000) }),
+  z.object({
+    type: z.literal("calculate"),
+    as: z.string().max(120),
+    expr: z.string().max(2000),
+  }),
+  z.object({
+    type: z.literal("aggregate"),
+    groupby: z.array(z.string().max(200)).max(10),
+    ops: z
+      .array(
+        z.object({
+          op: chartAggOpSchema,
+          field: z.string().max(200),
+          as: z.string().max(120),
+        })
+      )
+      .max(20),
+  }),
+  z.object({
+    type: z.literal("fold"),
+    fields: z.array(z.string().max(200)).max(50),
+    as: z.tuple([z.string().max(120), z.string().max(120)]),
+  }),
+  z.object({
+    type: z.literal("bin"),
+    field: z.string().max(200),
+    as: z.string().max(120),
+    maxbins: z.number().int().positive().max(100).optional(),
+  }),
+  z.object({
+    type: z.literal("window"),
+    ops: z
+      .array(
+        z.object({
+          op: z.enum([
+            "row_number",
+            "rank",
+            "dense_rank",
+            "cumsum",
+            "cummean",
+            "cummax",
+            "cummin",
+            "moving_avg",
+            "moving_sum",
+            "lag",
+            "lead",
+          ]),
+          field: z.string().max(200).optional(),
+          as: z.string().max(120),
+          window: z.number().int().optional(),
+        })
+      )
+      .max(10),
+    groupby: z.array(z.string().max(200)).max(10).optional(),
+    sort: z.array(z.string().max(200)).max(10).optional(),
+  }),
+  z.object({
+    type: z.literal("regression"),
+    on: z.string().max(200),
+    method: z.enum(["linear", "poly", "log"]),
+    degree: z.number().int().min(2).max(6).optional(),
+  }),
+]);
+export type ChartTransform = z.infer<typeof chartTransformSchema>;
+
+/** Analytical overlays — toggleable layers on top of the base mark. */
+export const chartLayerSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("reference-line"),
+    on: z.enum(["x", "y"]),
+    value: z.union([z.number(), z.enum(["mean", "median", "target"])]),
+    label: z.string().max(120).optional(),
+    style: z
+      .object({
+        stroke: z.string().max(40).optional(),
+        strokeWidth: z.number().min(0.5).max(8).optional(),
+        strokeDasharray: z.string().max(20).optional(),
+      })
+      .optional(),
+  }),
+  z.object({
+    type: z.literal("trend"),
+    on: z.literal("y"),
+    method: z.enum(["linear", "poly", "log"]),
+    degree: z.number().int().min(2).max(6).optional(),
+    ci: z.number().min(0).max(0.99).optional(),
+  }),
+  z.object({
+    type: z.literal("forecast"),
+    on: z.literal("y"),
+    horizon: z.number().int().min(1).max(64),
+    method: z.enum(["exp-smoothing", "linear"]),
+    ci: z.number().min(0).max(0.99).optional(),
+  }),
+  z.object({
+    type: z.literal("annotation"),
+    x: z.union([z.string(), z.number()]),
+    y: z.union([z.string(), z.number()]).optional(),
+    text: z.string().max(500),
+    arrow: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.literal("outliers"),
+    threshold: z.number().min(0).max(10),
+    style: z.enum(["highlight", "callout"]),
+  }),
+  z.object({
+    type: z.literal("comparison"),
+    against: z.literal("prior-period"),
+    style: z.enum(["faded", "split"]),
+  }),
+]);
+export type ChartLayer = z.infer<typeof chartLayerSchema>;
+
+/** Where the data lives. Chat charts use `session-ref` so client-side
+ * re-derivation hits the in-memory <RawDataProvider> cache instead of
+ * shipping rows in the spec. */
+export const chartSourceSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("inline"),
+    rows: z.array(
+      z.record(z.union([z.string(), z.number(), z.null(), z.boolean()]))
+    ),
+  }),
+  z.object({
+    kind: z.literal("session-ref"),
+    sessionId: z.string().max(120),
+    dataVersion: z.number().int().nonnegative().optional(),
+    rowEstimate: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    kind: z.literal("pivot-query"),
+    queryRef: z.string().max(200),
+    rowEstimate: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    kind: z.literal("analytical-query"),
+    queryRef: z.string().max(200),
+    rowEstimate: z.number().int().nonnegative().optional(),
+  }),
+]);
+export type ChartSource = z.infer<typeof chartSourceSchema>;
+
+export const chartConfigSchema = z.object({
+  title: z
+    .object({
+      text: z.string().max(200),
+      subtitle: z.string().max(300).optional(),
+    })
+    .optional(),
+  theme: z.enum(["light", "dark", "auto"]).optional(),
+  palette: z
+    .union([
+      z.enum(["qualitative", "sequential", "diverging"]),
+      z.string().max(40),
+    ])
+    .optional(),
+  height: z
+    .union([z.number().int().min(80).max(2000), z.literal("auto")])
+    .optional(),
+  width: z
+    .union([z.number().int().min(80).max(4000), z.literal("auto")])
+    .optional(),
+  legend: z
+    .object({
+      position: z
+        .enum(["top", "bottom", "left", "right", "none"])
+        .optional(),
+      interactive: z.boolean().optional(),
+    })
+    .optional(),
+  tooltip: z
+    .object({
+      format: z.enum(["rich", "compact"]).optional(),
+      showComparison: z.boolean().optional(),
+    })
+    .optional(),
+  interactions: z
+    .object({
+      brush: z.boolean().optional(),
+      click: z
+        .enum(["cross-filter", "drill-down", "drill-through", "none"])
+        .optional(),
+      hoverDim: z.boolean().optional(),
+    })
+    .optional(),
+  accessibility: z
+    .object({
+      ariaLabel: z.string().max(300).optional(),
+      description: z.string().max(1000).optional(),
+    })
+    .optional(),
+  export: z
+    .object({
+      png: z.boolean().optional(),
+      svg: z.boolean().optional(),
+      pdf: z.boolean().optional(),
+      csv: z.boolean().optional(),
+    })
+    .optional(),
+  /** Replaces v1's underscored `_isCorrelationChart` flag (contract Q2). */
+  loadingState: z.enum(["computing", "sampling", "idle"]).optional(),
+  /**
+   * Bar layout when `encoding.color` is set. Default: 'grouped'.
+   *   - grouped: side-by-side sub-bars per category
+   *   - stacked: stacked vertically per category
+   *   - normalized: stacked + each category sums to 100%
+   *   - grouped-stacked: outer X groups, inner color groups, each
+   *     inner bar stacked by `encoding.detail` (Tableau-style)
+   *   - diverging: positive values stack one direction, negatives the
+   *     other; reference line at zero (for variance / sentiment).
+   */
+  barLayout: z
+    .enum([
+      "grouped",
+      "stacked",
+      "normalized",
+      "grouped-stacked",
+      "diverging",
+    ])
+    .optional(),
+  /**
+   * Bar/column orientation. 'auto' picks horizontal when X cardinality
+   * is high or labels are long; defaults to vertical otherwise.
+   * Named `barOrientation` (not `orientation`) to avoid shadowing the
+   * deprecated `Window.orientation` DOM property.
+   */
+  barOrientation: z.enum(["vertical", "horizontal", "auto"]).optional(),
+  /**
+   * Whether to draw a "Total" / aggregate bar at the end of a stacked
+   * series. Applies to the bar mark when barLayout is 'stacked' or
+   * 'grouped-stacked'.
+   */
+  showTotalBar: z.boolean().optional(),
+  /**
+   * Render bar labels (the y-value) inside the bar when fits, else
+   * outside. Defaults to false to keep charts uncluttered.
+   */
+  barLabels: z.boolean().optional(),
+});
+export type ChartConfig = z.infer<typeof chartConfigSchema>;
+
+/** Root v2 spec. */
+export const chartSpecV2Schema = z.object({
+  version: z.literal(2),
+  mark: chartV2MarkSchema,
+  encoding: chartEncodingSchema,
+  transform: z.array(chartTransformSchema).max(20).optional(),
+  layers: z.array(chartLayerSchema).max(12).optional(),
+  source: chartSourceSchema,
+  config: chartConfigSchema.optional(),
+  /** Provenance shared with v1; same shape so the SourceDrawer keeps working. */
+  _agentProvenance: chartSpecSchema.shape._agentProvenance,
+  _agentEvidenceRef: z.string().max(200).optional(),
+  _agentTurnId: z.string().max(80).optional(),
+});
+export type ChartSpecV2 = z.infer<typeof chartSpecV2Schema>;
+
+/** Discriminator: v2 specs declare `version: 2`; v1 specs lack it. */
+export function isChartSpecV2(value: unknown): value is ChartSpecV2 {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { version?: unknown }).version === 2 &&
+    typeof (value as { mark?: unknown }).mark === "string"
+  );
+}
 
 // Insights
 export const insightSchema = z.object({
@@ -283,6 +807,42 @@ export const messageSchema = z.object({
       methodology: z.string().max(500).optional(),
       caveats: z.array(z.string().max(200)).max(3).optional(),
       nextSteps: z.array(z.string().max(200)).max(3).optional(),
+      /**
+       * W8 · "So what" reading of each headline finding. Each entry pairs the
+       * observed `statement` with its business-meaning `soWhat`, framed using
+       * the FMCG/Marico domain context when applicable. Optional confidence
+       * lets the UI show a low/med/high pill.
+       */
+      implications: z
+        .array(
+          z.object({
+            statement: z.string().max(280),
+            soWhat: z.string().max(280),
+            confidence: z.enum(["low", "medium", "high"]).optional(),
+          })
+        )
+        .max(4)
+        .optional(),
+      /**
+       * W8 · concrete recommended actions, grouped by horizon. Rendered as a
+       * numbered list under headings ("Do now", "This quarter", "Strategic").
+       */
+      recommendations: z
+        .array(
+          z.object({
+            action: z.string().max(200),
+            rationale: z.string().max(280),
+            horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
+          })
+        )
+        .max(4)
+        .optional(),
+      /**
+       * W8 · one-paragraph framing of the findings against FMCG/Marico domain
+       * priors. Cite the pack id (e.g. `marico-haircare-portfolio`). Rendered
+       * as an italic preamble pill above the body.
+       */
+      domainLens: z.string().max(500).optional(),
     })
     .optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
