@@ -1,0 +1,11 @@
+{
+  "id": "q04-citation-check",
+  "question": "Why did Saffola edible oils underperform Parachute in Q3 — is it a category-wide squeeze or brand-specific?",
+  "questionShape": "driver_discovery",
+  "minBodyChars": 500,
+  "minEnvelopeFields": 2,
+  "expectInvestigationSummary": true,
+  "expectAnswerSourceIn": ["narrator", "synthesizer", "delegate"],
+  "expectDomainLensCitesPackId": true,
+  "knownPackIdRegex": "(marico-|fmcg-|kpi-and-|seasonality-|competitors-by-|geography-|commodity-|regulatory-)"
+}

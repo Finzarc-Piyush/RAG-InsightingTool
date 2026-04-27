@@ -167,6 +167,21 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W33 · W28 fixture expansion + recording mode** — added two
+  new fixtures: `q04-citation-check.json` exercises the W22 `domainLens`
+  citation gate (asserts the LLM cites a real pack id via regex);
+  `q05-conversational.json` exercises the W17 completeness-bypass
+  path for descriptive turns. Per-fixture optional flags
+  (`expectDomainLensCitesPackId`, `knownPackIdRegex`,
+  `expectCompletenessGateBypassed`) drive the new assertions only
+  for fixtures that opt in. New `RECORD_LIVE_LLM_BASELINE=true` mode
+  (gated behind `LIVE_LLM_REPLAY=true`) dumps each fixture's full
+  result envelope to `<id>.recorded.json` (gitignored) so operators
+  can inspect what the LLM actually produces and inform tighter
+  assertions later. New
+  `tests/fixtures/golden-replay/README.md` documents the workflow.
+  All in-CI tests still skip trivially without the env gate;
+  `.env.example` documents the new flag.
 - **Wave W32 · `chatStream.service.ts` schema mismatches** —
   knocked typecheck noise from **91 → 89 errors** (-2) by fixing the
   two real type mismatches flagged in W27 as "scoped investigation

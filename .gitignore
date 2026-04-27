@@ -28,3 +28,6 @@ __pycache__/
 .cursor/dev-logs/
 .vscode/
 .idea/
+
+# W33 · live-LLM recording-mode outputs (locally captured baselines, never committed)
+server/tests/fixtures/golden-replay/*.recorded.json

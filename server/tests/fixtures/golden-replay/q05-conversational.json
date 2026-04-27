@@ -1,0 +1,10 @@
+{
+  "id": "q05-conversational",
+  "question": "What columns are in this dataset?",
+  "questionShape": "descriptive",
+  "minBodyChars": 100,
+  "minEnvelopeFields": 0,
+  "expectInvestigationSummary": false,
+  "expectAnswerSourceIn": ["narrator", "synthesizer", "delegate", "fallback"],
+  "expectCompletenessGateBypassed": true
+}

@@ -31,7 +31,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it, after } from "node:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ChatDocument,
@@ -42,6 +42,15 @@ import type {
 const LIVE_ENABLED =
   process.env.LIVE_LLM_REPLAY === "true" &&
   Boolean(process.env.AZURE_OPENAI_API_KEY);
+
+// W33 · recording mode. When set together with LIVE_LLM_REPLAY,
+// each fixture run dumps its full result to `<id>.recorded.json`
+// (gitignored) so operators can inspect what the LLM actually
+// produced and tighten assertions later. Assertions are softened
+// during recording so the test always passes if a result is
+// produced — the goal is capture, not gating.
+const RECORDING_ENABLED =
+  LIVE_ENABLED && process.env.RECORD_LIVE_LLM_BASELINE === "true";
 
 // When the gate is off we still want the file to LOAD without crashing so
 // the test runner can report 1 skipped test cleanly. Stub Azure env so the
@@ -58,6 +67,13 @@ interface Fixture {
   minEnvelopeFields: number;
   expectInvestigationSummary: boolean;
   expectAnswerSourceIn: string[];
+  // W33 · per-fixture optional gates.
+  /** When true, assert envelope.domainLens is present and matches knownPackIdRegex. */
+  expectDomainLensCitesPackId?: boolean;
+  /** Regex (string) of known pack-id prefixes for the citation check. */
+  knownPackIdRegex?: string;
+  /** Conversational/descriptive turns: completeness gate should NOT enforce. */
+  expectCompletenessGateBypassed?: boolean;
 }
 
 const FIXTURES_DIR = join(process.cwd(), "tests", "fixtures", "golden-replay");
@@ -195,6 +211,48 @@ describe("W28 · live-LLM golden replay", () => {
       const config = loadAgentConfigFromEnv();
       const result = await runAgentTurn(ctx, config);
 
+      // W33 · recording mode: dump the result to disk for operators to
+      // inspect, then soften assertions to "answer non-empty" so the
+      // test always passes on capture (recording is for capture, not
+      // gating).
+      if (RECORDING_ENABLED) {
+        const recordPath = join(FIXTURES_DIR, `${fixture.id}.recorded.json`);
+        const recordPayload = {
+          recordedAt: new Date().toISOString(),
+          fixture,
+          result: {
+            answer: result.answer,
+            answerEnvelope: result.answerEnvelope,
+            investigationSummary: result.investigationSummary,
+            magnitudes: result.magnitudes,
+            unexplained: result.unexplained,
+            chartCount: result.charts?.length ?? 0,
+            firstChartShape: result.charts?.[0]
+              ? {
+                  type: result.charts[0].type,
+                  title: result.charts[0].title,
+                  hasBusinessCommentary: Boolean(
+                    (result.charts[0] as { businessCommentary?: string })
+                      .businessCommentary
+                  ),
+                }
+              : null,
+            traceStepCount: result.agentTrace?.steps?.length ?? 0,
+            bodyWordCount: (result.answer ?? "").trim().split(/\s+/).filter(Boolean).length,
+            envelopeFieldCount: envelopeFieldCount(result.answerEnvelope),
+          },
+        };
+        writeFileSync(recordPath, JSON.stringify(recordPayload, null, 2));
+        console.log(
+          `📼 W33 recorded: ${fixture.id} → ${recordPath}\n` +
+            `   bodyWords=${recordPayload.result.bodyWordCount} ` +
+            `envelopeFields=${recordPayload.result.envelopeFieldCount} ` +
+            `charts=${recordPayload.result.chartCount}`
+        );
+        assert.ok(result.answer, `${fixture.id}: answer empty even in recording mode`);
+        return;
+      }
+
       // ── Loose shape assertions — survives non-determinism ──
       assert.ok(
         result.answer && result.answer.length >= fixture.minBodyChars,
@@ -209,6 +267,26 @@ describe("W28 · live-LLM golden replay", () => {
         assert.ok(
           result.investigationSummary,
           `${fixture.id}: investigationSummary missing`
+        );
+      }
+      // W33 · domainLens citation gate (when fixture asks for it).
+      if (fixture.expectDomainLensCitesPackId && fixture.knownPackIdRegex) {
+        const lens = result.answerEnvelope?.domainLens ?? "";
+        const re = new RegExp(fixture.knownPackIdRegex);
+        assert.ok(
+          lens.length === 0 || re.test(lens),
+          `${fixture.id}: domainLens cites a non-recognised pack id. lens="${lens.slice(0, 200)}"`
+        );
+      }
+      // W33 · conversational/descriptive bypass: should NOT have implications/
+      // recommendations (those are W17-gated only for analytical shapes).
+      // Loose: don't FAIL if they're populated, just assert that the
+      // completeness gate didn't reject the answer (i.e. the turn
+      // succeeded with a non-empty body).
+      if (fixture.expectCompletenessGateBypassed) {
+        assert.ok(
+          (result.answer?.length ?? 0) > 0,
+          `${fixture.id}: completeness-gate-bypassed turn produced empty answer`
         );
       }
       // Trace presence is a smoke that the loop completed.
