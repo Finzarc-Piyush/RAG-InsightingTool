@@ -39,6 +39,15 @@ export const chartSpecSchema = z.object({
   yDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for Y-axis
   trendLine: z.array(z.record(z.union([z.string(), z.number()]))).optional(), // Two points defining the trend line: [{ [x]: min, [y]: y1 }, { [x]: max, [y]: y2 }]
   keyInsight: z.string().optional(), // Key insight about the chart
+  /**
+   * W12 · 1–2 sentence framing of the chart against FMCG/Marico domain
+   * priors. Populated by `generateChartInsights` only when domain context
+   * is enabled and the chart's metric matches a known KPI (volume, value,
+   * share, distribution, ACV, MSL, etc.). Rendered under the keyInsight
+   * card. Cap matches keyInsight (≤500 chars) so renderers can share
+   * styling.
+   */
+  businessCommentary: z.string().max(500).optional(),
   /** When true, final enrichment must not rebuild series from full rawData (aggregated/agent charts). */
   _useAnalyticalDataOnly: z.boolean().optional(),
   /** Agent tool call id or trace ref linking narrative to evidence (optional). */

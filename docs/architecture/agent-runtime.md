@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W12 · per-chart business commentary** — `chartSpecSchema`
+  gains an optional `businessCommentary: z.string().max(500)` field.
+  `generateChartInsights` now accepts a `domainContext` block on the
+  synthesis context; when present it asks the LLM (same call as
+  `keyInsight`, no extra LLM cost) to produce 1–2 sentences framing
+  the chart's metric against the FMCG/Marico domain packs (cite the
+  pack id verbatim, e.g. `kpi-and-metric-glossary`,
+  `marico-haircare-portfolio`). The streaming chat path
+  (`chatStream.service.ts`) loads the enabled packs once via
+  `loadEnabledDomainContext` (process-cached) and threads the text
+  into `enrichCharts → generateChartInsights`. Client `MessageBubble`
+  renders the commentary directly under each chart card as a muted
+  italic line ("Business context: …"). Field is optional and back-
+  compat — legacy charts without it parse + render unchanged.
 - **Wave W11 · workbench rendering + post-pivot interpretation panel** —
   `WorkbenchActivityRow` (in `client/src/pages/Home/Components/ThinkingPanel.tsx`)
   now renders `entry.insight` as an italic line on a left accent border

@@ -11,6 +11,12 @@ export type ChartEnrichmentContext = {
   userQuestion?: string;
   sessionAnalysisContext?: SessionAnalysisContext;
   permanentContext?: string;
+  /**
+   * W12 · composed FMCG/Marico domain context. When set, chart insight
+   * generation gains a `businessCommentary` field framing the metric
+   * against the domain pack glossary.
+   */
+  domainContext?: string;
 };
 
 /**
@@ -74,13 +80,22 @@ export async function enrichCharts(
               sessionAnalysisContext:
                 enrichmentContext?.sessionAnalysisContext ?? chatDocument.sessionAnalysisContext,
               permanentContext: enrichmentContext?.permanentContext,
+              domainContext: enrichmentContext?.domainContext,
             })
           : null;
+
+        // W12 · prefer existing businessCommentary on the chart, then the
+        // newly-generated one, then leave undefined.
+        const businessCommentary =
+          (typeof c.businessCommentary === "string" && c.businessCommentary.trim().length > 0
+            ? c.businessCommentary
+            : insights?.businessCommentary) ?? undefined;
 
         enrichedCharts.push({
           ...c,
           data: dataForChart,
           keyInsight: hasUsableKeyInsight ? c.keyInsight : (insights?.keyInsight ?? c.keyInsight),
+          ...(businessCommentary ? { businessCommentary } : {}),
         });
       } catch (chartError) {
         console.error(`Error enriching chart "${c.title}":`, chartError);

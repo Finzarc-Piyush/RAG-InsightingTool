@@ -8,6 +8,43 @@ import { getInsightModel, getInsightTemperature } from './insightSynthesis/insig
 // keyInsight: grounded numbers + LLM interpretation (1–3 tight sentences typical).
 const KEY_INSIGHT_MAX_CHARS = 1400;
 
+/**
+ * Pick the dimension name to use when narrating "top performers". For multi-series charts
+ * (e.g. a pivot with column dimension Category), top performers are series labels — values
+ * of `chartSpec.seriesColumn`, NOT of `chartSpec.x`. This keeps prompt text and the
+ * deterministic fallback from calling a Category value a "Region".
+ */
+export function resolveTopPerfDimension(
+  chartSpec: Pick<ChartSpec, 'x' | 'seriesColumn' | 'seriesKeys'>
+): string {
+  const hasSeries =
+    Array.isArray(chartSpec.seriesKeys) && chartSpec.seriesKeys.length > 0;
+  if (hasSeries) {
+    const sc = chartSpec.seriesColumn?.trim();
+    return sc && sc.length > 0 ? sc : 'series';
+  }
+  return chartSpec.x;
+}
+
+/**
+ * Build the deterministic fallback narrative used when the model output fails grounding.
+ * Pure & testable; consumes pre-formatted numeric strings for the bottom threshold so the
+ * caller can reuse its existing formatY closure.
+ */
+export function buildDeterministicChartInsightFallback(args: {
+  chartSpec: Pick<ChartSpec, 'x' | 'y' | 'seriesColumn' | 'seriesKeys'>;
+  topX: unknown;
+  topY: number;
+  avgY: number;
+  yP75: number;
+  bottomThreshold: string;
+  formatY: (n: number) => string;
+}): string {
+  const { chartSpec, topX, topY, avgY, yP75, bottomThreshold, formatY } = args;
+  const dim = resolveTopPerfDimension(chartSpec);
+  return `Top ${dim} "${topX}" has the highest ${chartSpec.y} at ${formatY(topY)} (avg ${formatY(avgY)}, p75 ${formatY(yP75)}). To lift ${chartSpec.y}, prioritize ${dim} "${topX}" and target moving weaker segments above ${bottomThreshold}.`;
+}
+
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
 const enforceInsightLimit = (value: string) => {
   if (value.length > KEY_INSIGHT_MAX_CHARS) {
@@ -25,7 +62,7 @@ export async function generateChartInsights(
   summary: DataSummary,
   chatInsights?: Insight[],
   synthesisContext?: ChartInsightSynthesisContext
-): Promise<{ keyInsight: string }> {
+): Promise<{ keyInsight: string; businessCommentary?: string }> {
   if (!chartData || chartData.length === 0) {
     return {
       keyInsight: "No data available for analysis"
@@ -40,6 +77,11 @@ export async function generateChartInsights(
   // Multi-series charts pivot data: each series key IS a data column, chartSpec.y is a display label only
   const seriesKeys = Array.isArray(chartSpec.seriesKeys) && chartSpec.seriesKeys.length > 0
     ? chartSpec.seriesKeys : null;
+
+  // When ranking by series, top performers are values of the series dimension (seriesColumn),
+  // not values of the X dimension. Label the dimension accordingly so the prompt and fallback
+  // never call a Category value a "Region" (or whatever chartSpec.x happens to be).
+  const topPerfDimension = resolveTopPerfDimension(chartSpec);
 
   const xValues = chartData.map(row => row[chartSpec.x]).filter(v => v !== null && v !== undefined);
   const yValues = seriesKeys
@@ -371,6 +413,16 @@ SUGGESTION FORMAT:
     ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim().slice(0, 3000)}`
     : '';
 
+  // W12 · feed FMCG/Marico domain context to chart insight generation. When
+  // present, the model is asked to fill `businessCommentary` (1–2 sentences
+  // framing the chart's metric against industry priors). Capped at 3000 chars
+  // so the prompt stays under the existing budget; the full pack content is
+  // already available to narrator/synthesizer via the W7 bundle.
+  const domainBlock = synthesisContext?.domainContext?.trim()
+    ? `\n\nFMCG / MARICO DOMAIN CONTEXT (background only — never numeric evidence; cite pack id when used):\n${synthesisContext.domainContext.trim().slice(0, 3000)}`
+    : '';
+  const wantsBusinessCommentary = Boolean(domainBlock);
+
   // Build chat insights context if available
   const chatInsightsContext = chatInsights && chatInsights.length > 0
     ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
@@ -381,30 +433,35 @@ The keyInsight should relate this chart (${chartSpec.x}, ${chartSpec.y}${isDualA
 
   const dataFactsContext = `
 DATA FACTS (ground truth from the chart data; use these explicitly in the output):
-- Top ${chartSpec.y} performer(s) by ${chartSpec.x}: ${topPerformerStr}
-- Bottom ${chartSpec.y} performer(s) by ${chartSpec.x}: ${bottomPerformerStr}
+- Top ${chartSpec.y} performer(s) by ${topPerfDimension}: ${topPerformerStr}
+- Bottom ${chartSpec.y} performer(s) by ${topPerfDimension}: ${bottomPerformerStr}
 ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${y2Label} performer(s): ${bottomPerformerStrY2}` : ''}`.trim();
 
   const scatterBlock = scatterNumericFactsBlock ? `\n${scatterNumericFactsBlock}\n` : '';
 
-  const prompt = `Return JSON with one field: keyInsight.
+  const businessCommentaryRequest = wantsBusinessCommentary
+    ? `,
+  "businessCommentary": "1–2 sentences framing this chart's metric (${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) against the FMCG/Marico domain context above. Cite the pack id verbatim (e.g. \`marico-haircare-portfolio\`, \`kpi-and-metric-glossary\`) when you reference it. Treat domain content as orientation only — never invent industry figures. Omit (return null) when no pack is materially relevant."`
+    : '';
 
-TASK: Write 1–3 short sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / blocks below—do not invent metrics. Add "so what" (risk, opportunity, segment story, or next check) using only what the data plausibly supports; use general business sense where it does not contradict the numbers.
+  const prompt = `Return JSON with the listed fields.
+
+TASK: Write 1–3 short sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / blocks below—do not invent metrics. Add "so what" (risk, opportunity, segment story, or next check) using only what the data plausibly supports; use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
 
 CHART CONTEXT
 - Type: ${chartSpec.type}
 - Title: ${chartSpec.title}
 - X: ${chartSpec.x}${isCorrelationChart ? ' (FACTOR)' : ''}
-- Y: ${chartSpec.y}${isCorrelationChart ? ' (TARGET)' : ''}${isDualAxis ? ` | Y2: ${y2Label}` : ''}
+${seriesKeys ? `- Series: ${chartSpec.seriesColumn?.trim() || 'series'} (${seriesKeys.join(', ')})\n` : ''}- Y: ${chartSpec.y}${isCorrelationChart ? ' (TARGET)' : ''}${isDualAxis ? ` | Y2: ${y2Label}` : ''}
 - Points: ${chartData.length}
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
 ${dataFactsContext}
-${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}
+${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}${domainBlock}
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Plain sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${chartSpec.x} and its ${chartSpec.y} from DATA FACTS."
+  "keyInsight": "Plain sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS."${businessCommentaryRequest}
 }`;
 
   try {
@@ -447,6 +504,20 @@ OUTPUT JSON (exact keys only):
 
     const candidate = truncateInsight(modelKeyInsight);
 
+    // W12 · parse the optional businessCommentary the model emits when domain
+    // context was supplied. Cap to 500 chars to match the persisted schema;
+    // null/empty/whitespace cleanly drops the field.
+    let businessCommentary: string | undefined;
+    if (wantsBusinessCommentary) {
+      const raw = result.businessCommentary;
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed && trimmed.toLowerCase() !== "null") {
+          businessCommentary = trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 499)}…`;
+        }
+      }
+    }
+
     // Deterministic verification: ensure the output explicitly names the top category/value.
     const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
     const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
@@ -475,12 +546,26 @@ OUTPUT JSON (exact keys only):
           ? formatY(bottomPerformers[0].y)
           : formatY(yP25);
 
-      const fallback = `Top ${chartSpec.x} "${topX}" has the highest ${chartSpec.y} at ${formatY(topY)} (avg ${formatY(avgY)}, p75 ${formatY(yP75)}). To lift ${chartSpec.y}, prioritize ${chartSpec.x} "${topX}" and target moving weaker segments above ${bottomThresholdStr}.`;
+      const fallback = buildDeterministicChartInsightFallback({
+        chartSpec,
+        topX,
+        topY,
+        avgY,
+        yP75,
+        bottomThreshold: bottomThresholdStr,
+        formatY,
+      });
 
-      return { keyInsight: truncateInsight(fallback) };
+      return {
+        keyInsight: truncateInsight(fallback),
+        ...(businessCommentary ? { businessCommentary } : {}),
+      };
     }
 
-    return { keyInsight: enforceInsightLimit(candidate) };
+    return {
+      keyInsight: enforceInsightLimit(candidate),
+      ...(businessCommentary ? { businessCommentary } : {}),
+    };
   } catch (error) {
     console.error('Error generating chart insights:', error);
     return {

@@ -15,6 +15,7 @@ import {
 } from "../../models/chat.model.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
+import { attachAutoLayers } from "../../lib/charts/autoAttachLayers.js";
 import { sendSSE, setSSEHeaders, startSseKeepalive } from "../../utils/sse.helper.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { classifyMode } from "../../lib/agents/modeClassifier.js";
@@ -712,7 +713,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const availableColumns = chatDocument.dataSummary.columns.map((c) => c.name);
 
     onThinkingStep({
-      step: "Resolving question to dataset columns",
+      step: "Mapping columns from schema",
       status: "active",
       timestamp: Date.now(),
     });
@@ -725,7 +726,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     console.log(`📌 Schema binding canonical columns:`, schemaBinding.canonicalColumns);
 
     onThinkingStep({
-      step: "Resolving question to dataset columns",
+      step: "Mapping columns from schema",
       status: "completed",
       timestamp: Date.now(),
       details:
@@ -770,7 +771,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         step: "Analyzing user intent",
         status: "completed",
         timestamp: Date.now(),
-        details: `Intent: ${chatAnalysis.intent}${chatAnalysis.relevantColumns.length > 0 ? ` | Columns: ${chatAnalysis.relevantColumns.join(", ")}` : ""}`,
+        details: `Intent: ${chatAnalysis.intent}`,
       });
     } catch (error) {
       console.error("⚠️ Chat analysis failed:", error);
@@ -778,7 +779,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         step: "Analyzing user intent",
         status: "completed",
         timestamp: Date.now(),
-        details: `Using bound columns: ${schemaBinding.canonicalColumns.join(", ") || "none"}`,
+        details: "Intent classification failed; using bound columns",
       });
       chatAnalysis = {
         intent: "general",
@@ -994,6 +995,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     // Enrich charts
     if (result.charts && Array.isArray(result.charts)) {
+      // W12 · load enabled FMCG/Marico domain packs once and pass them down
+      // so chart insight generation can fill `businessCommentary`. Loader is
+      // process-cached; failures are non-fatal — commentary just won't render.
+      let domainContextForCharts: string | undefined;
+      try {
+        const { loadEnabledDomainContext } = await import(
+          "../../lib/domainContext/loadEnabledDomainContext.js"
+        );
+        const { text } = await loadEnabledDomainContext();
+        if (text?.trim()) domainContextForCharts = text;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
+      }
       result.charts = await enrichCharts(
         result.charts,
         chatDocument,
@@ -1003,8 +1018,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           userQuestion: message,
           sessionAnalysisContext: chatDocument.sessionAnalysisContext,
           permanentContext,
+          domainContext: domainContextForCharts,
         }
       );
+      // WC7 · auto-attach analytical layers (reference lines / trend / forecast /
+      // outliers / comparison) inferred from the user's question. The legacy
+      // ChartRenderer ignores `_autoLayers`; the v2 ChartShim forwards them
+      // into ChartSpecV2.layers so PremiumChart picks them up.
+      // Fix-2: cap input length to bound regex worst-case backtracking.
+      const safeQuestion = (message ?? "").slice(0, 4000);
+      result.charts = result.charts.map((c) => attachAutoLayers(c, safeQuestion));
     }
 
     // Check connection after enriching charts

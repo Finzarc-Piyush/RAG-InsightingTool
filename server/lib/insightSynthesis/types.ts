@@ -5,4 +5,10 @@ export type ChartInsightSynthesisContext = {
   userQuestion?: string;
   sessionAnalysisContext?: SessionAnalysisContext;
   permanentContext?: string;
+  /**
+   * W12 · composed FMCG/Marico domain context (already concatenated by
+   * `loadEnabledDomainContext`). When present, chart insights add a
+   * `businessCommentary` field framing the metric against industry priors.
+   */
+  domainContext?: string;
 };
