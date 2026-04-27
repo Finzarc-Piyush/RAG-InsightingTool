@@ -25,7 +25,11 @@ import {
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
-import { checkEnvelopeCompleteness } from "./checkEnvelopeCompleteness.js";
+import {
+  checkEnvelopeCompleteness,
+  checkDomainLensCitations,
+  extractSuppliedPackIds,
+} from "./checkEnvelopeCompleteness.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -2010,22 +2014,39 @@ export async function runAgentTurn(
       ctx.analysisBrief?.questionShape
     ) {
       const domainSupplied = Boolean(ctx.domainContext?.trim());
+      // W22 · pack-id list extracted once from the supplied domain context;
+      // the citation check (anti-hallucination) compares envelope citations
+      // against this list. Empty when no domain context was supplied.
+      const suppliedPackIds = extractSuppliedPackIds(ctx.domainContext);
       let completenessRound = 0;
       while (completenessRound < config.maxVerifierRoundsFinal) {
-        const gap = checkEnvelopeCompleteness(
+        // Run completeness first (W17), then citation validity (W22). Both
+        // share the same repair budget so one round can fix either issue;
+        // alternating issues over rounds is bounded by maxVerifierRoundsFinal.
+        const completenessGap = checkEnvelopeCompleteness(
           envelopeAnswerEnvelope,
           ctx.analysisBrief.questionShape,
           domainSupplied
         );
-        if (gap.ok) break;
+        const citationGap = completenessGap.ok
+          ? checkDomainLensCitations(envelopeAnswerEnvelope, suppliedPackIds)
+          : { ok: true as const };
+        if (completenessGap.ok && citationGap.ok) break;
+        const gap = !completenessGap.ok ? completenessGap : citationGap;
+        // TS narrowing: `gap` is the first non-ok result.
+        if (gap.ok) break; // unreachable; guard for narrowing
         completenessRound++;
         agentLog("envelope_repair", {
           turnId,
           round: completenessRound,
+          code: gap.code,
           missing: gap.description.slice(0, 200),
         });
         safeEmit("flow_decision", {
-          layer: "envelope-completeness",
+          layer:
+            gap.code === "HALLUCINATED_DOMAIN_CITATION"
+              ? "envelope-citations"
+              : "envelope-completeness",
           chosen: `repair-round-${completenessRound}`,
           reason: gap.description.slice(0, 300),
           candidates: [gap.code],

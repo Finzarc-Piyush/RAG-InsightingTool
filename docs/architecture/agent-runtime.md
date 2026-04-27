@@ -167,6 +167,19 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W22 · domainLens citation anti-hallucination check** — new
+  pure helper `checkDomainLensCitations` extracts backtick-quoted
+  pack-id-shaped tokens from `envelope.domainLens` and verifies each
+  was actually present in the supplied domain context. Pack ids are
+  pulled deterministically from the `<<DOMAIN PACK: id>>` markers in
+  `ctx.domainContext` via `extractSuppliedPackIds` (no loader I/O).
+  When the LLM cites an id it was never given (hallucination), the
+  agent loop runs the same `NarratorRepairContext` flow as W17, with
+  a course correction listing the legit pack ids. Shares the same
+  `maxVerifierRoundsFinal` budget so completeness + citation issues
+  alternating across rounds remain bounded. Heuristic guards against
+  false positives: only kebab-case backtick tokens (≥5 chars, ≥1
+  hyphen) are treated as candidate pack-id citations.
 - **Wave W21 · prior-turn investigation carry-over** — the agent now
   builds knowledge across turns instead of starting fresh.
   `sessionAnalysisContext.sessionKnowledge` gains an optional
