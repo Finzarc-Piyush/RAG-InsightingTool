@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W42 · streaming preview UX surface** — pairs with W41 to
+  finally make the W38 streaming feature visible to users. New
+  `client/src/pages/Home/Components/StreamingPreviewCard.tsx`
+  renders the W38 `streamingNarratorPreview` text (cleaned by W41)
+  as a live "Drafting answer…" card with a pulsing icon. Three
+  independent guards keep it hidden when not streaming: `isPending`
+  must be true, preview text must be non-empty, and the server must
+  be emitting `answer_chunk` events at all.
+  `streamingNarratorPreview` lifted into Home.tsx and threaded
+  through ChatInterface to the last-message slot. Semantic tokens
+  only (`bg-muted/30`, `text-foreground`, `text-muted-foreground`,
+  `bg-primary/10`, `text-primary`); theme:check clean.
 - **Wave W41 · streaming narrator `body`-field extraction** — closes
   the W38 "shipped-but-unusable" gap. New
   `lib/agents/runtime/jsonFieldStreamExtractor.ts` is a pure state

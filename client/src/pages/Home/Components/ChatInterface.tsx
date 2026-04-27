@@ -8,6 +8,7 @@ import {
 } from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
 import { ThinkingPanel } from '@/pages/Home/Components/ThinkingPanel';
+import { StreamingPreviewCard } from '@/pages/Home/Components/StreamingPreviewCard';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -97,6 +98,14 @@ interface ChatInterfaceProps {
   uploadStartError?: string | null;
   /** Append an assistant message that only adds a chart (Chart Builder). */
   onAppendAssistantChart?: (chart: ChartSpec) => void;
+  /**
+   * W42 · live "Drafting answer…" preview text accumulated from
+   * `answer_chunk` SSE events while the agent loop is still running.
+   * Cleaned by the W41 server-side body extractor — already plain
+   * prose, not raw JSON. Empty string when streaming is disabled
+   * (default) or no chunks have arrived yet.
+   */
+  streamingNarratorPreview?: string;
 }
 
 // Suggested questions are server-derived only (no hardcoded fallbacks).
@@ -159,6 +168,7 @@ export function ChatInterface({
   localPreviewParseStatus = 'full',
   uploadStartError = null,
   onAppendAssistantChart,
+  streamingNarratorPreview = "",
 }: ChatInterfaceProps) {
   const { scrollRequest, clearPivotScrollRequest } = useChatSidebarNav();
   const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -851,6 +861,18 @@ export function ChatInterface({
                       workbench={agentWorkbenchLive}
                       spawnedSubQuestions={spawnedSubQuestions}
                       isStreaming
+                    />
+                  </div>
+                )}
+                {/* W42 · live "Drafting answer…" preview, mounted directly
+                    under the thinking panel for the LAST message only.
+                    Independent guards (isLoading + non-empty preview)
+                    keep this hidden when streaming is disabled. */}
+                {isLastMessage && (
+                  <div className="max-w-[90%] mr-auto ml-11 mt-1 mb-1">
+                    <StreamingPreviewCard
+                      previewText={streamingNarratorPreview}
+                      isPending={isLoading}
                     />
                   </div>
                 )}

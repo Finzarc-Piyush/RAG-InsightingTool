@@ -128,6 +128,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     spawnedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
+    streamingNarratorPreview,
   } = useHomeMutations({
     sessionId,
     messages,
@@ -679,6 +680,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         spawnedSubQuestions={spawnedSubQuestions}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
         thinkingLiveAnchorTimestamp={thinkingLiveAnchorTimestamp}
+        streamingNarratorPreview={streamingNarratorPreview}
         aiSuggestions={suggestions}
         collaborators={collaborators}
         sessionId={sessionId}
