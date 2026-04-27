@@ -80,3 +80,26 @@ fixture JSON, never the recordings.
 
 Keep fixtures **shape-shaped, not text-shaped** — LLM output drifts;
 asserting against schema thresholds keeps the suite stable.
+
+## Scheduled CI (W45)
+
+The `.github/workflows/live-llm-replay.yml` workflow runs this suite
+every Monday at 08:00 UTC and on manual `workflow_dispatch`. Required
+secrets in the repo's `Settings → Secrets and variables → Actions`:
+
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_DEPLOYMENT_NAME`
+
+Optional:
+
+- `TAVILY_API_KEY` — only when a fixture exercises web search.
+
+To capture baselines from a real run (W33 recording mode), trigger
+the workflow manually with `recording_mode: true`. Recorded
+`<id>.recorded.json` files are uploaded as a 30-day artifact. Review,
+then update fixtures locally — recorded files are gitignored and
+should never be committed directly.
+
+Failures don't block `main` merges. Investigate the workflow run,
+patch the prompt, ship a new wave.

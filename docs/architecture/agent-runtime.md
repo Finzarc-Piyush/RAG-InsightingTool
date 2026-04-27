@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W45 · CI workflow YAML for live-LLM golden replay** —
+  pre-W45 the W28 + W33 harness existed but only ran when an
+  operator manually invoked it. New
+  `.github/workflows/live-llm-replay.yml` runs the harness on a
+  weekly schedule (Mondays 08:00 UTC) and via `workflow_dispatch`.
+  Required secrets: `AZURE_OPENAI_API_KEY`,
+  `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME`. Optional:
+  `TAVILY_API_KEY` for fixtures that exercise web search.
+  `concurrency: live-llm-replay` group so newer runs cancel older
+  queued ones — bounds cost. The `recording_mode` workflow input
+  triggers W33 baseline capture and uploads
+  `<id>.recorded.json` files as a 30-day artifact. Failures emit
+  notifications but do NOT block `main` merges (this workflow
+  doesn't gate branch protection). Cost: ~$3/run × weekly = ~$12/mo.
 - **Wave W44 · clickable recommendation actions** — pre-W44 the W9
   `recommendations` rendered as static text, forcing users to retype
   each action as a follow-up question. Each recommendation now has a

@@ -1,0 +1,99 @@
+# Wave W45 · Live-LLM golden-replay scheduled workflow
+#
+# Runs `tests/liveLlmGoldenReplayW28.test.ts` against the real
+# Azure OpenAI provider on a weekly schedule (Monday 08:00 UTC) and
+# on manual `workflow_dispatch`. The test is double-gated by the
+# `LIVE_LLM_REPLAY=true` env var AND the `AZURE_OPENAI_API_KEY`
+# secret, so it never runs in regular per-commit CI (`ci.yml`).
+#
+# Cost: ~$3 per run × weekly = ~$12/month. Failures emit a workflow
+# notification via the standard GitHub Actions path; failures DO NOT
+# block merges to `main` (this workflow doesn't gate branch
+# protection).
+#
+# Required secrets (set via repo Settings → Secrets and variables
+# → Actions):
+#   - AZURE_OPENAI_API_KEY
+#   - AZURE_OPENAI_ENDPOINT
+#   - AZURE_OPENAI_DEPLOYMENT_NAME
+#
+# Optional secrets:
+#   - TAVILY_API_KEY (only if any fixture exercises web_search)
+#
+# To capture baseline output for tightening assertions, run via
+# `workflow_dispatch` with the `recording_mode` input set to true;
+# the recorded JSON is uploaded as an artifact.
+name: Live-LLM golden replay
+
+on:
+  schedule:
+    # Weekly on Monday 08:00 UTC. Keep cost bounded; per-commit CI
+    # uses the W18 stub harness instead.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      recording_mode:
+        description: "Set to true to dump full result envelopes as artifacts (W33 RECORD_LIVE_LLM_BASELINE)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+# Prevent concurrent runs from racing on the same secrets / cost
+# budget. Newest run wins; older queued run cancelled.
+concurrency:
+  group: live-llm-replay
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Run W28 golden-replay fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    env:
+      LIVE_LLM_REPLAY: "true"
+      AGENTIC_LOOP_ENABLED: "true"
+      AGENTIC_ALLOW_NO_RAG: "true"
+      RECORD_LIVE_LLM_BASELINE: ${{ github.event.inputs.recording_mode || 'false' }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — required secrets present
+        run: |
+          set -euo pipefail
+          if [ -z "${AZURE_OPENAI_API_KEY:-}" ] || [ -z "${AZURE_OPENAI_ENDPOINT:-}" ] || [ -z "${AZURE_OPENAI_DEPLOYMENT_NAME:-}" ]; then
+            echo "::error::Required secrets not set. Configure AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_DEPLOYMENT_NAME in repo Settings → Secrets."
+            exit 1
+          fi
+          echo "Secrets present; continuing."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - name: Run W28 golden-replay only (skip per-commit suite)
+        run: |
+          node --import tsx --test --test-timeout=300000 \
+            tests/liveLlmGoldenReplayW28.test.ts
+
+      - name: Upload recordings artifact (recording mode only)
+        if: ${{ github.event.inputs.recording_mode == 'true' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-llm-recordings-${{ github.run_id }}
+          path: server/tests/fixtures/golden-replay/*.recorded.json
+          retention-days: 30
+          if-no-files-found: ignore
