@@ -274,6 +274,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         ...(answerResult.appliedFilters?.length
           ? { appliedFilters: answerResult.appliedFilters }
           : {}),
+        // W13 · compact blackboard digest for Investigation summary card.
+        ...(answerResult.investigationSummary
+          ? { investigationSummary: answerResult.investigationSummary }
+          : {}),
       },
     ]);
     console.log(`✅ Messages saved to chat: ${chatDocument.id}`);

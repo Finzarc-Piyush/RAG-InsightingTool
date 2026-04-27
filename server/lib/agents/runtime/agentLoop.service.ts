@@ -24,6 +24,7 @@ import {
   buildSynthesisContext,
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
+import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
@@ -2241,6 +2242,12 @@ export async function runAgentTurn(
       ...(dashboardDraft ? { dashboardDraft } : {}),
       ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),
       ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),
+      // W13 · compact persistable digest of the analytical blackboard so
+      // the client can render an "Investigation summary" card. Returns
+      // undefined when blackboard has nothing material to show.
+      ...(buildInvestigationSummary(ctx.blackboard)
+        ? { investigationSummary: buildInvestigationSummary(ctx.blackboard) }
+        : {}),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
       ...appliedFiltersOut(),

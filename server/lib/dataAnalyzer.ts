@@ -13,7 +13,6 @@ import {
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
-import { runDeepInvestigation, isDeepInvestigationEnabled } from './agents/runtime/investigationOrchestrator.js';
 import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 import { loadEnabledDomainContext } from './domainContext/loadEnabledDomainContext.js';
 
@@ -445,6 +444,9 @@ export async function answerQuestion(
     values: string[];
     match?: 'exact' | 'case_insensitive' | 'contains';
   }>;
+  // W13 · compact blackboard digest persisted onto the assistant message
+  // for the Investigation summary card.
+  investigationSummary?: import('../shared/schema.js').InvestigationSummary;
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -483,11 +485,11 @@ export async function answerQuestion(
         onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
       });
-      // W9: deep investigation path (DEEP_INVESTIGATION_ENABLED=true); falls back to single-turn.
-      const loopResult = isDeepInvestigationEnabled()
-        ? (await runDeepInvestigation(execCtx, agentOptions?.onAgentEvent)) ??
-          (await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent))
-        : await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
+      // Single-flow policy: always single-turn agentic. The deep-investigation
+      // / coordinator-decompose branch is intentionally not wired here; the
+      // underlying capability still lives at runtime/investigationOrchestrator
+      // and runtime/coordinatorAgent for future opt-in re-wiring.
+      const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
       if (loopResult?.answer?.trim()) {
         console.log('✅ Agentic loop returned answer');
         return {
@@ -505,6 +507,7 @@ export async function answerQuestion(
           lastAnalyticalRowsForEnrichment: loopResult.lastAnalyticalRowsForEnrichment,
           ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
           ...(loopResult.appliedFilters?.length ? { appliedFilters: loopResult.appliedFilters } : {}),
+          ...(loopResult.investigationSummary ? { investigationSummary: loopResult.investigationSummary } : {}),
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');

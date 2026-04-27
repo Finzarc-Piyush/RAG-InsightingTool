@@ -167,6 +167,23 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W13 · investigation summary card** — `messageSchema`
+  gains an optional `investigationSummary` field carrying a compact
+  digest of the analytical blackboard: `hypotheses` (text + status +
+  evidenceCount), `findings` (label + significance), `openQuestions`
+  (question + priority). New
+  `lib/agents/runtime/buildInvestigationSummary.ts` distils the
+  full blackboard into the persistable shape (sorts findings by
+  significance, filters actioned open questions, clips long text with
+  ellipses). The agentic loop attaches it to `AgentLoopResult`,
+  `dataAnalyzer.answerQuestion` propagates it, and both
+  `chatStream.service.ts` + `chat.service.ts` persist it onto the
+  assistant message. Client `InvestigationSummaryCard` renders at the
+  top of the analytical body (default-open) with status pills,
+  significance dots, and priority dots — surfacing *what was tested*,
+  *what was found*, and *what remains open* before the user reads
+  findings or pivots. Optional + back-compat — descriptive turns and
+  legacy messages render as before.
 - **Wave W12 · per-chart business commentary** — `chartSpecSchema`
   gains an optional `businessCommentary: z.string().max(500)` field.
   `generateChartInsights` now accepts a `domainContext` block on the

@@ -626,6 +626,50 @@ export const insightSchema = z.object({
   text: z.string(),
 });
 
+/**
+ * W13 · compact, persistable digest of the analytical blackboard for one
+ * assistant turn. Lets the client render an "Investigation summary" card
+ * that surfaces the hypotheses tested, headline findings, and unresolved
+ * open questions — the parts of the agentic loop that make the analysis
+ * read like a real investigation rather than a tool execution log.
+ *
+ * Authored as a separate small object instead of persisting the full
+ * blackboard so Cosmos document size stays bounded and the client doesn't
+ * need to know about evidence-ref bookkeeping.
+ */
+export const investigationSummarySchema = z.object({
+  hypotheses: z
+    .array(
+      z.object({
+        text: z.string().max(280),
+        status: z.enum(["open", "confirmed", "refuted", "partial"]),
+        evidenceCount: z.number().int().min(0).max(20),
+      })
+    )
+    .max(8)
+    .optional(),
+  findings: z
+    .array(
+      z.object({
+        label: z.string().max(200),
+        significance: z.enum(["routine", "notable", "anomalous"]),
+      })
+    )
+    .max(8)
+    .optional(),
+  openQuestions: z
+    .array(
+      z.object({
+        question: z.string().max(280),
+        priority: z.enum(["low", "medium", "high"]),
+      })
+    )
+    .max(6)
+    .optional(),
+});
+
+export type InvestigationSummary = z.infer<typeof investigationSummarySchema>;
+
 export type Insight = z.infer<typeof insightSchema>;
 
 // Thinking Steps (for real-time processing display)
@@ -880,6 +924,12 @@ export const messageSchema = z.object({
   intermediateInsight: z.string().optional(),
   /** Query-derived default pivot fields for auto-shown analysis tables. */
   pivotDefaults: pivotDefaultsSchema.optional(),
+  /**
+   * W13 · compact digest of the analytical blackboard for this turn —
+   * hypotheses tested with status, headline findings, unresolved open
+   * questions. Optional + back-compat (legacy turns parse cleanly).
+   */
+  investigationSummary: investigationSummarySchema.optional(),
   /**
    * W6 — filters the agent applied to this turn's analysis, surfaced in the
    * UI as chips above the chart cards so the user can confirm the scope.

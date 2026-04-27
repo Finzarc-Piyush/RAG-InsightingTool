@@ -23,6 +23,7 @@ import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
 import { StepByStepInsightsPanel } from './StepByStepInsightsPanel';
+import { InvestigationSummaryCard } from './InvestigationSummaryCard';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
@@ -621,6 +622,15 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           <div className="mb-3">
             <DataSummaryTable summary={(message as Message & { summary: unknown[] }).summary} />
           </div>
+        )}
+
+        {/* W13 · Investigation summary card. Surfaces hypotheses tested
+            (with status), headline findings, and unresolved open questions.
+            Default-open so the user immediately sees the analysis was real
+            investigation, not a query log. Hidden on intermediate messages
+            and when the blackboard digest is empty (descriptive turns). */}
+        {!isUser && !message.isIntermediate && (
+          <InvestigationSummaryCard summary={message.investigationSummary} />
         )}
 
         {/* W11 · post-pivot "Step-by-step interpretation" panel. Renders only

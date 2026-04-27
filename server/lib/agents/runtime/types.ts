@@ -343,4 +343,11 @@ export interface AgentLoopResult {
     values: string[];
     match?: "exact" | "case_insensitive" | "contains";
   }>;
+  /**
+   * W13 · compact digest of `ctx.blackboard` for client rendering. Built by
+   * `buildInvestigationSummary` near the end of `runAgentTurn`, persisted
+   * onto the assistant message so the UI can render a Hypotheses-tested /
+   * Findings / Open-questions card above the step-by-step panel.
+   */
+  investigationSummary?: import("../../../shared/schema.js").InvestigationSummary;
 }

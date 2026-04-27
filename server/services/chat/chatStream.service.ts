@@ -1256,6 +1256,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               ).appliedFilters,
             }
           : {}),
+        // W13 · persist the compact blackboard digest so the client can
+        // render an Investigation summary card above the step-by-step panel.
+        ...((result as { investigationSummary?: NonNullable<typeof assistantSave.investigationSummary> }).investigationSummary
+          ? {
+              investigationSummary: (
+                result as { investigationSummary: NonNullable<typeof assistantSave.investigationSummary> }
+              ).investigationSummary,
+            }
+          : {}),
       };
 
       await addMessagesBySessionId(sessionId, [
