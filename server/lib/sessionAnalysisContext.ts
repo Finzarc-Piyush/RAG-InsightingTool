@@ -348,6 +348,22 @@ export function buildInitialAssistantContentFromContext(
 }
 
 /** After saving an assistant message: merge reply into rolling JSON and persist. */
+/**
+ * W40 · per-session in-process mutex keyed by sessionId. Concurrent
+ * `persistMergeAssistantSessionContext` calls for the same session
+ * (e.g. duplicated tab firing two turns at once) chain through this
+ * promise so the read-modify-write of `sessionAnalysisContext` is
+ * serialised within a single Node process. Without this serialisation,
+ * the W21 `priorInvestigations` append on turn B silently overwrites
+ * turn A's append because the upsert is last-write-wins.
+ *
+ * Single-instance correctness only — multi-instance horizontal scaling
+ * would need Cosmos `ifMatch` ETag or an external lock. Per CLAUDE.md
+ * the deploy is single-instance today; the in-process mutex is a
+ * sufficient minimal fix.
+ */
+const sessionPersistChain = new Map<string, Promise<unknown>>();
+
 export async function persistMergeAssistantSessionContext(params: {
   sessionId: string;
   username: string;
@@ -360,6 +376,41 @@ export async function persistMergeAssistantSessionContext(params: {
    * `PriorInvestigation` entry to `sessionKnowledge.priorInvestigations`
    * so the next turn's planner can chain hypotheses across turns.
    */
+  question?: string;
+  investigationSummary?: import("../shared/schema.js").InvestigationSummary;
+}): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
+  // W40 · serialise per session. Chain after any in-flight persist for
+  // this sessionId before running the read-modify-write below. We drop
+  // the chain entry on completion so the map doesn't grow unbounded.
+  const previous = sessionPersistChain.get(params.sessionId);
+  const work = (async () => {
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        // Prior call's failure is its own concern; this call still runs.
+      }
+    }
+    return doPersist(params);
+  })();
+  sessionPersistChain.set(params.sessionId, work);
+  try {
+    return await work;
+  } finally {
+    // Only clear if our chain entry is still the latest — otherwise a
+    // newer caller has already chained off `work` and we'd orphan it.
+    if (sessionPersistChain.get(params.sessionId) === work) {
+      sessionPersistChain.delete(params.sessionId);
+    }
+  }
+}
+
+async function doPersist(params: {
+  sessionId: string;
+  username: string;
+  assistantMessage: string;
+  agentTrace?: unknown;
+  analysisBrief?: AnalysisBrief;
   question?: string;
   investigationSummary?: import("../shared/schema.js").InvestigationSummary;
 }): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {

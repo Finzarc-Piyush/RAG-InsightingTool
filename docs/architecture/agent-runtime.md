@@ -167,6 +167,20 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W40 · per-session mutex on `persistMergeAssistantSessionContext`** —
+  closes the race-condition edge case identified in the audit.
+  Pre-W40, two concurrent turns on the same session (e.g. duplicated
+  tab firing two requests) both read the same `priorInvestigations`
+  base, both appended their digest, and the `containerInstance.items.upsert`
+  was last-write-wins — so the first turn's append silently
+  vanished. New module-scope `sessionPersistChain: Map<sessionId, Promise>`
+  serialises calls per-session: each new persist awaits any
+  in-flight one before running its own read-modify-write.
+  Single-instance correctness only — multi-instance horizontal
+  scaling would need Cosmos `ifMatch` ETag or external lock; per
+  CLAUDE.md the deploy is single-instance, so the in-process mutex
+  is the right minimal fix. The map self-cleans on completion to
+  avoid unbounded growth.
 - **Wave W39 · merged hypothesis + analysis-brief LLM call (env-
   gated)** — pre-W39 a typical analytical turn fired TWO sequential
   pre-planner LLM calls: `generateHypotheses` (always) +
