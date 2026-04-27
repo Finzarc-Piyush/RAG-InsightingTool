@@ -17,7 +17,11 @@ import type { AgentExecutionContext } from "./types.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 
 const DOMAIN_BLOCK_CHAR_CAP = 6_000;
-const RAG_BLOCK_CHAR_CAP = 4_000;
+// W16 · 4_000 → 6_000 to make room for the third sub-section (web search
+// hits) alongside upfront RAG (round 1) and findings-driven RAG (round 2).
+// Each web hit is ~1.5k chars × up to 5 hits = 7.5k worst case, but the tool
+// already caps at 6k formatted, and synth-prompt-budget headroom is fine.
+const RAG_BLOCK_CHAR_CAP = 6_000;
 const COLUMN_ROLES_MAX = 20;
 const SUGGESTED_FOLLOWUPS_MAX = 4;
 const PERMANENT_NOTES_CAP = 2_000;
@@ -143,6 +147,18 @@ function buildRagBlock(
     parts.push(`# Findings-driven retrieval (round 2)\n${r2Block}`);
   }
 
+  // W16 · web search hits live in the same blackboard slot under
+  // `source: "web"`. They render in their own sub-section so the synthesizer
+  // sees them as background grounding, never as numeric evidence. The tool
+  // already formats hits with `[web:tavily:N]` prefixes, so we don't double-
+  // tag them with the dc-id — just emit the content verbatim.
+  const webHits =
+    input.blackboard?.domainContext?.filter((e) => e.source === "web") ?? [];
+  if (webHits.length > 0) {
+    const webBlock = webHits.map((e) => e.content.trim()).join("\n---\n");
+    parts.push(`# Web search context\n${webBlock}`);
+  }
+
   void ctx; // reserved for future synthesis-time RAG re-call
   const joined = parts.join("\n\n").trim();
   return joined.slice(0, RAG_BLOCK_CHAR_CAP);
@@ -191,7 +207,10 @@ export function formatSynthesisContextBundle(
   }
   if (bundle.ragBlock) {
     sections.push(
-      `## RELATED CONTEXT (RAG)\nUse for grounding only — never as numeric evidence.\n${bundle.ragBlock}`
+      // W16 · clarify that web hits (when present) follow the same rule as
+      // RAG hits — background grounding, never numeric evidence. Citations
+      // can use the [web:tavily:N] tags the tool emitted.
+      `## RELATED CONTEXT (RAG / web)\nUse for grounding and citation only — never as numeric evidence. RAG and web tags (\`[web:tavily:N]\`) may be cited inline when the framing is material.\n${bundle.ragBlock}`
     );
   }
   if (bundle.domainBlock) {

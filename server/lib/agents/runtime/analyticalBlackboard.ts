@@ -48,7 +48,13 @@ export interface OpenQuestion {
 export interface DomainContextEntry {
   id: string;
   content: string;
-  source: "rag_round1" | "rag_round2" | "injected";
+  /**
+   * W16 · "web" added so `web_search` tool hits flow into the same blackboard
+   * slot as RAG round-1/round-2 hits. The W7 synthesis context bundle renders
+   * web entries in their own labelled sub-section so the synthesizer treats
+   * them as background grounding (citable), never as numeric evidence.
+   */
+  source: "rag_round1" | "rag_round2" | "injected" | "web";
 }
 
 export interface AnalyticalBlackboard {

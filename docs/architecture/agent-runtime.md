@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W16 · web-search hits surface in the W7 RAG bundle** —
+  `DomainContextEntry["source"]` enum gains `"web"` alongside
+  `rag_round1` / `rag_round2` / `injected`. The `web_search` tool now
+  pushes successful hits to `ctx.exec.blackboard.domainContext` with
+  `source: "web"` (in addition to its observation return). The W7
+  `buildRagBlock` renders a third sub-section `# Web search context`
+  for those entries; the section label flips to "RELATED CONTEXT
+  (RAG / web)" and the narrator + synthesizer system prompts call
+  out `[web:tavily:N]` tags as citable background — never numeric
+  evidence. RAG cap bumped 4_000 → 6_000 chars to fit the third
+  sub-section. Sub-section order is stable (round-1 → round-2 → web)
+  so the prefix cache holds across calls.
 - **Wave W15 · agent-path chart commentary** — extends W12's
   per-chart `businessCommentary` to the agentic correlation paths.
   `analyzeCorrelations` gains an optional

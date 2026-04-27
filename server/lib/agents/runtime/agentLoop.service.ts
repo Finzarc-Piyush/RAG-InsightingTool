@@ -434,7 +434,7 @@ async function synthesizeFinalAnswerEnvelope(
   // is unconditionally present, the per-call questionShape is in the user
   // message above. ANALYST_PREAMBLE pushes the prefix over Azure's 1024-token
   // cache threshold for the 50% input discount.
-  const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools (figures and quoted facts), produce JSON. The user message also carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT, RELATED CONTEXT (RAG), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to enrich interpretation, but figures still come only from observations.
+  const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools (figures and quoted facts), produce JSON. The user message also carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT, RELATED CONTEXT (RAG / web), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to enrich interpretation, but figures still come only from observations. RELATED CONTEXT may include open-web hits (tagged \`[web:tavily:N]\`) — cite them inline when material; never use them as numeric evidence.
 
 Required:
 - "body": main markdown answer. Lead with the direct answer; expand into 4–7 paragraphs of grounded prose. LENGTH: 600–1200 words for analytical questions, 80–150 words for purely conversational ones. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Do not duplicate the full keyInsight inside body.

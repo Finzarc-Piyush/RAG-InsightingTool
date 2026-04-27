@@ -158,7 +158,8 @@ test("formatSynthesisContextBundle emits all four section headers when populated
   );
   assert.match(formatted, /## DATA UNDERSTANDING/);
   assert.match(formatted, /## USER CONTEXT/);
-  assert.match(formatted, /## RELATED CONTEXT \(RAG\)/);
+  // W16 · label now reads `RELATED CONTEXT (RAG / web)`.
+  assert.match(formatted, /## RELATED CONTEXT \(RAG \/ web\)/);
   assert.match(formatted, /## DOMAIN KNOWLEDGE \(FMCG \/ Marico\)/);
   assert.match(formatted, /Cite the pack id/);
 });

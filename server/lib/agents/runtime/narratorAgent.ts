@@ -140,9 +140,11 @@ export async function runNarrator(
 You have access to a structured blackboard: the hypotheses that were tested, their outcomes
 (confirmed / refuted / partial / open), and the findings that emerged. The user message also
 carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT,
-RELATED CONTEXT (RAG), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to make the answer
-substantive and decision-grade. Do NOT use the bundle as numeric evidence — figures still
-come only from the blackboard / observations.
+RELATED CONTEXT (RAG / web), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to make the answer
+substantive and decision-grade. The RELATED CONTEXT block may include open-web hits (tagged
+\`[web:tavily:N]\`) — treat them identically to RAG hits: background grounding for
+interpretation and inline citation, never numeric evidence. Figures still come only from
+the blackboard / observations.
 
 Your job: narrate the investigation clearly in the following JSON format:
 - "body": main markdown answer. Lead with the most important finding. For each confirmed

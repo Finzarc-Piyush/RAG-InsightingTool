@@ -18,6 +18,7 @@
 import { z } from "zod";
 import type { ToolRegistry } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { addDomainContext } from "../analyticalBlackboard.js";
 
 export const webSearchArgsSchema = z
   .object({
@@ -95,7 +96,7 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
   registry.register(
     "web_search",
     webSearchArgsSchema,
-    async (_ctx, args) => {
+    async (ctx, args) => {
       if (!isWebSearchEnabled()) {
         return {
           ok: false,
@@ -123,6 +124,14 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
           };
         }
         const formatted = formatHitsForPrompt(hits, providerLabel);
+        // W16 · also stash the formatted block on the analytical blackboard
+        // so the W7 synthesis context bundle picks it up as background
+        // grounding in the "Web search context" sub-section. The tool's
+        // observation return (below) is unchanged so the planner / working
+        // memory still see the hits in their existing slot.
+        if (ctx.exec.blackboard) {
+          addDomainContext(ctx.exec.blackboard, formatted, "web");
+        }
         agentLog("web_search.ok", {
           query: query.slice(0, 200),
           provider: providerLabel,
