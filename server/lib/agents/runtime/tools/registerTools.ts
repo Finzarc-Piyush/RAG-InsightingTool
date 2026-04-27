@@ -63,6 +63,7 @@ import { metadataService } from "../../../metadataService.js";
 import { registerBreakdownRankingTool } from "./breakdownRankingTool.js";
 import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
 import { registerPatchDashboardTool } from "./patchDashboardTool.js";
+import { registerWebSearchTool } from "./webSearchTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -1311,4 +1312,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
   registerBreakdownRankingTool(registry);
   registerTwoSegmentCompareTool(registry);
   registerPatchDashboardTool(registry);
+  // W14 · web_search is registered unconditionally so the planner can see it
+  // and learn the no-op message when WEB_SEARCH_ENABLED is false. Real
+  // execution is gated inside the tool itself.
+  registerWebSearchTool(registry);
 }

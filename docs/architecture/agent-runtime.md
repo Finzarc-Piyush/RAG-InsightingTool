@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W14 · `web_search` tool (env-gated, planner-callable)** —
+  fills the last remaining "world wide web" gap from the original
+  ask. New `lib/agents/runtime/tools/webSearchTool.ts` registers a
+  `web_search` tool unconditionally so the planner sees it in the
+  manifest, but real execution is double-gated: `WEB_SEARCH_ENABLED=true`
+  AND a `TAVILY_API_KEY`. Disabled invocations return a clear no-op
+  message so the planner learns to stop calling. Results format as
+  `[web:tavily:N] Title\nContent\n— url` blocks identical to RAG
+  formatting so synthesis treats them uniformly with the W7 RAG
+  bundle. Capped at 5 hits × 1.5k chars (≤ 6k total). Failures are
+  non-fatal. Provider is pluggable inside the tool file.
 - **Wave W13 · investigation summary card** — `messageSchema`
   gains an optional `investigationSummary` field carrying a compact
   digest of the analytical blackboard: `hypotheses` (text + status +
