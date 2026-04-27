@@ -134,14 +134,32 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
 
   // Answer the question using the latest data
   // Include permanent context if available
+  // W25 · accumulate the agent's emitted workbench events on the
+  // non-streaming path too, so per-step W10 insights / W19 enrichments
+  // ride through to persistence (the streaming path already does this via
+  // SSE; here we just listen to the same events without forwarding to a
+  // client). `agentSseEventToWorkbenchEntries` + `appendWorkbenchEntry`
+  // are the same helpers chatStream.service uses, ensuring exact-shape
+  // parity. A misbehaving accumulator can't break the turn — `safeEmit`
+  // in the agent loop swallows handler errors.
+  const { agentSseEventToWorkbenchEntries, appendWorkbenchEntry } =
+    await import("./agentWorkbench.util.js");
+  const agentWorkbench: import("../../shared/schema.js").AgentWorkbenchEntry[] = [];
+  const onAgentEvent = (event: string, data: unknown) => {
+    for (const entry of agentSseEventToWorkbenchEntries(event, data)) {
+      appendWorkbenchEntry(agentWorkbench, entry);
+    }
+  };
+
   // Pass columnarStoragePath and loadFullData for DuckDB plan path (analytical queries on large files)
   const agentOpts = isAgenticLoopEnabled()
     ? {
         dataBlobVersion: chatDocument.currentDataBlob?.version,
         username,
         chatDocument,
+        onAgentEvent,
       }
-    : { chatDocument };
+    : { chatDocument, onAgentEvent };
 
   const answerResult = await answerQuestion(
     latestData,
@@ -188,6 +206,43 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         domainContext: domainContextForCharts,
       }
     );
+  }
+
+  // W25 · per-step LLM-enriched insights on the non-streaming path. Same
+  // gate / behaviour as the streaming path (W19); failures are non-fatal
+  // and leave deterministic W10 insights as the fallback. The non-streaming
+  // path doesn't push live SSE updates, so the enrichment lands on the
+  // workbench BEFORE persistence — the user sees the enriched insights on
+  // initial load.
+  try {
+    const { enrichStepInsights, isRichStepInsightsEnabled } = await import(
+      "../../lib/agents/runtime/enrichStepInsights.js"
+    );
+    if (isRichStepInsightsEnabled() && agentWorkbench.length > 0) {
+      // Re-load domain context for the enrichment prompt; same memoised
+      // loader the chart-enrichment block above uses.
+      let dc: string | undefined;
+      try {
+        const { loadEnabledDomainContext } = await import(
+          "../../lib/domainContext/loadEnabledDomainContext.js"
+        );
+        const { text } = await loadEnabledDomainContext();
+        if (text?.trim()) dc = text;
+      } catch {
+        /* non-fatal */
+      }
+      await enrichStepInsights({
+        workbench: agentWorkbench,
+        finalAnswer: answerResult.answer ?? "",
+        sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+        domainContext: dc,
+        turnId:
+          (answerResult.agentTrace as { turnId?: string } | undefined)?.turnId ?? sessionId,
+      });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`W25 · enrichStepInsights (non-streaming) failed: ${msg}`);
   }
 
   // Validate and enrich response
@@ -290,6 +345,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         ...(answerResult.appliedFilters?.length
           ? { appliedFilters: answerResult.appliedFilters }
           : {}),
+        // W25 · persist the accumulated workbench so this code path
+        // matches the streaming path. Optional + back-compat.
+        ...(agentWorkbench.length > 0 ? { agentWorkbench } : {}),
         // W13 · compact blackboard digest for Investigation summary card.
         ...(answerResult.investigationSummary
           ? { investigationSummary: answerResult.investigationSummary }

@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W25 · chat.service workbench parity** — the non-streaming
+  code path now installs the same workbench accumulator as
+  `chatStream.service.ts`: `agentSseEventToWorkbenchEntries` +
+  `appendWorkbenchEntry` listening on `agentOpts.onAgentEvent`. The
+  W25 wave also runs `enrichStepInsights` on the accumulated workbench
+  (env-gated `RICH_STEP_INSIGHTS_ENABLED`, same as streaming) and
+  persists the array onto the assistant message via
+  `addMessagesBySessionId`. Failures are non-fatal — a misbehaving
+  accumulator can't break the turn (`safeEmit` swallows handler
+  errors). Closes the W10/W19 parity gap so non-streaming responses
+  carry per-step insights too.
 - **Wave W24 · multi-turn e2e — proves W21 carry-over** — new
   `tests/agentTurnMultiTurnE2EW24.test.ts` runs two consecutive
   `runAgentTurn` calls and asserts that turn 2's planner user prompt
