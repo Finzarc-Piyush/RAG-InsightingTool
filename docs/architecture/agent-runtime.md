@@ -167,6 +167,19 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W31 · real-time refresh of W26 banner via SSE** —
+  `persistMergeAssistantSessionContext` now returns the new
+  `SessionAnalysisContext` (or `undefined` when the chat doc is
+  missing); existing void-returning callers ignore the return value
+  forward-compatibly. After the persist succeeds in
+  `chatStream.service.ts`, the streaming code emits a new
+  `session_context_updated` SSE event carrying the updated
+  `priorInvestigations` array. Client `useHomeMutations` handles the
+  event by calling the lifted `setSessionAnalysisContext` setter
+  passed in from `Home.tsx`, which causes the W26
+  `PriorInvestigationsBanner` to re-render with the new state — no
+  page reload. Old clients ignore the unknown event; old servers
+  leave the banner stale (today's behaviour exactly).
 - **Wave W30 · per-turn `priorInvestigationsSnapshot` on the
   message** — refactored the W21 `priorInvestigations` per-entry
   shape into a canonical `priorInvestigationItemSchema` defined in

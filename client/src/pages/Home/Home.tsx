@@ -148,6 +148,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setIsDatasetPreviewLoading,
     setIsDatasetEnriching,
     setEnrichmentPollSnapshot: setEnrichmentPoll,
+    // W31 · pass the lifted SAC setter through so `useHomeMutations` can
+    // refresh the W26 PriorInvestigationsBanner in place when the
+    // server emits `session_context_updated` after each turn.
+    setSessionAnalysisContext,
     onUploadProcessingStarted: () => {
       setIsUploadStarting(false);
       setUploadStartError(null);

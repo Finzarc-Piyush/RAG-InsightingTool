@@ -362,12 +362,16 @@ export async function persistMergeAssistantSessionContext(params: {
    */
   question?: string;
   investigationSummary?: import("../shared/schema.js").InvestigationSummary;
-}): Promise<void> {
+}): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
+  // W31 · returns the new SessionAnalysisContext (or undefined when the
+  // chat doc is missing) so the streaming caller can emit it via SSE for
+  // real-time UI refresh of the W26 PriorInvestigationsBanner. Existing
+  // void-using callers ignore the return value — forward-compatible.
   const { getChatBySessionIdForUser, updateChatDocument } = await import(
     "../models/chat.model.js"
   );
   const doc = await getChatBySessionIdForUser(params.sessionId, params.username);
-  if (!doc) return;
+  if (!doc) return undefined;
   let agentTraceSummary: string | undefined;
   if (params.agentTrace != null) {
     try {
@@ -399,4 +403,5 @@ export async function persistMergeAssistantSessionContext(params: {
   }
   doc.sessionAnalysisContext = next;
   await updateChatDocument(doc);
+  return next;
 }

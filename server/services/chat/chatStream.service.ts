@@ -1324,7 +1324,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         const { persistMergeAssistantSessionContext } = await import(
           "../../lib/sessionAnalysisContext.js"
         );
-        await persistMergeAssistantSessionContext({
+        const updatedSAC = await persistMergeAssistantSessionContext({
           sessionId,
           username,
           assistantMessage: transformedResponse.answer,
@@ -1339,6 +1339,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             investigationSummary?: import("../../shared/schema.js").InvestigationSummary;
           }).investigationSummary,
         });
+        // W31 · emit the updated priorInvestigations array via SSE so the
+        // client's W26 PriorInvestigationsBanner refreshes in place
+        // without a page reload. `safeEmit` (closure scope) swallows
+        // closed-stream errors. Skipped silently when the persist failed
+        // (returns undefined) or no investigations exist yet.
+        const updatedPriors = updatedSAC?.sessionKnowledge?.priorInvestigations;
+        if (Array.isArray(updatedPriors) && updatedPriors.length > 0) {
+          sendSSE(res, "session_context_updated", {
+            priorInvestigations: updatedPriors,
+          });
+        }
       } catch (ctxErr) {
         console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
       }

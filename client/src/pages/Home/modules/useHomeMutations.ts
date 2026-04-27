@@ -51,6 +51,16 @@ interface UseHomeMutationsProps {
   setEnrichmentPollSnapshot?: (snapshot: DatasetEnrichmentPollSnapshot | null) => void;
   onUploadProcessingStarted?: () => void;
   onUploadError?: (message?: string) => void;
+  /**
+   * W31 · receiver for the `session_context_updated` SSE event so the
+   * W26 PriorInvestigationsBanner refreshes in place after each turn
+   * without a page reload. Optional — when absent, the banner stays
+   * stale until the next chat reload (today's behaviour).
+   */
+  setSessionAnalysisContext?: (
+    updater: (prev: import('@/shared/schema').SessionAnalysisContext | undefined) =>
+      import('@/shared/schema').SessionAnalysisContext | undefined
+  ) => void;
 }
 
 export const useHomeMutations = ({
@@ -75,6 +85,7 @@ export const useHomeMutations = ({
   setEnrichmentPollSnapshot,
   onUploadProcessingStarted,
   onUploadError,
+  setSessionAnalysisContext,
 }: UseHomeMutationsProps) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -705,6 +716,28 @@ export const useHomeMutations = ({
                     ...turnTraceRef.current,
                     workbench: entries,
                   };
+                }
+              } else if (event === 'session_context_updated') {
+                // W31 · server emits this after `persistMergeAssistantSessionContext`
+                // appends the W21 priorInvestigation entry. Refresh the
+                // lifted SAC state so the W26 PriorInvestigationsBanner
+                // re-renders without a page reload. Optional setter — if
+                // the host page didn't lift SAC (older mounts), the
+                // banner stays stale until reload (today's behaviour).
+                const payload = data as {
+                  priorInvestigations?: import('@/shared/schema').SessionAnalysisContext['sessionKnowledge']['priorInvestigations'];
+                };
+                if (Array.isArray(payload.priorInvestigations) && setSessionAnalysisContext) {
+                  setSessionAnalysisContext((prev) => {
+                    if (!prev) return prev;
+                    return {
+                      ...prev,
+                      sessionKnowledge: {
+                        ...prev.sessionKnowledge,
+                        priorInvestigations: payload.priorInvestigations,
+                      },
+                    };
+                  });
                 }
               } else if (event === 'sub_question_spawned') {
                 // W12: track spawned sub-questions for ThinkingPanel display
