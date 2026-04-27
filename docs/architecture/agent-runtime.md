@@ -167,6 +167,18 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W26 · PriorInvestigationsBanner UI** — surfaces the W21
+  `priorInvestigations` digest as a collapsed pill above the chat
+  message list ("📚 N earlier turns" with confirmed/refuted/open
+  totals). When expanded, lists each prior turn with its question,
+  headline finding, and per-status hypotheses (✓ confirmed, ✗
+  refuted, ◯ open). Hidden when the array is empty so legacy chats
+  are unchanged. The session's `sessionAnalysisContext` is now lifted
+  into Home.tsx via an optional `setSessionAnalysisContext` callback
+  on `useSessionLoader`. Semantic tokens only (`bg-card`,
+  `bg-muted/30`, `bg-primary/10`, `text-foreground`,
+  `text-muted-foreground`, `text-primary`, `border-border`).
+  `npm run theme:check` clean.
 - **Wave W25 · chat.service workbench parity** — the non-streaming
   code path now installs the same workbench accumulator as
   `chatStream.service.ts`: `agentSseEventToWorkbenchEntries` +

@@ -1,5 +1,9 @@
 import { useEffect } from 'react';
-import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
+import type {
+  TemporalDisplayGrain,
+  TemporalFacetColumnMeta,
+  SessionAnalysisContext,
+} from '@/shared/schema';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
 import { suggestedFollowUpsFromSession } from '@/lib/initialAnalysisMessage';
 import {
@@ -25,6 +29,13 @@ interface UseSessionLoaderProps {
   setMessages: (messages: any[] | ((prev: any[]) => any[])) => void;
   setSuggestions?: (suggestions: string[]) => void;
   setCollaborators?: (collaborators: string[]) => void;
+  /**
+   * W26 · lifts the loaded `sessionAnalysisContext` into Home so the
+   * `PriorInvestigationsBanner` can render its `priorInvestigations`
+   * digest above the chat. Optional — when absent the wave's UI hides
+   * itself silently.
+   */
+  setSessionAnalysisContext?: (sac: SessionAnalysisContext | undefined) => void;
 }
 
 /**
@@ -48,6 +59,7 @@ export const useSessionLoader = ({
   setMessages,
   setSuggestions,
   setCollaborators,
+  setSessionAnalysisContext,
 }: UseSessionLoaderProps) => {
   useEffect(() => {
     if (!loadedSessionData) return;
@@ -73,6 +85,11 @@ export const useSessionLoader = ({
     });
     if (setSuggestions) {
       setSuggestions(persistedFollowUps ?? []);
+    }
+    // W26 · publish the loaded sessionAnalysisContext upward so the
+    // PriorInvestigationsBanner can render its digest of prior turns.
+    if (setSessionAnalysisContext) {
+      setSessionAnalysisContext(session.sessionAnalysisContext ?? undefined);
     }
 
     // Set data summary information

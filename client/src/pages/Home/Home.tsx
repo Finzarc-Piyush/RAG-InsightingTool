@@ -3,6 +3,7 @@ import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
 import { StartAnalysisView } from '@/pages/Home/Components/StartAnalysisView';
 import { SnowflakeImportFlow } from '@/pages/Home/Components/SnowflakeImportFlow';
 import { ChatInterface } from './Components/ChatInterface';
+import { PriorInvestigationsBanner } from './Components/PriorInvestigationsBanner';
 import { ContextModal } from './Components/ContextModal';
 import { DataSummaryModal } from './Components/DataSummaryModal';
 import { useHomeState, useHomeMutations, useHomeHandlers, useSessionLoader } from './modules';
@@ -16,7 +17,7 @@ import {
   type LocalPreviewResult,
 } from '@/lib/localPreviewParser';
 import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages';
-import type { ChartSpec } from '@/shared/schema';
+import type { ChartSpec, SessionAnalysisContext } from '@/shared/schema';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
@@ -44,6 +45,11 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [collaborators, setCollaborators] = useState<string[]>([]);
+  // W26 · holds the loaded session's analysis context so the
+  // PriorInvestigationsBanner can render its `priorInvestigations` digest.
+  const [sessionAnalysisContext, setSessionAnalysisContext] = useState<
+    SessionAnalysisContext | undefined
+  >(undefined);
   const [isDatasetPreviewLoading, setIsDatasetPreviewLoading] = useState(false);
   const [isDatasetEnriching, setIsDatasetEnriching] = useState(false);
   const [enrichmentPoll, setEnrichmentPoll] = useState<DatasetEnrichmentPollSnapshot | null>(null);
@@ -405,6 +411,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setMessages,
     setSuggestions,
     setCollaborators,
+    setSessionAnalysisContext,
   });
 
   // Notify parent when sessionId or fileName changes
@@ -640,6 +647,11 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
 
   return (
     <>
+      {/* W26 · "What we already learned in this session" — collapsible
+          banner above the chat that surfaces the W21 priorInvestigations
+          digest. Hidden when the array is empty (legacy chats render
+          unchanged). */}
+      <PriorInvestigationsBanner sessionAnalysisContext={sessionAnalysisContext} />
       <ChatInterface
         messages={messages}
         onSendMessage={handleSendMessage}
