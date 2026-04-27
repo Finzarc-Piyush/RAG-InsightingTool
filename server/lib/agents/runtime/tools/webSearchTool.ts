@@ -81,6 +81,23 @@ async function tavilySearch(
   return { hits, providerLabel: "tavily" };
 }
 
+/**
+ * W36 · pull URLs out of an already-formatted hit block. The format
+ * `[web:tavily:N] Title\nContent\n— url` is stable, so a single regex
+ * matching the `— ` line is enough. Used to dedup against URLs the
+ * planner has already pulled from earlier `web_search` calls in this
+ * turn so the W7 ragBlock doesn't carry the same hit twice.
+ */
+const URL_LINE_RE = /^—\s+(https?:\/\/\S+)\s*$/gm;
+export function extractUrlsFromFormattedHits(formatted: string): string[] {
+  if (!formatted) return [];
+  const out: string[] = [];
+  for (const match of formatted.matchAll(URL_LINE_RE)) {
+    out.push(match[1].trim());
+  }
+  return out;
+}
+
 /** Format hits identically to RAG hits so the synthesizer treats them uniformly. */
 function formatHitsForPrompt(hits: SearchHit[], providerLabel: string): string {
   if (hits.length === 0) return "";
@@ -123,7 +140,31 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
             summary: "Web search returned no results for this query.",
           };
         }
-        const formatted = formatHitsForPrompt(hits, providerLabel);
+        // W36 · dedup against URLs already in the blackboard from earlier
+        // `web_search` calls in this turn. The planner can fire multiple
+        // queries (e.g. "Saffola Q3 share" + "Saffola Q3 volume") that
+        // return overlapping hits — without dedup the W7 ragBlock carries
+        // the same `— url` block twice and confuses the synthesizer.
+        const existingUrls = new Set(
+          (ctx.exec.blackboard?.domainContext ?? [])
+            .filter((e) => e.source === "web")
+            .flatMap((e) => extractUrlsFromFormattedHits(e.content))
+        );
+        const dedupedHits = hits.filter(
+          (h) => !h.url || !existingUrls.has(h.url)
+        );
+        const dropped = hits.length - dedupedHits.length;
+        if (dedupedHits.length === 0) {
+          agentLog("web_search.all_dup", {
+            query: query.slice(0, 200),
+            droppedCount: dropped,
+          });
+          return {
+            ok: true,
+            summary: `Web search returned ${hits.length} hits but all overlap URLs already in the blackboard from earlier calls in this turn.`,
+          };
+        }
+        const formatted = formatHitsForPrompt(dedupedHits, providerLabel);
         // W16 · also stash the formatted block on the analytical blackboard
         // so the W7 synthesis context bundle picks it up as background
         // grounding in the "Web search context" sub-section. The tool's
@@ -135,7 +176,8 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
         agentLog("web_search.ok", {
           query: query.slice(0, 200),
           provider: providerLabel,
-          hitCount: hits.length,
+          hitCount: dedupedHits.length,
+          dropped,
           totalLen: formatted.length,
         });
         return {

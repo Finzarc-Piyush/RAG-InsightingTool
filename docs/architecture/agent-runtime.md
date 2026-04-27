@@ -167,6 +167,17 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W36 · `web_search` hit URL-dedup** — closes the cleanup
+  deferred from W16. Before adding new hits to the analytical
+  blackboard, the tool now extracts URLs from existing
+  `source: "web"` entries (via the new exported helper
+  `extractUrlsFromFormattedHits`) and filters new hits whose URL
+  already appears. Avoids the case where the planner fires two
+  similar queries and the W7 ragBlock carries the same hit twice
+  (wastes tokens, confuses the synthesizer). When ALL new hits are
+  duplicates, returns a clear `web_search.all_dup` log line and a
+  short observation message so the planner learns. Telemetry now
+  reports `dropped` count alongside `hitCount`.
 - **Wave W35 · `magnitudes` numerical fabrication check** — new
   `checkMagnitudesAgainstObservations` extracts every numeric token
   from each magnitude's `value` (and `label` as fallback) and
