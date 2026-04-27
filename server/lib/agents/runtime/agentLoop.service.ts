@@ -1853,7 +1853,25 @@ export async function runAgentTurn(
         let envUnexplained: string | undefined;
 
         if (useNarrator) {
-          const narResult = await runNarrator(ctx, ctx.blackboard!, turnId, onLlmCall);
+          // W38 · attach a streaming hook so the narrator can stream the
+          // partial response to the client via `answer_chunk` SSE events.
+          // The hook fires only when STREAMING_NARRATOR_ENABLED=true (gated
+          // inside `completeJsonStreaming`); otherwise the call falls
+          // through to non-streaming with zero behaviour change. Repair
+          // calls (W17/W22) never receive the hook — they stay non-stream.
+          const narResult = await runNarrator(
+            ctx,
+            ctx.blackboard!,
+            turnId,
+            onLlmCall,
+            undefined,
+            {
+              onPartial: ({ delta }) => {
+                if (!delta) return;
+                safeEmit("answer_chunk", { delta });
+              },
+            }
+          );
           if (narResult) {
             // formatAnswerFromEnvelope signature is already in scope
             answer = formatAnswerFromEnvelope(narResult.body ?? "", narResult.keyInsight ?? null);

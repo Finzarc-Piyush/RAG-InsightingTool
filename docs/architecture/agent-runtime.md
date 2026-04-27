@@ -167,6 +167,22 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- **Wave W38 · streaming narrator output** — new
+  `completeJsonStreaming` in `lib/agents/runtime/llmJson.ts` calls
+  `openai.chat.completions.create({stream: true})` directly,
+  accumulates each chunk's delta, validates against the Zod schema
+  at the end, and falls back to non-streaming `completeJson` on ANY
+  failure (network, parse, schema). Double-gated by
+  `STREAMING_NARRATOR_ENABLED=true` AND non-Anthropic model (the
+  Anthropic adapter doesn't yet expose a streaming surface).
+  `runNarrator` accepts an optional `streaming` hook; the agent
+  loop wires it to `safeEmit("answer_chunk", { delta })` for the
+  initial narrator call only — repair calls (W17/W22) stay non-
+  streaming so the user doesn't see the answer thrash. Client
+  `useHomeMutations` accumulates deltas into a new
+  `streamingNarratorPreview` state surfaced via the hook return so
+  future UX can render a live "drafting answer…" preview. Reset on
+  each new turn. Default off; opt-in until UX surface lands.
 - **Wave W37 · per-message PriorInvestigationsBanner (W30 UI
   surface)** — closes the half-built W30 promise. `PriorInvestigationsBanner`
   refactored to accept EITHER `sessionAnalysisContext` (W26 mode —

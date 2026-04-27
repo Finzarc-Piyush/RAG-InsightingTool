@@ -11,7 +11,7 @@
  */
 
 import { z } from "zod";
-import { completeJson } from "./llmJson.js";
+import { completeJson, completeJsonStreaming, isStreamingNarratorEnabled } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { agentLog } from "./agentLogger.js";
@@ -113,12 +113,23 @@ export interface NarratorRepairContext {
  * Run the narrator to produce an investigation narrative from the blackboard.
  * Returns null if the LLM call fails (caller uses synthesizer fallback).
  */
+/**
+ * W38 · streaming-mode hook. When provided, the narrator uses
+ * `completeJsonStreaming` and forwards each chunk's accumulated raw
+ * text to `onPartial`. Repair calls (W17/W22 retries) ignore this and
+ * stay non-streaming — the user already saw the initial draft.
+ */
+export interface NarratorStreamingHook {
+  onPartial: (chunk: { rawSoFar: string; delta: string }) => void;
+}
+
 export async function runNarrator(
   ctx: AgentExecutionContext,
   blackboard: AnalyticalBlackboard,
   turnId: string,
   onLlmCall: () => void,
-  repair?: NarratorRepairContext
+  repair?: NarratorRepairContext,
+  streaming?: NarratorStreamingHook
 ): Promise<NarratorOutput | null> {
   const blackboardBlock = formatForNarrator(blackboard);
   if (!blackboardBlock.trim()) return null;
@@ -208,17 +219,31 @@ When the user message says "questionShape: none" you may omit magnitudes and une
   const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
   const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${bundleSection}${repairBlock}`;
 
-  const result = await completeJson(system, user, narratorOutputSchema, {
-    turnId: `${turnId}_narrator${repair ? "_repair" : ""}`,
-    // W8 · 4000 → 6000. The W8 prompt now requires implications,
-    // recommendations, and a domainLens paragraph on top of the existing
-    // envelope — earlier we sometimes hit the 4k cap and silently truncated
-    // late findings. 6k still leaves ~2k headroom for prose.
-    maxTokens: 6000,
-    temperature: 0.25,
-    onLlmCall,
-    purpose: LLM_PURPOSE.NARRATOR,
-  });
+  // W38 · use the streaming variant when (1) env flag is on, (2) caller
+  // supplied a streaming hook, AND (3) this is the initial call (not a
+  // W17/W22 repair). Repairs stay non-streaming because the user already
+  // saw the initial draft; streaming a repair would visually thrash.
+  const useStreaming = !repair && Boolean(streaming) && isStreamingNarratorEnabled();
+  const result = useStreaming
+    ? await completeJsonStreaming(system, user, narratorOutputSchema, {
+        turnId: `${turnId}_narrator_stream`,
+        maxTokens: 6000,
+        temperature: 0.25,
+        onLlmCall,
+        purpose: LLM_PURPOSE.NARRATOR,
+        onPartial: streaming!.onPartial,
+      })
+    : await completeJson(system, user, narratorOutputSchema, {
+        turnId: `${turnId}_narrator${repair ? "_repair" : ""}`,
+        // W8 · 4000 → 6000. The W8 prompt now requires implications,
+        // recommendations, and a domainLens paragraph on top of the existing
+        // envelope — earlier we sometimes hit the 4k cap and silently truncated
+        // late findings. 6k still leaves ~2k headroom for prose.
+        maxTokens: 6000,
+        temperature: 0.25,
+        onLlmCall,
+        purpose: LLM_PURPOSE.NARRATOR,
+      });
 
   if (!result.ok) {
     agentLog("narratorAgent.failed", { turnId, error: result.error, repair: !!repair });

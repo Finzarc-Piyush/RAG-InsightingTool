@@ -110,6 +110,11 @@ export const useHomeMutations = ({
   const [agentWorkbenchLive, setAgentWorkbenchLive] = useState<AgentWorkbenchEntry[]>([]);
   // W12: live sub-questions spawned during deep investigation
   const [spawnedSubQuestions, setSpawnedSubQuestions] = useState<string[]>([]);
+  // W38 · accumulating "drafting answer…" text from server streaming
+  // narrator (`answer_chunk` SSE events). Empty until streaming starts;
+  // reset between turns. The future UX surface for this preview lives in
+  // a separate wave — for now the data flows so consumers can opt in.
+  const [streamingNarratorPreview, setStreamingNarratorPreview] = useState<string>("");
   const [thinkingTargetTimestamp, setThinkingTargetTimestamp] = useState<number | null>(null);
   const [thinkingLiveAnchorTimestamp, setThinkingLiveAnchorTimestamp] = useState<number | null>(null);
   const hadIntermediateSegmentsRef = useRef(false);
@@ -617,6 +622,8 @@ export const useHomeMutations = ({
       setSpawnedSubQuestions([]);
       setThinkingTargetTimestamp(null);
       setThinkingLiveAnchorTimestamp(null);
+      // W38 · reset the streaming-narrator preview between turns.
+      setStreamingNarratorPreview("");
       
       logger.log('📤 Sending chat message:', message);
       logger.log('📋 SessionId:', sessionId);
@@ -738,6 +745,18 @@ export const useHomeMutations = ({
                       },
                     };
                   });
+                }
+              } else if (event === 'answer_chunk') {
+                // W38 · streaming narrator chunk. The server emits this
+                // when STREAMING_NARRATOR_ENABLED=true; each chunk's
+                // `delta` is the latest token slice from the LLM. We
+                // accumulate into `streamingNarratorPreview` so future
+                // UI can render a live "drafting answer…" preview before
+                // the final structured envelope arrives. Reset by the
+                // next turn's `onUserSent` reset path.
+                const delta = (data as { delta?: string }).delta ?? "";
+                if (delta) {
+                  setStreamingNarratorPreview((prev) => prev + delta);
                 }
               } else if (event === 'sub_question_spawned') {
                 // W12: track spawned sub-questions for ThinkingPanel display
@@ -1155,5 +1174,8 @@ export const useHomeMutations = ({
     spawnedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
+    // W38 · accumulating live narrator preview text. Empty when streaming
+    // is disabled or no chunks have arrived yet.
+    streamingNarratorPreview,
   };
 };
