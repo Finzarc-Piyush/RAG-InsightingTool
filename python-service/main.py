@@ -1063,6 +1063,148 @@ async def train_model_endpoint(request: TrainModelRequest):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+class BudgetRedistributeRequest(BaseModel):
+    """W50 — input contract for /mmm/budget-redistribute. See docs/architecture/mmm.md."""
+    data: List[Dict[str, Any]]
+    spend_columns: List[str] = Field(min_length=1, max_length=20)
+    outcome_column: str
+    time_column: str
+    total_budget: Optional[float] = Field(default=None, gt=0)
+    per_channel_bounds: Optional[Dict[str, List[float]]] = None
+    bound_multipliers: Optional[List[float]] = None
+    bootstrap_iters: int = Field(default=50, ge=0, le=500)
+    seed: int = 42
+    ridge_alpha: float = Field(default=1.0, ge=1e-6, le=1e6)
+    sweeps: int = Field(default=2, ge=1, le=4)
+    max_obs: Optional[int] = Field(default=None, ge=12, le=1040)
+
+
+@app.post("/mmm/budget-redistribute")
+async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
+    """Fit MMM and run constrained budget reallocation. Returns optimal totals,
+    projected lift, response curves, and diagnostics. Compute is gated by the
+    same training semaphore so an MMM job cannot starve the service."""
+    try:
+        if not request.data:
+            raise HTTPException(status_code=400, detail="Data is empty or not provided")
+        if len(request.data) > config.MAX_ROWS:
+            raise HTTPException(status_code=400, detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}")
+        if request.outcome_column in request.spend_columns:
+            raise HTTPException(status_code=400, detail="outcome_column cannot also be in spend_columns")
+        if len(set(request.spend_columns)) != len(request.spend_columns):
+            raise HTTPException(status_code=400, detail="Duplicate entries in spend_columns")
+
+        import pandas as pd  # local import — pd not used elsewhere in main.py
+
+        df = pd.DataFrame(request.data)
+        for col in [*request.spend_columns, request.outcome_column, request.time_column]:
+            if col not in df.columns:
+                raise HTTPException(status_code=400, detail=f"Column '{col}' not present in data")
+
+        df[request.time_column] = pd.to_datetime(df[request.time_column], errors="coerce")
+        df = df.dropna(subset=[request.time_column])
+        for col in [*request.spend_columns, request.outcome_column]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=[*request.spend_columns, request.outcome_column])
+        if len(df) < 12:
+            raise HTTPException(status_code=400, detail=f"Need at least 12 valid observations after cleaning; got {len(df)}")
+
+        weekly = (
+            df.set_index(request.time_column)
+              .sort_index()
+              .resample("W-MON")
+              .agg({**{c: "sum" for c in request.spend_columns}, request.outcome_column: "sum"})
+              .dropna()
+        )
+        if len(weekly) < 12:
+            raise HTTPException(status_code=400, detail=f"Need at least 12 weekly observations; got {len(weekly)}")
+
+        spend_df = weekly[request.spend_columns].astype(float).reset_index(drop=True)
+        y = weekly[request.outcome_column].astype(float).values
+        dates = weekly.index.values
+
+        from mmm.fit import fit_mmm, channel_response_curve
+        from mmm.optimize import optimize_allocation
+
+        async def _run():
+            return await asyncio.to_thread(
+                _run_mmm_pipeline, spend_df, y, dates, request, fit_mmm, channel_response_curve, optimize_allocation
+            )
+        return await _with_training_gate(_run, timeout_s=180)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in budget_redistribute: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+def _run_mmm_pipeline(spend_df, y, dates, request: BudgetRedistributeRequest, fit_mmm, channel_response_curve, optimize_allocation):
+    fit = fit_mmm(
+        spend_df, y, dates=dates,
+        ridge_alpha=request.ridge_alpha,
+        sweeps=request.sweeps,
+        bootstrap_iters=request.bootstrap_iters,
+        seed=request.seed,
+        max_obs=request.max_obs,
+    )
+    bounds = None
+    if request.per_channel_bounds:
+        bounds = {}
+        for ch, pair in request.per_channel_bounds.items():
+            if len(pair) != 2 or pair[0] < 0 or pair[1] < pair[0]:
+                raise ValueError(f"per_channel_bounds[{ch}] must be [min, max] with 0 ≤ min ≤ max")
+            bounds[ch] = (float(pair[0]), float(pair[1]))
+    bm = (0.5, 2.0)
+    if request.bound_multipliers:
+        if len(request.bound_multipliers) != 2 or request.bound_multipliers[0] < 0 or request.bound_multipliers[1] < request.bound_multipliers[0]:
+            raise ValueError("bound_multipliers must be [low, high] with 0 ≤ low ≤ high")
+        bm = (float(request.bound_multipliers[0]), float(request.bound_multipliers[1]))
+    opt = optimize_allocation(fit, total_budget=request.total_budget, bounds=bounds, bound_multipliers=bm)
+
+    response_curves: Dict[str, Any] = {}
+    for cf in fit.channels:
+        rc = channel_response_curve(fit, cf.name)
+        rc["optimal_x"] = float(opt.optimal_totals[cf.name])
+        response_curves[cf.name] = rc
+
+    channels_out: List[Dict[str, Any]] = []
+    for cf in fit.channels:
+        cur_t = float(opt.current_totals[cf.name])
+        opt_t = float(opt.optimal_totals[cf.name])
+        channels_out.append({
+            "name": cf.name,
+            "decay": cf.decay, "k": cf.k, "alpha": cf.alpha,
+            "beta": cf.beta,
+            "elasticity": cf.elasticity,
+            "elasticity_ci95": list(cf.elasticity_ci95),
+            "current_total_spend": cur_t,
+            "optimal_total_spend": opt_t,
+            "delta_pct": (opt_t - cur_t) / max(cur_t, 1e-12) * 100.0,
+        })
+    return {
+        "channels": channels_out,
+        "current_allocation": {k: float(v) for k, v in opt.current_totals.items()},
+        "optimal_allocation": {k: float(v) for k, v in opt.optimal_totals.items()},
+        "current_outcome": opt.current_outcome,
+        "optimal_outcome": opt.optimal_outcome,
+        "projected_lift_pct": opt.lift_pct,
+        "converged": opt.converged,
+        "iterations": opt.iterations,
+        "bounds_used": {ch: [float(b[0]), float(b[1])] for ch, b in opt.bounds_used.items()},
+        "total_budget_used": opt.total_budget_used,
+        "fit_metrics": {
+            "r_squared": fit.r_squared,
+            "rmse": fit.rmse,
+            "n_observations": fit.n_observations,
+            "max_pairwise_vif": fit.diagnostics.get("max_pairwise_vif", 1.0),
+        },
+        "model_caveats": list(fit.diagnostics.get("model_caveats", [])),
+        "response_curves": response_curves,
+    }
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
