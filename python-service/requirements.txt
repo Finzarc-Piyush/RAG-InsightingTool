@@ -6,6 +6,7 @@ numpy==1.26.4
 pydantic>=2.6.0,<3.0.0
 python-multipart==0.0.12
 scikit-learn==1.5.2
+scipy>=1.11,<2
 # matplotlib and seaborn were declared but never imported (P-055) — removed to
 # shrink the Vercel image. Add them back if we introduce server-side plotting.
 
