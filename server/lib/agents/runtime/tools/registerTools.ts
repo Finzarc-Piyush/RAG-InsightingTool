@@ -64,6 +64,7 @@ import { registerBreakdownRankingTool } from "./breakdownRankingTool.js";
 import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
 import { registerPatchDashboardTool } from "./patchDashboardTool.js";
 import { registerWebSearchTool } from "./webSearchTool.js";
+import { registerBudgetOptimizerTool } from "./budgetOptimizerTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -871,6 +872,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         Boolean(ctx.exec.columnarStoragePath) && isDuckDBAvailable();
 
       let rows: Record<string, any>[];
+      let nonNullCounts: { name: string; nonNull: number; total: number }[];
       if (useColumnarDuckdb) {
         let base: Record<string, any>[];
         try {
@@ -899,6 +901,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           return { ok: false, summary: fullOut.error };
         }
         rows = fullOut.rows;
+        nonNullCounts = fullOut.nonNull;
       } else {
         const out = applyAddComputedColumns(
           ctx.exec.data,
@@ -909,6 +912,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           return { ok: false, summary: out.error };
         }
         rows = out.rows;
+        nonNullCounts = out.nonNull;
       }
 
       let persistNote = "";
@@ -963,9 +967,12 @@ export function registerDefaultTools(registry: ToolRegistry) {
       const cols = rows.length > 0 ? Object.keys(rows[0]!) : [];
       const sample = JSON.stringify(rows.slice(0, 15), null, 2);
       const names = parsed.data.columns.map((c) => c.name).join(", ");
+      const coverage = nonNullCounts
+        .map((c) => `${c.name}: ${c.nonNull}/${c.total}`)
+        .join(", ");
       return {
         ok: true,
-        summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Columns: ${cols.join(", ")}${persistNote}${duckdbNote}\nSample:\n${sample.slice(0, 3500)}`,
+        summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Non-null: ${coverage}. Columns: ${cols.join(", ")}${persistNote}${duckdbNote}\nSample:\n${sample.slice(0, 3500)}`,
         table: {
           rows,
           columns: cols,
@@ -1057,7 +1064,18 @@ export function registerDefaultTools(registry: ToolRegistry) {
     "run_correlation",
     correlationArgs,
     async (ctx, args) => {
-      const targetVariable = args.targetVariable as string;
+      const requestedTarget = (args.targetVariable as string) ?? "";
+      // W48 · forgive case/spacing/underscore/dash differences before strict
+      // assertion. Same `findMatchingColumn` already used by chart builders,
+      // chart downsampling, dataTransform, pivot preview, segment driver — no
+      // new abstraction. Resolves "sales" → "Total Sales", "Sales (USD)", etc.
+      const allowedSet = [...allowedColumnNames(ctx)];
+      const matched = findMatchingColumn(requestedTarget, allowedSet);
+      const targetVariable = matched ?? requestedTarget;
+      let resolutionNote = "";
+      if (matched && matched !== requestedTarget) {
+        resolutionNote = ` (target resolved: "${requestedTarget}" → "${matched}")`;
+      }
       const err = assertColumns(ctx, [targetVariable]);
       if (err) return { ok: false, summary: err };
       const numeric = ctx.exec.summary.numericColumns;
@@ -1102,10 +1120,41 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
       }
 
-      const { charts, insights } = await analyzeCorrelations(
+      // W47 · frame-fit guard. `frame` is whatever the previous tool left in
+      // ctx.exec.data — if a `run_aggregation` / `execute_query_plan` ran
+      // first, the rows are aggregated (`{bucket, Sales_sum}`) and the schema
+      // numeric list (`Sales`, `Price`, …) doesn't match the row keys.
+      // `assertColumns` passed because allowedColumnNames unions schema + frame
+      // keys, but `row[targetVariable]` would still be `undefined` and every
+      // correlation would return NaN/empty. Auto-recover to row-level data.
+      const frameKeys = new Set(Object.keys(frame[0] ?? {}));
+      const targetOnFrame = frameKeys.has(targetVariable);
+      const numericOnFrame = numeric.filter((c) => frameKeys.has(c));
+      let frameNumeric = numericOnFrame;
+      let frameCategorical = categoricalCols.filter((c) => frameKeys.has(c));
+      if (!targetOnFrame || numericOnFrame.length <= 1) {
+        const rowLevel = ctx.exec.turnStartDataRef ?? [];
+        const rowLevelKeys = new Set(Object.keys(rowLevel[0] ?? {}));
+        if (rowLevel.length && rowLevelKeys.has(targetVariable)) {
+          frame = rowLevel as Record<string, any>[];
+          frameNumeric = numeric.filter((c) => rowLevelKeys.has(c));
+          frameCategorical = categoricalCols.filter((c) => rowLevelKeys.has(c));
+          filterNote += ` (auto-recovered to row-level frame, n=${frame.length}; original frame missing target or had ${numericOnFrame.length} numeric col(s))`;
+        } else if (!targetOnFrame) {
+          return {
+            ok: false,
+            summary: `Frame does not contain "${targetVariable}". Current frame keys: ${[...frameKeys].slice(0, 8).join(", ")}${frameKeys.size > 8 ? "…" : ""}. Numeric in frame: ${numericOnFrame.join(", ") || "(none)"}. No row-level fallback available — re-run upstream tool to materialize raw rows.`,
+          };
+        }
+        // If targetOnFrame but numericOnFrame.length <= 1 and no row-level
+        // fallback, fall through with what we have — analyzeCorrelations will
+        // surface a `no_numeric_pairs` diagnostic if it produces nothing.
+      }
+
+      const { charts, insights, diagnostic } = await analyzeCorrelations(
         frame,
         targetVariable,
-        numeric,
+        frameNumeric,
         (args.filter as "all" | "positive" | "negative" | undefined) ?? "all",
         undefined,
         ctx.exec.chatInsights,
@@ -1113,7 +1162,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         undefined,
         ctx.exec.sessionId,
         true,
-        categoricalCols,
+        frameCategorical,
         // W15 · pipe domain context + user/session signals through so the
         // agent-path correlation charts can render `businessCommentary`,
         // matching the W12 chatStream path.
@@ -1124,16 +1173,33 @@ export function registerDefaultTools(registry: ToolRegistry) {
           domainContext: ctx.exec.domainContext,
         }
       );
+      const noteSuffix = `${resolutionNote}${filterNote}`;
+      // W49 · ok:false when the analyzer produced nothing useful. The reflector
+      // already retries on ok:false (see dimensionFilters zero-rows path
+      // above) — keep correlation consistent so the planner gets a signal to
+      // try a different target, drop filters, or move on instead of treating
+      // empty as success.
+      if (charts.length === 0 && insights.length === 0) {
+        const reason = diagnostic?.reason ?? "unknown";
+        const stats = diagnostic
+          ? `frame=${diagnostic.frameRows} rows, target non-NaN sample=${diagnostic.targetSampleNonNan}/100, numeric tried=${diagnostic.numericTried} kept=${diagnostic.numericKept}, categorical tried=${diagnostic.categoricalTried} kept=${diagnostic.categoricalKept}`
+          : "no diagnostic available";
+        const notes = diagnostic?.notes ? ` ${diagnostic.notes}` : "";
+        return {
+          ok: false,
+          summary: `Correlation analysis produced no results. Reason: ${reason}. ${stats}.${notes}${noteSuffix}`,
+        };
+      }
       return {
         ok: true,
-        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).${filterNote}`,
+        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).${noteSuffix}`,
         charts,
         insights,
       };
     },
     {
       description:
-        "Correlation / drivers for a numeric target column. Automatically includes categorical variables via correlation ratio η (measures how much variance in the target each category explains). Optional dimensionFilters apply to **row-level turn-start data** (not aggregated frames).",
+        "Correlation / drivers for a numeric target column. Automatically includes categorical variables via correlation ratio η (measures how much variance in the target each category explains). Optional dimensionFilters apply to **row-level turn-start data** (not aggregated frames). Auto-recovers row-level data when the current frame is aggregated (e.g. after run_aggregation). Returns ok:false with a `reason` (no_target_values | no_numeric_pairs | no_categorical_signal | filter_eliminated_all | insights_llm_failed | chart_generation_failed) when no charts/insights can be produced.",
       argsHelp:
         '{"targetVariable": string, "filter"?: "all"|"positive"|"negative", "dimensionFilters"?: [{"column": string, "op": "in"|"not_in", "values": string[], "match"?: "exact"|"case_insensitive"|"contains"}]}',
     }
@@ -1325,4 +1391,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // and learn the no-op message when WEB_SEARCH_ENABLED is false. Real
   // execution is gated inside the tool itself.
   registerWebSearchTool(registry);
+  // W53 · marketing-mix budget reallocator. Trips on questions like
+  // "how should I redistribute my budget" — see budget_reallocation question
+  // shape in analysisBrief.ts.
+  registerBudgetOptimizerTool(registry);
 }
