@@ -25,6 +25,12 @@ import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import {
+  isBudgetRedistributeOperationResult,
+  buildRecommendationsFromBudgetOptimizer,
+  buildMagnitudesFromBudgetOptimizer,
+  buildDomainLensFromBudgetOptimizer,
+} from "./budgetOptimizerAdapter.js";
+import {
   buildSynthesisContext,
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
@@ -75,6 +81,9 @@ function detectSignificance(summary: string): Finding["significance"] {
   if (/\b\d{1,3}\.?\d*%|\bhighest\b|\blowest\b|\btop\b|\bbottom\b|\bdeclin|\bsurg|\bjump|\bdrop/i.test(summary)) return "notable";
   return "routine";
 }
+
+/** Total chart cap for a dashboard turn (planner + visualPlanner + feature sweep). */
+const DASHBOARD_CHART_HARD_CAP = 14;
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -449,6 +458,7 @@ async function synthesizeFinalAnswerEnvelope(
 
 Required:
 - "body": main markdown answer. Lead with the direct answer; expand into 4–7 paragraphs of grounded prose. LENGTH: 600–1200 words for analytical questions, 80–150 words for purely conversational ones. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Do not duplicate the full keyInsight inside body.
+  HARD CONSTRAINTS on body content: (1) Do NOT open with a methodology recap — phrases like "X has been calculated by grouping…", "the analysis was performed by summing…", "we computed X by aggregating…" are banned. The first sentence must state the headline finding with its number. (2) Do NOT include a paragraph describing dataset shape (rows × columns), data-quality assessments ("the dataset is clean", "well-structured for this purpose"), or hypothesis-confirmation language ("the findings align with the hypothesis"). The reader assumes the data was usable; surface genuine limitations only in implications/recommendations, not body prose.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions — segments, risk, opportunity, or "so what" for the business. Use general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
@@ -796,6 +806,17 @@ export async function runAgentTurn(
     }
   };
 
+  // F3 · client-disconnect abort. Throws AGENT_CLIENT_ABORTED when the SSE
+  // stream's owner has hung up; caller maps this to a clean early-return.
+  // Probed at major step boundaries (planner, tool dispatch, synthesis,
+  // visual planner) so we don't burn LLM budget for a tab the user closed.
+  const checkAbort = (label: string): void => {
+    if (ctx.abortSignal?.aborted) {
+      agentLog("agent.client_aborted", { turnId, label });
+      throw new Error("AGENT_CLIENT_ABORTED");
+    }
+  };
+
   let observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   let followUpPrompts: string[] | undefined;
@@ -814,6 +835,10 @@ export async function runAgentTurn(
   let dashboardDraft:
     | import("../../../shared/schema.js").DashboardSpec
     | undefined;
+  // Set when the agent persisted the draft automatically (auto-save flow).
+  // Used to short-circuit the chat-side "Create dashboard" CTA and route the
+  // user straight to /dashboard?open=<id>.
+  let createdDashboardId: string | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
@@ -1053,6 +1078,7 @@ export async function runAgentTurn(
     let replans = 0;
     // P-020: promoted to AgentConfig so operators can tune via AGENT_MAX_REPLANS_PER_STEP.
     while (replans <= config.maxReplansPerStep) {
+      checkAbort("planner-loop");
       if (Date.now() > deadline) {
         trace.budgetHits?.push("wall_time");
         break;
@@ -1960,6 +1986,16 @@ export async function runAgentTurn(
             if (narResult.implications?.length) env.implications = narResult.implications;
             if (narResult.recommendations?.length) env.recommendations = narResult.recommendations;
             if (narResult.domainLens) env.domainLens = narResult.domainLens;
+            // W54 · deterministic recommendations + magnitudes when the
+            // run_budget_optimizer tool produced a payload. The numbers must
+            // come from the optimizer, not the LLM, so we override.
+            if (isBudgetRedistributeOperationResult(operationResult)) {
+              const payload = operationResult.payload;
+              env.recommendations = buildRecommendationsFromBudgetOptimizer(payload);
+              if (!env.domainLens) env.domainLens = buildDomainLensFromBudgetOptimizer(payload);
+              const detMags = buildMagnitudesFromBudgetOptimizer(payload);
+              envMagnitudes = [...detMags, ...(envMagnitudes ?? [])].slice(0, 6);
+            }
             if (Object.keys(env).length) envelopeAnswerEnvelope = env;
           }
         }
@@ -1967,6 +2003,7 @@ export async function runAgentTurn(
         // Fallback: use existing synthesizer when narrator was skipped or returned null.
         // O4: prepend blackboard narrative block so synthesizer sees structured findings.
         if (!answer) {
+          checkAbort("pre-synthesis");
           const synthObservations =
             ctx.blackboard && ctx.blackboard.findings.length > 0
               ? [`[BLACKBOARD]\n${formatForNarrator(ctx.blackboard).slice(0, 3000)}`, ...observations]
@@ -2001,6 +2038,16 @@ export async function runAgentTurn(
             if (env.implications?.length) synthEnv.implications = env.implications;
             if (env.recommendations?.length) synthEnv.recommendations = env.recommendations;
             if (env.domainLens) synthEnv.domainLens = env.domainLens;
+            // W54 · same deterministic override as the narrator branch — the
+            // synthesizer fallback path also needs optimizer-derived numbers.
+            if (isBudgetRedistributeOperationResult(operationResult)) {
+              const payload = operationResult.payload;
+              synthEnv.recommendations = buildRecommendationsFromBudgetOptimizer(payload);
+              if (!synthEnv.domainLens)
+                synthEnv.domainLens = buildDomainLensFromBudgetOptimizer(payload);
+              const detMags = buildMagnitudesFromBudgetOptimizer(payload);
+              envMagnitudes = [...detMags, ...(envMagnitudes ?? [])].slice(0, 6);
+            }
             if (Object.keys(synthEnv).length) envelopeAnswerEnvelope = synthEnv;
           }
           // W5 + W8 · synthesis telemetry. When a fallback fires in production we
@@ -2206,6 +2253,7 @@ export async function runAgentTurn(
       charts: [],
     };
     try {
+      checkAbort("pre-visual-planner");
       visualExtra = await proposeAndBuildExtraCharts(
         ctx,
         observations.join("\n\n---\n\n"),
@@ -2236,6 +2284,50 @@ export async function runAgentTurn(
           phase: "post_visual",
           summary: `Visual planner added: ${visualExtra.charts.map((c) => `${c.title}:${c.x}/${c.y}`).join("; ")}`,
           ok: true,
+        });
+      }
+    }
+
+    // Deterministic feature sweep — when the user asked for a dashboard,
+    // fill coverage gaps the LLM-driven planner + visual planner left behind.
+    // Bounded so total mergedCharts never exceeds the dashboard cap.
+    if (ctx.analysisBrief?.requestsDashboard === true) {
+      try {
+        const { enumerateMissingDashboardCharts } = await import(
+          "./dashboardFeatureSweep.js"
+        );
+        const remaining = Math.max(
+          0,
+          DASHBOARD_CHART_HARD_CAP - mergedCharts.length
+        );
+        if (remaining > 0) {
+          const swept = enumerateMissingDashboardCharts(ctx, mergedCharts, {
+            maxAdds: remaining,
+          });
+          if (swept.length) {
+            mergedCharts.push(...swept);
+            appendInterAgentMessage(
+              trace,
+              {
+                from: "VisualPlanner",
+                to: "Coordinator",
+                intent: "feature_sweep_added",
+                evidenceRefs: swept.map((c) => `${c.x}/${c.y}`).slice(0, 12),
+                meta: { count: String(swept.length) },
+              },
+              safeEmit
+            );
+            agentLog("dashboard_feature_sweep", {
+              turnId,
+              addedCount: swept.length,
+              totalCharts: mergedCharts.length,
+            });
+          }
+        }
+      } catch (sweepErr) {
+        agentLog("dashboard_feature_sweep_failed", {
+          turnId,
+          error: sweepErr instanceof Error ? sweepErr.message : String(sweepErr),
         });
       }
     }
@@ -2304,6 +2396,79 @@ export async function runAgentTurn(
             },
             safeEmit
           );
+
+          // Auto-persist the draft so the user lands on /dashboard?open=<id>
+          // without a manual click. Failure leaves dashboardDraft as the
+          // fallback path (DashboardDraftCard's manual "Create dashboard").
+          if (ctx.username) {
+            try {
+              const { createDashboardFromSpec } = await import(
+                "../../../models/dashboard.model.js"
+              );
+              // F4 · Retry transient Cosmos errors (429/503/timeouts) so a
+              // momentary blip doesn't drop the auto-persist and force the user
+              // to click "Create" manually. 3 attempts with 200/400/800 ms
+              // backoff, only on retryable errors.
+              const isRetryable = (err: unknown): boolean => {
+                const m = err instanceof Error ? err.message : String(err);
+                const code = (err as { code?: string | number })?.code;
+                const status = (err as { statusCode?: number })?.statusCode;
+                if (status === 429 || status === 503 || status === 408) return true;
+                if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED") return true;
+                return /timeout|ECONNRESET|ETIMEDOUT|429|503/i.test(m);
+              };
+              let created: Awaited<ReturnType<typeof createDashboardFromSpec>>;
+              const delays = [200, 400, 800];
+              let attempt = 0;
+              for (;;) {
+                try {
+                  created = await createDashboardFromSpec(ctx.username, spec);
+                  break;
+                } catch (err) {
+                  if (attempt >= delays.length || !isRetryable(err)) throw err;
+                  agentLog("dashboard_auto_create_retry", {
+                    turnId,
+                    attempt: attempt + 1,
+                    delayMs: delays[attempt],
+                  });
+                  await new Promise((r) => setTimeout(r, delays[attempt]));
+                  attempt++;
+                }
+              }
+              createdDashboardId = created.id;
+              safeEmit("dashboard_created", {
+                dashboardId: created.id,
+                name: created.name,
+                sheetCount: spec.sheets.length,
+                chartCount: mergedCharts.length,
+              });
+              try {
+                const { setLastCreatedDashboardForSession } = await import(
+                  "../../../models/chat.model.js"
+                );
+                void setLastCreatedDashboardForSession(
+                  ctx.sessionId,
+                  ctx.username,
+                  created.id
+                );
+              } catch {
+                /* best-effort stamp; patch_dashboard still works without it */
+              }
+              agentLog("dashboard_auto_created", {
+                turnId,
+                dashboardId: created.id,
+                chartCount: mergedCharts.length,
+              });
+            } catch (createErr) {
+              agentLog("dashboard_auto_create_failed", {
+                turnId,
+                error:
+                  createErr instanceof Error
+                    ? createErr.message
+                    : String(createErr),
+              });
+            }
+          }
         }
       }
     } catch (dashErr) {
@@ -2452,6 +2617,7 @@ export async function runAgentTurn(
       ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
       ...(envelopeAnswerEnvelope ? { answerEnvelope: envelopeAnswerEnvelope } : {}),
       ...(dashboardDraft ? { dashboardDraft } : {}),
+      ...(createdDashboardId ? { createdDashboardId } : {}),
       ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),
       ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),
       // W13 · compact persistable digest of the analytical blackboard so
@@ -2466,6 +2632,28 @@ export async function runAgentTurn(
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (msg === "AGENT_CLIENT_ABORTED") {
+      // F3 · client closed the SSE stream; drop further LLM work and return
+      // whatever partial state we have without a noisy error fallback.
+      trace.budgetHits?.push("client_aborted" as never);
+      trace.endedAt = Date.now();
+      agentLog("turn_aborted", { turnId, mode: ctx.mode });
+      materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
+      return {
+        answer:
+          delegateAnswer ||
+          observationsFallbackAnswer() ||
+          "Request cancelled.",
+        charts: mergedCharts.length ? mergedCharts : undefined,
+        insights: mergedInsights.length ? mergedInsights : undefined,
+        table,
+        operationResult,
+        agentTrace: capAgentTrace(trace),
+        lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
+        ...briefOut(),
+        ...appliedFiltersOut(),
+      };
+    }
     if (msg === "AGENT_LLM_BUDGET") {
       trace.budgetHits?.push("max_llm_calls");
       trace.endedAt = Date.now();
