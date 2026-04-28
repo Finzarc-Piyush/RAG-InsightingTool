@@ -941,6 +941,12 @@ export const messageSchema = z.object({
     .optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
   dashboardDraft: z.record(z.unknown()).optional(),
+  /**
+   * Set when the agent persisted the dashboard automatically (requestsDashboard
+   * intent). The client uses this to skip the manual "Create dashboard" CTA
+   * and route the user straight to /dashboard?open=<id>.
+   */
+  createdDashboardId: z.string().optional(),
   timestamp: z.number(),
   thinkingSteps: z.array(thinkingStepSchema).optional(), // Snapshot of thinking steps for this turn (user message)
   /** Normalized agent activity blocks for the workbench UI (capped server-side) */
@@ -1246,6 +1252,8 @@ export const chatResponseSchema = z.object({
   unexplained: z.string().max(800).optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
   dashboardDraft: z.record(z.unknown()).optional(),
+  /** Set when the agent persisted the dashboard automatically (requestsDashboard intent). */
+  createdDashboardId: z.string().optional(),
   /** W6 — filters the agent applied to the turn, mirrored in messageSchema.appliedFilters. */
   appliedFilters: z
     .array(
@@ -1324,6 +1332,7 @@ export const questionShapeSchema = z.enum([
   "comparison",          // "how does A compare to B?"
   "exploration",         // "show me something interesting"
   "descriptive",         // "what's my top segment by revenue?"
+  "budget_reallocation", // W52 · "how should I redistribute my marketing budget?"
 ]);
 
 export type QuestionShape = z.infer<typeof questionShapeSchema>;
@@ -1331,7 +1340,7 @@ export type QuestionShape = z.infer<typeof questionShapeSchema>;
 export const analysisBriefSchema = z.object({
   version: z.literal(1),
   outcomeMetricColumn: z.string().max(200).optional(),
-  segmentationDimensions: z.array(z.string().max(200)).max(10).optional(),
+  segmentationDimensions: z.array(z.string().max(200)).max(24).optional(),
   filters: z.array(analysisBriefFilterSchema).max(12).optional(),
   timeWindow: z
     .object({
@@ -1354,7 +1363,7 @@ export const analysisBriefSchema = z.object({
    * Distinct from segmentationDimensions (which the user has already named);
    * this is the set the driver-discovery skill should test.
    */
-  candidateDriverDimensions: z.array(z.string().max(200)).max(12).optional(),
+  candidateDriverDimensions: z.array(z.string().max(200)).max(24).optional(),
   /** Phase-2: user asked to turn this turn into a dashboard. */
   requestsDashboard: z.boolean().optional(),
   /**

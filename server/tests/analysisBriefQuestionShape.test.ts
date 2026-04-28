@@ -8,7 +8,7 @@ import {
 } from "../shared/schema.js";
 
 describe("questionShape schema", () => {
-  it("accepts the six canonical shapes", () => {
+  it("accepts all canonical shapes including budget_reallocation", () => {
     for (const shape of [
       "driver_discovery",
       "variance_diagnostic",
@@ -16,6 +16,7 @@ describe("questionShape schema", () => {
       "comparison",
       "exploration",
       "descriptive",
+      "budget_reallocation",
     ] as const) {
       const parsed = questionShapeSchema.safeParse(shape);
       assert.equal(parsed.success, true, `expected ${shape} to parse`);
@@ -50,10 +51,19 @@ describe("analysisBriefSchema phase-1 additions", () => {
     assert.equal(parsed.success, true);
   });
 
-  it("rejects candidateDriverDimensions longer than 12", () => {
+  it("accepts candidateDriverDimensions of length 24", () => {
     const brief = {
       ...base,
-      candidateDriverDimensions: Array.from({ length: 13 }, (_, i) => `col${i}`),
+      candidateDriverDimensions: Array.from({ length: 24 }, (_, i) => `col${i}`),
+    };
+    const parsed = analysisBriefSchema.safeParse(brief);
+    assert.equal(parsed.success, true);
+  });
+
+  it("rejects candidateDriverDimensions longer than 24", () => {
+    const brief = {
+      ...base,
+      candidateDriverDimensions: Array.from({ length: 25 }, (_, i) => `col${i}`),
     };
     const parsed = analysisBriefSchema.safeParse(brief);
     assert.equal(parsed.success, false);
