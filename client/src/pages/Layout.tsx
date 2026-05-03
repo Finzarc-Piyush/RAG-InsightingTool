@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -15,7 +15,14 @@ import {
   ChevronRight,
   Table2,
   Loader2,
+  BookOpen,
+  Shield,
+  Pin,
+  PinOff,
+  Pencil,
+  Check,
 } from 'lucide-react';
+import { useSuperadmin } from '@/auth/useSuperadmin';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import LogoutButton from '@/components/LogoutButton';
@@ -40,8 +47,10 @@ import { RagContextPanel } from '@/components/RagContextPanel';
 
 interface LayoutProps {
   children: React.ReactNode;
-  currentPage: 'home' | 'dashboard' | 'analysis';
-  onNavigate: (page: 'home' | 'dashboard' | 'analysis') => void;
+  currentPage: 'home' | 'dashboard' | 'analysis' | 'memory' | 'superadmin';
+  onNavigate: (
+    page: 'home' | 'dashboard' | 'analysis' | 'memory' | 'superadmin'
+  ) => void;
   onNewChat: () => void;
   onUploadNew?: () => void;
   onLoadSession?: (sessionId: string, sessionData: unknown) => void;
@@ -65,9 +74,163 @@ const PAGE_COPY: Record<
     title: 'Analysis history',
     subtitle: 'Browse and reopen sessions',
   },
+  memory: {
+    title: 'Analysis Memory',
+    subtitle: 'Durable timeline of every event in this analysis',
+  },
+  superadmin: {
+    title: 'Admin View',
+    subtitle: 'Read-only shadow view of every session, dashboard, and analysis',
+  },
 };
 
 const RECENT_SESSIONS_LIMIT = 10;
+
+type PivotNavRowProps = {
+  entry: import('@/pages/Home/lib/chatPivotNav').ChatPivotNavEntry;
+  onScroll: (id: string) => void;
+  onTogglePin: (messageTimestamp: number) => void;
+  onRename: (messageTimestamp: number, name: string | null) => void;
+};
+
+function PivotNavRow({
+  entry,
+  onScroll,
+  onTogglePin,
+  onRename,
+}: PivotNavRowProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (editing) {
+      // Prefill with the current customName (if any). When clearing back to
+      // auto-name we want the input empty so the user types fresh — that's
+      // what `customName ?? ''` gives us.
+      setDraft(entry.customName ?? '');
+      // Focus on next tick so the input is mounted.
+      const t = setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [editing, entry.customName]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    const next = trimmed.length === 0 ? null : trimmed;
+    if (next === (entry.customName ?? null)) {
+      // No-op rename — just close the editor.
+      setEditing(false);
+      return;
+    }
+    onRename(entry.messageTimestamp, next);
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setEditing(false);
+  };
+
+  return (
+    <div
+      className={cn(
+        'group flex w-full items-center gap-1 rounded-lg px-2 py-1 text-xs text-sidebar-foreground hover:bg-sidebar-accent/80'
+      )}
+    >
+      {entry.hasPivotState && (
+        <button
+          type="button"
+          aria-label={entry.pinned ? 'Unpin pivot' : 'Pin pivot'}
+          title={entry.pinned ? 'Unpin' : 'Pin to top'}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePin(entry.messageTimestamp);
+          }}
+          className={cn(
+            'shrink-0 rounded p-1 hover:bg-sidebar-accent',
+            entry.pinned
+              ? 'text-foreground'
+              : 'text-muted-foreground opacity-50 group-hover:opacity-100'
+          )}
+        >
+          {entry.pinned ? (
+            <Pin className="h-3.5 w-3.5 fill-current" aria-hidden />
+          ) : (
+            <PinOff className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </button>
+      )}
+
+      {editing ? (
+        <>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancel();
+              }
+            }}
+            placeholder={entry.label}
+            maxLength={120}
+            className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            aria-label="Save name"
+            title="Save"
+            onClick={commit}
+            className="shrink-0 rounded p-1 text-foreground hover:bg-sidebar-accent"
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Cancel rename"
+            title="Cancel"
+            onClick={cancel}
+            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-sidebar-accent"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => onScroll(entry.id)}
+            className="min-w-0 flex-1 truncate text-left"
+            title={entry.label}
+          >
+            <span className="line-clamp-2">{entry.label}</span>
+          </button>
+          {entry.hasPivotState && (
+            <button
+              type="button"
+              aria-label="Rename pivot"
+              title="Rename"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditing(true);
+              }}
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-sidebar-accent group-hover:opacity-100 focus:opacity-100"
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export function Layout({
   children,
@@ -89,7 +252,9 @@ export function Layout({
   const { user } = useAuth();
   const { toast } = useToast();
   const userEmail = getUserEmail();
-  const { pivotEntries, requestPivotScroll } = useChatSidebarNav();
+  const { pivotEntries, requestPivotScroll, togglePivotPin, renamePivot } =
+    useChatSidebarNav();
+  const { isSuperadmin } = useSuperadmin();
 
   const { data: sessionsData, isPending: sessionsPending } =
     useQuery<SessionsResponse>({
@@ -116,6 +281,26 @@ export function Layout({
       label: 'Dashboard',
       icon: BarChart3,
     },
+    // W62 · Memory — only meaningful when a session is active.
+    ...(sessionId
+      ? [
+          {
+            id: 'memory' as const,
+            label: 'Memory',
+            icon: BookOpen,
+          },
+        ]
+      : []),
+    // Superadmin shadow viewer — only the two hardcoded emails see this.
+    ...(isSuperadmin
+      ? [
+          {
+            id: 'superadmin' as const,
+            label: 'Admin View',
+            icon: Shield,
+          },
+        ]
+      : []),
   ];
 
   const page = PAGE_COPY[currentPage];
@@ -311,16 +496,13 @@ export function Layout({
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-0.5 pl-2 pt-0.5">
                   {pivotEntries.map((entry) => (
-                    <Button
+                    <PivotNavRow
                       key={entry.id}
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-auto min-h-9 w-full justify-start whitespace-normal rounded-lg px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground hover:bg-sidebar-accent/80"
-                      onClick={() => requestPivotScroll(entry.id)}
-                    >
-                      <span className="line-clamp-2">{entry.label}</span>
-                    </Button>
+                      entry={entry}
+                      onScroll={requestPivotScroll}
+                      onTogglePin={togglePivotPin}
+                      onRename={renamePivot}
+                    />
                   ))}
                 </CollapsibleContent>
               </Collapsible>
@@ -335,6 +517,14 @@ export function Layout({
             item={navigationItems[1]}
             isActive={currentPage === 'dashboard'}
           />
+
+          {sessionId && navigationItems[2] ? (
+            <NavButton
+              key="memory"
+              item={navigationItems[2]}
+              isActive={currentPage === 'memory'}
+            />
+          ) : null}
 
           {sidebarOpen ? (
             <Collapsible

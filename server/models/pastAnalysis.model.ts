@@ -15,6 +15,8 @@ import { getDatabase, initializeCosmosDB } from "./database.config.js";
 import {
   pastAnalysisDocSchema,
   type PastAnalysisDoc,
+  type PastAnalysisFeedbackTarget,
+  type PastAnalysisFeedbackDetail,
 } from "../shared/schema.js";
 
 export const COSMOS_PAST_ANALYSES_CONTAINER_ID =
@@ -109,6 +111,14 @@ export async function getPastAnalysisDoc(
  * Patch the `feedback` field. Used by the thumbs UI route (W5.5). Returns the
  * resulting doc or `null` if the row no longer exists. Best-effort — does not
  * retry; the caller surface (an HTTP route) can.
+ *
+ * `target` (optional): when set, the granular feedback is upserted into the
+ * `feedbackDetails[]` array keyed by `(target.type, target.id)`. When the
+ * target is `{type:"answer", id:"answer"}`, the top-level fields are also
+ * mirrored so the AI Search index merge keeps surfacing answer-level sentiment.
+ * When `target` is omitted, this is the legacy answer-level write path: the
+ * top-level fields are updated and the `feedbackDetails` "answer" entry is
+ * mirrored too (so reads of either shape stay consistent).
  */
 export async function setPastAnalysisFeedback(
   sessionId: string,
@@ -118,19 +128,58 @@ export async function setPastAnalysisFeedback(
   // existing values when the user retracts a vote (feedback === "none") or
   // up-votes after a previous down-vote.
   reasons: PastAnalysisDoc["feedbackReasons"] = [],
-  comment?: string
+  comment?: string,
+  target?: PastAnalysisFeedbackTarget
 ): Promise<PastAnalysisDoc | null> {
   const container = await waitForPastAnalysesContainer();
+  const trimmedComment = comment?.trim().slice(0, 500) ?? null;
+  const effectiveTarget: PastAnalysisFeedbackTarget = target ?? {
+    type: "answer",
+    id: "answer",
+  };
+
+  // We need to read-modify-write to upsert into the feedbackDetails array
+  // (Cosmos PATCH lacks a portable "upsert by key" array op). The doc is small
+  // and writes to a single (sessionId, id) row are not contended, so the
+  // last-writer-wins window is acceptable for thumbs feedback.
+  const existing = await getPastAnalysisDoc(sessionId, id);
+  if (!existing) return null;
+
+  const prevDetails: PastAnalysisFeedbackDetail[] = existing.feedbackDetails ?? [];
+  const now = Date.now();
+  const filteredDetails = prevDetails.filter(
+    (d) => !(d.target.type === effectiveTarget.type && d.target.id === effectiveTarget.id)
+  );
+  const newDetail: PastAnalysisFeedbackDetail = {
+    target: effectiveTarget,
+    feedback,
+    reasons,
+    comment: trimmedComment,
+    createdAt:
+      prevDetails.find(
+        (d) => d.target.type === effectiveTarget.type && d.target.id === effectiveTarget.id
+      )?.createdAt ?? now,
+    updatedAt: now,
+  };
+  const nextDetails = [...filteredDetails, newDetail];
+
+  const ops: Array<{ op: "set"; path: string; value: unknown }> = [
+    { op: "set", path: "/feedbackDetails", value: nextDetails },
+  ];
+
+  // Mirror the "answer" target onto the top-level fields so the AI Search
+  // index merge (mergeFeedbackInPastAnalysisIndex) keeps working unchanged.
+  if (effectiveTarget.type === "answer" && effectiveTarget.id === "answer") {
+    ops.push(
+      { op: "set", path: "/feedback", value: feedback },
+      { op: "set", path: "/feedbackReasons", value: reasons },
+      { op: "set", path: "/feedbackComment", value: trimmedComment }
+    );
+  }
+
   try {
-    const trimmedComment = comment?.trim().slice(0, 500);
     const { resource } = await container.item(id, sessionId).patch<PastAnalysisDoc>({
-      operations: [
-        { op: "set", path: "/feedback", value: feedback },
-        { op: "set", path: "/feedbackReasons", value: reasons },
-        // Always set the comment field (to either the new value or undefined)
-        // so a retraction clears any stale free-text from a prior down-vote.
-        { op: "set", path: "/feedbackComment", value: trimmedComment ?? null },
-      ],
+      operations: ops,
     });
     return resource ?? null;
   } catch (err) {
@@ -162,6 +211,38 @@ export async function listPastAnalysesForSession(
     )
     .fetchAll();
   return resources;
+}
+
+/**
+ * Cross-partition aggregation of feedback counts grouped by sessionId. Used
+ * by the superadmin sessions list to render `▲ N / ▼ N / ◯ N` badges per
+ * session without firing an N+1 query.
+ *
+ * Cost: one cross-partition query that returns one row per past-analysis
+ * doc, projected to `(sessionId, feedback)`. We aggregate in memory.
+ * Practical cap is the size of the past_analyses container — paginate if
+ * this grows past tens of thousands.
+ */
+export async function aggregateFeedbackCountsBySession(): Promise<
+  Map<string, { up: number; down: number; none: number }>
+> {
+  const container = await waitForPastAnalysesContainer();
+  const { resources } = await container.items
+    .query<{ sessionId: string; feedback: "up" | "down" | "none" }>(
+      { query: "SELECT c.sessionId, c.feedback FROM c" },
+      { enableCrossPartitionQuery: true }
+    )
+    .fetchAll();
+
+  const out = new Map<string, { up: number; down: number; none: number }>();
+  for (const row of resources) {
+    const counts = out.get(row.sessionId) ?? { up: 0, down: 0, none: 0 };
+    if (row.feedback === "up") counts.up += 1;
+    else if (row.feedback === "down") counts.down += 1;
+    else counts.none += 1;
+    out.set(row.sessionId, counts);
+  }
+  return out;
 }
 
 /**

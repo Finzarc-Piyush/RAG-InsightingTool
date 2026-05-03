@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import {
   multiSeriesYDomainKind,
   yDomainForMultiSeriesRows,
@@ -13,23 +14,27 @@ describe("yDomainForMultiSeriesRows", () => {
 
   it("overlay uses max single series, not row sum", () => {
     const { yDomain } = yDomainForMultiSeriesRows(rows, keys, "overlay");
-    expect(yDomain[0]).toBe(0);
-    expect(yDomain[1]).toBeGreaterThan(35_000);
-    expect(yDomain[1]).toBeLessThan(55_000);
+    assert.equal(yDomain[0], 0);
+    assert.ok(yDomain[1] > 35_000, `expected yDomain[1] > 35000, got ${yDomain[1]}`);
+    assert.ok(yDomain[1] < 55_000, `expected yDomain[1] < 55000, got ${yDomain[1]}`);
   });
 
   it("stacked-bar uses row sum max", () => {
     const { yDomain } = yDomainForMultiSeriesRows(rows, keys, "stacked-bar");
     const maxRow = 32_000 + 33_000 + 29_000;
-    expect(yDomain[0]).toBe(0);
-    expect(yDomain[1]).toBeCloseTo(maxRow * 1.05, -2);
+    assert.equal(yDomain[0], 0);
+    // ±50 tolerance (vitest's toBeCloseTo(_, -2) → within ~50 of target)
+    assert.ok(
+      Math.abs(yDomain[1] - maxRow * 1.05) <= 50,
+      `expected ~${maxRow * 1.05}, got ${yDomain[1]}`,
+    );
   });
 
   it("multiSeriesYDomainKind", () => {
-    expect(multiSeriesYDomainKind("bar", undefined)).toBe("stacked-bar");
-    expect(multiSeriesYDomainKind("bar", "stacked")).toBe("stacked-bar");
-    expect(multiSeriesYDomainKind("bar", "grouped")).toBe("overlay");
-    expect(multiSeriesYDomainKind("line", undefined)).toBe("overlay");
-    expect(multiSeriesYDomainKind("area", "stacked")).toBe("overlay");
+    assert.equal(multiSeriesYDomainKind("bar", undefined), "stacked-bar");
+    assert.equal(multiSeriesYDomainKind("bar", "stacked"), "stacked-bar");
+    assert.equal(multiSeriesYDomainKind("bar", "grouped"), "overlay");
+    assert.equal(multiSeriesYDomainKind("line", undefined), "overlay");
+    assert.equal(multiSeriesYDomainKind("area", "stacked"), "overlay");
   });
 });

@@ -175,7 +175,121 @@ export function parseFlexibleDate(dateStr: string | Date): Date | null {
     return isNaN(parsed.getTime()) ? null : parsed;
   }
 
+  // Wide-format PeriodIso labels with a fixed calendar anchor — emitted by
+  // the upload-time melt (see `wideFormat/periodVocabulary.ts`). Each shape
+  // resolves to a representative anchor date so `applyTemporalFacetColumns`
+  // can derive Year/Quarter/Month buckets. Comparative-only / rolling shapes
+  // (`L12M`, `L12M-YA`, `MAT-YA`, `YTD-TY`, `XXXX-Q1`) intentionally remain
+  // unparseable: they are anchored to "now", not a fixed calendar date.
+  const isoPeriod = matchIsoPeriodAnchor(str);
+  if (isoPeriod) return isoPeriod;
+
   if (startsWithMonthPrefix) return null;
+  return null;
+}
+
+/**
+ * Map a wide-format PeriodIso label to a representative calendar anchor.
+ * Returns null for shapes without a fixed anchor (rolling windows, bare
+ * comparatives, X-prefixed unknown years).
+ */
+function matchIsoPeriodAnchor(str: string): Date | null {
+  // Strip trailing comparative qualifier (-TY, -YA, -2YA, -3YA) if any —
+  // the anchor is encoded in the year component, not the qualifier.
+  const stripped = str.replace(/-(?:TY|YA|2YA|3YA)$/i, "");
+
+  // YYYY-Qn (calendar quarter) → first day of quarter
+  const qMatch = stripped.match(/^(\d{4})-Q([1-4])$/i);
+  if (qMatch) {
+    const year = Number(qMatch[1]);
+    const q = Number(qMatch[2]);
+    if (year >= 1900 && year <= 2100) {
+      return new Date(year, (q - 1) * 3, 1);
+    }
+    return null;
+  }
+
+  // YYYY-Hn (half year) → first day of half
+  const hMatch = stripped.match(/^(\d{4})-H([12])$/i);
+  if (hMatch) {
+    const year = Number(hMatch[1]);
+    const h = Number(hMatch[2]);
+    if (year >= 1900 && year <= 2100) {
+      return new Date(year, h === 1 ? 0 : 6, 1);
+    }
+    return null;
+  }
+
+  // YYYY-Wnn (ISO week) → Monday of that ISO week
+  const wMatch = stripped.match(/^(\d{4})-W(\d{2})$/i);
+  if (wMatch) {
+    const year = Number(wMatch[1]);
+    const week = Number(wMatch[2]);
+    if (year >= 1900 && year <= 2100 && week >= 1 && week <= 53) {
+      // ISO 8601 week date: Monday of the week containing Jan 4.
+      const jan4 = new Date(year, 0, 4);
+      const jan4Day = (jan4.getDay() + 6) % 7; // Mon=0..Sun=6
+      const week1Monday = new Date(year, 0, 4 - jan4Day);
+      const result = new Date(week1Monday);
+      result.setDate(week1Monday.getDate() + (week - 1) * 7);
+      return result;
+    }
+    return null;
+  }
+
+  // FYYYYY (fiscal year) and CYYYYY (calendar year) → Jan 1 of that year
+  const fyMatch = stripped.match(/^(?:FY|CY)?(\d{4})$/i);
+  if (fyMatch && /^(?:FY|CY)\d{4}$/i.test(stripped)) {
+    const year = Number(fyMatch[1]);
+    if (year >= 1900 && year <= 2100) return new Date(year, 0, 1);
+    return null;
+  }
+
+  // WE-YYYY-MM-DD (week-ending date) → exact date
+  const weMatch = stripped.match(/^WE-(\d{4})-(\d{2})-(\d{2})$/i);
+  if (weMatch) {
+    const year = Number(weMatch[1]);
+    const month = Number(weMatch[2]);
+    const day = Number(weMatch[3]);
+    if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const d = new Date(year, month - 1, day);
+      if (d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day) {
+        return d;
+      }
+    }
+    return null;
+  }
+
+  // MAT-YYYY-MM (Moving Annual Total ending YYYY-MM) → first day of that month
+  const matMatch = stripped.match(/^MAT-(\d{4})-(\d{2})$/i);
+  if (matMatch) {
+    const year = Number(matMatch[1]);
+    const month = Number(matMatch[2]);
+    if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12) {
+      return new Date(year, month - 1, 1);
+    }
+    return null;
+  }
+
+  // YTD-YYYY-MM (year-to-date through YYYY-MM) → first day of that month
+  const ytdMonthMatch = stripped.match(/^YTD-(\d{4})-(\d{2})$/i);
+  if (ytdMonthMatch) {
+    const year = Number(ytdMonthMatch[1]);
+    const month = Number(ytdMonthMatch[2]);
+    if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12) {
+      return new Date(year, month - 1, 1);
+    }
+    return null;
+  }
+
+  // YTD-YYYY (year-to-date YYYY) → Jan 1 of that year
+  const ytdYearMatch = stripped.match(/^YTD-(\d{4})$/i);
+  if (ytdYearMatch) {
+    const year = Number(ytdYearMatch[1]);
+    if (year >= 1900 && year <= 2100) return new Date(year, 0, 1);
+    return null;
+  }
+
   return null;
 }
 

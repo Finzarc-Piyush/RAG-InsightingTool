@@ -111,6 +111,17 @@ export async function runVerifier(
     planSteps?: PlanStep[];
     /** W7.5 · Charts produced this turn; powers the narrative-vs-numbers check. */
     charts?: ChartSpec[];
+    /**
+     * Wave B6 · prior verifier verdicts emitted earlier in THIS turn. Lets
+     * the verifier escalate when a previously-flagged issue is being
+     * reasserted (e.g. magnitude FABRICATED at step 2 surfaces again at
+     * step 5 — bump severity / flip course_correction toward replan).
+     */
+    priorVerifierVerdicts?: ReadonlyArray<{
+      stepIndex: number;
+      verdict: string;
+      rationale: string;
+    }>;
   },
   onLlmCall: () => void
 ): Promise<VerifierResult> {
@@ -195,10 +206,23 @@ Phase-1 completeness checks (only when ANALYSIS_BRIEF_JSON.questionShape is set)
 Prefer course_correction "revise_narrative" for completeness issues (evidence is usually present; the narrative just didn't surface it). Only escalate to "replan" when the required evidence is actually absent from the tool output.`;
 
   const brief = formatAnalysisBriefForPrompt(ctx);
+  // Wave B6 · prior in-turn verifier verdicts so this round can detect
+  // re-assertion of already-flagged issues. Cap at 4 KB total.
+  const priorVerdictsBlock =
+    params.priorVerifierVerdicts && params.priorVerifierVerdicts.length > 0
+      ? `\n\nPast verifier verdicts in this turn (most recent last; escalate when the candidate reasserts a previously-flagged issue):\n${params.priorVerifierVerdicts
+          .slice(-6)
+          .map(
+            (v) =>
+              `  step ${v.stepIndex}: ${v.verdict} — ${v.rationale.slice(0, 320)}`
+          )
+          .join("\n")
+          .slice(0, 4_000)}`
+      : "";
   // W4 · evidence cap 6000 → 16000, candidate cap 4000 → 8000. Deep verifier
   // runs on Claude Opus 4.7 (per W2 routing); expanding the window catches
   // numeric-fabrication errors that hide past truncation boundaries.
-  const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 16_000)}\n\nCandidate:\n${params.candidate.slice(0, 8_000)}`;
+  const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 16_000)}\n\nCandidate:\n${params.candidate.slice(0, 8_000)}${priorVerdictsBlock}`;
 
   const out = await completeJson(system, user, verifierOutputSchema, {
     turnId: params.turnId,
@@ -259,9 +283,9 @@ export async function rewriteNarrative(
         },
       ],
       temperature: 0.3,
-      // W4 · 800 → 2000. This is a narrative rewrite, not chart-JSON repair —
-      // 800 was clipping multi-paragraph answers mid-sentence.
-      max_tokens: 2000,
+      // W4 · 800 → 2000; WTL2 · 2_000 → 3_500. Course corrections often
+      // include a full multi-paragraph rewrite; 2k clipped late paragraphs.
+      max_tokens: 3500,
     },
     // W4 · was LLM_PURPOSE.CHART_JSON_REPAIR (a copy-paste from the chart
     // repair path). VERIFIER_DEEP routes through W2 to Claude Opus 4.7 and

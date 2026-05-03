@@ -14,7 +14,7 @@ import {
   ChatDocument 
 } from "../../models/chat.model.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
-import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
+import { enrichCharts, enrichPivotInsightFromEnvelope, validateAndEnrichResponse } from "./chatResponse.service.js";
 import { attachAutoLayers } from "../../lib/charts/autoAttachLayers.js";
 import { sendSSE, setSSEHeaders, startSseKeepalive } from "../../utils/sse.helper.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
@@ -25,7 +25,10 @@ import { bindSchemaColumnsForAgentic } from "../../lib/schemaColumnBinding.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
-import { persistMidTurnAssistantSessionContext } from "../../lib/sessionAnalysisContext.js";
+import {
+  persistMidTurnAssistantSessionContext,
+  extractAndPersistUserHierarchies,
+} from "../../lib/sessionAnalysisContext.js";
 import { preserveFinalPreview } from "./previewRetention.js";
 import { Response } from "express";
 import {
@@ -33,8 +36,16 @@ import {
   appendWorkbenchEntry,
 } from "./agentWorkbench.util.js";
 import { allowedColumnNamesForQueryPlan } from "../../lib/queryPlanExecutor.js";
-import { derivePivotDefaultsFromExecutionMerged } from "../../lib/pivotDefaultsFromExecution.js";
+import {
+  derivePivotDefaultsFromExecutionMerged,
+  type PivotDefaultsRowsValues,
+} from "../../lib/pivotDefaultsFromExecution.js";
+import { extractRankingIntent } from "../../lib/agents/runtime/planArgRepairs.js";
+import type { RankingMeta } from "../../shared/schema.js";
 import { upsertPastAnalysisDoc } from "../../models/pastAnalysis.model.js";
+import { appendMemoryEntries } from "../../models/analysisMemory.model.js";
+import { scheduleIndexMemoryEntries } from "../../lib/rag/indexSession.js";
+import { buildTurnEndMemoryEntries } from "../../lib/agents/runtime/memoryEntryBuilders.js";
 import type { PastAnalysisDoc, PastAnalysisOutcome, ChartSpec } from "../../shared/schema.js";
 import { takeTurnTotals } from "../../lib/telemetry/turnUsageAggregator.js";
 import { indexPastAnalysis } from "../../lib/rag/pastAnalysesStore.js";
@@ -227,6 +238,7 @@ function maybeWritePastAnalysisDoc(params: {
       // reasons are appended later via the model's patch helper
       // (`pastAnalysis.model.ts: persistFeedbackReasons`).
       feedbackReasons: [],
+      feedbackDetails: [],
       createdAt: Date.now(),
     };
     // W6.2 · accumulate cost/tokens against today's user budget. Fire-and-forget;
@@ -291,13 +303,18 @@ function readDimensionFiltersFromParsed(
   return out.length ? out : undefined;
 }
 
-function mergePivotDefaultsForResponse(params: {
+export function mergePivotDefaultsForResponse(params: {
   dataSummary: ChatDocument["dataSummary"];
   parsedQuery: Record<string, unknown> | null;
   parserPivot: Message["pivotDefaults"] | undefined;
-  executionPivot: Message["pivotDefaults"] | undefined;
+  executionPivot: PivotDefaultsRowsValues | undefined;
 }): Message["pivotDefaults"] | undefined {
   const { dataSummary, parsedQuery, parserPivot, executionPivot } = params;
+  // Scalar agent answers (single-row aggregate, no group-by) must not fabricate
+  // row dimensions from the parser's schema heuristic — suppress the pivot.
+  if (executionPivot?.scalar === true) {
+    return undefined;
+  }
   const finalRows = executionPivot?.rows?.length
     ? executionPivot.rows
     : parserPivot?.rows;
@@ -457,7 +474,7 @@ function derivePivotDefaultsFromExecution(params: {
   agentTrace?: Record<string, unknown>;
   table?: unknown;
   dataSummary: ChatDocument["dataSummary"];
-}): Message["pivotDefaults"] | undefined {
+}): PivotDefaultsRowsValues | undefined {
   return derivePivotDefaultsFromExecutionMerged(
     params.dataSummary,
     params.agentTrace,
@@ -480,6 +497,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   // Track if client disconnected
   let clientDisconnected = false;
 
+  // F3 · AbortController fired on client disconnect, forwarded into runAgentTurn
+  // via ctx.abortSignal so the agent loop can exit early instead of burning
+  // LLM budget after the user hangs up.
+  const turnAbortController = new AbortController();
+
   // Handle client disconnect/abort
   const checkConnection = (): boolean => {
     if (res.writableEnded || res.destroyed || !res.writable) {
@@ -492,6 +514,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   // Set up connection close handlers
   res.on('close', () => {
     clientDisconnected = true;
+    if (!turnAbortController.signal.aborted) {
+      turnAbortController.abort();
+    }
     // res.writableEnded is true when the server called res.end() — that's an expected
     // close, not a client abort. Only log when the client disconnected before we finished.
     if (!res.writableEnded) {
@@ -519,8 +544,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       const errorMessage = dbError instanceof Error ? dbError.message : String(dbError);
       if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || dbError.code === 'ECONNREFUSED') {
         console.error('❌ CosmosDB connection error, attempting to continue with blob storage data...');
-        sendSSE(res, 'error', { 
-          message: 'Database connection issue. Please try again in a moment. If the problem persists, check your network connection.' 
+        sendSSE(res, 'error', {
+          error: 'Database connection issue. Please try again in a moment. If the problem persists, check your network connection.',
         });
         res.end();
         return;
@@ -530,7 +555,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     }
 
     if (!chatDocument) {
-      sendSSE(res, 'error', { message: 'Session not found. Please upload a file first.' });
+      sendSSE(res, 'error', { error: 'Session not found. Please upload a file first.' });
       res.end();
       return;
     }
@@ -550,7 +575,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     }
     if (enrichment === "failed") {
       sendSSE(res, "error", {
-        message:
+        error:
           "Data enrichment failed for this session. Please try uploading your file again.",
       });
       res.end();
@@ -631,7 +656,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const flushIntermediateSegment = (
       rawPreview: Record<string, unknown>[],
       insight?: string,
-      segmentPivotDefaults?: Message["pivotDefaults"]
+      segmentPivotDefaults?: Message["pivotDefaults"],
+      executionScalar?: boolean
     ) => {
       if (!rawPreview.length) return;
       if (!checkConnection()) return;
@@ -662,6 +688,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           parsedQuery: parsedQueryForLoad,
           segmentPivot: segmentPivotDefaults,
         });
+      } else if (executionScalar === true) {
+        // Scalar agent step (single-row aggregate, no row dims). Suppress the
+        // pivot/chart entirely — the schema-heuristic fallback would render a
+        // misleading multi-dim view unrelated to the question.
+        pivotDefaultsForSegment = undefined;
       } else {
         pivotDefaultsForSegment = filterProvisionalPivotDefaultsToPreviewKeys(
           provisionalPivotDefaults,
@@ -892,6 +923,38 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       detectedMode = 'analysis';
     }
 
+    // H5 · before the agent loop runs, check if the user message declares
+    // a dimension hierarchy ("X is the category", "Y is rolled up", ...).
+    // Cheap regex pre-check skips the LLM call on routine analytical
+    // questions; on a hit, the merged SAC (with new dimensionHierarchies)
+    // is persisted to Cosmos so the agent loop and post-turn assistant
+    // merge both see it. The H2 immutability guard stops the assistant
+    // merge from wiping it.
+    try {
+      const userMergedSAC = await extractAndPersistUserHierarchies({
+        sessionId,
+        username,
+        userMessage: message,
+        previous: chatDocument.sessionAnalysisContext,
+      });
+      if (userMergedSAC) {
+        chatDocument.sessionAnalysisContext = userMergedSAC;
+        sendSSE(res, "session_context_updated", {
+          dimensionHierarchies:
+            userMergedSAC.dataset?.dimensionHierarchies ?? [],
+          priorInvestigations:
+            userMergedSAC.sessionKnowledge?.priorInvestigations ?? [],
+        });
+      }
+    } catch (err) {
+      console.warn("⚠️ user-hierarchy extraction skipped:", err);
+    }
+
+    onThinkingStep({
+      step: 'Loading dataset',
+      status: 'active',
+      timestamp: Date.now(),
+    });
     const { latestData, columnarStoragePathOpt, loadFullDataOpt, permanentContext, sessionAnalysisContext } =
       await resolveAnswerQuestionDataLoad({
         chatDocument,
@@ -902,6 +965,19 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           parsedQuery: parsedQueryForLoad,
         },
       });
+    {
+      const rowCount = Array.isArray(latestData) ? latestData.length : 0;
+      const colCount = chatDocument.dataSummary?.columns?.length ?? 0;
+      onThinkingStep({
+        step: 'Loading dataset',
+        status: 'completed',
+        timestamp: Date.now(),
+        details:
+          rowCount && colCount
+            ? `${rowCount.toLocaleString()} rows · ${colCount} columns`
+            : undefined,
+      });
+    }
 
     // Hoisted so flow_decision events fire on both agentic and legacy paths.
     const onAgentEvent = (event: string, data: unknown) => {
@@ -952,6 +1028,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const agentOptions = isAgenticLoopEnabled()
         ? {
             onAgentEvent,
+            abortSignal: turnAbortController.signal,
             streamPreAnalysis: {
               intentLabel: chatAnalysis.intent,
               analysis: chatAnalysis.analysis,
@@ -982,12 +1059,19 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               preview: Record<string, unknown>[];
               insight?: string;
               pivotDefaults?: import("../../shared/schema.js").Message["pivotDefaults"];
+              executionScalar?: boolean;
             }) => {
-              const { preview, insight, pivotDefaults: segmentPivotDefaults } = payload;
+              const {
+                preview,
+                insight,
+                pivotDefaults: segmentPivotDefaults,
+                executionScalar,
+              } = payload;
               flushIntermediateSegment(
                 preview as Record<string, unknown>[],
                 insight,
-                segmentPivotDefaults
+                segmentPivotDefaults,
+                executionScalar
               );
             },
           }
@@ -1015,22 +1099,25 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
+    // W12 · load enabled FMCG/Marico domain packs once and pass them down
+    // so chart insight generation can fill `businessCommentary`. Loader is
+    // process-cached; failures are non-fatal — commentary just won't render.
+    // Lifted to enclosing scope so Wave-3 pivot envelope enrichment (after
+    // pivotDefaults is merged) can reuse the same context without a reload.
+    let domainContextForCharts: string | undefined;
+    try {
+      const { loadEnabledDomainContext } = await import(
+        "../../lib/domainContext/loadEnabledDomainContext.js"
+      );
+      const { text } = await loadEnabledDomainContext();
+      if (text?.trim()) domainContextForCharts = text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
+    }
+
     // Enrich charts
     if (result.charts && Array.isArray(result.charts)) {
-      // W12 · load enabled FMCG/Marico domain packs once and pass them down
-      // so chart insight generation can fill `businessCommentary`. Loader is
-      // process-cached; failures are non-fatal — commentary just won't render.
-      let domainContextForCharts: string | undefined;
-      try {
-        const { loadEnabledDomainContext } = await import(
-          "../../lib/domainContext/loadEnabledDomainContext.js"
-        );
-        const { text } = await loadEnabledDomainContext();
-        if (text?.trim()) domainContextForCharts = text;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
-      }
       result.charts = await enrichCharts(
         result.charts,
         chatDocument,
@@ -1125,6 +1212,58 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       parserPivot: parserPivotDefaults,
       executionPivot: executionPivotDefaults,
     });
+    if (executionPivotDefaults?.scalar === true) {
+      transformedResponse.pivotAutoShow = false;
+    }
+    // RNK2 · stamp `rankingMeta` when the question is a ranking / leaderboard
+    // / entity-max question AND we have row data to surface. This does NOT
+    // re-shape the pivot — `mergePivotDefaultsForResponse` already produces
+    // rows=[entity], values=[metric_op] for these queries because the planner
+    // emitted that shape (see RNK1.3 / RNK1.4). The meta tag drives the
+    // "Full leaderboard available below" hint in AnswerCard and labels the
+    // message in Cosmos so historical ranking turns render correctly.
+    try {
+      const rankingIntent = extractRankingIntent(message, chatDocument.dataSummary);
+      if (rankingIntent && transformedResponse.pivotDefaults?.rows?.length) {
+        const tableRows = Array.isArray((result as any).table)
+          ? ((result as any).table as Array<Record<string, unknown>>)
+          : [];
+        const totalEntities = tableRows.length;
+        if (totalEntities > 0) {
+          // Cosmos message-doc safety: persist at most 5000 ranking rows on
+          // the message preview/table; the user sees the truncationNote in
+          // the leaderboard hint when N > 5000. The agent's narrator still
+          // sees the true totalEntities via leaderboardSummary (RNK2.2).
+          const PERSIST_CAP = 5000;
+          let truncationNote: string | undefined;
+          if (totalEntities > PERSIST_CAP) {
+            truncationNote = `Showing top ${PERSIST_CAP} of ${totalEntities}`;
+            if (Array.isArray((result as any).table)) {
+              (result as any).table = tableRows.slice(0, PERSIST_CAP);
+            }
+          }
+          const meta: RankingMeta = {
+            intentKind: rankingIntent.kind,
+            direction: rankingIntent.direction,
+            entityColumn: rankingIntent.entityColumn,
+            ...(rankingIntent.metricColumn
+              ? { metricColumn: rankingIntent.metricColumn }
+              : {}),
+            totalEntities,
+            ...(truncationNote ? { truncationNote } : {}),
+          };
+          transformedResponse.rankingMeta = meta;
+          transformedResponse.pivotAutoShow = true;
+        }
+      }
+    } catch (err) {
+      // Non-critical: ranking-meta enrichment failures must never break the
+      // response. Log and move on — the user still sees the same answer with
+      // pivot defaults; only the leaderboard hint disappears.
+      console.warn("[chatStream] rankingMeta enrichment failed", {
+        message: (err as Error)?.message?.slice(0, 200),
+      });
+    }
     if (process.env.NODE_ENV !== "production") {
       console.debug("[chatStream] pivotDefaults merged", {
         parser: parserPivotDefaults,
@@ -1132,6 +1271,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         value: transformedResponse.pivotDefaults,
       });
     }
+
+    // Wave 3 · when a pivot view is being rendered but the answer envelope
+    // didn't supply structured findings (dataOps / legacy turns), generate a
+    // narrator-style finding/implication/recommendation envelope from the
+    // pivot's primary chart so the pivot tab's "Key insight" matches the
+    // chat-analysis InsightCard tone instead of falling through to a single
+    // chart-keyInsight sentence. No-op when the envelope was already populated
+    // or when no pivot is rendered.
+    Object.assign(
+      transformedResponse,
+      await enrichPivotInsightFromEnvelope(result, transformedResponse, {
+        userQuestion: message,
+        domainContext: domainContextForCharts,
+      })
+    );
 
     const allowPreviewInAnswer = userExplicitlyAskedForColumnsOrPreview(message);
     if (allowPreviewInAnswer) {
@@ -1261,6 +1415,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         summary: transformedResponse.summary || undefined,
         agentTrace: transformedResponse.agentTrace,
         pivotDefaults: transformedResponse.pivotDefaults,
+        ...(transformedResponse.rankingMeta
+          ? { rankingMeta: transformedResponse.rankingMeta as RankingMeta }
+          : {}),
         timestamp: assistantMessageTimestamp,
         ...(finalThinkingBefore ? { thinkingBefore: finalThinkingBefore } : {}),
         ...(mergedSuggestedQuestions.length > 0
@@ -1282,6 +1439,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 .unexplained,
             }
           : {}),
+        // Persist spawned sub-questions with their stable ids so per-question
+        // feedback (thumbs up/down) survives reload. The agent loop ships
+        // SpawnedQuestion[] under `spawnedQuestions`; we only persist the
+        // {id, question} subset since that's all the UI needs.
+        ...((result as { spawnedQuestions?: { id?: string; question?: string }[] }).spawnedQuestions?.length
+          ? {
+              spawnedQuestions: (
+                result as { spawnedQuestions: { id?: string; question?: string }[] }
+              ).spawnedQuestions
+                .filter((q): q is { id: string; question: string } =>
+                  typeof q?.id === "string" && typeof q?.question === "string"
+                )
+                .map((q) => ({ id: q.id, question: q.question })),
+            }
+          : {}),
         // W3 · structured AnswerEnvelope from narrator (TL;DR, findings,
         // methodology, caveats, nextSteps). Optional — absent on synthesizer
         // fallback turns; the client gracefully falls back to markdown.
@@ -1297,6 +1469,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               dashboardDraft: (
                 transformedResponse as { dashboardDraft: Record<string, unknown> }
               ).dashboardDraft,
+            }
+          : {}),
+        ...((transformedResponse as { createdDashboardId?: string }).createdDashboardId
+          ? {
+              createdDashboardId: (
+                transformedResponse as { createdDashboardId: string }
+              ).createdDashboardId,
             }
           : {}),
         ...((result as { appliedFilters?: Array<{ column: string; op: 'in' | 'not_in'; values: string[]; match?: 'exact' | 'case_insensitive' | 'contains' }> }).appliedFilters?.length
@@ -1323,14 +1502,127 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               priorInvestigationsSnapshot: chatDocument.sessionAnalysisContext!.sessionKnowledge!.priorInvestigations,
             }
           : {}),
+        // Wave A2 · full in-memory turn state (workingMemory, reflector +
+        // verifier verdicts, blackboard snapshot, per-step tool I/O). Lets
+        // a follow-up turn's `priorTurnState` handle (Wave B9) reach typed
+        // structured state instead of TEXT digests.
+        ...((result as { agentInternals?: NonNullable<typeof assistantSave.agentInternals> })
+          .agentInternals
+          ? {
+              agentInternals: (result as { agentInternals?: NonNullable<typeof assistantSave.agentInternals> })
+                .agentInternals,
+            }
+          : {}),
       };
 
-      await addMessagesBySessionId(sessionId, [
-        userSave,
-        ...intermediateCosmosMessages,
-        assistantSave,
-      ]);
-      console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+      // Wave A3 · route the chat-message persist through the queue so
+      // transient Cosmos failures retry (250ms / 1s / 4s backoff) and so
+      // the SSE stream emits structured `persist_status` events for client-
+      // side observability. We still `await` the queue here so the SSE
+      // close happens after Cosmos commits — full client-perceivable
+      // parallelism is Wave A4 (streaming partial saves at step end).
+      const { enqueuePersist } = await import("../../lib/persistenceQueue.js");
+      let persistEmitted = false;
+      const { promise: persistPromise } = enqueuePersist({
+        sessionId,
+        messages: [userSave, ...intermediateCosmosMessages, assistantSave],
+        onSuccess: () => {
+          if (persistEmitted) return;
+          persistEmitted = true;
+          sendSSE(res, "persist_status", {
+            kind: "messages",
+            status: "ok",
+            messageTimestamp: assistantMessageTimestamp,
+          });
+        },
+        onAttemptFailed: (err, attempt) => {
+          sendSSE(res, "persist_status", {
+            kind: "messages",
+            status: "retrying",
+            attempt,
+            error: err.message.slice(0, 400),
+          });
+        },
+        onFailure: (err) => {
+          if (persistEmitted) return;
+          persistEmitted = true;
+          // Wave A5 will surface this to the client as a "Save again"
+          // affordance; today we just emit the structured event and log.
+          sendSSE(res, "persist_status", {
+            kind: "messages",
+            status: "failed",
+            error: err.message.slice(0, 400),
+            messageTimestamp: assistantMessageTimestamp,
+          });
+        },
+      });
+      const persistOutcome = await persistPromise;
+      if (persistOutcome === "succeeded") {
+        console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+      } else {
+        console.error(
+          `❌ Messages persist failed for chat: ${chatDocument.id} (turn answer streamed; user-visible affordance via persist_status SSE event)`
+        );
+      }
+      // Wave A4 · clear the mid-turn checkpoint now that the final assistant
+      // message is durably saved. Best-effort; failures are logged but don't
+      // surface to the user (the worst case is a stale checkpoint banner the
+      // next time the session loads, which the client handles gracefully).
+      void (async () => {
+        try {
+          const { clearTurnCheckpoint } = await import("../../lib/turnCheckpoint.js");
+          await clearTurnCheckpoint(sessionId, username);
+        } catch {
+          /* swallow */
+        }
+      })();
+
+      // W58 · Append the turn's analytical events to the durable Memory
+      // container (W56) and mirror to AI Search (W57). Best-effort: a Cosmos
+      // or Search outage must not surface as a turn failure to the user.
+      try {
+        const turnIdForMemory: string | undefined =
+          (transformedResponse as { agentTrace?: { turnId?: string } })
+            .agentTrace?.turnId;
+        if (turnIdForMemory) {
+          const memoryEntries = buildTurnEndMemoryEntries({
+            sessionId,
+            username,
+            turnId: turnIdForMemory,
+            dataVersion:
+              chatDocument.currentDataBlob?.version ??
+              chatDocument.ragIndex?.dataVersion ??
+              1,
+            createdAt: assistantMessageTimestamp,
+            question: message,
+            assistant: assistantSave,
+            investigationSummary: (
+              result as {
+                investigationSummary?: import("../../shared/schema.js").InvestigationSummary;
+              }
+            ).investigationSummary,
+            appliedFilters: (
+              result as {
+                appliedFilters?: Array<{
+                  column: string;
+                  op: "in" | "not_in";
+                  values: string[];
+                  match?: "exact" | "case_insensitive" | "contains";
+                }>;
+              }
+            ).appliedFilters,
+          });
+          if (memoryEntries.length > 0) {
+            await appendMemoryEntries(memoryEntries);
+            scheduleIndexMemoryEntries(memoryEntries);
+            console.log(
+              `📓 Memory: appended ${memoryEntries.length} entries for turn ${turnIdForMemory}`
+            );
+          }
+        }
+      } catch (memoryErr) {
+        console.warn("⚠️ analysisMemory turn-end write failed:", memoryErr);
+      }
 
       try {
         const { persistMergeAssistantSessionContext } = await import(
@@ -1356,10 +1648,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         // without a page reload. `safeEmit` (closure scope) swallows
         // closed-stream errors. Skipped silently when the persist failed
         // (returns undefined) or no investigations exist yet.
-        const updatedPriors = updatedSAC?.sessionKnowledge?.priorInvestigations;
-        if (Array.isArray(updatedPriors) && updatedPriors.length > 0) {
+        // H5 · also emit dimensionHierarchies so the UI chip stays in
+        // sync after the assistant merge runs.
+        const updatedPriors = updatedSAC?.sessionKnowledge?.priorInvestigations ?? [];
+        const updatedHierarchies =
+          updatedSAC?.dataset?.dimensionHierarchies ?? [];
+        if (updatedPriors.length > 0 || updatedHierarchies.length > 0) {
           sendSSE(res, "session_context_updated", {
             priorInvestigations: updatedPriors,
+            dimensionHierarchies: updatedHierarchies,
           });
         }
       } catch (ctxErr) {
@@ -1430,7 +1727,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     console.error('Chat stream error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process message';
     if (checkConnection()) {
-    sendSSE(res, 'error', { message: errorMessage });
+    sendSSE(res, 'error', { error: errorMessage });
     }
     if (!res.writableEnded && !res.destroyed) {
     res.end();
@@ -1459,7 +1756,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
       // Handle authorization errors
       if (accessError?.statusCode === 403) {
         console.warn(`⚠️ Unauthorized SSE access attempt: ${username} tried to access session ${sessionId}`);
-        sendSSE(res, 'error', { message: 'Unauthorized to access this session' });
+        sendSSE(res, 'error', { error: 'Unauthorized to access this session' });
         res.end();
         return;
       }
@@ -1468,8 +1765,8 @@ export async function streamChatMessages(sessionId: string, username: string, re
       const errorMessage = accessError instanceof Error ? accessError.message : String(accessError);
       if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || accessError.code === 'ECONNREFUSED') {
         console.error('❌ CosmosDB connection error in streamChatMessages:', errorMessage.substring(0, 100));
-        sendSSE(res, 'error', { 
-          message: 'Database connection issue. Please try again in a moment.' 
+        sendSSE(res, 'error', {
+          error: 'Database connection issue. Please try again in a moment.',
         });
         res.end();
         return;
@@ -1480,7 +1777,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
     }
     
     if (!chatDocument) {
-      sendSSE(res, 'error', { message: 'Session not found' });
+      sendSSE(res, 'error', { error: 'Session not found' });
       res.end();
       return;
     }
@@ -1639,8 +1936,8 @@ export async function streamChatMessages(sessionId: string, username: string, re
         // Only try to send error if connection is still open
         if (!res.writableEnded && !res.destroyed && res.writable) {
           console.error('Error fetching chat messages for SSE:', error);
-          sendSSE(res, 'error', { 
-            message: error instanceof Error ? error.message : 'Failed to fetch messages.' 
+          sendSSE(res, 'error', {
+            error: error instanceof Error ? error.message : 'Failed to fetch messages.',
           });
         }
         return false;
@@ -1730,7 +2027,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
   } catch (error) {
     console.error("streamChatMessages error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream chat messages.";
-    sendSSE(res, 'error', { message });
+    sendSSE(res, 'error', { error: message });
     res.end();
   }
 }

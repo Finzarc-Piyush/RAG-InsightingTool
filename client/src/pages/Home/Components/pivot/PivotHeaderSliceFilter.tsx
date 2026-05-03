@@ -48,8 +48,8 @@ export function PivotHeaderSliceFilter({
     setLoading(true);
     void (async () => {
       try {
-        const vals = await fetchPivotColumnDistincts(sessionId, field, 2000);
-        if (!cancelled) setOptions(vals);
+        const values = await fetchPivotColumnDistincts(sessionId, field);
+        if (!cancelled) setOptions(values);
       } catch {
         if (!cancelled) setOptions([]);
       } finally {

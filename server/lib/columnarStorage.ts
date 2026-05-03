@@ -87,6 +87,108 @@ export class SessionDataNotMaterializedError extends Error {
   }
 }
 
+const MS_PER_DAY = 86400000;
+
+/**
+ * Convert a DuckDB driver-side date/timestamp wrapper to a JS Date. Only fires
+ * for shapes that clearly look like DATE/TIMESTAMP wrappers (no enumerable own
+ * properties — the JSON-renders-as-`{}` case that broke `add_computed_columns`,
+ * or duck-typed properties like `{ days, micros, epochMs }`). Returns null
+ * when the object is not a recognised wrapper.
+ */
+export function duckDateWrapperToJsDate(obj: object): Date | null {
+  const o = obj as Record<string, unknown>;
+
+  if (typeof o.toISOString === 'function') {
+    try {
+      const iso = (o.toISOString as () => unknown).call(o);
+      if (typeof iso === 'string') {
+        const t = Date.parse(iso);
+        if (!isNaN(t)) return new Date(t);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  if (typeof o.epochMs === 'number' && Number.isFinite(o.epochMs)) {
+    return new Date(o.epochMs);
+  }
+  if (typeof o.epochSeconds === 'number' && Number.isFinite(o.epochSeconds)) {
+    return new Date(o.epochSeconds * 1000);
+  }
+  if (typeof o.micros === 'bigint') {
+    const ms = Number(o.micros / 1000n);
+    if (Number.isFinite(ms)) return new Date(ms);
+  }
+  if (typeof o.micros === 'number' && Number.isFinite(o.micros)) {
+    return new Date(o.micros / 1000);
+  }
+  if (typeof o.days === 'number' && Number.isFinite(o.days)) {
+    return new Date(o.days * MS_PER_DAY);
+  }
+  if (typeof o.days === 'bigint') {
+    const ms = Number(o.days) * MS_PER_DAY;
+    if (Number.isFinite(ms)) return new Date(ms);
+  }
+
+  if (
+    typeof o.toString === 'function' &&
+    o.toString !== Object.prototype.toString
+  ) {
+    try {
+      const s = String(o);
+      if (s && s !== '[object Object]') {
+        const t = Date.parse(s);
+        if (!isNaN(t)) return new Date(t);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Recursively normalize a single DuckDB driver-returned value: bigints to
+ * numbers (when safe), arrays/objects element-wise, and DATE/TIMESTAMP
+ * wrappers to JS Date so `parseRowDate` and tool consumers see real dates
+ * instead of opaque `{}`. Exported for unit testing.
+ */
+export function normalizeDuckValueExported(value: unknown): unknown {
+  if (typeof value === 'bigint') {
+    const n = Number(value);
+    if (Number.isSafeInteger(n)) return n;
+    return value.toString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => normalizeDuckValueExported(v));
+  }
+  if (value instanceof Date) return value;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const ownKeys = Object.keys(obj);
+    const looksLikeDateWrapper =
+      ownKeys.length === 0 ||
+      ownKeys.includes('days') ||
+      ownKeys.includes('micros') ||
+      ownKeys.includes('epochMs') ||
+      ownKeys.includes('epochSeconds') ||
+      typeof obj.toISOString === 'function';
+    if (looksLikeDateWrapper) {
+      const d = duckDateWrapperToJsDate(value as object);
+      if (d && !isNaN(d.getTime())) return d;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = normalizeDuckValueExported(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 export class ColumnarStorageService {
   private db: Database | null = null;
   private sessionId: string;
@@ -101,6 +203,17 @@ export class ColumnarStorageService {
 
   private quoteIdent(identifier: string): string {
     return `"${identifier.replace(/"/g, '""')}"`;
+  }
+
+  /**
+   * Wave-FA1 · Public DDL escape hatch. Used by the active-filter overlay to
+   * issue `CREATE OR REPLACE VIEW data_filtered AS …`. Callers must be sure
+   * the SQL they pass is safe (built via the helpers in `activeFilter/` that
+   * compose `quoteIdent` / `escapeSqlStringLiteral`); never concatenate user
+   * input directly into a string here.
+   */
+  async executeStatement(sql: string): Promise<void> {
+    return this.runStatement(sql);
   }
 
   private async runStatement(sql: string): Promise<void> {
@@ -141,22 +254,7 @@ export class ColumnarStorageService {
   }
 
   private normalizeDuckValue(value: unknown): unknown {
-    if (typeof value === 'bigint') {
-      const n = Number(value);
-      if (Number.isSafeInteger(n)) return n;
-      return value.toString();
-    }
-    if (Array.isArray(value)) {
-      return value.map((v) => this.normalizeDuckValue(v));
-    }
-    if (value && typeof value === 'object') {
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        out[k] = this.normalizeDuckValue(v);
-      }
-      return out;
-    }
-    return value;
+    return normalizeDuckValueExported(value);
   }
 
   private normalizeDuckRows<T = any>(rows: any[]): T[] {

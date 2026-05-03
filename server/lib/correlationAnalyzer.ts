@@ -2,6 +2,7 @@ import { ChartSpec, Insight, DataSummary } from '../shared/schema.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
 import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
+import { formatCompactNumber } from './formatCompactNumber.js';
 import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { generateStreamingCorrelationChart } from './streamingCorrelationAnalyzer.js';
@@ -14,6 +15,43 @@ import {
 } from './correlationMath.js';
 
 export { calculateCorrelations, calculateEtaSquared, calculateCategoricalCorrelations };
+
+// W46 · diagnostic surface for empty/partial correlation outputs. Populated at
+// every "return empty" site inside `analyzeCorrelations` so callers (and the
+// agent reflector) can see *why* nothing came back instead of treating an
+// empty payload as a successful no-op.
+export type CorrelationDiagnosticReason =
+  | 'no_target_values'
+  | 'no_numeric_pairs'
+  | 'no_categorical_signal'
+  | 'filter_eliminated_all'
+  | 'insights_llm_failed'
+  | 'chart_generation_failed';
+
+export interface CorrelationDiagnostic {
+  reason: CorrelationDiagnosticReason;
+  frameRows: number;
+  numericTried: number;
+  numericKept: number;
+  categoricalTried: number;
+  categoricalKept: number;
+  targetSampleNonNan: number; // first 100 rows: how many had a numeric target value
+  filter: 'all' | 'positive' | 'negative';
+  notes?: string;
+}
+
+function targetSampleStats(
+  data: Record<string, any>[],
+  targetVariable: string,
+  sampleSize = 100
+): number {
+  const slice = data.slice(0, Math.min(data.length, sampleSize));
+  let nonNan = 0;
+  for (const row of slice) {
+    if (!isNaN(toNumber(row[targetVariable]))) nonNan += 1;
+  }
+  return nonNan;
+}
 
 // Calculate linear regression (slope and intercept) for trend line
 function linearRegression(xValues: number[], yValues: number[]): { slope: number; intercept: number } | null {
@@ -56,12 +94,18 @@ export async function analyzeCorrelations(
   // produce `businessCommentary` (FMCG/Marico framing). Backwards-compatible:
   // pre-W15 callers still work and produce keyInsight only.
   synthesisContext?: import("./insightSynthesis/types.js").ChartInsightSynthesisContext
-): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
+): Promise<{ charts: ChartSpec[]; insights: Insight[]; diagnostic?: CorrelationDiagnostic }> {
   console.log('=== CORRELATION ANALYSIS DEBUG ===');
   console.log('Target variable:', targetVariable);
   console.log('Numeric columns to analyze:', numericColumns);
   console.log('Categorical columns to analyze:', categoricalColumns ?? []);
   console.log('Data rows:', data.length);
+
+  const targetNonNan = targetSampleStats(data, targetVariable);
+  // numericColumns includes the target itself; calculateCorrelations skips it
+  // (correlationMath.ts:43), so the actual "tried" count excludes the target.
+  const numericTried = numericColumns.filter((c) => c !== targetVariable).length;
+  const categoricalTried = categoricalColumns?.length ?? 0;
 
   // Redis cache removed - proceed with calculation
 
@@ -87,8 +131,32 @@ export async function analyzeCorrelations(
   console.log('=== END RAW CORRELATION DEBUG ===');
 
   if (correlations.length === 0) {
-    console.error('No correlations found!');
-    return { charts: [], insights: [] };
+    // W46 · classify the empty path so the tool surface can tell the agent
+    // *why* nothing came back, instead of returning a silent ok-with-empty.
+    const reason: CorrelationDiagnosticReason =
+      targetNonNan === 0
+        ? 'no_target_values'
+        : numericTried > 0 && numericCorrelations.length === 0 && catCorrelations.length === 0
+          ? 'no_numeric_pairs'
+          : 'no_categorical_signal';
+    const diagnostic: CorrelationDiagnostic = {
+      reason,
+      frameRows: data.length,
+      numericTried,
+      numericKept: numericCorrelations.length,
+      categoricalTried,
+      categoricalKept: catCorrelations.length,
+      targetSampleNonNan: targetNonNan,
+      filter,
+      notes:
+        reason === 'no_target_values'
+          ? `Target "${targetVariable}" had no numeric values in first 100 rows — frame may be aggregated or column is non-numeric.`
+          : reason === 'no_numeric_pairs'
+            ? `${numericTried} numeric column(s) tried but none produced valid Pearson pairs with "${targetVariable}".`
+            : `${categoricalTried} categorical column(s) tried but none passed the η thresholds (≥5 pairs, ≥2 groups, non-zero variance).`,
+    };
+    console.error('No correlations found!', diagnostic);
+    return { charts: [], insights: [], diagnostic };
   }
 
   // Apply filter if requested
@@ -102,18 +170,30 @@ export async function analyzeCorrelations(
   }
 
   if (filteredCorrelations.length === 0) {
-    const filterMessage = filter === 'positive' 
-      ? 'No positive correlations found.' 
-      : filter === 'negative' 
-      ? 'No negative correlations found.' 
+    const filterMessage = filter === 'positive'
+      ? 'No positive correlations found.'
+      : filter === 'negative'
+      ? 'No negative correlations found.'
       : 'No correlations found.';
     console.warn(filterMessage);
-    return { 
-      charts: [], 
+    const diagnostic: CorrelationDiagnostic = {
+      reason: 'filter_eliminated_all',
+      frameRows: data.length,
+      numericTried,
+      numericKept: numericCorrelations.length,
+      categoricalTried,
+      categoricalKept: catCorrelations.length,
+      targetSampleNonNan: targetNonNan,
+      filter,
+      notes: `${correlations.length} correlation(s) computed but filter="${filter}" dropped them all. All correlations with "${targetVariable}" are ${filter === 'positive' ? 'negative' : 'positive'}.`,
+    };
+    return {
+      charts: [],
       insights: [{
         id: 1,
         text: `**No ${filter === 'positive' ? 'positive' : 'negative'} correlations found:** ${filterMessage} All correlations with ${targetVariable} are ${filter === 'positive' ? 'negative' : 'positive'}.`
-      }] 
+      }],
+      diagnostic,
     };
   }
 
@@ -296,11 +376,59 @@ export async function analyzeCorrelations(
   // Pass topCorrelations (same as used in charts) to ensure insights match what's displayed
   const insights = await generateCorrelationInsights(targetVariable, topCorrelations, data, summaryStub, filter, categoricalSet);
 
-  const result = { charts, insights };
+  // W46 · partial-failure diagnostics. Correlations exist (we'd have early-
+  // returned otherwise), but downstream chart/insight generation may have
+  // dropped output. Tell the caller so it can react.
+  let diagnostic: CorrelationDiagnostic | undefined;
+  if (generateCharts && charts.length === 0) {
+    diagnostic = {
+      reason: 'chart_generation_failed',
+      frameRows: data.length,
+      numericTried,
+      numericKept: numericCorrelations.length,
+      categoricalTried,
+      categoricalKept: catCorrelations.length,
+      targetSampleNonNan: targetNonNan,
+      filter,
+      notes: `Charts requested but none generated. ${topCorrelations.length} top correlation(s) available; ${topCorrelations.filter((c) => !categoricalSet.has(c.variable)).length} were numeric (eligible for scatter).`,
+    };
+  } else if (insights.length === 0) {
+    diagnostic = {
+      reason: 'insights_llm_failed',
+      frameRows: data.length,
+      numericTried,
+      numericKept: numericCorrelations.length,
+      categoricalTried,
+      categoricalKept: catCorrelations.length,
+      targetSampleNonNan: targetNonNan,
+      filter,
+      notes: `LLM returned no parseable insights for ${topCorrelations.length} correlation(s). Falls back to deterministic insights in W50.`,
+    };
+  }
+
+  const result = diagnostic ? { charts, insights, diagnostic } : { charts, insights };
 
   // Redis cache removed
 
   return result;
+}
+
+// W50 · deterministic insight fallback when the LLM round-trip fails. Every
+// "silent return []" inside the parser used to leave the user with an empty
+// insight list even though the raw correlations were perfectly good. This
+// surfaces the top correlations directly so the agent and the user always get
+// something actionable, not nothing.
+export function fallbackInsightsFromRaw(
+  targetVariable: string,
+  correlations: CorrelationResult[],
+  categoricalSet?: Set<string>
+): Insight[] {
+  return correlations.slice(0, 5).map((c, i) => ({
+    id: i + 1,
+    text: categoricalSet?.has(c.variable)
+      ? `**${c.variable}** explains ${(c.correlation * 100).toFixed(0)}% of variance in ${targetVariable} (η=${c.correlation.toFixed(2)}, n=${c.nPairs ?? 'NA'}). Reminder: Correlation does not imply causation.`
+      : `**${c.variable}** has a ${c.correlation > 0 ? 'positive' : 'negative'} correlation with ${targetVariable} (r=${c.correlation.toFixed(2)}, n=${c.nPairs ?? 'NA'}). Reminder: Correlation does not imply causation.`,
+  }));
 }
 
 async function generateCorrelationInsights(
@@ -418,9 +546,15 @@ async function generateCorrelationInsights(
         
         const formatValue = (val: number, isPercent: boolean = false): string => {
           if (!isFinite(val)) return 'N/A';
-          const abs = Math.abs(val);
-          const fmt = abs >= 100 ? val.toFixed(0) : abs >= 10 ? val.toFixed(1) : abs >= 1 ? val.toFixed(2) : val.toFixed(3);
-          return isPercent ? `${fmt}%` : fmt;
+          // Percentages stay on the original scale (e.g. "12.5%"); other numeric
+          // values get K/M/B abbreviation when ≥1000 so the LLM prompt and any
+          // downstream prose render compactly.
+          if (isPercent) {
+            const abs = Math.abs(val);
+            const fmt = abs >= 100 ? val.toFixed(0) : abs >= 10 ? val.toFixed(1) : abs >= 1 ? val.toFixed(2) : val.toFixed(3);
+            return `${fmt}%`;
+          }
+          return formatCompactNumber(val);
         };
         
         const factorIsPercent = data.some(row => typeof row[corr.variable] === 'string' && row[corr.variable].includes('%'));
@@ -476,27 +610,39 @@ Write exactly ${insightCount} insights (one per variable, strongest correlation 
 
 Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${insightCount} items.`;
 
-  const response = await callLlm(
-    {
-      model: getInsightModel(),
-      messages: [
-        {
-          role: 'system',
-          content: `You are a senior data analyst. Return valid JSON: {"insights":[{"text":"..."}]}. Each text must include r and n, interpretation grounded in the provided stats, and end with "Reminder: Correlation does not imply causation." Do not use P75/P90 shorthand—use numeric values from the prompt.`,
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: getBatchInsightTemperature(),
-      max_tokens: Math.min(2000 + Math.max(0, (insightCount - 7) * 200), 10000),
-    },
-    { purpose: LLM_PURPOSE.CORRELATION_INSIGHT }
-  );
-
-  const content = response.choices[0].message.content || '{}';
+  // W50 · LLM call must never throw out of this function. Network/auth errors
+  // (e.g. 401 from a bad subscription key, 429 rate limit, timeouts) used to
+  // bubble up and fail the whole tool with `ok:false, summary: "<raw error>"`,
+  // even though we have raw correlations on hand. Catch and fall back.
+  let content = '{}';
+  try {
+    const response = await callLlm(
+      {
+        model: getInsightModel(),
+        messages: [
+          {
+            role: 'system',
+            content: `You are a senior data analyst. Return valid JSON: {"insights":[{"text":"..."}]}. Each text must include r and n, interpretation grounded in the provided stats, and end with "Reminder: Correlation does not imply causation." Do not use P75/P90 shorthand—use numeric values from the prompt. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions. Pearson r, η, and n-counts stay unabbreviated.`,
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: getBatchInsightTemperature(),
+        max_tokens: Math.min(2000 + Math.max(0, (insightCount - 7) * 200), 10000),
+      },
+      { purpose: LLM_PURPOSE.CORRELATION_INSIGHT }
+    );
+    content = response.choices[0].message.content || '{}';
+  } catch (err) {
+    console.error(
+      '❌ Correlation insight LLM call failed — using deterministic fallback:',
+      (err as Error)?.message ?? err
+    );
+    return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
+  }
   console.log('📝 Raw AI response for correlation insights (first 1000 chars):', content.substring(0, 1000));
   console.log('📊 Expected insight count:', insightCount);
   console.log('📋 Variables to analyze:', correlations.map(c => c.variable).join(', '));
@@ -513,8 +659,10 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
         console.log('⚠️ Found "insight" instead of "insights", using that');
         parsed.insights = parsed.insight;
       } else {
-        console.error('❌ No valid insights array found in response');
-        return [];
+        // W50 · don't return empty — synthesize deterministic insights from
+        // the raw correlation values so the user always sees the top drivers.
+        console.error('❌ No valid insights array found in response — using deterministic fallback');
+        return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
       }
     }
     
@@ -558,10 +706,17 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
       console.warn(`⚠️ Generated ${validInsights.length} insights but expected ${insightCount}`);
     }
     
+    // W50 · if the LLM returned a parseable but empty/garbage list, fall back
+    // to deterministic insights rather than leaving the user with nothing.
+    if (validInsights.length === 0) {
+      console.warn('⚠️ LLM returned 0 valid insights — using deterministic fallback');
+      return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
+    }
     return validInsights;
   } catch (error) {
     console.error('❌ Error parsing correlation insights:', error);
     console.error('Raw content that failed to parse:', content.substring(0, 1000));
-    return [];
+    // W50 · same fallback on JSON parse failures.
+    return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
   }
 }

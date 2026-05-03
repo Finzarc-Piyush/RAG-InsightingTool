@@ -14,6 +14,7 @@ import dataApiRoutes from "./dataApi.js";
 import snowflakeRoutes from "./snowflake.js";
 import feedbackRoutes from "./feedback.js";
 import adminRoutes from "./admin.js";
+import superadminRoutes from "./superadmin.js";
 
 export function registerRoutes(app: Express): Server | void {
   // Register route modules
@@ -31,6 +32,7 @@ export function registerRoutes(app: Express): Server | void {
   app.use('/api/data', dataApiRoutes);
   app.use('/api', feedbackRoutes);
   app.use('/api', adminRoutes);
+  app.use('/api', superadminRoutes);
 
   // For Vercel, we don't need to create HTTP server
   if (process.env.VERCEL) {

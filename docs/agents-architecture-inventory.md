@@ -1,49 +1,47 @@
-# Agents architecture inventory and multi-agent roadmap
+# Agents architecture inventory
 
-This document is **reference** for developers and AI assistants: it maps where “agents” appear in the RAG-InsightingTool repo and outlines **safe patterns** to grow toward explicit multi-agent collaboration. Optional trace handoffs (`AGENT_INTER_AGENT_MESSAGES`) add structured fields to `AgentTrace` only when enabled; default behavior is unchanged.
+> **Last updated:** 2026-04-28 · **Status:** reflects HEAD (post-Wave W55).
+> The earlier "two coexisting layers" framing is **obsolete** — the legacy `AgentOrchestrator` and handler chain were deleted in commit `9422bed7` (2026-04-26). When updating this file, verify against the live tree and bump this header.
+
+This document is **reference** for developers and AI assistants: it maps every "agent"-related module in the RAG-InsightingTool repo and describes how they connect. Optional trace handoffs (`AGENT_INTER_AGENT_MESSAGES`) add structured fields to `AgentTrace` only when enabled.
 
 **Related design docs**
 
-- Product rollout and RAG invariants: [plans/agentic_only_rag_chat.md](plans/agentic_only_rag_chat.md)
-- Agentic loop, verifier/critic, SSE concepts: [plans/agentic_analysis_architecture.md](plans/agentic_analysis_architecture.md)
+- High-level orientation: [CLAUDE.md](../CLAUDE.md) (the holy bible — read this first).
+- Product rollout and RAG invariants: [plans/agentic_only_rag_chat.md](plans/agentic_only_rag_chat.md).
+- Agentic loop, verifier/critic, SSE concepts: [plans/agentic_analysis_architecture.md](plans/agentic_analysis_architecture.md).
+- Runtime details: [architecture/agent-runtime.md](architecture/agent-runtime.md), [architecture/tool-registry.md](architecture/tool-registry.md), [architecture/skills.md](architecture/skills.md), [architecture/mmm.md](architecture/mmm.md).
 
 ---
 
 ## 1. Executive summary
 
-The codebase uses **two layers**:
+There is **one** path through the system: the agentic plan/act loop. [`runAgentTurn`](../server/lib/agents/runtime/agentLoop.service.ts) runs a **planner → tools → reflector → verifier → narrator** sequence with budgets and trace. The previous handler-based orchestrator is gone — its files (`orchestrator.ts`, `index.ts`, `handlers/*`, `contextRetriever.ts`) were removed in commit `9422bed7` on 2026-04-26.
 
-1. **Legacy handler orchestrator** — [`AgentOrchestrator`](../server/lib/agents/orchestrator.ts) picks **one** registered handler per query (`processQuery`). Used when the agentic loop flag is **off**.
-2. **Agentic plan–act loop** — [`runAgentTurn`](../server/lib/agents/runtime/agentLoop.service.ts) runs a **planner**, **tools**, **reflector**, and **verifier** with budgets and trace. Used when `AGENTIC_LOOP_ENABLED=true`.
+Routing is centralised in [`answerQuestion`](../server/lib/dataAnalyzer.ts), which **throws** if `AGENTIC_LOOP_ENABLED` is not `true`:
 
-Routing is centralized in [`answerQuestion`](../server/lib/dataAnalyzer.ts) via [`isAgenticLoopEnabled()`](../server/lib/agents/runtime/types.ts).
+```ts
+// server/lib/dataAnalyzer.ts:459
+if (!isAgenticLoopEnabled()) {
+  throw new Error("AGENTIC_LOOP_ENABLED must be true; the legacy orchestrator has been removed.");
+}
+```
 
 ```mermaid
 flowchart LR
-  subgraph chatPath [Chat path]
-    CS[chatStream.service]
-    DA[dataAnalyzer.answerQuestion]
-  end
-  subgraph legacyLayer [Legacy when agentic off]
-    OR[AgentOrchestrator.processQuery]
-    H[Handler chain via index.ts]
-  end
-  subgraph agenticLayer [Agentic when flag on]
-    AL[runAgentTurn]
-    PL[runPlanner]
-    RF[runReflector]
-    VF[runVerifier]
-    TR[ToolRegistry]
-  end
-  chatPath --> DA
-  DA -->|AGENTIC_LOOP_ENABLED| AL
-  DA -->|else| OR
-  OR --> H
-  AL --> PL
-  AL --> TR
-  AL --> RF
-  AL --> VF
+  CS[chatStream.service]
+  DA[dataAnalyzer.answerQuestion]
+  AL[runAgentTurn]
+  PL[runPlanner]
+  TR[ToolRegistry]
+  RF[runReflector]
+  VF[runVerifier]
+  NA[runNarrator]
+  CS --> DA --> AL
+  AL --> PL --> TR --> RF --> VF --> NA
 ```
+
+The investigation subsystem (blackboard, hypothesis planner, coordinator, investigation tree) sits underneath this loop and is summarised in §5 below.
 
 ---
 
@@ -51,76 +49,70 @@ flowchart LR
 
 | Location | Role |
 |----------|------|
-| [server/lib/dataAnalyzer.ts](../server/lib/dataAnalyzer.ts) | **`answerQuestion`**: if agentic → `runAgentTurn`; else information-seeking shortcut (when applicable), then **`getInitializedOrchestrator().processQuery`** |
-| [server/services/chat/chatStream.service.ts](../server/services/chat/chatStream.service.ts) | Streaming chat: mode classification, schema binding, agentic checks, SSE → workbench |
-| [server/services/chat/chat.service.ts](../server/services/chat/chat.service.ts) | Non-stream paths: intent + columns + `isAgenticLoopEnabled` |
-| [server/services/chat/answerQuestionContext.ts](../server/services/chat/answerQuestionContext.ts) | Context assembly for `answerQuestion`; agent utilities |
-| [server/index.ts](../server/index.ts) | Startup: [`assertAgenticRagConfiguration`](../server/lib/agents/runtime/assertAgenticRag.ts) when agentic + RAG expectations apply |
+| [server/lib/dataAnalyzer.ts](../server/lib/dataAnalyzer.ts) | **`answerQuestion`** — agentic-only entry; builds `AgentExecutionContext` and calls `runAgentTurn`. |
+| [server/services/chat/chatStream.service.ts](../server/services/chat/chatStream.service.ts) | Streaming chat: mode classification, schema binding, agent SSE → workbench, per-step insight enrichment, persist + session-context merge. |
+| [server/services/chat/chat.service.ts](../server/services/chat/chat.service.ts) | Non-streaming chat path; same agentic delegation. |
+| [server/services/chat/answerQuestionContext.ts](../server/services/chat/answerQuestionContext.ts) | Context assembly for `answerQuestion`. |
+| [server/index.ts](../server/index.ts) | Startup; [`assertAgenticRagConfiguration`](../server/lib/agents/runtime/assertAgenticRag.ts) runs inside `createApp()` and fails boot on misconfig. |
 
 ---
 
-## 3. Legacy orchestrator (handlers)
-
-**Registration** — [server/lib/agents/index.ts](../server/lib/agents/index.ts)
-
-- `initializeAgents()` registers handlers on the singleton orchestrator (order matters): `ConversationalHandler`, `DataOpsHandler`, `MLModelHandler`, `StatisticalHandler`, `ComparisonHandler`, `CorrelationHandler`, `GeneralHandler`.
-
-**Execution** — [server/lib/agents/orchestrator.ts](../server/lib/agents/orchestrator.ts)
-
-- `processQuery()` resolves context, mode (`dataOps` / analysis / modeling), intent, and dispatches to **one** handler.
-
-**Handlers** — [server/lib/agents/handlers/](../server/lib/agents/handlers/)
-
-| File | Purpose |
-|------|---------|
-| [baseHandler.ts](../server/lib/agents/handlers/baseHandler.ts) | Shared handler contract |
-| [conversationalHandler.ts](../server/lib/agents/handlers/conversationalHandler.ts) | Conversational / light Q&A |
-| [dataOpsHandler.ts](../server/lib/agents/handlers/dataOpsHandler.ts) | Bridges to Data Ops orchestrator |
-| [generalHandler.ts](../server/lib/agents/handlers/generalHandler.ts) | Catch-all; interacts with agentic flags in places |
-| [statisticalHandler.ts](../server/lib/agents/handlers/statisticalHandler.ts) | Statistical analysis |
-| [comparisonHandler.ts](../server/lib/agents/handlers/comparisonHandler.ts) | Comparisons |
-| [correlationHandler.ts](../server/lib/agents/handlers/correlationHandler.ts) | Correlations |
-| [mlModelHandler.ts](../server/lib/agents/handlers/mlModelHandler.ts) | ML / modeling |
-
-**Support modules** — [server/lib/agents/](../server/lib/agents/)
+## 3. Agentic runtime loop
 
 | File | Role |
 |------|------|
-| [intentClassifier.ts](../server/lib/agents/intentClassifier.ts) | Intent for routing |
-| [modeClassifier.ts](../server/lib/agents/modeClassifier.ts) | Mode (`analysis` / `dataOps` / `modeling`) |
-| [contextResolver.ts](../server/lib/agents/contextResolver.ts) | “That column” style resolution |
-| [contextRetriever.ts](../server/lib/agents/contextRetriever.ts) | Retrieval helpers |
-| [complexQueryDetector.ts](../server/lib/agents/complexQueryDetector.ts) | Complexity heuristics |
-| [models.ts](../server/lib/agents/models.ts) | Model identifiers / config |
-| [simpleAnalysisFastPath.ts](../server/lib/agents/simpleAnalysisFastPath.ts) | Fast path vs full loop when agentic (see tests) |
+| [agentLoop.service.ts](../server/lib/agents/runtime/agentLoop.service.ts) | **`runAgentTurn`** — main loop, budgets, synthesis, SSE callbacks. |
+| [planner.ts](../server/lib/agents/runtime/planner.ts) | Structured planning (`runPlanner`). |
+| [reflector.ts](../server/lib/agents/runtime/reflector.ts) | Post-tool **continue / replan / finish / clarify**. |
+| [verifier.ts](../server/lib/agents/runtime/verifier.ts) | **Verifier** + `rewriteNarrative`. Step-level invocation gated on `result.answerFragment` (W1). |
+| [narratorAgent.ts](../server/lib/agents/runtime/narratorAgent.ts) | Reads the analytical blackboard and emits the structured `NarratorOutput` envelope. Streaming-capable when `STREAMING_NARRATOR_ENABLED=true` (W38). |
+| [synthesisFallback.ts](../server/lib/agents/runtime/synthesisFallback.ts) | Empty-blackboard fallback path. |
+| [tools/registerTools.ts](../server/lib/agents/runtime/tools/registerTools.ts) | One-shot boot registration of all tools. |
+| [toolRegistry.ts](../server/lib/agents/runtime/toolRegistry.ts) | `ToolRegistry`, dispatch, zod arg-parsing, telemetry. |
+| [types.ts](../server/lib/agents/runtime/types.ts) | `AgentExecutionContext`, `AgentTrace`, `VerdictType`, `PlanStep`, `AgentLoopResult`, env-flag readers. |
+| [schemas.ts](../server/lib/agents/runtime/schemas.ts) | Zod / JSON schemas for planner, verifier, narrator, blackboard. |
+| [llmJson.ts](../server/lib/agents/runtime/llmJson.ts) | Structured LLM completion helper (`completeJson`, `completeJsonStreaming`). |
+| [callLlm.ts](../server/lib/agents/runtime/callLlm.ts) | Provider-agnostic LLM wrapper (Azure OpenAI ↔ Anthropic via `OPENAI_MODEL_FOR_*`). Test stub via `__setLlmStubResolver` (W18). |
+| [anthropicProvider.ts](../server/lib/agents/runtime/anthropicProvider.ts) | Claude Opus 4.7 routing implementation. |
+| [llmCostModel.ts](../server/lib/agents/runtime/llmCostModel.ts), [llmUsageEmitter.ts](../server/lib/agents/runtime/llmUsageEmitter.ts), [llmCallPurpose.ts](../server/lib/agents/runtime/llmCallPurpose.ts) | Cost telemetry. |
+| [context.ts](../server/lib/agents/runtime/context.ts) | Prompt context summarisation (`summarizeContextForPrompt`, `formatUserAndSessionJsonBlocks`). |
+| [workingMemory.ts](../server/lib/agents/runtime/workingMemory.ts) | Per-turn working memory; cap at `AGENT_OBSERVATION_MAX_CHARS`. |
+| [memoryEntryBuilders.ts](../server/lib/agents/runtime/memoryEntryBuilders.ts) + [memoryLifecycleBuilders.ts](../server/lib/agents/runtime/memoryLifecycleBuilders.ts) + [memoryRecall.ts](../server/lib/agents/runtime/memoryRecall.ts) | Working-memory lifecycle helpers. |
+| [visualPlanner.ts](../server/lib/agents/runtime/visualPlanner.ts) | Extra chart planning; `AGENT_MAX_EXTRA_CHARTS_PER_TURN`. |
+| [plannerColumnResolve.ts](../server/lib/agents/runtime/plannerColumnResolve.ts) | Column name resolution for planner. |
+| [planArgRepairs.ts](../server/lib/agents/runtime/planArgRepairs.ts) | Plan argument repairs (filter injection, dimension hygiene). |
+| [chartProposalValidation.ts](../server/lib/agents/runtime/chartProposalValidation.ts) | Chart proposal validation. |
+| [buildIntermediateInsight.ts](../server/lib/agents/runtime/buildIntermediateInsight.ts) | Intermediate insights for SSE workbench rows. |
+| [enrichStepInsights.ts](../server/lib/agents/runtime/enrichStepInsights.ts) | Single-batched LLM call enriching workbench step insights (W19, env-gated `RICH_STEP_INSIGHTS_ENABLED`). |
+| [agentLogger.ts](../server/lib/agents/runtime/agentLogger.ts) | Structured agent logging. |
+| [interAgentMessages.ts](../server/lib/agents/runtime/interAgentMessages.ts) | Optional `interAgentMessages` on trace (`AGENT_INTER_AGENT_MESSAGES`). |
+| [assertAgenticRag.ts](../server/lib/agents/runtime/assertAgenticRag.ts) | Startup RAG assertion. |
+| [index.ts](../server/lib/agents/runtime/index.ts) | Re-exports `runAgentTurn`, constants. |
+| [runDataOpsFromAgent.ts](../server/lib/agents/runDataOpsFromAgent.ts) | Tool path into Data Ops without `processQuery`. |
+| [analysisBrief.ts](../server/lib/agents/runtime/analysisBrief.ts) | Diagnostic-intent brief generation. |
+| [runHypothesisAndBrief.ts](../server/lib/agents/runtime/runHypothesisAndBrief.ts) | W39 merged pre-planner LLM call (env-gated `MERGED_PRE_PLANNER`). |
+| [verifyNarrativeNumbers.ts](../server/lib/agents/runtime/verifyNarrativeNumbers.ts) + [checkMagnitudesAgainstObservations.ts](../server/lib/agents/runtime/checkMagnitudesAgainstObservations.ts) + [checkEnvelopeCompleteness.ts](../server/lib/agents/runtime/checkEnvelopeCompleteness.ts) + [verifierHelpers.ts](../server/lib/agents/runtime/verifierHelpers.ts) | Deterministic narrative-quality gates (W17, W22, W35) — fired before the deep verifier. |
+| [budgetOptimizerAdapter.ts](../server/lib/agents/runtime/budgetOptimizerAdapter.ts) | MMM output adapter (W54) — builds recommendations / magnitudes / domainLens from `runBudgetRedistribute` results. |
+| [buildDashboard.ts](../server/lib/agents/runtime/buildDashboard.ts) + [buildDashboardPrompt.ts](../server/lib/agents/runtime/buildDashboardPrompt.ts) + [dashboardAutogenGate.ts](../server/lib/agents/runtime/dashboardAutogenGate.ts) + [dashboardFeatureSweep.ts](../server/lib/agents/runtime/dashboardFeatureSweep.ts) + [dashboardTemplates.ts](../server/lib/agents/runtime/dashboardTemplates.ts) | Phase-2 dashboard autogen (env-gated `DASHBOARD_AUTOGEN_ENABLED`). |
+| [skills/](../server/lib/agents/runtime/skills/) | Phase-1 analytical skills (see [docs/architecture/skills.md](architecture/skills.md)). |
 
 ---
 
-## 4. Agentic runtime loop
+## 4. Investigation subsystem
+
+These modules orchestrate multi-question, hypothesis-driven analytical turns; they sit underneath the loop and persist evidence to a structured blackboard.
 
 | File | Role |
 |------|------|
-| [server/lib/agents/runtime/agentLoop.service.ts](../server/lib/agents/runtime/agentLoop.service.ts) | **`runAgentTurn`**: main loop, budgets, synthesis, SSE callbacks |
-| [server/lib/agents/runtime/planner.ts](../server/lib/agents/runtime/planner.ts) | Structured planning (`runPlanner`) |
-| [server/lib/agents/runtime/reflector.ts](../server/lib/agents/runtime/reflector.ts) | Post-tool **continue / replan / finish / clarify** |
-| [server/lib/agents/runtime/verifier.ts](../server/lib/agents/runtime/verifier.ts) | **Verifier** + `rewriteNarrative`. Step-level invocation in `agentLoop.service.ts` is gated on `result.answerFragment` (W1) — analytical tools whose `result.summary` is a structured digest do not invoke the verifier, since the verifier critiques narrative quality and a digest is not a narrative draft. |
-| [server/lib/agents/runtime/tools/registerTools.ts](../server/lib/agents/runtime/tools/registerTools.ts) | Default tool registration |
-| [server/lib/agents/runtime/toolRegistry.ts](../server/lib/agents/runtime/toolRegistry.ts) | Tool registry types / dispatch |
-| [server/lib/agents/runtime/types.ts](../server/lib/agents/runtime/types.ts) | `AgentExecutionContext`, `AgentTrace`, `AgentConfig`, flags |
-| [server/lib/agents/runtime/schemas.ts](../server/lib/agents/runtime/schemas.ts) | Zod / JSON schemas for LLM outputs |
-| [server/lib/agents/runtime/llmJson.ts](../server/lib/agents/runtime/llmJson.ts) | Structured LLM completion helper |
-| [server/lib/agents/runtime/context.ts](../server/lib/agents/runtime/context.ts) | Prompt context summarization |
-| [server/lib/agents/runtime/workingMemory.ts](../server/lib/agents/runtime/workingMemory.ts) | Working memory between steps |
-| [server/lib/agents/runtime/visualPlanner.ts](../server/lib/agents/runtime/visualPlanner.ts) | Extra chart planning; `AGENT_MAX_EXTRA_CHARTS_PER_TURN` |
-| [server/lib/agents/runtime/plannerColumnResolve.ts](../server/lib/agents/runtime/plannerColumnResolve.ts) | Column name resolution for planner |
-| [server/lib/agents/runtime/planArgRepairs.ts](../server/lib/agents/runtime/planArgRepairs.ts) | Plan argument repairs |
-| [server/lib/agents/runtime/chartProposalValidation.ts](../server/lib/agents/runtime/chartProposalValidation.ts) | Chart proposal validation |
-| [server/lib/agents/runtime/buildIntermediateInsight.ts](../server/lib/agents/runtime/buildIntermediateInsight.ts) | Intermediate insights |
-| [server/lib/agents/runtime/agentLogger.ts](../server/lib/agents/runtime/agentLogger.ts) | Structured agent logging |
-| [server/lib/agents/runtime/interAgentMessages.ts](../server/lib/agents/runtime/interAgentMessages.ts) | Optional `interAgentMessages` on trace (`AGENT_INTER_AGENT_MESSAGES`) |
-| [server/lib/agents/runtime/assertAgenticRag.ts](../server/lib/agents/runtime/assertAgenticRag.ts) | Startup RAG assertion |
-| [server/lib/agents/runtime/index.ts](../server/lib/agents/runtime/index.ts) | Re-exports `runAgentTurn`, constants |
-| [server/lib/agents/runDataOpsFromAgent.ts](../server/lib/agents/runDataOpsFromAgent.ts) | Tool path into Data Ops without `processQuery` |
+| [analyticalBlackboard.ts](../server/lib/agents/runtime/analyticalBlackboard.ts) | Shared structured evidence store: findings, hypotheses, open questions, methodology notes, domain context entries. |
+| [hypothesisPlanner.ts](../server/lib/agents/runtime/hypothesisPlanner.ts) | Decomposes the user's question into hypotheses (status: confirmed / refuted / open). |
+| [coordinatorAgent.ts](../server/lib/agents/runtime/coordinatorAgent.ts) | Lightweight coordinator (`decomposeQuestion`); currently shipped but not invoked from `answerQuestion` per the W11–W13 single-flow policy. |
+| [investigationTree.ts](../server/lib/agents/runtime/investigationTree.ts) + [investigationOrchestrator.ts](../server/lib/agents/runtime/investigationOrchestrator.ts) | BFS outer loop over a tree of sub-questions. |
+| [contextAgent.ts](../server/lib/agents/runtime/contextAgent.ts) | Multi-round RAG resolution before tool calls. |
+| [priorInvestigations.ts](../server/lib/agents/runtime/priorInvestigations.ts) | W21 carry-over: distils a turn's blackboard into a digest; appended into `sessionAnalysisContext.sessionKnowledge.priorInvestigations` (FIFO, capped at 5). Surfaced via `PriorInvestigationsBanner` (W26). |
+| [buildInvestigationSummary.ts](../server/lib/agents/runtime/buildInvestigationSummary.ts) | W13 — distils the full blackboard into the persistable digest (hypotheses + findings + open questions). |
+| [buildSynthesisContext.ts](../server/lib/agents/runtime/buildSynthesisContext.ts) | W7 — composes the four-block synthesis bundle (data / user / RAG / domain) consumed by narrator + synthesizer. |
+| [insightHelpers.ts](../server/lib/agents/runtime/insightHelpers.ts) | Maps blackboard signals → `InsightCard`. |
 
 ---
 
@@ -128,40 +120,46 @@ flowchart LR
 
 | File | Role |
 |------|------|
-| [server/services/chat/agentWorkbench.util.ts](../server/services/chat/agentWorkbench.util.ts) | SSE events → `AgentWorkbenchEntry`, size caps, `AGENT_SSE_CRITIC_FINAL_ONLY` |
-| [server/services/chat/intermediatePivotPolicy.ts](../server/services/chat/intermediatePivotPolicy.ts) | Intermediate pivot coalescing; `AGENT_INTERMEDIATE_PIVOT_COALESCE` |
-| [server/lib/sessionAnalysisContext.ts](../server/lib/sessionAnalysisContext.ts) | Mid-turn session merge; `AgentMidTurnSessionPayload`, trace summary for prompts |
+| [server/services/chat/agentWorkbench.util.ts](../server/services/chat/agentWorkbench.util.ts) | SSE events → `AgentWorkbenchEntry`, size caps, `AGENT_SSE_CRITIC_FINAL_ONLY`. |
+| [server/services/chat/intermediatePivotPolicy.ts](../server/services/chat/intermediatePivotPolicy.ts) | Intermediate pivot coalescing; `AGENT_INTERMEDIATE_PIVOT_COALESCE`. |
+| [server/lib/sessionAnalysisContext.ts](../server/lib/sessionAnalysisContext.ts) | Mid-turn session merge; `AgentMidTurnSessionPayload`, trace summary for prompts; `persistMergeAssistantSessionContext` per-session mutex (W40); `regenerateStarterQuestionsLLM`. |
+| [server/lib/sessionAnalysisContextGuards.ts](../server/lib/sessionAnalysisContextGuards.ts) | Schema guards for the session context. |
 
 **Shared schema** (message fields)
 
-- [server/shared/schema.ts](../server/shared/schema.ts) and [client/src/shared/schema.ts](../client/src/shared/schema.ts) — `agentWorkbench`, `AgentWorkbenchEntry`, thinking / trace shapes.
-- **Flow visibility (Wave W1)**: `AgentWorkbenchEntry` now supports `kind: "flow_decision"` with a structured `flowDecision: { layer, chosen, overriddenBy?, reason?, confidence?, candidates? }` payload. Used to surface routing decisions and silent overrides (mode-vs-intent, reflector replan, verifier rewriteNarrative, coordinator decompose) so users can see which flow won.
-- **Single-flow policy (W11–W13)**: the agent loop no longer silently overrides the planned flow. Specifically: (a) reflector `replan` is suppressed — the original plan runs to completion and the reflector's note is captured in trace + emitted as `flow_decision { chosen: "continue-as-planned" }`; (b) verifier `reviseNarrative` no longer triggers `rewriteNarrative` or narrator-repair — the original narrative is preserved and the verdict is emitted as `critic_verdict` + `flow_decision { chosen: "kept-original" }`; (c) `runDeepInvestigation` / `coordinatorAgent.decomposeQuestion` are no longer called from `dataAnalyzer.ts:answerQuestion` — single-turn agentic only. The underlying capabilities (reflector, verifier, narrator, deep investigation, coordinator decompose) all still exist as standalone code under `runtime/` and can be re-wired behind feature flags if needed. **W4 exception**: single-flow applies to LLM-authored narratives only. When `answerSource === "fallback"` (synthesis cascaded to `renderFallbackAnswer` because the LLM paths all returned empty), the final verifier is skipped entirely and a `flow_decision { layer: "verifier-rewrite-final", chosen: "fallback-skipped" }` is emitted — there is no narrative to critique and the renderer guarantees a presentable markdown table.
+- [server/shared/schema.ts](../server/shared/schema.ts) and [client/src/shared/schema.ts](../client/src/shared/schema.ts) — `agentWorkbench`, `AgentWorkbenchEntry`, `answerEnvelope`, `investigationSummary`, thinking / trace shapes.
+- **Flow visibility**: `AgentWorkbenchEntry` supports `kind: "flow_decision"` with a structured `flowDecision: { layer, chosen, overriddenBy?, reason?, confidence?, candidates? }` payload.
+- **Single-flow policy (W11–W13)**: the agent loop no longer silently overrides the planned flow. Reflector `replan` is suppressed; verifier `reviseNarrative` no longer triggers `rewriteNarrative` for LLM-authored narratives; `runDeepInvestigation` / `coordinatorAgent.decomposeQuestion` are no longer called from `answerQuestion`. The capabilities still exist as standalone code and can be re-wired behind feature flags. **W4 exception**: when `answerSource === "fallback"`, the final verifier is skipped entirely.
 
 **Client**
 
-- [client/src/pages/Home/modules/useHomeMutations.ts](../client/src/pages/Home/modules/useHomeMutations.ts) — live workbench state during stream |
-- [client/src/pages/Home/Components/ChatInterface.tsx](../client/src/pages/Home/Components/ChatInterface.tsx) — passes workbench to UI |
-- [client/src/pages/Home/Components/MessageBubble.tsx](../client/src/pages/Home/Components/MessageBubble.tsx) — renders workbench / thinking |
-- [client/src/pages/Home/Home.tsx](../client/src/pages/Home/Home.tsx) — wires props |
-- [client/src/lib/api/chat.ts](../client/src/lib/api/chat.ts) — documents SSE kinds when agentic |
+- [client/src/pages/Home/modules/useHomeMutations.ts](../client/src/pages/Home/modules/useHomeMutations.ts) — live workbench / streaming-narrator-preview / spawned-sub-questions state.
+- [client/src/pages/Home/Components/ChatInterface.tsx](../client/src/pages/Home/Components/ChatInterface.tsx) — passes workbench to UI.
+- [client/src/pages/Home/Components/MessageBubble.tsx](../client/src/pages/Home/Components/MessageBubble.tsx) — renders workbench / thinking / AnswerCard / chart commentary / pivot / Investigation card.
+- [client/src/pages/Home/Components/AnswerCard.tsx](../client/src/pages/Home/Components/AnswerCard.tsx) — renders the structured `answerEnvelope`.
+- [client/src/pages/Home/Components/ThinkingPanel.tsx](../client/src/pages/Home/Components/ThinkingPanel.tsx) + [StepByStepInsightsPanel.tsx](../client/src/pages/Home/Components/StepByStepInsightsPanel.tsx) + [StreamingPreviewCard.tsx](../client/src/pages/Home/Components/StreamingPreviewCard.tsx) — live agent visibility.
+- [client/src/pages/Home/Components/InvestigationSummaryCard.tsx](../client/src/pages/Home/Components/InvestigationSummaryCard.tsx) + [PriorInvestigationsBanner.tsx](../client/src/pages/Home/Components/PriorInvestigationsBanner.tsx) — investigation provenance surfaces.
+- [client/src/lib/api/chat.ts](../client/src/lib/api/chat.ts) — documents SSE kinds (`agent_workbench`, `answer_chunk`, `session_context_updated`, `sub_question_spawned`, `streaming_preview`, `workbench_enriched`).
 
 ---
 
 ## 6. Cross-cutting imports (agent-adjacent)
 
-These modules are used by analysis, charts, or agent tools but are not the full “loop”:
+These modules are used by analysis, charts, or agent tools but are not the full "loop":
 
 | Area | Example paths |
 |------|----------------|
 | Column matching | [server/lib/agents/utils/columnMatcher.ts](../server/lib/agents/utils/columnMatcher.ts) — used from chart builders, pivot helpers, `dataTransform`, `fileParser`, etc. |
 | Column extraction | [server/lib/agents/utils/columnExtractor.ts](../server/lib/agents/utils/columnExtractor.ts) |
-| Schema binding (agentic) | [server/lib/schemaColumnBinding.ts](../server/lib/schemaColumnBinding.ts) |
-| Data Ops | [server/lib/dataOps/dataOpsOrchestrator.ts](../server/lib/dataOps/dataOpsOrchestrator.ts) — dynamic imports of `contextResolver` |
-| Segment driver tool | [server/lib/segmentDriverAnalysisTool.ts](../server/lib/segmentDriverAnalysisTool.ts) |
-| Tests | [server/tests/agent*.ts](../server/tests/), planner/tool/runtime tests |
+| Filter inference | [server/lib/agents/utils/inferFiltersFromQuestion.ts](../server/lib/agents/utils/inferFiltersFromQuestion.ts) (W1–W6) |
+| Schema binding | [server/lib/schemaColumnBinding.ts](../server/lib/schemaColumnBinding.ts) |
+| Data Ops | [server/lib/dataOps/dataOpsOrchestrator.ts](../server/lib/dataOps/dataOpsOrchestrator.ts), [server/lib/dataOps/pythonService.ts](../server/lib/dataOps/pythonService.ts), [server/lib/dataOps/mmmService.ts](../server/lib/dataOps/mmmService.ts) |
+| MMM column tagger | [server/lib/marketingColumnTags.ts](../server/lib/marketingColumnTags.ts) |
+| Segment-driver tool | [server/lib/segmentDriverAnalysisTool.ts](../server/lib/segmentDriverAnalysisTool.ts) |
+| Skills | [server/lib/agents/runtime/skills/](../server/lib/agents/runtime/skills/) — `varianceDecomposer`, `driverDiscovery`, `insightExplorer`, `timeWindowDiff`, `parallelResolve` |
+| Tests | [server/tests/agent*.ts](../server/tests/), planner/tool/runtime/skill tests |
 
-**Python service** — [python-service/](../python-service/): no agent-specific orchestration in tree (FastAPI data-ops only).
+**Python service** — [python-service/](../python-service/): no agent-specific orchestration in tree (FastAPI data-ops + MMM optimiser only).
 
 ---
 
@@ -169,99 +167,66 @@ These modules are used by analysis, charts, or agent tools but are not the full 
 
 | Variable | Where used | Notes |
 |----------|------------|--------|
-| `AGENTIC_LOOP_ENABLED` | `types.ts`, docs, tests | Must be `"true"` to enable `runAgentTurn` path |
-| `AGENTIC_STRICT` | `types.ts`, `dataAnalyzer.ts` | Deprecated semantics when agentic on (see logs) |
-| `AGENTIC_ALLOW_NO_RAG` | `assertAgenticRag.ts` | Tests / local experiments without RAG |
-| `AGENT_MAX_STEPS` | `types.ts` | Default 12 |
-| `AGENT_MAX_WALL_MS` | `types.ts` | Default 120000 |
-| `AGENT_MAX_TOOL_CALLS` | `types.ts` | Default 20 |
-| `AGENT_MAX_VERIFIER_ROUNDS_STEP` | `types.ts` | Default 2 |
-| `AGENT_MAX_VERIFIER_ROUNDS_FINAL` | `types.ts` | Default 2 |
-| `AGENT_MAX_LLM_CALLS` | `types.ts` | Default 40 |
-| `AGENT_SAMPLE_ROWS_CAP` | `types.ts` | Default 200 |
-| `AGENT_OBSERVATION_MAX_CHARS` | `types.ts` | Default 8000 |
-| `AGENT_MAX_EXTRA_CHARTS_PER_TURN` | `visualPlanner.ts` | Default 2 |
-| `AGENT_MID_TURN_CONTEXT` | `agentLoop.service.ts` | `"false"` disables mid-turn context hook |
-| `AGENT_MID_TURN_CONTEXT_THROTTLE_MS` | `agentLoop.service.ts` | Default 8000 |
-| `AGENT_INTERMEDIATE_PIVOT_COALESCE` | `intermediatePivotPolicy.ts` | Pivot SSE coalescing |
-| `AGENT_INTER_AGENT_MESSAGES` | `types.ts`, `interAgentMessages.ts`, `agentLoop.service.ts` | When `"true"`, records `AgentTrace.interAgentMessages` (Planner / Verifier / Reflector / Synthesizer / VisualPlanner handoffs); emits SSE `handoff` → workbench kind `handoff` |
-| `AGENT_INTER_AGENT_PROMPT_FEEDBACK` | `planner.ts`, `reflector.ts`, `agentLoop.service.ts` | When `"true"` **and** inter-agent messages exist, injects a compact digest into planner + reflector prompts (better replans; more tokens) |
-| `AGENT_SSE_CRITIC_FINAL_ONLY` | `agentWorkbench.util.ts` | Show more critic SSE when `0` / `false` |
-| `AGENT_VERBOSE_LOGS` | `fileParser.ts` | Verbose logging |
+| `AGENTIC_LOOP_ENABLED` | `dataAnalyzer.ts`, `types.ts`, tests | Must be `"true"`. `answerQuestion` throws otherwise. |
+| `AGENTIC_ALLOW_NO_RAG` | `assertAgenticRag.ts` | Tests / local experiments without RAG. |
+| `AGENT_MAX_STEPS` | `types.ts` | Default 30. |
+| `AGENT_MAX_WALL_MS` | `types.ts` | Default 600 000. |
+| `AGENT_MAX_TOOL_CALLS` | `types.ts` | Default 60. |
+| `AGENT_MAX_VERIFIER_ROUNDS_STEP` | `types.ts` | Default 2. |
+| `AGENT_MAX_VERIFIER_ROUNDS_FINAL` | `types.ts` | Default 2. |
+| `AGENT_MAX_LLM_CALLS` | `types.ts` | Per-turn LLM budget. |
+| `AGENT_SAMPLE_ROWS_CAP` | `types.ts` | Default 200. |
+| `AGENT_OBSERVATION_MAX_CHARS` | `types.ts` | Default 8 000. |
+| `AGENT_MAX_EXTRA_CHARTS_PER_TURN` | `visualPlanner.ts` | Default 2. |
+| `AGENT_MID_TURN_CONTEXT` | `agentLoop.service.ts` | `"false"` disables mid-turn context hook. |
+| `AGENT_MID_TURN_CONTEXT_THROTTLE_MS` | `agentLoop.service.ts` | Default 8 000. |
+| `AGENT_INTERMEDIATE_PIVOT_COALESCE` | `intermediatePivotPolicy.ts` | Pivot SSE coalescing. |
+| `AGENT_INTER_AGENT_MESSAGES` | `types.ts`, `interAgentMessages.ts` | Records `AgentTrace.interAgentMessages`; emits SSE `handoff` → workbench kind `handoff`. |
+| `AGENT_INTER_AGENT_PROMPT_FEEDBACK` | `planner.ts`, `reflector.ts` | Injects handoff digest into planner + reflector prompts (more tokens). |
+| `AGENT_SSE_CRITIC_FINAL_ONLY` | `agentWorkbench.util.ts` | Show more critic SSE when `0`/`false`. |
+| `AGENT_VERBOSE_LOGS` | `fileParser.ts` | Verbose logging. |
+| `AGENT_TRACE_MAX_BYTES` | `agentLoop.service.ts` | Trace byte cap. |
+| `AGENT_TOOL_TIMEOUT_MS` | `toolRegistry.ts` | Per-tool wall-time bound. |
+| `STREAMING_NARRATOR_ENABLED` | `narratorAgent.ts`, `llmJson.ts` | W38 — streaming narrator output (Azure OpenAI only). |
+| `RICH_STEP_INSIGHTS_ENABLED` | `enrichStepInsights.ts` | W19 — per-step LLM-enriched insights. |
+| `MERGED_PRE_PLANNER` | `runHypothesisAndBrief.ts` | W39 — merged hypothesis + analysis-brief LLM call. |
+| `DASHBOARD_AUTOGEN_ENABLED` | `dashboardAutogenGate.ts` | Phase-2 dashboard autogen. |
+| `DEEP_ANALYSIS_SKILLS_ENABLED` | `skills/types.ts` | Phase-1 skills exposure to planner. |
+| `WEB_SEARCH_ENABLED` + `TAVILY_API_KEY` | `tools/webSearchTool.ts` | W14 — web search tool execution. |
+| `LIVE_LLM_REPLAY` + `RECORD_LIVE_LLM_BASELINE` | golden-replay tests | W28 / W33 — live LLM CI. |
+| `ANTHROPIC_API_KEY` + `OPENAI_MODEL_FOR_NARRATOR` / `_VERIFIER_DEEP` / `_COORDINATOR` / `_HYPOTHESIS` | `anthropicProvider.ts`, `callLlm.ts` | Per-role Claude Opus 4.7 routing; falls back to Azure OpenAI when key missing. |
 
 RAG variables when agentic is on are documented in [server/.env.example](../server/.env.example) and [assertAgenticRag.ts](../server/lib/agents/runtime/assertAgenticRag.ts).
 
 ---
 
-## 8. Multi-agent roadmap: how specialists can “talk” safely
+## 8. Multi-agent posture
 
-Today’s agentic path is already **multi-role** (planner, tools, reflector, verifier) inside **one** orchestrating function. The items below mix **implemented** building blocks (flags default off) with **future** work.
+Today's agentic path is multi-role (planner, tools, reflector, verifier, narrator) inside **one** orchestrating function. The single-flow policy (W11–W13) keeps the planner's chosen flow honest — silent overrides are gone; replan / rewrite candidates are emitted as `flow_decision` SSE rows for visibility but the original plan still runs.
 
-### 8.1 Coordinator + message bus — **implemented (trace + SSE)**
+**Implemented building blocks (additive, default-off):**
 
-- [`runAgentTurn`](../server/lib/agents/runtime/agentLoop.service.ts) remains the **Coordinator**.
-- Append-only **[`InterAgentMessage`](../server/lib/agents/runtime/types.ts)** on `AgentTrace.interAgentMessages` when `AGENT_INTER_AGENT_MESSAGES=true`: `from`, `to`, `intent`, `artifacts[]`, **`evidenceRefs[]`**, `blockingQuestions[]`, `meta` (sizes capped in [`interAgentMessages.ts`](../server/lib/agents/runtime/interAgentMessages.ts)).
-- Optional SSE **`handoff`** → workbench rows via [`agentWorkbench.util.ts`](../server/services/chat/agentWorkbench.util.ts) (kind **`handoff`** in [shared schema](../server/shared/schema.ts)).
-- Optional **prompt feedback** when `AGENT_INTER_AGENT_PROMPT_FEEDBACK=true`: [`formatInterAgentHandoffsForPrompt`](../server/lib/agents/runtime/interAgentMessages.ts) injects a digest into [`runPlanner`](../server/lib/agents/runtime/planner.ts) and [`runReflector`](../server/lib/agents/runtime/reflector.ts) so replans see prior coordinator decisions (bounded characters).
+- Append-only **[`InterAgentMessage`](../server/lib/agents/runtime/types.ts)** on `AgentTrace.interAgentMessages` when `AGENT_INTER_AGENT_MESSAGES=true` (`from`, `to`, `intent`, `artifacts[]`, `evidenceRefs[]`, `blockingQuestions[]`, `meta`).
+- Optional SSE **`handoff`** → workbench rows.
+- Optional **prompt feedback** (`AGENT_INTER_AGENT_PROMPT_FEEDBACK=true`) injecting a handoff digest into planner + reflector prompts.
 
-**Still future:** separate specialist **processes** or unconstrained peer-to-peer LLM chains (see §8.7).
+**Future (not yet implemented):**
 
-### 8.2 Named specialist agents (split prompts, not split processes) — **conceptual / partial**
+- Tool partition per logical agent role (subset tools per role from `registerTools.ts`).
+- Debate / second-opinion verifier (Proposer + Skeptic with bounded rounds).
+- Explicit session persistence flags for "awaiting user" beyond the current `clarify` return path.
+- Separate specialist processes — avoid until evidence in-process is insufficient.
 
-Logical roles match today’s code; prompts are not yet split into isolated services.
-
-| Specialist | Responsibility | Maps to today |
-|------------|----------------|---------------|
-| SchemaAgent | Columns, filters, `canonicalColumns` | Stream pre-analysis + `plannerColumnResolve` |
-| PlanAgent | Step DAG, tool choice | `runPlanner` |
-| ExecutionAgent | Tool args, retries | Tool runner + `planArgRepairs` |
-| EvidenceAgent | RAG / retrieval narrative | `retrieve_*` tools |
-| NarrativeAgent | User-facing draft | Synthesis step in `agentLoop.service` |
-| CriticAgent | Grounding check | `runVerifier` / `rewriteNarrative` |
-
-**Communication rule:** agents do not call each other’s LLMs directly; they **publish messages** the Coordinator reads and **invokes** the next specialist with capped context.
-
-**Next step:** optional dedicated JSON schemas per “agent” output (same pattern as [`completeJson`](../server/lib/agents/runtime/llmJson.ts) + [schemas.ts](../server/lib/agents/runtime/schemas.ts)).
-
-### 8.3 Tool partition per agent — **not implemented**
-
-- Subset tools from [registerTools.ts](../server/lib/agents/runtime/tools/registerTools.ts) per role so planners cannot emit impossible tool combinations.
-- Coordinator merges **observations** into shared working memory ([workingMemory.ts](../server/lib/agents/runtime/workingMemory.ts)).
-
-**Migration risk:** *Medium* (tool manifest and planner schema must stay in sync; tests in `toolManifest.test.ts`).
-
-### 8.4 Debate / second opinion — **not implemented** (verifier already multi-round)
-
-- Extend the **verifier** pattern: a **Proposer** emits a candidate; a **Skeptic** returns structured objections; Coordinator runs bounded rounds then **requires** agreement or falls back to `ask_user`.
-- Reuse `AGENT_MAX_VERIFIER_ROUNDS_*` and `AGENT_MAX_LLM_CALLS` semantics.
-
-**Migration risk:** *Medium* (latency and cost; must hard-cap rounds).
-
-### 8.5 Human-in-the-loop as an agent boundary — **partially implemented**
-
-- [`runReflector`](../server/lib/agents/runtime/reflector.ts) supports `clarify` with `clarify_message`; trace records `clarify_user` handoffs when inter-agent tracing is on.
-- **Future:** explicit session persistence flags for “awaiting user” beyond current clarify return path.
-
-**Migration risk:** *Low* (mostly product/UX consistency).
-
-### 8.6 Telemetry and UI — **implemented (additive)**
-
-- `AgentTrace.interAgentMessages` + byte cap in [`capAgentTrace`](../server/lib/agents/runtime/agentLoop.service.ts) (with `AGENT_TRACE_MAX_BYTES`).
-- Workbench **`handoff`** entries (additive enum; existing clients show `kind` pill + JSON body).
-
-**Migration risk:** *Low* for additive schema; older clients ignore unknown kinds if they only switch on a fixed set (this UI renders `entry.kind` as text).
-
-### 8.7 What to avoid early
-
-- Replacing [`AgentOrchestrator`](../server/lib/agents/orchestrator.ts) handler order or `processQuery` routing without a feature flag — **high** regression risk for non-agentic deployments.
-- Unbounded agent-to-agent LLM chains — blows `AGENT_MAX_LLM_CALLS` and harms latency.
+**What to avoid early:** unbounded agent-to-agent LLM chains (blows `AGENT_MAX_LLM_CALLS`); re-wiring `coordinatorAgent.decomposeQuestion` into `answerQuestion` without a feature flag (the single-flow policy is intentional).
 
 ---
 
-## 9. Verification checklist (when you change code later)
+## 9. Verification checklist
 
 - Doc-only changes: no `npm test` required.
-- After any future code change to agents: run `npm test` in [server/](../server/).
+- After any future code change to agents: `cd server && npm test` and (if charts / Phase-1 skills touched) `cd client && npm test && npm run theme:check`.
+- For runtime regressions, the W20 e2e smoke test (`tests/agentTurnE2EW20.test.ts`) is the "all wave outputs combined" gate.
+- For prompt-quality drift, run the live-LLM golden replay (`LIVE_LLM_REPLAY=true cd server && node --import tsx --test tests/liveLlmGoldenReplayW28.test.ts`).
 
 ---
 
@@ -269,12 +234,14 @@ Logical roles match today’s code; prompts are not yet split into isolated serv
 
 | Pattern | Meaning |
 |---------|---------|
-| `server/lib/agents/**` | Handlers, orchestrator, intent/mode, agent utilities |
-| `server/lib/agents/runtime/**` | Agentic loop, planner, tools, verifier, reflector |
+| `server/lib/agents/runtime/**` | Agentic loop, planner, tools, verifier, reflector, narrator, blackboard, skills |
+| `server/lib/agents/utils/**` | Column matching, column extraction, filter inference |
 | `runAgentTurn` | Agentic turn entry |
-| `AgentOrchestrator` / `processQuery` | Legacy multi-handler path |
 | `agentWorkbench` | Persisted + live UI trace blocks |
+| `analyticalBlackboard` | Shared evidence store between planner / tools / narrator |
+| `priorInvestigations` | FIFO carry-over of compact turn digests across the session (W21) |
+| `analysis_memory` (Cosmos container) | W56 · per-session append-only journal of every analytical event; partition `/sessionId`; mirrored to AI Search (W57); user-visible at `/analysis/:sessionId/memory` (W62) |
 
 ---
 
-*Last generated for repo layout as of the agents inventory task; update this file when adding new agent entrypoints or env vars.*
+*Last reviewed against repo HEAD on 2026-04-28; bump this date when the file is updated.*

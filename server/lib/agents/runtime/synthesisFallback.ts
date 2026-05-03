@@ -12,6 +12,8 @@
  * appear in the output.
  */
 
+import { formatCompactNumber } from "../../formatCompactNumber.js";
+
 export interface FallbackRender {
   content: string;
   /** Present only when a Sample[] block was successfully parsed into a table. */
@@ -143,9 +145,15 @@ function collectColumnsInFirstRowOrder(rows: Record<string, unknown>[]): string[
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "number" && Number.isFinite(v)) {
+    // G3-P3 · readers are managers / CXOs — render large numbers compactly
+    // (710K, 1.95M) instead of raw decimals (710,212.40). Keep small numbers
+    // (< 1000) precise so percentages, ratios, and counts stay readable.
+    if (Math.abs(v) >= 1000) {
+      return formatCompactNumber(v);
+    }
     if (!Number.isInteger(v)) {
       return v.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
+        minimumFractionDigits: 0,
         maximumFractionDigits: 2,
       });
     }

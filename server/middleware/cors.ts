@@ -86,7 +86,7 @@ export const corsConfig = cors({
     "x-user-name",
     "X-Internal-Api-Key",
   ],
-  exposedHeaders: ["Content-Length"],
+  exposedHeaders: ["Content-Length", "X-Working-Dataset-Row-Count"],
   optionsSuccessStatus: 200,
   preflightContinue: false,
 });

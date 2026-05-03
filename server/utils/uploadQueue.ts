@@ -408,6 +408,58 @@ class UploadQueue {
       }
       } // end else if (job.fileBuffer)
 
+      // Wide-format auto-melt: if the parsed dataset has period
+      // headers (Q1 23, MAT Dec-24, Latest 12 Mths 2YA …) we reshape
+      // it to long form HERE — before profile inference, summary
+      // creation, DuckDB materialisation, RAG indexing — so every
+      // downstream consumer sees a normal long-format table. The
+      // original wide buffer remains in blob storage for download.
+      // Feature-flag escape hatch: `WIDE_FORMAT_AUTO_MELT_ENABLED=false`.
+      let wideFormatTransform: import('../shared/schema.js').WideFormatTransform | undefined;
+      const wideFormatEnabled =
+        process.env.WIDE_FORMAT_AUTO_MELT_ENABLED !== 'false' &&
+        process.env.WIDE_FORMAT_AUTO_MELT_ENABLED !== '0';
+      if (wideFormatEnabled && data.length > 0) {
+        const { classifyDataset } = await import('../lib/wideFormat/classifyDataset.js');
+        const { meltDataset } = await import('../lib/wideFormat/meltDataset.js');
+        const headers = Object.keys(data[0] || {});
+        const classification = classifyDataset(headers);
+        if (classification.isWide) {
+          const melted = meltDataset(data, classification);
+          data = melted.rows;
+          wideFormatTransform = {
+            detected: true,
+            shape: melted.summary.shape,
+            idColumns: melted.summary.idColumns,
+            meltedColumns: melted.summary.meltedColumns,
+            periodCount: melted.summary.periodCount,
+            periodColumn: melted.summary.periodColumn,
+            periodIsoColumn: melted.summary.periodIsoColumn,
+            periodKindColumn: melted.summary.periodKindColumn,
+            valueColumn: melted.summary.valueColumn,
+            metricColumn: melted.summary.metricColumn,
+            detectedCurrencySymbol: melted.summary.detectedCurrencySymbol,
+          };
+          console.log(
+            `[upload:${job.sessionId}] wide-format auto-melt → shape=${melted.summary.shape}, ` +
+              `${melted.summary.periodCount} period cols → ${data.length} long rows ` +
+              `(${classification.reason})`
+          );
+        }
+      }
+
+      // Decorator: stamp wide-format metadata + Value-column currency
+      // onto every DataSummary built from the (now long) data.
+      const { applyWideFormatTransformToSummary } = await import(
+        '../lib/wideFormat/applyWideFormatToSummary.js'
+      );
+      const decorateSummaryWithWideFormat = (
+        summary: ReturnType<typeof createDataSummary>
+      ): void => {
+        if (!wideFormatTransform) return;
+        applyWideFormatTransformToSummary(summary, wideFormatTransform);
+      };
+
       const columnOrderBeforeClean = Object.keys(data[0] || {});
 
       const skipUploadLlm =
@@ -417,6 +469,7 @@ class UploadQueue {
       // Preview checkpoint: heuristic summary + 50 sample rows (no LLM).
       // Date columns for enrichment are chosen by the upload LLM; do not canonicalize preview on heuristics.
       const previewSummary = createDataSummary(data);
+      decorateSummaryWithWideFormat(previewSummary);
       if (!skipUploadLlm) {
         previewSummary.dateColumns = [];
       }
@@ -473,6 +526,7 @@ class UploadQueue {
           data = finalPrep.data;
           summary = finalPrep.summary;
         }
+        decorateSummaryWithWideFormat(summary);
         const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
           fileLabel: job.fileName,
         });
@@ -496,8 +550,14 @@ class UploadQueue {
         };
       } else {
         job.enrichmentStep = 'inferring_profile';
+        // Build a preliminary summary (and decorate with wide-format
+        // metadata) so the LLM sees `ambiguousCurrencyColumns` and can
+        // pick a 3-letter ISO code. WF8.
+        const interimSummary = createDataSummary(data);
+        decorateSummaryWithWideFormat(interimSummary);
         datasetProfile = await inferDatasetProfile(data, {
           fileName: job.fileName,
+          dataSummary: interimSummary,
         });
         const enableDirtyDateLlm =
           process.env.ENABLE_DIRTY_DATE_LLM === 'true' ||
@@ -518,6 +578,18 @@ class UploadQueue {
           });
           data = finalPrep.data;
           summary = finalPrep.summary;
+        }
+        decorateSummaryWithWideFormat(summary);
+        // Apply LLM currency overrides — only on columns that already
+        // carry a heuristic currency tag (we won't invent one).
+        if (datasetProfile.currencyOverrides && datasetProfile.currencyOverrides.length > 0) {
+          for (const ov of datasetProfile.currencyOverrides) {
+            const col = summary.columns.find((c) => c.name === ov.columnName);
+            if (col?.currency) {
+              col.currency.isoCode = ov.isoCode;
+              col.currency.confidence = Math.max(col.currency.confidence, 0.95);
+            }
+          }
         }
         // Always build heuristic context immediately so the understanding checkpoint
         // can unblock chat without waiting for the LLM seed round-trips.
@@ -565,6 +637,32 @@ class UploadQueue {
                 datasetProfile,
                 dataSummary: summary,
               });
+              // AD1 · auto-detect dimension rollup rows (a single value in a
+              // dimension column that aggregates the rest — e.g. FEMALE SHOWER
+              // GEL totalling MARICO+PURITE+OLIV+LASHE in the Marico-VN data).
+              // Stamped with `source: "auto"` so the user can override via chat.
+              // The H2 immutability guard preserves both user and auto entries
+              // across subsequent assistant merges.
+              try {
+                const { detectRollupHierarchies } = await import(
+                  '../lib/detectRollupHierarchies.js'
+                );
+                const detected = detectRollupHierarchies({
+                  data,
+                  summary,
+                  datasetProfile,
+                });
+                if (detected.length > 0) {
+                  seededCtx.dataset.dimensionHierarchies = detected;
+                  console.log(
+                    `📐 detectRollupHierarchies: ${detected
+                      .map((h) => `${h.column}="${h.rollupValue}"`)
+                      .join(', ')}`
+                  );
+                }
+              } catch (err) {
+                console.warn('⚠️ detectRollupHierarchies skipped:', err);
+              }
               const doc = await getChatBySessionIdEfficient(job.sessionId);
               if (!doc) return;
               // If the user already saved context while we were seeding, their merged
@@ -572,9 +670,31 @@ class UploadQueue {
               if (doc.permanentContext?.trim()) {
                 return;
               }
+              // The seed runs after the welcome message is already persisted with
+              // heuristic-fallback bullets. If the LLM populated the manager-facing
+              // bullet arrays, re-render the welcome message in place so the
+              // authority shifts from heuristic to LLM (mirrors the W5 onlyInitial
+              // pattern in chat.model.ts after permanentContext save).
+              const seedAddedBullets =
+                (seededCtx.dataset.keyHighlights?.length ?? 0) > 0 ||
+                (seededCtx.dataset.whatYouCanAnalyze?.length ?? 0) > 0;
+              let messages = doc.messages ?? [];
+              const onlyInitial =
+                messages.length === 1 && messages[0]?.role === 'assistant';
+              if (seedAddedBullets && onlyInitial) {
+                const { buildInitialAssistantContentFromContext } = await import(
+                  '../lib/sessionAnalysisContext.js'
+                );
+                const newContent = buildInitialAssistantContentFromContext(
+                  summary,
+                  seededCtx
+                );
+                messages = [{ ...messages[0], content: newContent }];
+              }
               await updateChatDocument({
                 ...doc,
                 sessionAnalysisContext: seededCtx,
+                messages,
                 lastUpdatedAt: Date.now(),
               });
             } catch {
@@ -621,6 +741,35 @@ class UploadQueue {
         job.understandingReady = true;
         job.understandingReadyAt = Date.now();
         job.suggestedQuestions = mergedSuggestedQuestions;
+
+        // W59 · record `enrichment_complete` in the durable Memory journal.
+        // W68 · skip when username is missing so schema validation passes.
+        const enrichUsername = existingDoc?.username?.trim();
+        if (enrichUsername) {
+          void (async () => {
+            try {
+              const { buildEnrichmentCompleteEntry, scheduleLifecycleMemory } =
+                await import(
+                  "../lib/agents/runtime/memoryLifecycleBuilders.js"
+                );
+              scheduleLifecycleMemory(
+                buildEnrichmentCompleteEntry({
+                  sessionId: job.sessionId,
+                  username: enrichUsername,
+                  rowCount: summary.rowCount ?? 0,
+                  columnCount: summary.columnCount ?? 0,
+                  suggestedQuestions: mergedSuggestedQuestions,
+                  createdAt: Date.now(),
+                })
+              );
+            } catch (e) {
+              console.warn(
+                "⚠️ analysisMemory enrichment_complete hook failed:",
+                e
+              );
+            }
+          })();
+        }
       } catch (understandingPersistError) {
         console.warn("⚠️ Failed to persist understanding-ready checkpoint:", understandingPersistError);
       }

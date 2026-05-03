@@ -1,5 +1,4 @@
-import { lazy, Suspense, useState, useMemo } from 'react';
-import { useLocation } from 'wouter';
+import { lazy, Suspense, useMemo } from 'react';
 import {
   Message,
   ChartSpec,
@@ -15,13 +14,9 @@ import { DataPreviewTable } from './DataPreviewTable';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { dashboardsApi } from '@/lib/api/dashboards';
 import { splitAssistantFollowUpPrompts } from '@/lib/chat/splitAssistantFollowUpPrompts';
 import { cn } from '@/lib/utils';
-import { useToast } from '@/hooks/use-toast';
 import {
-  LayoutDashboard,
-  Loader2,
   TrendingUp,
   BarChart2,
   PieChart,
@@ -36,14 +31,6 @@ const ChartRenderer = lazy(() =>
 );
 
 // ---- helpers ---------------------------------------------------------------
-
-function stripAgentChartMeta(chart: ChartSpec): ChartSpec {
-  const { _agentEvidenceRef: _e, _agentTurnId: _t, ...rest } = chart as ChartSpec & {
-    _agentEvidenceRef?: string;
-    _agentTurnId?: string;
-  };
-  return rest as ChartSpec;
-}
 
 function isFullWidthChart(chart: ChartSpec): boolean {
   if (chart.type === 'line' || chart.type === 'area' || chart.type === 'heatmap') return true;
@@ -139,9 +126,23 @@ interface ChartCardProps {
   idx: number;
   sessionId?: string | null;
   thinkingSteps: ThinkingStep[];
+  /**
+   * When true, omit the per-chart `keyInsight` callout below the chart body.
+   * Used in the chat-message context whenever a comprehensive narrative
+   * envelope is present — the long-form answer already references each
+   * chart so the small left-border callout is redundant. Other surfaces
+   * (`/explore`, dashboard view) keep it.
+   */
+  suppressKeyInsight?: boolean;
 }
 
-function ChartCard({ chart, idx, sessionId, thinkingSteps }: ChartCardProps) {
+function ChartCard({
+  chart,
+  idx,
+  sessionId,
+  thinkingSteps,
+  suppressKeyInsight,
+}: ChartCardProps) {
   const loadingState = extractCorrelationLoadingState(chart, thinkingSteps);
 
   return (
@@ -170,10 +171,12 @@ function ChartCard({ chart, idx, sessionId, thinkingSteps }: ChartCardProps) {
         </Suspense>
       </div>
 
-      {/* Per-chart insight callout */}
-      {chart.keyInsight && (
+      {/* Per-chart insight callout (suppressed when narrative envelope is rich) */}
+      {!suppressKeyInsight && chart.keyInsight && (
         <div className="mx-4 mb-3 mt-0 rounded-r-brand-sm border-l-2 border-primary/60 bg-primary/5 px-3 py-2">
-          <p className="text-xs leading-relaxed text-muted-foreground">{chart.keyInsight}</p>
+          <div className="text-xs leading-relaxed text-muted-foreground">
+            <MarkdownRenderer content={chart.keyInsight} />
+          </div>
         </div>
       )}
     </div>
@@ -209,10 +212,6 @@ export function AnalyticalDashboardResponse({
   temporalFacetColumns,
   thinkingSteps = [],
 }: AnalyticalDashboardResponseProps) {
-  const [saving, setSaving] = useState(false);
-  const { toast } = useToast();
-  const [, setLocation] = useLocation();
-
   const charts = message.charts ?? [];
   const insights = message.insights ?? [];
 
@@ -243,58 +242,26 @@ export function AnalyticalDashboardResponse({
     return precedingUserQuestion?.slice(0, 80).trim() || 'Analysis';
   }, [message.dashboardDraft, charts, precedingUserQuestion]);
 
-  async function handleSaveAsDashboard() {
-    setSaving(true);
-    try {
-      const strippedCharts = charts.map(stripAgentChartMeta);
-      const d = await dashboardsApi.createFromAnalysis({
-        name: dashboardTitle,
-        question: precedingUserQuestion || '',
-        summaryBody: message.content || '',
-        limitationsBody: message.unexplained
-          ? `${message.unexplained}\n\nObservational session data only. Segment movements show association, not proven causation.`
-          : 'Observational session data only. Segment movements show association, not proven causation. Validate material decisions with additional evidence or experiments.',
-        recommendationsBody: (message.followUpPrompts ?? [])
-          .slice(0, 6)
-          .map((p) => `• ${p}`)
-          .join('\n'),
-        charts: strippedCharts,
-      });
-      setLocation(`/dashboard?open=${encodeURIComponent(d.id)}`);
-      toast({
-        title: 'Dashboard created',
-        description: `Opening "${d.name}" on the Dashboard page.`,
-      });
-    } catch (e: any) {
-      toast({
-        title: 'Could not create dashboard',
-        description: e?.message || 'Try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setSaving(false);
-    }
-  }
+  // Suppress per-chart `keyInsight` callouts whenever the narrative envelope
+  // is substantive — the long-form body already references each chart, and
+  // the small left-border callout below each chart becomes redundant noise.
+  // Gate: ≥2 findings AND >200 chars of narrative.
+  const suppressPerChartInsight = useMemo(() => {
+    const env = (message as Message & {
+      answerEnvelope?: { findings?: unknown[] };
+    }).answerEnvelope;
+    const findingsCount = Array.isArray(env?.findings) ? env!.findings!.length : 0;
+    return findingsCount >= 2 && markdownBody.trim().length > 200;
+  }, [message, markdownBody]);
 
   return (
     <div className="w-full space-y-4">
-      {/* 1. Action bar */}
-      <div className="flex items-center justify-between gap-3">
+      {/* 1. Title row. Dashboards are now persisted automatically when the
+          brief flags requestsDashboard, so the previous "Save as Dashboard"
+          pill was removed — the agent owns the save and the user is routed
+          to /dashboard?open=<id> when the stream completes. */}
+      <div className="flex items-center gap-3">
         <h2 className="flex-1 truncate text-sm font-semibold text-foreground">{dashboardTitle}</h2>
-        <Button
-          size="sm"
-          variant="outline"
-          className="shrink-0 gap-1.5"
-          onClick={handleSaveAsDashboard}
-          disabled={saving}
-        >
-          {saving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <LayoutDashboard className="h-3.5 w-3.5" />
-          )}
-          {saving ? 'Saving…' : 'Save as Dashboard'}
-        </Button>
       </div>
 
       {/* 2a. Applied-filters chips — visible scope of this turn's analysis */}
@@ -305,35 +272,10 @@ export function AnalyticalDashboardResponse({
       {/* 2. KPI magnitudes strip — renders nothing when empty */}
       <MagnitudesRow items={message.magnitudes as MagnitudeItem[] | undefined} />
 
-      {/* 3. Narrative answer card */}
-      {markdownBody.trim().length > 10 && (
-        <Settle className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-5 shadow-elev-1">
-          <div className="text-[15px] leading-[24px] text-foreground">
-            <MarkdownRenderer content={markdownBody} />
-          </div>
-          {followUpChips.length > 0 && onSuggestedQuestionClick && (
-            <div className="mt-4">
-              <p className="mb-2 text-sm font-semibold text-foreground">You might try:</p>
-              <div className="flex flex-wrap gap-2">
-                {followUpChips.map((q, i) => (
-                  <Button
-                    key={`chip-${i}`}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-auto rounded-full px-3 py-1.5 text-xs"
-                    onClick={() => onSuggestedQuestionClick(q)}
-                  >
-                    {q}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
-        </Settle>
-      )}
-
-      {/* 4. Charts / Pivot tabs */}
+      {/* 3. Charts / Pivot tabs — moved ABOVE the narrative so the user sees
+          visuals first. Per-chart key-insight callouts are suppressed when
+          the narrative is comprehensive (the body already references each
+          chart). */}
       {charts.length > 0 && (
         <Tabs defaultValue="charts">
           <TabsList className="mb-3">
@@ -362,6 +304,7 @@ export function AnalyticalDashboardResponse({
                     idx={idx}
                     sessionId={sessionId}
                     thinkingSteps={thinkingSteps}
+                    suppressKeyInsight={suppressPerChartInsight}
                   />
                 </Settle>
               ))}
@@ -381,10 +324,41 @@ export function AnalyticalDashboardResponse({
                 temporalFacetColumns={temporalFacetColumns}
                 pivotDefaults={message.pivotDefaults}
                 pivotInsight={insights[0]?.text}
+                onSuggestedQuestionClick={onSuggestedQuestionClick}
               />
             </TabsContent>
           )}
         </Tabs>
+      )}
+
+      {/* 4. Narrative answer card — moved BELOW the charts so the visual
+          summary leads and the prose reads as commentary on what was just
+          shown rather than a wall of text the user has to scroll past. */}
+      {markdownBody.trim().length > 10 && (
+        <Settle className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-5 shadow-elev-1">
+          <div className="text-[15px] leading-[24px] text-foreground">
+            <MarkdownRenderer content={markdownBody} />
+          </div>
+          {followUpChips.length > 0 && onSuggestedQuestionClick && (
+            <div className="mt-4">
+              <p className="mb-2 text-sm font-semibold text-foreground">You might try:</p>
+              <div className="flex flex-wrap gap-2">
+                {followUpChips.map((q, i) => (
+                  <Button
+                    key={`chip-${i}`}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-auto rounded-full px-3 py-1.5 text-xs"
+                    onClick={() => onSuggestedQuestionClick(q)}
+                  >
+                    {q}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+        </Settle>
       )}
 
       {/* 5. Key Findings */}

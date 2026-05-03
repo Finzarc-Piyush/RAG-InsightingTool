@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
 import { sanitizeDateStringForParse } from "../lib/dateUtils.js";
 import {
   inferTemporalGrainFromDates,
@@ -9,7 +10,7 @@ import type { ChartSpec } from "../shared/schema.js";
 
 describe("sanitizeDateStringForParse", () => {
   it("trims whitespace only (no regex date cleanup)", () => {
-    expect(sanitizeDateStringForParse("  2015-01-13  ")).toBe("2015-01-13");
+    assert.equal(sanitizeDateStringForParse("  2015-01-13  "), "2015-01-13");
   });
 });
 
@@ -20,7 +21,7 @@ describe("inferTemporalGrainFromDates", () => {
       new Date(2020, 0, 2),
       new Date(2020, 0, 3),
     ];
-    expect(inferTemporalGrainFromDates(dates)).toBe("dayOrWeek");
+    assert.equal(inferTemporalGrainFromDates(dates), "dayOrWeek");
   });
 
   it("classifies monthly spacing as monthOrQuarter", () => {
@@ -29,28 +30,28 @@ describe("inferTemporalGrainFromDates", () => {
       new Date(2020, 1, 1),
       new Date(2020, 2, 1),
     ];
-    expect(inferTemporalGrainFromDates(dates)).toBe("monthOrQuarter");
+    assert.equal(inferTemporalGrainFromDates(dates), "monthOrQuarter");
   });
 
   it("classifies yearly spacing as year", () => {
     const dates = [new Date(2018, 5, 1), new Date(2019, 5, 1), new Date(2020, 5, 1)];
-    expect(inferTemporalGrainFromDates(dates)).toBe("year");
+    assert.equal(inferTemporalGrainFromDates(dates), "year");
   });
 });
 
 describe("formatDateForChartAxis", () => {
   it("formats dayOrWeek as dd/MM/yy", () => {
     const d = new Date(2015, 0, 13);
-    expect(formatDateForChartAxis(d, "dayOrWeek")).toBe("13/01/15");
+    assert.equal(formatDateForChartAxis(d, "dayOrWeek"), "13/01/15");
   });
 
   it("formats monthOrQuarter as MMM-yy", () => {
     const d = new Date(2025, 0, 1);
-    expect(formatDateForChartAxis(d, "monthOrQuarter")).toBe("Jan-25");
+    assert.equal(formatDateForChartAxis(d, "monthOrQuarter"), "Jan-25");
   });
 
   it("formats year as yyyy", () => {
-    expect(formatDateForChartAxis(new Date(2024, 6, 1), "year")).toBe("2024");
+    assert.equal(formatDateForChartAxis(new Date(2024, 6, 1), "year"), "2024");
   });
 });
 
@@ -68,7 +69,7 @@ describe("processChartData temporal x labels", () => {
       { "Order Date": new Date(2015, 0, 14), Sales: 20 },
     ];
     const out = processChartData(data, chartSpec, ["Order Date"]);
-    expect(out).toHaveLength(2);
-    expect(out[0]!["Order Date"]).toMatch(/^\d{2}\/\d{2}\/\d{2}$/);
+    assert.equal(out.length, 2);
+    assert.match(String(out[0]!["Order Date"]), /^\d{2}\/\d{2}\/\d{2}$/);
   });
 });

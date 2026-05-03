@@ -542,13 +542,34 @@ export function resolveDateBucketForGroupBy(
   return { mode: "none", readColumn: col };
 }
 
-function applySort(data: Record<string, any>[], sort?: SortRequest[]): Record<string, any>[] {
+function applySort(
+  data: Record<string, any>[],
+  sort?: SortRequest[],
+  summary?: DataSummary
+): Record<string, any>[] {
   if (!sort || !sort.length) return data;
+
+  // WPF3 · Wide-format-melted datasets carry a `Period` column with raw labels
+  // ("Q1 23", "Q2 23", "Q1 24") and a parallel `PeriodIso` column with the
+  // canonical sortable form ("2023-Q1", "2024-Q1"). Lexicographic sort on the
+  // raw label produces "Q1 24" before "Q2 23" — wrong. When sorting by Period
+  // and the corresponding row also has PeriodIso, compare the ISO instead so
+  // chronological order is preserved.
+  const wf = summary?.wideFormatTransform;
+  const periodSortRemap =
+    wf?.detected && wf.periodColumn && wf.periodIsoColumn
+      ? { from: wf.periodColumn, to: wf.periodIsoColumn }
+      : null;
+
   const sorted = [...data];
   sorted.sort((a, b) => {
     for (const spec of sort) {
-      const aVal = a[spec.column];
-      const bVal = b[spec.column];
+      const sortColumn =
+        periodSortRemap && spec.column === periodSortRemap.from
+          ? periodSortRemap.to
+          : spec.column;
+      const aVal = a[sortColumn] ?? a[spec.column];
+      const bVal = b[sortColumn] ?? b[spec.column];
       if (aVal === bVal) continue;
       const direction = spec.direction === 'asc' ? 1 : -1;
       if (typeof aVal === 'number' && typeof bVal === 'number') {
@@ -1149,7 +1170,7 @@ function applyFiltersStreaming(
     if (description) descriptions.push(description);
   }
 
-  workingData = applySort(workingData, parsed.sort || undefined);
+  workingData = applySort(workingData, parsed.sort || undefined, summary);
 
   if (parsed.limit && parsed.limit > 0) {
     workingData = workingData.slice(0, parsed.limit);
@@ -1312,7 +1333,7 @@ export function applyQueryTransformations(
     if (description) descriptions.push(description);
   }
 
-  workingData = applySort(workingData, parsed.sort || undefined);
+  workingData = applySort(workingData, parsed.sort || undefined, summary);
 
   if (parsed.limit && parsed.limit > 0) {
     workingData = workingData.slice(0, parsed.limit);

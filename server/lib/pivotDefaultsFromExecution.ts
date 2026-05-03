@@ -24,6 +24,12 @@ export type PivotDefaultsRowsValues = {
   columns?: string[];
   filterFields?: string[];
   filterSelections?: Record<string, string[]>;
+  /**
+   * The agent's last `execute_query_plan` had no `groupBy` and the result is a
+   * single-row aggregate (a scalar). Callers must NOT fabricate row dimensions
+   * from schema heuristics in this case — render no pivot/chart.
+   */
+  scalar?: boolean;
 };
 
 function collectTraceHintsFromPlan(
@@ -160,6 +166,40 @@ export function mergePivotDefaultRowsAndValues(params: {
   if (Object.keys(slice.filterSelections).length) {
     out.filterSelections = slice.filterSelections;
   }
+
+  // WPF7 · For compound-shape wide-format-melted datasets, pre-select a
+  // single Metric value in the pivot filter so the default render doesn't
+  // silently SUM across mixed metrics (value_sales + volume = garbage).
+  // Only when Metric isn't already pinned to rows / columns / filters by
+  // the trace plan or the dimension-filter slice.
+  const wf = dataSummary.wideFormatTransform;
+  if (
+    wf?.detected &&
+    wf.shape === "compound" &&
+    wf.metricColumn &&
+    !out.rows.includes(wf.metricColumn) &&
+    !(out.columns ?? []).includes(wf.metricColumn) &&
+    !(out.filterFields ?? []).includes(wf.metricColumn)
+  ) {
+    const metricCol = dataSummary.columns.find(
+      (c) => c.name === wf.metricColumn
+    );
+    const distinctMetrics = (metricCol?.topValues ?? [])
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    if (distinctMetrics.length > 0) {
+      const preferred =
+        distinctMetrics.find((m) =>
+          /value[\s_-]*sales|sales[\s_-]*value|revenue|^sales$/i.test(m)
+        ) ?? distinctMetrics[0];
+      out.filterFields = [...(out.filterFields ?? []), wf.metricColumn];
+      out.filterSelections = {
+        ...(out.filterSelections ?? {}),
+        [wf.metricColumn]: [preferred],
+      };
+    }
+  }
+
   return out;
 }
 
@@ -202,6 +242,32 @@ export function derivePivotDefaultsFromExecutionMerged(
   )
     ? ((table as { rows: unknown[] }).rows as Record<string, unknown>[])
     : [];
+
+  // Scalar: an analytical step produced a single-row aggregate with no row
+  // dimensions. Two shapes hit this — (a) execute_query_plan with empty groupBy,
+  // (b) run_analytical_query whose parsed plan didn't surface as a trace step.
+  // Suppress the pivot/chart so callers don't fabricate dimensions from schema
+  // heuristics.
+  if (tableRows.length <= 1) {
+    if (tracePlan) {
+      const scalarHints = collectTraceHintsFromPlan(tracePlan, dataSummary);
+      if (scalarHints.traceRows.length === 0) {
+        return { rows: [], values: [], scalar: true };
+      }
+    } else {
+      const fromPreviewScalar = derivePivotDefaultsFromPreviewRows(
+        tableRows,
+        dataSummary,
+        tableColumns.length ? tableColumns : null
+      );
+      if (
+        fromPreviewScalar &&
+        (!fromPreviewScalar.rows || fromPreviewScalar.rows.length === 0)
+      ) {
+        return { rows: [], values: [], scalar: true };
+      }
+    }
+  }
 
   if (!tracePlan) {
     const fromPreview = derivePivotDefaultsFromPreviewRows(

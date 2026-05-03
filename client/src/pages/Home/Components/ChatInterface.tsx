@@ -8,11 +8,12 @@ import {
 } from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
 import { ThinkingPanel } from '@/pages/Home/Components/ThinkingPanel';
+import { PercolatingIndicator } from '@/pages/Home/Components/PercolatingIndicator';
 import { StreamingPreviewCard } from '@/pages/Home/Components/StreamingPreviewCard';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -21,18 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { getUserEmail } from '@/utils/userStorage';
 import { useToast } from '@/hooks/use-toast';
 import { ChartBuilderDialog } from '@/components/ChartBuilderDialog';
 import type { ChartSpec } from '@/shared/schema';
-import { FilterDataModal } from '@/components/FilterDataModal';
-import { FilterCondition } from '@/components/ColumnFilterDialog';
+import { FilterDataPanel } from '@/components/FilterDataPanel';
+import { ActiveFilterChips } from '@/components/ActiveFilterChips';
+import { sessionsApi, type ActiveFilterResponse } from '@/lib/api/sessions';
+import { downloadWorkingDatasetXlsx } from '@/lib/api';
+import type { ActiveFilterCondition, ActiveFilterSpec } from '@/shared/schema';
 import { debounce } from '@/lib/debounce';
 import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
 import {
@@ -73,7 +71,7 @@ interface ChatInterfaceProps {
   thinkingSteps?: ThinkingStep[];
   agentWorkbenchLive?: AgentWorkbenchEntry[];
   /** W12: sub-questions spawned during deep investigation (streamed live). */
-  spawnedSubQuestions?: string[];
+  spawnedSubQuestions?: { id: string; question: string }[];
   thinkingTargetTimestamp?: number | null;
   /** Message timestamp after which the live thinking strip is rendered while streaming. */
   thinkingLiveAnchorTimestamp?: number | null;
@@ -88,11 +86,23 @@ interface ChatInterfaceProps {
   enrichmentPoll?: DatasetEnrichmentPollSnapshot | null;
   enrichmentStartedAtMs?: number | null;
   onOpenDataSummary?: () => void; // Callback to open data summary modal
+  /** Reopen the ContextModal in "append" mode so the user can add more context. */
+  onOpenAdditionalContext?: () => void;
   /** Seed the composer from outside (e.g. Data Summary modal); bump id for each new draft */
   externalComposerDraft?: { text: string; id: number } | null;
   onExternalComposerDraftConsumed?: () => void;
   preEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
   postEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
+  /** WF9 — per-column currency tag (server-detected). */
+  currencyByColumn?: Record<string, import('@/shared/schema').ColumnCurrency>;
+  /** WF9 — wide-format auto-melt metadata (server-populated). */
+  wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+  /** H6 — declared dimension hierarchies (from sessionAnalysisContext). */
+  dimensionHierarchies?: import('@/shared/schema').DimensionHierarchy[];
+  /** EU1 — callback after a successful hierarchy remove. */
+  onHierarchiesChange?: (
+    next: import('@/shared/schema').DimensionHierarchy[],
+  ) => void;
   previewSource?: 'none' | 'local' | 'server';
   localPreviewParseStatus?: 'full' | 'headers_only' | 'failed';
   uploadStartError?: string | null;
@@ -160,10 +170,15 @@ export function ChatInterface({
   enrichmentPoll = null,
   enrichmentStartedAtMs = null,
   onOpenDataSummary,
+  onOpenAdditionalContext,
   externalComposerDraft = null,
   onExternalComposerDraftConsumed,
   preEnrichmentPreviewSnapshot = null,
   postEnrichmentPreviewSnapshot = null,
+  currencyByColumn,
+  wideFormatTransform,
+  dimensionHierarchies,
+  onHierarchiesChange,
   previewSource = 'none',
   localPreviewParseStatus = 'full',
   uploadStartError = null,
@@ -176,13 +191,13 @@ export function ChatInterface({
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('all');
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [isDownloadingDataset, setIsDownloadingDataset] = useState(false);
   const { toast } = useToast();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
   const lastExternalComposerDraftIdRef = useRef<number | null>(null);
-  const lastMessageRef = useRef<HTMLDivElement | null>(null);
-  const previousLastTimestampRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isStuckToBottomRef = useRef(true);
   const [mentionState, setMentionState] = useState<{
     active: boolean;
     query: string;
@@ -283,35 +298,25 @@ export function ChatInterface({
     suggestions.length > 0 &&
     (messages.length === 0 || (messages.length === 1 && messages[0].role === 'assistant'));
 
+  // Follow-tail: snap to bottom whenever the message list grows, but only
+  // while the user is already at (or near) the bottom. ResizeObserver fires
+  // on any height change — covers new messages, streaming chunk growth, the
+  // streaming narrator preview, thinking-step rendering, and chart reflows.
   useEffect(() => {
-    if (!filteredMessages.length || !lastMessageRef.current) return;
-
-    const lastMessage = filteredMessages[filteredMessages.length - 1];
-    if (!lastMessage) return;
-
-    if (previousLastTimestampRef.current === lastMessage.timestamp) {
-      return;
-    }
-
-    const behavior: ScrollBehavior =
-      previousLastTimestampRef.current === null ? 'auto' : 'smooth';
-
-    lastMessageRef.current.scrollIntoView({
-      behavior,
-      block: lastMessage.role === 'assistant' ? 'start' : 'end'
-    });
-
-    previousLastTimestampRef.current = lastMessage.timestamp;
-  }, [filteredMessages]);
-
-  useEffect(() => {
-    if (isLoading && thinkingSteps && thinkingSteps.length > 0 && lastMessageRef.current) {
-      lastMessageRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      });
-    }
-  }, [thinkingSteps, isLoading]);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const followIfStuck = () => {
+      if (isStuckToBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      }
+    };
+    followIfStuck();
+    const inner = container.firstElementChild as HTMLElement | null;
+    if (!inner) return;
+    const ro = new ResizeObserver(followIfStuck);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, []);
 
   // Handle scroll position tracking
   useEffect(() => {
@@ -322,7 +327,8 @@ export function ChatInterface({
       const { scrollTop, scrollHeight, clientHeight } = container;
       const isNearTop = scrollTop < 100;
       const isNearBottom = scrollTop + clientHeight >= scrollHeight - 100;
-      
+
+      isStuckToBottomRef.current = isNearBottom;
       setShowScrollToTop(!isNearTop && scrollHeight > clientHeight);
       setShowScrollToBottom(!isNearBottom && scrollHeight > clientHeight);
     };
@@ -358,6 +364,7 @@ export function ChatInterface({
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
+      isStuckToBottomRef.current = true;
       messagesContainerRef.current.scrollTo({
         top: messagesContainerRef.current.scrollHeight,
         behavior: 'smooth',
@@ -368,35 +375,117 @@ export function ChatInterface({
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     if (inputValue.trim() && !isLoading) {
+      isStuckToBottomRef.current = true;
       onSendMessage(inputValue.trim());
       setInputValue('');
       inputRef.current?.focus();
     }
   }, [inputValue, isLoading, onSendMessage]);
 
-  const handleFilterApply = useCallback((condition: FilterCondition) => {
-    // Build filter message
-    let filterMessage = 'filter data where ';
-    
-    if (condition.operator === 'between') {
-      filterMessage += `${condition.column} is between ${condition.value} and ${condition.value2}`;
-    } else if (condition.operator === 'in') {
-      const valuesStr = condition.values?.map(v => `"${v}"`).join(', ') || '';
-      filterMessage += `${condition.column} is in [${valuesStr}]`;
-    } else if (condition.operator === 'contains') {
-      filterMessage += `${condition.column} contains "${condition.value}"`;
-    } else if (condition.operator === 'startsWith') {
-      filterMessage += `${condition.column} starts with "${condition.value}"`;
-    } else if (condition.operator === 'endsWith') {
-      filterMessage += `${condition.column} ends with "${condition.value}"`;
-    } else {
-      filterMessage += `${condition.column} ${condition.operator} ${condition.value}`;
-    }
+  // Wave-FA4 · Per-session active filter (Excel-style overlay).
+  const [activeFilter, setActiveFilter] = useState<ActiveFilterSpec | null>(null);
+  const [filteredRows, setFilteredRows] = useState<number>(totalRows ?? 0);
+  const [filterTotalRows, setFilterTotalRows] = useState<number>(totalRows ?? 0);
+  const [savingFilter, setSavingFilter] = useState(false);
+  const filterRequestSeqRef = useRef(0);
 
-    // Close modal and send filter message
-    setFilterModalOpen(false);
-    onSendMessage(filterMessage);
-  }, [onSendMessage]);
+  // Load the server-persisted filter on session change.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const out = (await sessionsApi.getActiveFilter(sessionId)) as ActiveFilterResponse;
+        if (cancelled) return;
+        setActiveFilter(out.activeFilter);
+        setFilteredRows(out.filteredRows);
+        setFilterTotalRows(out.totalRows);
+      } catch {
+        // Endpoint not yet enabled or session not found — silently fall back to
+        // unfiltered view. The button still works once the user clicks it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  // Push a conditions array to the server (debounced — see invokers).
+  const pushConditions = useCallback(
+    async (conditions: ActiveFilterCondition[]) => {
+      if (!sessionId) return;
+      const seq = ++filterRequestSeqRef.current;
+      setSavingFilter(true);
+      try {
+        const out = (await sessionsApi.setActiveFilter(
+          sessionId,
+          conditions
+        )) as ActiveFilterResponse;
+        if (seq !== filterRequestSeqRef.current) return; // superseded
+        setActiveFilter(out.activeFilter);
+        setFilteredRows(out.filteredRows);
+        setFilterTotalRows(out.totalRows);
+      } catch (err) {
+        toast({
+          title: "Couldn't apply filter",
+          description: err instanceof Error ? err.message : "Try again",
+          variant: "destructive",
+        });
+      } finally {
+        if (seq === filterRequestSeqRef.current) setSavingFilter(false);
+      }
+    },
+    [sessionId, toast]
+  );
+
+  const debouncedPushConditions = useMemo(
+    () => debounce(pushConditions, 250),
+    [pushConditions]
+  );
+
+  const handleConditionsChange = useCallback(
+    (conditions: ActiveFilterCondition[]) => {
+      // Optimistic local update so the panel is responsive while the PUT flies.
+      setActiveFilter((prev) => ({
+        conditions,
+        version: (prev?.version ?? 0) + 0, // local-only; server bumps real version
+        updatedAt: prev?.updatedAt ?? Date.now(),
+      }));
+      debouncedPushConditions(conditions);
+    },
+    [debouncedPushConditions]
+  );
+
+  const handleClearAllFilters = useCallback(async () => {
+    if (!sessionId) return;
+    const seq = ++filterRequestSeqRef.current;
+    setSavingFilter(true);
+    try {
+      const out = (await sessionsApi.clearActiveFilter(sessionId)) as ActiveFilterResponse;
+      if (seq !== filterRequestSeqRef.current) return;
+      setActiveFilter(out.activeFilter);
+      setFilteredRows(out.filteredRows);
+      setFilterTotalRows(out.totalRows);
+    } catch (err) {
+      toast({
+        title: "Couldn't clear filter",
+        description: err instanceof Error ? err.message : "Try again",
+        variant: "destructive",
+      });
+    } finally {
+      if (seq === filterRequestSeqRef.current) setSavingFilter(false);
+    }
+  }, [sessionId, toast]);
+
+  const handleRemoveSingleCondition = useCallback(
+    (column: string) => {
+      const next = (activeFilter?.conditions ?? []).filter((c) => c.column !== column);
+      void pushConditions(next);
+    },
+    [activeFilter?.conditions, pushConditions]
+  );
+
+  const activeConditionCount = activeFilter?.conditions.length ?? 0;
 
   // Debounced mention state update function
   const updateMentionStateInternal = useCallback(
@@ -609,8 +698,7 @@ export function ChatInterface({
     }));
   }, []);
 
-  // Sidebar hover state
-  const [isColumnSidebarOpen, setIsColumnSidebarOpen] = useState(false);
+  const [isColumnSidebarOpen, setIsColumnSidebarOpen] = useState(true);
 
   // Handle column click - insert column name into input
   const handleColumnClick = useCallback((column: string) => {
@@ -636,22 +724,89 @@ export function ChatInterface({
     }
   }, []);
 
+  const handleDownloadWorkingDataset = useCallback(async () => {
+    if (!sessionId || isDownloadingDataset) return;
+
+    // Row-count cap awareness:
+    //   - XLSX caps a single sheet at 1,048,576 rows. For datasets above
+    //     ~900k rows, auto-switch to CSV so we don't silently truncate.
+    //   - For 250k–900k rows, stay on XLSX but warn the user it'll take a moment.
+    const XLSX_HARD_CAP = 900_000;
+    const SLOW_XLSX_THRESHOLD = 250_000;
+    const rowCount = totalRows ?? 0;
+    const format: 'xlsx' | 'csv' = rowCount > XLSX_HARD_CAP ? 'csv' : 'xlsx';
+
+    if (rowCount > XLSX_HARD_CAP) {
+      toast({
+        title: 'Switching to CSV',
+        description: `Dataset has ${rowCount.toLocaleString()} rows — Excel's per-sheet limit is ~1,048,576. Downloading as CSV instead.`,
+      });
+    } else if (rowCount > SLOW_XLSX_THRESHOLD) {
+      toast({
+        title: 'Preparing large download',
+        description: `Building XLSX for ${rowCount.toLocaleString()} rows — this may take a moment.`,
+      });
+    }
+
+    setIsDownloadingDataset(true);
+    try {
+      await downloadWorkingDatasetXlsx(sessionId, format);
+    } catch (error) {
+      toast({
+        title: 'Download failed',
+        description: error instanceof Error ? error.message : 'Could not download the working dataset.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDownloadingDataset(false);
+    }
+  }, [sessionId, isDownloadingDataset, totalRows, toast]);
+
   return (
     <div className="relative flex h-[calc(100vh-4.25rem)] bg-gradient-to-b from-muted/30 via-background to-background">
-      {/* Data Summary Button - Left Side */}
-      {sessionId && onOpenDataSummary && (
+      {/* Data Summary + Give Additional Context + Download Working Dataset Buttons - Left Side */}
+      {sessionId && (onOpenDataSummary || onOpenAdditionalContext) && (
         <div
-          className={`absolute left-4 top-4 ${isDatasetEnriching && !isDatasetPreviewLoading ? 'z-50' : 'z-30'}`}
+          className={`absolute left-4 top-4 flex flex-col gap-2 ${isDatasetEnriching && !isDatasetPreviewLoading ? 'z-50' : 'z-30'}`}
         >
+          {onOpenDataSummary && (
+            <Button
+              onClick={onOpenDataSummary}
+              variant="outline"
+              size="sm"
+              className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm transition-all hover:border-primary hover:shadow-lg"
+              title="View Data Summary"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Data Summary</span>
+            </Button>
+          )}
+          {onOpenAdditionalContext && (
+            <Button
+              onClick={onOpenAdditionalContext}
+              variant="outline"
+              size="sm"
+              className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm transition-all hover:border-primary hover:shadow-lg"
+              title="Give additional context to refine analysis"
+            >
+              <MessageSquarePlus className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Give Additional Context</span>
+            </Button>
+          )}
           <Button
-            onClick={onOpenDataSummary}
+            onClick={handleDownloadWorkingDataset}
             variant="outline"
             size="sm"
+            disabled={isDownloadingDataset}
             className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm transition-all hover:border-primary hover:shadow-lg"
-            title="View Data Summary"
+            title="Download the latest unfiltered dataset (matches what the analysis uses) as Excel"
           >
-            <FileText className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Data Summary</span>
+            {isDownloadingDataset ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            <span className="hidden sm:inline">Download Dataset</span>
           </Button>
         </div>
       )}
@@ -690,6 +845,17 @@ export function ChatInterface({
       )}
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Wave-FA4 · Active filter chip strip — shown above the chat scroll
+            area so the user always sees they're working on a filtered slice. */}
+        {activeFilter && activeFilter.conditions.length > 0 && (
+          <ActiveFilterChips
+            conditions={activeFilter.conditions}
+            totalRows={filterTotalRows}
+            filteredRows={filteredRows}
+            onRemoveCondition={handleRemoveSingleCondition}
+            onClearAll={handleClearAllFilters}
+          />
+        )}
         {/* Messages Area */}
         <div
           ref={messagesContainerRef}
@@ -846,12 +1012,16 @@ export function ChatInterface({
                   enrichmentStartedAtMs={enrichmentStartedAtMs}
                   preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
+                  currencyByColumn={hasDatasetSchema ? currencyByColumn : undefined}
+                  wideFormatTransform={hasDatasetSchema ? wideFormatTransform : undefined}
+                  dimensionHierarchies={hasDatasetSchema ? dimensionHierarchies : undefined}
+                  hierarchyEditSessionId={hasDatasetSchema ? sessionId ?? undefined : undefined}
+                  onHierarchiesChange={hasDatasetSchema ? onHierarchiesChange : undefined}
                   allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
                   allowPivotAutoShow={allowPivotAutoShow}
                   onAppendAssistantChart={onAppendAssistantChart}
                   precedingUserQuestion={precedingUserQuestion}
                   uploadPreviewThinking={uploadPreviewThinking}
-                  ref={isLastMessage ? lastMessageRef : undefined}
                 />
                 {showLiveThinkingStrip && (
                   <div className="max-w-[90%] mr-auto ml-11 mt-1 mb-1">
@@ -861,6 +1031,7 @@ export function ChatInterface({
                       workbench={agentWorkbenchLive}
                       spawnedSubQuestions={spawnedSubQuestions}
                       isStreaming
+                      sessionId={sessionId ?? null}
                     />
                   </div>
                 )}
@@ -938,28 +1109,41 @@ export function ChatInterface({
             </div>
           )}
           
+          {isLoading && <PercolatingIndicator />}
+
           <form onSubmit={handleSubmit} className="flex items-end gap-2">
             {columns && columns.length > 0 && (
               <div className="flex-shrink-0">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-11 rounded-xl border-2 border-border/80 bg-card px-4 text-sm font-medium shadow-sm hover:bg-muted/50 focus:border-primary focus:ring-2 focus:ring-primary/40"
-                    >
-                      <Filter className="mr-2 h-4 w-4 text-muted-foreground" />
-                      <span>Filter Data</span>
-                      <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent side="top" align="start" className="w-56">
-                    <DropdownMenuItem onClick={() => setFilterModalOpen(true)}>
-                      <Filter className="w-4 h-4 mr-2" />
-                      <span>Filter Data</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <Button
+                  type="button"
+                  variant={activeConditionCount > 0 ? "default" : "outline"}
+                  onClick={() => setFilterModalOpen(true)}
+                  className={
+                    activeConditionCount > 0
+                      ? "h-11 rounded-xl px-4 text-sm font-medium shadow-sm"
+                      : "h-11 rounded-xl border-2 border-border/80 bg-card px-4 text-sm font-medium shadow-sm hover:bg-muted/50 focus:border-primary focus:ring-2 focus:ring-primary/40"
+                  }
+                  data-testid="button-filter-data"
+                  aria-label={
+                    activeConditionCount > 0
+                      ? `Filter Data — ${activeConditionCount} active`
+                      : "Filter Data"
+                  }
+                >
+                  <Filter
+                    className={`mr-2 h-4 w-4 ${
+                      activeConditionCount > 0
+                        ? "text-primary-foreground"
+                        : "text-muted-foreground"
+                    }`}
+                  />
+                  <span>Filter Data</span>
+                  {activeConditionCount > 0 && (
+                    <span className="ml-2 rounded-full bg-primary-foreground/25 px-2 py-0.5 text-[11px] font-semibold tabular-nums">
+                      {activeConditionCount}
+                    </span>
+                  )}
+                </Button>
               </div>
             )}
             <div className="flex-shrink-0">
@@ -1040,7 +1224,14 @@ export function ChatInterface({
       {(showScrollToTop || showScrollToBottom) && (
         <div 
           className="fixed top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2"
-          style={{ right: columns && columns.length > 0 && isColumnSidebarOpen ? '280px' : '32px' }}
+          style={{
+            right:
+              columns && columns.length > 0
+                ? isColumnSidebarOpen
+                  ? '280px'
+                  : '92px'
+                : '32px',
+          }}
         >
           {showScrollToTop && (
             <Button
@@ -1065,14 +1256,12 @@ export function ChatInterface({
         </div>
       )}
       
-      {/* Right Sidebar - Column Navigator (hover to expand) */}
+      {/* Right Sidebar - Column Navigator */}
       {columns && columns.length > 0 && (
         <div
-          className={`h-full flex-shrink-0 border-l border-border/80 bg-card/80 backdrop-blur-sm transition-[width] duration-200 ease-out ${
-            isColumnSidebarOpen ? 'w-64 shadow-sm' : 'w-3'
+          className={`h-full flex-shrink-0 border-l border-border/80 bg-card/80 backdrop-blur-sm transition-[width] duration-300 ease-out motion-reduce:transition-none ${
+            isColumnSidebarOpen ? 'w-64 shadow-sm' : 'w-[4.25rem]'
           }`}
-          onMouseEnter={() => setIsColumnSidebarOpen(true)}
-          onMouseLeave={() => setIsColumnSidebarOpen(false)}
         >
           <ColumnSidebar
             columns={columns}
@@ -1080,21 +1269,29 @@ export function ChatInterface({
             dateColumns={dateColumns}
             onColumnClick={handleColumnClick}
             collapsed={!isColumnSidebarOpen}
+            onToggleCollapse={() => setIsColumnSidebarOpen((v) => !v)}
             className="w-full h-full border-0 shadow-none bg-transparent"
           />
         </div>
       )}
 
-      {/* Filter Data Modal */}
+      {/* Wave-FA · Excel-style filter panel (right-side slide-in). Replaces
+          the legacy FilterDataModal which sent a "filter data where ..." chat
+          message and destructively mutated the dataset. */}
       {columns && columns.length > 0 && (
-        <FilterDataModal
+        <FilterDataPanel
           open={filterModalOpen}
           onOpenChange={setFilterModalOpen}
+          sessionId={sessionId ?? null}
           columns={columns}
-          numericColumns={numericColumns}
-          dateColumns={dateColumns}
-          data={sampleRows}
-          onApply={handleFilterApply}
+          numericColumns={numericColumns ?? []}
+          dateColumns={dateColumns ?? []}
+          totalRows={filterTotalRows}
+          filteredRows={filteredRows}
+          activeFilter={activeFilter}
+          onConditionsChange={handleConditionsChange}
+          onClearAll={handleClearAllFilters}
+          saving={savingFilter}
         />
       )}
     </div>

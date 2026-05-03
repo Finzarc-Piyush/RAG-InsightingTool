@@ -44,12 +44,18 @@ function getOpenAIClient(): OpenAI {
   openaiInstance = new OpenAI({
     apiKey: process.env.AZURE_OPENAI_API_KEY!,
     baseURL: chatBaseURL,
-    defaultQuery: { 
+    defaultQuery: {
       'api-version': apiVersion
     },
     defaultHeaders: {
       'api-key': process.env.AZURE_OPENAI_API_KEY!,
     },
+    // RL2-followup: SDK default is 2 retries on 429. With dashboard turns
+    // firing ~20 LLM calls in seconds, 2 retries doesn't ride out a tight
+    // per-minute Azure quota. 5 retries with the SDK's default exponential
+    // backoff gives us up to ~16s of cushion. Mirrors the Anthropic provider's
+    // RL1 handling so neither path is the weak link.
+    maxRetries: Number(process.env.AZURE_OPENAI_MAX_RETRIES || 5),
   });
 
   // Use the deployment name as the model
@@ -166,11 +172,7 @@ export const openai = {
   },
 } as OpenAI;
 
-// Export MODEL with lazy initialization
-export const MODEL = (() => {
-  if (!modelName) {
-    getOpenAIClient();
-  }
-  return modelName || process.env.AZURE_OPENAI_DEPLOYMENT_NAME || '';
-})() as string;
+// Export MODEL — read env directly so importing this module never throws.
+// Lazy initialization happens at the first `openai.*` access.
+export const MODEL: string = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || '';
 

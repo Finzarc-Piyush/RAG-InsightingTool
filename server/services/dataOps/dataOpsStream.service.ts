@@ -80,7 +80,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       // If CosmosDB isn't initialized, we can't get the document
       if (error?.message?.includes('CosmosDB container not initialized')) {
         console.warn('⚠️ CosmosDB not initialized, cannot proceed without session document.');
-        sendSSE(res, 'error', { message: 'Database is initializing. Please wait a moment and try again.' });
+        sendSSE(res, 'error', { error: 'Database is initializing. Please wait a moment and try again.' });
         res.end();
         return;
       }
@@ -89,7 +89,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     }
     
     if (!chatDocument) {
-      sendSSE(res, 'error', { message: 'Session not found. Please upload a file first.' });
+      sendSSE(res, 'error', { error: 'Session not found. Please upload a file first.' });
       res.end();
       return;
     }
@@ -121,17 +121,17 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     } catch (error: any) {
       console.error('❌ Failed to load data:', error);
       const errorMessage = error?.message || 'Failed to load data';
-      sendSSE(res, 'error', { 
-        message: errorMessage.includes('No data found') 
-          ? 'No data found. Please ensure your file was uploaded correctly and try uploading again.' 
-          : errorMessage 
+      sendSSE(res, 'error', {
+        error: errorMessage.includes('No data found')
+          ? 'No data found. Please ensure your file was uploaded correctly and try uploading again.'
+          : errorMessage,
       });
       res.end();
       return;
     }
     
     if (!fullData || fullData.length === 0) {
-      sendSSE(res, 'error', { message: 'No data found. Please ensure your file was uploaded correctly and try again.' });
+      sendSSE(res, 'error', { error: 'No data found. Please ensure your file was uploaded correctly and try again.' });
       res.end();
       return;
     }
@@ -257,7 +257,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
   } catch (error) {
     console.error('Data Ops stream error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process data operation';
-    sendSSE(res, 'error', { message: errorMessage });
+    sendSSE(res, 'error', { error: errorMessage });
     res.end();
   }
 }

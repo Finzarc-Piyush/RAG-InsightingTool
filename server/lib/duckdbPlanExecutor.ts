@@ -7,6 +7,7 @@
 import type { ChatDocument } from '../models/chat.model.js';
 import { ColumnarStorageService, isDuckDBAvailable } from './columnarStorage.js';
 import { ensureAuthoritativeDataTable } from './ensureSessionDuckdbMaterialized.js';
+import { resolveSessionDataTable } from './activeFilter/resolveSessionDataTable.js';
 import type { ExecutionPlan, ExecutionStep } from './analyticalQueryEngine.js';
 
 const TABLE_NAME = 'data';
@@ -49,16 +50,24 @@ function escapeVal(value: unknown): string {
  * Build a single SQL query from an execution plan (filter, group_by, aggregate, sort).
  * Returns null if the plan contains unsupported steps (pivot, calculate, select, etc.).
  */
-export function buildSqlFromPlan(plan: ExecutionPlan): string | null {
+export function buildSqlFromPlan(
+  plan: ExecutionPlan,
+  options?: { tableName?: string }
+): string | null {
+  // Wave-FA2 · `tableName` lets the caller target `data_filtered` (per-session
+  // active-filter view) instead of the canonical `data` table. Default keeps
+  // legacy behaviour for callers that don't yet thread the chat document.
+  const baseTable = options?.tableName ?? TABLE_NAME;
+  const baseTableEsc = escapeCol(baseTable);
   const steps = plan.steps || [];
-  if (steps.length === 0) return `SELECT * FROM ${TABLE_NAME}`;
+  if (steps.length === 0) return `SELECT * FROM ${baseTableEsc}`;
 
   const unsupported = ['pivot', 'join', 'calculate', 'select'];
   for (const step of steps) {
     if (unsupported.includes(step.operation)) return null;
   }
 
-  let currentFrom = TABLE_NAME;
+  let currentFrom = baseTableEsc;
   let selectList = '*';
 
   for (let i = 0; i < steps.length; i++) {
@@ -185,9 +194,6 @@ export async function executePlanInDuckDB(
 ): Promise<{ success: boolean; data?: Record<string, any>[]; error?: string }> {
   if (!isDuckDBAvailable()) return { success: false, error: 'DuckDB not available' };
 
-  const sql = buildSqlFromPlan(plan);
-  if (!sql) return { success: false, error: 'Plan contains unsupported steps for DuckDB' };
-
   const storage = new ColumnarStorageService({ sessionId });
   try {
     await storage.initialize();
@@ -199,6 +205,12 @@ export async function executePlanInDuckDB(
         return { success: false, error: msg };
       }
     }
+    // Wave-FA2 · target `data_filtered` view when an active filter is set.
+    const tableName = chat
+      ? await resolveSessionDataTable(storage, chat)
+      : TABLE_NAME;
+    const sql = buildSqlFromPlan(plan, { tableName });
+    if (!sql) return { success: false, error: 'Plan contains unsupported steps for DuckDB' };
     const rows = await storage.executeQuery<Record<string, any>>(sql);
     return { success: true, data: rows };
   } catch (err) {

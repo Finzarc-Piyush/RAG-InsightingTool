@@ -35,7 +35,9 @@ export function isRichStepInsightsEnabled(): boolean {
   return process.env.RICH_STEP_INSIGHTS_ENABLED === "true";
 }
 
-const ENRICHED_INSIGHT_MAX = 200;
+// WTL2 · 200 → 400. 200 chars was too short for substantive per-step
+// insight; users see these in the workbench.
+const ENRICHED_INSIGHT_MAX = 400;
 const FINAL_ANSWER_PREVIEW_MAX = 4_000;
 const ENTRY_SUMMARY_MAX = 400;
 const MAX_ENTRIES_PER_CALL = 20;
@@ -140,7 +142,8 @@ ${clip(params.finalAnswer, FINAL_ANSWER_PREVIEW_MAX)}${sacBrief}${domainBrief}`;
 
   const out = await completeJson(system, user, enrichStepInsightsSchema, {
     turnId: `${params.turnId}_step_enrich`,
-    maxTokens: 1_500,
+    // WTL2 · 1_500 → 2_400. Step insights are user-visible — give them room.
+    maxTokens: 2_400,
     temperature: getInsightTemperature(),
     model: getInsightModel(),
     onLlmCall: params.onLlmCall,

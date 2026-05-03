@@ -18,6 +18,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FeedbackButtons } from "./FeedbackButtons";
+import type { Feedback, FeedbackTarget } from "@/lib/api/feedback";
 
 interface ThinkingPanelProps {
   steps: ThinkingStep[];
@@ -27,7 +29,15 @@ interface ThinkingPanelProps {
   /** live = collapsible stream panel; archived = saved segment, starts collapsed. */
   variant?: "live" | "archived";
   /** W12: sub-questions the agent spawned during deep investigation. */
-  spawnedSubQuestions?: string[];
+  spawnedSubQuestions?: { id: string; question: string }[];
+  /** Session id (for the per-sub-question feedback row). */
+  sessionId?: string | null;
+  /** Turn id (per-sub-question feedback target). Skip thumbs when absent. */
+  turnId?: string | null;
+  /** When true, suppresses feedback interaction (superadmin shadow viewer). */
+  readOnly?: boolean;
+  /** Hydrated per-sub-question feedback state (from past_analyses.feedbackDetails). */
+  spawnedQuestionFeedback?: Record<string, { feedback: Feedback; comment?: string }>;
 }
 
 function StepRow({ step }: { step: ThinkingStep }) {
@@ -204,6 +214,10 @@ export function ThinkingPanel({
   isStreaming,
   variant = "live",
   spawnedSubQuestions = [],
+  sessionId,
+  turnId,
+  readOnly = false,
+  spawnedQuestionFeedback,
 }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
   const prevStreaming = useRef(false);
@@ -314,15 +328,30 @@ export function ThinkingPanel({
               Investigating further
             </div>
             <div className="space-y-1">
-              {spawnedSubQuestions.map((q, i) => (
-                <div
-                  key={i}
-                  className="flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground/80"
-                >
-                  <GitBranch className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary/60" />
-                  <span>{q}</span>
-                </div>
-              ))}
+              {spawnedSubQuestions.map((q) => {
+                const fb = spawnedQuestionFeedback?.[q.id];
+                const target: FeedbackTarget = { type: "subanswer", id: q.id };
+                return (
+                  <div
+                    key={q.id}
+                    className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground/80"
+                  >
+                    <GitBranch className="h-3.5 w-3.5 shrink-0 text-primary/60" />
+                    <span className="flex-1 min-w-0">{q.question}</span>
+                    {sessionId && turnId && (
+                      <FeedbackButtons
+                        sessionId={sessionId}
+                        turnId={turnId}
+                        target={target}
+                        layout="inline-right"
+                        disabled={readOnly}
+                        initial={fb?.feedback ?? "none"}
+                        initialComment={fb?.comment ?? ""}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

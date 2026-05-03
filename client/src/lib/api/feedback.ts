@@ -19,6 +19,15 @@ export type FeedbackReason =
   | "other";
 
 /**
+ * Granular feedback target — answer / spawned sub-question / pivot. Omitted →
+ * legacy answer-level write. Mirrors `pastAnalysisFeedbackTargetSchema`.
+ */
+export type FeedbackTarget = {
+  type: "answer" | "subanswer" | "pivot";
+  id: string;
+};
+
+/**
  * W5.5b · Send a thumbs up/down for a completed turn.
  * W9 · accepts optional reasons[] and comment for thumbs-down. Used to:
  *   - exclude the past-analysis row from the W5 cache via `feedback ne 'down'`
@@ -34,6 +43,7 @@ export async function submitFeedback(args: {
   feedback: Feedback;
   reasons?: FeedbackReason[];
   comment?: string;
+  target?: FeedbackTarget;
 }): Promise<boolean> {
   try {
     const auth = await getAuthorizationHeader();

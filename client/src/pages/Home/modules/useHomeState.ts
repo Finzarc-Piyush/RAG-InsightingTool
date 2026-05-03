@@ -3,7 +3,9 @@ import {
   Message,
   UploadResponse,
   TemporalDisplayGrain,
+  type ColumnCurrency,
   type TemporalFacetColumnMeta,
+  type WideFormatTransform,
 } from '@/shared/schema';
 
 export interface HomeState {
@@ -20,6 +22,8 @@ export interface HomeState {
   temporalFacetColumns: TemporalFacetColumnMeta[];
   totalRows: number;
   totalColumns: number;
+  currencyByColumn: Record<string, ColumnCurrency>;
+  wideFormatTransform?: WideFormatTransform;
 }
 
 export const useHomeState = () => {
@@ -38,6 +42,10 @@ export const useHomeState = () => {
   const [temporalFacetColumns, setTemporalFacetColumns] = useState<TemporalFacetColumnMeta[]>([]);
   const [totalRows, setTotalRows] = useState<number>(0);
   const [totalColumns, setTotalColumns] = useState<number>(0);
+  const [currencyByColumn, setCurrencyByColumn] = useState<Record<string, ColumnCurrency>>({});
+  const [wideFormatTransform, setWideFormatTransform] = useState<WideFormatTransform | undefined>(
+    undefined
+  );
 
   const resetState = useCallback(() => {
     setSessionId(null);
@@ -53,6 +61,8 @@ export const useHomeState = () => {
     setTemporalFacetColumns([]);
     setTotalRows(0);
     setTotalColumns(0);
+    setCurrencyByColumn({});
+    setWideFormatTransform(undefined);
   }, []);
 
   return {
@@ -69,6 +79,8 @@ export const useHomeState = () => {
     temporalFacetColumns,
     totalRows,
     totalColumns,
+    currencyByColumn,
+    wideFormatTransform,
 
     setSessionId,
     setFileName,
@@ -83,6 +95,8 @@ export const useHomeState = () => {
     setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
+    setCurrencyByColumn,
+    setWideFormatTransform,
 
     resetState,
   };

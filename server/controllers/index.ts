@@ -19,6 +19,8 @@ export {
   removeChartFromDashboardController,
   addTableToDashboardController,
   removeTableFromDashboardController,
+  addPivotToDashboardController,
+  removePivotFromDashboardController,
   addSheetToDashboardController,
   removeSheetFromDashboardController,
   renameSheetController,

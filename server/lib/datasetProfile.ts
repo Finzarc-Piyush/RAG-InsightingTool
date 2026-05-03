@@ -1,9 +1,11 @@
 import {
   datasetProfileSchema,
+  type DataSummary,
   type DatasetProfile,
 } from '../shared/schema.js';
 import { completeJson } from './agents/runtime/llmJson.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
+import { AMBIGUOUS_SYMBOLS } from './wideFormat/currencyVocabulary.js';
 
 export type { DatasetProfile };
 export { datasetProfileSchema };
@@ -38,10 +40,10 @@ function buildLlmPayload(data: Record<string, any>[]) {
   return { columns, sampleRows };
 }
 
-const SYSTEM_PROMPT = `You are a data analyst. You receive JSON with "columns" (header names in order) and "sampleRows" (up to 100 raw rows — values may be messy: mixed date formats, text, numbers).
+const SYSTEM_PROMPT = `You are a data analyst. You receive JSON with "columns" (header names in order), "sampleRows" (up to 100 raw rows — values may be messy: mixed date formats, text, numbers), and optionally "ambiguousCurrencyColumns" listing numeric columns whose currency symbol is ambiguous (e.g. "$" could be USD / CAD / AUD / SGD / HKD; "kr" could be SEK / DKK / NOK; "¥" could be JPY or CNY).
 
 Return ONLY a JSON object with these keys:
-- shortDescription: 1–3 sentences describing what the dataset is about.
+- shortDescription: 1–3 sentences describing what the dataset is about. If the dataset has been pre-melted from wide format (you'll see a "Period" / "PeriodIso" / "Value" column triple), describe it as period-over-period and mention the period range.
 - dateColumns: every column that holds dates, datetimes, or business period labels that represent time (exact header names from "columns"). Include messy string encodings (e.g. "Q1 27-Feb '25", "H1 Q1", fiscal labels). If none, use []. Do not include identifier columns (row id, order id, etc.).
 - dirtyStringDateColumns: subset of dateColumns where values in the sample are mostly plain strings (or mixed) and are NOT already ISO/standard datetimes or native timestamps in the sample — i.e. the column needs a cleaned parse pass. Columns where every non-null sample value is already an ISO-like datetime string or unambiguous standard format should NOT be listed here. If none need cleaning, use [].
 - suggestedQuestions: 5–8 short, concrete analytical questions a user might ask. Do NOT include questions about identifier or key columns (those in idColumns — they are row keys, not dimensions). Do NOT ask "how does [date column] trend over time" — date columns are time axes; instead ask how a numeric metric changes over the date column.
@@ -49,6 +51,7 @@ Return ONLY a JSON object with these keys:
 - idColumns: identifier columns (customer id, order id, etc.), subset of "columns".
 - grainGuess: optional short phrase (e.g. "daily orders", "monthly revenue").
 - notes: optional caveats (PII, mixed formats, fiscal year assumptions, etc.).
+- currencyOverrides: ONLY when "ambiguousCurrencyColumns" is non-empty. For each listed column, pick the most likely ISO 4217 code based on (a) market / region / brand values in other columns (e.g. "Off VN" → VND, "MARICO India" → INR, "USA West" → USD, "Stockholm" → SEK), (b) dataset shortDescription, (c) typical magnitudes (Vietnamese đồng amounts are usually in the billions, Japanese yen also large; CAD/USD/EUR/GBP smaller). Skip columns whose context is genuinely unclear. Use exactly 3-letter codes.
 
 For each name in dirtyStringDateColumns, the pipeline will add a new column named Cleaned_<exact original header> with normalized values when possible.
 
@@ -56,10 +59,15 @@ Do not invent column names. Only use names from "columns".`;
 
 /**
  * LLM inference on raw sample rows — intended to run before date canonicalization.
+ *
+ * Pass `dataSummary` to enable currency-symbol disambiguation (WF8):
+ * columns whose detected symbol is ambiguous (`$`, `kr`, `¥`) are
+ * surfaced to the LLM so it can pick a 3-letter ISO code from
+ * context. The override is returned in `currencyOverrides`.
  */
 export async function inferDatasetProfile(
   data: Record<string, any>[],
-  options?: { fileName?: string; timeoutMs?: number }
+  options?: { fileName?: string; timeoutMs?: number; dataSummary?: DataSummary }
 ): Promise<DatasetProfile> {
   if (!data.length) {
     return { ...emptyDatasetProfile(), shortDescription: 'No rows to analyze.' };
@@ -68,9 +76,20 @@ export async function inferDatasetProfile(
   const timeoutMs =
     options?.timeoutMs ?? (Number(process.env.DATASET_PROFILE_TIMEOUT_MS) || 45_000);
   const payload = buildLlmPayload(data);
+  const ambiguousCurrencyColumns: string[] = [];
+  if (options?.dataSummary) {
+    for (const c of options.dataSummary.columns) {
+      if (c.currency && AMBIGUOUS_SYMBOLS.has(c.currency.symbol)) {
+        ambiguousCurrencyColumns.push(c.name);
+      }
+    }
+  }
   const userContent = JSON.stringify({
     fileName: options?.fileName,
     ...payload,
+    ...(ambiguousCurrencyColumns.length > 0
+      ? { ambiguousCurrencyColumns }
+      : {}),
   });
 
   const runLlm = async (): Promise<DatasetProfile> => {

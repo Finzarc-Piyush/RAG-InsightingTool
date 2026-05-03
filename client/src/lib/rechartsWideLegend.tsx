@@ -50,7 +50,6 @@ export function RechartsWideLegendContent(props: {
   return (
     <div
       className="flex w-full flex-wrap items-center justify-center gap-x-6 gap-y-2 px-2 pt-1"
-      onClick={(e) => e.stopPropagation()}
     >
       {isInteractive && onToggleAll && (
         <span className="inline-flex items-center gap-1 mr-2 shrink-0">

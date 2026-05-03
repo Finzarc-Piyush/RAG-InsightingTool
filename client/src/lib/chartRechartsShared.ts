@@ -1,4 +1,5 @@
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
+import { MAX_X_AXIS_LABELS } from '@/lib/charts/xAxisLabelCap';
 
 /** Theme-aware series colors (see index.css --chart-1 … --chart-5) */
 export const CHART_SERIES_COLORS = [
@@ -16,7 +17,7 @@ export const CHART_DUAL_AXIS_STROKES: readonly string[] = [
   'hsl(var(--chart-4))',
 ];
 
-export const LINE_AREA_MAX_X_TICKS = 12;
+export const LINE_AREA_MAX_X_TICKS = MAX_X_AXIS_LABELS;
 
 export function evenlySpacedDataKeys(
   rows: Record<string, unknown>[],

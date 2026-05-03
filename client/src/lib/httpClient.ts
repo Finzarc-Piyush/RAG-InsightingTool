@@ -70,6 +70,32 @@ apiClient.interceptors.response.use(
       }
     }
 
+    // 429 Too Many Requests — retry once with a small backoff. Chart-preview
+    // and chart-key-insight calls fan out an LLM request per render; under
+    // burst load Azure OpenAI returns 429 and the user-visible error
+    // ("Request failed with status code 429") otherwise sticks until the next
+    // config change.
+    if (error.response?.status === 429) {
+      const cfg = error.config as (typeof error.config) & { _rateLimitRetry?: boolean };
+      if (cfg && !cfg._rateLimitRetry) {
+        cfg._rateLimitRetry = true;
+        const retryAfterHeader = error.response.headers?.["retry-after"];
+        let delayMs = 1500;
+        if (typeof retryAfterHeader === "string") {
+          const seconds = Number(retryAfterHeader);
+          if (Number.isFinite(seconds) && seconds > 0) {
+            delayMs = Math.min(seconds * 1000, 5000);
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        try {
+          return await apiClient.request(cfg);
+        } catch {
+          // fall through to the generic error path below
+        }
+      }
+    }
+
     if (error.response?.status === 401) {
       const cfg = error.config as (typeof error.config) & { _authRetry?: boolean };
       if (cfg && !cfg._authRetry) {

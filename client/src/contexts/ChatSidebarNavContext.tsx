@@ -3,13 +3,26 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
+  type Context,
   type ReactNode,
 } from 'react';
+import type { ChatPivotNavEntry } from '@/pages/Home/lib/chatPivotNav';
 
-export type ChatPivotNavEntry = { id: string; label: string };
+export type { ChatPivotNavEntry };
 
 type ScrollRequest = { id: string; nonce: number };
+
+type PivotMutationHandlers = {
+  /** Toggle pinned state for the message at this ms-epoch timestamp. */
+  togglePivotPin: (messageTimestamp: number) => void;
+  /**
+   * Set or clear the user's custom name. Pass `null` (or empty string) to
+   * clear back to the auto-derived name.
+   */
+  renamePivot: (messageTimestamp: number, name: string | null) => void;
+};
 
 type ChatSidebarNavContextValue = {
   pivotEntries: ChatPivotNavEntry[];
@@ -17,17 +30,35 @@ type ChatSidebarNavContextValue = {
   scrollRequest: ScrollRequest | null;
   requestPivotScroll: (id: string) => void;
   clearPivotScrollRequest: () => void;
+  /** Home.tsx registers concrete handlers via `setPivotMutationHandlers`. */
+  togglePivotPin: PivotMutationHandlers['togglePivotPin'];
+  renamePivot: PivotMutationHandlers['renamePivot'];
+  setPivotMutationHandlers: (handlers: PivotMutationHandlers | null) => void;
 };
 
-const ChatSidebarNavContext = createContext<ChatSidebarNavContextValue | null>(
-  null
-);
+// HMR-resilient singleton — see DashboardContext.tsx for rationale.
+const CHATSIDEBAR_CONTEXT_KEY = "__MARICO_CHATSIDEBAR_CONTEXT_V1__";
+const ChatSidebarNavContext: Context<ChatSidebarNavContextValue | null> =
+  ((globalThis as Record<string, unknown>)[CHATSIDEBAR_CONTEXT_KEY] as
+    | Context<ChatSidebarNavContextValue | null>
+    | undefined) ??
+  ((globalThis as Record<string, unknown>)[CHATSIDEBAR_CONTEXT_KEY] = createContext<
+    ChatSidebarNavContextValue | null
+  >(null)) as Context<ChatSidebarNavContextValue | null>;
+
+const NOOP_HANDLERS: PivotMutationHandlers = {
+  togglePivotPin: () => {},
+  renamePivot: () => {},
+};
 
 export function ChatSidebarNavProvider({ children }: { children: ReactNode }) {
   const [pivotEntries, setPivotEntries] = useState<ChatPivotNavEntry[]>([]);
   const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(
     null
   );
+  // Handlers come from Home.tsx (which holds the messages + session id).
+  // Stored in a ref so registering them doesn't re-render every consumer.
+  const handlersRef = useRef<PivotMutationHandlers>(NOOP_HANDLERS);
 
   const requestPivotScroll = useCallback((id: string) => {
     setScrollRequest((prev) => ({
@@ -40,6 +71,24 @@ export function ChatSidebarNavProvider({ children }: { children: ReactNode }) {
     setScrollRequest(null);
   }, []);
 
+  const setPivotMutationHandlers = useCallback(
+    (handlers: PivotMutationHandlers | null) => {
+      handlersRef.current = handlers ?? NOOP_HANDLERS;
+    },
+    []
+  );
+
+  const togglePivotPin = useCallback((messageTimestamp: number) => {
+    handlersRef.current.togglePivotPin(messageTimestamp);
+  }, []);
+
+  const renamePivot = useCallback(
+    (messageTimestamp: number, name: string | null) => {
+      handlersRef.current.renamePivot(messageTimestamp, name);
+    },
+    []
+  );
+
   const value = useMemo(
     () => ({
       pivotEntries,
@@ -47,12 +96,18 @@ export function ChatSidebarNavProvider({ children }: { children: ReactNode }) {
       scrollRequest,
       requestPivotScroll,
       clearPivotScrollRequest,
+      togglePivotPin,
+      renamePivot,
+      setPivotMutationHandlers,
     }),
     [
       pivotEntries,
       scrollRequest,
       requestPivotScroll,
       clearPivotScrollRequest,
+      togglePivotPin,
+      renamePivot,
+      setPivotMutationHandlers,
     ]
   );
 

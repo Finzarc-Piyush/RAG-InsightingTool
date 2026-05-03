@@ -15,9 +15,12 @@ import { useToast } from '@/hooks/use-toast';
 import { useDashboardContext } from '../context/DashboardContext';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { PivotTile } from './PivotTile';
 
 // Lazy load ChartRenderer to reduce initial bundle size
 const ChartRenderer = lazy(() => import('@/pages/Home/Components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
+// WC9.3 · v1→v2 shim
+import { ChartShim } from '@/components/charts/ChartShim';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
@@ -32,6 +35,9 @@ interface DashboardTilesProps {
   tiles: DashboardTile[];
   onDeleteChart?: (chartIndex: number) => void;
   onDeleteTable?: (tableIndex: number) => void;
+  onDeletePivot?: (pivotIndex: number) => void;
+  /** Source session powering pivot tile data fetches. */
+  sessionId?: string | null;
   filtersByTile: Record<string, ActiveChartFilters>;
   onTileFiltersChange: (tileId: string, filters: ActiveChartFilters) => void;
   sheetId?: string;
@@ -59,11 +65,16 @@ type TileConfig = {
 };
 
 const TILE_CONFIG: Record<DashboardTile['kind'], TileConfig> = {
-  chart: { w: 6, h: 12, minW: 3, minH: 4 },
-  insight: { w: 4, h: 7, minW: 2, minH: 2 },
+  // 3-up by default: w=4 of a 12-col grid for chart/pivot tiles.
+  // Chart tiles include their inline keyInsight, so h is bumped from the
+  // pre-inline default (12) to give the insight room without cramping the
+  // chart visual.
+  chart: { w: 4, h: 16, minW: 3, minH: 6 },
+  insight: { w: 4, h: 7, minW: 2, minH: 2 }, // Legacy standalone-insight kind; no longer emitted by DashboardView.
   action: { w: 4, h: 7, minW: 2, minH: 2 }, // Kept for backward compatibility but no longer used
   table: { w: 4, h: 8, minW: 2, minH: 3 },
   narrative: { w: 6, h: 10, minW: 3, minH: 4 },
+  pivot: { w: 4, h: 12, minW: 3, minH: 4 },
 };
 
 const ResponsiveLayoutKeys = Object.keys(COLS) as Array<keyof typeof COLS>;
@@ -208,6 +219,8 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   tiles,
   onDeleteChart,
   onDeleteTable,
+  onDeletePivot,
+  sessionId,
   filtersByTile,
   onTileFiltersChange,
   sheetId,
@@ -221,7 +234,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenTiles(dashboardId));
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<
-    { type: 'chart' | 'insight' | 'table'; index: number; title: string; chartIndex?: number } | null
+    { type: 'chart' | 'insight' | 'table' | 'pivot'; index: number; title: string; chartIndex?: number } | null
   >(null);
   const [editingTile, setEditingTile] = useState<{ type: 'insight'; chartIndex: number; text: string } | null>(null);
   const [editingTable, setEditingTable] = useState<{ tableIndex: number; caption: string } | null>(null);
@@ -603,6 +616,9 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     } else if (tile.kind === 'table') {
       setPendingDelete({ type: 'table', index: tile.index, title: tile.title || `Table ${tile.index + 1}` });
       setDeleteConfirmOpen(true);
+    } else if (tile.kind === 'pivot') {
+      setPendingDelete({ type: 'pivot', index: tile.index, title: tile.title || `Pivot ${tile.index + 1}` });
+      setDeleteConfirmOpen(true);
     }
   }, [tiles]);
 
@@ -682,8 +698,22 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
       onDeleteTable(pendingDelete.index);
       setDeleteConfirmOpen(false);
       setPendingDelete(null);
+    } else if (pendingDelete.type === 'pivot') {
+      if (!onDeletePivot) {
+        toast({
+          title: 'Error',
+          description: 'Pivot deletion is not available for this view.',
+          variant: 'destructive',
+        });
+        setDeleteConfirmOpen(false);
+        setPendingDelete(null);
+        return;
+      }
+      onDeletePivot(pendingDelete.index);
+      setDeleteConfirmOpen(false);
+      setPendingDelete(null);
     }
-  }, [pendingDelete, onDeleteChart, onDeleteTable, updateChartInsightOrRecommendation, dashboardId, sheetId, onUpdate, toast]);
+  }, [pendingDelete, onDeleteChart, onDeleteTable, onDeletePivot, updateChartInsightOrRecommendation, dashboardId, sheetId, onUpdate, toast]);
 
   useEffect(() => {
     persistHiddenTiles(dashboardId, hiddenIds);
@@ -714,22 +744,54 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                 )}
               </div>
             </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4">
+            <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
               <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
                 <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                  <ChartRenderer
-                    chart={tile.chart}
-                    index={tile.index}
-                    isSingleChart={false}
-                    showAddButton={false}
-                    useChartOnlyModal
-                    fillParent
-                    enableFilters
-                    filters={filtersByTile[tile.id]}
-                    onFiltersChange={(next) => onTileFiltersChange(tile.id, next)}
+                  <ChartShim
+                    spec={tile.chart}
+                    legacy={() => (
+                      <ChartRenderer
+                        chart={tile.chart}
+                        index={tile.index}
+                        isSingleChart={false}
+                        showAddButton={false}
+                        useChartOnlyModal
+                        fillParent
+                        enableFilters
+                        filters={filtersByTile[tile.id]}
+                        onFiltersChange={(next) => onTileFiltersChange(tile.id, next)}
+                      />
+                    )}
                   />
                 </Suspense>
               </div>
+              {tile.chart.keyInsight && (
+                <div className="relative flex-shrink-0 group/insight">
+                  <div className="max-h-[200px] overflow-y-auto rounded-r-brand-sm border-l-2 border-primary/60 bg-primary/5 px-3 py-2 pr-9">
+                    <div className="text-xs leading-relaxed text-muted-foreground">
+                      <MarkdownRenderer content={tile.chart.keyInsight} />
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-1 h-6 w-6 opacity-0 group-hover/insight:opacity-100 transition-opacity"
+                      aria-label="Edit insight"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTile({
+                          type: 'insight',
+                          chartIndex: tile.index,
+                          text: tile.chart.keyInsight ?? '',
+                        });
+                      }}
+                    >
+                      <Edit2 className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         );
@@ -815,6 +877,16 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
             </CardContent>
           </Card>
         );
+      case 'pivot': {
+        return (
+          <PivotTile
+            pivot={tile.pivot}
+            sessionId={sessionId}
+            canEdit={canEdit}
+            onDelete={canEdit ? () => handleDeleteClick(tile) : undefined}
+          />
+        );
+      }
       case 'table': {
         return (
           <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="table">
@@ -904,7 +976,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
         compactType={null}
         preventCollision={false}
-        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input"
+        draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input, [data-dashboard-tile='pivot'] button"
       >
         {visibleTiles.map((tile) => {
           const isGrabbed = grabbedTileId === tile.id;
@@ -970,6 +1042,9 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
               )}
               {pendingDelete?.type === 'table' && (
                 <>Are you sure you want to delete the table "{pendingDelete.title}"? This action cannot be undone.</>
+              )}
+              {pendingDelete?.type === 'pivot' && (
+                <>Are you sure you want to delete the pivot "{pendingDelete.title}"? This action cannot be undone.</>
               )}
             </DialogDescription>
           </DialogHeader>

@@ -239,7 +239,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
   try {
     const userEmail = getUserEmailFromRequest(req);
     if (!userEmail) {
-      sendSSE(res, 'error', { message: 'Missing authenticated user email.' });
+      sendSSE(res, 'error', { error: 'Missing authenticated user email.' });
       res.end();
       return;
     }

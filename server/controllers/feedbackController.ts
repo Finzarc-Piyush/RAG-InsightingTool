@@ -27,6 +27,7 @@ import { mergeFeedbackInPastAnalysisIndex } from "../lib/rag/pastAnalysesStore.j
 import {
   pastAnalysisFeedbackSchema,
   pastAnalysisFeedbackReasonSchema,
+  pastAnalysisFeedbackTargetSchema,
 } from "../shared/schema.js";
 
 const feedbackBodySchema = z.object({
@@ -37,6 +38,8 @@ const feedbackBodySchema = z.object({
   // Both fields are optional for backwards compat with W5.5b clients.
   reasons: z.array(pastAnalysisFeedbackReasonSchema).max(7).optional(),
   comment: z.string().max(500).optional(),
+  // Granular target. Omitted → answer-level (legacy behaviour).
+  target: pastAnalysisFeedbackTargetSchema.optional(),
 });
 
 export async function feedbackController(req: Request, res: Response) {
@@ -52,7 +55,7 @@ export async function feedbackController(req: Request, res: Response) {
       details: parsed.error.flatten(),
     });
   }
-  const { sessionId, turnId, feedback, reasons, comment } = parsed.data;
+  const { sessionId, turnId, feedback, reasons, comment, target } = parsed.data;
   const docId = `${sessionId}__${turnId}`;
 
   // Authz: refuse to mutate another user's row. The userId on the doc is
@@ -78,7 +81,14 @@ export async function feedbackController(req: Request, res: Response) {
   const effectiveReasons = feedback === "down" ? reasons ?? [] : [];
   const effectiveComment = feedback === "down" ? comment : undefined;
   try {
-    await setPastAnalysisFeedback(sessionId, docId, feedback, effectiveReasons, effectiveComment);
+    await setPastAnalysisFeedback(
+      sessionId,
+      docId,
+      feedback,
+      effectiveReasons,
+      effectiveComment,
+      target
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`⚠️ feedback: setPastAnalysisFeedback failed (${msg})`);
@@ -86,14 +96,18 @@ export async function feedbackController(req: Request, res: Response) {
   }
 
   // Re-push to AI Search so the cache filter sees the new feedback immediately.
-  // Best-effort — log + continue if it fails.
-  try {
-    await mergeFeedbackInPastAnalysisIndex(docId, feedback);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `⚠️ feedback: AI Search merge failed for ${docId} (Cosmos updated, index will catch up later): ${msg}`
-    );
+  // Best-effort — log + continue if it fails. Only mirror when the target is
+  // the answer-level vote, since the index reflects answer-level sentiment.
+  const isAnswerLevel = !target || (target.type === "answer" && target.id === "answer");
+  if (isAnswerLevel) {
+    try {
+      await mergeFeedbackInPastAnalysisIndex(docId, feedback);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `⚠️ feedback: AI Search merge failed for ${docId} (Cosmos updated, index will catch up later): ${msg}`
+      );
+    }
   }
 
   return res.json({

@@ -32,13 +32,13 @@ describe("W8 · answerEnvelope.implications", () => {
     assert.equal(parsed.answerEnvelope?.implications?.[0].confidence, "high");
   });
 
-  it("rejects more than 4 implications", () => {
+  it("rejects more than 6 implications (WTL3 · cap raised 4 → 6)", () => {
     const tooMany = {
       role: "assistant",
       content: "x",
       timestamp: Date.now(),
       answerEnvelope: {
-        implications: Array.from({ length: 5 }, () => ({
+        implications: Array.from({ length: 7 }, () => ({
           statement: "s",
           soWhat: "w",
         })),
@@ -104,12 +104,12 @@ describe("W8 · answerEnvelope.domainLens", () => {
     assert.match(parsed.answerEnvelope!.domainLens!, /marico-haircare-portfolio/);
   });
 
-  it("rejects a domainLens over 500 chars", () => {
+  it("rejects a domainLens over 900 chars (WTL3 · cap raised 500 → 900)", () => {
     const bad = {
       role: "assistant",
       content: "x",
       timestamp: Date.now(),
-      answerEnvelope: { domainLens: "x".repeat(501) },
+      answerEnvelope: { domainLens: "x".repeat(901) },
     };
     assert.throws(() => messageSchema.parse(bad));
   });

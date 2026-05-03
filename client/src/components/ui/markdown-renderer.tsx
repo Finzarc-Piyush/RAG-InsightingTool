@@ -1,4 +1,5 @@
 import React from 'react';
+import { compactizeNumbersInText } from '@/lib/text/compactizeNumbersInText';
 
 /**
  * Simple markdown renderer for chat messages
@@ -6,8 +7,9 @@ import React from 'react';
  * Removes orphaned asterisks that aren't part of markdown formatting
  */
 export function MarkdownRenderer({ content }: { content: string }) {
-  // Clean up orphaned asterisks (standalone * that aren't part of **bold** or *italic*)
-  const cleanedContent = cleanOrphanedAsterisks(content);
+  // Compact large numbers (≥1000) to K/M/B/T form before markdown cleanup so
+  // chat narrative prose matches the K/M/B convention used everywhere else.
+  const cleanedContent = cleanOrphanedAsterisks(compactizeNumbersInText(content));
   
   // Split by lines to handle line breaks
   const lines = cleanedContent.split('\n');

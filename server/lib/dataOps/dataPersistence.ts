@@ -170,6 +170,34 @@ export async function saveModifiedData(
   const { scheduleIndexSessionRag } = await import("../rag/indexSession.js");
   scheduleIndexSessionRag(sessionId);
 
+  // W59 · record `data_op` in the durable Memory journal so resume-after-days
+  // shows every transform as a milestone in the analysis timeline.
+  void (async () => {
+    try {
+      const { buildDataOpEntry, scheduleLifecycleMemory } = await import(
+        "../agents/runtime/memoryLifecycleBuilders.js"
+      );
+      scheduleLifecycleMemory(
+        buildDataOpEntry({
+          sessionId,
+          username,
+          operation,
+          description,
+          dataVersion: newVersion,
+          rowsBefore,
+          rowsAfter,
+          blobName: newBlob.blobName,
+          createdAt: Date.now(),
+          // Use newVersion as the per-version sequence so concurrent ops
+          // collide deterministically on the same id (idempotent upsert).
+          sequence: newVersion,
+        })
+      );
+    } catch (e) {
+      console.warn("⚠️ analysisMemory data_op hook failed:", e);
+    }
+  })();
+
   return {
     version: newVersion,
     rowsBefore,

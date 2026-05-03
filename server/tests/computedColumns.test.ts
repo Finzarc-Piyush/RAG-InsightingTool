@@ -123,6 +123,87 @@ describe("applyAddComputedColumns", () => {
     if (!out.ok) return;
     assert.equal(out.rows[0]!.PerUnit, null);
   });
+
+  it("fails fast when date_diff_days produces null for every row on real data", () => {
+    // Reproduces the production bug: source date columns arrive as opaque
+    // wrapper objects ({} after JSON.stringify) so parseRowDate returns null
+    // for every row. Tool used to silently succeed; should now fail loudly.
+    const summary = minimalSummary(
+      ["Order Date", "Ship Date"],
+      ["Order Date", "Ship Date"]
+    );
+    const data = Array.from({ length: 12 }, () => ({
+      "Order Date": {},
+      "Ship Date": {},
+    }));
+    const out = applyAddComputedColumns(data, summary, {
+      columns: [
+        {
+          name: "Shipping Time (Days)",
+          def: {
+            type: "date_diff_days",
+            startColumn: "Order Date",
+            endColumn: "Ship Date",
+          },
+        },
+      ],
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.match(out.error, /Shipping Time \(Days\)/);
+    assert.match(out.error, /Order Date/);
+    assert.match(out.error, /Ship Date/);
+  });
+
+  it("reports per-column non-null counts on success", () => {
+    const summary = minimalSummary(
+      ["Order Date", "Ship Date"],
+      ["Order Date", "Ship Date"]
+    );
+    const data = [
+      { "Order Date": "11/8/17", "Ship Date": "11/11/17" },
+      { "Order Date": "6/9/15", "Ship Date": "6/14/15" },
+      { "Order Date": null, "Ship Date": null },
+    ];
+    const out = applyAddComputedColumns(data, summary, {
+      columns: [
+        {
+          name: "ShipLagDays",
+          def: {
+            type: "date_diff_days",
+            startColumn: "Order Date",
+            endColumn: "Ship Date",
+          },
+        },
+      ],
+    });
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.deepEqual(out.nonNull, [{ name: "ShipLagDays", nonNull: 2, total: 3 }]);
+  });
+
+  it("does NOT fire the guard for tiny test datasets (clampNegative legit)", () => {
+    // Below the row threshold, all-null is allowed (existing clampNegative
+    // semantics, single-row unit tests).
+    const summary = minimalSummary(["A", "B"], ["A", "B"]);
+    const data = [{ A: "1/10/20", B: "1/5/20" }];
+    const out = applyAddComputedColumns(data, summary, {
+      columns: [
+        {
+          name: "D",
+          def: {
+            type: "date_diff_days",
+            startColumn: "A",
+            endColumn: "B",
+            clampNegative: true,
+          },
+        },
+      ],
+    });
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.equal(out.rows[0]!.D, null);
+  });
 });
 
 describe("registerComputedColumnsOnSummary", () => {

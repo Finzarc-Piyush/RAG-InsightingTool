@@ -1,9 +1,9 @@
 import React, { useRef, useState, useEffect, lazy, Suspense } from 'react';
 import { ChartSpec } from '@/shared/schema';
-import { InsightRecommendationTile } from './InsightRecommendationTile';
 import { EditInsightModal } from './EditInsightModal';
 import { Button } from '@/components/ui/button';
-import { Trash2, GripVertical } from 'lucide-react';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { Trash2, GripVertical, Edit2 } from 'lucide-react';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { useToast } from '@/hooks/use-toast';
 import { useDashboardContext } from '../context/DashboardContext';
@@ -11,6 +11,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 // Lazy load ChartRenderer to reduce initial bundle size
 const ChartRenderer = lazy(() => import('@/pages/Home/Components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
+// WC9.3 · v1→v2 shim — dashboard cards flip to PremiumChart per-mark via feature flag.
+import { ChartShim } from '@/components/charts/ChartShim';
 
 interface ChartContainerProps {
   chart: ChartSpec;
@@ -175,12 +177,12 @@ export function ChartContainer({ chart, index, dashboardId, sheetId, onDelete, o
               flex: 1,
             }}
           >
-            {/* Chart Section - 55% of content area */}
+            {/* Chart Section - fills remaining space */}
             <div
-              className="flex-shrink-0 border-b border-border"
+              className="border-b border-border"
               style={{
-                flexBasis: '55%',
-                minHeight: '55%',
+                flex: 1,
+                minHeight: 0,
                 padding: '16px',
                 overflow: 'hidden',
               }}
@@ -188,47 +190,42 @@ export function ChartContainer({ chart, index, dashboardId, sheetId, onDelete, o
             >
               <div className="h-full w-full">
                 <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                  <ChartRenderer
-                    chart={chart}
-                    index={index}
-                    isSingleChart={false}
-                    showAddButton={false}
-                    useChartOnlyModal
-                    fillParent
-                    enableFilters
+                  <ChartShim
+                    spec={chart}
+                    legacy={() => (
+                      <ChartRenderer
+                        chart={chart}
+                        index={index}
+                        isSingleChart={false}
+                        showAddButton={false}
+                        useChartOnlyModal
+                        fillParent
+                        enableFilters
+                      />
+                    )}
                   />
                 </Suspense>
               </div>
             </div>
 
-            {/* Key Insights Section - 25% of content area */}
+            {/* Key Insight — same container, same chat-style markdown rendering. */}
             {chart.keyInsight && (
-              <div
-                className="flex-shrink-0 border-b border-border"
-                style={{
-                  flexBasis: '25%',
-                  minHeight: '25%',
-                  padding: '16px',
-                  overflow: 'hidden',
-                }}
-              >
-                <InsightRecommendationTile 
-                  variant="insight" 
-                  text={chart.keyInsight} 
-                  onEdit={() => setIsEditingInsight(true)}
-                />
+              <div className="relative flex-shrink-0 group/insight">
+                <div className="mx-4 mb-3 mt-2 max-h-[200px] overflow-y-auto rounded-r-brand-sm border-l-2 border-primary/60 bg-primary/5 px-3 py-2 pr-9">
+                  <div className="text-xs leading-relaxed text-muted-foreground">
+                    <MarkdownRenderer content={chart.keyInsight} />
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-5 top-3 h-6 w-6 opacity-0 group-hover/insight:opacity-100 transition-opacity"
+                  onClick={() => setIsEditingInsight(true)}
+                  aria-label="Edit insight"
+                >
+                  <Edit2 className="h-3 w-3" />
+                </Button>
               </div>
-            )}
-
-            {/* If no insights, expand chart to fill remaining space */}
-            {!chart.keyInsight && (
-              <div
-                className="flex-shrink-0"
-                style={{
-                  flexBasis: '45%',
-                  minHeight: '45%',
-                }}
-              />
             )}
           </div>
         </div>

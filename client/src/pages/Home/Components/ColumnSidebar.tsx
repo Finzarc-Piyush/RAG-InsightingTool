@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Search, Hash, Calendar, Type, X } from 'lucide-react';
+import { Search, Hash, Calendar, Type, X, Menu } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface ColumnSidebarProps {
@@ -12,6 +13,7 @@ interface ColumnSidebarProps {
   onColumnClick?: (column: string) => void;
   className?: string;
   collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export function ColumnSidebar({
@@ -21,6 +23,7 @@ export function ColumnSidebar({
   onColumnClick,
   className,
   collapsed = false,
+  onToggleCollapse,
 }: ColumnSidebarProps) {
   // All hooks must be called before any conditional returns
   const [searchQuery, setSearchQuery] = useState('');
@@ -45,18 +48,33 @@ export function ColumnSidebar({
     return { numeric, date, other };
   }, [filteredColumns, numericColumns, dateColumns]);
 
-  // Compact collapsed view - just a vertical "Columns" label
   if (collapsed) {
     return (
       <div
         className={cn(
-          'flex h-full items-center justify-center bg-card/80 border-l border-border shadow-sm',
+          'flex h-full flex-col items-center bg-card/80 border-l border-border shadow-sm',
           className
         )}
       >
-        <span className="text-[10px] font-medium tracking-[0.18em] text-muted-foreground [writing-mode:vertical-rl] rotate-180">
-          COLUMNS
-        </span>
+        <div className="flex w-full items-center justify-center border-b border-border/80 p-4">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleCollapse}
+            aria-expanded={false}
+            aria-controls="column-sidebar"
+            className="h-10 w-10 shrink-0 rounded-lg"
+          >
+            <Menu className="h-4 w-4" aria-hidden />
+            <span className="sr-only">Expand columns</span>
+          </Button>
+        </div>
+        <div className="flex flex-1 items-center justify-center">
+          <span className="text-[10px] font-medium tracking-[0.18em] text-muted-foreground [writing-mode:vertical-rl] rotate-180">
+            COLUMNS
+          </span>
+        </div>
       </div>
     );
   }
@@ -85,12 +103,28 @@ export function ColumnSidebar({
       )}
     >
       {/* Header */}
-      <div className="p-4 border-b border-border bg-muted/30">
+      <div id="column-sidebar" className="p-4 border-b border-border bg-muted/30">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-foreground">Columns</h2>
-          <Badge variant="secondary" className="text-xs">
-            {columns.length}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-foreground">Columns</h2>
+            <Badge variant="secondary" className="text-xs">
+              {columns.length}
+            </Badge>
+          </div>
+          {onToggleCollapse && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleCollapse}
+              aria-expanded={true}
+              aria-controls="column-sidebar"
+              className="h-8 w-8 shrink-0 rounded-lg"
+            >
+              <X className="h-4 w-4" aria-hidden />
+              <span className="sr-only">Collapse columns</span>
+            </Button>
+          )}
         </div>
         
         {/* Search Input */}

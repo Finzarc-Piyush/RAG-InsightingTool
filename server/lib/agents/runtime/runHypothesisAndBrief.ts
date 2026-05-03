@@ -120,6 +120,9 @@ HYPOTHESES (always required, 3 to 5 entries under \`hypotheses\`):
 - Focus on specific dimensions, metrics, or time windows visible in the schema.
 - Do not repeat the question — each hypothesis should be a distinct explanation candidate.
 - Keep each hypothesis under 25 words.
+- When the FMCG / MARICO DOMAIN CONTEXT block is present, prefer hypotheses that test domain-relevant explanations (category seasonality, channel-mix shifts, commodity/input-cost lag, premiumisation, sub-brand cannibalisation, distribution gains/losses) over generic statistical fishing — but only when the data could plausibly answer them. Do not invent metric names; use only columns from the supplied schema.
+- WGR5 — For trend / growth / "fastest growing" / "biggest decliner" questions, candidate hypotheses must include period-on-period growth shifts (YoY decay, QoQ acceleration, MoM swings) — not only level differences between segments. Test growth-rate explanations across all available year-pairs, not just the first one.
+- WSE5 — Trend questions on multi-year monthly/quarterly data must also include candidate hypotheses about recurring within-year SEASONALITY (Q4 holiday peak, Q1 summer peak, monsoon-driven rural demand, Diwali festive Q3, back-to-school) — these are distinct from growth hypotheses. Seasonality hypotheses are testable: "Sales peak in the same calendar quarter every year" / "Volume is consistently lower in monsoon months". Generate at least one such hypothesis when the dataset has ≥2 years × monthly or quarterly cadence.
 - Output JSON: { "hypotheses": [{ "text": string, "targetColumn"?: string }, ...] }${briefAsk}
 
 Output STRICTLY ONE JSON object: { "hypotheses": [...], "brief": {...} | null }`;
@@ -130,6 +133,9 @@ Output STRICTLY ONE JSON object: { "hypotheses": [...], "brief": {...} | null }`
   const sacSnippet = ctx.sessionAnalysisContext
     ? JSON.stringify(ctx.sessionAnalysisContext.dataset).slice(0, 800)
     : "";
+  const domainSnippet = ctx.domainContext?.trim()
+    ? `FMCG / MARICO DOMAIN CONTEXT (background only — never numeric evidence; cite pack id when used):\n${ctx.domainContext.trim().slice(0, 4000)}`
+    : "";
   const user = [
     `Question: ${ctx.question}`,
     `Columns (${ctx.summary.columns.length} total): ${cols}`,
@@ -137,13 +143,15 @@ Output STRICTLY ONE JSON object: { "hypotheses": [...], "brief": {...} | null }`
     `Date columns: ${(ctx.summary.dateColumns || []).join(", ")}`,
     briefSnippet ? `Existing brief snapshot: ${briefSnippet}` : "",
     sacSnippet ? `Session dataset summary: ${sacSnippet}` : "",
+    domainSnippet,
   ]
     .filter(Boolean)
     .join("\n");
 
   const result = await completeJson(system, user, mergedOutputSchema, {
     turnId: `${turnId}_merged_pre_planner`,
-    maxTokens: 1600,
+    // WTL2 · 1_600 → 2_800. Merged hypothesis+brief — both halves benefit.
+    maxTokens: 2800,
     temperature: 0.25,
     onLlmCall,
     purpose: LLM_PURPOSE.HYPOTHESIS,

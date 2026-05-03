@@ -1,6 +1,7 @@
 import type { ChatDocument } from "../models/chat.model.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
+import { resolveSessionDataTable } from "./activeFilter/resolveSessionDataTable.js";
 import { metadataService } from "./metadataService.js";
 import {
   pivotQueryRequestSchema,
@@ -414,7 +415,8 @@ function buildWhereClause(
 
 async function fetchFilteredRows(
   storage: ColumnarStorageService,
-  request: PivotQueryRequest
+  request: PivotQueryRequest,
+  tableName: string
 ): Promise<Record<string, unknown>[]> {
   const rowFields = request.rowFields;
   const colField = request.colFields[0] ?? null;
@@ -434,7 +436,9 @@ async function fetchFilteredRows(
 
   // Important: columns in dataApi are dynamic, so we must quote identifiers.
   const selectList = selectCols.map((c) => quoteIdent(c)).join(", ");
-  const sql = `SELECT ${selectList} FROM data WHERE ${whereSql}`;
+  // Wave-FA2 · `tableName` resolves to `data` or `data_filtered` per the
+  // session active filter (composed AND with the pivot's own UI filters).
+  const sql = `SELECT ${selectList} FROM ${quoteIdent(tableName)} WHERE ${whereSql}`;
   return await storage.executeQuery<Record<string, unknown>>(sql);
 }
 
@@ -469,6 +473,10 @@ export async function executePivotQuery(
     filterSelections: request.filterSelections ?? null,
     valueSpecs: valueSpecsNormalized,
     rowSort: rowSortNormalized,
+    // Wave-FA2 · Session active-filter version is part of the cache key so
+    // setting/clearing the filter invalidates pivot results without needing
+    // a manual cache flush.
+    activeFilterVersion: opts?.chat?.activeFilter?.version ?? 0,
   });
   const cacheKey = `${sessionId}_${dataVersion}_${configHash}`;
 
@@ -494,7 +502,10 @@ export async function executePivotQuery(
     }
     await storage.assertTableExists('data');
     const start = Date.now();
-    const filteredRows = await fetchFilteredRows(storage, request);
+    const tableName = opts?.chat
+      ? await resolveSessionDataTable(storage, opts.chat)
+      : "data";
+    const filteredRows = await fetchFilteredRows(storage, request, tableName);
 
     const colField = request.colFields[0] ?? null;
     const colKeys = colField ? collectColKeys(filteredRows, colField) : [];

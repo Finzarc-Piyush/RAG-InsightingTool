@@ -13,6 +13,7 @@ import {
   ChatDocument 
 } from "../models/chat.model.js";
 import { loadChartsFromBlob } from "../lib/blobStorage.js";
+import { listPastAnalysesForSession } from "../models/pastAnalysis.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { getDataSummary } from "../lib/dataOps/pythonService.js";
 import { generateAISuggestions, getDefaultSuggestions } from "../lib/suggestionGenerator.js";
@@ -22,9 +23,14 @@ import {
 } from "../lib/statisticalSummary.js";
 import {
   chartSpecSchema,
+  dimensionHierarchySchema,
+  pivotStateSchema,
   type ChartSpec,
   type DataSummary,
 } from "../shared/schema.js";
+import { z } from "zod";
+import { updateSessionDimensionHierarchies } from "../lib/sessionAnalysisContext.js";
+import { updateChatDocument } from "../models/chat.model.js";
 import { processChartData } from "../lib/chartGenerator.js";
 import {
   calculateSmartDomainsForChart,
@@ -397,11 +403,49 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
 
       console.log(`✅ Enriched ${enrichedMessages.length} messages with chart data`);
 
+      // Hydrate per-turn feedback (answer-level + granular target details) onto
+      // assistant messages so the thumbs render the persisted state on reload.
+      // Best-effort: a Cosmos hiccup here downgrades to "no thumbs hydration"
+      // rather than failing the whole session load.
+      let pastAnalysesByTurn = new Map<
+        string,
+        { feedback: "up" | "down" | "none"; feedbackComment?: string; feedbackDetails: import("../shared/schema.js").PastAnalysisFeedbackDetail[] }
+      >();
+      try {
+        const past = await listPastAnalysesForSession(sessionId, 200);
+        pastAnalysesByTurn = new Map(
+          past.map((p) => [
+            p.turnId,
+            {
+              feedback: p.feedback,
+              feedbackComment: p.feedbackComment,
+              feedbackDetails: p.feedbackDetails ?? [],
+            },
+          ])
+        );
+      } catch (err) {
+        console.warn(
+          `⚠️ feedback hydration failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      const messagesWithFeedback = enrichedMessages.map((msg) => {
+        const turnId = (msg as { agentTrace?: { turnId?: string } } | undefined)?.agentTrace?.turnId;
+        if (!turnId) return msg;
+        const past = pastAnalysesByTurn.get(turnId);
+        if (!past) return msg;
+        return {
+          ...msg,
+          feedback: past.feedback,
+          feedbackComment: past.feedbackComment,
+          feedbackDetails: past.feedbackDetails,
+        };
+      });
+
       // Return session with charts loaded from blob and messages enriched with chart data
       const sessionWithCharts = {
         ...session,
         charts: chartsWithData,
-        messages: enrichedMessages,
+        messages: messagesWithFeedback,
         datasetProfile: session.datasetProfile || {
           shortDescription: "",
           dateColumns: [],
@@ -631,6 +675,120 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
     
     res.status(500).json({
       error: errorMessage
+    });
+  }
+};
+
+/**
+ * W-PivotState · per-session in-process mutex for message pivotState writes.
+ * Mirrors the W40 pattern in `persistMergeAssistantSessionContext`. Reads chat
+ * doc, mutates one message's `pivotState`, writes the whole doc back. Concurrent
+ * PATCH calls for the same session chain through this map so a streaming-turn
+ * append (which also reads-modifies-writes the doc) does not silently overwrite
+ * a debounced PATCH that landed mid-turn.
+ *
+ * Single-instance correctness only — multi-instance scaling would need Cosmos
+ * `ifMatch` ETag or external lock.
+ */
+const messagePivotStateLocks = new Map<string, Promise<unknown>>();
+
+export const updateMessagePivotStateEndpoint = async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const tsParam = req.params.messageTimestamp;
+    const ts = Number(tsParam);
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    if (!Number.isFinite(ts)) {
+      return res.status(400).json({ error: "messageTimestamp must be numeric" });
+    }
+
+    const username = requireUsername(req);
+
+    // Body shape: `{ pivotState: PivotState | null }`. `null` clears the field
+    // (e.g. user "Reset" affordance). Anything else fails validation.
+    const body = req.body ?? {};
+    const incoming = body.pivotState;
+    let parsedState: import("../shared/schema.js").PivotState | null;
+    if (incoming === null) {
+      parsedState = null;
+    } else {
+      const parsed = pivotStateSchema.safeParse(incoming);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid pivotState payload",
+          details: parsed.error.flatten(),
+        });
+      }
+      parsedState = parsed.data;
+    }
+
+    const previous = messagePivotStateLocks.get(sessionId);
+    const work = (async () => {
+      if (previous) {
+        try {
+          await previous;
+        } catch {
+          // Prior caller's failure is its own concern.
+        }
+      }
+
+      const doc = await getChatBySessionIdForUser(sessionId, username);
+      if (!doc) {
+        const err = new Error("Session not found") as Error & { statusCode?: number };
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const messages = Array.isArray(doc.messages) ? doc.messages : [];
+      const idx = messages.findIndex(
+        (m) => m && m.role === "assistant" && m.timestamp === ts
+      );
+      if (idx < 0) {
+        const err = new Error("Assistant message not found for given timestamp") as Error & {
+          statusCode?: number;
+        };
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const next = { ...messages[idx] };
+      if (parsedState === null) {
+        delete (next as Record<string, unknown>).pivotState;
+      } else {
+        (next as Record<string, unknown>).pivotState = parsedState;
+      }
+      messages[idx] = next;
+      doc.messages = messages;
+
+      await updateChatDocument(doc);
+    })();
+
+    messagePivotStateLocks.set(sessionId, work);
+    try {
+      await work;
+    } finally {
+      if (messagePivotStateLocks.get(sessionId) === work) {
+        messagePivotStateLocks.delete(sessionId);
+      }
+    }
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    if (err instanceof AuthenticationError) {
+      return res.status(401).json({ error: err.message });
+    }
+    if (err?.statusCode === 404) {
+      return res.status(404).json({ error: err.message });
+    }
+    if (err?.statusCode === 403 || /unauthorized/i.test(String(err?.message ?? ""))) {
+      return res.status(403).json({ error: err.message });
+    }
+    console.error("Update message pivotState error:", err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to update pivot state",
     });
   }
 };
@@ -1117,6 +1275,39 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
   }
 };
 
+// RL2 · per-session mutex chain. When a dashboard turn emits N chart bubbles,
+// each bubble's debounced effect POSTs to /chart-key-insight in parallel
+// (within the 500ms client debounce window). Without serialisation this fans
+// out N parallel `generateChartInsights` calls per session, each issuing its
+// own outbound LLM request — multiplying instantaneous LLM-API pressure.
+// Mirrors the W40 pattern at sessionAnalysisContext.ts:472-513.
+const chartKeyInsightChain = new Map<string, Promise<unknown>>();
+
+async function runSerialisedPerSession<T>(
+  sessionId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const previous = chartKeyInsightChain.get(sessionId);
+  const next = (async () => {
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        // Prior call's failure is its own concern; this call still runs.
+      }
+    }
+    return work();
+  })();
+  chartKeyInsightChain.set(sessionId, next);
+  try {
+    return await next;
+  } finally {
+    if (chartKeyInsightChain.get(sessionId) === next) {
+      chartKeyInsightChain.delete(sessionId);
+    }
+  }
+}
+
 /** On-demand Key Insight for chart preview / pivot charts (avoids LLM on debounced preview). */
 export const postChartKeyInsightEndpoint = async (req: Request, res: Response) => {
   try {
@@ -1138,11 +1329,18 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
     if (!bodyChart || typeof bodyChart !== "object") {
       return res.status(400).json({ error: "Request body must include a chart object" });
     }
+    const userQuestionRaw = rawBody?.userQuestion;
+    const userQuestion =
+      typeof userQuestionRaw === "string" && userQuestionRaw.trim().length > 0
+        ? userQuestionRaw.trim()
+        : undefined;
 
     const chart = chartSpecSchema.parse(bodyChart) as ChartSpec;
     const rows = Array.isArray(chart.data) ? chart.data : [];
+    // Empty data is a valid user-driven state (zero-row filter). Return an empty
+    // insight so the client can preserve prior text rather than seeing an error.
     if (rows.length === 0) {
-      return res.status(400).json({ error: "chart.data is required and must be non-empty" });
+      return res.json({ keyInsight: "" });
     }
 
     const capped = rows.slice(0, CHART_KEY_INSIGHT_MAX_ROWS) as Record<string, any>[];
@@ -1151,12 +1349,40 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
       data: capped,
     };
 
-    const { keyInsight } = await generateChartInsights(
-      chartForInsight,
-      capped,
-      session.dataSummary as DataSummary,
-      undefined,
-      undefined
+    // Match the agent-turn `enrichCharts` parity: hydrate synthesis context so
+    // the LLM produces a substantive insight, not a flat statistical sentence
+    // that mimics the deterministic fallback. Domain context loader is process-
+    // memoised; failures are non-fatal (commentary just won't render).
+    let domainContext: string | undefined;
+    try {
+      const { loadEnabledDomainContext } = await import(
+        "../lib/domainContext/loadEnabledDomainContext.js"
+      );
+      const { text } = await loadEnabledDomainContext();
+      if (text?.trim()) domainContext = text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`postChartKeyInsightEndpoint · domain context load failed: ${msg}`);
+    }
+
+    const chatLevelInsights =
+      Array.isArray(session.insights) && session.insights.length > 0
+        ? session.insights
+        : undefined;
+
+    const { keyInsight } = await runSerialisedPerSession(sessionId, () =>
+      generateChartInsights(
+        chartForInsight,
+        capped,
+        session.dataSummary as DataSummary,
+        chatLevelInsights,
+        {
+          userQuestion,
+          sessionAnalysisContext: session.sessionAnalysisContext,
+          permanentContext: session.permanentContext,
+          domainContext,
+        }
+      )
     );
 
     return res.json({ keyInsight });
@@ -1169,6 +1395,9 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
     return res.status(400).json({ error: msg });
   }
 };
+
+// Exported for tests so we can verify same-session serialisation directly.
+export const __chartKeyInsight_test__ = { runSerialisedPerSession };
 
 // Delete session by session ID
 export const deleteSessionEndpoint = async (req: Request, res: Response) => {
@@ -1214,5 +1443,53 @@ export const deleteSessionEndpoint = async (req: Request, res: Response) => {
     res.status(500).json({
       error: errorMessage
     });
+  }
+};
+
+
+// EU1 · Replace the dimensionHierarchies array on a session.
+// Used by the in-banner remove/edit affordances. The H2 immutability
+// guard does NOT block this path because it operates only on assistant
+// merges; the user-merge LLM and this endpoint both have full control.
+const putSessionHierarchiesBodySchema = z.object({
+  hierarchies: z.array(dimensionHierarchySchema).max(20),
+});
+
+export const putSessionHierarchiesEndpoint = async (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    const parsed = putSessionHierarchiesBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid hierarchies payload",
+        details: parsed.error.flatten(),
+      });
+    }
+    const username = requireUsername(req);
+    const updated = await updateSessionDimensionHierarchies({
+      sessionId,
+      username,
+      hierarchies: parsed.data.hierarchies,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    res.json({
+      success: true,
+      hierarchies: updated.dataset.dimensionHierarchies ?? [],
+    });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    console.error("Put session hierarchies error:", error);
+    const msg = error instanceof Error ? error.message : "Failed to update hierarchies";
+    if (/not initialized/.test(msg)) {
+      return res.status(503).json({ error: "Database is initializing. Please try again." });
+    }
+    res.status(500).json({ error: msg });
   }
 };

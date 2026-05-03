@@ -89,14 +89,14 @@ describe("W16 · ragBlock includes web sub-section", () => {
     assert.ok(r1 >= 0 && r2 > r1 && web > r2, `expected order r1<r2<web; got r1=${r1} r2=${r2} web=${web}`);
   });
 
-  it("respects the W16-bumped 6_000-char cap", () => {
+  it("respects the WTL2-bumped 9_000-char cap (was W16: 6k)", () => {
     const bb = createBlackboard();
-    // 5 × 1.5k chars of web content = 7.5k pre-cap; truncated to ≤6k.
-    for (let i = 0; i < 5; i++) {
+    // 8 × 1.5k chars of web content = 12k pre-cap; truncated to ≤9k.
+    for (let i = 0; i < 8; i++) {
       addDomainContext(bb, `[web:tavily:${i + 1}] ${"x".repeat(1500)}`, "web");
     }
     const bundle = buildSynthesisContext(minimalCtx(), { blackboard: bb });
-    assert.ok(bundle.ragBlock.length <= 6_000, `ragBlock=${bundle.ragBlock.length} > 6000`);
+    assert.ok(bundle.ragBlock.length <= 9_000, `ragBlock=${bundle.ragBlock.length} > 9000`);
   });
 });
 

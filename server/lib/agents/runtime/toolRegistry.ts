@@ -7,6 +7,8 @@ import { agentLog } from "./agentLogger.js";
 export interface ToolRunContext {
   exec: AgentExecutionContext;
   config: AgentConfig;
+  /** Optional — current turn id for tools that emit Memory entries (W59). */
+  turnId?: string;
 }
 
 export interface ToolResult {

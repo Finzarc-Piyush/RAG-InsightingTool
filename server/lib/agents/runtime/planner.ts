@@ -22,7 +22,13 @@ import {
   repairExecuteQueryPlanDimensionFilters,
   repairExecuteQueryPlanSort,
   ensureInferredFiltersOnStep,
+  injectRollupExcludeFilters,
+  injectCompoundShapeMetricGuard,
+  extractDistinctMetricValues,
+  extractRankingIntent,
+  enforceRankingPlanShape,
 } from "./planArgRepairs.js";
+import { coalesceQueryPlanSteps } from "./coalescePlanSteps.js";
 
 /** Args whose string values must be real column names from DataSummary. */
 const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
@@ -31,7 +37,11 @@ function normalizeExecuteQueryPlanStepArgs(
   step: PlanStep,
   columns: readonly { name: string }[],
   preferredNumeric: readonly string[] = [],
-  streamPreAnalysis?: AgentExecutionContext["streamPreAnalysis"]
+  streamPreAnalysis?: AgentExecutionContext["streamPreAnalysis"],
+  // WPF5 · When set, resolveToSchemaColumn refuses to fuzzy-match stale wide
+  // column names that were melted away (e.g. "Q1 23 Value Sales" no longer
+  // resolves to a substring like "Value").
+  wideFormatTransform?: import("../../../shared/schema.js").WideFormatTransform
 ): void {
   if (step.tool !== "execute_query_plan") return;
   const plan = step.args.plan as Record<string, unknown> | undefined;
@@ -60,10 +70,14 @@ function normalizeExecuteQueryPlanStepArgs(
     if (schemaSet.has(raw)) return raw;
     const mapped = mappingLookup.get(normKey(raw));
     if (mapped && schemaSet.has(mapped)) return mapped;
-    const resolved = resolveToSchemaColumn(raw, columns);
+    const resolved = resolveToSchemaColumn(raw, columns, wideFormatTransform);
     if (schemaSet.has(resolved)) return resolved;
     if (canonicalCols.length > 0) {
-      const canonResolved = resolveToSchemaColumn(raw, canonicalCols);
+      const canonResolved = resolveToSchemaColumn(
+        raw,
+        canonicalCols,
+        wideFormatTransform
+      );
       if (canonicalSet.has(canonResolved)) return canonResolved;
     }
     return resolved;
@@ -120,12 +134,13 @@ function preferredNumericColumns(ctx: AgentExecutionContext): string[] {
 
 function normalizeCorrelationStepArgs(
   step: PlanStep,
-  columns: readonly { name: string }[]
+  columns: readonly { name: string }[],
+  wideFormatTransform?: import("../../../shared/schema.js").WideFormatTransform
 ): void {
   if (step.tool !== "run_correlation") return;
   const tv = step.args.targetVariable;
   if (typeof tv === "string" && tv.length > 0) {
-    step.args.targetVariable = resolveToSchemaColumn(tv, columns);
+    step.args.targetVariable = resolveToSchemaColumn(tv, columns, wideFormatTransform);
   }
   const dfs = step.args.dimensionFilters;
   if (Array.isArray(dfs)) {
@@ -133,7 +148,8 @@ function normalizeCorrelationStepArgs(
       if (d && typeof d === "object" && typeof (d as { column?: string }).column === "string") {
         (d as { column: string }).column = resolveToSchemaColumn(
           (d as { column: string }).column,
-          columns
+          columns,
+          wideFormatTransform
         );
       }
     }
@@ -142,12 +158,13 @@ function normalizeCorrelationStepArgs(
 
 function normalizeRunSegmentDriverStepArgs(
   step: PlanStep,
-  columns: readonly { name: string }[]
+  columns: readonly { name: string }[],
+  wideFormatTransform?: import("../../../shared/schema.js").WideFormatTransform
 ): void {
   if (step.tool !== "run_segment_driver_analysis") return;
   const out = step.args.outcomeColumn;
   if (typeof out === "string" && out.length > 0) {
-    step.args.outcomeColumn = resolveToSchemaColumn(out, columns);
+    step.args.outcomeColumn = resolveToSchemaColumn(out, columns, wideFormatTransform);
   }
   const dfs = step.args.dimensionFilters;
   if (Array.isArray(dfs)) {
@@ -155,7 +172,8 @@ function normalizeRunSegmentDriverStepArgs(
       if (d && typeof d === "object" && typeof (d as { column?: string }).column === "string") {
         (d as { column: string }).column = resolveToSchemaColumn(
           (d as { column: string }).column,
-          columns
+          columns,
+          wideFormatTransform
         );
       }
     }
@@ -164,7 +182,7 @@ function normalizeRunSegmentDriverStepArgs(
   if (Array.isArray(bc)) {
     step.args.breakdownColumns = (bc as string[])
       .filter((c): c is string => typeof c === "string" && c.length > 0)
-      .map((c) => resolveToSchemaColumn(c, columns));
+      .map((c) => resolveToSchemaColumn(c, columns, wideFormatTransform));
   }
 }
 
@@ -381,7 +399,15 @@ export async function runPlanner(
   workingMemoryBlock?: string,
   handoffDigest?: string,
   /** P-A1: upfront RAG retrieval digest for the initial planner call. */
-  ragHitsBlock?: string
+  ragHitsBlock?: string,
+  /** W60: semantic recall over the per-session Analysis Memory journal. */
+  memoryRecallBlock?: string,
+  /**
+   * Wave B5 · structured per-step insights (W19 `buildIntermediateInsight`)
+   * formatted as a labelled block. Lets the planner build on what prior
+   * steps already learned instead of re-deriving from raw observations.
+   */
+  stepInsightsBlock?: string
 ): Promise<PlannerRunResult> {
   const tools = registry.formatToolManifestForPlanner();
   const modeNote =
@@ -404,7 +430,7 @@ Rules:
 - derive_dimension_bucket: run before execute_query_plan (with dependsOn) to map categories into custom buckets, then groupBy the new column name. Args: sourceColumn, newColumnName, buckets: [{ "label", "values": [...] }], optional matchMode (exact|case_insensitive), optional defaultLabel.
 - add_computed_columns: row-wise derived numeric columns (safe defs only). Use before execute_query_plan when a needed metric doesn't exist (e.g. date_diff_days with startColumn/endColumn/clampNegative; or numeric_binary with op add|subtract|multiply|divide and leftColumn/rightColumn). Args: columns: [{ "name", "def" }] (max 12). Optional persistToSession (default false; true only if the user asked to save permanently) + persistDescription.
 - run_readonly_sql (analysis only): last-resort SELECT-only single statement over table \`dataset\`; no DDL/DML.
-- run_correlation: when the user asks what drives / affects / correlates with a numeric column. Pass dimensionFilters when scoping to a segment so the tool sees row-level data, not aggregates left in ctx.data.
+- run_correlation: when the user asks what drives / affects / correlates with a numeric column. Pass dimensionFilters when scoping to a segment so the tool sees row-level data, not aggregates left in ctx.data. If a prior step aggregated ctx.data (run_aggregation, execute_query_plan with groupBy), the tool auto-recovers row-level data from turnStartDataRef when the frame doesn't fit — but planning an aggregation step *before* run_correlation in the same plan is a smell; place run_correlation in its own parallelGroup or chain it after a non-aggregating step.
 - run_segment_driver_analysis (when listed): one-shot driver path for a filtered segment + outcome column. Use for "what's driving the difference between A and B".
 - A vs B cohort comparisons (region slice vs the rest, etc.): run_analytical_query or execute_query_plan twice with different dimensionFilters in the same parallelGroup, then build_chart on both result sets.
 - Authoritative columns: when the dataset block lists "Preferred columns", "AUTHORITATIVE columns for this question", or "DIAGNOSTIC_ANALYSIS_HINT", use those exact strings unless a get_schema_summary step in the same plan proves the headers differ. Diagnostic hint = row-level slice → breakdowns → correlation; never correlate on aggregate-only tables.
@@ -413,35 +439,45 @@ Rules:
 - build_chart: use when a visualization clarifies comparisons or magnitudes. For raw schema columns, x and y must match the schema. After execute_query_plan with sum(Sales), y must be the aggregated column name on the result rows (Sales_sum), not Sales; x is the same groupBy column. Set aggregate "none" when there's exactly one row per x; use sum|mean only when charting raw rows.
 - Layered / multi-series charts: when execute_query_plan returns long rows (one row per x × second dimension), use build_chart type "bar" (stacked default) or "line"/"area" for trends; set seriesColumn to the second dimension (the chart compiler can bind it automatically if omitted, as long as the column is in the result). Optional barLayout: stacked|grouped. For two numeric metrics over the same x, use y2 instead of seriesColumn. Heatmaps: type "heatmap", x/y as the two dimensions, z the numeric cell value.
 - CRITICAL — Temporal x → never type "bar"; always "line" or "area" for trends.
+- WGR5 — Growth questions: for trend / "fastest growing" / "biggest decliner" / YoY / QoQ / MoM / WoW questions, prefer compute_growth over breakdown_ranking. Choose grain by temporal coverage (multi-year → "yoy"; single year multi-quarter → "qoq"; single year multi-month → "mom"; weekly cadence → "wow"; uncertain → "auto"). For "fastest growing X" questions set mode "rankByGrowth" + dimensionColumn=X; for open-ended trends use mode "series" + a "summary" pass. NEVER compute period-over-period growth via execute_query_plan's percent_change op — it gives only consecutive deltas, not YoY/QoQ/MoM, so it will silently miss Year3-vs-Year1 growth and similar.
+- WSE5 — Trend questions on multi-year monthly OR quarterly data MUST also call detect_seasonality alongside compute_growth (in the same parallelGroup). Time-series alone reports the global maximum ("Nov 2018 was the peak") and BURIES the recurring pattern ("Q4 always peaks"). detect_seasonality returns month-of-year / quarter-of-year indices, peak consistency across years (e.g. "Oct/Nov/Dec in top-3 every year"), and a strength tier. The growth_analysis skill auto-emits this — but if you handcraft a trend plan, include detect_seasonality explicitly. If a question is purely about a single point in time (no recurring-pattern intent), you can skip it.
 - CRITICAL — seriesColumn cardinality ≤ 15 distinct values. Higher cardinality → either set max_series: 10 (auto-caps + "Others"), use a single-series bar sorted by y showing top N, or use a heatmap. Never produce dozens of overlapping series.
+- DASHBOARD INTENT — when ANALYSIS_BRIEF_JSON.requestsDashboard is true, the dashboard MUST be exhaustive: plan ONE build_chart step per dimension in segmentationDimensions ∪ candidateDriverDimensions (each breaking the outcomeMetricColumn down by that dim), PLUS one primary trend over time on the strongest date column, PLUS optional drivers/correlations or top-N outliers if not already covered. Do not collapse multiple dimensions into a single chart. Use parallelGroup heavily to keep latency bounded: every dimension breakdown is independent and should share one parallelGroup so they run concurrently. Skip a dimension only when its values clearly exceed ~60 uniques (use derive_dimension_bucket first or omit). Each chart's title should be a short claim ("Sales rose 18% in Q3", "South region drives 42% of revenue") so the dashboard's Summary sheet can cite each title verbatim. A downstream deterministic feature-sweep fills any dimension you skip, so completeness is preserved — but the planner should still aim for full coverage.
 - Multi-step: when step B needs outputs from step A, set B's dependsOn to A's id; tools run in dependency order. Use Prior tool observations / Structured working memory blocks (when present) to fill later-step args. Don't ignore successful tool output; if a step failed or returned an unhelpful near-full-table result, replan with a clearer question_override or add a follow-up tool.
-- At most 6 steps. Each step: id (unique string), tool (exact name), args (object, {} if none), optional dependsOn (id string), optional parallelGroup (string), optional hypothesisId (string).
-- parallelGroup EFFICIENCY: when the plan has 3+ independent breakdowns (Region, Category, Salesman, etc.), assign them the same parallelGroup string — they run concurrently and count as ONE step against the 6-step budget. Steps in the same parallelGroup must not have dependsOn pointing to each other. Cap at 3 steps per group.
+- Step budget: at most 6 steps when requestsDashboard is false; at most 14 steps when requestsDashboard is true (dashboard breakdowns are independent and parallelisable, so the larger budget translates to ~3 parallel groups of 4–5 steps each rather than 14× sequential latency). Each step: id (unique string), tool (exact name), args (object, {} if none), optional dependsOn (id string), optional parallelGroup (string), optional hypothesisId (string).
+- parallelGroup EFFICIENCY: when the plan has 3+ independent breakdowns (Region, Category, Salesman, etc.), assign them the same parallelGroup string — they run concurrently and count as ONE step against the step budget. Steps in the same parallelGroup must not have dependsOn pointing to each other. Cap at 5 steps per group when requestsDashboard is true (so an 8-dim dashboard fits in two parallelGroups), otherwise 3.
+- RNK1 — RANKING / LEADERBOARD / ENTITY-MAX intent: for "top N <entities>" (top 300 salespeople, best 50 SKUs), "who has the highest/maximum/most/largest <metric>" (max leaves, highest absenteeism), "who has the lowest/minimum/least/fewest <metric>", and "list <entities>" / "who are the <entities>" questions, emit the leaderboard plan shape — never aggregate the metric without grouping by the entity. Two valid tools: (a) breakdown_ranking with metricColumn=<numeric>, breakdownColumn=<entity column from schema>, topN=<N from question> (use the literal N — do not cap; for "highest/lowest" use topN=1), direction="desc" (default) or "asc" (for lowest/least/fewest/worst/bottom). (b) execute_query_plan with plan.groupBy=[<entity>], plan.aggregations=[{column:<metric>, operation:"sum"|"max"|"min"}], plan.sort=[{column:"<metric>_<op>", direction:"desc"|"asc"}], plan.limit=<N> (1 for extremum, N for "top N"). For entity-listing intent ("list the salespeople") use execute_query_plan with groupBy=[<entity>], NO aggregations, NO limit. A deterministic post-processor will repair these shapes when the planner gets them wrong, but emit the correct shape on the first try when possible.
 - hypothesisId: when INVESTIGATION_HYPOTHESES is present, set this to the id of the hypothesis the step primarily tests; the server marks that hypothesis resolved when the step produces evidence.
 ${formatSkillsManifestForPlanner()}
 Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string, "hypothesisId"?: string}]}`;
 
+  // WTL2 · 12_000 → 20_000. Prior observations carry the bulk of evidence
+  // for replans; truncating them was hurting plan quality on multi-step
+  // analyses.
   const priorBlock =
     priorObservationsText?.trim().length ?
-      `Prior tool observations (from this turn; use for planning next steps):\n${priorObservationsText.trim().slice(0, 12000)}\n\n`
+      `Prior tool observations (from this turn; use for planning next steps):\n${priorObservationsText.trim().slice(0, 20_000)}\n\n`
       : "";
 
+  // WTL2 · 8_000 → 14_000.
   const memoryBlock =
     workingMemoryBlock?.trim().length ?
-      `Structured working memory (callId, suggestedColumns, slots — use for chained tool args):\n${workingMemoryBlock.trim().slice(0, 8000)}\n\n`
+      `Structured working memory (callId, suggestedColumns, slots — use for chained tool args):\n${workingMemoryBlock.trim().slice(0, 14_000)}\n\n`
       : "";
 
+  // WTL2 · 12_000 → 20_000.
   const handoffBlock =
     handoffDigest?.trim().length ?
-      `Coordinator handoff log (this turn — use to align the new plan with prior decisions):\n${handoffDigest.trim().slice(0, 12000)}\n\n`
+      `Coordinator handoff log (this turn — use to align the new plan with prior decisions):\n${handoffDigest.trim().slice(0, 20_000)}\n\n`
       : "";
 
   // P-A1: Inject a compact digest of upfront RAG hits so the planner has
   // semantic grounding on the first call, rather than having to discover it
-  // via retrieve_semantic_context. Cap at 1500 chars so this stays cheap.
+  // via retrieve_semantic_context. WTL2 · 1_500 → 3_000 — was suspiciously
+  // tight; planners were missing relevant retrieved context.
   const ragBlock =
     ragHitsBlock?.trim().length ?
-      `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 1500)}\n\n`
+      `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 3_000)}\n\n`
       : "";
 
   const hypothesisBlock = ctx.blackboard
@@ -451,7 +487,26 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     ? `### INVESTIGATION_HYPOTHESES (test these; mark evidence in tool args):\n${hypothesisBlock}\n\n`
     : "";
 
-  const user = `User question:\n${ctx.question}\n\n${ragBlock}${hypoSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  // W60 · semantic recall block over the per-session Memory journal. Sits
+  // between RAG hits and the prior-turn observations so the planner sees
+  // long-term grounding before turn-local scratch.
+  // WTL2 · 10_000 → 16_000. W57 past-analyses surfaces here; richer
+  // long-term grounding helps the planner avoid re-asking already-answered
+  // sub-questions.
+  const memoryRecallSection =
+    memoryRecallBlock?.trim().length
+      ? `${memoryRecallBlock.trim().slice(0, 16_000)}\n\n`
+      : "";
+
+  // Wave B5 · structured step insights from prior tool steps in this turn,
+  // surfaced as a labelled block so the planner can build on what was just
+  // learned instead of re-deriving from raw observation text.
+  const stepInsightsSection =
+    stepInsightsBlock?.trim().length
+      ? `### STEP_INSIGHTS_SO_FAR (compact insights from prior tool steps in this turn — use as the baseline for the next steps):\n${stepInsightsBlock.trim().slice(0, 5_000)}\n\n`
+      : "";
+
+  const user = `User question:\n${ctx.question}\n\n${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,
@@ -488,15 +543,46 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   }
 
   const preferredNumeric = preferredNumericColumns(ctx);
+
+  // WPF2 · Resolve compound-shape Metric distinct values ONCE per turn so the
+  // metric guard can build concrete `metric IN [...]` filters per step.
+  // Prefer canonical topValues from upload-time profiling; fall back to a
+  // sample scan over ctx.data.
+  // RNK1 · resolve ranking intent ONCE per turn so each step can apply
+  // the deterministic shape coercion. Returns null for non-ranking
+  // questions (trends, drivers, A vs B), which makes the per-step call a
+  // cheap no-op.
+  const rankingIntent = extractRankingIntent(ctx.question, ctx.summary);
+
+  const wideFormat = ctx.summary.wideFormatTransform;
+  let distinctMetricValues: string[] = [];
+  if (
+    wideFormat?.detected &&
+    wideFormat.shape === "compound" &&
+    wideFormat.metricColumn
+  ) {
+    const metricColInfo = ctx.summary.columns.find(
+      (c) => c.name === wideFormat.metricColumn
+    );
+    const fromTopValues = (metricColInfo?.topValues ?? [])
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    distinctMetricValues =
+      fromTopValues.length > 0
+        ? fromTopValues
+        : extractDistinctMetricValues(ctx.data ?? [], wideFormat.metricColumn);
+  }
+
   for (const step of stepsWithMeta) {
     normalizeExecuteQueryPlanStepArgs(
       step,
       ctx.summary.columns,
       preferredNumeric,
-      ctx.streamPreAnalysis
+      ctx.streamPreAnalysis,
+      wideFormat
     );
-    normalizeCorrelationStepArgs(step, ctx.summary.columns);
-    normalizeRunSegmentDriverStepArgs(step, ctx.summary.columns);
+    normalizeCorrelationStepArgs(step, ctx.summary.columns, wideFormat);
+    normalizeRunSegmentDriverStepArgs(step, ctx.summary.columns, wideFormat);
     normalizeDeriveDimensionBucketStepArgs(step, ctx.summary.columns);
     normalizeAddComputedColumnsStepArgs(step, ctx.summary.columns);
     patchExecuteQueryPlanDateAggregation(
@@ -523,6 +609,50 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       console.warn(
         `[planner] injected inferred filters into ${step.tool} step ${step.id}: ${injected.join(", ")}`
       );
+    }
+    const rollupInjected = injectRollupExcludeFilters(
+      step,
+      ctx.sessionAnalysisContext?.dataset?.dimensionHierarchies,
+      ctx.question
+    );
+    if (rollupInjected.length) {
+      console.warn(
+        `[planner] auto-excluded declared rollup values from ${step.tool} step ${step.id}: ${rollupInjected.join(", ")}`
+      );
+    }
+    // RNK1 · enforce ranking-question plan shape (top N / extremum / entity
+    // listing). This is the deterministic backstop — the LLM also gets a
+    // prompt block (rule below `parallelGroup EFFICIENCY`), but it routinely
+    // gets the topN value or the entity column wrong on these shapes.
+    const rankingFix = enforceRankingPlanShape(step, rankingIntent);
+    if (rankingFix.changed) {
+      console.warn(
+        `[planner] coerced ${step.tool} step ${step.id} to ranking shape: ${rankingFix.reason ?? ""}`
+      );
+    }
+    // WPF2 · Compound-shape Metric guard: prevent silent SUM across mixed
+    // metrics (value_sales + volume) on wide-format-melted datasets. Emits a
+    // warn line so the user-visible workbench / production logs reflect it.
+    if (wideFormat?.detected && wideFormat.shape === "compound") {
+      const guard = injectCompoundShapeMetricGuard(
+        step,
+        wideFormat,
+        ctx.question,
+        distinctMetricValues
+      );
+      if (guard.injectedFilter?.length) {
+        console.warn(
+          `[planner] injected compound-shape Metric filter into ${step.tool} step ${step.id}: ${wideFormat.metricColumn} in [${guard.injectedFilter.join(", ")}]${guard.fallbackUsed ? " (fallback heuristic — user did not name a metric)" : ""}`
+        );
+      } else if (guard.expandedGroupBy) {
+        console.warn(
+          `[planner] expanded groupBy with compound-shape Metric column on ${step.tool} step ${step.id}: ${wideFormat.metricColumn} (cross-metric question)`
+        );
+      } else if (guard.reason === "no_metrics_known") {
+        console.warn(
+          `[planner] WARNING: compound-shape ${step.tool} step ${step.id} touches ${wideFormat.valueColumn} but no Metric values are known — values may mix incompatible metrics`
+        );
+      }
     }
   }
 
@@ -641,9 +771,22 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     }
   }
 
+  // Coalesce same-shape execute_query_plan steps (e.g. 3 hypotheses that all
+  // group by Category but differ only in aggregation) into a single multi-agg
+  // step so downstream emits ONE pivot card instead of N nearly-identical ones.
+  // Env gate: AGENT_COALESCE_SAME_SHAPE_QUERIES (default true).
+  const coalesced = coalesceQueryPlanSteps(sorted);
+  if (coalesced.length !== sorted.length) {
+    agentLog("planner_coalesced_query_plan_steps", {
+      turnId,
+      before: sorted.length,
+      after: coalesced.length,
+    });
+  }
+
   return {
     ok: true,
     rationale: out.data.rationale,
-    steps: sorted,
+    steps: coalesced,
   };
 }

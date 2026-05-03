@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { dataOpsChatWithAI, dataOpsChatWithAIStream, downloadModifiedDataset } from "../controllers/dataOpsController.js";
+import { dataOpsChatWithAI, dataOpsChatWithAIStream, downloadModifiedDataset, downloadWorkingDataset } from "../controllers/dataOpsController.js";
 
 const router = Router();
 
@@ -18,7 +18,10 @@ router.post('/data-ops/chat/stream', dataOpsChatWithAIStream);
 // Download modified dataset endpoint
 router.get('/data-ops/download/:sessionId', downloadModifiedDataset);
 
-console.log('✅ Data Ops routes registered: /api/data-ops/chat, /api/data-ops/chat/stream, /api/data-ops/download/:sessionId');
+// Download the latest working dataset (xlsx, unfiltered, matches the agent's view)
+router.get('/data-ops/download-working/:sessionId', downloadWorkingDataset);
+
+console.log('✅ Data Ops routes registered: /api/data-ops/chat, /api/data-ops/chat/stream, /api/data-ops/download/:sessionId, /api/data-ops/download-working/:sessionId');
 
 export default router;
 

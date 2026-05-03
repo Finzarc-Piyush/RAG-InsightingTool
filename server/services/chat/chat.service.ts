@@ -307,7 +307,18 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     // 2. Store charts in top-level session.charts (with data for small charts, without data for large ones)
     // 3. Strip data from message-level charts to prevent CosmosDB size issues
     // 4. Check for duplicates before adding
-    await addMessagesBySessionId(sessionId, [
+    //
+    // Wave A3 · routed through `persistenceQueue.enqueuePersist` so transient
+    // Cosmos failures retry with exponential backoff. The non-streaming path
+    // has no SSE channel, so terminal failures throw upward and the existing
+    // controller try/catch returns a 5xx — same behaviour as before, just
+    // more durable.
+    const { enqueuePersist: enqueuePersistChat } = await import(
+      "../../lib/persistenceQueue.js"
+    );
+    const { promise: persistChatPromise } = enqueuePersistChat({
+      sessionId,
+      messages: [
       {
         role: 'user',
         content: message,
@@ -353,9 +364,29 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
               priorInvestigationsSnapshot: chatDocument.sessionAnalysisContext!.sessionKnowledge!.priorInvestigations,
             }
           : {}),
+        // Wave A2 · agentInternals (workingMemory, reflector + verifier
+        // verdicts, blackboard snapshot, per-step tool I/O). See chatStream
+        // service for the streaming-path counterpart.
+        ...((answerResult as { agentInternals?: import("../../shared/schema.js").AgentInternals }).agentInternals
+          ? {
+              agentInternals: (answerResult as { agentInternals?: import("../../shared/schema.js").AgentInternals })
+                .agentInternals,
+            }
+          : {}),
       },
-    ]);
-    console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+      ],
+    });
+    const persistChatOutcome = await persistChatPromise;
+    if (persistChatOutcome === "succeeded") {
+      console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+    } else {
+      // Non-streaming controller currently treats this as a hard error so
+      // its catch block returns 5xx to the client. Same UX as today —
+      // the queue just gave it 3 attempts at recovery first.
+      throw new Error(
+        `persistenceQueue: messages save failed for session ${sessionId} after retries`
+      );
+    }
 
     try {
       const { persistMergeAssistantSessionContext } = await import(

@@ -39,9 +39,15 @@ interface HomeProps {
   resetTrigger?: number;
   loadedSessionData?: any;
   onSessionChange?: (sessionId: string | null, fileName: string | null) => void;
+  /**
+   * sessionId parsed from the URL (`/analysis/:sessionId`). When set, the
+   * chat surface is mid-rehydration and Home must render the loader instead
+   * of the StartAnalysisView blank slate. Null when on bare `/analysis`.
+   */
+  urlSessionId?: string | null;
 }
 
-export default function Home({ resetTrigger = 0, loadedSessionData, onSessionChange }: HomeProps) {
+export default function Home({ resetTrigger = 0, loadedSessionData, onSessionChange, urlSessionId = null }: HomeProps) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [collaborators, setCollaborators] = useState<string[]>([]);
@@ -57,6 +63,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   const [showContextModal, setShowContextModal] = useState(false);
   const [contextModalSessionId, setContextModalSessionId] = useState<string | null>(null);
   const [isSavingContext, setIsSavingContext] = useState(false);
+  const [currentPermanentContext, setCurrentPermanentContext] = useState<string>('');
   const [showDataSummaryModal, setShowDataSummaryModal] = useState(false);
   const [preEnrichmentPreviewSnapshot, setPreEnrichmentPreviewSnapshot] =
     useState<PreviewSnapshot | null>(null);
@@ -87,7 +94,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setExternalComposerDraft({ text, id: composerDraftIdRef.current });
   }, []);
   const { toast } = useToast();
-  const { setPivotEntries } = useChatSidebarNav();
+  const { setPivotEntries, setPivotMutationHandlers } = useChatSidebarNav();
   const {
     sessionId,
     fileName,
@@ -102,6 +109,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     temporalFacetColumns,
     totalRows,
     totalColumns,
+    currencyByColumn,
+    wideFormatTransform,
     setSessionId,
     setFileName,
     setMessages,
@@ -115,6 +124,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
+    setCurrencyByColumn,
+    setWideFormatTransform,
     resetState,
   } = useHomeState();
 
@@ -129,6 +140,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
     streamingNarratorPreview,
+    togglePivotPin,
+    renamePivot,
   } = useHomeMutations({
     sessionId,
     messages,
@@ -144,6 +157,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTemporalFacetColumns,
     setTotalRows,
     setTotalColumns,
+    setCurrencyByColumn,
+    setWideFormatTransform,
     setMessages,
     setSuggestions,
     setIsDatasetPreviewLoading,
@@ -417,6 +432,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setSuggestions,
     setCollaborators,
     setSessionAnalysisContext,
+    setWideFormatTransform,
+    setCurrencyByColumn,
   });
 
   // Notify parent when sessionId or fileName changes
@@ -430,6 +447,13 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setPivotEntries(buildChatPivotNavEntries(messages));
     return () => setPivotEntries([]);
   }, [messages, setPivotEntries]);
+
+  // Register pin / rename handlers with the sidebar context. Sidebar lives at
+  // the Layout level (above Home), so the context is the bridge.
+  useEffect(() => {
+    setPivotMutationHandlers({ togglePivotPin, renamePivot });
+    return () => setPivotMutationHandlers(null);
+  }, [setPivotMutationHandlers, togglePivotPin, renamePivot]);
 
   // Fetch collaborators when sessionId is available
   useEffect(() => {
@@ -455,11 +479,17 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   // user can type while background work runs — the welcome message is produced
   // from dataset understanding alone and never waits for user input.
   useEffect(() => {
-    if (!sessionId || contextModalShownRef.current.has(sessionId)) return;
+    if (!sessionId) return;
+    // Always sync the local mirror of permanentContext so the "Give Additional
+    // Context" modal can render the existing text read-only on reopen.
+    const resumedSession = loadedSessionData?.session ?? loadedSessionData;
+    const stored: string = resumedSession?.permanentContext?.trim?.() ?? '';
+    setCurrentPermanentContext(stored);
+
+    if (contextModalShownRef.current.has(sessionId)) return;
     // For resumed sessions, loadedSessionData carries the stored permanentContext.
     // If it's already set, there's nothing to ask — mark shown and skip.
-    const resumedSession = loadedSessionData?.session ?? loadedSessionData;
-    if (resumedSession?.permanentContext?.trim()) {
+    if (stored.length > 0) {
       contextModalShownRef.current.add(sessionId);
       return;
     }
@@ -467,6 +497,13 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setShowContextModal(true);
     contextModalShownRef.current.add(sessionId);
   }, [sessionId, loadedSessionData]);
+
+  // Reopen the ContextModal in append-mode from the analysis page.
+  const handleOpenAdditionalContext = useCallback(() => {
+    if (!sessionId) return;
+    setContextModalSessionId(sessionId);
+    setShowContextModal(true);
+  }, [sessionId]);
 
   // Handle saving context
   const handleSaveContext = async (context: string) => {
@@ -480,6 +517,17 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
       );
       setShowContextModal(false);
       setContextModalSessionId(null);
+
+      // Optimistically mirror the server's idempotent merge so the next
+      // "Give Additional Context" reopen shows the appended text without a
+      // refetch round-trip. Server is still source of truth on resume.
+      setCurrentPermanentContext((prev) => {
+        const trimmed = context.trim();
+        if (!trimmed) return prev;
+        if (!prev) return trimmed;
+        if (prev.includes(trimmed)) return prev;
+        return `${prev}\n\n${trimmed}`;
+      });
 
       // W7: consume regenerated starter questions + rewritten welcome message
       // from the PATCH response so chips refresh without a refetch race.
@@ -601,9 +649,36 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     </Dialog>
   );
 
-  // Don't show start/upload/snowflake if we're loading a session (even if sessionId isn't set yet)
-  // Only show when there's no session data being loaded AND no sessionId
-  if (!sessionId && !loadedSessionData && previewSource !== 'local') {
+  // A session is "in flight" whenever the URL claims one (`/analysis/:sessionId`)
+  // or App has primed `loadedSessionData` from a sidebar click. In either case
+  // the chat surface should render the loader on the first paint — not the
+  // StartAnalysisView blank slate — so that returning from another page reads
+  // as "your chat is loading," not "your chat got reset."
+  const isResumingSession = !sessionId && (!!loadedSessionData || !!urlSessionId);
+
+  // Loader takes priority. Falls through to ChatInterface once useSessionLoader
+  // populates `sessionId`, or to StartAnalysisView if rehydration 404s and the
+  // App-level effect strips the URL back to bare `/analysis`.
+  if (isResumingSession) {
+    return (
+      <>
+        <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
+          <div className="text-center max-w-md px-6">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Loading analysis</h3>
+            <p className="text-sm text-gray-600 mb-4">Preparing your data and insights...</p>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '40%' }}></div>
+            </div>
+          </div>
+        </div>
+        {sheetSelectorDialog}
+      </>
+    );
+  }
+
+  // Show start/upload/snowflake only when there's truly no session in flight.
+  if (!sessionId && !loadedSessionData && !urlSessionId && previewSource !== 'local') {
     if (startMode === 'choice') {
       return (
         <>
@@ -631,25 +706,6 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     }
   }
 
-  // If we're loading a session but sessionId isn't set yet, show loading state
-  if (!sessionId && loadedSessionData) {
-    return (
-      <>
-        <div className="h-[calc(100vh-80px)] bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
-          <div className="text-center max-w-md px-6">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Loading analysis</h3>
-            <p className="text-sm text-gray-600 mb-4">Preparing your data and insights...</p>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '40%' }}></div>
-            </div>
-          </div>
-        </div>
-        {sheetSelectorDialog}
-      </>
-    );
-  }
-
   return (
     <>
       {/* W26 · "What we already learned in this session" — collapsible
@@ -673,6 +729,21 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         temporalFacetColumns={temporalFacetColumns}
         totalRows={totalRows}
         totalColumns={totalColumns}
+        currencyByColumn={currencyByColumn}
+        wideFormatTransform={wideFormatTransform}
+        dimensionHierarchies={
+          sessionAnalysisContext?.dataset?.dimensionHierarchies
+        }
+        onHierarchiesChange={(next) =>
+          setSessionAnalysisContext((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  dataset: { ...prev.dataset, dimensionHierarchies: next },
+                }
+              : prev,
+          )
+        }
         onStopGeneration={handleStopGeneration}
         onEditMessage={handleEditMessage}
         thinkingSteps={thinkingSteps}
@@ -689,6 +760,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         enrichmentPoll={enrichmentPoll}
         enrichmentStartedAtMs={enrichmentStartedAtMs}
         onOpenDataSummary={() => setShowDataSummaryModal(true)}
+        onOpenAdditionalContext={handleOpenAdditionalContext}
         externalComposerDraft={externalComposerDraft}
         onExternalComposerDraftConsumed={handleComposerDraftConsumed}
         preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
@@ -703,6 +775,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onClose={handleCloseContextModal}
         onSave={handleSaveContext}
         isLoading={isSavingContext}
+        existingContext={currentPermanentContext}
       />
       <DataSummaryModal
         isOpen={showDataSummaryModal}

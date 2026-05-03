@@ -11,6 +11,7 @@ import { User, Bot, Edit2, Check, X as XIcon, Info } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
+import { BuildDashboardCallout } from './BuildDashboardCallout';
 import { FeedbackButtons } from './FeedbackButtons';
 import { AnswerCard } from './AnswerCard';
 import { MessageActionsBar } from './MessageActionsBar';
@@ -226,6 +227,18 @@ interface MessageBubbleProps {
     totalRows: number;
     totalColumns: number;
   } | null;
+  /** WF9 — per-column currency tag (from dataSummary.columns[].currency). */
+  currencyByColumn?: Record<string, import('@/shared/schema').ColumnCurrency>;
+  /** WF9 — wide-format transform metadata (from dataSummary.wideFormatTransform). */
+  wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+  /** H6 — declared dimension hierarchies (from sessionAnalysisContext.dataset.dimensionHierarchies). */
+  dimensionHierarchies?: import('@/shared/schema').DimensionHierarchy[];
+  /** EU1 — when present, hierarchies banner shows ✕ Remove buttons. */
+  hierarchyEditSessionId?: string;
+  /** EU1 — callback after a successful hierarchy remove. */
+  onHierarchiesChange?: (
+    next: import('@/shared/schema').DimensionHierarchy[],
+  ) => void;
   /** Show dataset columns/preview only when explicitly requested by the user. */
   allowDatasetPreviewInAnswer?: boolean;
   /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
@@ -267,12 +280,60 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   enrichmentStartedAtMs,
   preEnrichmentPreviewSnapshot,
   postEnrichmentPreviewSnapshot,
+  currencyByColumn,
+  wideFormatTransform,
+  dimensionHierarchies,
+  hierarchyEditSessionId,
+  onHierarchiesChange,
   allowDatasetPreviewInAnswer = false,
   allowPivotAutoShow = false,
   onAppendAssistantChart,
   precedingUserQuestion,
   uploadPreviewThinking,
 }, ref) => {
+  // Derive per-sub-question feedback state from the hydrated feedbackDetails
+  // so each spawned-question row in the (archived) ThinkingPanel can show the
+  // persisted thumbs state on reload. Cheap to recompute on render — the array
+  // is at most 16 entries (messageSchema.spawnedQuestions cap).
+  const spawnedQuestionFeedbackMap = useMemo(() => {
+    const details = (
+      message as Message & {
+        feedbackDetails?: Array<{
+          target: { type: "answer" | "subanswer" | "pivot"; id: string };
+          feedback: "up" | "down" | "none";
+          comment?: string | null;
+        }>;
+      }
+    ).feedbackDetails;
+    if (!details?.length) return undefined;
+    const map: Record<string, { feedback: "up" | "down" | "none"; comment?: string }> = {};
+    for (const d of details) {
+      if (d.target.type !== "subanswer") continue;
+      map[d.target.id] = {
+        feedback: d.feedback,
+        comment: d.comment ?? undefined,
+      };
+    }
+    return Object.keys(map).length ? map : undefined;
+  }, [message]);
+
+  // Same derivation for the pivot target, used by DataPreviewTable's thumbs row.
+  const pivotFeedback = useMemo(() => {
+    const details = (
+      message as Message & {
+        feedbackDetails?: Array<{
+          target: { type: "answer" | "subanswer" | "pivot"; id: string };
+          feedback: "up" | "down" | "none";
+          comment?: string | null;
+        }>;
+      }
+    ).feedbackDetails;
+    if (!details?.length) return undefined;
+    const hit = details.find((d) => d.target.type === "pivot");
+    if (!hit) return undefined;
+    return { feedback: hit.feedback, comment: hit.comment ?? undefined };
+  }, [message]);
+
   const [savingReport, setSavingReport] = useState(false);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -426,6 +487,17 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
     !isPreviewSystemMessage &&
     !isEnrichmentSystemMessage;
 
+  // Phase-2 "offer" surface: server emitted a dashboardDraft but did NOT
+  // auto-persist it (multi-chart turn without an explicit ask). When
+  // `createdDashboardId` is set, the explicit-ask path already created the
+  // dashboard server-side — render `DashboardDraftCard` (post-create state)
+  // instead of the offer button.
+  const showBuildDashboardOffer =
+    !isUser &&
+    !message.isIntermediate &&
+    Boolean((message as Message & { dashboardDraft?: unknown }).dashboardDraft) &&
+    !(message as Message & { createdDashboardId?: string }).createdDashboardId;
+
   const assistantMarkdownParts = useMemo(() => {
     if (isUser || !displayContent) {
       return { markdownBody: displayContent, followUpChips: [] as string[] };
@@ -566,6 +638,12 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 steps={thinkingPanelSteps ?? []}
                 workbench={thinkingPanelWorkbench ?? []}
                 isStreaming={!!thinkingPanelStreaming}
+                spawnedSubQuestions={
+                  (message as Message & { spawnedQuestions?: { id: string; question: string }[] }).spawnedQuestions
+                }
+                sessionId={sessionId ?? null}
+                turnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}
+                spawnedQuestionFeedback={spawnedQuestionFeedbackMap}
               />
             </>
           )}
@@ -579,8 +657,25 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               steps={message.thinkingBefore.steps}
               workbench={message.thinkingBefore.workbench ?? []}
               isStreaming={false}
+              spawnedSubQuestions={
+                (message as Message & { spawnedQuestions?: { id: string; question: string }[] }).spawnedQuestions
+              }
+              sessionId={sessionId ?? null}
+              turnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}
+              spawnedQuestionFeedback={spawnedQuestionFeedbackMap}
             />
           )}
+
+        {/* Phase-2 · "Build Dashboard" offer below the Thinking bubble.
+            Slot A — paired with the bottom-of-answer slot at L820+. Renders
+            only on the offer track (no `createdDashboardId`). */}
+        {showBuildDashboardOffer && (
+          <BuildDashboardCallout
+            draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+            sessionId={sessionId ?? undefined}
+            variant="above-answer"
+          />
+        )}
 
         {/* Show Filter Applied Message for filter operations */}
         {!isUser && isFilterResponse && filterCondition && (
@@ -615,6 +710,13 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               pivotInsight={
                 !message.isIntermediate ? message.insights?.[0]?.text : undefined
               }
+              userQuestion={precedingUserQuestion}
+              initialPivotState={message.pivotState}
+              messageTimestamp={message.timestamp}
+              streamingActive={message.isIntermediate}
+              onSuggestedQuestionClick={onSuggestedQuestionClick}
+              feedbackTurnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}
+              pivotFeedbackInitial={pivotFeedback}
             />
           </div>
         )}
@@ -731,10 +833,24 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 </div>
               </div>
             )}
-            {(message as Message & { dashboardDraft?: unknown }).dashboardDraft ? (
+            {/* Phase-2 · Slot B (bottom of key insights / answer card). The
+                offer button (multi-chart, no explicit ask) and the post-create
+                surface (explicit ask path) are mutually exclusive. */}
+            {showBuildDashboardOffer ? (
+              <BuildDashboardCallout
+                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+                sessionId={sessionId ?? undefined}
+                variant="below-answer"
+              />
+            ) : (message as Message & { createdDashboardId?: string })
+                .createdDashboardId ? (
               <DashboardDraftCard
                 draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
                 sessionId={sessionId ?? undefined}
+                createdDashboardId={
+                  (message as Message & { createdDashboardId?: string })
+                    .createdDashboardId
+                }
               />
             ) : null}
             {/* W7 · message-level actions (Copy now; Regenerate added in W9). */}
@@ -743,7 +859,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               precedingUserQuestion={precedingUserQuestion ?? undefined}
             />
             {/* W5.5b · thumbs up/down feeds the cache invalidation + golden corpus.
-                Only rendered when we have the turnId from the agent trace. */}
+                Only rendered when we have the turnId from the agent trace.
+                Feedback `target={{type:"answer",id:"answer"}}` is implicit (omitted)
+                so the legacy answer-level top-level fields stay populated. */}
             {sessionId &&
               (message.agentTrace as { turnId?: string } | undefined)?.turnId && (
                 <FeedbackButtons
@@ -752,6 +870,10 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   initial={
                     (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
                   }
+                  initialComment={
+                    (message as Message & { feedbackComment?: string }).feedbackComment ?? ""
+                  }
+                  target={{ type: "answer", id: "answer" }}
                 />
               )}
             {message.suggestedQuestions &&
@@ -819,6 +941,11 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   defaultExpanded={!(hasAggPreview || hasAggSummary)}
                   preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
+                  currencyByColumn={currencyByColumn}
+                  wideFormatTransform={wideFormatTransform}
+                  dimensionHierarchies={dimensionHierarchies}
+                  sessionIdForHierarchyEdit={hierarchyEditSessionId}
+                  onHierarchiesChange={onHierarchiesChange}
                 />
                 {uploadPreviewThinking?.active && (
                   <div className="mt-2">
@@ -895,6 +1022,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                               isLoading={chartLoadingState.isLoading}
                               loadingProgress={chartLoadingState.progress}
                               keyInsightSessionId={sessionId ?? null}
+                              onSuggestedQuestionClick={onSuggestedQuestionClick}
                             />
                           )}
                         />
@@ -1107,6 +1235,10 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
     // Phase 2: re-render when the inline dashboard draft appears/changes.
     Boolean((prevProps.message as { dashboardDraft?: unknown }).dashboardDraft) ===
       Boolean((nextProps.message as { dashboardDraft?: unknown }).dashboardDraft) &&
+    // Phase-2 offer → post-create transition: id presence flips
+    // showBuildDashboardOffer → false and swaps callout for DashboardDraftCard.
+    ((prevProps.message as { createdDashboardId?: string }).createdDashboardId ?? '') ===
+      ((nextProps.message as { createdDashboardId?: string }).createdDashboardId ?? '') &&
     // UX-3: re-render when magnitudes arrive (Phase-1 rich envelope).
     JSON.stringify((prevProps.message as { magnitudes?: unknown }).magnitudes ?? null) ===
       JSON.stringify((nextProps.message as { magnitudes?: unknown }).magnitudes ?? null) &&

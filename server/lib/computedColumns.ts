@@ -92,14 +92,28 @@ function isNumericDef(def: ComputedColumnDef): boolean {
   return def.type === "date_diff_days" || def.type === "numeric_binary";
 }
 
+/** Per-column non-null counts for the newly-added computed columns. */
+export type ComputedColumnNonNull = { name: string; nonNull: number; total: number };
+
+function failureMessageForDef(name: string, def: ComputedColumnDef): string {
+  if (def.type === "date_diff_days") {
+    return `Computed column "${name}" produced null for every row. Check that "${def.startColumn}" and "${def.endColumn}" contain parseable dates (the source columns may be opaque/empty).`;
+  }
+  return `Computed column "${name}" produced null for every row. Check that "${def.leftColumn}" and "${def.rightColumn}" contain valid numbers.`;
+}
+
 /**
  * Append computed columns (shallow row copies). Validates schema column names and name collisions.
+ * Returns per-column non-null counts so callers can surface coverage in tool results, and fails
+ * fast when a column produces null for every row (silent date-parsing failure was a real bug).
  */
 export function applyAddComputedColumns(
   data: Record<string, any>[],
   summary: DataSummary,
   args: AddComputedColumnsArgs
-): { ok: true; rows: Record<string, any>[] } | { ok: false; error: string } {
+):
+  | { ok: true; rows: Record<string, any>[]; nonNull: ComputedColumnNonNull[] }
+  | { ok: false; error: string } {
   const allowed = new Set(summary.columns.map((c) => c.name));
   const existing = new Set(summary.columns.map((c) => c.name));
 
@@ -125,16 +139,43 @@ export function applyAddComputedColumns(
     }
   }
 
+  const nonNullCounts = new Map<string, number>(
+    args.columns.map(({ name }) => [name, 0])
+  );
+
   const rows = data.map((row) => {
     const out: Record<string, any> = { ...row };
     for (const { name, def } of args.columns) {
       const v = computeCellValue(row as Record<string, unknown>, def);
       out[name] = v;
+      if (v !== null && v !== undefined && !Number.isNaN(v)) {
+        nonNullCounts.set(name, (nonNullCounts.get(name) ?? 0) + 1);
+      }
     }
     return out;
   });
 
-  return { ok: true, rows };
+  const total = rows.length;
+  const nonNull: ComputedColumnNonNull[] = args.columns.map(({ name }) => ({
+    name,
+    nonNull: nonNullCounts.get(name) ?? 0,
+    total,
+  }));
+
+  // Guard against silent date-parsing failures on real data: if a column produced
+  // null for every row across a non-trivial dataset, the source columns are likely
+  // unparseable (e.g. opaque DuckDB driver values, missing dates). Below the
+  // threshold, treat all-null as legitimate (clampNegative on a tiny test, etc.).
+  const NULL_GUARD_MIN_ROWS = 10;
+  if (total >= NULL_GUARD_MIN_ROWS) {
+    for (const { name, def } of args.columns) {
+      if ((nonNullCounts.get(name) ?? 0) === 0) {
+        return { ok: false, error: failureMessageForDef(name, def) };
+      }
+    }
+  }
+
+  return { ok: true, rows, nonNull };
 }
 
 /** Extend in-memory DataSummary so execute_query_plan sees new numeric columns. */

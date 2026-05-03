@@ -3,8 +3,7 @@ import {
   isDatasetEnrichmentSystemMessage,
   isDatasetPreviewSystemMessage,
 } from '@/pages/Home/modules/uploadSystemMessages';
-
-const PREVIEW_TRUNCATE = 48;
+import { pivotAutoName } from '@/pages/Home/lib/pivotAutoName';
 
 /** DOM id for the analysis pivot block in MessageBubble (must stay in sync). */
 export function chatPivotAnchorId(message: Message): string {
@@ -34,9 +33,19 @@ export function computeAllowPivotAutoShow(message: Message): boolean {
       Boolean(message.pivotDefaults?.values?.length);
     return hasIntermediatePivotDefaults;
   }
-  const serverHint = Boolean(
-    (message as Message & { pivotAutoShow?: boolean }).pivotAutoShow
-  );
+  const pivotAutoShowField = (message as Message & { pivotAutoShow?: boolean })
+    .pivotAutoShow;
+  // Scalar agent answers: server explicitly set pivotAutoShow=false AND emitted
+  // no pivotDefaults. Honor that suppression — preview rows alone are not enough
+  // to render a meaningful pivot when the agent's analytical step had no row
+  // dimensions (otherwise the grid auto-recommends a misleading view).
+  const hasPivotDefaults =
+    Boolean(message.pivotDefaults?.rows?.length) ||
+    Boolean(message.pivotDefaults?.values?.length);
+  if (pivotAutoShowField === false && !hasPivotDefaults) {
+    return false;
+  }
+  const serverHint = Boolean(pivotAutoShowField);
   const hasPreviewRows =
     Array.isArray((message as Message & { preview?: unknown[] }).preview) &&
     ((message as Message & { preview?: unknown[] }).preview?.length ?? 0) > 0;
@@ -53,28 +62,49 @@ export function messageHasNavigablePivotTable(message: Message): boolean {
   );
 }
 
-function pivotLabelForMessage(message: Message, ordinal: number): string {
-  const t = message.content?.trim() ?? '';
-  if (!t) return `Pivot ${ordinal}`;
-  const oneLine = t.replace(/\s+/g, ' ');
-  if (oneLine.length <= PREVIEW_TRUNCATE) return oneLine;
-  return `${oneLine.slice(0, PREVIEW_TRUNCATE)}…`;
-}
-
-export function buildChatPivotNavEntries(messages: Message[]): {
+export type ChatPivotNavEntry = {
+  /** DOM anchor id (for click-to-scroll). */
   id: string;
+  /** Resolved display label: customName ?? auto-name ?? "Pivot N". */
   label: string;
-}[] {
-  const out: { id: string; label: string }[] = [];
+  /** True when the user has pinned this pivot — sorts to the top. */
+  pinned: boolean;
+  /** ms-epoch timestamp of the source message; handlers use this to PATCH. */
+  messageTimestamp: number;
+  /** False for legacy messages with no pivotState — pin/rename icons hidden. */
+  hasPivotState: boolean;
+  /** User's persisted override, if set. Lets the input prefill on rename. */
+  customName: string | null;
+};
+
+export function buildChatPivotNavEntries(
+  messages: Message[]
+): ChatPivotNavEntry[] {
+  const out: ChatPivotNavEntry[] = [];
   let ordinal = 0;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (!messageHasNavigablePivotTable(m)) continue;
     ordinal += 1;
+    const pivotState = (m as Message & { pivotState?: { config?: unknown; pinned?: boolean; customName?: string } })
+      .pivotState;
+    const customName = pivotState?.customName?.trim() || null;
+    const auto = pivotState?.config
+      ? pivotAutoName(pivotState.config as Parameters<typeof pivotAutoName>[0])
+      : null;
+    const label = customName ?? auto ?? `Pivot ${ordinal}`;
     out.push({
       id: chatPivotAnchorId(m),
-      label: pivotLabelForMessage(m, ordinal),
+      label,
+      pinned: Boolean(pivotState?.pinned),
+      messageTimestamp: m.timestamp,
+      hasPivotState: Boolean(pivotState),
+      customName,
     });
   }
-  return out;
+  // Stable partition: pinned-first, message-order within each group.
+  const pinned: ChatPivotNavEntry[] = [];
+  const rest: ChatPivotNavEntry[] = [];
+  for (const e of out) (e.pinned ? pinned : rest).push(e);
+  return [...pinned, ...rest];
 }

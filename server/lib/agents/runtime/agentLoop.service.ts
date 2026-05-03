@@ -15,6 +15,11 @@ import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
 import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief, shouldBuildAnalysisBrief } from "./analysisBrief.js";
+import { applyDashboardCoverage } from "./dashboardCoverageGate.js";
+import {
+  classifyDashboardIntent,
+  EXPLICIT_RX as DASHBOARD_EXPLICIT_RX,
+} from "./dashboardIntent.js";
 import { generateHypotheses } from "./hypothesisPlanner.js";
 import {
   isMergedPrePlannerEnabled,
@@ -35,6 +40,10 @@ import {
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
+import { buildAgentInternals } from "./buildAgentInternals.js";
+import { scheduleTurnCheckpoint } from "../../turnCheckpoint.js";
+import { auditMagnitude } from "./magnitudeAudit.js";
+import { detectContradictions } from "./inconsistencyWatcher.js";
 import {
   checkEnvelopeCompleteness,
   checkDomainLensCitations,
@@ -60,7 +69,17 @@ import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { getInsightModel, getInsightTemperatureConservative } from "../../insightSynthesis/insightModelConfig.js";
 import { completeJson } from "./llmJson.js";
 import { proposeAndBuildExtraCharts } from "./visualPlanner.js";
-import { chartSpecSchema, type ChartSpec, type Insight } from "../../../shared/schema.js";
+import {
+  buildChartFromAnalyticalTable,
+  chartAxisSignature,
+} from "./chartFromTable.js";
+import {
+  chartSpecSchema,
+  type ChartSpec,
+  type DashboardPivotSpec,
+  type DataSummary,
+  type Insight,
+} from "../../../shared/schema.js";
 import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
 import { registerDerivedColumnOnSummary } from "../../deriveDimensionBucket.js";
 import {
@@ -82,8 +101,95 @@ function detectSignificance(summary: string): Finding["significance"] {
   return "routine";
 }
 
+/**
+ * Wave B4 · derive a confidence label for a structured finding from the
+ * tool result's analyticalMeta + significance. High = aggregation applied
+ * over a sufficient row count; medium = aggregation applied but small N;
+ * low = no aggregation OR very small N.
+ */
+function pickFindingConfidence(
+  result: ToolResult,
+  significance: Finding["significance"]
+): "low" | "medium" | "high" {
+  const meta = result.analyticalMeta;
+  const inputN = meta?.inputRowCount ?? 0;
+  const outputN = meta?.outputRowCount ?? 0;
+  const aggregated = !!meta?.appliedAggregation;
+  if (significance === "anomalous" && aggregated && inputN >= 100) return "high";
+  if (aggregated && inputN >= 50) return "medium";
+  if (aggregated || outputN >= 5) return "medium";
+  return "low";
+}
+
+/**
+ * Wave B4 · best-effort numeric extraction from a tool's `summary` /
+ * `numericPayload`. Only fires for unambiguous patterns (single percent or
+ * single signed delta). When the pattern is ambiguous, returns undefined and
+ * Wave C2 (magnitude audit) treats the finding as unverifiable rather than
+ * inventing a number.
+ */
+function extractMagnitudeFromSummary(
+  summary?: string,
+  numericPayload?: string
+):
+  | {
+      value: number;
+      unit: string;
+      direction?: "up" | "down" | "flat";
+    }
+  | undefined {
+  const text = `${summary ?? ""}\n${numericPayload ?? ""}`;
+  // Percent change with explicit sign (e.g. "−12.4%" or "+5.0%").
+  const pctMatch = text.match(/([+\-−])\s*(\d+(?:\.\d+)?)\s*%/);
+  if (pctMatch) {
+    const sign = pctMatch[1] === "+" ? 1 : -1;
+    const value = sign * parseFloat(pctMatch[2]);
+    return {
+      value,
+      unit: "%",
+      direction: value > 0 ? "up" : value < 0 ? "down" : "flat",
+    };
+  }
+  // Bare percent without sign — treat as magnitude only, no direction.
+  const bareMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (bareMatch) return { value: parseFloat(bareMatch[1]), unit: "%" };
+  return undefined;
+}
+
+/**
+ * Wave B4 · pull simple numeric stats from `numericPayload` (a colon-separated
+ * key:value blob written by `run_analytical_query`). Best-effort; unparseable
+ * payloads return `[]`.
+ */
+function extractStatsFromNumericPayload(
+  numericPayload: string | undefined,
+  tool: string
+): Array<{ kind: string; column?: string; value: number; filter?: Record<string, unknown> }> {
+  if (!numericPayload) return [];
+  const out: Array<{
+    kind: string;
+    column?: string;
+    value: number;
+  }> = [];
+  // Look for "metric=value" or "column: number" patterns.
+  const matches = numericPayload.matchAll(/(\w[\w_-]*)\s*[:=]\s*(-?\d+(?:\.\d+)?)/g);
+  let count = 0;
+  for (const m of matches) {
+    if (count >= 6) break;
+    const value = parseFloat(m[2]);
+    if (!Number.isFinite(value)) continue;
+    out.push({ kind: tool, column: m[1], value });
+    count++;
+  }
+  return out;
+}
+
 /** Total chart cap for a dashboard turn (planner + visualPlanner + feature sweep). */
-const DASHBOARD_CHART_HARD_CAP = 14;
+// DB4 · 14 → 18. The pre-DB4 cap was tight enough that the sweep frequently
+// stopped before it reached the long-tail high-cardinality dimensions that
+// DB4's top-N+Other bucketing now charts. 18 leaves headroom for the new
+// bucketed entries while keeping the dashboard legible.
+const DASHBOARD_CHART_HARD_CAP = 18;
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -102,6 +208,95 @@ function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[]
     return (t as { rows: Record<string, unknown>[] }).rows;
   }
   return [];
+}
+
+/** Extract `{rows, columns}` from the loosely-typed `table` field on
+ *  AgentLoopResult. Same shape contract as derivePivotDefaultsFromExecution. */
+function extractTableRowsAndColumns(table: unknown): {
+  rows: Record<string, unknown>[];
+  columns: string[] | null;
+} {
+  if (!table) return { rows: [], columns: null };
+  if (Array.isArray(table)) {
+    return { rows: table as Record<string, unknown>[], columns: null };
+  }
+  if (typeof table === "object" && table !== null) {
+    const rows = Array.isArray((table as { rows?: unknown }).rows)
+      ? ((table as { rows: Record<string, unknown>[] }).rows)
+      : [];
+    const cols = Array.isArray((table as { columns?: unknown }).columns)
+      ? ((table as { columns: unknown[] }).columns).filter(
+          (v): v is string => typeof v === "string"
+        )
+      : null;
+    return { rows, columns: cols };
+  }
+  return { rows: [], columns: null };
+}
+
+/**
+ * Build the `DashboardPivotSpec` to auto-attach to the dashboard at build
+ * time. Uses the same `derivePivotDefaultsFromPreviewRows` helper that seeds
+ * the chat-side pivot panel — so the dashboard's pivot tile renders the
+ * SAME view the user sees if they switch the chat response to "Pivot".
+ *
+ * Returns `undefined` when the turn produced no analytical table or when the
+ * derived defaults don't have a meaningful row × value pivot (single-cell
+ * scalar answers, etc.). Caller treats undefined as "no pivot tile".
+ */
+function buildAutoPivotSpec(args: {
+  table: unknown;
+  summary: DataSummary | undefined;
+  turnId: string;
+  sessionId: string | undefined;
+}): DashboardPivotSpec | undefined {
+  if (!args.summary) return undefined;
+  const { rows, columns } = extractTableRowsAndColumns(args.table);
+  if (rows.length === 0) return undefined;
+
+  const defaults = derivePivotDefaultsFromPreviewRows(
+    rows,
+    args.summary,
+    columns
+  );
+  if (!defaults) return undefined;
+  const pivotRows = defaults.rows ?? [];
+  const pivotValues = defaults.values ?? [];
+  const pivotColumns = defaults.columns ?? [];
+  if (pivotRows.length === 0 || pivotValues.length === 0) return undefined;
+
+  // Convert plain field names → `{id, field, agg}` shape required by the
+  // pivot config schema. Default agg is "sum" (matches the chat-side
+  // pivot panel's default).
+  const valueSpecs = pivotValues.slice(0, 6).map((field) => ({
+    id: `${field}_sum`,
+    field,
+    agg: "sum" as const,
+  }));
+
+  // Title: "<value-fields> by <rows> across <cols>" — terse, mirrors how
+  // the chat-side pivot insight describes itself. Capped to 200 chars.
+  const valuesPart = pivotValues.slice(0, 3).join(", ");
+  const rowsPart = pivotRows.slice(0, 3).join(" × ");
+  const colsPart = pivotColumns.slice(0, 2).join(" × ");
+  const titleParts: string[] = [valuesPart, `by ${rowsPart}`];
+  if (colsPart) titleParts.push(`across ${colsPart}`);
+  const title = titleParts.join(" ").slice(0, 200) || "Pivot view";
+
+  return {
+    id: `auto-pivot-${args.turnId}`,
+    title,
+    pivotConfig: {
+      rows: pivotRows.slice(0, 4),
+      columns: pivotColumns.slice(0, 2),
+      values: valueSpecs,
+      filters: [],
+      unused: [],
+    },
+    analysisView: "pivot",
+    sourceSessionId: args.sessionId,
+    createdAt: Date.now(),
+  };
 }
 
 function toolTableColumnOrderForIntermediate(tr: ToolResult): string[] | null {
@@ -277,6 +472,57 @@ function materializeDeferredBuildCharts(
     }
   }
   deferred.length = 0;
+}
+
+/**
+ * Final pass over `mergedCharts`: dedupe by axis-signature and cap at
+ * `AGENT_MAX_FINAL_CHARTS_PER_TURN` (default 14, matches dashboard mode).
+ * Mutates the array in place; called once at end of turn after all chart
+ * sources (per-step promotion, materializeDeferredBuildCharts, visualPlanner,
+ * dashboard feature sweep) have populated it.
+ *
+ * Dedupe order: first-seen wins (preserves chart sources earlier in the turn).
+ * Cap order: rows-count wins (more informative survives), ties broken by
+ * earliest emission.
+ */
+function finalizeMergedCharts(mergedCharts: ChartSpec[]): void {
+  if (mergedCharts.length === 0) return;
+
+  const seen = new Set<string>();
+  const dedupedInPlace: ChartSpec[] = [];
+  for (const c of mergedCharts) {
+    const sig = chartAxisSignature(c);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    dedupedInPlace.push(c);
+  }
+
+  const capRaw = process.env.AGENT_MAX_FINAL_CHARTS_PER_TURN;
+  const cap = capRaw != null && capRaw !== "" ? parseInt(capRaw, 10) : 14;
+  const effectiveCap = Number.isFinite(cap) && cap > 0 ? cap : 14;
+
+  let capped: ChartSpec[];
+  if (dedupedInPlace.length <= effectiveCap) {
+    capped = dedupedInPlace;
+  } else {
+    // Pair each chart with its original index so ties break on emission order.
+    const ranked = dedupedInPlace
+      .map((c, i) => ({
+        c,
+        i,
+        rows: Array.isArray((c as { data?: unknown[] }).data)
+          ? ((c as { data: unknown[] }).data.length as number)
+          : 0,
+      }))
+      .sort((a, b) => (b.rows - a.rows) || (a.i - b.i))
+      .slice(0, effectiveCap)
+      // Restore original emission order for the final array.
+      .sort((a, b) => a.i - b.i);
+    capped = ranked.map((r) => r.c);
+  }
+
+  mergedCharts.length = 0;
+  for (const c of capped) mergedCharts.push(c);
 }
 
 function capAgentTrace(trace: AgentTrace): AgentTrace {
@@ -627,7 +873,9 @@ async function runNarrativeRetry(
         { role: "user", content: user },
       ],
       temperature: 0.4,
-      max_tokens: 800,
+      // WTL2 · 800 → 1400. Final-answer retry was clipping mid-sentence on
+      // rich envelopes.
+      max_tokens: 1400,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
   );
@@ -661,7 +909,8 @@ async function runPlainTextRetry(
         { role: "user", content: user },
       ],
       temperature: 0.35,
-      max_tokens: 2000,
+      // WTL2 · 2_000 → 3_500. Plain-text retry softer prompt — give it room.
+      max_tokens: 3500,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
   );
@@ -728,7 +977,10 @@ async function runPlannerWithOneRetry(
   priorObservationsText?: string,
   workingMemoryBlock?: string,
   handoffDigest?: string,
-  ragHitsBlock?: string
+  ragHitsBlock?: string,
+  memoryRecallBlock?: string,
+  /** Wave B5 · structured per-step insights for re-planning. */
+  stepInsightsBlock?: string
 ) {
   const first = await runPlanner(
     ctx,
@@ -738,7 +990,9 @@ async function runPlannerWithOneRetry(
     priorObservationsText,
     workingMemoryBlock,
     handoffDigest,
-    ragHitsBlock
+    ragHitsBlock,
+    memoryRecallBlock,
+    stepInsightsBlock
   );
   if (first.ok) return first;
   const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
@@ -756,7 +1010,9 @@ async function runPlannerWithOneRetry(
     priorObservationsText,
     workingMemoryBlock,
     handoffDigest,
-    ragHitsBlock
+    ragHitsBlock,
+    memoryRecallBlock,
+    stepInsightsBlock
   );
 }
 
@@ -767,9 +1023,8 @@ export async function runAgentTurn(
 ): Promise<AgentLoopResult> {
   const registry = new ToolRegistry();
   registerDefaultTools(registry);
-  const toolCtx = { exec: ctx, config };
-
   const turnId = randomUUID();
+  const toolCtx = { exec: ctx, config, turnId };
   const trace: AgentTrace = {
     turnId,
     startedAt: Date.now(),
@@ -840,6 +1095,31 @@ export async function runAgentTurn(
   // user straight to /dashboard?open=<id>.
   let createdDashboardId: string | undefined;
   const workingMemory: WorkingMemoryEntry[] = [];
+  // Wave A2 · structured per-step verdicts + tool I/O snapshots persisted via
+  // `agentInternals` at end-of-turn so the next turn's `priorTurnState`
+  // handle (Wave B9) can read typed prior state instead of TEXT digests.
+  const reflectorVerdicts: import("./buildAgentInternals.js").ReflectorVerdictRecord[] = [];
+  const verifierVerdicts: import("./buildAgentInternals.js").VerifierVerdictRecord[] = [];
+  const toolIOEntries: import("./buildAgentInternals.js").ToolIORecord[] = [];
+  // Wave B3 · lossless structured observation log. The legacy `observations[]`
+  // text array (capped at 80) survives for prompt rendering, but every tool
+  // result's full payload (table, charts, numericPayload, analyticalMeta) is
+  // preserved here for programmatic re-use by tools (B2 read accessors), the
+  // narrator (B4 magnitude audits), and verifier (C2 raw-row spot-checks).
+  const structuredObservations: import("./investigationState.js").StructuredObservation[] = [];
+  // Wave B4 · structured findings (independent from the legacy blackboard
+  // text findings; both populated for back-compat).
+  const structuredFindings: import("./investigationState.js").StructuredFinding[] = [];
+  // Wave B1/B8 · cross-step typed scratchpad.
+  const turnScratchpad: import("./investigationState.js").ScratchpadEntry[] = [];
+  // Wave B1/B7 · structured sub-questions emitted by reflector / orchestrator.
+  const turnSubQuestions: import("./investigationState.js").SubQuestion[] = [];
+  // Wave C2 · magnitude audits accumulated during the turn (one per
+  // structured finding with a magnitude). Drift > 5% downgrades the
+  // finding's confidence to "low".
+  const magnitudeAudits: import("./investigationState.js").MagnitudeAudit[] = [];
+  // Wave B10 · contradictions detected by the inconsistency watcher.
+  const turnContradictions: import("./investigationState.js").Contradiction[] = [];
   const mergedCharts: ChartSpec[] = [];
   const mergedInsights: Insight[] = [];
   const deferredPlanCharts: DeferredBuildChartTemplate[] = [];
@@ -996,6 +1276,14 @@ export async function runAgentTurn(
   // per-task post-processing. On any failure it falls back to the
   // per-task path (so the merged option is always strictly safer).
   if (ctx.mode === "analysis") {
+    const briefStepLabel = isMergedPrePlannerEnabled()
+      ? "Drafting analysis brief & hypotheses"
+      : "Generating hypotheses";
+    safeEmit("thinking", {
+      step: briefStepLabel,
+      status: "active",
+      timestamp: Date.now(),
+    });
     if (isMergedPrePlannerEnabled()) {
       const mergedShouldBuildBrief = shouldBuildAnalysisBrief(ctx);
       const merged = await runHypothesisAndBriefMerged(
@@ -1016,15 +1304,30 @@ export async function runAgentTurn(
     } else {
       await generateHypotheses(ctx, blackboard, turnId, onLlmCall);
     }
+    safeEmit("thinking", {
+      step: briefStepLabel,
+      status: "completed",
+      timestamp: Date.now(),
+      details: blackboard.hypotheses.length
+        ? `${blackboard.hypotheses.length} hypothes${blackboard.hypotheses.length === 1 ? "is" : "es"}`
+        : undefined,
+    });
   }
 
   // P-A1: upfront RAG retrieval so the planner has semantic grounding on its
   // first call. Retrieval failures are non-fatal — planner still works on the
   // data summary alone; the block simply stays empty.
   let upfrontRagHitsBlock: string | undefined;
+  let upfrontRagEmitted = false;
   try {
     const { isRagEnabled } = await import("../../rag/config.js");
     if (isRagEnabled()) {
+      safeEmit("thinking", {
+        step: "Retrieving session context",
+        status: "active",
+        timestamp: Date.now(),
+      });
+      upfrontRagEmitted = true;
       const { retrieveRagHits, formatHitsForPrompt } = await import(
         "../../rag/retrieve.js"
       );
@@ -1042,9 +1345,45 @@ export async function runAgentTurn(
           lastRagHitCount = topHits.length;
         }
       }
+      safeEmit("thinking", {
+        step: "Retrieving session context",
+        status: "completed",
+        timestamp: Date.now(),
+        details: `${topHits.length} hit${topHits.length === 1 ? "" : "s"}`,
+      });
     }
   } catch (err) {
+    if (upfrontRagEmitted) {
+      safeEmit("thinking", {
+        step: "Retrieving session context",
+        status: "completed",
+        timestamp: Date.now(),
+      });
+    }
     agentLog("upfrontRag.failed", {
+      turnId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // W60 · semantic recall over the per-session Analysis Memory journal.
+  // Replaces the count-capped priorInvestigations block in the planner prompt
+  // with unbounded session memory + bounded prompt size.
+  let memoryRecallBlock: string | undefined;
+  try {
+    const { formatMemoryRecallForPlanner } = await import("./memoryRecall.js");
+    const block = await formatMemoryRecallForPlanner({
+      sessionId: ctx.sessionId,
+      question: ctx.question,
+      // No minDataVersion floor: prior findings stay informational context even
+      // after data transforms; the narrator weighs relevance against the
+      // current frame. Tighten only when a transform clearly invalidates them.
+    });
+    if (block) {
+      memoryRecallBlock = block;
+    }
+  } catch (err) {
+    agentLog("memoryRecall.failed", {
       turnId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -1199,6 +1538,31 @@ export async function runAgentTurn(
       }
 
       if (!planResult) {
+        // Wave B5 · format structured per-step insights collected so far in
+        // this turn into a labelled block the planner can build on. This
+        // closes the gap where W19 step insights were emitted to the UI but
+        // never threaded back into the next planning iteration.
+        const stepInsightsBlock =
+          mergedInsights.length > 0
+            ? mergedInsights
+                .slice(-5) // last 5 steps' insights
+                .map((ins, idx) => {
+                  const text =
+                    typeof (ins as { text?: string }).text === "string"
+                      ? ((ins as { text?: string }).text as string)
+                      : typeof ins === "string"
+                        ? (ins as string)
+                        : "";
+                  return text ? `${idx + 1}. ${text.slice(0, 500)}` : "";
+                })
+                .filter(Boolean)
+                .join("\n")
+            : "";
+        safeEmit("thinking", {
+          step: "Planning approach",
+          status: "active",
+          timestamp: Date.now(),
+        });
         planResult = await runPlannerWithOneRetry(
           ctx,
           registry,
@@ -1207,8 +1571,19 @@ export async function runAgentTurn(
           priorForPlanner,
           workingMemoryBlock || undefined,
           handoffDigest,
-          upfrontRagHitsBlock
+          upfrontRagHitsBlock,
+          memoryRecallBlock,
+          stepInsightsBlock || undefined
         );
+        safeEmit("thinking", {
+          step: "Planning approach",
+          status: "completed",
+          timestamp: Date.now(),
+          details:
+            planResult?.ok && Array.isArray(planResult.steps)
+              ? `${planResult.steps.length} step${planResult.steps.length === 1 ? "" : "s"}`
+              : undefined,
+        });
       }
       if (!planResult.ok) {
         trace.parseFailures = (trace.parseFailures || 0) + 1;
@@ -1259,6 +1634,26 @@ export async function runAgentTurn(
       }
 
       const plan = planResult;
+
+      // DB3 · Dashboard coverage gate. When `brief.requestsDashboard` is true
+      // and the LLM-emitted plan misses any low-cardinality dimension named in
+      // `candidateDriverDimensions ∪ segmentationDimensions`, append a
+      // deterministic `build_chart` step per missing dim. Single-flow policy
+      // is preserved (no replan, no narrative override). High-cardinality dims
+      // pass through to DB4's feature-sweep top-N+Other bucketing.
+      const coverage = applyDashboardCoverage(plan.steps, ctx);
+      if (coverage.extensions.length > 0) {
+        safeEmit("dashboard_coverage_gate", {
+          missingDimensions: coverage.missingDimensions,
+          highCardinalityDimensions: coverage.highCardinalityDimensions,
+          appendedStepIds: coverage.extensions.map((s) => s.id),
+        });
+        agentLog("dashboardCoverageGate.extended", {
+          turnId,
+          missing: coverage.missingDimensions.join(","),
+          appended: coverage.extensions.length,
+        });
+      }
 
       trace.planRationale = plan.rationale;
       trace.steps = plan.steps;
@@ -1404,6 +1799,63 @@ export async function runAgentTurn(
             resultSummary: result.summary.slice(0, 2_500),
           };
           trace.toolCalls.push(record);
+          // Wave A2 · capture full tool I/O (including the table / numericPayload
+          // that the legacy `trace.toolCalls` truncates to a 2_500-char summary).
+          {
+            let argsJson = "{}";
+            try {
+              argsJson = JSON.stringify(step.args ?? {});
+            } catch {
+              /* fall through with empty */
+            }
+            let resultPayload: string | undefined;
+            try {
+              const obj: Record<string, unknown> = {};
+              const tableLike = (result as { table?: unknown }).table;
+              if (tableLike != null) obj.table = tableLike;
+              if (result.numericPayload != null)
+                obj.numericPayload = result.numericPayload;
+              if (Object.keys(obj).length > 0) resultPayload = JSON.stringify(obj);
+            } catch {
+              /* skip on cyclic */
+            }
+            toolIOEntries.push({
+              stepId: step.id,
+              tool: step.tool,
+              ok: result.ok,
+              argsJson,
+              resultSummary: result.summary,
+              resultPayload,
+              analyticalMeta: result.analyticalMeta as
+                | {
+                    inputRowCount?: number;
+                    outputRowCount?: number;
+                    appliedAggregation?: boolean;
+                  }
+                | undefined,
+              durationMs: Math.max(0, t1 - t0),
+            });
+            // Wave B3 · lossless structured observation (full ToolResult).
+            structuredObservations.push({
+              id: `obs-${step.id}-${structuredObservations.length + 1}`,
+              stepId: step.id,
+              tool: step.tool,
+              args: (step.args ?? {}) as Record<string, unknown>,
+              result, // full ToolResult preserved
+              resultSummary: result.summary,
+              metrics: {
+                inputRowCount: (result.analyticalMeta as { inputRowCount?: number } | undefined)
+                  ?.inputRowCount,
+                outputRowCount: (result.analyticalMeta as { outputRowCount?: number } | undefined)
+                  ?.outputRowCount,
+                appliedAggregation: (result.analyticalMeta as { appliedAggregation?: boolean } | undefined)
+                  ?.appliedAggregation,
+                durationMs: Math.max(0, t1 - t0),
+              },
+              findingIds: [], // populated below if Wave B4 path emits a structured finding
+              createdAt: t1,
+            });
+          }
 
           safeEmit("tool_result", {
             id: callId,
@@ -1490,7 +1942,10 @@ export async function runAgentTurn(
             candidate += `\nSuggested columns: ${result.suggestedColumns.join(", ")}`;
           }
 
-          const evidence = `${result.summary}\n${lastNumeric || ""}`.slice(0, 8000);
+          // WTL2 · 8_000 → 14_000. Evidence is what the verifier inspects; the
+          // narrator-side cap (AGENT_OBSERVATION_MAX_CHARS) was already 24k →
+          // 40k under WTL1, so giving the verifier a richer slice is consistent.
+          const evidence = `${result.summary}\n${lastNumeric || ""}`.slice(0, 14_000);
 
           if (hasNarrativeCandidate) {
             let vRound = 0;
@@ -1505,6 +1960,8 @@ export async function runAgentTurn(
                   blackboard: ctx.blackboard,
                   planSteps: plan.steps,
                   charts: mergedCharts,
+                  // Wave B6 · in-turn verifier history.
+                  priorVerifierVerdicts: verifierVerdicts,
                 },
                 onLlmCall
               );
@@ -1515,6 +1972,21 @@ export async function runAgentTurn(
                 issueCodes: verdict.issues.map((i) => i.code),
                 courseCorrection: verdict.course_correction,
               });
+              // Wave A2 · structured verifier-verdict record persisted via
+              // agentInternals so subsequent turns / debugging can replay.
+              {
+                // WTL2 · 1_800 → 3_000 (issue lines), 3_500 → 6_000 (evidence).
+                const issueLines = verdict.issues
+                  .map((i) => `${i.code}: ${i.description}`)
+                  .join("\n")
+                  .slice(0, 3_000);
+                verifierVerdicts.push({
+                  stepIndex: stepsWalked,
+                  verdict: verdict.verdict,
+                  rationale: verdict.course_correction || issueLines || "(no rationale)",
+                  evidence: evidence?.slice(0, 6_000),
+                });
+              }
 
               safeEmit("critic_verdict", {
                 stepId: step.id,
@@ -1604,6 +2076,11 @@ export async function runAgentTurn(
             );
             const hasPivotHint =
               Boolean(pivotDefaults?.rows?.length) && Boolean(pivotDefaults?.values?.length);
+            // Scalar: a 1-row aggregate with no row dimensions. Flag it so the
+            // chat stream skips the schema-heuristic fallback that otherwise
+            // renders Postal-Code-by-week-style nonsense beneath the answer.
+            const executionScalar =
+              intermediateRows.length <= 1 && !pivotDefaults?.rows?.length;
             ctx.onIntermediateArtifact({
               preview: intermediateRows.slice(0, 50),
               insight,
@@ -1618,6 +2095,7 @@ export async function runAgentTurn(
                     },
                   }
                 : {}),
+              ...(executionScalar ? { executionScalar: true } : {}),
             });
           }
         }
@@ -1634,12 +2112,79 @@ export async function runAgentTurn(
             step.tool === "run_readonly_sql")
         ) {
           const analyticalRows = stepResult.table.rows as Record<string, unknown>[];
-          ctx.data = analyticalRows;
+          // Wave C1 · `AGENT_IMMUTABLE_CTX_DATA` (default ON for new turns)
+          // routes aggregate output through `lastAnalyticalTable` only,
+          // leaving `ctx.data` pointing at the original row-level frame.
+          // Removes the silent narrowing where chained tools after a
+          // groupby saw aggregates instead of raw rows. Default is ON; set
+          // env var to "false" to fall back to legacy behaviour.
+          const immutable =
+            (process.env.AGENT_IMMUTABLE_CTX_DATA ?? "true").toLowerCase() !==
+            "false";
+          if (!immutable) {
+            ctx.data = analyticalRows;
+          }
           ctx.lastAnalyticalTable = {
             rows: analyticalRows,
             columns: rowKeysFromFirstRow(analyticalRows),
             sourceTool: step.tool,
           };
+
+          // Promote successful execute_query_plan / run_analytical_query
+          // results into final-message charts so the rendered answer surfaces
+          // every breakdown the agent ran, not just the one the planner
+          // explicitly built. Dedupes by axis-signature against existing
+          // mergedCharts. Final cap applied later via finalizeMergedCharts.
+          // Env gate: AGENT_PROMOTE_INTERMEDIATE_CHARTS (default true).
+          if (
+            (step.tool === "execute_query_plan" ||
+              step.tool === "run_analytical_query") &&
+            (process.env.AGENT_PROMOTE_INTERMEDIATE_CHARTS ?? "true")
+              .toLowerCase() !== "false"
+          ) {
+            try {
+              const promoted = buildChartFromAnalyticalTable({
+                table: {
+                  rows: ctx.lastAnalyticalTable.rows,
+                  columns: ctx.lastAnalyticalTable.columns,
+                },
+                summary: ctx.summary,
+                question: ctx.question,
+              });
+              if (promoted) {
+                const sig = chartAxisSignature(promoted);
+                const existingSigs = new Set(
+                  mergedCharts.map(chartAxisSignature)
+                );
+                if (!existingSigs.has(sig)) {
+                  const tagged: ChartSpec = {
+                    ...promoted,
+                    ...(finalCallId
+                      ? { _agentEvidenceRef: finalCallId, _agentTurnId: turnId }
+                      : {}),
+                  };
+                  mergedCharts.push(tagged);
+                  agentLog("chart_promoted_from_intermediate", {
+                    turnId,
+                    tool: step.tool,
+                    title: promoted.title,
+                    x: promoted.x,
+                    y: promoted.y,
+                    type: promoted.type,
+                  });
+                }
+              }
+            } catch (promoteErr) {
+              agentLog("chart_promotion_failed", {
+                turnId,
+                tool: step.tool,
+                err:
+                  promoteErr instanceof Error
+                    ? promoteErr.message
+                    : String(promoteErr),
+              });
+            }
+          }
         }
 
         if (stepResult.ok && step.tool === "derive_dimension_bucket") {
@@ -1693,14 +2238,101 @@ export async function runAgentTurn(
             relatedColumns: stepResult.suggestedColumns ?? [],
           });
           // O2: if the planner bound this step to a hypothesis, resolve it now.
-          if (step.hypothesisId) {
+          // Multiple hypotheses can be linked when coalesceQueryPlanSteps merged
+          // same-shape steps; resolve each one against the same finding.
+          {
             const sig = finding.significance;
-            resolveHypothesis(
-              ctx.blackboard,
-              step.hypothesisId,
-              sig === "anomalous" ? "confirmed" : "partial",
-              finding.id
-            );
+            const status = sig === "anomalous" ? "confirmed" : "partial";
+            const linkedHypIds: string[] =
+              step.hypothesisIds && step.hypothesisIds.length > 0
+                ? step.hypothesisIds
+                : step.hypothesisId
+                  ? [step.hypothesisId]
+                  : [];
+            for (const hid of linkedHypIds) {
+              resolveHypothesis(ctx.blackboard, hid, status, finding.id);
+            }
+          }
+          // Wave B4 · structured finding side-channel. Carries claim/evidence/
+          // magnitude/confidence so narrator + verifier can read typed state
+          // instead of summarising-the-summary. Best-effort: bound to the same
+          // legacy finding via shared id so cross-references stay aligned.
+          {
+            const lastObs =
+              structuredObservations.length > 0
+                ? structuredObservations[structuredObservations.length - 1]
+                : undefined;
+            const sf: import("./investigationState.js").StructuredFinding = {
+              id: finding.id,
+              claim: stepResult.summary?.slice(0, 600) ?? finding.label,
+              hypothesisId: step.hypothesisId,
+              significance: finding.significance,
+              confidence: pickFindingConfidence(stepResult, finding.significance),
+              sources: [step.id],
+              evidence: {
+                queries: [
+                  {
+                    stepId: step.id,
+                    tool: step.tool,
+                    query:
+                      typeof step.args?.plan === "string"
+                        ? (step.args.plan as string).slice(0, 1000)
+                        : JSON.stringify(step.args ?? {}).slice(0, 1000),
+                  },
+                ],
+                rowRefs:
+                  stepResult.analyticalMeta?.outputRowCount
+                    ? [
+                        {
+                          count: stepResult.analyticalMeta.outputRowCount,
+                          producedByStepId: step.id,
+                          sample: Array.isArray(
+                            (stepResult.table as { rows?: Record<string, unknown>[] } | undefined)
+                              ?.rows
+                          )
+                            ? ((stepResult.table as { rows: Record<string, unknown>[] }).rows.slice(
+                                0,
+                                5
+                              ) as Record<string, unknown>[])
+                            : undefined,
+                        },
+                      ]
+                    : [],
+                stats: extractStatsFromNumericPayload(stepResult.numericPayload, step.tool),
+              },
+              magnitude: extractMagnitudeFromSummary(stepResult.summary, stepResult.numericPayload),
+              relatedColumns: stepResult.suggestedColumns ?? [],
+              createdAt: Date.now(),
+            };
+            structuredFindings.push(sf);
+            if (lastObs) lastObs.findingIds.push(sf.id);
+            // Wave B10 · inconsistency watcher: cross-check against existing
+            // findings on the same metric/scope, flag contradictions for the
+            // reflector to investigate. Pure function, fires synchronously.
+            try {
+              const contradictions = detectContradictions(sf, structuredFindings);
+              for (const c of contradictions) turnContradictions.push(c);
+            } catch {
+              /* watcher is best-effort */
+            }
+            // Wave C2 · magnitude ground-truth audit. Best-effort, async,
+            // bounded to ~10 audits per turn. Drift > 5% downgrades the
+            // finding's confidence so narrator caveats reflect reality.
+            if (sf.magnitude) {
+              void (async () => {
+                try {
+                  const audit = await auditMagnitude(ctx, sf);
+                  if (audit) {
+                    magnitudeAudits.push(audit);
+                    if (audit.status === "drift") {
+                      sf.confidence = "low";
+                    }
+                  }
+                } catch {
+                  /* swallow; audit is best-effort */
+                }
+              })();
+            }
           }
         }
 
@@ -1741,23 +2373,84 @@ export async function runAgentTurn(
                   ? stepResult.analyticalMeta
                   : undefined,
               workingMemorySuggestedColumns,
+              // Wave B6 · in-turn verdict history so the reflector can
+              // detect repetition + verifier patterns.
+              priorReflectorVerdicts: reflectorVerdicts,
+              priorVerifierVerdicts: verifierVerdicts,
             },
             turnId,
             onLlmCall,
             refDigest
           );
           trace.reflectorNotes.push(ref.action + (ref.note ? `: ${ref.note}` : ""));
+          // Wave A4 · debounced mid-turn checkpoint: snapshot the running
+          // agentInternals to `chatDocument.currentTurnCheckpoint` so a
+          // mid-turn process crash leaves a partial answer the next session
+          // load can render. Best-effort, non-blocking, debounced (3s).
+          if (ctx.sessionId && ctx.username) {
+            try {
+              scheduleTurnCheckpoint({
+                sessionId: ctx.sessionId,
+                username: ctx.username,
+                question: ctx.question,
+                agentInternals: buildAgentInternals({
+                  workingMemory,
+                  reflectorVerdicts,
+                  verifierVerdicts,
+                  blackboard: ctx.blackboard,
+                  toolIO: toolIOEntries,
+                }),
+                stepsCompleted: stepsWalked,
+                startedAt: trace.startedAt,
+              });
+            } catch {
+              // Best-effort only.
+            }
+          }
+          // Wave A2 · structured reflector verdict for agentInternals.
+          reflectorVerdicts.push({
+            stepIndex: stepsWalked,
+            action: ref.action as
+              | "continue"
+              | "finish"
+              | "replan"
+              | "clarify"
+              | "investigate_gap",
+            rationale: ref.note ?? "(no rationale)",
+            suggestedQuestions: ref.spawnedQuestions?.map((q) => q.question),
+            gapFill: (ref as { gapFill?: { hypothesisId?: string; tool?: string; rationale?: string } })
+              .gapFill?.tool
+              ? {
+                  hypothesisId: (ref as { gapFill?: { hypothesisId?: string } }).gapFill
+                    ?.hypothesisId,
+                  tool: (ref as { gapFill?: { tool: string } }).gapFill!.tool,
+                  rationale: (ref as { gapFill?: { rationale?: string } }).gapFill?.rationale,
+                }
+              : undefined,
+          });
           // W8: collect sub-questions emitted by the reflector.
           if (ref.spawnedQuestions?.length) {
-            for (const sq of ref.spawnedQuestions) {
-              accumulatedSpawnedQuestions.push({ ...sq, suggestedColumns: sq.suggestedColumns ?? [] });
+            // Stamp a stable UUID on every spawned question so per-question
+            // feedback (thumbs up/down) can target it across reorders/edits.
+            const stamped = ref.spawnedQuestions.map((sq) => ({
+              ...sq,
+              id: sq.id ?? randomUUID(),
+              suggestedColumns: sq.suggestedColumns ?? [],
+            }));
+            for (const sq of stamped) {
+              accumulatedSpawnedQuestions.push(sq);
               // O1: persist spawned questions to the blackboard so convergence
               // and context-agent Round 2 can see open investigative threads.
               if (ctx.blackboard) {
                 addOpenQuestion(ctx.blackboard, sq.question, sq.spawnReason ?? "", { priority: sq.priority ?? "medium" });
               }
             }
-            safeEmit("sub_question_spawned", { questions: ref.spawnedQuestions.map((q) => q.question) });
+            // SSE payload carries the new {id, question}[] shape alongside the
+            // legacy `questions: string[]` field so older clients still render.
+            safeEmit("sub_question_spawned", {
+              questions: stamped.map((q) => q.question),
+              spawnedQuestions: stamped.map((q) => ({ id: q.id, question: q.question })),
+            });
           }
           appendInterAgentMessage(
             trace,
@@ -1930,6 +2623,12 @@ export async function runAgentTurn(
           // so the W38 fallback to non-streaming on schema-failure is
           // still the correctness backstop.
           const bodyExtractor = new JsonFieldStreamExtractor("body");
+          safeEmit("thinking", {
+            step: "Synthesizing answer",
+            status: "active",
+            timestamp: Date.now(),
+          });
+          let firstChunkSeen = false;
           const narResult = await runNarrator(
             ctx,
             ctx.blackboard!,
@@ -1940,10 +2639,32 @@ export async function runAgentTurn(
               onPartial: ({ delta }) => {
                 if (!delta) return;
                 const cleaned = bodyExtractor.process(delta);
-                if (cleaned) safeEmit("answer_chunk", { delta: cleaned });
+                if (cleaned) {
+                  if (!firstChunkSeen) {
+                    firstChunkSeen = true;
+                    safeEmit("thinking", {
+                      step: "Synthesizing answer",
+                      status: "completed",
+                      timestamp: Date.now(),
+                    });
+                  }
+                  safeEmit("answer_chunk", { delta: cleaned });
+                }
               },
-            }
+            },
+            // G4-P5 · structured per-step tool I/O so the narrator's
+            // data-understanding block can list each step's tool, args, row
+            // count. Distinguishes "step queried whole dataset" from "step
+            // filtered to a subset" — fixes the "data is incomplete" hallucination.
+            structuredObservations
           );
+          if (!firstChunkSeen) {
+            safeEmit("thinking", {
+              step: "Synthesizing answer",
+              status: "completed",
+              timestamp: Date.now(),
+            });
+          }
           if (narResult) {
             // formatAnswerFromEnvelope signature is already in scope
             answer = formatAnswerFromEnvelope(narResult.body ?? "", narResult.keyInsight ?? null);
@@ -2212,11 +2933,20 @@ export async function runAgentTurn(
           reason: composite.description.slice(0, 300),
           candidates: failedCodes,
         });
-        const repaired = await runNarrator(ctx, ctx.blackboard, turnId, onLlmCall, {
-          issues: composite.description,
-          priorDraft: answer,
-          courseCorrection: composite.courseCorrection,
-        });
+        const repaired = await runNarrator(
+          ctx,
+          ctx.blackboard,
+          turnId,
+          onLlmCall,
+          {
+            issues: composite.description,
+            priorDraft: answer,
+            courseCorrection: composite.courseCorrection,
+          },
+          undefined,
+          // G4-P5 · pass structured observations on the repair pass too.
+          structuredObservations
+        );
         if (!repaired) break;
         // Rebuild answer + envelope from the repaired narrator output. Mirror
         // the assembly in the initial narrator branch above so all envelope
@@ -2288,10 +3018,15 @@ export async function runAgentTurn(
       }
     }
 
-    // Deterministic feature sweep — when the user asked for a dashboard,
-    // fill coverage gaps the LLM-driven planner + visual planner left behind.
-    // Bounded so total mergedCharts never exceeds the dashboard cap.
-    if (ctx.analysisBrief?.requestsDashboard === true) {
+    // Deterministic feature sweep — when the user explicitly asked for a
+    // dashboard, fill coverage gaps the LLM-driven planner + visual planner
+    // left behind. Bounded so total mergedCharts never exceeds the dashboard
+    // cap. Only runs on the auto_create track (regex or brief flag); the
+    // multi-chart "offer" track does NOT pad charts the user didn't request.
+    const isExplicitDashboardAsk =
+      DASHBOARD_EXPLICIT_RX.test(ctx.question) ||
+      ctx.analysisBrief?.requestsDashboard === true;
+    if (isExplicitDashboardAsk) {
       try {
         const { enumerateMissingDashboardCharts } = await import(
           "./dashboardFeatureSweep.js"
@@ -2301,9 +3036,32 @@ export async function runAgentTurn(
           DASHBOARD_CHART_HARD_CAP - mergedCharts.length
         );
         if (remaining > 0) {
-          const swept = enumerateMissingDashboardCharts(ctx, mergedCharts, {
-            maxAdds: remaining,
-          });
+          // DB4 · pass a report sink so the loop can emit telemetry for
+          // bucketed (top-N+Other) dims and high-cardinality skips. Both are
+          // user-actionable: bucketed dims may need a derive_dimension_bucket
+          // step to be useful; skipped dims at >500 uniques tell the user
+          // why a candidate driver dim never appeared.
+          const sweepReport = {
+            skippedHighCardinality: [] as Array<{ dimension: string; uniques: number }>,
+            bucketedDimensions: [] as Array<{ dimension: string; uniques: number; topN: number }>,
+          };
+          const swept = enumerateMissingDashboardCharts(
+            ctx,
+            mergedCharts,
+            { maxAdds: remaining },
+            sweepReport
+          );
+          if (sweepReport.bucketedDimensions.length || sweepReport.skippedHighCardinality.length) {
+            safeEmit("dashboard_feature_sweep_diagnostic", {
+              bucketedDimensions: sweepReport.bucketedDimensions,
+              skippedHighCardinality: sweepReport.skippedHighCardinality,
+            });
+            agentLog("dashboard_feature_sweep_diagnostic", {
+              turnId,
+              bucketed: sweepReport.bucketedDimensions.length,
+              skipped: sweepReport.skippedHighCardinality.length,
+            });
+          }
           if (swept.length) {
             mergedCharts.push(...swept);
             appendInterAgentMessage(
@@ -2332,6 +3090,21 @@ export async function runAgentTurn(
       }
     }
 
+    // Final dedupe + cap on mergedCharts. After this point the response is
+    // assembled, so all chart sources (per-step promotion, deferred build_chart,
+    // visual planner, dashboard sweep) are flushed into one canonical list.
+    {
+      const beforeCount = mergedCharts.length;
+      finalizeMergedCharts(mergedCharts);
+      if (mergedCharts.length !== beforeCount) {
+        agentLog("merged_charts_finalized", {
+          turnId,
+          before: beforeCount,
+          after: mergedCharts.length,
+        });
+      }
+    }
+
     if (!answer?.trim()) {
       const fb = observationsFallbackAnswer();
       if (fb) {
@@ -2346,24 +3119,62 @@ export async function runAgentTurn(
       }
     }
 
-    // PR 2.B — emit a DashboardSpec draft when the user asked for a dashboard
-    // and at least one chart exists. Non-fatal: failures leave dashboardDraft
-    // unset and the normal answer still streams to the client.
+    // PR 2.B — emit a DashboardSpec draft. Two tracks:
+    //   - auto_create: user explicitly asked (regex or brief flag) → build +
+    //     persist + emit `dashboard_created` → client auto-navigates.
+    //   - offer: multi-chart turn (>= MULTI_CHART_OFFER_THRESHOLD) without an
+    //     explicit ask → build spec only; client renders a "Build Dashboard"
+    //     button the user can click.
+    // Non-fatal: failures leave dashboardDraft unset and the normal answer
+    // still streams to the client.
+    const dashIntent = classifyDashboardIntent({
+      question: ctx.question,
+      chartCount: mergedCharts.length,
+      brief: ctx.analysisBrief,
+    });
+    agentLog("dashboard_intent", {
+      turnId,
+      intent: dashIntent,
+      chartCount: mergedCharts.length,
+    });
     try {
-      const { shouldBuildDashboard, buildDashboardFromTurn } = await import(
+      const { dashboardBuildDecision, buildDashboardFromTurn } = await import(
         "./buildDashboard.js"
       );
-      if (
-        answer?.trim() &&
-        shouldBuildDashboard({
-          brief: ctx.analysisBrief,
-          charts: mergedCharts,
-          userKey: ctx.username,
-        })
-      ) {
+      const dashDecision = dashboardBuildDecision({
+        intent: dashIntent,
+        charts: mergedCharts,
+        userKey: ctx.username,
+      });
+      if (answer?.trim() && dashDecision.build) {
         const intermediateSummaries = trace.toolCalls
           .filter((t) => t.ok && t.resultSummary)
           .map((t) => `${t.name}: ${t.resultSummary}`);
+        // W5 · build the slim envelope the dashboard prompt + persistence
+        // expect. `envelopeAnswerEnvelope` lacks magnitudes (those live at
+        // top-level on the message); merge them in here.
+        const dashEnvelope = envelopeAnswerEnvelope
+          ? {
+              ...envelopeAnswerEnvelope,
+              ...(envelopeMagnitudes && envelopeMagnitudes.length > 0
+                ? { magnitudes: envelopeMagnitudes }
+                : {}),
+            }
+          : envelopeMagnitudes && envelopeMagnitudes.length > 0
+            ? { magnitudes: envelopeMagnitudes }
+            : undefined;
+        // FIX · auto-include the response's pivot on the dashboard. We use the
+        // same `derivePivotDefaultsFromPreviewRows` the chat-side pivot uses
+        // to seed its initial state — so the dashboard's pivot tile renders
+        // the same view the user would see if they toggled "Pivot" in chat.
+        // No tools re-run; the tile fetches data live from the same DuckDB
+        // session at render time (same pattern as the chat-side pivot).
+        const dashPivot = buildAutoPivotSpec({
+          table,
+          summary: ctx.summary,
+          turnId,
+          sessionId: ctx.sessionId,
+        });
         const spec = await buildDashboardFromTurn({
           question: ctx.question,
           answerBody: answer,
@@ -2374,6 +3185,8 @@ export async function runAgentTurn(
           turnId,
           onLlmCall,
           intermediateSummaries,
+          envelope: dashEnvelope,
+          pivot: dashPivot,
         });
         if (spec) {
           dashboardDraft = spec;
@@ -2398,9 +3211,12 @@ export async function runAgentTurn(
           );
 
           // Auto-persist the draft so the user lands on /dashboard?open=<id>
-          // without a manual click. Failure leaves dashboardDraft as the
-          // fallback path (DashboardDraftCard's manual "Create dashboard").
-          if (ctx.username) {
+          // without a manual click. Only on the auto_create track — the
+          // multi-chart "offer" track relies on the client's explicit
+          // BuildDashboardCallout button to create + navigate. Failure leaves
+          // dashboardDraft as the fallback path (DashboardDraftCard's manual
+          // "Create dashboard").
+          if (dashDecision.persist && ctx.username) {
             try {
               const { createDashboardFromSpec } = await import(
                 "../../../models/dashboard.model.js"
@@ -2417,12 +3233,25 @@ export async function runAgentTurn(
                 if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED") return true;
                 return /timeout|ECONNRESET|ETIMEDOUT|429|503/i.test(m);
               };
+              // Wave-FA6 · Snapshot the session's active filter onto the
+              // dashboard spec for provenance. Charts are already filtered at
+              // capture time (since `loadLatestData` honored the filter); this
+              // records *which* slice the dashboard was built from so the
+              // dashboard view can show a banner.
+              const specWithFilter = ctx.chatDocument?.activeFilter &&
+                ctx.chatDocument.activeFilter.conditions.length > 0
+                ? { ...spec, capturedActiveFilter: ctx.chatDocument.activeFilter }
+                : spec;
               let created: Awaited<ReturnType<typeof createDashboardFromSpec>>;
               const delays = [200, 400, 800];
               let attempt = 0;
               for (;;) {
                 try {
-                  created = await createDashboardFromSpec(ctx.username, spec);
+                  created = await createDashboardFromSpec(
+                    ctx.username,
+                    specWithFilter,
+                    ctx.sessionId
+                  );
                   break;
                 } catch (err) {
                   if (attempt >= delays.length || !isRetryable(err)) throw err;
@@ -2539,6 +3368,8 @@ export async function runAgentTurn(
           blackboard: ctx.blackboard,
           planSteps: trace.steps,
           charts: mergedCharts,
+          // Wave B6 · in-turn verdict history.
+          priorVerifierVerdicts: verifierVerdicts,
         },
         onLlmCall
       );
@@ -2548,6 +3379,19 @@ export async function runAgentTurn(
         issueCodes: fv.issues.map((i) => i.code),
         courseCorrection: fv.course_correction,
       });
+      // Wave A2 · structured final-verifier verdict (stepIndex = -1 marker).
+      {
+        const issueLines = fv.issues
+          .map((i) => `${i.code}: ${i.description}`)
+          .join("\n")
+          .slice(0, 1800);
+        verifierVerdicts.push({
+          stepIndex: -1,
+          verdict: fv.verdict,
+          rationale: fv.course_correction || issueLines || "(no rationale)",
+          evidence: finalEvidence?.slice(0, 3500),
+        });
+      }
       safeEmit("critic_verdict", {
         stepId: "final",
         verdict: fv.verdict,
@@ -2626,6 +3470,16 @@ export async function runAgentTurn(
       ...(buildInvestigationSummary(ctx.blackboard)
         ? { investigationSummary: buildInvestigationSummary(ctx.blackboard) }
         : {}),
+      // Wave A2 · full in-memory turn state for round-trip persistence to
+      // Cosmos. Survives end-to-end: workingMemory, structured reflector +
+      // verifier verdicts, blackboard snapshot, per-step tool I/O.
+      agentInternals: buildAgentInternals({
+        workingMemory,
+        reflectorVerdicts,
+        verifierVerdicts,
+        blackboard: ctx.blackboard,
+        toolIO: toolIOEntries,
+      }),
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
       ...appliedFiltersOut(),

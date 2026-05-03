@@ -15,6 +15,81 @@ import {
   remapGroupByToTemporalFacet,
 } from '../temporalFacetColumns.js';
 import { coerceTemporalFacetKeysToStrings } from "../temporalFacetKeyNormalization.js";
+import type { ActiveFilterCondition } from "../../shared/schema.js";
+
+/**
+ * Wave-FA4 · Translator from the legacy LLM-parsed `intent.filterConditions`
+ * shape to the new `ActiveFilterCondition[]` overlay shape. Returns ok:false
+ * with a reason when at least one condition uses an operator the overlay
+ * can't model — caller falls back to the legacy destructive `saveModifiedData`
+ * path so behaviour stays exactly as before for `!=`, `contains`, etc.
+ *
+ * Operator mappings (loose; preserves user intent for the natural-language
+ * path which was never operator-precise to begin with):
+ *   `=`, `in`           → `kind: "in"`
+ *   `>`, `>=`, `<`, `<=`, `between` (numeric) → `kind: "range"`
+ *   `between` on a date column                → `kind: "dateRange"`
+ *   `!=`, `contains`, `startsWith`, `endsWith` → not modelable → fall back
+ */
+function translateLegacyFilterToActiveFilter(
+  rawConditions: NonNullable<DataOpsIntent["filterConditions"]>
+): { ok: true; conditions: ActiveFilterCondition[] } | { ok: false; reason: string } {
+  const out: ActiveFilterCondition[] = [];
+  for (const c of rawConditions) {
+    if (!c.column) return { ok: false, reason: "missing column" };
+    const column = c.column;
+    const op = c.operator;
+    if (op === "=") {
+      out.push({ kind: "in", column, values: [String(c.value)] });
+      continue;
+    }
+    if (op === "in") {
+      const vals = Array.isArray(c.values) ? c.values.map(String) : [];
+      out.push({ kind: "in", column, values: vals });
+      continue;
+    }
+    if (op === ">=" || op === ">") {
+      const n = Number(c.value);
+      if (!Number.isFinite(n)) return { ok: false, reason: `non-numeric ${op} bound` };
+      out.push({ kind: "range", column, min: n });
+      continue;
+    }
+    if (op === "<=" || op === "<") {
+      const n = Number(c.value);
+      if (!Number.isFinite(n)) return { ok: false, reason: `non-numeric ${op} bound` };
+      out.push({ kind: "range", column, max: n });
+      continue;
+    }
+    if (op === "between") {
+      // Treat YYYY-MM-DD-looking strings as date range; otherwise numeric range.
+      const isIsoDate =
+        typeof c.value === "string" && /^\d{4}-\d{2}-\d{2}/.test(c.value);
+      if (isIsoDate) {
+        out.push({
+          kind: "dateRange",
+          column,
+          from: String(c.value),
+          to: typeof c.value2 === "string" ? c.value2 : undefined,
+        });
+      } else {
+        const lo = Number(c.value);
+        const hi = Number(c.value2);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+          return { ok: false, reason: "between requires two numeric bounds" };
+        }
+        out.push({ kind: "range", column, min: lo, max: hi });
+      }
+      continue;
+    }
+    return { ok: false, reason: `operator '${op}' not representable as active filter` };
+  }
+  return { ok: true, conditions: out };
+}
+
+async function loadActiveFilterPersistModule() {
+  const translateModule = await import("../activeFilter/persistActiveFilter.js");
+  return { translateModule };
+}
 
 export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
 
@@ -5199,7 +5274,42 @@ export async function executeDataOperation(
         }
       }).join(` ${logicalOperator} `);
       
-      // Save filtered data as the new working dataset
+      // Wave-FA4 · Try to translate to the new non-destructive `activeFilter`
+      // overlay. If every condition translates cleanly, write the spec to the
+      // session document and return without ever calling `saveModifiedData`.
+      // The canonical dataset is preserved; subsequent reads via
+      // `loadLatestData` apply the filter automatically.
+      const translation = translateLegacyFilterToActiveFilter(intent.filterConditions);
+      if (translation.ok && sessionDoc) {
+        const { translateModule } = await loadActiveFilterPersistModule();
+        await translateModule.applyActiveFilterFromIntent(
+          sessionDoc,
+          translation.conditions
+        );
+        const previewData = filteredData.slice(0, 50);
+        const answer = `✅ I've filtered the dataset based on your conditions:\n\n` +
+          `**Filter conditions:** ${conditionDescriptions}\n` +
+          `**Rows before:** ${rowsBefore}\n` +
+          `**Rows after:** ${rowsAfter}\n` +
+          `**Rows removed:** ${rowsRemoved}\n\n` +
+          `The filter is active for this analysis. Your original dataset is unchanged — open the Filter Data panel to refine or clear it.`;
+        return {
+          answer,
+          data: filteredData,
+          preview: previewData,
+          saved: false,
+        };
+      }
+
+      // Legacy fallback for operators the active-filter overlay can't model
+      // (`!=`, `contains`, `startsWith`, `endsWith`) or when the session doc
+      // is unavailable. Mutates the dataset exactly as before.
+      const fallbackReason = translation.ok
+        ? "session doc unavailable"
+        : translation.reason;
+      console.warn(
+        `⚠️ Legacy filter fallback (operator(s) not modelable as active filter): ${fallbackReason}`
+      );
       const saveResult = await saveModifiedData(
         sessionId,
         filteredData,
@@ -5207,17 +5317,17 @@ export async function executeDataOperation(
         `Filtered data: ${conditionDescriptions}`,
         sessionDoc
       );
-      
+
       // Get preview from saved data
       const previewData = await getPreviewFromSavedData(sessionId, filteredData);
-      
+
       const answer = `✅ I've filtered the dataset based on your conditions:\n\n` +
         `**Filter conditions:** ${conditionDescriptions}\n` +
         `**Rows before:** ${rowsBefore}\n` +
         `**Rows after:** ${rowsAfter}\n` +
         `**Rows removed:** ${rowsRemoved}\n\n` +
         `The filtered dataset is now your working dataset. All subsequent queries will work on this filtered data.`;
-      
+
       return {
         answer,
         data: filteredData,
@@ -5255,6 +5365,28 @@ export async function executeDataOperation(
           };
         }
 
+        // WPF4 · Re-apply the wide-format melt that ran at upload so "revert
+        // to original" returns the post-melt analytical canonical, not the
+        // raw wide buffer. Pre-WPF4 this path silently restored wide rows
+        // while the post-melt summary still expected long columns.
+        try {
+          const { applyWideFormatMeltIfNeeded } = await import(
+            '../wideFormat/applyWideFormatMeltIfNeeded.js'
+          );
+          const wfApplied = applyWideFormatMeltIfNeeded(
+            originalData,
+            sessionDoc.dataSummary
+          );
+          if (wfApplied.remelted) {
+            originalData = wfApplied.rows as Record<string, any>[];
+            console.log(
+              `[dataOps:revert] re-applied wide-format melt → ${originalData.length} long rows`
+            );
+          }
+        } catch (e) {
+          console.warn('⚠️ dataOps:revert wide-format re-melt failed', e);
+        }
+
         // Convert "-" to 0 for numeric columns (same as upload processing)
         const numericColumns = sessionDoc.dataSummary?.numericColumns || [];
         originalData = convertDashToZeroForNumericColumns(originalData, numericColumns);
@@ -5267,6 +5399,16 @@ export async function executeDataOperation(
           'Reverted data to original form',
           sessionDoc
         );
+
+        // Wave-FA5 · Revert clears the active filter too. Otherwise the user
+        // restores the canonical dataset but is still operating on the
+        // filtered view.
+        try {
+          const { translateModule } = await loadActiveFilterPersistModule();
+          await translateModule.clearActiveFilter(sessionDoc);
+        } catch (e) {
+          console.warn("⚠️ revert: failed to clear active filter", e);
+        }
 
         // Get preview from saved data
         const previewData = await getPreviewFromSavedData(sessionId, originalData);

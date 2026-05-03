@@ -14,6 +14,7 @@ import type { SnowflakeImportResponse } from '@/lib/api/snowflake';
 import { sessionsApi } from '@/lib/api/sessions';
 import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
+import { useLocation } from 'wouter';
 import { useRef, useEffect, useState } from 'react';
 import { logger } from '@/lib/logger';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
@@ -44,6 +45,12 @@ interface UseHomeMutationsProps {
   setTemporalFacetColumns: (cols: TemporalFacetColumnMeta[]) => void;
   setTotalRows: (rows: number) => void;
   setTotalColumns: (columns: number) => void;
+  setCurrencyByColumn?: (
+    map: Record<string, import('@/shared/schema').ColumnCurrency>
+  ) => void;
+  setWideFormatTransform?: (
+    t: import('@/shared/schema').WideFormatTransform | undefined
+  ) => void;
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setSuggestions?: (suggestions: string[]) => void;
   setIsDatasetPreviewLoading?: (v: boolean) => void;
@@ -78,6 +85,8 @@ export const useHomeMutations = ({
   setTemporalFacetColumns,
   setTotalRows,
   setTotalColumns,
+  setCurrencyByColumn,
+  setWideFormatTransform,
   setMessages,
   setSuggestions,
   setIsDatasetPreviewLoading,
@@ -89,8 +98,17 @@ export const useHomeMutations = ({
 }: UseHomeMutationsProps) => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [location, setLocation] = useLocation();
   const userEmail = getUserEmail();
   const abortControllerRef = useRef<AbortController | null>(null);
+  /**
+   * Captures the dashboard the agent auto-created during a streaming turn.
+   * onSuccess inspects this to navigate the user to /dashboard?open=<id>
+   * once the answer settles. Cleared on each new turn.
+   */
+  const autoCreatedDashboardRef = useRef<{ id: string; name?: string } | null>(
+    null
+  );
   const uploadPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const uploadPollInFlightRef = useRef(false);
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
@@ -108,8 +126,13 @@ export const useHomeMutations = ({
   const earlyAssistantReplyTsRef = useRef<number | null>(null);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [agentWorkbenchLive, setAgentWorkbenchLive] = useState<AgentWorkbenchEntry[]>([]);
-  // W12: live sub-questions spawned during deep investigation
-  const [spawnedSubQuestions, setSpawnedSubQuestions] = useState<string[]>([]);
+  // W12: live sub-questions spawned during deep investigation. Carry a stable
+  // id per spawn so per-question feedback (thumbs up/down) can target it.
+  // The SSE event still ships the legacy `questions: string[]` field for
+  // back-compat; if `spawnedQuestions` is present we prefer it.
+  const [spawnedSubQuestions, setSpawnedSubQuestions] = useState<
+    { id: string; question: string }[]
+  >([]);
   // W38 · accumulating "drafting answer…" text from server streaming
   // narrator (`answer_chunk` SSE events). Empty until streaming starts;
   // reset between turns. The future UX surface for this preview lives in
@@ -200,8 +223,12 @@ export const useHomeMutations = ({
     dateColumns?: string[];
     rowCount?: number;
     columnCount?: number;
-    summaryColumns?: Array<{ name: string }>;
+    summaryColumns?: Array<{
+      name: string;
+      currency?: import('@/shared/schema').ColumnCurrency;
+    }>;
     temporalFacetColumns?: TemporalFacetColumnMeta[];
+    wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
     allowEmptyRowsOverwrite?: boolean;
   }) => {
     const nextColumns = payload.columns ?? [];
@@ -221,12 +248,24 @@ export const useHomeMutations = ({
     if (payload.dateColumns) setDateColumns(payload.dateColumns);
     if (payload.summaryColumns) {
       setTemporalDisplayGrainsByColumn(temporalGrainsFromSummaryColumns(payload.summaryColumns));
+      // WF9 — derive per-column currency map from the summary so the
+      // banner and column chips can render currency badges.
+      if (setCurrencyByColumn) {
+        const map: Record<string, import('@/shared/schema').ColumnCurrency> = {};
+        for (const col of payload.summaryColumns) {
+          if (col.currency) map[col.name] = col.currency;
+        }
+        setCurrencyByColumn(map);
+      }
     }
     if (payload.temporalFacetColumns !== undefined) {
       setTemporalFacetColumns(payload.temporalFacetColumns);
     }
     if (typeof payload.rowCount === 'number') setTotalRows(payload.rowCount);
     if (typeof payload.columnCount === 'number') setTotalColumns(payload.columnCount);
+    if (setWideFormatTransform) {
+      setWideFormatTransform(payload.wideFormatTransform);
+    }
 
     return {
       hasColumns: hasColumns || previewStateRef.current.columns.length > 0,
@@ -250,6 +289,7 @@ export const useHomeMutations = ({
         dateColumns: session.dataSummary.dateColumns || [],
         summaryColumns: session.dataSummary.columns,
         temporalFacetColumns: session.dataSummary.temporalFacetColumns ?? [],
+        wideFormatTransform: session.dataSummary.wideFormatTransform,
         rowCount: session.dataSummary.rowCount || 0,
         columnCount: session.dataSummary.columnCount || 0,
         allowEmptyRowsOverwrite: opts.allowEmptyRowsOverwrite,
@@ -457,6 +497,17 @@ export const useHomeMutations = ({
           setTemporalFacetColumns(data.summary.temporalFacetColumns ?? []);
           setTotalRows(data.summary.rowCount);
           setTotalColumns(data.summary.columnCount);
+          // WF9 — currency map + wide-format transform.
+          if (setCurrencyByColumn) {
+            const map: Record<string, import('@/shared/schema').ColumnCurrency> = {};
+            for (const col of data.summary.columns ?? []) {
+              if (col?.currency) map[col.name] = col.currency;
+            }
+            setCurrencyByColumn(map);
+          }
+          if (setWideFormatTransform) {
+            setWideFormatTransform(data.summary.wideFormatTransform);
+          }
         }
         
         const sac = (data as { sessionAnalysisContext?: import('@/shared/schema').SessionAnalysisContext })
@@ -654,6 +705,7 @@ export const useHomeMutations = ({
       });
       
       // Routing is server-side (classifyMode); do not send client mode override.
+      autoCreatedDashboardRef.current = null;
       return new Promise<ChatResponse>((resolve, reject) => {
         let responseData: ChatResponse | null = null;
         let pendingCharts: ChatResponse["charts"] | undefined;
@@ -663,6 +715,12 @@ export const useHomeMutations = ({
           sessionId,
           message,
           {
+            onDashboardCreated: (payload) => {
+              autoCreatedDashboardRef.current = {
+                id: payload.dashboardId,
+                name: payload.name,
+              };
+            },
             onQueued: () => {
               if (streamResolved) return;
               streamResolved = true;
@@ -731,18 +789,32 @@ export const useHomeMutations = ({
                 // re-renders without a page reload. Optional setter — if
                 // the host page didn't lift SAC (older mounts), the
                 // banner stays stale until reload (today's behaviour).
+                // H6 · also surfaces dimensionHierarchies updates so the
+                // chip in ColumnsDisplay refreshes the same turn the user
+                // declares "X is the category".
                 const payload = data as {
                   priorInvestigations?: import('@/shared/schema').SessionAnalysisContext['sessionKnowledge']['priorInvestigations'];
+                  dimensionHierarchies?: import('@/shared/schema').SessionAnalysisContext['dataset']['dimensionHierarchies'];
                 };
-                if (Array.isArray(payload.priorInvestigations) && setSessionAnalysisContext) {
+                const hasPriors = Array.isArray(payload.priorInvestigations);
+                const hasHierarchies = Array.isArray(payload.dimensionHierarchies);
+                if ((hasPriors || hasHierarchies) && setSessionAnalysisContext) {
                   setSessionAnalysisContext((prev) => {
                     if (!prev) return prev;
                     return {
                       ...prev,
-                      sessionKnowledge: {
-                        ...prev.sessionKnowledge,
-                        priorInvestigations: payload.priorInvestigations,
-                      },
+                      sessionKnowledge: hasPriors
+                        ? {
+                            ...prev.sessionKnowledge,
+                            priorInvestigations: payload.priorInvestigations,
+                          }
+                        : prev.sessionKnowledge,
+                      dataset: hasHierarchies
+                        ? {
+                            ...prev.dataset,
+                            dimensionHierarchies: payload.dimensionHierarchies,
+                          }
+                        : prev.dataset,
                     };
                   });
                 }
@@ -759,10 +831,51 @@ export const useHomeMutations = ({
                   setStreamingNarratorPreview((prev) => prev + delta);
                 }
               } else if (event === 'sub_question_spawned') {
-                // W12: track spawned sub-questions for ThinkingPanel display
-                const questions = (data as { questions?: string[] }).questions;
-                if (questions?.length) {
-                  setSpawnedSubQuestions((prev) => [...prev, ...questions]);
+                // W12: track spawned sub-questions for ThinkingPanel display.
+                // Prefer the `spawnedQuestions: {id, question}[]` shape; fall
+                // back to the legacy `questions: string[]` for back-compat.
+                const payload = data as {
+                  questions?: string[];
+                  spawnedQuestions?: { id?: string; question?: string }[];
+                };
+                if (payload.spawnedQuestions?.length) {
+                  const next = payload.spawnedQuestions
+                    .filter((q): q is { id: string; question: string } =>
+                      typeof q?.id === "string" && typeof q?.question === "string"
+                    )
+                    .map((q) => ({ id: q.id, question: q.question }));
+                  if (next.length) setSpawnedSubQuestions((prev) => [...prev, ...next]);
+                } else if (payload.questions?.length) {
+                  // Legacy server: synthesise a hash-based id so feedback still
+                  // addresses the question consistently within the session.
+                  const next = payload.questions.map((q) => {
+                    let h = 5381;
+                    for (let i = 0; i < q.length; i++) h = ((h << 5) + h + q.charCodeAt(i)) | 0;
+                    return { id: `legacy-${(h >>> 0).toString(36)}`, question: q };
+                  });
+                  setSpawnedSubQuestions((prev) => [...prev, ...next]);
+                }
+              } else if (event === 'persist_status') {
+                // Wave A5 · server emits this when the chat-message Cosmos
+                // write retries or terminally fails. Today we surface only
+                // the terminal failure as a toast — the retry status is
+                // observability-only. A future wave wires a "Save again"
+                // affordance that re-POSTs the assistant message envelope.
+                const payload = data as {
+                  kind?: string;
+                  status?: 'ok' | 'retrying' | 'failed';
+                  attempt?: number;
+                  error?: string;
+                  messageTimestamp?: number;
+                };
+                if (payload?.status === 'failed') {
+                  toast({
+                    variant: 'destructive',
+                    title: "Couldn't save your last answer",
+                    description:
+                      payload.error?.slice(0, 200) ??
+                      'A database write failed after retries. Reload may not show this turn.',
+                  });
                 }
               }
             },
@@ -869,6 +982,11 @@ export const useHomeMutations = ({
             },
             onError: (error: Error) => {
               logger.error('❌ API request failed:', error);
+              toast({
+                title: 'Request failed',
+                description: error.message || 'The server reported an error during streaming.',
+                variant: 'destructive',
+              });
               earlyAssistantReplyTsRef.current = null;
               hadIntermediateSegmentsRef.current = false;
               turnTraceRef.current = { steps: [], workbench: [] };
@@ -951,6 +1069,13 @@ export const useHomeMutations = ({
         return;
       }
       
+      // Prefer the SSE-captured id (fires before `response` over the wire);
+      // fall back to whatever the response payload carried, in case the
+      // dedicated event was missed.
+      const autoDashboardId =
+        autoCreatedDashboardRef.current?.id ??
+        (data as { createdDashboardId?: string }).createdDashboardId;
+
       const assistantMessage: Message & { preview?: any[]; summary?: any[] } = {
         role: 'assistant',
         content: data.answer, // Keep markdown formatting for proper rendering
@@ -962,6 +1087,7 @@ export const useHomeMutations = ({
         pivotDefaults: (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
         thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
         ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
+        ...(autoDashboardId ? { createdDashboardId: autoDashboardId } : {}),
       };
       
       console.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
@@ -1003,6 +1129,7 @@ export const useHomeMutations = ({
               agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
               thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
               ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
+              ...(autoDashboardId ? { createdDashboardId: autoDashboardId } : {}),
             };
             const withFinalTrace =
               !segmentedTurn &&
@@ -1054,6 +1181,21 @@ export const useHomeMutations = ({
       if (data.suggestions && setSuggestions) {
         setSuggestions(data.suggestions);
       }
+
+      // Auto-navigate when the agent persisted a dashboard for this turn.
+      // The user explicitly asked for one, so route them straight to it.
+      // Only fire on /analysis to avoid stealing focus from /history etc.
+      if (autoDashboardId && location.startsWith('/analysis')) {
+        const dashName =
+          autoCreatedDashboardRef.current?.name ??
+          (autoDashboardId ? 'Dashboard' : '');
+        toast({
+          title: 'Dashboard saved',
+          description: dashName ? `Opening "${dashName}"…` : 'Opening dashboard…',
+        });
+        setLocation(`/dashboard?open=${encodeURIComponent(autoDashboardId)}`);
+      }
+      autoCreatedDashboardRef.current = null;
     },
     onError: (error, variables) => {
       // Clear pending message ref
@@ -1158,10 +1300,81 @@ export const useHomeMutations = ({
       });
       
       pendingUserMessageRef.current = null;
-      
+
       // Reset mutation state to clear loading state
       chatMutation.reset();
     }
+  };
+
+  /**
+   * Apply a partial-update to a message's pivotState (pinned / customName)
+   * with optimistic local mutation + server PATCH. Used by the sidebar
+   * pin and rename affordances. Reverts local state on PATCH failure.
+   *
+   * Reads the current pivotState from `messagesRef` (kept in sync with the
+   * messages array) so concurrent setMessages calls don't fight us.
+   */
+  const mutateMessagePivotMeta = (
+    messageTimestamp: number,
+    patch: { pinned?: boolean; customName?: string | undefined }
+  ) => {
+    if (!sessionId) return;
+    const idx = messagesRef.current.findIndex(
+      (m) => m.role === 'assistant' && m.timestamp === messageTimestamp
+    );
+    if (idx < 0) return;
+    const current = messagesRef.current[idx];
+    const currentPivot = (current as Message & { pivotState?: import('@/shared/schema').PivotState })
+      .pivotState;
+    if (!currentPivot) return; // legacy message — sidebar already hides icons
+    const nextPivot: import('@/shared/schema').PivotState = {
+      ...currentPivot,
+      ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+      ...('customName' in patch ? { customName: patch.customName } : {}),
+    };
+
+    const prevSnapshot = current;
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === idx
+          ? ({ ...m, pivotState: nextPivot } as Message)
+          : m
+      )
+    );
+
+    void (async () => {
+      try {
+        await sessionsApi.updateMessagePivotState(
+          sessionId,
+          messageTimestamp,
+          nextPivot
+        );
+      } catch (e) {
+        logger.debug('[useHomeMutations] pivotState pin/rename PATCH failed', e);
+        // Revert local state.
+        setMessages((prev) =>
+          prev.map((m, i) => (i === idx ? prevSnapshot : m))
+        );
+      }
+    })();
+  };
+
+  const togglePivotPin = (messageTimestamp: number) => {
+    const idx = messagesRef.current.findIndex(
+      (m) => m.role === 'assistant' && m.timestamp === messageTimestamp
+    );
+    if (idx < 0) return;
+    const cur = (messagesRef.current[idx] as Message & {
+      pivotState?: import('@/shared/schema').PivotState;
+    }).pivotState;
+    if (!cur) return;
+    mutateMessagePivotMeta(messageTimestamp, { pinned: !cur.pinned });
+  };
+
+  const renamePivot = (messageTimestamp: number, name: string | null) => {
+    // Empty / null clears the override (falls back to auto-name).
+    const trimmed = name?.trim() ? name.trim() : undefined;
+    mutateMessagePivotMeta(messageTimestamp, { customName: trimmed });
   };
 
   return {
@@ -1177,5 +1390,7 @@ export const useHomeMutations = ({
     // W38 · accumulating live narrator preview text. Empty when streaming
     // is disabled or no chunks have arrived yet.
     streamingNarratorPreview,
+    togglePivotPin,
+    renamePivot,
   };
 };

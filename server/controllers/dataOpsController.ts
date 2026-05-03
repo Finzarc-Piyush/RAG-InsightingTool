@@ -186,3 +186,109 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
     sendError(res, errorMessage);
   }
 };
+
+/**
+ * Download the latest "working" dataset as XLSX — the exact rows the agent's
+ * tools see (post-upload-enrichment, post-data-ops modifications, post-
+ * persisted-computed-columns), with the active filter intentionally bypassed.
+ *
+ * Reuses `loadLatestData(..., { skipActiveFilter: true })` so the file matches
+ * what the agent reads at chat time:
+ *   - Wide-format auto-melt is re-applied on blob re-parse paths.
+ *   - `canonicalizeLoadedData` materializes all temporal facet columns
+ *     (Year · X, Quarter · X, Month · X, …) into the returned rows.
+ *   - The Wave-FA non-destructive active filter is skipped — users always get
+ *     the canonical unfiltered dataset, even when a filter chip is active.
+ *
+ * Per-turn computed columns added without `persistToSession: true` are NOT
+ * present here by design — they are also absent from the next turn's agent
+ * read, so this matches the agent's view exactly.
+ */
+export const downloadWorkingDataset = async (req: Request, res: Response) => {
+  try {
+    console.log('📥 downloadWorkingDataset() called');
+    const { sessionId } = req.params;
+    const username = requireUsername(req);
+
+    if (!sessionId) {
+      return sendValidationError(res, 'Session ID is required');
+    }
+
+    const chatDocument = await getChatBySessionIdEfficient(sessionId);
+    if (!chatDocument) {
+      return sendNotFound(res, 'Session not found');
+    }
+
+    if (chatDocument.username.toLowerCase() !== username.toLowerCase()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const data = await loadLatestData(
+      chatDocument,
+      undefined,
+      undefined,
+      { skipActiveFilter: true },
+    );
+
+    if (!data || data.length === 0) {
+      return sendError(res, 'No data available to download');
+    }
+
+    const format = (req.query.format as string) === 'csv' ? 'csv' : 'xlsx';
+    const originalFileName = chatDocument.fileName || 'dataset';
+    const stem = originalFileName.replace(/\.[^/.]+$/, '');
+    const baseFileName = sanitizeDownloadFileStem(stem, 'dataset');
+    const timestamp = downloadFilenameTimestamp();
+    // Wave-C · Surface row count up-front so the client can warn before a
+    // huge silent download. Header is exposed via CORS in `corsAllowedOrigins`.
+    res.setHeader('X-Working-Dataset-Row-Count', String(data.length));
+
+    if (format === 'xlsx') {
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+      const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+      const filename = `${baseFileName}_working_${timestamp}.xlsx`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Length', excelBuffer.length);
+      res.send(excelBuffer);
+    } else {
+      const csvBuffer = buildCsvBuffer(data);
+      const filename = `${baseFileName}_working_${timestamp}.csv`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Length', csvBuffer.length);
+      res.send(csvBuffer);
+    }
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    console.error('Download working dataset error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to download working dataset';
+    sendError(res, errorMessage);
+  }
+};
+
+/**
+ * RFC 4180-ish CSV serializer: quote any field containing a comma, newline,
+ * or quote; escape embedded quotes by doubling. Null / undefined become an
+ * empty cell. Mirrors the inline CSV builder in `downloadModifiedDataset`.
+ */
+function buildCsvBuffer(rows: Record<string, any>[]): Buffer {
+  if (rows.length === 0) return Buffer.from('', 'utf-8');
+  const columns = Object.keys(rows[0] ?? {});
+  const escape = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (s.includes(',') || s.includes('\n') || s.includes('"')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+  const header = columns.map((c) => escape(c)).join(',');
+  const body = rows.map((row) => columns.map((c) => escape(row[c])).join(',')).join('\n');
+  return Buffer.from(`${header}\n${body}`, 'utf-8');
+}

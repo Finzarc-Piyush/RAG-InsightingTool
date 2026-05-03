@@ -7,6 +7,7 @@ import {
   Dashboard,
   DashboardNarrativeBlock,
   DashboardPatch,
+  DashboardPivotSpec,
   DashboardSpec,
   DashboardTableSpec,
 } from "@/shared/schema";
@@ -28,6 +29,10 @@ export const dashboardsApi = {
   ) => api.delete<Dashboard>(`/api/dashboards/${dashboardId}/charts`, { data: payload as any }),
   removeTable: (dashboardId: string, payload: { index: number; sheetId?: string }) =>
     api.delete<Dashboard>(`/api/dashboards/${dashboardId}/tables`, { data: payload }),
+  addPivot: (dashboardId: string, pivot: DashboardPivotSpec, sheetId?: string) =>
+    api.post<Dashboard>(`/api/dashboards/${dashboardId}/pivots`, { pivot, sheetId }),
+  removePivot: (dashboardId: string, payload: { index: number; sheetId?: string }) =>
+    api.delete<Dashboard>(`/api/dashboards/${dashboardId}/pivots`, { data: payload }),
   addSheet: (dashboardId: string, name: string) =>
     api.post<Dashboard>(`/api/dashboards/${dashboardId}/sheets`, { name }),
   removeSheet: (dashboardId: string, sheetId: string) =>

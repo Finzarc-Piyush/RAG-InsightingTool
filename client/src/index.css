@@ -76,12 +76,46 @@
 
   --input: 240 5% 84%;
   --ring: 221 83% 53%;
-  /* Chart series: blue / teal / amber / rose / violet — distinct & colorblind-friendly */
+  /* WC1.4 · Chart palette (light mode)
+   * Qualitative (1–12): distinct hues, color-blind-friendly cycle.
+   * Sequential blue (seq-1..9): single hue, 9 lightness steps for heatmaps / choropleths.
+   * Diverging red↔blue (div-1..11): neutral center, ±5 steps for variance / delta charts.
+   */
   --chart-1: 217 91% 48%;
   --chart-2: 172 48% 38%;
   --chart-3: 30 92% 46%;
   --chart-4: 340 75% 50%;
   --chart-5: 265 78% 54%;
+  --chart-6: 142 60% 40%;
+  --chart-7: 12 80% 50%;
+  --chart-8: 200 80% 45%;
+  --chart-9: 50 85% 45%;
+  --chart-10: 290 50% 50%;
+  --chart-11: 25 30% 45%;
+  --chart-12: 0 0% 50%;
+  --chart-seq-1: 217 50% 96%;
+  --chart-seq-2: 217 60% 86%;
+  --chart-seq-3: 217 70% 76%;
+  --chart-seq-4: 217 75% 65%;
+  --chart-seq-5: 217 80% 55%;
+  --chart-seq-6: 217 85% 45%;
+  --chart-seq-7: 217 80% 35%;
+  --chart-seq-8: 217 75% 25%;
+  --chart-seq-9: 217 65% 15%;
+  --chart-div-1: 0 75% 35%;
+  --chart-div-2: 0 70% 48%;
+  --chart-div-3: 0 65% 60%;
+  --chart-div-4: 0 55% 75%;
+  --chart-div-5: 0 40% 90%;
+  --chart-div-6: 0 0% 96%;
+  --chart-div-7: 217 40% 90%;
+  --chart-div-8: 217 55% 75%;
+  --chart-div-9: 217 65% 60%;
+  --chart-div-10: 217 75% 48%;
+  --chart-div-11: 217 80% 35%;
+  /* WC1.5 · entry animation timing for chart marks. */
+  --chart-anim-entry-duration: 420ms;
+  --chart-anim-entry-easing: cubic-bezier(0.16, 1, 0.3, 1);
 
   --font-sans: "Plus Jakarta Sans", Inter, system-ui, -apple-system, sans-serif;
   --font-serif: Georgia, serif;
@@ -228,12 +262,39 @@
   --gradient-canvas: linear-gradient(180deg, hsl(var(--background)) 0%, hsl(240 6% 5%) 100%);
   --gradient-ink-soft: radial-gradient(120% 80% at 0% 0%, hsl(var(--primary) / 0.12), transparent 60%);
   --gradient-elevate: linear-gradient(180deg, hsl(240 5% 12% / 1) 0%, hsl(240 5% 10% / 0.6) 100%);
-  /* Brighter series for dark surfaces */
+  /* Brighter series for dark surfaces (WC1.4 extended palette) */
   --chart-1: 217 85% 62%;
   --chart-2: 172 55% 54%;
   --chart-3: 32 88% 58%;
   --chart-4: 340 72% 62%;
   --chart-5: 265 72% 68%;
+  --chart-6: 142 60% 62%;
+  --chart-7: 12 80% 65%;
+  --chart-8: 200 75% 60%;
+  --chart-9: 50 80% 62%;
+  --chart-10: 290 55% 65%;
+  --chart-11: 25 35% 60%;
+  --chart-12: 0 0% 70%;
+  --chart-seq-1: 217 25% 18%;
+  --chart-seq-2: 217 35% 28%;
+  --chart-seq-3: 217 45% 38%;
+  --chart-seq-4: 217 55% 48%;
+  --chart-seq-5: 217 65% 58%;
+  --chart-seq-6: 217 75% 65%;
+  --chart-seq-7: 217 85% 72%;
+  --chart-seq-8: 217 90% 80%;
+  --chart-seq-9: 217 95% 88%;
+  --chart-div-1: 0 75% 50%;
+  --chart-div-2: 0 70% 60%;
+  --chart-div-3: 0 65% 70%;
+  --chart-div-4: 0 55% 78%;
+  --chart-div-5: 0 40% 85%;
+  --chart-div-6: 0 0% 25%;
+  --chart-div-7: 217 40% 85%;
+  --chart-div-8: 217 55% 78%;
+  --chart-div-9: 217 65% 70%;
+  --chart-div-10: 217 75% 60%;
+  --chart-div-11: 217 80% 50%;
 
   --shadow-2xs: 0px 1px 2px 0px hsl(0 0% 0% / 0.20);
   --shadow-xs: 0px 1px 3px 0px hsl(0 0% 0% / 0.30);
@@ -439,6 +500,64 @@
     50% {
       box-shadow: 0 0 0 6px hsl(var(--primary) / 0);
     }
+  }
+  /* WC1.5 · chart mark entry animation. Applied to PremiumChart's
+     wrapper so the whole chart fades + scales in on mount. Per-mark
+     stagger animations (bar grow, line draw, etc.) land in subsequent
+     waves. */
+  @keyframes chart-fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .chart-fade-in {
+    animation: chart-fade-in var(--chart-anim-entry-duration)
+      var(--chart-anim-entry-easing) backwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-fade-in {
+      animation: none;
+    }
+  }
+  /* WC8.2 · print stylesheet — flatten chart cards, hide UI controls. */
+  @media print {
+    .chart-fade-in {
+      animation: none;
+    }
+    /* Mark chrome that shouldn't print on chart cards. */
+    [data-chart-no-print="true"],
+    [aria-label="Export chart"],
+    [aria-label="Chart type"],
+    [aria-label="Suggested alternative chart types"] {
+      display: none !important;
+    }
+    svg [stroke="hsl(var(--border))"] {
+      stroke: #888 !important;
+    }
+    svg text {
+      fill: #111 !important;
+    }
+  }
+  /* WC8.4 · high-contrast palette — opt-in via [data-chart-contrast='high']
+     on the chart container. Overrides chart-1..12 with high-contrast hues. */
+  [data-chart-contrast="high"] {
+    --chart-1: 220 100% 30%;
+    --chart-2: 160 80% 25%;
+    --chart-3: 30 100% 35%;
+    --chart-4: 340 80% 30%;
+    --chart-5: 280 90% 30%;
+    --chart-6: 130 80% 25%;
+    --chart-7: 0 100% 35%;
+    --chart-8: 200 100% 28%;
+    --chart-9: 50 100% 30%;
+    --chart-10: 300 80% 30%;
+    --chart-11: 0 0% 20%;
+    --chart-12: 0 0% 0%;
   }
   @media (prefers-reduced-motion: reduce) {
     .react-grid-item.react-draggable-dragging [data-dashboard-tile] {

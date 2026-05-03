@@ -9,7 +9,7 @@
  *   - draft is missing / not parseable → renders nothing.
  *   - create call rejects → inline error banner inside the card.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +23,7 @@ import { dashboardsApi } from "@/lib/api/dashboards";
 import { dashboardSpecSchema, type DashboardSpec } from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, LayoutDashboard, ArrowUpRight, Share2 } from "lucide-react";
+import { Loader2, LayoutDashboard, ArrowUpRight, Share2, Download } from "lucide-react";
 // W7.7 · share the just-created dashboard via the existing analysis-share dialog.
 import { ShareAnalysisDialog } from "@/pages/Analysis/ShareAnalysisDialog";
 
@@ -38,6 +38,13 @@ interface DashboardDraftCardProps {
    * on follow-up turns.
    */
   sessionId?: string;
+  /**
+   * Set when the agent already auto-persisted the dashboard for this turn
+   * (server-side W4 path). When present we skip the "Create dashboard" CTA
+   * and render only "Open dashboard" + "Share" — the dashboard already
+   * exists and the user has typically been auto-navigated to it.
+   */
+  createdDashboardId?: string;
 }
 
 function parseDraft(raw: unknown): DashboardSpec | null {
@@ -46,17 +53,36 @@ function parseDraft(raw: unknown): DashboardSpec | null {
   return out.success ? out.data : null;
 }
 
-export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps) {
+export function DashboardDraftCard({
+  draft,
+  sessionId,
+  createdDashboardId,
+}: DashboardDraftCardProps) {
   const parsed = useMemo(() => parseDraft(draft), [draft]);
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "creating" }
+    | { kind: "creating_with_export" }
     | { kind: "created"; dashboardId: string }
     | { kind: "error"; message: string }
-  >({ kind: "idle" });
+  >(() =>
+    createdDashboardId
+      ? { kind: "created", dashboardId: createdDashboardId }
+      : { kind: "idle" }
+  );
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [shareOpen, setShareOpen] = useState(false);
+
+  useEffect(() => {
+    if (createdDashboardId) {
+      setStatus((prev) =>
+        prev.kind === "created" && prev.dashboardId === createdDashboardId
+          ? prev
+          : { kind: "created", dashboardId: createdDashboardId }
+      );
+    }
+  }, [createdDashboardId]);
 
   if (!parsed) return null;
 
@@ -75,6 +101,38 @@ export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps
         title: "Dashboard created",
         description: parsed.name,
       });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not create dashboard";
+      logger.error("createFromSpec failed", err);
+      setStatus({ kind: "error", message });
+    }
+  };
+
+  // One-click: persist + download narrative PPT in a single user gesture.
+  // Uses the server-side narrative exporter (text + chart metadata, ~50KB) —
+  // does NOT require the dashboard page DOM. For chart-image fidelity, the
+  // user opens the dashboard and uses its richer Export PPT button.
+  const handleCreateAndExport = async () => {
+    setStatus({ kind: "creating_with_export" });
+    try {
+      const dashboard = await dashboardsApi.createFromSpec(parsed, sessionId);
+      try {
+        await dashboardsApi.exportDashboard(dashboard.id, "pptx");
+        toast({
+          title: "Dashboard saved · PPT downloaded",
+          description:
+            "Text + insights only. Open the dashboard for a chart-image PPT.",
+        });
+      } catch (exportErr) {
+        logger.error("exportDashboard failed after create", exportErr);
+        toast({
+          title: "Dashboard saved · PPT failed",
+          description: "Open the dashboard and try Export PPT from there.",
+          variant: "destructive",
+        });
+      }
+      setStatus({ kind: "created", dashboardId: dashboard.id });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not create dashboard";
@@ -145,22 +203,50 @@ export function DashboardDraftCard({ draft, sessionId }: DashboardDraftCardProps
               ) : null}
             </>
           ) : (
-            <Button
-              size="sm"
-              variant="default"
-              onClick={handleCreate}
-              disabled={status.kind === "creating"}
-              aria-label="Create this dashboard"
-            >
-              {status.kind === "creating" ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                  Creating…
-                </>
-              ) : (
-                <>Create dashboard</>
-              )}
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={handleCreate}
+                disabled={
+                  status.kind === "creating" ||
+                  status.kind === "creating_with_export"
+                }
+                aria-label="Create this dashboard"
+              >
+                {status.kind === "creating" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    Creating…
+                  </>
+                ) : (
+                  <>Create dashboard</>
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCreateAndExport}
+                disabled={
+                  status.kind === "creating" ||
+                  status.kind === "creating_with_export"
+                }
+                aria-label="Create this dashboard and download as PPT"
+                title="Save the dashboard and download a narrative PPT in one step"
+              >
+                {status.kind === "creating_with_export" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    Creating & exporting…
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-4 w-4 mr-1" />
+                    Create &amp; download PPT
+                  </>
+                )}
+              </Button>
+            </>
           )}
         </div>
       </CardContent>

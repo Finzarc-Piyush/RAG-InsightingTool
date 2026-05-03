@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { FeedbackButtons } from './FeedbackButtons';
 import {
   BarChart3,
   Download,
@@ -13,6 +14,7 @@ import {
   Minimize2,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   Table2,
   X,
 } from 'lucide-react';
@@ -22,6 +24,7 @@ import {
   fetchSessionSampleRows,
   pivotQuery,
   pivotDrillthrough,
+  sessionsApi,
 } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import type {
@@ -30,7 +33,12 @@ import type {
   PivotModel as PivotModelContract,
   PivotQueryRequest,
   ChartSpec,
+  ChartSpecV2,
+  DashboardPivotSpec,
+  PivotState,
 } from '@/shared/schema';
+import { isChartSpecV2 } from '@/shared/schema';
+import { AddPivotToDashboardModal } from './DashboardModal/AddPivotToDashboardModal';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import {
   facetColumnHeaderLabelForColumn,
@@ -51,14 +59,66 @@ import type { FilterSelections, PivotModel, PivotUiConfig } from '@/lib/pivot/ty
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { api } from '@/lib/httpClient';
+import { withInflightLimit } from '@/lib/inflightLimiter';
 import {
   recommendPivotChart,
   recommendPivotChartForType,
   type PivotChartKind,
 } from '@/lib/pivot/chartRecommendation';
+import {
+  buildPivotChartSpecV2,
+  isV2PivotMark,
+} from '@/lib/pivot/buildPivotChartSpec';
+import {
+  chartTypeValidityForPivot,
+  PIVOT_CHART_KINDS,
+  type PivotChartValidityMap,
+} from '@/lib/pivot/chartTypeValidity';
+
+// PV4 · UI ordering + display labels for the Change Chart Type dropdown.
+// Order: Compare → Trend → Distribution → Composition → Multi-measure → Flow.
+const CHART_KIND_DROPDOWN_ORDER: ReadonlyArray<PivotChartKind> = [
+  'bar',
+  'line',
+  'area',
+  'scatter',
+  'pie',
+  'donut',
+  'heatmap',
+  'radar',
+  'bubble',
+  'waterfall',
+];
+const CHART_KIND_LABEL: Record<PivotChartKind, string> = {
+  bar: 'Bar',
+  line: 'Line',
+  area: 'Area',
+  scatter: 'Scatter',
+  pie: 'Pie',
+  donut: 'Donut',
+  heatmap: 'Heatmap',
+  radar: 'Radar',
+  bubble: 'Bubble',
+  waterfall: 'Waterfall',
+};
+type V1ChartType = 'bar' | 'line' | 'area' | 'scatter' | 'pie' | 'heatmap';
+const V2_TO_V1_FALLBACK: Record<'donut' | 'radar' | 'bubble' | 'waterfall', V1ChartType> = {
+  donut: 'pie',
+  radar: 'bar',
+  bubble: 'scatter',
+  waterfall: 'bar',
+};
+function coerceChartTypeForPersistence(kind: PivotChartKind): V1ChartType {
+  if (kind === 'donut' || kind === 'radar' || kind === 'bubble' || kind === 'waterfall') {
+    return V2_TO_V1_FALLBACK[kind];
+  }
+  return kind;
+}
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
+import { PivotFilterChips } from './pivot/PivotFilterChips';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
 import { ChartRenderer } from './ChartRenderer';
+import { ChartShim } from '@/components/charts/ChartShim';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 interface DataPreviewTableProps {
@@ -89,6 +149,36 @@ interface DataPreviewTableProps {
   analysisIntermediateInsight?: string;
   /** Insight from the final answer envelope — shown in the Key insight box for non-intermediate pivot responses. */
   pivotInsight?: string;
+  /**
+   * Original user question that produced this analytical message. Threaded down
+   * so live chart/pivot key-insight refetches receive the same `userQuestion`
+   * that the agent-turn pipeline does — keeps live refetches qualitatively as
+   * rich as the original turn instead of degrading to flat statistical sentences.
+   */
+  userQuestion?: string;
+  /**
+   * W-PivotState · persisted full pivot + chart UI state for THIS message,
+   * loaded from Cosmos on session reopen. When provided, takes precedence over
+   * `pivotDefaults`-driven hydration. Pairs with `messageTimestamp` (used to
+   * address the message in the PATCH endpoint).
+   */
+  initialPivotState?: PivotState;
+  /** W-PivotState · numeric ms-epoch timestamp of the assistant message. */
+  messageTimestamp?: number;
+  /**
+   * W-PivotState · while the agent's streaming turn is in flight for this
+   * message, suppress the debounced PATCH so we don't race the server's
+   * read-modify-write on `chatDocument.messages`.
+   */
+  streamingActive?: boolean;
+  /** Forwarded to ChartRenderer → ChartModal so the trailing "Next, …" insight chip can pre-fill the composer. */
+  onSuggestedQuestionClick?: (question: string) => void;
+  /** Turn id for the per-pivot feedback target. When absent the thumbs row is hidden. */
+  feedbackTurnId?: string | null;
+  /** Initial state for the per-pivot thumbs (hydrated from feedbackDetails). */
+  pivotFeedbackInitial?: { feedback: "up" | "down" | "none"; comment?: string };
+  /** When true, suppresses feedback interaction (superadmin shadow viewer). */
+  feedbackReadOnly?: boolean;
 }
 
 function inferNumericColumns(
@@ -170,8 +260,18 @@ export function DataPreviewTable({
   pivotDefaults,
   analysisIntermediateInsight,
   pivotInsight,
+  userQuestion,
+  initialPivotState,
+  messageTimestamp,
+  streamingActive,
+  onSuggestedQuestionClick,
+  feedbackTurnId,
+  pivotFeedbackInitial,
+  feedbackReadOnly = false,
 }: DataPreviewTableProps) {
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
+  const [pivotAddDialogPivot, setPivotAddDialogPivot] =
+    useState<DashboardPivotSpec | null>(null);
   const { toast } = useToast();
 
   const [pivotConfig, setPivotConfig] = useState<PivotUiConfig>(() =>
@@ -180,10 +280,27 @@ export function DataPreviewTable({
   const [filterSelections, setFilterSelections] = useState<FilterSelections>({});
   /** Tracks distinct filter values seen on prior syncs so new values can merge into selections. */
   const filterDistinctSnapshotRef = useRef<Record<string, Set<string>>>({});
+  /**
+   * Parallel provenance ref to `filterDistinctSnapshotRef`. Distinguishes
+   * authoritative DuckDB-derived snapshots from sample-row fallbacks so the
+   * first authoritative sync after a sample-only sync re-narrows to the
+   * agent hint instead of merging the full universe into the selection.
+   */
+  const filterDistinctProvenanceRef = useRef<
+    Record<string, "authoritative" | "sample">
+  >({});
   const filterDistinctFetchSeqRef = useRef(0);
   const [sessionFilterDistincts, setSessionFilterDistincts] = useState<
     Record<string, string[]>
   >({});
+  const [sessionFilterDistinctsErrors, setSessionFilterDistinctsErrors] =
+    useState<Record<string, string>>({});
+  /**
+   * Bumping this counter forces the per-field distincts fetch to re-fire even
+   * when `pivotDistinctFieldsSignature` is unchanged. Used by the popover's
+   * "Retry" button after a prior fetch failed.
+   */
+  const [filterDistinctsRetryNonce, setFilterDistinctsRetryNonce] = useState(0);
   const [collapsedPivotGroups, setCollapsedPivotGroups] = useState<Set<string>>(
     () => new Set()
   );
@@ -204,14 +321,53 @@ export function DataPreviewTable({
   const [chartRecommendationReason, setChartRecommendationReason] = useState<string | null>(
     null
   );
-  const [chartPreview, setChartPreview] = useState<ChartSpec | null>(null);
+  const [chartPreview, setChartPreview] = useState<ChartSpec | ChartSpecV2 | null>(null);
   const [chartPreviewLoading, setChartPreviewLoading] = useState(false);
   const [chartPreviewError, setChartPreviewError] = useState<string | null>(null);
   const chartPreviewRequestSeqRef = useRef(0);
   /** Tracks the config hash at the time of the last successful chart-preview API call. */
   const lastChartConfigRef = useRef<string>('');
+  const [chartInsight, setChartInsight] = useState<{
+    hash: string;
+    text: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+  const chartInsightSeqRef = useRef(0);
+  /**
+   * Hash + outcome for which an insight fetch was last launched. Outcome-aware so
+   * a transient empty/error result does not poison the dedupe (a failed run at hash
+   * H must remain refetchable when the user lands on H again). Only `success` and
+   * in-flight `pending` short-circuit subsequent runs.
+   */
+  type InsightOutcome = 'pending' | 'success' | 'empty' | 'error';
+  const lastInsightHashRef = useRef<{ hash: string; outcome: InsightOutcome }>({
+    hash: '',
+    outcome: 'success',
+  });
+  // Pivot-view live insight (Bug 1). Mirrors `chartInsight` but is driven by
+  // pivot config changes instead of chart-view chartPreview changes, so insights
+  // refresh whenever the user mutates rows / columns / values / filters.
+  const [pivotKeyInsight, setPivotKeyInsight] = useState<{
+    hash: string;
+    text: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+  const pivotInsightSeqRef = useRef(0);
+  const lastPivotInsightHashRef = useRef<{ hash: string; outcome: InsightOutcome }>({
+    hash: '',
+    outcome: 'success',
+  });
   /** When true, do not overwrite chart axis fields from auto-recommendation. */
   const chartMappingManualRef = useRef(false);
+  /**
+   * PV6 · When true, the user has explicitly picked a chartType (via the
+   * Change Chart Type dropdown OR via persisted state) and the auto-track
+   * effect must not clobber it. Reset whenever the pivot's structural
+   * signature changes — a new pivot warrants a fresh recommendation.
+   */
+  const chartTypeUserPickedRef = useRef(false);
   const [pivotTopN, setPivotTopN] = useState<number | null>(null);
   const [showValuesAs, setShowValuesAs] = useState<PivotShowValuesAsMode>('raw');
   const [showSubtotals, setShowSubtotals] = useState(true);
@@ -526,6 +682,48 @@ export function DataPreviewTable({
     return numericColumns.filter((c) => schemaColumnKeys.includes(c));
   }, [numericColumns, schemaColumnKeys]);
 
+  /**
+   * Column keys actually present on the rendered data rows. Used to keep the
+   * chart recommender from picking field names that exist only in the schema
+   * (e.g. base table columns "Shipping Time (Days)") when the agent's result
+   * was aggregated under an alias ("Average Shipping Time"). Without this the
+   * chart silently binds to a non-existent column and renders empty.
+   */
+  const actualResultColumns = useMemo(() => {
+    if (variant !== 'analysis') return undefined;
+    const first = pivotRows[0];
+    if (!first || typeof first !== 'object') return undefined;
+    return Object.keys(first);
+  }, [variant, pivotRows]);
+
+  /**
+   * PV7 · sample values for temporal detection. Indexed by every plausible
+   * "row-dim" candidate the recommender might consider — both the configured
+   * pivot.rows AND the actualResultColumns (the agent often aliases the
+   * dimension column, e.g. "Order Date" → "Order Period"). Capped at 30
+   * samples per column so the memo stays cheap even for large pivots.
+   */
+  const sampleValuesByField = useMemo<Record<string, ReadonlyArray<unknown>>>(() => {
+    const out: Record<string, unknown[]> = {};
+    if (variant !== 'analysis') return out;
+    const candidates = new Set<string>();
+    for (const r of normalizedPivotConfig.rows) candidates.add(r);
+    if (actualResultColumns) for (const c of actualResultColumns) candidates.add(c);
+    if (candidates.size === 0) return out;
+    const limit = Math.min(30, pivotRows.length);
+    for (const col of candidates) {
+      const samples: unknown[] = [];
+      for (let i = 0; i < limit; i++) {
+        const row = pivotRows[i] as Record<string, unknown> | undefined;
+        if (!row) continue;
+        const v = row[col];
+        if (v != null && v !== '') samples.push(v);
+      }
+      if (samples.length > 0) out[col] = samples;
+    }
+    return out;
+  }, [variant, normalizedPivotConfig.rows, actualResultColumns, pivotRows]);
+
   const recommendedPivotChart = useMemo(() => {
     if (variant !== 'analysis' || !canPivot) return null;
     return recommendPivotChart({
@@ -534,6 +732,8 @@ export function DataPreviewTable({
       dateColumns: effectiveDateColumns,
       rowCount: serverPivotMeta?.rowCount ?? pivotRows.length,
       colKeyCount: serverPivotMeta?.colKeyCount ?? 0,
+      actualResultColumns,
+      sampleValuesByField,
     });
   }, [
     variant,
@@ -544,6 +744,35 @@ export function DataPreviewTable({
     serverPivotMeta?.rowCount,
     serverPivotMeta?.colKeyCount,
     pivotRows.length,
+    actualResultColumns,
+    sampleValuesByField,
+  ]);
+
+  // PV4 · validity map for the Change Chart Type dropdown — disables marks
+  // that don't fit the current pivot config and surfaces the reason as a
+  // tooltip. Same shape function the agent's chart compiler can reuse.
+  const chartValidity = useMemo<PivotChartValidityMap | null>(() => {
+    if (variant !== 'analysis' || !canPivot) return null;
+    return chartTypeValidityForPivot({
+      pivotConfig: normalizedPivotConfig,
+      numericColumns,
+      dateColumns: effectiveDateColumns,
+      rowCount: serverPivotMeta?.rowCount ?? pivotRows.length,
+      colKeyCount: serverPivotMeta?.colKeyCount ?? 0,
+      actualResultColumns,
+      sampleValuesByField,
+    });
+  }, [
+    variant,
+    canPivot,
+    normalizedPivotConfig,
+    numericColumns,
+    effectiveDateColumns,
+    serverPivotMeta?.rowCount,
+    serverPivotMeta?.colKeyCount,
+    pivotRows.length,
+    actualResultColumns,
+    sampleValuesByField,
   ]);
 
   const pivotQueryRequest = useMemo((): PivotQueryRequest | null => {
@@ -563,6 +792,10 @@ export function DataPreviewTable({
       const snap = filterDistinctSnapshotRef.current[f];
 
       const selArr = Array.from(sel);
+      // Snapshot is the full authoritative DuckDB distinct set (no paging in
+      // PF3+). If the user's selection equals the snapshot, the filter is a
+      // no-op — omit the field from the payload so the server returns the
+      // full dataset for that dimension.
       if (snap) {
         const isAll =
           sel.size === snap.size && selArr.every((v) => snap.has(v));
@@ -622,47 +855,118 @@ export function DataPreviewTable({
     const defaultFilterKeys = (pivotDefaults?.filterFields ?? []).filter((k) =>
       pivotFieldKeys.includes(k)
     );
-    setPivotConfig(
-      normalizePivotConfig(
-        pivotFieldKeys,
-        createInitialPivotConfig(
+    // W-PivotState · when a persisted pivotState is being restored for THIS
+    // message, leave the user-state setters alone — the hydration effect below
+    // is the source of truth. We still reset the data-shape side (server pivot
+    // model, drillthrough cache) so stale aggregates from a different field
+    // signature don't bleed in.
+    if (!initialPivotState) {
+      setPivotConfig(
+        normalizePivotConfig(
           pivotFieldKeys,
-          numericColumns,
-          defaultPivotRowKeys,
-          defaultValueMeasures,
-          {
-            defaultFilterKeys,
-            defaultColumnKeys: defaultPivotColumnKeys.filter((k) =>
-              pivotFieldKeys.includes(k)
-            ),
-          }
+          createInitialPivotConfig(
+            pivotFieldKeys,
+            numericColumns,
+            defaultPivotRowKeys,
+            defaultValueMeasures,
+            {
+              defaultFilterKeys,
+              defaultColumnKeys: defaultPivotColumnKeys.filter((k) =>
+                pivotFieldKeys.includes(k)
+              ),
+            }
+          )
         )
-      )
-    );
-    setFilterSelections({});
-    filterDistinctSnapshotRef.current = {};
-    setCollapsedPivotGroups(new Set());
-    setAnalysisView('chart');
+      );
+      setFilterSelections({});
+      filterDistinctSnapshotRef.current = {};
+      filterDistinctProvenanceRef.current = {};
+      setCollapsedPivotGroups(new Set());
+      setAnalysisView('chart');
+      setChartType('bar');
+      // PV6 · No persisted state → auto-track effect should drive chartType
+      // from the recommendation as soon as pivot data materializes.
+      chartTypeUserPickedRef.current = false;
+      setChartTitle('Pivot chart');
+      setChartXCol('');
+      setChartYCol('');
+      setChartZCol('');
+      setChartSeriesCol('');
+      setChartBarLayout('stacked');
+      setChartRecommendationReason(null);
+      setChartPreview(null);
+      setExpandedWorkspaceTab('chart');
+      lastChartConfigRef.current = '';
+    }
     setServerPivotModel(null);
     setServerPivotMeta(null);
     setServerPivotError(null);
     setServerPivotLoading(false);
     setDrillthrough(null);
     setSessionSampleError(null);
-    setChartType('bar');
-    setChartTitle('Pivot chart');
-    setChartXCol('');
-    setChartYCol('');
-    setChartZCol('');
-    setChartSeriesCol('');
-    setChartBarLayout('stacked');
-    setChartRecommendationReason(null);
-    setChartPreview(null);
     setChartPreviewError(null);
     setChartPreviewLoading(false);
-    setExpandedWorkspaceTab('chart');
-    lastChartConfigRef.current = '';
-  }, [variant, pivotDataSignature]);
+  }, [variant, pivotDataSignature, initialPivotState]);
+
+  /**
+   * W-PivotState · hydrate from `initialPivotState` once per message identity.
+   *
+   * Runs AFTER the reset-effect above so it overrides whatever defaults that
+   * effect applied. Keyed off `messageTimestamp` so a different message in the
+   * same DataPreviewTable instance re-hydrates. Falls back to `pivotDefaults`
+   * (which the reset-effect already handles) when `initialPivotState` is absent.
+   *
+   * Sets `chartMappingManualRef = true` so the auto-recommend effect (which
+   * watches `chartLayoutForPreview`) does not overwrite the restored chart axes.
+   */
+  const lastHydratedMessageRef = useRef<number | 'none'>('none');
+  useEffect(() => {
+    if (variant !== 'analysis') return;
+    if (!initialPivotState) return;
+    const key = messageTimestamp ?? 'none';
+    if (lastHydratedMessageRef.current === key) return;
+    if (pivotFieldKeys.length === 0) return; // wait for schema columns to arrive
+
+    lastHydratedMessageRef.current = key;
+
+    setPivotConfig(
+      normalizePivotConfig(pivotFieldKeys, {
+        rows: initialPivotState.config.rows ?? [],
+        columns: initialPivotState.config.columns ?? [],
+        values: initialPivotState.config.values ?? [],
+        filters: initialPivotState.config.filters ?? [],
+        unused: initialPivotState.config.unused ?? [],
+        rowSort: initialPivotState.config.rowSort,
+      })
+    );
+
+    if (initialPivotState.filterSelections) {
+      const next: FilterSelections = {};
+      for (const [k, vals] of Object.entries(initialPivotState.filterSelections)) {
+        next[k] = new Set(vals);
+      }
+      setFilterSelections(next);
+    }
+
+    if (initialPivotState.analysisView) {
+      setAnalysisView(initialPivotState.analysisView);
+    }
+
+    if (initialPivotState.chart) {
+      const c = initialPivotState.chart;
+      setChartType(c.type);
+      // PV6 · Respect the persisted user pick — block the auto-track effect
+      // from clobbering it on first render.
+      chartTypeUserPickedRef.current = true;
+      setChartXCol(c.xCol);
+      setChartYCol(c.yCol);
+      setChartZCol(c.zCol ?? '');
+      setChartSeriesCol(c.seriesCol);
+      setChartBarLayout(c.barLayout);
+      // Lock auto-recommend so the restored axes survive subsequent renders.
+      chartMappingManualRef.current = true;
+    }
+  }, [variant, initialPivotState, messageTimestamp, pivotFieldKeys]);
 
   // Backend pivot query (Excel-like interaction loop)
   useEffect(() => {
@@ -700,33 +1004,91 @@ export function DataPreviewTable({
   useEffect(() => {
     if (variant !== 'analysis' || !sessionId) {
       setSessionFilterDistincts({});
+      setSessionFilterDistinctsErrors({});
       return;
     }
     const fields = [...new Set(pivotSyncFields)];
     if (fields.length === 0) {
       setSessionFilterDistincts({});
+      setSessionFilterDistinctsErrors({});
       return;
     }
     let cancelled = false;
     const seq = ++filterDistinctFetchSeqRef.current;
+    // Clear any prior error markers for the fields we're about to refetch so
+    // the popover doesn't flash "Couldn't load values" while the retry is in
+    // flight.
+    setSessionFilterDistinctsErrors((prev) => {
+      if (fields.every((f) => !(f in prev))) return prev;
+      const next = { ...prev };
+      for (const f of fields) delete next[f];
+      return next;
+    });
     void (async () => {
-      const out: Record<string, string[]> = {};
+      const values: Record<string, string[]> = {};
+      const errors: Record<string, string> = {};
       await Promise.all(
         fields.map(async (f) => {
           try {
-            out[f] = await fetchPivotColumnDistincts(sessionId, f, 2000);
-          } catch {
-            // omit key — fall back to preview-row distincts
+            // Full DuckDB distincts (no pagination, no cap that bites in
+            // practice). Same authoritative table the agent's tools see.
+            values[f] = await fetchPivotColumnDistincts(sessionId, f);
+          } catch (e) {
+            errors[f] =
+              e instanceof Error ? e.message : 'Failed to load filter values';
           }
         })
       );
       if (cancelled || seq !== filterDistinctFetchSeqRef.current) return;
-      setSessionFilterDistincts(out);
+      setSessionFilterDistincts(values);
+      setSessionFilterDistinctsErrors((prev) => {
+        const next = { ...prev };
+        for (const [f, msg] of Object.entries(errors)) next[f] = msg;
+        return next;
+      });
     })();
     return () => {
       cancelled = true;
     };
-  }, [variant, sessionId, pivotDistinctFieldsSignature]);
+  }, [
+    variant,
+    sessionId,
+    pivotDistinctFieldsSignature,
+    filterDistinctsRetryNonce,
+  ]);
+
+  // Per-field render-time resolution: every field in the FILTERS shelf is
+  // either 'loading' (we haven't completed a fetch attempt yet), 'loaded'
+  // (sessionFilterDistincts has the key — value list is authoritative), or
+  // 'error' (last fetch attempt failed). Derived synchronously from
+  // pivotSyncFields membership rather than effect-set state, so the popover
+  // can never render "No values to filter" in the sub-frame window before
+  // the fetch effect runs.
+  const filterDistinctsResolution = useMemo<
+    Record<string, 'loading' | 'loaded' | 'error'>
+  >(() => {
+    const out: Record<string, 'loading' | 'loaded' | 'error'> = {};
+    for (const f of pivotSyncFields) {
+      if (Object.prototype.hasOwnProperty.call(sessionFilterDistincts, f)) {
+        out[f] = 'loaded';
+      } else if (Object.prototype.hasOwnProperty.call(sessionFilterDistinctsErrors, f)) {
+        out[f] = 'error';
+      } else {
+        out[f] = 'loading';
+      }
+    }
+    return out;
+  }, [pivotSyncFields, sessionFilterDistincts, sessionFilterDistinctsErrors]);
+
+  const handleRetryFilterDistincts = useCallback((field: string) => {
+    setSessionFilterDistinctsErrors((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+    setFilterDistinctsRetryNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     if (variant !== 'analysis') return;
@@ -738,7 +1100,8 @@ export function DataPreviewTable({
         filterDistinctSnapshotRef,
         temporalFacetColumns,
         sessionFilterDistincts,
-        pivotDefaults?.filterSelections ?? null
+        pivotDefaults?.filterSelections ?? null,
+        filterDistinctProvenanceRef
       )
     );
   }, [
@@ -768,6 +1131,8 @@ export function DataPreviewTable({
         dateColumns: effectiveDateColumns,
         rowCount: serverPivotMeta?.rowCount ?? pivotRows.length,
         colKeyCount: serverPivotMeta?.colKeyCount ?? 0,
+        actualResultColumns,
+        sampleValuesByField,
       },
       chartType
     );
@@ -781,6 +1146,8 @@ export function DataPreviewTable({
     serverPivotMeta?.colKeyCount,
     pivotRows.length,
     chartType,
+    actualResultColumns,
+    sampleValuesByField,
   ]);
 
   const pivotChartLayoutSignature = useMemo(
@@ -818,6 +1185,129 @@ export function DataPreviewTable({
     [chartType, chartXCol, chartYCol, chartZCol, chartSeriesCol, chartBarLayout, chartTitle, pivotQueryRequest]
   );
 
+  /**
+   * W-PivotState · debounced PATCH to persist the user's pivot+chart UI state.
+   *
+   * Skips:
+   *  - non-analysis variants (no pivot UI),
+   *  - missing sessionId / messageTimestamp (anonymous / unsaved messages),
+   *  - while the agent's streaming turn for THIS message is in flight (the
+   *    server is read-modify-writing the same chat doc; PATCHes during that
+   *    window race with the streaming append),
+   *  - the first emission after hydration (so re-applying the same state we
+   *    just loaded doesn't generate a write).
+   *
+   * Debounce window: 1500 ms. Slow enough that rapid drag-and-drop coalesces
+   * into one network call; short enough that a quick toggle is durable before
+   * the user navigates away.
+   */
+  const pivotStatePatchSeqRef = useRef(0);
+  const lastPatchedPivotStateHashRef = useRef<string>('__init__');
+  useEffect(() => {
+    if (variant !== 'analysis') return;
+    if (!sessionId) return;
+    if (!Number.isFinite(messageTimestamp)) return;
+    if (streamingActive) return;
+
+    const payload: PivotState = {
+      schemaVersion: 1,
+      config: {
+        rows: normalizedPivotConfig.rows,
+        columns: normalizedPivotConfig.columns,
+        values: normalizedPivotConfig.values,
+        filters: normalizedPivotConfig.filters,
+        unused: normalizedPivotConfig.unused,
+        rowSort: normalizedPivotConfig.rowSort,
+      },
+      filterSelections: Object.fromEntries(
+        Object.entries(filterSelections).map(([k, set]) => [k, Array.from(set)])
+      ),
+      analysisView,
+      chart: {
+        // PV3 · PivotState schema persists only v1 marks today. Coerce v2
+        // marks to their nearest v1 equivalent so persistence keeps working
+        // and a session reload doesn't lose the user's general intent.
+        type: coerceChartTypeForPersistence(chartType),
+        xCol: chartXCol,
+        yCol: chartYCol,
+        zCol: chartZCol || undefined,
+        seriesCol: chartSeriesCol,
+        barLayout: chartBarLayout,
+      },
+      // Preserve sidebar-managed metadata (pin, custom name) so a config-edit
+      // PATCH does not clobber a concurrent pin/rename from the sidebar.
+      // `initialPivotState` re-renders with the latest server-truth via
+      // `message.pivotState`, so this stays current.
+      ...(initialPivotState?.pinned !== undefined
+        ? { pinned: initialPivotState.pinned }
+        : {}),
+      ...(initialPivotState?.customName !== undefined
+        ? { customName: initialPivotState.customName }
+        : {}),
+    };
+
+    const hash = JSON.stringify(payload);
+    if (lastPatchedPivotStateHashRef.current === hash) return;
+
+    // First emission after mount/hydration: record-and-skip so we don't
+    // overwrite Cosmos with the same state we just loaded.
+    if (lastPatchedPivotStateHashRef.current === '__init__') {
+      lastPatchedPivotStateHashRef.current = hash;
+      return;
+    }
+
+    const seq = ++pivotStatePatchSeqRef.current;
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          await sessionsApi.updateMessagePivotState(
+            sessionId,
+            messageTimestamp as number,
+            payload
+          );
+          if (seq !== pivotStatePatchSeqRef.current) return;
+          lastPatchedPivotStateHashRef.current = hash;
+        } catch (e) {
+          // Non-fatal — the user's state is still authoritative locally; next
+          // edit will retry. Don't toast (would be noisy on every flaky write).
+          logger.debug('[DataPreviewTable] pivotState PATCH failed', e);
+        }
+      })();
+    }, 1500);
+
+    return () => {
+      clearTimeout(t);
+    };
+  }, [
+    variant,
+    sessionId,
+    messageTimestamp,
+    streamingActive,
+    normalizedPivotConfig,
+    filterSelections,
+    analysisView,
+    chartType,
+    chartXCol,
+    chartYCol,
+    chartZCol,
+    chartSeriesCol,
+    chartBarLayout,
+    // Track sidebar-managed metadata so a pin/rename from the sidebar
+    // re-runs this effect with the new payload (idempotent for the field
+    // itself; ensures subsequent config edits include the updated meta).
+    initialPivotState?.pinned,
+    initialPivotState?.customName,
+  ]);
+
+  /**
+   * W-PivotState · when a different message renders into this DataPreviewTable
+   * instance, reset the patch-skip ref so the new message's hydration can also
+   * skip its own first emission.
+   */
+  useEffect(() => {
+    lastPatchedPivotStateHashRef.current = '__init__';
+  }, [messageTimestamp]);
+
   const pivotChartValueFieldOptions = useMemo(
     () => normalizedPivotConfig.values.map((v) => v.field).filter(Boolean) as string[],
     [normalizedPivotConfig.values]
@@ -833,13 +1323,35 @@ export function DataPreviewTable({
     return opts;
   }, [normalizedPivotConfig.rows, normalizedPivotConfig.columns, chartXCol]);
 
-  const chartUiWasActiveRef = useRef(false);
+  /**
+   * PV6 · `chartType` auto-tracks the recommender so the chart card always
+   * shows the most appropriate mark for the current pivot shape — until the
+   * user explicitly picks a type from the dropdown. Pre-PV6 a "fire-on-edge"
+   * effect set chartType only on the first chartUiActive=false→true edge,
+   * which silently locked the type to whatever default was set when the
+   * recommendation arrived (often 'bar' before pivotRows materialized) and
+   * never re-applied — the symptom the user reported as "always shows bar
+   * even when X is a date".
+   *
+   * `chartTypeUserPickedRef` (declared near `chartMappingManualRef` above)
+   * is the manual-override sentinel — set true on dropdown selection AND on
+   * hydrate-from-persisted, reset false when the pivot's structural
+   * signature changes.
+   */
   useEffect(() => {
-    if (chartUiActive && !chartUiWasActiveRef.current && recommendedPivotChart) {
-      setChartType(recommendedPivotChart.chartType);
-    }
-    chartUiWasActiveRef.current = chartUiActive;
-  }, [chartUiActive, recommendedPivotChart]);
+    chartTypeUserPickedRef.current = false;
+  }, [pivotChartLayoutSignature]);
+  useEffect(() => {
+    if (!chartUiActive) return;
+    if (chartTypeUserPickedRef.current) return;
+    if (!recommendedPivotChart) return;
+    if (recommendedPivotChart.chartType === chartType) return;
+    // Mirror the scatter coercion: scatter is incompatible with a server
+    // pivot layout, so don't auto-flip there even if the recommender returns
+    // scatter — would oscillate against the coercion effect at L1107.
+    if (pivotQueryRequest && recommendedPivotChart.chartType === 'scatter') return;
+    setChartType(recommendedPivotChart.chartType);
+  }, [chartUiActive, recommendedPivotChart, chartType, pivotQueryRequest]);
 
   useEffect(() => {
     if (!(chartUiActive || pivotExpanded) || !chartLayoutForPreview) return;
@@ -939,7 +1451,16 @@ export function DataPreviewTable({
     filterSelections,
   ]);
 
-  const effectivePivotModel = serverPivotModel ?? pivotModel;
+  // In analysis variant the server pivot (operating on the full DuckDB session
+  // table) is the authoritative source. The client-side `pivotModel` is built
+  // from the agent's narrow output sample and silently drops rows for filter
+  // values that don't appear in that sample — exactly the user-visible bug
+  // this gating is here to prevent. Errors and loading states are already
+  // surfaced via `serverPivotError` / `serverPivotLoading` downstream.
+  const effectivePivotModel =
+    variant === 'analysis' && sessionId
+      ? serverPivotModel
+      : serverPivotModel ?? pivotModel;
 
   const handlePivotSliceFilterChange = useCallback(
     (field: string, next: Set<string>) => {
@@ -947,6 +1468,28 @@ export function DataPreviewTable({
     },
     []
   );
+
+  const handleClearPivotFilterField = useCallback(
+    (field: string) => {
+      const distincts = sessionFilterDistincts[field] ?? [];
+      setFilterSelections((prev) => ({
+        ...prev,
+        [field]: new Set(distincts),
+      }));
+    },
+    [sessionFilterDistincts]
+  );
+
+  const handleClearAllPivotFilters = useCallback(() => {
+    setFilterSelections((prev) => {
+      const next: FilterSelections = { ...prev };
+      for (const f of normalizedPivotConfig.filters) {
+        const distincts = sessionFilterDistincts[f] ?? [];
+        next[f] = new Set(distincts);
+      }
+      return next;
+    });
+  }, [normalizedPivotConfig.filters, sessionFilterDistincts]);
 
   const handlePivotHideColumnMember = useCallback(
     (colField: string, memberKey: string) => {
@@ -1258,6 +1801,13 @@ export function DataPreviewTable({
     if (chartType === 'scatter' && pivotQueryRequest) {
       return 'Scatter is not available with a server pivot layout (it would use raw rows, not your pivot aggregates). Pick Bar, Line, Area, Pie, or Heatmap, or use Build chart from the chat bar for row-level scatter.';
     }
+    // PV3 · v2-only marks (donut/radar/bubble/waterfall) build a ChartSpecV2
+    // from the materialized pivot rows; they don't need the v1 X/Y/numeric
+    // constraints below. The recommender already validated the field shape.
+    if (isV2PivotMark(chartType)) {
+      if (!chartXCol || !chartYCol) return 'Choose X and Y columns.';
+      return null;
+    }
     if (!chartXCol || !chartYCol) return 'Choose X and Y columns.';
     const yOkMeasure = chartMeasureOptions.includes(chartYCol);
     const yOkPivotValue = pivotChartValueFieldOptions.includes(chartYCol);
@@ -1306,6 +1856,44 @@ export function DataPreviewTable({
     const seq = ++chartPreviewRequestSeqRef.current;
     setChartPreviewLoading(true);
     setChartPreviewError(null);
+
+    // PV3 · v2-only marks build a ChartSpecV2 client-side from the
+    // materialized pivot rows. Skips the server `/chart-preview` round-trip.
+    if (isV2PivotMark(chartType)) {
+      try {
+        if (pivotFlatRows.length === 0) {
+          setChartPreview(null);
+          setChartPreviewError('No rows to chart from the current pivot.');
+          return;
+        }
+        const v2Spec = buildPivotChartSpecV2({
+          chartType,
+          recommendation: {
+            chartType,
+            x: chartXCol || null,
+            y: chartYCol || null,
+            z: chartZCol || null,
+            seriesColumn: chartSeriesCol || null,
+            barLayout: chartBarLayout,
+            reason: chartRecommendationReason ?? '',
+          },
+          pivotFlatRows: pivotFlatRows as Array<Record<string, unknown>>,
+          valueFields: pivotChartValueFieldOptions,
+          title: chartTitle.trim() || 'Pivot chart',
+        });
+        if (seq !== chartPreviewRequestSeqRef.current) return;
+        if (!v2Spec) {
+          setChartPreview(null);
+          setChartPreviewError('Could not build chart from this pivot configuration.');
+          return;
+        }
+        setChartPreview(v2Spec);
+      } finally {
+        if (seq === chartPreviewRequestSeqRef.current) setChartPreviewLoading(false);
+      }
+      return;
+    }
+
     try {
       const body: Record<string, unknown> = {
         title: chartTitle.trim() || 'Pivot chart',
@@ -1327,14 +1915,16 @@ export function DataPreviewTable({
         body.seriesColumn = chartSeriesCol;
         body.barLayout = chartBarLayout;
       }
-      const res = await api.post<{ chart: ChartSpec }>(
-        `/api/sessions/${sessionId}/chart-preview`,
-        {
-          chart: body,
-          pivotFilterFields: pivotFilterPayloadForChart.pivotFilterFields,
-          pivotFilterSelections: pivotFilterPayloadForChart.pivotFilterSelections,
-          ...(pivotQueryRequest ? { pivotQuery: pivotQueryRequest } : {}),
-        }
+      const res = await withInflightLimit('chart-preview', () =>
+        api.post<{ chart: ChartSpec }>(
+          `/api/sessions/${sessionId}/chart-preview`,
+          {
+            chart: body,
+            pivotFilterFields: pivotFilterPayloadForChart.pivotFilterFields,
+            pivotFilterSelections: pivotFilterPayloadForChart.pivotFilterSelections,
+            ...(pivotQueryRequest ? { pivotQuery: pivotQueryRequest } : {}),
+          }
+        )
       );
       if (seq !== chartPreviewRequestSeqRef.current) return;
       setChartPreview(res.chart);
@@ -1356,6 +1946,9 @@ export function DataPreviewTable({
     chartZCol,
     chartSeriesCol,
     chartBarLayout,
+    chartRecommendationReason,
+    pivotFlatRows,
+    pivotChartValueFieldOptions,
     pivotFilterPayloadForChart.pivotFilterFields,
     pivotFilterPayloadForChart.pivotFilterSelections,
     pivotQueryRequest,
@@ -1386,8 +1979,223 @@ export function DataPreviewTable({
     runChartPreview,
   ]);
 
+  // Fetch chart key insight after the preview settles.
+  //   • Triggered ONLY by a new `chartPreview` reference (assigned by
+  //     runChartPreview after a successful POST), so the preview is always in
+  //     sync with the `chartConfigHash` captured in this closure — no fetching
+  //     against a stale preview when the hash flips ahead of the preview (Bug B).
+  //   • `lastInsightHashRef` is a ref (not state) so updating it does not
+  //     retrigger the effect that owns it (Bug A).
+  //   • The ref is committed INSIDE the timeout, not at effect-entry, so a
+  //     synthetic re-mount (React StrictMode / Vite Fast Refresh) cleanly
+  //     re-runs the effect after cleanup cancels the timer — without the
+  //     ref-update path the second mount would short-circuit and the fetch
+  //     would never fire (Bug D).
+  useEffect(() => {
+    if (!sessionId || !chartPreview) return;
+    // PV3 · The /chart-key-insight endpoint expects v1 ChartSpec; skip the
+    // fetch for v2 specs. Pivot key insight (chartView=pivot) handles v2 via
+    // the synthetic-spec path it builds itself.
+    if (isChartSpecV2(chartPreview)) return;
+    // Outcome-aware dedupe: only short-circuit when a successful (or in-flight)
+    // run already covers this hash. Empty/error outcomes remain refetchable.
+    if (
+      lastInsightHashRef.current.hash === chartConfigHash &&
+      (lastInsightHashRef.current.outcome === 'success' ||
+        lastInsightHashRef.current.outcome === 'pending')
+    ) {
+      return;
+    }
+    // Empty-result preview (e.g., "no rows after filters"): keep the prior text
+    // visible (don't blank to null) so the user retains context while they
+    // adjust filters. Server now returns 200 keyInsight:'' for the same case.
+    const previewData = (chartPreview as { data?: unknown[] }).data;
+    if (!Array.isArray(previewData) || previewData.length === 0) {
+      lastInsightHashRef.current = { hash: chartConfigHash, outcome: 'empty' };
+      setChartInsight((prev) => ({
+        hash: chartConfigHash,
+        text: prev?.text ?? null,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+    const requestHash = chartConfigHash;
+    const seq = ++chartInsightSeqRef.current;
+    setChartInsight((prev) => ({
+      hash: requestHash,
+      text: prev?.text ?? null,
+      loading: true,
+      error: null,
+    }));
+    const t = window.setTimeout(() => {
+      lastInsightHashRef.current = { hash: requestHash, outcome: 'pending' };
+      void (async () => {
+        try {
+          const res = await withInflightLimit('chart-key-insight', () =>
+            api.post<{ keyInsight: string }>(
+              `/api/sessions/${sessionId}/chart-key-insight`,
+              { chart: chartPreview, userQuestion }
+            )
+          );
+          if (seq !== chartInsightSeqRef.current) return;
+          const text = res.keyInsight ?? '';
+          lastInsightHashRef.current = {
+            hash: requestHash,
+            outcome: text.trim().length > 0 ? 'success' : 'empty',
+          };
+          setChartInsight((prev) => ({
+            hash: requestHash,
+            // Preserve prior text when the new response is empty (server-side
+            // zero-row fallback) so the card doesn't suddenly disappear.
+            text: text.trim().length > 0 ? text : prev?.text ?? null,
+            loading: false,
+            error: null,
+          }));
+        } catch (e) {
+          if (seq !== chartInsightSeqRef.current) return;
+          lastInsightHashRef.current = { hash: requestHash, outcome: 'error' };
+          setChartInsight((prev) => ({
+            hash: requestHash,
+            text: prev?.text ?? null,
+            loading: false,
+            error: e instanceof Error ? e.message : 'Insight unavailable',
+          }));
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(t);
+    // chartConfigHash intentionally excluded from deps: relying on chartPreview
+    // ref changes guarantees we never fetch with a stale preview (see Bug B).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartPreview, sessionId, userQuestion]);
+
+  // Hash for the pivot-view live insight: pivot config + filters. Materialized
+  // pivot data (`pivotFlatRows`) drives the actual fetch trigger so we never
+  // POST against pre-server-query stale rows.
+  const pivotInsightConfigHash = useMemo(
+    () =>
+      JSON.stringify({
+        rows: normalizedPivotConfig.rows,
+        columns: normalizedPivotConfig.columns,
+        values: normalizedPivotConfig.values,
+        pivotFilterPayloadForChart,
+      }),
+    [
+      normalizedPivotConfig.rows,
+      normalizedPivotConfig.columns,
+      normalizedPivotConfig.values,
+      pivotFilterPayloadForChart,
+    ]
+  );
+
+  // Pivot-view live key insight refetch (Bug 1). Fires whenever the materialized
+  // pivot result changes, regardless of `chartUiActive`. Builds a synthetic
+  // ChartSpec from the leaf data rows and POSTs to /chart-key-insight with the
+  // user's original question so the LLM produces a substantive insight aligned
+  // with the current pivot shape — instead of the message-frozen one that may
+  // narrate dimensions no longer present.
+  useEffect(() => {
+    if (!sessionId) return;
+    if (variant !== 'analysis') return;
+    const rowDims = normalizedPivotConfig.rows;
+    const valueSpecs = normalizedPivotConfig.values;
+    if (rowDims.length === 0 || valueSpecs.length === 0) return;
+    if (
+      lastPivotInsightHashRef.current.hash === pivotInsightConfigHash &&
+      (lastPivotInsightHashRef.current.outcome === 'success' ||
+        lastPivotInsightHashRef.current.outcome === 'pending')
+    ) {
+      return;
+    }
+
+    const xCol = rowDims[0];
+    const primaryValue = valueSpecs[0];
+    const dataRows: Record<string, string | number | null>[] = [];
+    for (const r of pivotFlatRows) {
+      if (r.kind !== 'data') continue;
+      const row: Record<string, string | number | null> = { [xCol]: r.label };
+      for (const vs of valueSpecs) {
+        const n = r.values?.flatValues?.[vs.id];
+        row[vs.field] =
+          typeof n === 'number' && Number.isFinite(n) ? n : null;
+      }
+      dataRows.push(row);
+    }
+
+    if (dataRows.length === 0) {
+      lastPivotInsightHashRef.current = {
+        hash: pivotInsightConfigHash,
+        outcome: 'empty',
+      };
+      setPivotKeyInsight((prev) => ({
+        hash: pivotInsightConfigHash,
+        text: prev?.text ?? null,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    const requestHash = pivotInsightConfigHash;
+    const seq = ++pivotInsightSeqRef.current;
+    setPivotKeyInsight((prev) => ({
+      hash: requestHash,
+      text: prev?.text ?? null,
+      loading: true,
+      error: null,
+    }));
+    const t = window.setTimeout(() => {
+      lastPivotInsightHashRef.current = { hash: requestHash, outcome: 'pending' };
+      void (async () => {
+        try {
+          const syntheticChart: ChartSpec = {
+            type: 'bar',
+            title: 'Pivot summary',
+            x: xCol,
+            y: primaryValue.field,
+            data: dataRows,
+          };
+          const res = await withInflightLimit('chart-key-insight', () =>
+            api.post<{ keyInsight: string }>(
+              `/api/sessions/${sessionId}/chart-key-insight`,
+              { chart: syntheticChart, userQuestion }
+            )
+          );
+          if (seq !== pivotInsightSeqRef.current) return;
+          const text = res.keyInsight ?? '';
+          lastPivotInsightHashRef.current = {
+            hash: requestHash,
+            outcome: text.trim().length > 0 ? 'success' : 'empty',
+          };
+          setPivotKeyInsight((prev) => ({
+            hash: requestHash,
+            text: text.trim().length > 0 ? text : prev?.text ?? null,
+            loading: false,
+            error: null,
+          }));
+        } catch (e) {
+          if (seq !== pivotInsightSeqRef.current) return;
+          lastPivotInsightHashRef.current = { hash: requestHash, outcome: 'error' };
+          setPivotKeyInsight((prev) => ({
+            hash: requestHash,
+            text: prev?.text ?? null,
+            loading: false,
+            error: e instanceof Error ? e.message : 'Insight unavailable',
+          }));
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pivotFlatRows, pivotInsightConfigHash, sessionId, variant, userQuestion]);
+
   const addChartToChat = useCallback(() => {
     if (!chartPreview || !onChartAdded) return;
+    // PV3 · v2-only marks aren't supported by the chat ChartSpec contract yet;
+    // the user can still preview them in the pivot card. "Add to chat" stays
+    // disabled for v2 specs (handled at the button level).
+    if (isChartSpecV2(chartPreview)) return;
     onChartAdded(chartPreview);
     toast({
       title: 'Chart added',
@@ -1449,7 +2257,24 @@ export function DataPreviewTable({
     canPivot &&
     normalizedPivotConfig.values.length > 0;
 
-  const trimmedAnalysisInsight = (analysisIntermediateInsight ?? pivotInsight)?.trim() ?? "";
+  // Live pivot-derived insight (Bug 1) wins over the message-frozen `pivotInsight`
+  // so the Key Insight card matches the current pivot shape after the user has
+  // added/changed fields. `analysisIntermediateInsight` still wins because it
+  // narrates a specific tool step's result, which the live refetch cannot
+  // reproduce. Frozen `pivotInsight` remains the boot-state fallback.
+  const trimmedAnalysisInsight =
+    (analysisIntermediateInsight ?? pivotKeyInsight?.text ?? pivotInsight)?.trim() ?? "";
+
+  const chartPreviewForRender = useMemo<ChartSpec | null>(() => {
+    if (!chartPreview) return null;
+    // PV3 · v2 specs are rendered by PremiumChart (via ChartShim) and don't
+    // share v1's `keyInsight` field. The legacy render prop never fires for
+    // v2 specs, so this memo is only ever consumed for v1.
+    if (isChartSpecV2(chartPreview)) return null;
+    const text = chartInsight?.text?.trim();
+    if (!text) return chartPreview;
+    return { ...chartPreview, keyInsight: text };
+  }, [chartPreview, chartInsight?.text]);
   const toolPreviewRowCount = data.length;
   const pivotResultRowCount = serverPivotMeta?.rowCount;
   const showPivotVersusToolRowClarification =
@@ -1497,11 +2322,7 @@ export function DataPreviewTable({
 
     return (
     <div
-      className={
-        forExpandedView
-          ? 'relative flex flex-col flex-1 min-h-0 min-w-0'
-          : undefined
-      }
+      className="relative flex flex-col flex-1 min-h-0 min-w-0"
       onClick={handlePivotWorkspaceBgClick}
     >
       {forExpandedView && serverPivotError ? (
@@ -1522,26 +2343,22 @@ export function DataPreviewTable({
         </div>
       ) : null}
       <div className="flex flex-wrap items-center gap-3 mb-2 shrink-0">
-        <Button
-          ref={forExpandedView ? undefined : pivotExpandButtonRef}
-          type="button"
-          variant="outline"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          title={forExpandedView ? 'Exit expanded view' : 'Expand pivot'}
-          aria-label={forExpandedView ? 'Exit expanded view' : 'Expand pivot'}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (forExpandedView) setPivotExpanded(false);
-            else setPivotExpanded(true);
-          }}
-        >
-          {forExpandedView ? (
+        {forExpandedView ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            title="Exit expanded view"
+            aria-label="Exit expanded view"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPivotExpanded(false);
+            }}
+          >
             <Minimize2 className="h-4 w-4" />
-          ) : (
-            <Maximize2 className="h-4 w-4" />
-          )}
-        </Button>
+          </Button>
+        ) : null}
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Top N</span>
           <input
@@ -1592,6 +2409,15 @@ export function DataPreviewTable({
           Grand total
         </label>
       </div>
+
+      <PivotFilterChips
+        filterFields={normalizedPivotConfig.filters}
+        filterSelections={filterSelections}
+        distinctsByField={sessionFilterDistincts}
+        temporalFacetColumns={temporalFacetColumns}
+        onClearField={handleClearPivotFilterField}
+        onClearAll={handleClearAllPivotFilters}
+      />
 
       <PivotGrid
         model={pivotModelForRender as any}
@@ -1686,6 +2512,25 @@ export function DataPreviewTable({
             <div className="flex items-center gap-2 mb-2">
               <Lightbulb className="w-4 h-4 text-primary" />
               <h4 className="text-sm font-semibold text-foreground">Key insight</h4>
+              {pivotKeyInsight?.loading && (
+                <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Re-deriving insight…
+                </span>
+              )}
+              {sessionId && feedbackTurnId && (
+                <div className={pivotKeyInsight?.loading ? "ml-2" : "ml-auto"}>
+                  <FeedbackButtons
+                    sessionId={sessionId}
+                    turnId={feedbackTurnId}
+                    target={{ type: "pivot", id: "pivot" }}
+                    layout="inline-right"
+                    disabled={feedbackReadOnly}
+                    initial={pivotFeedbackInitial?.feedback ?? "none"}
+                    initialComment={pivotFeedbackInitial?.comment ?? ""}
+                  />
+                </div>
+              )}
             </div>
             <div className="text-sm text-foreground">
               <MarkdownRenderer content={trimmedAnalysisInsight} />
@@ -1742,6 +2587,76 @@ export function DataPreviewTable({
             )}
             {sessionId && (
               <>
+                {variant === 'analysis' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => {
+                      const cfg = normalizedPivotConfig;
+                      if (!cfg || cfg.values.length === 0) {
+                        toast({
+                          title: 'Pivot is empty',
+                          description: 'Add at least one value before saving to a dashboard.',
+                          variant: 'destructive',
+                        });
+                        return;
+                      }
+                      const fs: Record<string, string[]> = {};
+                      for (const [k, v] of Object.entries(filterSelections)) {
+                        if (v instanceof Set) fs[k] = Array.from(v);
+                      }
+                      const titleParts: string[] = [];
+                      if (cfg.values.length > 0) {
+                        titleParts.push(
+                          cfg.values.map((v) => `${v.field} (${v.agg})`).join(', ')
+                        );
+                      }
+                      if (cfg.rows.length > 0) titleParts.push(`by ${cfg.rows.join(' × ')}`);
+                      if (cfg.columns.length > 0)
+                        titleParts.push(`across ${cfg.columns.join(' × ')}`);
+                      const title = titleParts.join(' ').slice(0, 200) || 'Pivot view';
+                      const built: DashboardPivotSpec = {
+                        id: `pivot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        title,
+                        pivotConfig: {
+                          rows: cfg.rows,
+                          columns: cfg.columns,
+                          values: cfg.values,
+                          filters: cfg.filters,
+                          unused: cfg.unused,
+                          ...(cfg.rowSort ? { rowSort: cfg.rowSort } : {}),
+                        },
+                        ...(Object.keys(fs).length > 0 ? { filterSelections: fs } : {}),
+                        analysisView: analysisView === 'flat' ? 'flat' : analysisView,
+                        ...(analysisView === 'chart' && chartType && chartXCol && chartYCol
+                          ? {
+                              chart: {
+                                type: chartType as
+                                  | 'bar'
+                                  | 'line'
+                                  | 'area'
+                                  | 'scatter'
+                                  | 'pie'
+                                  | 'heatmap',
+                                xCol: chartXCol,
+                                yCol: chartYCol,
+                                ...(chartZCol ? { zCol: chartZCol } : {}),
+                                seriesCol: chartSeriesCol,
+                                barLayout: chartBarLayout as 'stacked' | 'grouped',
+                              },
+                            }
+                          : {}),
+                        sourceSessionId: sessionId,
+                        createdAt: Date.now(),
+                      };
+                      setPivotAddDialogPivot(built);
+                    }}
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add to Dashboard
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -1770,264 +2685,132 @@ export function DataPreviewTable({
       <div
         className={
           variant === 'analysis'
-            ? 'flex gap-0 items-stretch min-w-0'
+            ? 'flex gap-0 items-stretch min-w-0 h-[min(70vh,40rem)]'
             : undefined
         }
       >
         <div
           className={
-            variant === 'analysis' ? 'flex-1 min-w-0 pr-2' : undefined
+            variant === 'analysis'
+              ? 'flex-1 min-w-0 min-h-0 flex flex-col pr-2'
+              : undefined
           }
         >
+            {variant === 'analysis' ? (
+              <div className="flex justify-end mb-2 shrink-0">
+                <Button
+                  ref={pivotExpandButtonRef}
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  title="Expand pivot"
+                  aria-label="Expand pivot"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPivotExpanded(true);
+                  }}
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : null}
             {analysisView === 'chart' ? (
-              <div className="rounded-lg border border-border/60 bg-muted/10 p-3 space-y-3">
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="space-y-1.5 min-w-[11rem]">
-                    <label className="text-xs text-muted-foreground">Chart type</label>
-                    <select
-                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                      value={chartType}
-                      onChange={(e) => setChartType(e.target.value as PivotChartKind)}
-                    >
-                      <option value="bar">Bar</option>
-                      <option value="line">Line</option>
-                      <option value="area">Area</option>
-                      <option value="scatter" disabled={Boolean(pivotQueryRequest)}>
-                        Scatter{pivotQueryRequest ? ' (not with pivot)' : ''}
-                      </option>
-                      <option value="pie">Pie</option>
-                      <option value="heatmap">Heatmap</option>
-                    </select>
-                  </div>
+              // G1-P1.a — chart card uses an EXPLICIT-pixel chart wrapper
+              // (h-[480px]) instead of flex-1 + min-h. Recharts'
+              // ResponsiveContainer with height="100%" needs a pixel-height
+              // parent on first render; flex-1 sees 0 until the next
+              // ResizeObserver tick, which is what produced the "chart
+              // appears too high in the card / chart only renders in
+              // fullscreen" symptom.
+              <div className="flex flex-col flex-1 min-h-0 gap-3 rounded-lg border border-border/60 bg-muted/10 p-3 overflow-y-auto">
+                <div className="flex flex-wrap items-end gap-3 shrink-0">
                   <Button
                     type="button"
                     size="sm"
                     className="text-xs"
                     onClick={addChartToChat}
-                    disabled={!chartPreview || !onChartAdded}
+                    disabled={
+                      !chartPreview ||
+                      !onChartAdded ||
+                      (chartPreview != null && isChartSpecV2(chartPreview))
+                    }
+                    title={
+                      chartPreview && isChartSpecV2(chartPreview)
+                        ? 'Premium charts (donut/radar/bubble/waterfall) cannot be added to chat yet.'
+                        : undefined
+                    }
                   >
                     Add to chat
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    onClick={resetChartMappingToRecommended}
-                    disabled={!chartLayoutForPreview}
-                  >
-                    Reset mapping
-                  </Button>
-                </div>
-                <div className="flex flex-wrap items-end gap-3 border-t border-border/50 pt-3">
-                  {chartType === 'scatter' ? (
-                    <>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">X measure</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartXCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartXCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {pivotChartValueFieldOptions.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
-                          {chartMeasureOptions
-                            .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                            .map((m) => (
-                              <option key={`sx-${m}`} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">Y measure</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartYCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartYCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {pivotChartValueFieldOptions.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
-                          {chartMeasureOptions
-                            .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                            .map((m) => (
-                              <option key={`sy-${m}`} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    </>
-                  ) : chartType === 'heatmap' ? (
-                    <>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">Rows (X)</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartXCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartXCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {normalizedPivotConfig.rows.map((r) => (
-                            <option key={r} value={r}>
-                              {r}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">Columns (Y)</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartYCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartYCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {normalizedPivotConfig.columns.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">Value (Z)</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartZCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartZCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {pivotChartValueFieldOptions.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">X axis</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartXCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartXCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {normalizedPivotConfig.rows.map((r) => (
-                            <option key={r} value={r}>
-                              {r}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1.5 min-w-[9rem]">
-                        <label className="text-xs text-muted-foreground">Y axis</label>
-                        <select
-                          className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                          value={chartYCol}
-                          onChange={(e) => {
-                            chartMappingManualRef.current = true;
-                            setChartYCol(e.target.value);
-                          }}
-                        >
-                          <option value="">—</option>
-                          {pivotChartValueFieldOptions.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
-                          {chartMeasureOptions
-                            .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                            .map((m) => (
-                              <option key={`m-${m}`} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      {(chartType === 'bar' || chartType === 'line' || chartType === 'area') &&
-                      pivotChartSeriesOptions.length > 0 ? (
-                        <>
-                          <div className="space-y-1.5 min-w-[9rem]">
-                            <label className="text-xs text-muted-foreground">Series</label>
-                            <select
-                              className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                              value={chartSeriesCol}
-                              onChange={(e) => {
-                                chartMappingManualRef.current = true;
-                                setChartSeriesCol(e.target.value);
-                              }}
-                            >
-                              <option value="">None</option>
-                              {pivotChartSeriesOptions.map((s) => (
-                                <option key={s} value={s}>
-                                  {s}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          {chartType === 'bar' ? (
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Bar layout</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartBarLayout}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartBarLayout(e.target.value as 'stacked' | 'grouped');
-                                }}
-                              >
-                                <option value="stacked">Stacked</option>
-                                <option value="grouped">Grouped</option>
-                              </select>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </>
-                  )}
+                  {/* PV4 · Change Chart Type — lets the user override the
+                      auto-recommended mark. Invalid options are disabled with
+                      a tooltip explaining what's missing. Selecting a new mark
+                      flips chartMappingManualRef so the auto-recommend effect
+                      doesn't clobber the user's choice on the next pivot
+                      change. */}
+                  <div className="space-y-1.5 min-w-[10rem]">
+                    <label
+                      htmlFor="pivot-chart-type"
+                      className="text-xs text-muted-foreground"
+                    >
+                      Chart type
+                    </label>
+                    <select
+                      id="pivot-chart-type"
+                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                      value={chartType}
+                      onChange={(e) => {
+                        chartMappingManualRef.current = true;
+                        chartTypeUserPickedRef.current = true;
+                        setChartType(e.target.value as PivotChartKind);
+                      }}
+                    >
+                      {CHART_KIND_DROPDOWN_ORDER.map((m) => {
+                        const v = chartValidity?.[m];
+                        const disabled = !!v && !v.valid;
+                        return (
+                          <option
+                            key={m}
+                            value={m}
+                            disabled={disabled}
+                            title={disabled ? v?.reason : undefined}
+                          >
+                            {CHART_KIND_LABEL[m]}
+                            {disabled ? ' (n/a)' : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                  {chartType === 'bar' && pivotChartSeriesOptions.length > 0 ? (
+                    <div className="space-y-1.5 min-w-[9rem]">
+                      <label className="text-xs text-muted-foreground">Bar layout</label>
+                      <select
+                        className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                        value={chartBarLayout}
+                        onChange={(e) => {
+                          chartMappingManualRef.current = true;
+                          setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                        }}
+                      >
+                        <option value="stacked">Stacked</option>
+                        <option value="grouped">Grouped</option>
+                      </select>
+                    </div>
+                  ) : null}
                 </div>
                 {chartRecommendationReason ? (
-                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  <p className="text-[11px] text-muted-foreground leading-relaxed shrink-0">
                     {chartRecommendationReason}
                   </p>
                 ) : null}
                 {(chartConfigValidationError || chartPreviewError) && (
-                  <p className="text-xs text-destructive" role="alert">
+                  <p className="text-xs text-destructive shrink-0" role="alert">
                     {chartConfigValidationError ?? chartPreviewError}
                   </p>
                 )}
-                <div className="rounded-lg border border-border/60 bg-background p-2 min-h-[400px] relative">
+                <div className="flex h-[480px] flex-col rounded-lg border border-border/60 bg-background p-2 relative">
                   {chartPreviewLoading && !chartPreview ? (
                     <div className="absolute inset-0 flex items-center justify-center text-muted-foreground gap-2 text-xs">
                       <Loader2 className="h-5 w-5 animate-spin" />
@@ -2035,20 +2818,30 @@ export function DataPreviewTable({
                     </div>
                   ) : null}
                   {chartPreview ? (
-                    <ChartRenderer
-                      chart={chartPreview}
-                      index={0}
-                      isSingleChart
-                      showAddButton
-                      enableFilters
-                      keyInsightSessionId={sessionId ?? null}
-                    />
+                    <div className="flex flex-1 min-h-0 flex-col">
+                      <ChartShim
+                        spec={chartPreview}
+                        legacy={() => (
+                          <ChartRenderer
+                            chart={chartPreviewForRender ?? (chartPreview as ChartSpec)}
+                            index={0}
+                            isSingleChart
+                            showAddButton
+                            enableFilters
+                            fillParent
+                            keyInsightSessionId={null}
+                            onSuggestedQuestionClick={onSuggestedQuestionClick}
+                          />
+                        )}
+                      />
+                    </div>
                   ) : !chartPreviewLoading ? (
-                    <div className="h-[400px] flex items-center justify-center text-xs text-muted-foreground">
+                    <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
                       Chart preview will appear automatically from your pivot layout.
                     </div>
                   ) : null}
                 </div>
+                {chartPreview ? <ChartKeyInsightCallout insight={chartInsight} /> : null}
               </div>
             ) : showPivotAnalysisView ? (
               !canPivot ? (
@@ -2193,9 +2986,10 @@ export function DataPreviewTable({
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.15 }}
-                      className="flex-1 min-w-0 p-2.5 overflow-hidden"
+                      className="flex flex-1 min-w-0 min-h-0 flex-col p-2.5 overflow-hidden"
                     >
                       <PivotFieldPanel
+                        fillAvailableHeight
                         config={normalizedPivotConfig}
                         onConfigChange={handlePivotConfigChange}
                         filterSelections={filterSelections}
@@ -2204,6 +2998,9 @@ export function DataPreviewTable({
                         numericColumns={numericColumns}
                         temporalFacetColumns={temporalFacetColumns}
                         filterDistinctsFromSession={sessionFilterDistincts}
+                        filterDistinctsResolution={filterDistinctsResolution}
+                        onRetryDistincts={handleRetryFilterDistincts}
+                        variant={variant === 'analysis' ? 'analysis' : 'preview'}
                       />
                     </motion.div>
                   )}
@@ -2225,7 +3022,7 @@ export function DataPreviewTable({
         createPortal(
           <>
             <div
-              className="fixed inset-0 z-40 bg-black/50"
+              className="fixed inset-0 z-40 bg-[hsl(240_6%_10%/0.35)] backdrop-blur-sm"
               aria-hidden
               onClick={() => setPivotExpanded(false)}
             />
@@ -2301,242 +3098,76 @@ export function DataPreviewTable({
               <div className="flex flex-1 min-h-0 min-w-0 gap-0 items-stretch">
                 <div className="flex-1 min-w-0 min-h-0 flex flex-col px-2 pb-2 pt-2 overflow-hidden">
                   {expandedWorkspaceTab === 'chart' ? (
-                    <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-border/60 bg-muted/10 p-3 space-y-3 overflow-auto">
+                    <div className="flex flex-1 min-h-0 flex-col rounded-lg border border-border/60 bg-muted/10 p-3 gap-3 overflow-hidden">
                       <div className="flex flex-wrap items-end gap-3 shrink-0">
-                        <div className="space-y-1.5 min-w-[11rem]">
-                          <label className="text-xs text-muted-foreground">Chart type</label>
-                          <select
-                            className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                            value={chartType}
-                            onChange={(e) => setChartType(e.target.value as PivotChartKind)}
-                          >
-                            <option value="bar">Bar</option>
-                            <option value="line">Line</option>
-                            <option value="area">Area</option>
-                            <option value="scatter" disabled={Boolean(pivotQueryRequest)}>
-                              Scatter{pivotQueryRequest ? ' (not with pivot)' : ''}
-                            </option>
-                            <option value="pie">Pie</option>
-                            <option value="heatmap">Heatmap</option>
-                          </select>
-                        </div>
                         <Button
                           type="button"
                           size="sm"
                           className="text-xs"
                           onClick={addChartToChat}
-                          disabled={!chartPreview || !onChartAdded}
+                          disabled={
+                            !chartPreview ||
+                            !onChartAdded ||
+                            (chartPreview != null && isChartSpecV2(chartPreview))
+                          }
+                          title={
+                            chartPreview && isChartSpecV2(chartPreview)
+                              ? 'Premium charts (donut/radar/bubble/waterfall) cannot be added to chat yet.'
+                              : undefined
+                          }
                         >
                           Add to chat
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="text-xs"
-                          onClick={resetChartMappingToRecommended}
-                          disabled={!chartLayoutForPreview}
-                        >
-                          Reset mapping
-                        </Button>
-                      </div>
-                      <div className="flex flex-wrap items-end gap-3 shrink-0 border-t border-border/50 pt-3">
-                        {chartType === 'scatter' ? (
-                          <>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">X measure</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartXCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartXCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {pivotChartValueFieldOptions.map((f) => (
-                                  <option key={f} value={f}>
-                                    {f}
-                                  </option>
-                                ))}
-                                {chartMeasureOptions
-                                  .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                                  .map((m) => (
-                                    <option key={`ex-sx-${m}`} value={m}>
-                                      {m}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Y measure</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartYCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartYCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {pivotChartValueFieldOptions.map((f) => (
-                                  <option key={f} value={f}>
-                                    {f}
-                                  </option>
-                                ))}
-                                {chartMeasureOptions
-                                  .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                                  .map((m) => (
-                                    <option key={`ex-sy-${m}`} value={m}>
-                                      {m}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                          </>
-                        ) : chartType === 'heatmap' ? (
-                          <>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Rows (X)</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartXCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartXCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {normalizedPivotConfig.rows.map((r) => (
-                                  <option key={r} value={r}>
-                                    {r}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Columns (Y)</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartYCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartYCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {normalizedPivotConfig.columns.map((c) => (
-                                  <option key={c} value={c}>
-                                    {c}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Value (Z)</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartZCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartZCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {pivotChartValueFieldOptions.map((f) => (
-                                  <option key={f} value={f}>
-                                    {f}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">X axis</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartXCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartXCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {normalizedPivotConfig.rows.map((r) => (
-                                  <option key={r} value={r}>
-                                    {r}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-1.5 min-w-[9rem]">
-                              <label className="text-xs text-muted-foreground">Y axis</label>
-                              <select
-                                className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                value={chartYCol}
-                                onChange={(e) => {
-                                  chartMappingManualRef.current = true;
-                                  setChartYCol(e.target.value);
-                                }}
-                              >
-                                <option value="">—</option>
-                                {pivotChartValueFieldOptions.map((f) => (
-                                  <option key={f} value={f}>
-                                    {f}
-                                  </option>
-                                ))}
-                                {chartMeasureOptions
-                                  .filter((m) => !pivotChartValueFieldOptions.includes(m))
-                                  .map((m) => (
-                                    <option key={`ex-m-${m}`} value={m}>
-                                      {m}
-                                    </option>
-                                  ))}
-                              </select>
-                            </div>
-                            {(chartType === 'bar' || chartType === 'line' || chartType === 'area') &&
-                            pivotChartSeriesOptions.length > 0 ? (
-                              <>
-                                <div className="space-y-1.5 min-w-[9rem]">
-                                  <label className="text-xs text-muted-foreground">Series</label>
-                                  <select
-                                    className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                    value={chartSeriesCol}
-                                    onChange={(e) => {
-                                      chartMappingManualRef.current = true;
-                                      setChartSeriesCol(e.target.value);
-                                    }}
-                                  >
-                                    <option value="">None</option>
-                                    {pivotChartSeriesOptions.map((s) => (
-                                      <option key={s} value={s}>
-                                        {s}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                                {chartType === 'bar' ? (
-                                  <div className="space-y-1.5 min-w-[9rem]">
-                                    <label className="text-xs text-muted-foreground">Bar layout</label>
-                                    <select
-                                      className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
-                                      value={chartBarLayout}
-                                      onChange={(e) => {
-                                        chartMappingManualRef.current = true;
-                                        setChartBarLayout(e.target.value as 'stacked' | 'grouped');
-                                      }}
-                                    >
-                                      <option value="stacked">Stacked</option>
-                                      <option value="grouped">Grouped</option>
-                                    </select>
-                                  </div>
-                                ) : null}
-                              </>
-                            ) : null}
-                          </>
-                        )}
+                        <div className="space-y-1.5 min-w-[10rem]">
+                          <label
+                            htmlFor="pivot-chart-type-expanded"
+                            className="text-xs text-muted-foreground"
+                          >
+                            Chart type
+                          </label>
+                          <select
+                            id="pivot-chart-type-expanded"
+                            className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                            value={chartType}
+                            onChange={(e) => {
+                              chartMappingManualRef.current = true;
+                              chartTypeUserPickedRef.current = true;
+                              setChartType(e.target.value as PivotChartKind);
+                            }}
+                          >
+                            {CHART_KIND_DROPDOWN_ORDER.map((m) => {
+                              const v = chartValidity?.[m];
+                              const disabled = !!v && !v.valid;
+                              return (
+                                <option
+                                  key={m}
+                                  value={m}
+                                  disabled={disabled}
+                                  title={disabled ? v?.reason : undefined}
+                                >
+                                  {CHART_KIND_LABEL[m]}
+                                  {disabled ? ' (n/a)' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                        {chartType === 'bar' && pivotChartSeriesOptions.length > 0 ? (
+                          <div className="space-y-1.5 min-w-[9rem]">
+                            <label className="text-xs text-muted-foreground">Bar layout</label>
+                            <select
+                              className="w-full rounded border border-border/60 bg-background px-2 py-1.5 text-xs"
+                              value={chartBarLayout}
+                              onChange={(e) => {
+                                chartMappingManualRef.current = true;
+                                setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                              }}
+                            >
+                              <option value="stacked">Stacked</option>
+                              <option value="grouped">Grouped</option>
+                            </select>
+                          </div>
+                        ) : null}
                       </div>
                       {chartRecommendationReason ? (
                         <p className="text-[11px] text-muted-foreground leading-relaxed shrink-0">
@@ -2548,7 +3179,7 @@ export function DataPreviewTable({
                           {chartConfigValidationError ?? chartPreviewError}
                         </p>
                       )}
-                      <div className="rounded-lg border border-border/60 bg-background p-2 flex-1 min-h-[400px] relative">
+                      <div className="flex flex-1 min-h-[400px] flex-col rounded-lg border border-border/60 bg-background p-2 relative">
                         {chartPreviewLoading && !chartPreview ? (
                           <div className="absolute inset-0 flex items-center justify-center text-muted-foreground gap-2 text-xs">
                             <Loader2 className="h-5 w-5 animate-spin" />
@@ -2556,20 +3187,32 @@ export function DataPreviewTable({
                           </div>
                         ) : null}
                         {chartPreview ? (
-                          <ChartRenderer
-                            chart={chartPreview}
-                            index={0}
-                            isSingleChart
-                            showAddButton
-                            enableFilters
-                            keyInsightSessionId={sessionId ?? null}
-                          />
+                          <div className="flex flex-1 min-h-0 flex-col">
+                            <ChartShim
+                              spec={chartPreview}
+                              legacy={() => (
+                                <ChartRenderer
+                                  chart={chartPreviewForRender ?? (chartPreview as ChartSpec)}
+                                  index={0}
+                                  isSingleChart
+                                  showAddButton
+                                  enableFilters
+                                  fillParent
+                                  keyInsightSessionId={null}
+                                  onSuggestedQuestionClick={onSuggestedQuestionClick}
+                                />
+                              )}
+                            />
+                          </div>
                         ) : !chartPreviewLoading ? (
-                          <div className="h-full min-h-[400px] flex items-center justify-center text-xs text-muted-foreground px-2 text-center">
+                          <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground px-2 text-center">
                             Chart preview updates from your pivot layout and filters.
                           </div>
                         ) : null}
                       </div>
+                      {chartPreview ? (
+                        <ChartKeyInsightCallout insight={chartInsight} />
+                      ) : null}
                     </div>
                   ) : (
                     renderPivotDataWorkspace(true)
@@ -2620,6 +3263,7 @@ export function DataPreviewTable({
                         >
                           <PivotFieldPanel
                             fillAvailableHeight
+                            maxAvailableVisible={10}
                             config={normalizedPivotConfig}
                             onConfigChange={handlePivotConfigChange}
                             filterSelections={filterSelections}
@@ -2628,6 +3272,9 @@ export function DataPreviewTable({
                             numericColumns={numericColumns}
                             temporalFacetColumns={temporalFacetColumns}
                             filterDistinctsFromSession={sessionFilterDistincts}
+                            filterDistinctsResolution={filterDistinctsResolution}
+                            onRetryDistincts={handleRetryFilterDistincts}
+                            variant={variant === 'analysis' ? 'analysis' : 'preview'}
                           />
                         </motion.div>
                       )}
@@ -2639,6 +3286,63 @@ export function DataPreviewTable({
           </>,
           document.body
         )}
+      {pivotAddDialogPivot && (
+        <AddPivotToDashboardModal
+          isOpen={Boolean(pivotAddDialogPivot)}
+          onClose={() => setPivotAddDialogPivot(null)}
+          pivot={pivotAddDialogPivot}
+        />
+      )}
+    </Card>
+  );
+}
+
+function ChartKeyInsightCallout({
+  insight,
+}: {
+  insight: { text: string | null; loading: boolean; error: string | null } | null;
+}) {
+  if (!insight) return null;
+  // No text yet and we're loading the first one — show a slim spinner.
+  if (insight.loading && !insight.text) {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded-lg border border-border/60 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Generating key insight…
+      </div>
+    );
+  }
+  // Error with no prior text to fall back on — show the error.
+  if (insight.error && !insight.text) {
+    return (
+      <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        Key insight unavailable: {insight.error}
+      </div>
+    );
+  }
+  if (!insight.text) return null;
+  return (
+    <Card className="mt-3 p-3 bg-primary/5 border-l-4 border-l-primary shadow-sm border-border/60">
+      <div className="flex items-center gap-2 mb-1.5">
+        <Lightbulb className="w-4 h-4 text-primary" />
+        <h4 className="text-xs font-semibold text-foreground uppercase tracking-wide">
+          Key insight
+        </h4>
+        {insight.loading && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Refreshing…
+          </span>
+        )}
+      </div>
+      <div className="text-sm text-foreground">
+        <MarkdownRenderer content={insight.text} />
+      </div>
+      {insight.error && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground italic">
+          Couldn't refresh: {insight.error}. Showing previous insight.
+        </p>
+      )}
     </Card>
   );
 }

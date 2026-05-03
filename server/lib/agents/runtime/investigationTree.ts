@@ -55,6 +55,8 @@ export function isDeepInvestigationEnabled(): boolean {
 export type NodeStatus = "pending" | "running" | "answered" | "pruned";
 
 export interface SpawnedQuestion {
+  /** Stable id (UUID) generated at spawn time so per-question feedback can target it. */
+  id: string;
   question: string;
   spawnReason: string;
   priority: "high" | "medium" | "low";

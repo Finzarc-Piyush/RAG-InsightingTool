@@ -2,6 +2,24 @@
  * Map LLM-output column string to exact DataSummary name when unambiguous (case / spacing).
  * Used by the planner before Zod + column validation.
  */
+import type { WideFormatTransform } from "../../../shared/schema.js";
+
+/**
+ * WPF5 · Returns true when the requested column name was a wide-format
+ * header that was melted away at upload time. Caller should refuse the
+ * fuzzy match (would otherwise silently bind to a substring like Period
+ * or Value) and surface a corrective error.
+ */
+function isStaleWideFormatColumn(
+  name: string,
+  wideFormatTransform?: WideFormatTransform
+): boolean {
+  if (!wideFormatTransform?.detected) return false;
+  const lower = name.trim().toLowerCase();
+  return wideFormatTransform.meltedColumns.some(
+    (c) => c.trim().toLowerCase() === lower
+  );
+}
 function tokenOverlapScore(a: string, b: string): number {
   const aw = a
     .toLowerCase()
@@ -80,11 +98,18 @@ function resolveBySubstringOrTokens(
 
 export function resolveToSchemaColumn(
   raw: string,
-  columns: readonly { name: string }[]
+  columns: readonly { name: string }[],
+  wideFormatTransform?: WideFormatTransform
 ): string {
   const t = raw.trim();
   if (!t) return raw;
   if (columns.some((c) => c.name === t)) return t;
+  // WPF5 · Refuse to fuzzy-match a stale wide-format column name. Returning
+  // the raw value keeps the existing "if it doesn't match a real column,
+  // pass through unchanged" contract — downstream Zod / column-allowlist
+  // validation will then reject it loudly with a clear error, instead of
+  // silently binding "Q1 23 Value Sales" to the substring "Value".
+  if (isStaleWideFormatColumn(t, wideFormatTransform)) return raw;
   const tl = t.toLowerCase();
   const caseInsensitive = columns.filter((c) => c.name.toLowerCase() === tl);
   if (caseInsensitive.length === 1) return caseInsensitive[0].name;

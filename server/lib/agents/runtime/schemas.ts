@@ -22,6 +22,13 @@ export const plannerOutputSchema = z.object({
 export type PlannerOutput = z.infer<typeof plannerOutputSchema>;
 
 export const spawnedQuestionSchema = z.object({
+  /**
+   * Stable id (UUID) generated when the reflector emits this question. Lets the
+   * UI attach per-sub-question feedback that survives reorders and edits.
+   * Optional in the schema for back-compat with persisted reflector output —
+   * the agent loop fills missing ids in before the SSE event fires.
+   */
+  id: z.string().optional(),
   question: z.string(),
   spawnReason: z.string(),
   priority: z.enum(["high", "medium", "low"]),

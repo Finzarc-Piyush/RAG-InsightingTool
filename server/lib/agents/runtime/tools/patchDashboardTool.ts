@@ -101,6 +101,34 @@ export function registerPatchDashboardTool(registry: ToolRegistry): void {
           removeCharts: args.removeCharts,
           renameSheet: args.renameSheet,
         });
+
+        // W65 · Memory journal: record the dashboard edit so resume-after-days
+        // shows the timeline of dashboard evolution. Best-effort.
+        void (async () => {
+          try {
+            const { buildDashboardPatchedEntry, scheduleLifecycleMemory } =
+              await import("../memoryLifecycleBuilders.js");
+            scheduleLifecycleMemory(
+              buildDashboardPatchedEntry({
+                sessionId: ctx.exec.sessionId,
+                username,
+                dashboardId: dashboard.id,
+                dashboardName: dashboard.name ?? dashboard.id,
+                addedCount: args.addCharts?.length ?? 0,
+                removedCount: args.removeCharts?.length ?? 0,
+                renamedSheetTo: args.renameSheet?.name,
+                createdAt: Date.now(),
+                turnId: ctx.turnId,
+              })
+            );
+          } catch (e) {
+            console.warn(
+              "⚠️ analysisMemory dashboard_patched hook failed:",
+              e
+            );
+          }
+        })();
+
         return {
           ok: true,
           summary: `patch_dashboard applied to ${dashboard.id} — ${summarisePatch(args)}.`,

@@ -18,10 +18,11 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Filter, GripVertical, X } from 'lucide-react';
+import { Filter, GripVertical, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -113,10 +114,35 @@ type PivotFieldPanelProps = {
   temporalFacetColumns?: TemporalFacetColumnMeta[];
   /** Distinct values per filter field from session `data` (GET pivot/fields). Omitted fields use row scan. */
   filterDistinctsFromSession?: Record<string, string[]>;
+  /**
+   * Render-time resolution per filter field: 'loading' (fetch in flight or
+   * not yet attempted), 'loaded' (values authoritative), 'error' (last fetch
+   * attempt failed). Derived synchronously by the parent from FILTERS-shelf
+   * membership so the popover never flashes through "No values to filter"
+   * before the loader appears.
+   */
+  filterDistinctsResolution?: Record<string, 'loading' | 'loaded' | 'error'>;
+  /** Re-fire the per-field distincts fetch after a prior failure. */
+  onRetryDistincts?: (field: string) => void;
+  /**
+   * When 'analysis', the FILTERS popover REQUIRES session-distincts and never
+   * falls back to sample row-scan (sample omits values that exist in the full
+   * dataset, which silently truncates the user's filter list). For 'preview'
+   * variants without a sessionId, sample fallback is preserved.
+   */
+  variant?: 'analysis' | 'preview';
   className?: string;
   /** When true, grow the field list to fill the parent column (e.g. expanded pivot dialog). */
   fillAvailableHeight?: boolean;
+  /**
+   * Cap for the "Choose fields to add" list — internal scroll kicks in past this many rows
+   * so the selected zones (Filters/Columns/Rows/Values) stay visible without panel scroll.
+   */
+  maxAvailableVisible?: number;
 };
+
+const AVAILABLE_ROW_HEIGHT_PX = 34;
+const AVAILABLE_ROW_GAP_PX = 6;
 
 export function PivotFieldPanel({
   config,
@@ -127,9 +153,19 @@ export function PivotFieldPanel({
   numericColumns,
   temporalFacetColumns = [],
   filterDistinctsFromSession,
+  filterDistinctsResolution,
+  onRetryDistincts,
+  variant = 'preview',
   className,
   fillAvailableHeight = false,
+  maxAvailableVisible = 5,
 }: PivotFieldPanelProps) {
+  // Clamp to ≥1 so callers passing 0 or negative don't produce CSS like
+  // `max-height: -6px`, which would visually collapse the available list.
+  const availableRowsClamped = Math.max(1, maxAvailableVisible);
+  const availableMaxHeightPx =
+    availableRowsClamped * AVAILABLE_ROW_HEIGHT_PX +
+    (availableRowsClamped - 1) * AVAILABLE_ROW_GAP_PX;
   const [activeId, setActiveId] = useState<string | null>(null);
   const numericSet = useMemo(() => new Set(numericColumns), [numericColumns]);
   const facetMetaByFieldName = useMemo(
@@ -275,6 +311,7 @@ export function PivotFieldPanel({
       onDragStart={onDragStart}
       onDragCancel={onDragCancel}
       onDragEnd={onDragEnd}
+      autoScroll={{ acceleration: 18 }}
     >
       <div
         className={cn(
@@ -303,7 +340,11 @@ export function PivotFieldPanel({
           )}
         >
           <div className="flex flex-col gap-3 pb-2">
-            <Well dropId={zoneDroppableId('unused')} title={ZONE_LABEL.unused}>
+            <Well
+              dropId={zoneDroppableId('unused')}
+              title={ZONE_LABEL.unused}
+              maxBodyHeightPx={availableMaxHeightPx}
+            >
               <SortableContext
                 id="unused"
                 items={config.unused.map(dimDndId)}
@@ -346,6 +387,16 @@ export function PivotFieldPanel({
                     data={data}
                     facetMetaByFieldName={facetMetaByFieldName}
                     filterDistinctsFromSession={filterDistinctsFromSession}
+                    resolution={
+                      filterDistinctsResolution?.[field] ??
+                      (variant === 'analysis' ? 'loading' : 'loaded')
+                    }
+                    onRetry={
+                      onRetryDistincts
+                        ? () => onRetryDistincts(field)
+                        : undefined
+                    }
+                    variant={variant}
                     selected={filterSelections[field]}
                     onSelectionChange={(next) =>
                       onFilterSelectionsChange({ ...filterSelections, [field]: next })
@@ -454,10 +505,13 @@ function Well({
   title,
   dropId,
   children,
+  maxBodyHeightPx,
 }: {
   title: string;
   dropId: string;
   children: React.ReactNode;
+  /** When set, the items list scrolls internally past this pixel height. */
+  maxBodyHeightPx?: number;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: dropId });
   return (
@@ -473,7 +527,19 @@ function Well({
           {title}
         </span>
       </div>
-      <div className="min-h-[40px] space-y-1.5">{children}</div>
+      <div
+        className={cn(
+          'min-h-[40px] space-y-1.5',
+          maxBodyHeightPx !== undefined && 'overflow-y-auto pr-1'
+        )}
+        style={
+          maxBodyHeightPx !== undefined
+            ? { maxHeight: `${maxBodyHeightPx}px` }
+            : undefined
+        }
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -583,6 +649,9 @@ function FilterFieldRow({
   data,
   facetMetaByFieldName,
   filterDistinctsFromSession,
+  resolution,
+  onRetry,
+  variant,
   selected,
   onSelectionChange,
   onRemove,
@@ -592,23 +661,57 @@ function FilterFieldRow({
   data: Record<string, unknown>[];
   facetMetaByFieldName: Map<string, TemporalFacetColumnMeta>;
   filterDistinctsFromSession?: Record<string, string[]>;
+  resolution: 'loading' | 'loaded' | 'error';
+  onRetry?: () => void;
+  variant: 'analysis' | 'preview';
   selected: Set<string> | undefined;
   onSelectionChange: (next: Set<string>) => void;
   onRemove: () => void;
 }) {
-  const options = useMemo(() => {
-    if (
-      filterDistinctsFromSession &&
-      Object.prototype.hasOwnProperty.call(filterDistinctsFromSession, field)
-    ) {
-      return [...filterDistinctsFromSession[field]].sort((a, b) =>
+  const sessionDistincts =
+    filterDistinctsFromSession &&
+    Object.prototype.hasOwnProperty.call(filterDistinctsFromSession, field)
+      ? filterDistinctsFromSession[field]
+      : undefined;
+
+  // In analysis variant the FILTERS popover sources values from the full
+  // session distincts (`/pivot/fields` against the DuckDB `data` table —
+  // same authoritative set the agent's tools see). Sample-derived fallback
+  // only applies to non-analysis preview tables that have no sessionId.
+  const allOptions = useMemo(() => {
+    if (sessionDistincts) {
+      return [...sessionDistincts].sort((a, b) =>
         a.localeCompare(b, undefined, { numeric: true })
       );
     }
+    if (variant === 'analysis') return [] as string[];
     return distinctPivotFilterKeysFromRows(data, field, facetMetaByFieldName);
-  }, [data, field, facetMetaByFieldName, filterDistinctsFromSession]);
+  }, [data, field, facetMetaByFieldName, sessionDistincts, variant]);
 
-  const effective = selected ?? new Set(options);
+  // Local substring filter for popover navigation. Pure client-side — no
+  // network round-trip, no debounce, no race. Shown when the loaded list is
+  // long enough to warrant search (otherwise the input is just noise).
+  const [searchQ, setSearchQ] = useState('');
+  const showSearchInput = allOptions.length > 8;
+  const visibleOptions = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    if (q.length === 0) return allOptions;
+    return allOptions.filter((v) => v.toLowerCase().includes(q));
+  }, [allOptions, searchQ]);
+
+  // selected === undefined semantically means "filter inactive — include all
+  // values". Render with all checkboxes checked so the user can deselect
+  // from the full set; the round-trip is correct because the snapshot equals
+  // the full set, so the isAll-omit path drops the field from the payload.
+  const effective = selected ?? new Set(allOptions);
+
+  const showLoadingState = variant === 'analysis' && resolution === 'loading';
+  const showErrorState = variant === 'analysis' && resolution === 'error';
+  const showEmptyState =
+    !showLoadingState &&
+    !showErrorState &&
+    allOptions.length === 0 &&
+    searchQ.trim().length === 0;
 
   const toggle = (v: string) => {
     const next = new Set(effective);
@@ -669,7 +772,10 @@ function FilterFieldRow({
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => onSelectionChange(new Set(options))}
+                disabled={
+                  showLoadingState || showErrorState || allOptions.length === 0
+                }
+                onClick={() => onSelectionChange(new Set(allOptions))}
               >
                 All
               </Button>
@@ -678,28 +784,75 @@ function FilterFieldRow({
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
+                disabled={showLoadingState || showErrorState}
                 onClick={() => onSelectionChange(new Set())}
               >
                 None
               </Button>
             </div>
           </div>
-          <ScrollArea className="h-[200px] pr-2">
-            <div className="space-y-2">
-              {options.map((v) => (
-                <div key={v} className="flex items-center gap-2">
-                  <Checkbox
-                    id={`${field}-${v}`}
-                    checked={effective.has(v)}
-                    onCheckedChange={() => toggle(v)}
-                  />
-                  <Label htmlFor={`${field}-${v}`} className="text-xs font-normal truncate cursor-pointer">
-                    {v || '(blank)'}
-                  </Label>
-                </div>
-              ))}
+          {showSearchInput && !showLoadingState && !showErrorState && (
+            <div className="mb-2">
+              <Input
+                value={searchQ}
+                onChange={(e) => setSearchQ(e.target.value)}
+                placeholder="Search values…"
+                className="h-7 text-xs"
+                aria-label={`Search ${label} values`}
+              />
             </div>
-          </ScrollArea>
+          )}
+          {showLoadingState ? (
+            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Loading values…</span>
+            </div>
+          ) : showErrorState ? (
+            <div className="space-y-2 py-3 px-1 text-xs">
+              <p className="text-destructive">Couldn't load values.</p>
+              {onRetry && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={onRetry}
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
+          ) : showEmptyState ? (
+            <p className="py-2 px-1 text-xs text-muted-foreground">
+              No values to filter.
+            </p>
+          ) : (
+            <ScrollArea className="h-[200px] pr-2">
+              <div className="space-y-2">
+                {visibleOptions.length === 0 ? (
+                  <p className="px-1 text-xs text-muted-foreground">
+                    No values match.
+                  </p>
+                ) : (
+                  visibleOptions.map((v) => (
+                    <div key={v} className="flex items-center gap-2">
+                      <Checkbox
+                        id={`${field}-${v}`}
+                        checked={effective.has(v)}
+                        onCheckedChange={() => toggle(v)}
+                      />
+                      <Label
+                        htmlFor={`${field}-${v}`}
+                        className="text-xs font-normal truncate cursor-pointer"
+                      >
+                        {v || '(blank)'}
+                      </Label>
+                    </div>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          )}
         </PopoverContent>
       </Popover>
       <Button

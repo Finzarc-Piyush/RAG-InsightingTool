@@ -37,7 +37,7 @@ describe("queryPlanDuckdbExecutor", () => {
     assert.ok(built);
     assert.match(built!.aggregateSql, /GROUP BY/);
     assert.match(built!.aggregateSql, /ORDER BY/);
-    assert.match(built!.aggregateSql, /SUM\(CAST\("Sales" AS DOUBLE\)\)/);
+    assert.match(built!.aggregateSql, /SUM\(TRY_CAST\("Sales" AS DOUBLE\)\)/);
     assert.match(built!.countSql, /SELECT COUNT\(\*\)/);
   });
 

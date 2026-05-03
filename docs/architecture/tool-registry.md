@@ -88,6 +88,22 @@ the loop runs them through `ToolRegistry.execute`.
 
 ## Recent changes
 
+- **Waves W46-W51** — `run_correlation` no longer fails silently. Six tiny
+  waves harden the path:
+  - **W46**: `analyzeCorrelations` returns `diagnostic?: CorrelationDiagnostic`
+    with one of six `reason`s explaining empty payloads.
+  - **W47**: tool handler validates that the current frame actually contains
+    the target column; auto-recovers from `turnStartDataRef` when the previous
+    tool aggregated `ctx.exec.data` (e.g. after `run_aggregation`).
+  - **W48**: target column resolved via the existing `findMatchingColumn`
+    fuzzy matcher — `"sales"` resolves against schema `"Total Sales"`, etc.
+  - **W49**: returns `ok:false` with the diagnostic summary when nothing was
+    produced, so the reflector can retry instead of treating empty as success.
+  - **W50**: deterministic insight fallback when the LLM call throws or
+    returns garbage — users always see top correlations from raw values.
+  - **W51**: integration tests
+    (`server/tests/runCorrelationFrameFit.test.ts`) +
+    planner-prompt note.
 - **Wave F2** — `ToolRegistry.register` throws
   `ToolAlreadyRegisteredError` when the tool name is taken. Boot-time
   registration runs once per process; a collision means a merge

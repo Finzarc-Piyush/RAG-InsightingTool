@@ -1,4 +1,4 @@
-import type { DataSummary } from "../../shared/schema.js";
+import type { DataSummary, DimensionHierarchy } from "../../shared/schema.js";
 import type { ChatDocument } from "../../models/chat.model.js";
 
 export interface RagChunk {
@@ -68,11 +68,31 @@ function duckdbSampleChunk(sample: Record<string, any>[]): RagChunk {
   };
 }
 
-export function userContextChunk(permanentContext: string): RagChunk {
+function formatDimensionHierarchiesForChunk(
+  hierarchies: DimensionHierarchy[] | undefined
+): string {
+  if (!hierarchies?.length) return "";
+  const lines = hierarchies.slice(0, 12).map((h) => {
+    const items = h.itemValues?.length
+      ? ` (children: ${h.itemValues.slice(0, 8).join(", ")}${h.itemValues.length > 8 ? ", ..." : ""})`
+      : "";
+    return `- "${h.column}" column: "${h.rollupValue}" is a category total that rolls up the other values${items}`;
+  });
+  return `\n\nDeclared dimension hierarchies (treat as ground truth — exclude rollup values from peer-comparison aggregations on the listed columns):\n${lines.join(
+    "\n"
+  )}`;
+}
+
+export function userContextChunk(
+  permanentContext: string,
+  hierarchies?: DimensionHierarchy[]
+): RagChunk {
   return {
     chunkId: USER_CONTEXT_CHUNK_ID,
     chunkType: "user_context",
-    content: `User-provided analysis context:\n${permanentContext.trim()}`,
+    content: `User-provided analysis context:\n${permanentContext.trim()}${formatDimensionHierarchiesForChunk(
+      hierarchies
+    )}`,
   };
 }
 
@@ -90,8 +110,12 @@ export function buildChunksForSession(params: {
   const chunks: RagChunk[] = [];
 
   // Prepend user-provided context so it ranks reliably in retrieval.
-  if (doc.permanentContext?.trim()) {
-    chunks.push(userContextChunk(doc.permanentContext));
+  // H5 · also surfaces declared dimension hierarchies inside this chunk.
+  const hierarchies = doc.sessionAnalysisContext?.dataset?.dimensionHierarchies;
+  if (doc.permanentContext?.trim() || hierarchies?.length) {
+    chunks.push(
+      userContextChunk(doc.permanentContext ?? "", hierarchies)
+    );
   }
 
   chunks.push(summaryChunk(doc.dataSummary));

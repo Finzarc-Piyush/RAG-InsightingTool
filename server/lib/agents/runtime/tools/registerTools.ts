@@ -65,6 +65,8 @@ import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
 import { registerPatchDashboardTool } from "./patchDashboardTool.js";
 import { registerWebSearchTool } from "./webSearchTool.js";
 import { registerBudgetOptimizerTool } from "./budgetOptimizerTool.js";
+import { registerComputeGrowthTool } from "./computeGrowthTool.js";
+import { registerDetectSeasonalityTool } from "./detectSeasonalityTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -764,7 +766,20 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
       const cols =
         resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
-      const formattedResults = JSON.stringify(resultRows.slice(0, 200), null, 2);
+      // RNK1 · slim the narrator observation snippet — 200 rows of JSON often
+      // brushed the 40k observation cap and truncated unrelated tool output
+      // from the same turn. The full result still rides on `table.rows` below
+      // and powers downstream pivot/leaderboard surfacing.
+      const OBSERVATION_TOP_K = 30;
+      const formattedResults = JSON.stringify(
+        resultRows.slice(0, OBSERVATION_TOP_K),
+        null,
+        2
+      );
+      const showingNote =
+        resultRows.length > OBSERVATION_TOP_K
+          ? ` (showing first ${OBSERVATION_TOP_K} of ${resultRows.length} rows in this snippet; full table available downstream)`
+          : "";
       const rs = descriptions.length
         ? descriptions.join("; ")
         : "Query plan executed.";
@@ -780,7 +795,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
       return {
         ok: true,
-        summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}\nSample:\n${formattedResults.length > 3500 ? formattedResults.slice(0, 3500) + "…" : formattedResults}`,
+        summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}${showingNote}\nSample:\n${formattedResults.length > 3500 ? formattedResults.slice(0, 3500) + "…" : formattedResults}`,
         numericPayload: formattedResults.slice(0, 8_000),
         analyticalMeta,
         queryPlanParsed: parsed,
@@ -970,6 +985,38 @@ export function registerDefaultTools(registry: ToolRegistry) {
       const coverage = nonNullCounts
         .map((c) => `${c.name}: ${c.nonNull}/${c.total}`)
         .join(", ");
+
+      // W59 · record the computed-column recipe (regardless of persistToSession)
+      // so resume-after-days the planner can see what derived metrics were
+      // useful in past turns and reference them by name. W68 · skip silently
+      // when username is missing so the producer doesn't fail schema validation
+      // (the entry can be backfilled later via the W67 script).
+      const memoryUsername = ctx.exec.username?.trim();
+      if (memoryUsername) {
+        void (async () => {
+          try {
+            const { buildComputedColumnEntry, scheduleLifecycleMemory } =
+              await import("../memoryLifecycleBuilders.js");
+            scheduleLifecycleMemory(
+              buildComputedColumnEntry({
+                sessionId: ctx.exec.sessionId,
+                username: memoryUsername,
+                columns: parsed.data.columns,
+                persistedToBlob: Boolean(parsed.data.persistToSession),
+                description: parsed.data.persistDescription,
+                createdAt: Date.now(),
+                turnId: ctx.turnId,
+              })
+            );
+          } catch (e) {
+            console.warn(
+              "⚠️ analysisMemory computed_column_added hook failed:",
+              e
+            );
+          }
+        })();
+      }
+
       return {
         ok: true,
         summary: `add_computed_columns: added ${names}. Rows: ${rows.length}. Non-null: ${coverage}. Columns: ${cols.join(", ")}${persistNote}${duckdbNote}\nSample:\n${sample.slice(0, 3500)}`,
@@ -1395,4 +1442,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // "how should I redistribute my budget" — see budget_reallocation question
   // shape in analysisBrief.ts.
   registerBudgetOptimizerTool(registry);
+  // WGR3 · period-over-period growth (YoY/QoQ/MoM/WoW). Use for trend /
+  // "fastest growing market" / "biggest decliner" questions.
+  registerComputeGrowthTool(registry);
+  // WSE3 · within-year recurring seasonality (month-of-year / quarter-of-year).
+  // Use for trend questions on multi-year monthly/quarterly data.
+  registerDetectSeasonalityTool(registry);
 }

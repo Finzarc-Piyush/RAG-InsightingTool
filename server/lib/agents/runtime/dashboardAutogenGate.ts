@@ -10,6 +10,7 @@
  */
 
 import type { AnalysisBrief, ChartSpec } from "../../../shared/schema.js";
+import type { DashboardIntent } from "./dashboardIntent.js";
 
 export function isDashboardAutogenEnabled(): boolean {
   return process.env.DASHBOARD_AUTOGEN_ENABLED === "true";
@@ -63,4 +64,28 @@ export function shouldBuildDashboard(args: {
   if (!Array.isArray(args.charts) || args.charts.length === 0) return false;
   if (!isUserEnrolledInDashboardAutogenRollout(args.userKey)) return false;
   return true;
+}
+
+/**
+ * Intent-aware decision: whether to BUILD a dashboard spec for this turn, and
+ * whether to PERSIST it (auto_create) vs surface it as a clickable offer
+ * ("Build Dashboard" button on the client).
+ *
+ * `build=true, persist=true`  → explicit ask path (existing behavior)
+ * `build=true, persist=false` → multi-chart offer path (new)
+ * `build=false`               → no spec emitted
+ */
+export function dashboardBuildDecision(args: {
+  intent: DashboardIntent;
+  charts: ChartSpec[];
+  /** Used by the W7.6 ramp; pass `ctx.username` from the agent loop. */
+  userKey?: string;
+}): { build: boolean; persist: boolean } {
+  if (!isDashboardAutogenEnabled()) return { build: false, persist: false };
+  if (args.intent === "none") return { build: false, persist: false };
+  if (!Array.isArray(args.charts) || args.charts.length === 0)
+    return { build: false, persist: false };
+  if (!isUserEnrolledInDashboardAutogenRollout(args.userKey))
+    return { build: false, persist: false };
+  return { build: true, persist: args.intent === "auto_create" };
 }

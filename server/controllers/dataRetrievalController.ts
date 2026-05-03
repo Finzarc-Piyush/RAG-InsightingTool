@@ -1,10 +1,11 @@
 import { Request, Response } from "express";
-import { 
-  getUserChats, 
-  getChatDocument, 
+import {
+  getUserChats,
+  getChatDocument,
   getChatBySessionIdForUser,
 } from "../models/chat.model.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
 
 // Get all analysis sessions for a user
 export const getUserAnalysisSessions = async (req: Request, res: Response) => {
@@ -65,6 +66,12 @@ export const getAnalysisData = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Analysis data not found' });
     }
 
+    // Wave-FA5 · Apply active-filter overlay to rawData / sampleRows so the
+    // data preview UI shows what subsequent analyses will see. The canonical
+    // dataset on the document is unchanged.
+    const rawDataFiltered = applyActiveFilter(chatDocument.rawData ?? [], chatDocument.activeFilter);
+    const sampleRowsFiltered = applyActiveFilter(chatDocument.sampleRows ?? [], chatDocument.activeFilter);
+
     // Return complete analysis data
     res.json({
       id: chatDocument.id,
@@ -74,8 +81,8 @@ export const getAnalysisData = async (req: Request, res: Response) => {
       lastUpdatedAt: chatDocument.lastUpdatedAt,
       collaborators: chatDocument.collaborators || [chatDocument.username],
       dataSummary: chatDocument.dataSummary,
-      rawData: chatDocument.rawData,
-      sampleRows: chatDocument.sampleRows,
+      rawData: rawDataFiltered,
+      sampleRows: sampleRowsFiltered,
       // Preview can be generated from rawData.slice(0, 50) on the frontend
       columnStatistics: chatDocument.columnStatistics,
       charts: chatDocument.charts,
@@ -83,7 +90,8 @@ export const getAnalysisData = async (req: Request, res: Response) => {
       messages: chatDocument.messages,
       blobInfo: chatDocument.blobInfo,
       analysisMetadata: chatDocument.analysisMetadata,
-      sessionId: chatDocument.sessionId
+      sessionId: chatDocument.sessionId,
+      activeFilter: chatDocument.activeFilter ?? null,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {
@@ -105,10 +113,14 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
     const username = requireUsername(req);
 
     const chatDocument = await getChatBySessionIdForUser(sessionId, username);
-    
+
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found for this session' });
     }
+
+    // Wave-FA5 · See parallel comment in getAnalysisData above.
+    const rawDataFiltered = applyActiveFilter(chatDocument.rawData ?? [], chatDocument.activeFilter);
+    const sampleRowsFiltered = applyActiveFilter(chatDocument.sampleRows ?? [], chatDocument.activeFilter);
 
     // Return complete analysis data
     res.json({
@@ -119,8 +131,8 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
       lastUpdatedAt: chatDocument.lastUpdatedAt,
       collaborators: chatDocument.collaborators || [chatDocument.username],
       dataSummary: chatDocument.dataSummary,
-      rawData: chatDocument.rawData,
-      sampleRows: chatDocument.sampleRows,
+      rawData: rawDataFiltered,
+      sampleRows: sampleRowsFiltered,
       // Preview can be generated from rawData.slice(0, 50) on the frontend
       columnStatistics: chatDocument.columnStatistics,
       charts: chatDocument.charts,
@@ -128,7 +140,8 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
       messages: chatDocument.messages,
       blobInfo: chatDocument.blobInfo,
       analysisMetadata: chatDocument.analysisMetadata,
-      sessionId: chatDocument.sessionId
+      sessionId: chatDocument.sessionId,
+      activeFilter: chatDocument.activeFilter ?? null,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {
@@ -189,9 +202,12 @@ export const getRawData = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Analysis data not found' });
     }
 
+    // Wave-FA5 · paginate AFTER applying the filter so page numbers stay
+    // consistent within a filtered view.
+    const filteredRows = applyActiveFilter(chatDocument.rawData ?? [], chatDocument.activeFilter);
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + limit;
-    const paginatedData = chatDocument.rawData.slice(startIndex, endIndex);
+    const paginatedData = filteredRows.slice(startIndex, endIndex);
 
     res.json({
       chatId: chatDocument.id,
@@ -200,11 +216,12 @@ export const getRawData = async (req: Request, res: Response) => {
       pagination: {
         page,
         limit,
-        totalRows: chatDocument.rawData.length,
-        totalPages: Math.ceil(chatDocument.rawData.length / limit),
-        hasNextPage: endIndex < chatDocument.rawData.length,
+        totalRows: filteredRows.length,
+        totalPages: Math.ceil(filteredRows.length / limit),
+        hasNextPage: endIndex < filteredRows.length,
         hasPrevPage: page > 1
-      }
+      },
+      activeFilter: chatDocument.activeFilter ?? null,
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {

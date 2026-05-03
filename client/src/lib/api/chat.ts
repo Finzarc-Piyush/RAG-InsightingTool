@@ -66,6 +66,62 @@ export async function downloadModifiedDataset(
   }
 }
 
+/**
+ * Download the latest "working" dataset — the rows the agent's tools see,
+ * with the active filter intentionally bypassed. Server-side this hits
+ * `loadLatestData(..., { skipActiveFilter: true })`, so the file includes all
+ * temporal facet columns, wide-format melt, and persisted computed columns.
+ *
+ * `format` defaults to `'xlsx'`. CSV is recommended for >~900k-row datasets
+ * because the XLSX spec hard-caps a single sheet at 1,048,576 rows.
+ */
+export async function downloadWorkingDatasetXlsx(
+  sessionId: string,
+  format: 'xlsx' | 'csv' = 'xlsx',
+): Promise<{ filename: string; rowCount: number | null }> {
+  const headers = await buildApiHeaders();
+
+  try {
+    const url =
+      `${API_BASE_URL}/api/data-ops/download-working/${sessionId}` +
+      (format === 'csv' ? '?format=csv' : '');
+    logger.log("🌐 Downloading working dataset from:", url);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to download working dataset: ${response.status} ${errorText}`);
+    }
+
+    const contentDisposition = response.headers.get("Content-Disposition");
+    const parsedName = parseFilenameFromContentDisposition(contentDisposition);
+    const filename = parsedName ?? `dataset_working_${downloadFilenameTimestamp()}.${format}`;
+    const rowCountHeader = response.headers.get("X-Working-Dataset-Row-Count");
+    const rowCount = rowCountHeader != null ? Number(rowCountHeader) : null;
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+
+    logger.log("✅ Working dataset downloaded successfully:", filename);
+    return { filename, rowCount: Number.isFinite(rowCount) ? rowCount : null };
+  } catch (error) {
+    logger.error("❌ Failed to download working dataset:", error);
+    throw error;
+  }
+}
+
 export interface StreamIntermediatePayload {
   preview: Record<string, unknown>[];
   thinkingSteps: ThinkingStep[];
@@ -92,6 +148,17 @@ export interface StreamChatCallbacks {
   onDone?: () => void;
   /** Server queued the message until dataset enrichment completes */
   onQueued?: (payload: { message?: string; reason?: string }) => void;
+  /**
+   * Fired once the agent has auto-persisted the dashboard to Cosmos when
+   * `analysisBrief.requestsDashboard` was true. Use to navigate the user
+   * straight to /dashboard?open=<id> on stream completion.
+   */
+  onDashboardCreated?: (payload: {
+    dashboardId: string;
+    name?: string;
+    sheetCount?: number;
+    chartCount?: number;
+  }) => void;
   /** plan | tool_call | tool_result | critic_verdict | handoff (+ mirrored workbench rows) when AGENTIC_LOOP_ENABLED */
   onAgentEvent?: (event: string, data: unknown) => void;
 }
@@ -215,7 +282,11 @@ function dispatchEvent(
       break;
     case "error":
       callbacks.onError?.(
-        new Error((payload as { message?: string })?.message || "Unknown error")
+        new Error(
+          (payload as { error?: string; message?: string })?.error ||
+            (payload as { error?: string; message?: string })?.message ||
+            "Unknown error"
+        )
       );
       break;
     case "done":
@@ -223,6 +294,16 @@ function dispatchEvent(
       break;
     case "queued":
       callbacks.onQueued?.(payload as { message?: string; reason?: string });
+      break;
+    case "dashboard_created":
+      callbacks.onDashboardCreated?.(
+        payload as {
+          dashboardId: string;
+          name?: string;
+          sheetCount?: number;
+          chartCount?: number;
+        }
+      );
       break;
     case "plan":
     case "tool_call":
@@ -402,7 +483,11 @@ function dispatchDataOpsEvent(
       break;
     case "error":
       callbacks.onError?.(
-        new Error((payload as { message?: string })?.message || "Unknown error")
+        new Error(
+          (payload as { error?: string; message?: string })?.error ||
+            (payload as { error?: string; message?: string })?.message ||
+            "Unknown error"
+        )
       );
       break;
     case "done":

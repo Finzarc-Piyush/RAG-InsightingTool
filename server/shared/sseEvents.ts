@@ -36,6 +36,7 @@ export const SSE_EVENT_KIND = {
   MAGNITUDES: "magnitudes",
   UNEXPLAINED: "unexplained",
   DASHBOARD_DRAFT: "dashboard_draft",
+  DASHBOARD_CREATED: "dashboard_created",
   CACHE_HIT: "cache_hit",
   INTERMEDIATE: "intermediate",
   RESPONSE: "response",
@@ -168,6 +169,15 @@ const dashboardDraftSchema = z
   })
   .passthrough();
 
+const dashboardCreatedSchema = z
+  .object({
+    dashboardId: z.string(),
+    name: z.string().optional(),
+    sheetCount: z.number().int().nonnegative().optional(),
+    chartCount: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
 const cacheHitSchema = z
   .object({
     source: z.string().optional(),
@@ -218,6 +228,7 @@ export const sseEventSchemas: Record<SseEventKind, z.ZodTypeAny> = {
   [SSE_EVENT_KIND.MAGNITUDES]: magnitudesSchema,
   [SSE_EVENT_KIND.UNEXPLAINED]: unexplainedSchema,
   [SSE_EVENT_KIND.DASHBOARD_DRAFT]: dashboardDraftSchema,
+  [SSE_EVENT_KIND.DASHBOARD_CREATED]: dashboardCreatedSchema,
   [SSE_EVENT_KIND.CACHE_HIT]: cacheHitSchema,
   [SSE_EVENT_KIND.INTERMEDIATE]: intermediateSchema,
   [SSE_EVENT_KIND.RESPONSE]: responseSchema,

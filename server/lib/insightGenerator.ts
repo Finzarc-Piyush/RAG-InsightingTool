@@ -1,12 +1,25 @@
 import { ChartSpec, DataSummary, Insight } from '../shared/schema.js';
 import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
+import { formatCompactNumber } from './formatCompactNumber.js';
 import type { ChartInsightSynthesisContext } from './insightSynthesis/types.js';
 import { formatSessionAnalysisContextForInsight } from './insightSynthesis/formatSessionContext.js';
 import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
+import { computePivotPatterns, renderPivotPatternsBlock } from './insightGenerator/pivotPatterns.js';
+import { buildPatternDrivenFallback } from './insightGenerator/deterministicNarratives.js';
 
-// keyInsight: grounded numbers + LLM interpretation (1–3 tight sentences typical).
-const KEY_INSIGHT_MAX_CHARS = 1400;
+/**
+ * Break a single-paragraph keyInsight into one line per sentence so the UI
+ * (MarkdownRenderer maps "\n" → <br>) renders skimable line breaks. Splits
+ * after `.`, `!`, `?` only when followed by an uppercase letter or `(`, so
+ * abbreviations like "vs. Y" or decimals like "0.5" are not split.
+ */
+function insertSentenceBreaks(s: string): string {
+  return s.replace(/([.!?])\s+(?=[A-Z(])/g, '$1\n\n');
+}
+
+// keyInsight: grounded numbers + LLM interpretation (3–5 substantive sentences typical).
+const KEY_INSIGHT_MAX_CHARS = 2200;
 
 /**
  * Pick the dimension name to use when narrating "top performers". For multi-series charts
@@ -108,14 +121,7 @@ export async function generateChartInsights(
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
   };
 
-  const roundSmart = (v: number): string => {
-    if (!isFinite(v)) return String(v);
-    const abs = Math.abs(v);
-    if (abs >= 100) return v.toFixed(0);
-    if (abs >= 10) return v.toFixed(1);
-    if (abs >= 1) return v.toFixed(2);
-    return v.toFixed(3);
-  };
+  const roundSmart = (v: number): string => formatCompactNumber(v);
 
   // Calculate statistics for Y2 if dual-axis
   const maxY2 = numericY2.length > 0 ? Math.max(...numericY2) : 0;
@@ -373,7 +379,7 @@ NUMERIC XY RELATIONSHIP (ground truth from plotted points):
 
       // For categorical charts, require both top X and its top Y to avoid mismatches.
       if ((!isCategoricalX || (mentionsTopX && mentionsTopY))) {
-        return { keyInsight: enforceInsightLimit(candidate) };
+        return { keyInsight: insertSentenceBreaks(enforceInsightLimit(candidate)) };
       }
     }
   }
@@ -428,7 +434,7 @@ SUGGESTION FORMAT:
     ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
 ${chatInsights.map((insight, idx) => `${idx + 1}. ${insight.text}`).join('\n')}
 
-The keyInsight should relate this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) to the analysis; 1–3 tight sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters total.`
+The keyInsight should connect this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) to the analysis with 3–5 substantive sentences: the headline number, what it implies for segment / risk / opportunity, and one concrete next-check or next-action. ≤${KEY_INSIGHT_MAX_CHARS} characters total.`
     : '';
 
   const dataFactsContext = `
@@ -436,6 +442,20 @@ DATA FACTS (ground truth from the chart data; use these explicitly in the output
 - Top ${chartSpec.y} performer(s) by ${topPerfDimension}: ${topPerformerStr}
 - Bottom ${chartSpec.y} performer(s) by ${topPerfDimension}: ${bottomPerformerStr}
 ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${y2Label} performer(s): ${bottomPerformerStrY2}` : ''}`.trim();
+
+  // Wave 1 · pivot patterns: derived signals (concentration, gap, dispersion,
+  // segments, temporal, dual-axis) that the LLM needs to escape the formulaic
+  // "leader-vs-laggard" pattern. Pure function over chartData; pushes the
+  // model toward driver / risk / next-check phrasing.
+  const pivotPatterns = computePivotPatterns(chartData, {
+    x: chartSpec.x,
+    y: chartSpec.y,
+    type: chartSpec.type,
+    seriesKeys: chartSpec.seriesKeys,
+    y2: (chartSpec as any).y2,
+  });
+  const pivotPatternsBlock = renderPivotPatternsBlock(pivotPatterns, formatY);
+  const pivotPatternsSection = pivotPatternsBlock ? `\n\n${pivotPatternsBlock}` : '';
 
   const scatterBlock = scatterNumericFactsBlock ? `\n${scatterNumericFactsBlock}\n` : '';
 
@@ -446,7 +466,13 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 
   const prompt = `Return JSON with the listed fields.
 
-TASK: Write 1–3 short sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / blocks below—do not invent metrics. Add "so what" (risk, opportunity, segment story, or next check) using only what the data plausibly supports; use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
+TASK: Write 3–5 substantive sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / PIVOT PATTERNS / blocks below—do not invent metrics. Each sentence must carry its own claim, ordered as:
+  1. HEADLINE — the topline magnitude with a comparative anchor (% of total, multiplier vs median, top:bottom ratio, or recent vs prior delta — pick whichever the data supports).
+  2. DRIVER — what specific segment / time bucket / mix is producing the headline, named explicitly. Use PIVOT PATTERNS (segments above P75, peak / trough labels, concentration share) as your driver vocabulary.
+  3. RISK — what the pattern implies for concentration, volatility, dependence, or sustainability (e.g. high HHI = single-segment risk; high CV = unstable benchmarking; long-tail share = limited near-term lift).
+  4. NEXT-CHECK — one concrete, *quantified* diagnostic (e.g. "split {topX} by channel to test whether the 8× lead is structural", "compare {peakLabel} vs {troughLabel} on {factor}"). Never propose a generic action.
+
+Use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
 
 CHART CONTEXT
 - Type: ${chartSpec.type}
@@ -456,12 +482,12 @@ ${seriesKeys ? `- Series: ${chartSpec.seriesColumn?.trim() || 'series'} (${serie
 - Points: ${chartData.length}
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
-${dataFactsContext}
+${dataFactsContext}${pivotPatternsSection}
 ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}${domainBlock}
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Plain sentences, ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS."${businessCommentaryRequest}
+  "keyInsight": "Plain sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS, then explain what that concentration means and what to investigate next."${businessCommentaryRequest}
 }`;
 
   try {
@@ -471,13 +497,24 @@ OUTPUT JSON (exact keys only):
         messages: [
           {
             role: 'system',
-            content: `You are a senior analyst. Output JSON with a single key "keyInsight": 1–3 sentences interpreting the chart using ONLY provided numbers. Connect metrics to implications (segments, concentration, tradeoffs, what to test next) where justified. Never use percentile shorthand like P75 or P90—use numeric values. No markdown bold/headers in the string.`,
+            content: `You are a senior analyst. Output JSON with a single key "keyInsight": 3–5 substantive sentences interpreting the chart using ONLY provided numbers. Each sentence carries its own claim — headline, driver, risk, next-check — using PIVOT PATTERNS as the driver / risk vocabulary (concentration share, HHI, CV, long-tail count, segments above P75, peak / trough, recent-vs-prior delta).
+
+ANTI-PATTERNS — do NOT write any of these:
+- "Increase {y} where {y} is low" / "improve underperformers" / "lift weaker segments" — generic, not a mechanism.
+- "Focus on {top}" / "prioritize {leader}" without naming a *mechanism* (price, distribution, mix, segment, channel, cadence, season).
+- Sentences that only restate which value is highest or lowest.
+- Suggestions that ignore concentration / dispersion / temporal signals when those signals are present in PIVOT PATTERNS.
+- Vague next-actions ("monitor", "investigate further", "look deeper"). Always quantify the next-check (a target multiple, a comparison split, a time window).
+
+If the data does not support a credible mechanism, propose a *diagnostic question* (a specific split or comparison) instead of a recommendation — never a generic push.
+
+Never use percentile shorthand like P75 or P90 — use numeric values. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions. No markdown bold/headers in the string.`,
           },
           { role: 'user', content: prompt },
         ],
         response_format: { type: 'json_object' },
         temperature: getInsightTemperature(),
-        max_tokens: 900,
+        max_tokens: 1400,
       },
       { purpose: LLM_PURPOSE.INSIGHT_GEN }
     );
@@ -541,6 +578,26 @@ OUTPUT JSON (exact keys only):
     }
 
     if (!passes && topX !== undefined && typeof topY === 'number' && !isNaN(topY)) {
+      // Wave 2 · prefer the pattern-driven fallback when patterns are usable
+      // (it produces 4-claim narratives keyed off concentration / dispersion /
+      // trend / relationship / diagnostic families instead of the formulaic
+      // "prioritize the leader, lift the laggards" template).
+      const usePatternFallback =
+        pivotPatterns.topPerformers.length > 0 && pivotPatterns.rowCount >= 2;
+
+      if (usePatternFallback) {
+        const { text } = buildPatternDrivenFallback({
+          patterns: pivotPatterns,
+          chartSpec,
+          dimensionLabel: topPerfDimension,
+          formatY,
+        });
+        return {
+          keyInsight: insertSentenceBreaks(truncateInsight(text)),
+          ...(businessCommentary ? { businessCommentary } : {}),
+        };
+      }
+
       const bottomThresholdStr =
         bottomPerformers.length > 0 && typeof bottomPerformers[0]?.y === 'number'
           ? formatY(bottomPerformers[0].y)
@@ -557,19 +614,21 @@ OUTPUT JSON (exact keys only):
       });
 
       return {
-        keyInsight: truncateInsight(fallback),
+        keyInsight: insertSentenceBreaks(truncateInsight(fallback)),
         ...(businessCommentary ? { businessCommentary } : {}),
       };
     }
 
     return {
-      keyInsight: enforceInsightLimit(candidate),
+      keyInsight: insertSentenceBreaks(enforceInsightLimit(candidate)),
       ...(businessCommentary ? { businessCommentary } : {}),
     };
   } catch (error) {
     console.error('Error generating chart insights:', error);
     return {
-      keyInsight: `This ${chartSpec.type} chart shows ${chartData.length} data points with values ranging from ${minY.toFixed(2)} to ${maxY.toFixed(2)}`
+      keyInsight: insertSentenceBreaks(
+        `This ${chartSpec.type} chart shows ${chartData.length} data points with values ranging from ${formatCompactNumber(minY)} to ${formatCompactNumber(maxY)}`
+      )
     };
   }
 }

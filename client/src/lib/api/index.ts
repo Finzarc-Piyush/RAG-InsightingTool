@@ -12,12 +12,18 @@ export type {
   PivotFieldsColumnDistinctResponse,
 } from "./data";
 export { sessionsApi } from "./sessions";
+export { analysisMemoryApi } from "./analysisMemory";
+export type {
+  MemoryListResponse,
+  MemorySearchResponse,
+  MemorySearchHit,
+} from "./analysisMemory";
 export { dashboardsApi } from "./dashboards";
 export { sharedAnalysesApi } from "./sharedAnalyses";
 export { sharedDashboardsApi } from "./sharedDashboards";
 export { snowflakeApi } from "./snowflake";
 export type { SnowflakeTableInfo, SnowflakeImportResponse } from "./snowflake";
-export { streamChatRequest, streamDataOpsChatRequest, downloadModifiedDataset } from "./chat";
+export { streamChatRequest, streamDataOpsChatRequest, downloadModifiedDataset, downloadWorkingDatasetXlsx } from "./chat";
 export { getUploadJobStatus } from "./uploadStatus";
 export type {
   UploadJobStatusResponse,

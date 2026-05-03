@@ -8,6 +8,7 @@ import type { Layouts } from 'react-grid-layout';
 import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
 import { DashboardTiles } from './DashboardTiles';
+import { CapturedFilterBanner } from './CapturedFilterBanner';
 import { ShareDashboardDialog } from './ShareDashboardDialog';
 import { ActiveChartFilters, hasActiveFilters } from '@/lib/chartFilters';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,13 @@ import { ChevronLeft, ChevronRight, FileText, Edit2, Check, X, Trash2, Download,
 import { cn } from '@/lib/utils';
 import { useDashboardContext } from '../context/DashboardContext';
 import { getUserEmail } from '@/utils/userStorage';
+import {
+  EXPORT_BRAND,
+  EXPORT_FONT_FAMILY,
+  EXPORT_PIXEL_RATIO,
+  SLIDE_HEIGHT_IN,
+  SLIDE_WIDTH_IN,
+} from '../exportTheme';
 
 interface DashboardViewProps {
   dashboard: DashboardData;
@@ -121,33 +129,19 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         block,
       }));
 
-    const baseTiles: DashboardTile[] = activeSheet.charts.flatMap((chart, index) => {
-      const chartId = `chart-${index}`;
-      const tiles: DashboardTile[] = [
-        {
-          kind: 'chart',
-          id: chartId,
-          title: chart.title || `Chart ${index + 1}`,
-          chart,
-          index,
-          metadata: {
-            lastUpdated: dashboard.updatedAt,
-          },
-        },
-      ];
-
-      if (chart.keyInsight) {
-        tiles.push({
-          kind: 'insight',
-          id: `insight-${index}`,
-          title: 'Key Insight',
-          narrative: chart.keyInsight,
-          relatedChartId: chartId,
-        });
-      }
-
-      return tiles;
-    });
+    // Chart and its keyInsight live in ONE tile — same container, same chat
+    // pairing. The render branch in DashboardTiles.tsx pulls keyInsight off
+    // tile.chart directly.
+    const baseTiles: DashboardTile[] = activeSheet.charts.map((chart, index) => ({
+      kind: 'chart' as const,
+      id: `chart-${index}`,
+      title: chart.title || `Chart ${index + 1}`,
+      chart,
+      index,
+      metadata: {
+        lastUpdated: dashboard.updatedAt,
+      },
+    }));
 
     const tableTiles: DashboardTile[] = (activeSheet.tables ?? []).map((table, index) => ({
       kind: 'table',
@@ -157,13 +151,21 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       index,
     }));
 
+    const pivotTiles: DashboardTile[] = (activeSheet.pivots ?? []).map((pivot, index) => ({
+      kind: 'pivot',
+      id: `pivot-${pivot.id || index}`,
+      title: pivot.title || `Pivot ${index + 1}`,
+      pivot,
+      index,
+    }));
+
     // Always return a section, even if there are no tiles (empty sheet)
     return [
       {
         id: activeSheet.id,
         title: activeSheet.name,
         description: `Charts and insights for ${activeSheet.name}`,
-        tiles: [...narrativeTiles, ...baseTiles, ...tableTiles],
+        tiles: [...narrativeTiles, ...baseTiles, ...pivotTiles, ...tableTiles],
       },
     ];
   }, [activeSheet, dashboard.updatedAt]);
@@ -245,18 +247,6 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     () => sections.flatMap((section) => section.tiles).filter((tile): tile is DashboardTile & { kind: 'chart' } => tile.kind === 'chart'),
     [sections]
   );
-
-  const insightMap = useMemo(() => {
-    const map = new Map<string, DashboardTile>();
-    sections.forEach((section) => {
-      section.tiles.forEach((tile) => {
-        if (tile.kind === 'insight' && tile.relatedChartId) {
-          map.set(`${tile.kind}-${tile.relatedChartId}`, tile);
-        }
-      });
-    });
-    return map;
-  }, [sections]);
 
   const activeSection = sections.find((section) => section.id === activeSheetId) ?? sections[0];
 
@@ -341,35 +331,21 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     }
   };
 
-  // Handle actual export with selected sheets
+  // W12 · rich PPTX assembly. Slide order:
+  //   1. Cover (dashboard name + envelope.tldr + date + brand band)
+  //   2. Executive Summary block (one slide per featured chart/pivot, with
+  //      keyInsight / matching finding alongside)
+  //   3. Recommendations (envelope.recommendations grouped by horizon)
+  //   4. All Artefacts slides (every captured tile, no exec chrome)
+  //   5. Methodology + caveats (envelope.methodology / caveats / domainLens)
+  //   6. Closing (original question + footer)
   const handleExport = async (sheetIdsToExport?: string[]) => {
     if (isExporting) return;
 
     const sheetsToExport = sheetIdsToExport || Array.from(selectedSheetIds);
-    
+
     if (sheetsToExport.length === 0) {
       toast({ title: 'No views selected', description: 'Please select at least one view to export.' });
-      return;
-    }
-
-    // Get all charts from selected sheets
-    const allCharts: Array<{ sheet: typeof sheets[0]; chartIndex: number; chart: any }> = [];
-    sheetsToExport.forEach((sheetId) => {
-      const sheet = sheets.find((s) => s.id === sheetId);
-      if (sheet) {
-        sheet.charts.forEach((chart, index) => {
-          allCharts.push({ sheet, chartIndex: index, chart });
-        });
-      }
-    });
-
-    if (allCharts.length === 0) {
-      toast({
-        title: "No charts in selection",
-        description:
-          "Use “Report PDF” or “Report PPTX” below for narrative/table export, or pick views that contain charts.",
-      });
-      setExportDialogOpen(false);
       return;
     }
 
@@ -379,124 +355,422 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     try {
       const pptx = new PptxGenJS();
       pptx.layout = PPT_LAYOUT;
+      pptx.author = 'Marico Insighting Tool';
 
-      const originalActiveSheetId = activeSheetId;
-      let slideIndex = 0;
+      const slideW = SLIDE_WIDTH_IN;
+      const slideH = SLIDE_HEIGHT_IN;
+      const envelope = dashboard.answerEnvelope;
+      const today = new Date().toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
 
-      // Process each selected sheet
-      for (let sheetIndex = 0; sheetIndex < sheetsToExport.length; sheetIndex++) {
-        const sheetId = sheetsToExport[sheetIndex];
-        const sheet = sheets.find(s => s.id === sheetId);
-        if (!sheet || sheet.charts.length === 0) continue;
-
-        // Switch to this sheet to render its charts
-        setActiveSheetId(sheetId);
-        
-        // Wait for charts to render (small delay to ensure DOM updates)
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Get chart nodes for this sheet
-        const chartNodes = Array.from(document.querySelectorAll('[data-dashboard-chart-node]')) as HTMLElement[];
-        
-        if (chartNodes.length === 0) {
-          console.warn(`No chart nodes found for sheet: ${sheet.name}`);
-          continue;
-        }
-
-        // Process each chart in this sheet
-        for (let chartIndex = 0; chartIndex < Math.min(sheet.charts.length, chartNodes.length); chartIndex++) {
-          const chart = sheet.charts[chartIndex];
-          const chartNode = chartNodes[chartIndex];
-        const slide = pptx.addSlide();
-
-        let imgData: string | undefined;
-        if (chartNode) {
-          // Increase quality by using higher pixel ratio for better resolution
-          imgData = await htmlToImage.toPng(chartNode, {
-            cacheBust: true,
-            backgroundColor: '#FFFFFF',
-            style: { boxShadow: 'none' },
-            pixelRatio: 5, // Triple the resolution for crisp, high-quality images
-            quality: 1.0, // Maximum quality (0-1 range)
-          });
-        }
-
-        // Layout matching Keynote style: title at top, chart left, text right
-        const slideWidth = 10; // Standard slide width in inches
-        const leftPad = 0.3;
-        const topPad = 0.3; // Start higher for title
-        const titleHeight = 0.5;
-        
-        // Chart dimensions - left side
-        const imgW = 5.5; // Chart width
-        const imgH = 4.0; // Chart height
-        const chartTopY = topPad + titleHeight + 0.2; // Below title
-
-        // Add chart title at the top (centered or left-aligned)
-        slide.addText(chart.title || `Chart ${chartIndex + 1}`, {
-          x: leftPad,
-          y: topPad,
-          w: slideWidth - (leftPad * 2),
-          h: titleHeight,
-          fontSize: 18,
-          bold: true,
-          color: '1F2937',
-          align: 'left',
-          valign: 'middle',
+      // ── Cover slide ─────────────────────────────────────────────────
+      const cover = pptx.addSlide();
+      cover.background = { color: EXPORT_BRAND.background };
+      // brand accent band on the left edge
+      cover.addShape(pptx.ShapeType.rect, {
+        x: 0,
+        y: 0,
+        w: 0.18,
+        h: slideH,
+        fill: { color: EXPORT_BRAND.primary },
+        line: { color: EXPORT_BRAND.primary },
+      });
+      cover.addText(dashboard.name || 'Dashboard', {
+        x: 0.7,
+        y: 2.2,
+        w: slideW - 1.4,
+        h: 1.0,
+        fontSize: 36,
+        bold: true,
+        color: EXPORT_BRAND.title,
+        fontFace: EXPORT_FONT_FAMILY,
+      });
+      if (envelope?.tldr) {
+        cover.addText(envelope.tldr, {
+          x: 0.7,
+          y: 3.4,
+          w: slideW - 1.4,
+          h: 1.6,
+          fontSize: 16,
+          color: EXPORT_BRAND.foreground,
+          fontFace: EXPORT_FONT_FAMILY,
+          valign: 'top',
         });
+      }
+      cover.addText(today, {
+        x: 0.7,
+        y: slideH - 0.8,
+        w: slideW - 1.4,
+        h: 0.4,
+        fontSize: 11,
+        color: EXPORT_BRAND.muted,
+        fontFace: EXPORT_FONT_FAMILY,
+      });
+      cover.addText('Marico Insighting Tool', {
+        x: 0.7,
+        y: slideH - 0.45,
+        w: slideW - 1.4,
+        h: 0.3,
+        fontSize: 10,
+        color: EXPORT_BRAND.muted,
+        fontFace: EXPORT_FONT_FAMILY,
+      });
 
-        // Add chart image on the left
-        if (imgData) {
-          slide.addImage({ data: imgData, x: leftPad, y: chartTopY, w: imgW, h: imgH });
+      // ── Capture every tile across all selected sheets ──────────────
+      const originalActiveSheetId = activeSheetId;
+      type CapturedTile = {
+        sheetName: string;
+        kind: 'chart' | 'pivot';
+        title: string;
+        keyInsight?: string;
+        imgData?: string;
+      };
+      const captured: CapturedTile[] = [];
+
+      for (const sheetId of sheetsToExport) {
+        const sheet = sheets.find((s) => s.id === sheetId);
+        if (!sheet) continue;
+
+        setActiveSheetId(sheetId);
+        // Allow PivotTile fetches + chart renders to settle before capture.
+        await new Promise((r) => setTimeout(r, 800));
+
+        const chartNodes = Array.from(
+          document.querySelectorAll('[data-dashboard-chart-node]')
+        ) as HTMLElement[];
+        for (let i = 0; i < (sheet.charts?.length ?? 0); i++) {
+          const node = chartNodes[i];
+          let imgData: string | undefined;
+          if (node) {
+            try {
+              imgData = await htmlToImage.toPng(node, {
+                cacheBust: true,
+                backgroundColor: '#FFFFFF',
+                style: { boxShadow: 'none' },
+                pixelRatio: EXPORT_PIXEL_RATIO,
+                quality: 1.0,
+              });
+            } catch (err) {
+              console.warn('Chart capture failed', err);
+            }
+          }
+          captured.push({
+            sheetName: sheet.name,
+            kind: 'chart',
+            title: sheet.charts[i]?.title ?? `Chart ${i + 1}`,
+            keyInsight: sheet.charts[i]?.keyInsight,
+            imgData,
+          });
         }
 
-        // Text sections on the right - aligned with chart top
-        const rightX = leftPad + imgW + 0.4; // Gap between chart and text
-        const colW = slideWidth - rightX - leftPad; // Remaining width
-        let currentY = chartTopY; // Start at same Y as chart
-
-        // Key Insight section
-        if (chart.keyInsight) {
-          slide.addText('Key Insight', {
-            x: rightX,
-            y: currentY,
-            w: colW,
-            fontSize: 13,
-            bold: true,
-            color: '0B63F6',
-            valign: 'top',
+        // Pivot capture (W11) — uses the same pixelRatio path.
+        const pivotNodes = Array.from(
+          document.querySelectorAll('[data-dashboard-pivot-node]')
+        ) as HTMLElement[];
+        for (let i = 0; i < (sheet.pivots?.length ?? 0); i++) {
+          const node = pivotNodes[i];
+          let imgData: string | undefined;
+          if (node) {
+            try {
+              imgData = await htmlToImage.toPng(node, {
+                cacheBust: true,
+                backgroundColor: '#FFFFFF',
+                style: { boxShadow: 'none' },
+                pixelRatio: EXPORT_PIXEL_RATIO,
+                quality: 1.0,
+              });
+            } catch (err) {
+              console.warn('Pivot capture failed', err);
+            }
+          }
+          captured.push({
+            sheetName: sheet.name,
+            kind: 'pivot',
+            title: sheet.pivots![i]?.title ?? `Pivot ${i + 1}`,
+            imgData,
           });
-          currentY += 0.4;
-          
-          slide.addText(chart.keyInsight, {
-            x: rightX,
-            y: currentY,
-            w: colW,
-            h: 1.8, // Height for insight text
-            fontSize: 11,
-            color: '111827',
-            wrap: true,
-            valign: 'top',
-          });
-          currentY += 2.0; // Space for insight text + gap
-        }
-
-
-          slideIndex++;
         }
       }
 
-      // Restore original active sheet
       setActiveSheetId(originalActiveSheetId);
 
-      const fileName = sheetsToExport.length === sheets.length 
-        ? `${dashboard.name || 'dashboard'}.pptx`
-        : `${dashboard.name || 'dashboard'}_${sheetsToExport.length}_sheets.pptx`;
-      
+      // Helper: a content slide with the brand header band.
+      const addContentSlide = (title: string) => {
+        const s = pptx.addSlide();
+        s.background = { color: EXPORT_BRAND.background };
+        s.addShape(pptx.ShapeType.rect, {
+          x: 0,
+          y: 0,
+          w: slideW,
+          h: 0.18,
+          fill: { color: EXPORT_BRAND.primary },
+          line: { color: EXPORT_BRAND.primary },
+        });
+        s.addText(title, {
+          x: 0.4,
+          y: 0.3,
+          w: slideW - 0.8,
+          h: 0.6,
+          fontSize: 22,
+          bold: true,
+          color: EXPORT_BRAND.title,
+          fontFace: EXPORT_FONT_FAMILY,
+        });
+        return s;
+      };
+
+      // Helper: render a captured tile onto a slide with insight panel.
+      const addTileSlide = (
+        title: string,
+        imgData: string | undefined,
+        insightPairs: Array<{ heading: string; body: string }>
+      ) => {
+        const s = addContentSlide(title);
+        const imgX = 0.4;
+        const imgY = 1.1;
+        const imgW = 7.6;
+        const imgH = 5.5;
+        if (imgData) {
+          s.addImage({ data: imgData, x: imgX, y: imgY, w: imgW, h: imgH });
+        } else {
+          s.addText('(Image capture unavailable)', {
+            x: imgX,
+            y: imgY,
+            w: imgW,
+            h: imgH,
+            fontSize: 12,
+            color: EXPORT_BRAND.muted,
+            fontFace: EXPORT_FONT_FAMILY,
+          });
+        }
+        const rightX = imgX + imgW + 0.3;
+        const rightW = slideW - rightX - 0.4;
+        let y = imgY;
+        for (const p of insightPairs) {
+          if (!p.body?.trim()) continue;
+          s.addText(p.heading, {
+            x: rightX,
+            y,
+            w: rightW,
+            h: 0.3,
+            fontSize: 12,
+            bold: true,
+            color: EXPORT_BRAND.primary,
+            fontFace: EXPORT_FONT_FAMILY,
+          });
+          y += 0.35;
+          s.addText(p.body, {
+            x: rightX,
+            y,
+            w: rightW,
+            h: 1.6,
+            fontSize: 11,
+            color: EXPORT_BRAND.foreground,
+            fontFace: EXPORT_FONT_FAMILY,
+            wrap: true,
+            valign: 'top',
+          });
+          y += 1.7;
+        }
+        return s;
+      };
+
+      // ── Executive summary slides ──────────────────────────────────
+      const execSheet = sheets.find(
+        (s) => s.id === 'sheet_summary' || s.name.toLowerCase().includes('executive')
+      );
+      const execChartTitles = new Set(
+        (execSheet?.charts ?? []).map((c) => c.title?.toLowerCase()).filter(Boolean) as string[]
+      );
+      const execPivotTitles = new Set(
+        (execSheet?.pivots ?? []).map((p) => p.title?.toLowerCase()).filter(Boolean) as string[]
+      );
+      const execTiles = captured.filter((t) =>
+        t.kind === 'chart'
+          ? execChartTitles.has(t.title.toLowerCase())
+          : execPivotTitles.has(t.title.toLowerCase())
+      );
+      const findingByTitle = new Map<string, string>();
+      for (const f of envelope?.findings ?? []) {
+        if (f.headline) findingByTitle.set(f.headline.toLowerCase(), f.evidence ?? '');
+      }
+      for (const t of execTiles) {
+        const matchedFinding = findingByTitle.get(t.title.toLowerCase());
+        addTileSlide(`Executive summary — ${t.title}`, t.imgData, [
+          { heading: 'Key insight', body: t.keyInsight ?? '' },
+          { heading: 'Evidence', body: matchedFinding ?? '' },
+        ]);
+      }
+
+      // ── Recommendations slide ─────────────────────────────────────
+      if (envelope?.recommendations?.length) {
+        const s = addContentSlide('Recommendations');
+        const groups: Record<string, string[]> = { now: [], this_quarter: [], strategic: [] };
+        for (const r of envelope.recommendations) {
+          const horizon = r.horizon ?? 'now';
+          (groups[horizon] ??= []).push(`• ${r.action} — ${r.rationale}`);
+        }
+        const labels: Record<string, string> = {
+          now: 'Now',
+          this_quarter: 'This quarter',
+          strategic: 'Strategic',
+        };
+        let y = 1.2;
+        for (const horizon of ['now', 'this_quarter', 'strategic'] as const) {
+          const items = groups[horizon];
+          if (!items?.length) continue;
+          s.addText(labels[horizon], {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 0.4,
+            fontSize: 14,
+            bold: true,
+            color: EXPORT_BRAND.primary,
+            fontFace: EXPORT_FONT_FAMILY,
+          });
+          y += 0.45;
+          s.addText(items.join('\n'), {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 0.5 * items.length + 0.4,
+            fontSize: 12,
+            color: EXPORT_BRAND.foreground,
+            fontFace: EXPORT_FONT_FAMILY,
+            valign: 'top',
+            wrap: true,
+          });
+          y += 0.5 * items.length + 0.5;
+        }
+      }
+
+      // ── All Artefacts slides ──────────────────────────────────────
+      // Includes every captured tile not already on Sheet 1 (avoid dupes).
+      const execTitleSet = new Set(execTiles.map((t) => `${t.kind}::${t.title.toLowerCase()}`));
+      const restTiles = captured.filter(
+        (t) => !execTitleSet.has(`${t.kind}::${t.title.toLowerCase()}`)
+      );
+      for (const t of restTiles) {
+        addTileSlide(t.title, t.imgData, t.keyInsight ? [{ heading: 'Key insight', body: t.keyInsight }] : []);
+      }
+
+      // ── Methodology + caveats slide ───────────────────────────────
+      if (envelope?.methodology || envelope?.caveats?.length || envelope?.domainLens) {
+        const s = addContentSlide('Methodology');
+        let y = 1.2;
+        if (envelope.methodology) {
+          s.addText(envelope.methodology, {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 1.6,
+            fontSize: 12,
+            color: EXPORT_BRAND.foreground,
+            fontFace: EXPORT_FONT_FAMILY,
+            valign: 'top',
+            wrap: true,
+          });
+          y += 1.7;
+        }
+        if (envelope.caveats?.length) {
+          s.addText('Caveats', {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 0.4,
+            fontSize: 14,
+            bold: true,
+            color: EXPORT_BRAND.primary,
+            fontFace: EXPORT_FONT_FAMILY,
+          });
+          y += 0.45;
+          s.addText(envelope.caveats.map((c: string) => `• ${c}`).join('\n'), {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 0.4 * envelope.caveats.length + 0.3,
+            fontSize: 12,
+            color: EXPORT_BRAND.foreground,
+            fontFace: EXPORT_FONT_FAMILY,
+            valign: 'top',
+            wrap: true,
+          });
+          y += 0.4 * envelope.caveats.length + 0.4;
+        }
+        if (envelope.domainLens) {
+          s.addText('Domain context', {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 0.4,
+            fontSize: 14,
+            bold: true,
+            color: EXPORT_BRAND.primary,
+            fontFace: EXPORT_FONT_FAMILY,
+          });
+          y += 0.45;
+          s.addText(envelope.domainLens, {
+            x: 0.4,
+            y,
+            w: slideW - 0.8,
+            h: 1.2,
+            fontSize: 12,
+            color: EXPORT_BRAND.foreground,
+            fontFace: EXPORT_FONT_FAMILY,
+            valign: 'top',
+            wrap: true,
+          });
+        }
+      }
+
+      // ── Closing slide ─────────────────────────────────────────────
+      const closing = addContentSlide('Original question');
+      // Original question lives in sheet narrative blocks — find a "custom" block
+      // titled "Original question" or fall back to the dashboard name.
+      const originalQ = (() => {
+        for (const s of sheets) {
+          for (const b of s.narrativeBlocks ?? []) {
+            if (b.title?.toLowerCase().startsWith('original question')) return b.body;
+          }
+        }
+        return '';
+      })();
+      if (originalQ) {
+        closing.addText(originalQ, {
+          x: 0.4,
+          y: 1.2,
+          w: slideW - 0.8,
+          h: 4.5,
+          fontSize: 16,
+          color: EXPORT_BRAND.foreground,
+          fontFace: EXPORT_FONT_FAMILY,
+          valign: 'top',
+          wrap: true,
+        });
+      }
+      closing.addText('Generated by Marico Insighting Tool', {
+        x: 0.4,
+        y: slideH - 0.55,
+        w: slideW - 0.8,
+        h: 0.3,
+        fontSize: 10,
+        color: EXPORT_BRAND.muted,
+        fontFace: EXPORT_FONT_FAMILY,
+      });
+
+      const fileName =
+        sheetsToExport.length === sheets.length
+          ? `${dashboard.name || 'dashboard'}.pptx`
+          : `${dashboard.name || 'dashboard'}_${sheetsToExport.length}_sheets.pptx`;
+
       await pptx.writeFile({ fileName });
-      toast({ 
-        title: 'Export complete', 
-        description: `Your PowerPoint with ${slideIndex} slide${slideIndex !== 1 ? 's' : ''} has been downloaded.` 
+      toast({
+        title: 'Export complete',
+        description: `Downloaded ${fileName}.`,
       });
     } catch (err) {
       console.error(err);
@@ -561,6 +835,12 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           } : undefined}
         />
 
+        {/* Wave-FA6 · Provenance banner: when the dashboard was captured under
+            an active filter, surface the filter conditions so the viewer knows
+            this dashboard reflects a slice of the dataset, not the whole. */}
+        {dashboard.capturedActiveFilter && dashboard.capturedActiveFilter.conditions.length > 0 && (
+          <CapturedFilterBanner spec={dashboard.capturedActiveFilter} />
+        )}
       </div>
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -834,13 +1114,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           <DialogHeader>
             <DialogTitle>Export Dashboard</DialogTitle>
             <DialogDescription>
-              Choose views, then pick an export path.{" "}
-              <span className="block pt-2 text-xs text-muted-foreground">
-                <strong>Report PDF / Report PPTX</strong> are generated on the server from the saved dashboard model
-                (narrative text, chart titles/axes, tables). For slides that include{" "}
-                <strong>rasterized chart images</strong>, use the blue primary export below (this browser captures the
-                grid with html-to-image — same idea as a visual deck).
-              </span>
+              Choose views to include. <strong>Report PPTX</strong> rasterizes
+              charts and pivots into a branded slide deck (cover, exec summary,
+              recommendations, methodology). <strong>Download data (XLSX)</strong>{" "}
+              gives you the raw rows behind every chart.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -893,49 +1170,21 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                 size="sm"
                 disabled={!!serverExportBusy}
                 onClick={async () => {
-                  setServerExportBusy("pdf");
-                  try {
-                    await dashboardsApi.exportDashboard(dashboard.id, "pdf");
-                    toast({
-                      title: "Report PDF (server)",
-                      description:
-                        "Document-model PDF: narratives and tables as text; charts summarized by title/axes (no chart screenshots).",
-                    });
-                  } catch (e: any) {
-                    toast({
-                      title: "Export failed",
-                      description: e?.message || "Could not generate PDF.",
-                      variant: "destructive",
-                    });
-                  } finally {
-                    setServerExportBusy(null);
-                  }
-                }}
-              >
-                {serverExportBusy === "pdf" ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  "Report PDF"
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={!!serverExportBusy}
-                onClick={async () => {
                   setServerExportBusy("pptx");
                   try {
-                    await dashboardsApi.exportDashboard(dashboard.id, "pptx");
+                    const url = `/api/dashboards/${dashboard.id}/export/xlsx`;
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.click();
                     toast({
-                      title: "Report PPTX (server)",
+                      title: "Download data",
                       description:
-                        "Structured text slides from the dashboard model — not embedded chart PNGs. Use the primary export for screenshot-based slides.",
+                        "Started XLSX download. One tab per chart with raw rows + provenance.",
                     });
                   } catch (e: any) {
                     toast({
-                      title: "Export failed",
-                      description: e?.message || "Could not generate PPTX.",
+                      title: "Download failed",
+                      description: e?.message || "Could not download data.",
                       variant: "destructive",
                     });
                   } finally {
@@ -943,10 +1192,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   }
                 }}
               >
-                {serverExportBusy === "pptx" ? (
+                {serverExportBusy ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  "Report PPTX"
+                  "Download data (XLSX)"
                 )}
               </Button>
             </div>
@@ -974,7 +1223,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
               ) : (
                 <>
                   <Download className="h-4 w-4 mr-2" />
-                  Export {selectedSheetIds.size} View{selectedSheetIds.size !== 1 ? 's' : ''}
+                  Report PPTX
                 </>
               )}
             </Button>

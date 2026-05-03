@@ -23,6 +23,7 @@ import {
   buildSynthesisContext,
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
+import { formatDimensionHierarchiesBlock } from "./context.js";
 import type { AgentExecutionContext } from "./types.js";
 
 export { shouldUseNarrator } from "./analyticalBlackboard.js";
@@ -48,48 +49,45 @@ const narratorOutputSchema = z.object({
   unexplained: z.string().optional(),
   // W3 · AnswerEnvelope — optional structured rendering hints. Narrator may
   // emit any subset; the UI's AnswerCard renders whichever fields are present
-  // and falls back to `body` markdown for the rest.
-  tldr: z.string().max(280).optional(),
+  // and falls back to `body` markdown for the rest. WTL3 · caps loosened in
+  // lockstep with shared/schema.ts answerEnvelope.
+  tldr: z.string().max(400).optional(),
   findings: z
     .array(
       z.object({
-        headline: z.string().max(200),
-        evidence: z.string().max(600),
-        magnitude: z.string().max(80).optional(),
+        headline: z.string().max(280),
+        evidence: z.string().max(1200),
+        magnitude: z.string().max(120).optional(),
       })
     )
-    .max(5)
+    .max(7)
     .optional(),
-  methodology: z.string().max(500).optional(),
-  caveats: z.array(z.string().max(200)).max(3).optional(),
-  // W8 · "So what" reading of the headline findings. Each entry pairs an
-  // observed `statement` with its business `soWhat`, framed against the
-  // FMCG/Marico domain context when the bundle includes one.
+  methodology: z.string().max(1400).optional(),
+  caveats: z.array(z.string().max(280)).max(5).optional(),
+  // W8 · "So what" reading of the headline findings.
   implications: z
     .array(
       z.object({
-        statement: z.string().max(280),
-        soWhat: z.string().max(280),
+        statement: z.string().max(400),
+        soWhat: z.string().max(400),
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(4)
+    .max(6)
     .optional(),
-  // W8 · concrete next actions, grouped by horizon for the AnswerCard's
-  // "Do now / This quarter / Strategic" sections.
+  // W8 · concrete next actions, grouped by horizon.
   recommendations: z
     .array(
       z.object({
-        action: z.string().max(200),
-        rationale: z.string().max(280),
+        action: z.string().max(280),
+        rationale: z.string().max(400),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )
-    .max(4)
+    .max(6)
     .optional(),
   // W8 · one-paragraph framing of the findings against FMCG/Marico priors.
-  // Cite the pack id (e.g. `marico-haircare-portfolio`) when referenced.
-  domainLens: z.string().max(500).optional(),
+  domainLens: z.string().max(900).optional(),
 });
 
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
@@ -129,7 +127,24 @@ export async function runNarrator(
   turnId: string,
   onLlmCall: () => void,
   repair?: NarratorRepairContext,
-  streaming?: NarratorStreamingHook
+  streaming?: NarratorStreamingHook,
+  /**
+   * G4-P5 · structured tool I/O captured by the agent loop. When provided,
+   * the narrator's data-understanding block lists each step's tool, args,
+   * and row count — so it can distinguish "this step queried the whole
+   * dataset" from "this step filtered to Central only".
+   */
+  structuredObservations?: ReadonlyArray<{
+    stepId: string;
+    tool: string;
+    args: Record<string, unknown>;
+    metrics: {
+      inputRowCount?: number;
+      outputRowCount?: number;
+      appliedAggregation?: boolean;
+      durationMs?: number;
+    };
+  }>
 ): Promise<NarratorOutput | null> {
   const blackboardBlock = formatForNarrator(blackboard);
   if (!blackboardBlock.trim()) return null;
@@ -139,7 +154,7 @@ export async function runNarrator(
   // hits (including blackboard round-2 entries), and FMCG/Marico domain
   // packs in stable byte-order so the prefix cache holds across calls.
   const synthBundleBlock = formatSynthesisContextBundle(
-    buildSynthesisContext(ctx, { blackboard })
+    buildSynthesisContext(ctx, { blackboard, structuredObservations })
   );
   const phase1Shape = ctx.analysisBrief?.questionShape;
 
@@ -165,6 +180,16 @@ Your job: narrate the investigation clearly in the following JSON format:
   conversational questions. Do not pad with filler — every paragraph must add either a
   finding, a numeric claim, an interpretation grounded in the domain context, or a
   recommendation. Prefer 4–7 paragraphs of grounded prose over bullet-spam.
+  HARD CONSTRAINTS on body content:
+  • Do NOT open with a methodology recap — phrases like "X has been calculated by
+    grouping…", "the analysis was performed by summing…", "we computed X by aggregating…"
+    are banned. The first sentence must state the headline finding with its number.
+  • Do NOT include a paragraph describing the dataset shape (row count × column count),
+    data-quality assessments ("the dataset is clean", "well-structured for this purpose",
+    "appears suitable"), or hypothesis-confirmation language ("the findings align with
+    the hypothesis", "this confirms our assumption that…"). The reader assumes the data
+    was usable. If a data limitation is genuinely material, surface it inside \`caveats\`,
+    not inside body prose.
 - "keyInsight": 1–3 sentences on what the findings imply for decisions (the "so what").
   Use null if nothing beyond the body adds value.
 - "ctas": 0 to 3 actionable follow-up prompts (empty array if none fit).
@@ -200,7 +225,72 @@ W8 · Decision-grade extensions — REQUIRED for analytical questions:
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
 - "magnitudes": 2–4 entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent.
 - "unexplained": one sentence (≤180 chars) on what could NOT be determined. Omit if nothing material is missing.
-When the user message says "questionShape: none" you may omit magnitudes and unexplained.`;
+When the user message says "questionShape: none" you may omit magnitudes and unexplained.
+
+VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
+- Plain English ONLY. Never use these terms anywhere in body, keyInsight, findings,
+  implications, or recommendations: HHI, CV, IQR, P25, P50, P75, "long tail",
+  "Pearson r", "percentile", "coefficient of variation". Use plain language instead:
+  "concentrated / spread out", "varies a lot / fairly stable", "in the top/bottom
+  quartile", "moves in the same direction", "smaller segments combined".
+- Numbers ≥1000 MUST be rendered compactly (710K, 1.95M, 2.3B). Never raw decimals
+  like "710,212.40" or "$1,950,000.50". Currency stays prefixed where appropriate
+  ("$710K"). Percentages and ratios stay precise ("31%", "1.8×").
+- Tone is neutral and observational. Never accusatory. Avoid framings like
+  "underperforms", "lagging", "weak performance" unless the data clearly establishes
+  a benchmark; "South contributed 17% of the total" is preferred to "South is
+  underperforming the rest of the country".
+- Recommendations are ANALYTICAL next steps, not executive decisions. The reader
+  is an analyst running a report, not a CEO. Do NOT propose launching new products,
+  entering new categories, changing channels, premiumising a brand, restructuring
+  distribution, or any other strategic move that requires authority the reader
+  does not have. Do propose splitting by an existing dimension, comparing two
+  cohorts the data has, or looking at the metric over time.
+- Never speculate about causes the data does not show. The data has the columns
+  listed in DATA UNDERSTANDING — do not invent channel, distribution, brand,
+  competition, customer demographics, supply-chain, or pricing mechanisms unless
+  those columns are in the data.
+- DIMENSION HIERARCHIES: when the user message includes a DIMENSION HIERARCHIES
+  block, treat the listed rollup values as category totals — never as competing
+  items. Phrase findings as "the <rollupValue> category" (or "overall <column>"
+  if more natural), and frame member values as a share of that category, not of
+  the dataset total. Example: prefer "within the FEMALE SHOWER GEL category,
+  MARICO leads at 31%" over "FEMALE SHOWER GEL leads with 88% of total sales".
+  When the same block also surfaces a "DETECTED INTENT — share-of-category"
+  hint, the user is explicitly asking for share / contribution / % computed
+  AGAINST the rollup as the denominator — divide the member's value by the
+  rollup's value (e.g. MARICO 6000 / FSG 68751 = ~9 %), NOT by the sum of the
+  remaining members.
+- WGR5 — GROWTH PROMINENCE: when the blackboard or tool observations contain
+  growth output (the compute_growth tool emits memorySlots like growth_grain,
+  growth_top_dimension, growth_top_pct and rows with prior_value/growth_pct),
+  surface the period-over-period growth rates explicitly in the answer. Put
+  the percentage delta into findings[].magnitude (e.g. "+33.0% YoY"),
+  spell out which segment grew fastest and which declined fastest by name in
+  implications[]. Cover ALL year-pairs the data supports, not just the first
+  pair (a 3-year dataset has TWO YoY pairs per segment, not one). For
+  "fastest growing" questions, the lede in tldr should name the top segment
+  and its growth rate. Never bury growth rates inside methodology or caveats.
+- WSE5 — SEASONALITY PROMINENCE: when the blackboard or tool observations
+  contain seasonality output (detect_seasonality emits memorySlots
+  seasonality_strength, seasonality_peak_positions, seasonality_consistency_max,
+  seasonality_grain, seasonality_years_observed; its summary text reads
+  e.g. "Strong month-of-year seasonality across 5 years: Nov consistently
+  peaks (5 of 5 years), with Nov averaging +38% vs the typical month"),
+  frame any peak claim as a RECURRING pattern, not a single-period max. Cite
+  the consistency fraction (e.g. "5 of 5 years"), the named months/quarters
+  (e.g. "Oct/Nov/Dec"), AND the magnitude (e.g. "~30% above the annual mean").
+  NEVER report a single-month peak ("Nov 2018 was the peak") as the headline
+  finding when seasonality output shows it's part of a recurring Q4 spike —
+  that buries the actual story. Place a SEPARATE Seasonality finding in
+  findings[] alongside the Trend / Growth finding (they answer different
+  questions: trend = "are values rising over years?"; seasonality = "do
+  values peak at the same time within each year?"). Cross-cite the
+  seasonality-and-festivals domain pack in domainLens when the detected
+  pattern matches Marico expectations (Q1 summer, Q3 Diwali festive,
+  monsoon-driven rural). When seasonality_strength is "weak" or "none",
+  still acknowledge the result briefly ("no clear within-year recurring
+  pattern") so the reader knows the cut was checked.`;
 
   const phase1Line = phase1Shape
     ? `questionShape: ${phase1Shape}\n`
@@ -217,7 +307,9 @@ When the user message says "questionShape: none" you may omit magnitudes and une
       }`
     : "";
   const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
-  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${bundleSection}${repairBlock}`;
+  const hierarchyBlock = formatDimensionHierarchiesBlock(ctx);
+  const hierarchySection = hierarchyBlock ? `\n${hierarchyBlock}` : "";
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${bundleSection}${hierarchySection}${repairBlock}`;
 
   // W38 · use the streaming variant when (1) env flag is on, (2) caller
   // supplied a streaming hook, AND (3) this is the initial call (not a
@@ -227,7 +319,12 @@ When the user message says "questionShape: none" you may omit magnitudes and une
   const result = useStreaming
     ? await completeJsonStreaming(system, user, narratorOutputSchema, {
         turnId: `${turnId}_narrator_stream`,
-        maxTokens: 6000,
+        // WTL2 · 6_000 → 10_000. Narrator output IS the user-visible answer.
+        // Rich envelopes (findings + implications + recommendations + caveats
+        // + methodology + domainLens) plus the WGR5 growth-prominence rule
+        // routinely brushed against 6k. Claude Opus 4.7 has plenty of output
+        // headroom; this gives the answer room to be substantive.
+        maxTokens: 10_000,
         temperature: 0.25,
         onLlmCall,
         purpose: LLM_PURPOSE.NARRATOR,
@@ -239,7 +336,12 @@ When the user message says "questionShape: none" you may omit magnitudes and une
         // recommendations, and a domainLens paragraph on top of the existing
         // envelope — earlier we sometimes hit the 4k cap and silently truncated
         // late findings. 6k still leaves ~2k headroom for prose.
-        maxTokens: 6000,
+        // WTL2 · 6_000 → 10_000. Narrator output IS the user-visible answer.
+        // Rich envelopes (findings + implications + recommendations + caveats
+        // + methodology + domainLens) plus the WGR5 growth-prominence rule
+        // routinely brushed against 6k. Claude Opus 4.7 has plenty of output
+        // headroom; this gives the answer room to be substantive.
+        maxTokens: 10_000,
         temperature: 0.25,
         onLlmCall,
         purpose: LLM_PURPOSE.NARRATOR,

@@ -182,11 +182,35 @@ export type FilterDistinctSnapshotRef = {
 };
 
 /**
+ * Per-field provenance for the distinct snapshot. `'authoritative'` means the
+ * snapshot was taken from the full DuckDB `/pivot/fields` distincts;
+ * `'sample'` means it was derived from the preview row sample (no sessionId,
+ * or sessionFilterDistincts hadn't loaded yet at sync time).
+ *
+ * Used to detect the "first authoritative sync upgrades a sample-only
+ * snapshot" case: without provenance, the merge-new-distincts branch would
+ * silently broaden the selection to the full universe and destroy the
+ * agent's narrow filter intent.
+ */
+export type FilterDistinctProvenanceRef = {
+  current: Record<string, "authoritative" | "sample">;
+};
+
+/**
  * Keeps pivot filter selections in sync with the current `filters` list and row data.
+ *
  * When `distinctSnapshotRef` is provided, any **new** distinct values that appear in
- * `rows` since the last sync are merged into the selection (so stale "all values" sets
- * don't hide rows after preview/data updates). Values the user explicitly excluded
- * are not re-added if they were present in the previous snapshot.
+ * authoritative-source distincts since the last sync are merged into the selection
+ * (so stale "all values" sets don't hide rows after a real data refresh). Values
+ * the user explicitly excluded are not re-added if they were present in the
+ * previous snapshot.
+ *
+ * **Provenance invariant:** if the previous snapshot was taken from the row sample
+ * (no sessionId or sessionFilterDistincts not yet loaded) and the current sync has
+ * authoritative distincts available for that field, treat it as a re-initialisation:
+ * drop the prior entry and re-narrow against the hint. This prevents the
+ * merge-new-distincts branch from silently broadening an agent-narrowed selection
+ * once the full DuckDB distincts arrive a frame later.
  */
 export function syncFilterSelectionsWithFilters(
   rows: Record<string, unknown>[],
@@ -194,10 +218,31 @@ export function syncFilterSelectionsWithFilters(
   prev: FilterSelections,
   distinctSnapshotRef?: FilterDistinctSnapshotRef,
   temporalFacetColumns?: TemporalFacetColumnMeta[] | null,
-  /** Per filter field: distinct values from session `data` (GET pivot/fields). If a field is missing here, distincts come from `rows`. */
+  /**
+   * Per filter field: full authoritative distinct values from the session
+   * `data` table (`/pivot/fields` endpoint). If a field is missing here,
+   * distincts fall back to `rows` (the preview sample) — only used for the
+   * non-analysis variant where there's no sessionId / DuckDB session.
+   */
   datasetDistincts?: Record<string, string[]> | null,
-  /** When a field has no prior selection, narrow to these values (intersected with current distincts) instead of selecting all. */
-  initialSelections?: Record<string, string[]> | null
+  /**
+   * When a field has no prior selection, narrow to these values (intersected
+   * with current distincts) instead of selecting all. Sourced from the
+   * server's `pivotDefaults.filterSelections` (i.e. the agent's
+   * dimensionFilters), so a question like "show FEMALE SHOWER GEL only"
+   * lands here as `{ Products: ["FEMALE SHOWER GEL"] }`.
+   */
+  initialSelections?: Record<string, string[]> | null,
+  /**
+   * Parallel provenance ref to `distinctSnapshotRef`. When provided, the
+   * function tags each snapshot write as `'authoritative'` or `'sample'`
+   * and uses the prior value to detect the upgrade case described in the
+   * function-level invariant.
+   *
+   * Optional: callers that don't need the upgrade guard (e.g. tests covering
+   * single-call behaviour, or the no-sessionId preview variant) can omit it.
+   */
+  provenanceRef?: FilterDistinctProvenanceRef
 ): FilterSelections {
   const next: FilterSelections = { ...prev };
   const snap = distinctSnapshotRef?.current ?? null;
@@ -207,12 +252,12 @@ export function syncFilterSelectionsWithFilters(
     : undefined;
 
   for (const f of filters) {
+    const sourceIsAuthoritative =
+      !!datasetDistincts &&
+      Object.prototype.hasOwnProperty.call(datasetDistincts, f);
     const distinctNow = new Set<string>();
-    if (
-      datasetDistincts &&
-      Object.prototype.hasOwnProperty.call(datasetDistincts, f)
-    ) {
-      for (const v of datasetDistincts[f]) {
+    if (sourceIsAuthoritative) {
+      for (const v of datasetDistincts![f]) {
         distinctNow.add(v);
       }
     } else {
@@ -220,23 +265,47 @@ export function syncFilterSelectionsWithFilters(
         distinctNow.add(pivotRowDimensionKey(r, f, facetMetaByField));
       }
     }
+
+    // Provenance upgrade: a previous sync seeded `next[f]` from a row-sample
+    // snapshot before authoritative DuckDB distincts had loaded. The
+    // merge-new-distincts path below would silently broaden the selection to
+    // the full universe, killing the agent's filter. Treat this as a
+    // re-initialisation: drop the prior selection and snapshot for `f` and
+    // fall through into the "no prior selection" path so the hint is
+    // re-applied against the now-authoritative distincts.
+    if (
+      sourceIsAuthoritative &&
+      provenanceRef?.current[f] === "sample" &&
+      next[f] !== undefined
+    ) {
+      delete next[f];
+      if (snap) delete snap[f];
+      delete provenanceRef.current[f];
+    }
+
     const lastSnap = snap?.[f] ?? new Set<string>();
 
     if (next[f] === undefined) {
       const hinted = initialSelections?.[f];
       let initial: Set<string>;
       if (hinted?.length) {
-        const narrowed = new Set(
-          hinted.filter((v) => distinctNow.has(v))
-        );
-        initial =
-          narrowed.size > 0 ? narrowed : new Set(distinctNow);
+        const narrowed = new Set(hinted.filter((v) => distinctNow.has(v)));
+        // Distincts are now authoritative (full DuckDB set), so a hint that
+        // doesn't intersect them is a stale hint — fall back to all loaded
+        // values rather than fabricate a selection containing values that
+        // don't exist in the dataset.
+        initial = narrowed.size > 0 ? narrowed : new Set(distinctNow);
       } else {
         initial = new Set(distinctNow);
       }
       next[f] = initial;
       if (snap) {
         snap[f] = new Set(distinctNow);
+      }
+      if (provenanceRef) {
+        provenanceRef.current[f] = sourceIsAuthoritative ?
+          "authoritative"
+        : "sample";
       }
       continue;
     }
@@ -245,6 +314,14 @@ export function syncFilterSelectionsWithFilters(
       continue;
     }
 
+    // Two cases reach here, both safe for merging:
+    //   1. previous snap was authoritative AND current source is authoritative
+    //      — genuine data refresh, auto-merge new categories.
+    //   2. previous snap was sample AND current source is sample (no
+    //      sessionId / preview variant) — auto-merge new row values as data
+    //      streams in.
+    // The dangerous case (sample → authoritative) was redirected to the
+    // re-initialisation branch above.
     const sel = new Set(next[f]);
     for (const v of distinctNow) {
       if (!lastSnap.has(v)) {
@@ -258,6 +335,11 @@ export function syncFilterSelectionsWithFilters(
     }
     next[f] = sel;
     distinctSnapshotRef.current[f] = new Set(distinctNow);
+    if (provenanceRef) {
+      provenanceRef.current[f] = sourceIsAuthoritative ?
+        "authoritative"
+      : "sample";
+    }
   }
 
   for (const k of Object.keys(next)) {
@@ -265,6 +347,9 @@ export function syncFilterSelectionsWithFilters(
       delete next[k];
       if (snap && k in snap) {
         delete snap[k];
+      }
+      if (provenanceRef && k in provenanceRef.current) {
+        delete provenanceRef.current[k];
       }
     }
   }

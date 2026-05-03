@@ -11,6 +11,7 @@ import { completeJson } from "./agents/runtime/llmJson.js";
 import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
 import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
 import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
+import { buildDeterministicScopeFacts } from "./datasetScopeFacts.js";
 
 export { withImmutableUserIntentFromPrevious };
 
@@ -42,6 +43,7 @@ Nested field types (all required — do not deviate):
   facts items        : { "statement": "<string>", "source": "user"|"assistant"|"data", "confidence": "high"|"medium"|"low" }
   analysesDone items : plain strings, NOT objects
   interpretedConstraints items: plain strings, NOT objects
+  dimensionHierarchies items: { "column": "<existing column name>", "rollupValue": "<value in that column that is a category total>", "itemValues": ["<child value>", ...]|omit, "source": "user", "description": "<short explanation>"|omit }
   lastUpdated.reason : exactly one of "seed" | "user_context" | "assistant_turn" | "mid_turn"`;
 
 const SEED_SYSTEM = `You output only a JSON object matching the given schema (version 1).
@@ -53,17 +55,41 @@ Set lastUpdated.reason to "seed" and lastUpdated.at to the current ISO-8601 time
 Required top-level shape (all fields mandatory, no extras at the top level):
 {
   "version": 1,
-  "dataset": { "shortDescription": "...", "columnRoles": [], "caveats": [] },
+  "dataset": { "shortDescription": "...", "columnRoles": [], "caveats": [], "keyHighlights": ["...", "..."], "whatYouCanAnalyze": ["...", "..."] },
   "userIntent": { "interpretedConstraints": [] },
   "sessionKnowledge": { "facts": [], "analysesDone": [] },
   "suggestedFollowUps": ["...", "..."],
   "lastUpdated": { "reason": "seed", "at": "<ISO-8601 timestamp>" }
 }
-${NESTED_FIELD_TYPES}`;
+${NESTED_FIELD_TYPES}
+
+Audience for the welcome card is a manager / business owner — NOT a data engineer. Two of the dataset.* fields are written for that reader:
+
+  dataset.keyHighlights — 3–5 short scope bullets (each ≤200 chars). They answer "what's actually in this data". Include, where you can ground them in DATA_SUMMARY:
+    • the time span ("Apr 2023 → Mar 2024", "4 years of weekly data")
+    • the breadth in business terms ("4 regions · 17 product categories", "23 brands across 6 markets")
+    • a headline magnitude ONLY if obvious from a single primary metric ("$2.3M total sales across 9.8K orders"). Skip when ambiguous — silence beats a wrong number.
+    Use business nouns. NEVER use the words "numeric", "categorical", "column", or "dimension" in this field.
+
+  dataset.whatYouCanAnalyze — 3–4 themes (each ≤80 chars) phrased as actions a manager would actually want. Examples:
+    • "Compare regional sales performance"
+    • "Track shipping efficiency by mode"
+    • "Profile high-value customer segments"
+    Each theme must be answerable from the columns present. Avoid vague ones like "explore the data".
+
+If the data genuinely doesn't support one of these (e.g. no date column → no time-span bullet), omit that bullet rather than fabricating one. Empty arrays are acceptable.`;
 
 const MERGE_USER_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 You receive PREVIOUS_JSON and new USER_NOTES (verbatim). Merge USER_NOTES into userIntent and sessionKnowledge; refine interpretedConstraints and facts as appropriate.
 Preserve dataset.* unless the user clearly corrects domain facts. Cap array lengths per schema.
+
+DIMENSION HIERARCHIES — when the user declares that one value in a column is a "category", "total", "rollup", "parent", "all", or "overall" of the other values in the same column, record it as an entry in dataset.dimensionHierarchies with source="user". Examples that should produce a hierarchy entry:
+  • "FEMALE SHOWER GEL is the entire category. Marico, Purite, Oliv, Lashe are products within it." → { "column": "Products", "rollupValue": "FEMALE SHOWER GEL", "itemValues": ["MARICO", "PURITE", "OLIV", "LASHE"], "source": "user", "description": "FEMALE SHOWER GEL is the category total." }
+  • "ALL REGIONS in the Region column is the total — the others are individual regions." → { "column": "Region", "rollupValue": "ALL REGIONS", "source": "user" }
+The "column" must match a real column name (use exact casing from PREVIOUS_JSON.dataset.columnRoles when possible). Carry forward any pre-existing hierarchies from PREVIOUS_JSON.dataset.dimensionHierarchies unless the user explicitly retracts them. itemValues is OPTIONAL — omit it if the user did not enumerate the children.
+
+ML1 · multi-level same-column hierarchies are supported. When the user declares NESTED rollups in the same column (e.g. "World totals everything; Asia totals India + China + Japan; India totals Mumbai + Delhi"), emit ONE hierarchy entry per rollup level (3 entries here, all with column="Geography"). Each entry's itemValues should list the IMMEDIATE children of that rollup (not the leaf values).
+
 Set lastUpdated.reason to "user_context" and lastUpdated.at to current ISO-8601.
 ${NESTED_FIELD_TYPES}`;
 
@@ -177,6 +203,123 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
   return out.data;
 }
 
+/**
+ * H5 · Cheap regex pre-check: does this user message look like it might
+ * declare a dimension hierarchy ("X is the category", "X is a rollup",
+ * "Y, Z are products within X", etc.)? Used to gate the user-merge LLM
+ * call so routine analytical questions don't pay LLM cost.
+ */
+const HIERARCHY_HINT_RE =
+  /\b(is\s+(?:the|a|an)\s+(?:entire\s+|whole\s+|overall\s+|total\s+|grand\s+|sub[- ]?)?(?:category|categor[iy]|rollup|roll[- ]?up|aggregate|sub[- ]?total|grand\s+total|category\s+total|parent|total|umbrella)|are\s+(?:the\s+)?(?:individual\s+|child\s+|sub[- ]?)?(?:products?|items?|brands?|skus?|categor[iy]|sub[- ]?categor[iy]|members?)\s+(?:within|under|in|of|inside)|rolls?\s+up|rolled\s+up|category\s+total|grand\s+total)\b/i;
+
+export function shouldExtractUserHierarchies(userText: string | undefined): boolean {
+  if (!userText) return false;
+  return HIERARCHY_HINT_RE.test(userText);
+}
+
+/**
+ * H5 · Run the user-merge LLM on a chat-turn user message and persist the
+ * resulting SAC to Cosmos via the same per-session mutex as the assistant
+ * merge. Returns the new SAC when it actually changed, or undefined when
+ * no merge happened (regex didn't match, no doc, or merge result is
+ * identical to the previous SAC).
+ */
+export async function extractAndPersistUserHierarchies(params: {
+  sessionId: string;
+  username: string;
+  userMessage: string;
+  previous: SessionAnalysisContext | undefined;
+}): Promise<SessionAnalysisContext | undefined> {
+  if (!shouldExtractUserHierarchies(params.userMessage)) return undefined;
+  const merged = await mergeSessionAnalysisContextUserLLM({
+    previous: params.previous,
+    userText: params.userMessage,
+  });
+  const prevHashable = JSON.stringify(
+    params.previous?.dataset?.dimensionHierarchies ?? []
+  );
+  const nextHashable = JSON.stringify(
+    merged.dataset?.dimensionHierarchies ?? []
+  );
+  if (prevHashable === nextHashable) return undefined;
+
+  const previousChain = sessionPersistChain.get(params.sessionId);
+  const work = (async () => {
+    if (previousChain) {
+      try {
+        await previousChain;
+      } catch {
+        /* prior call's failure isn't this caller's concern */
+      }
+    }
+    const { getChatBySessionIdForUser, updateChatDocument } = await import(
+      "../models/chat.model.js"
+    );
+    const doc = await getChatBySessionIdForUser(params.sessionId, params.username);
+    if (!doc) return undefined;
+    doc.sessionAnalysisContext = merged;
+    await updateChatDocument(doc);
+    return merged;
+  })();
+  sessionPersistChain.set(params.sessionId, work);
+  try {
+    return await work;
+  } finally {
+    if (sessionPersistChain.get(params.sessionId) === work) {
+      sessionPersistChain.delete(params.sessionId);
+    }
+  }
+}
+
+/**
+ * EU1 · Replace `dataset.dimensionHierarchies` for a session via the same
+ * per-session mutex as the assistant merge. Used by the PUT endpoint that
+ * powers the in-banner remove/edit UI. Schema validation is performed by
+ * the caller (controller). Returns the new SAC, or undefined if the chat
+ * doc is missing.
+ */
+export async function updateSessionDimensionHierarchies(params: {
+  sessionId: string;
+  username: string;
+  hierarchies: SessionAnalysisContext["dataset"]["dimensionHierarchies"];
+}): Promise<SessionAnalysisContext | undefined> {
+  const previousChain = sessionPersistChain.get(params.sessionId);
+  const work = (async () => {
+    if (previousChain) {
+      try {
+        await previousChain;
+      } catch {
+        /* prior call's failure isn't this caller's concern */
+      }
+    }
+    const { getChatBySessionIdForUser, updateChatDocument } = await import(
+      "../models/chat.model.js"
+    );
+    const doc = await getChatBySessionIdForUser(params.sessionId, params.username);
+    if (!doc) return undefined;
+    const baseSAC = doc.sessionAnalysisContext ?? emptySessionAnalysisContext();
+    const next: SessionAnalysisContext = {
+      ...baseSAC,
+      dataset: {
+        ...baseSAC.dataset,
+        dimensionHierarchies: params.hierarchies,
+      },
+      lastUpdated: { reason: "user_context", at: ISO() },
+    };
+    doc.sessionAnalysisContext = next;
+    await updateChatDocument(doc);
+    return next;
+  })();
+  sessionPersistChain.set(params.sessionId, work);
+  try {
+    return await work;
+  } finally {
+    if (sessionPersistChain.get(params.sessionId) === work) {
+      sessionPersistChain.delete(params.sessionId);
+    }
+  }
+}
+
 /** Programmatic merge after a successful analysis brief (bounded; no extra LLM). */
 export function applyAnalysisBriefDigestToSession(
   ctx: SessionAnalysisContext,
@@ -256,16 +399,24 @@ export async function persistMidTurnAssistantSessionContext(params: {
 
 /**
  * Initial assistant message shown after enrichment.
- * Includes everything the LLM understood about the dataset so the user can
- * verify the context before asking questions.
  *
- * Robustness: the LLM-derived `columnRoles` / `caveats` are populated by a
- * fire-and-forget `seedSessionAnalysisContextLLM` after upload, so the
- * initial message often runs against a sparse heuristic context. In that
- * case we synthesize a "Columns at a glance" section directly from
- * `summary` so the message always has substance — never just one stat
- * line. See feedback memory: non-blocking startup must produce visible
- * artifacts from automatic understanding alone.
+ * Audience: manager-level analysts. The body is intentionally framed in
+ * business terms ("4 regions · 17 categories", "Compare regional sales
+ * performance") rather than data-engineer terms ("Numeric: Sales", "mixed
+ * date formats in Order Date"). Column-type breakdowns and parse-quality
+ * caveats live elsewhere — they're not what a manager opens this for.
+ *
+ * Two render states:
+ *   1. Heuristic-only (LLM seed not yet landed) — `keyHighlights` /
+ *      `whatYouCanAnalyze` are absent on `ctx.dataset`, so we synthesise
+ *      both via `buildDeterministicScopeFacts(summary)`. Non-blocking
+ *      startup contract: this path must always have substance. Memory:
+ *      `feedback_non_blocking_startup`.
+ *   2. LLM-seeded — `seedSessionAnalysisContextLLM` populated the manager-
+ *      framed bullets, so we render those verbatim.
+ *
+ * Suggested questions are rendered as clickable pills in the UI
+ * (`MessageBubble.tsx`), so they're intentionally omitted from the body.
  */
 export function buildInitialAssistantContentFromContext(
   summary: DataSummary,
@@ -274,75 +425,31 @@ export function buildInitialAssistantContentFromContext(
   const lines: string[] = [];
 
   // ── Dataset overview ──────────────────────────────────────────────────────
-  lines.push(`**${summary.rowCount.toLocaleString()} rows · ${summary.columnCount} columns** (${summary.numericColumns.length} numeric, ${summary.dateColumns.length} date)`);
+  lines.push(`**${summary.rowCount.toLocaleString()} rows · ${summary.columnCount} columns**`);
 
   const desc = ctx.dataset.shortDescription?.trim();
   if (desc) lines.push("", desc);
 
   if (ctx.dataset.grainGuess) lines.push("", `**Row grain:** ${ctx.dataset.grainGuess}`);
 
-  // ── Column roles ─────────────────────────────────────────────────────────
-  // When the LLM seed has landed we render the structured column roles. When
-  // it hasn't (heuristic-only state on a fresh upload) we fall back to a
-  // deterministic columns-at-a-glance breakdown derived from `summary` so the
-  // user still sees what we understood about the dataset.
-  if (ctx.dataset.columnRoles.length > 0) {
-    lines.push("", "**Column roles understood:**");
-    for (const col of ctx.dataset.columnRoles) {
-      const note = col.notes ? ` — ${col.notes}` : "";
-      lines.push(`• ${col.name} *(${col.role})*${note}`);
-    }
-  } else {
-    const numericNames = summary.numericColumns;
-    const dateNames = summary.dateColumns;
-    const dateNameSet = new Set(dateNames);
-    const numericNameSet = new Set(numericNames);
-    const otherNames = summary.columns
-      .map((c) => c.name)
-      .filter((n) => !numericNameSet.has(n) && !dateNameSet.has(n));
-
-    // Date columns gain calendar grains via hidden __tf_* facet columns; surface
-    // those as a capability hint per source date column ("order_date — year,
-    // quarter, month") rather than exposing the internal column names.
-    // Source: summary.temporalFacetColumns metadata + agent prompt at
-    // server/lib/dataOps/dataOpsOrchestrator.ts:1755-1764 which tells the agent
-    // to group by these for "by year/quarter/month" requests.
-    const grainsBySource = new Map<string, string[]>();
-    for (const tf of summary.temporalFacetColumns ?? []) {
-      const list = grainsBySource.get(tf.sourceColumn) ?? [];
-      if (!list.includes(tf.grain)) list.push(tf.grain);
-      grainsBySource.set(tf.sourceColumn, list);
-    }
-    const formatDateName = (name: string): string => {
-      const grains = grainsBySource.get(name);
-      if (!grains?.length) return name;
-      return `${name} *(can group by ${grains.join(", ")})*`;
-    };
-
-    const sections: Array<{ label: string; names: string[]; format?: (n: string) => string }> = [];
-    if (numericNames.length > 0) sections.push({ label: "Numeric", names: numericNames });
-    if (dateNames.length > 0) sections.push({ label: "Date", names: dateNames, format: formatDateName });
-    if (otherNames.length > 0) sections.push({ label: "Categorical", names: otherNames });
-
-    if (sections.length > 0) {
-      lines.push("", "**Columns at a glance:**");
-      for (const s of sections) {
-        const formatter = s.format ?? ((n: string) => n);
-        const shown = s.names.slice(0, 6).map(formatter).join(", ");
-        const more = s.names.length > 6 ? ` *(+${s.names.length - 6} more)*` : "";
-        lines.push(`• ${s.label}: ${shown}${more}`);
-      }
-    }
+  // ── What's in this data ──────────────────────────────────────────────────
+  // LLM-seeded bullets win when present; otherwise fall back to deterministic
+  // scope facts so the heuristic-only render still has substance.
+  const fallback = buildDeterministicScopeFacts(summary);
+  const highlights = (ctx.dataset.keyHighlights ?? []).filter((b) => b.trim());
+  const renderedHighlights = highlights.length > 0 ? highlights : fallback.highlights;
+  if (renderedHighlights.length > 0) {
+    lines.push("", "**What's in this data:**");
+    for (const h of renderedHighlights) lines.push(`• ${h}`);
   }
 
-  // ── Caveats ───────────────────────────────────────────────────────────────
-  if (ctx.dataset.caveats.length > 0) {
-    lines.push("", "**Data caveats:**");
-    for (const c of ctx.dataset.caveats) lines.push(`• ${c}`);
+  // ── What you can analyze ─────────────────────────────────────────────────
+  const themes = (ctx.dataset.whatYouCanAnalyze ?? []).filter((t) => t.trim());
+  const renderedThemes = themes.length > 0 ? themes : fallback.analyzeThemes;
+  if (renderedThemes.length > 0) {
+    lines.push("", "**What you can analyze:**");
+    for (const t of renderedThemes) lines.push(`• ${t}`);
   }
-
-  // Suggested questions are rendered as clickable pills in the UI (see
-  // MessageBubble.tsx), so we intentionally omit them from the markdown body.
 
   return lines.join("\n");
 }

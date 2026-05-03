@@ -2,6 +2,7 @@ import type { DataSummary } from "../../shared/schema.js";
 import { isRagEnabled, getRagTopK } from "./config.js";
 import { embedQuery } from "./embeddings.js";
 import { vectorSearchSession, keywordSearchSession } from "./aiSearchStore.js";
+import { MEMORY_ENTRY_CHUNK_TYPE } from "./indexSession.js";
 import type { RagHit } from "./ragHit.js";
 import { suggestedColumnsFromHits, formatHitsForPrompt } from "./retrieveHelpers.js";
 
@@ -72,6 +73,9 @@ export async function retrieveRagHits(params: {
       queryVector: qv,
       topK,
       dataVersion: params.dataVersion,
+      // W57 · keep memory entries out of data-RAG retrieval; they are surfaced
+      // separately via `searchMemoryEntries` for the planner's recall block.
+      excludeChunkTypes: [MEMORY_ENTRY_CHUNK_TYPE],
     });
 
     const mean = meanScore(vectorHits);
@@ -86,6 +90,7 @@ export async function retrieveRagHits(params: {
           query: params.question,
           topK: 2,
           dataVersion: params.dataVersion,
+          excludeChunkTypes: [MEMORY_ENTRY_CHUNK_TYPE],
         });
       } catch (kwErr) {
         // Keyword augmentation is best-effort — never block the main result.
@@ -111,5 +116,56 @@ export async function retrieveRagHits(params: {
     console.error("⚠️ RAG retrieve failed:", e);
     const msg = e instanceof Error ? e.message : String(e);
     return { hits: [], suggestedColumns: [], retrievalError: msg };
+  }
+}
+
+/**
+ * W57 · Semantic search restricted to Analysis Memory entries for a session.
+ * Used by W60 (planner recall block) and W61 (Memory page search endpoint).
+ *
+ * Returns the most relevant memory entries (questions, hypotheses, findings,
+ * conclusions, etc.) for a follow-up question — bypasses the FIFO 5 cap on
+ * `priorInvestigations` and unlocks unbounded session memory with a bounded
+ * prompt (top-k injection only).
+ */
+export async function searchMemoryEntries(params: {
+  sessionId: string;
+  query: string;
+  topK?: number;
+  /** Optional staleness floor: only return entries with dataVersion ≥ this. */
+  minDataVersion?: number;
+}): Promise<{
+  hits: RagHit[];
+  retrievalError?: string;
+  diagnostics?: { meanSimilarity: number };
+}> {
+  if (!isRagEnabled()) {
+    return { hits: [] };
+  }
+  const queryText = (params.query || "").trim();
+  if (!queryText) return { hits: [] };
+  const topK = params.topK ?? 12;
+  try {
+    const qv = await embedQuery(queryText);
+    // W66 · Pass `minDataVersion` through to AI Search as an OData `ge` clause
+    // (server-side staleness filter) — preserves index efficiency vs paging
+    // through and discarding client-side. When `minDataVersion` is unset, we
+    // fall back to all dataVersions so historical entries still appear.
+    const vectorHits = await vectorSearchSession({
+      sessionId: params.sessionId,
+      queryVector: qv,
+      topK,
+      includeChunkTypes: [MEMORY_ENTRY_CHUNK_TYPE],
+      minDataVersion: params.minDataVersion,
+    });
+    const deduped = dedupHits(vectorHits).slice(0, topK);
+    return {
+      hits: deduped,
+      diagnostics: { meanSimilarity: meanScore(deduped) },
+    };
+  } catch (e) {
+    console.error("⚠️ Memory recall search failed:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    return { hits: [], retrievalError: msg };
   }
 }

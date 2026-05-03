@@ -23,6 +23,7 @@ import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/
 import { processChartData } from './chartGenerator.js';
 import { optimizeChartData } from './chartDownsampling.js';
 import { analyzeCorrelations } from './correlationAnalyzer.js';
+import { formatCompactNumber } from './formatCompactNumber.js';
 import { generateChartInsights } from './insightGenerator.js';
 import { parseUserQuery } from './queryParser.js';
 import { applyQueryTransformations } from './dataTransform.js';
@@ -279,7 +280,7 @@ Output valid JSON only: {"insights":[{"id":1,"text":"..."}, ...]}. Do not use P7
         {
           role: 'system',
           content:
-            'You are a senior business analyst. Output only valid JSON with an "insights" array. Each item: { "id": number, "text": "string" }. Ground every figure in the user statistics.',
+            'You are a senior business analyst. Output only valid JSON with an "insights" array. Each item: { "id": number, "text": "string" }. Ground every figure in the user statistics. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions.',
         },
         { role: 'user', content: insightPrompt },
       ],
@@ -408,6 +409,8 @@ export interface AnswerQuestionAgentOptions {
   onMidTurnSessionContext?: import('./agents/runtime/types.js').AgentExecutionContext['onMidTurnSessionContext'];
   /** Preliminary analytical table rows (segmented streaming UX). */
   onIntermediateArtifact?: import('./agents/runtime/types.js').AgentExecutionContext['onIntermediateArtifact'];
+  /** F3 · Aborted on SSE client disconnect; agent loop short-circuits between steps. */
+  abortSignal?: AbortSignal;
 }
 
 export async function answerQuestion(
@@ -484,6 +487,7 @@ export async function answerQuestion(
         analysisSpec,
         onMidTurnSessionContext: agentOptions?.onMidTurnSessionContext,
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
+        abortSignal: agentOptions?.abortSignal,
       });
       // Single-flow policy: always single-turn agentic. The deep-investigation
       // / coordinator-decompose branch is intentionally not wired here; the
@@ -879,14 +883,13 @@ export async function generateInsights(
   // Helper to format values per column (adds % when needed)
   const formatValue = (col: string, v: number): string => {
     if (!isFinite(v)) return String(v);
-    const abs = Math.abs(v);
-    const fmt = (n: number) => {
-      if (abs >= 100) return n.toFixed(0);
-      if (abs >= 10) return n.toFixed(1);
-      if (abs >= 1) return n.toFixed(2);
-      return n.toFixed(3);
-    };
-    return isPercent[col] ? `${fmt(v)}%` : fmt(v);
+    if (isPercent[col]) {
+      // Percentages stay on the original scale; do not abbreviate to K/M/B.
+      const abs = Math.abs(v);
+      const fmt = abs >= 100 ? v.toFixed(0) : abs >= 10 ? v.toFixed(1) : abs >= 1 ? v.toFixed(2) : v.toFixed(3);
+      return `${fmt}%`;
+    }
+    return formatCompactNumber(v);
   };
 
   const NUMERIC_COLUMNS_FOR_UPLOAD_STATS = 3;
@@ -1042,7 +1045,7 @@ Rules:
         {
           role: 'system',
           content:
-            'You are a senior business analyst. Output valid JSON with an "insights" array. Each item: { "text": "string" }. Ground claims in provided statistics; interpret business meaning where justified.',
+            'You are a senior business analyst. Output valid JSON with an "insights" array. Each item: { "text": "string" }. Ground claims in provided statistics; interpret business meaning where justified. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions.',
         },
         {
           role: 'user',

@@ -6,6 +6,9 @@
 import { Router, Request, Response } from 'express';
 import { ColumnarStorageService, SessionDataNotMaterializedError } from '../lib/columnarStorage.js';
 import { ensureAuthoritativeDataTable } from '../lib/ensureSessionDuckdbMaterialized.js';
+import { resolveSessionDataTable } from '../lib/activeFilter/resolveSessionDataTable.js';
+import { buildActiveFilterWhereSql } from '../lib/activeFilter/buildActiveFilterSql.js';
+import { isActiveFilterEffective } from '../lib/activeFilter/applyActiveFilter.js';
 import { metadataService } from '../lib/metadataService.js';
 import { getChatBySessionIdForUser, type ChatDocument } from '../models/chat.model.js';
 import { getAuthenticatedEmail } from '../utils/auth.helper.js';
@@ -314,6 +317,15 @@ router.get('/:sessionId/pivot/fields', async (req: Request, res: Response) => {
     const column = (req.query.column as string | undefined)?.trim();
     const q = (req.query.q as string | undefined)?.trim();
     const limit = parseInt((req.query.limit as string) || '50', 10) || 50;
+    // Wave-FA2 · Excel cross-column behavior: when listing values for a
+    // column the user is about to filter, narrow by other active-filter
+    // conditions but NOT by the column itself (otherwise opening the Region
+    // filter would show only Regions already selected). Caller passes
+    // `?excludeColumn=Region` to opt in.
+    const excludeColumn = (req.query.excludeColumn as string | undefined)?.trim();
+    // `?unfiltered=true` is the strong opt-out: ignore the active filter
+    // entirely (used by admin tooling). Default false.
+    const unfiltered = (req.query.unfiltered as string | undefined) === 'true';
 
     const storage = new ColumnarStorageService({ sessionId });
     await storage.initialize();
@@ -351,11 +363,30 @@ router.get('/:sessionId/pivot/fields', async (req: Request, res: Response) => {
         return sendValidationError(res, `Unknown column: ${column}`);
       }
 
-      const where = q
-        ? `WHERE LOWER(COALESCE(CAST(${quoteIdent(column)} AS VARCHAR), '')) LIKE ${escapeSqlStringLiteral(
+      // Active-filter overlay (excluding the column being filtered, so the
+      // value list always shows the full set of values for *that* column).
+      let activeFilterClause: string | null = null;
+      if (!unfiltered && isActiveFilterEffective(chat.activeFilter)) {
+        const filteredSpec = excludeColumn
+          ? {
+              ...chat.activeFilter!,
+              conditions: chat.activeFilter!.conditions.filter(
+                (c) => c.column !== excludeColumn
+              ),
+            }
+          : chat.activeFilter!;
+        activeFilterClause = buildActiveFilterWhereSql(filteredSpec);
+      }
+      const whereClauses: string[] = [];
+      if (q) {
+        whereClauses.push(
+          `LOWER(COALESCE(CAST(${quoteIdent(column)} AS VARCHAR), '')) LIKE ${escapeSqlStringLiteral(
             `%${q.toLowerCase()}%`
           )}`
-        : '';
+        );
+      }
+      if (activeFilterClause) whereClauses.push(activeFilterClause);
+      const where = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
       const sql = `SELECT DISTINCT COALESCE(CAST(${quoteIdent(column)} AS VARCHAR), '') as v FROM data ${where} LIMIT ${limit}`;
       const rows = await storage.executeQuery<{ v: any }>(sql);
@@ -471,11 +502,15 @@ router.post('/:sessionId/pivot/drillthrough', async (req: Request, res: Response
       const chat = await loadChatForDataSession(req, sessionId);
       await ensureAuthoritativeDataTable(storage, chat);
       await storage.assertTableExists('data');
-      const countSql = `SELECT COUNT(*) as count FROM data WHERE ${whereSql}`;
+      // Wave-FA2 · drillthrough composes pivot's UI filters AND the session
+      // active filter, by routing through the `data_filtered` view.
+      const tableName = await resolveSessionDataTable(storage, chat);
+      const tableExpr = quoteIdent(tableName);
+      const countSql = `SELECT COUNT(*) as count FROM ${tableExpr} WHERE ${whereSql}`;
       const countRows = await storage.executeQuery<{ count: number }>(countSql);
       const count = countRows[0]?.count ?? 0;
 
-      const sql = `SELECT ${selectCols} FROM data WHERE ${whereSql} LIMIT ${limit}`;
+      const sql = `SELECT ${selectCols} FROM ${tableExpr} WHERE ${whereSql} LIMIT ${limit}`;
       const rows = await storage.executeQuery<Record<string, unknown>>(sql);
 
       res.json({

@@ -17,25 +17,27 @@ import { z } from "zod";
 // superset of the persisted answerEnvelope shape — the loop wires
 // narrator output → answerEnvelope, so any narrator field that lacks a
 // home in the schema would be silently dropped.
+// WTL3 · caps loosened to mirror the bumped narratorOutputSchema in
+// narratorAgent.ts and the answerEnvelope in shared/schema.ts.
 const narratorOutputSchemaMirror = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).default([]),
   magnitudes: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
   unexplained: z.string().optional(),
-  tldr: z.string().max(280).optional(),
+  tldr: z.string().max(400).optional(),
   findings: z
     .array(
       z.object({
-        headline: z.string().max(200),
-        evidence: z.string().max(600),
-        magnitude: z.string().max(80).optional(),
+        headline: z.string().max(280),
+        evidence: z.string().max(1200),
+        magnitude: z.string().max(120).optional(),
       })
     )
-    .max(5)
+    .max(7)
     .optional(),
-  methodology: z.string().max(500).optional(),
-  caveats: z.array(z.string().max(200)).max(3).optional(),
+  methodology: z.string().max(1400).optional(),
+  caveats: z.array(z.string().max(280)).max(5).optional(),
 });
 
 describe("W3 · messageSchema.answerEnvelope", () => {
@@ -84,19 +86,19 @@ describe("W3 · messageSchema.answerEnvelope", () => {
     assert.strictEqual(parsed.success, true);
   });
 
-  it("rejects TL;DR over 280 chars (one tweet's worth)", () => {
+  it("rejects TL;DR over 400 chars (WTL3 · cap raised 280 → 400)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
-      answerEnvelope: { tldr: "a".repeat(281) },
+      answerEnvelope: { tldr: "a".repeat(401) },
     });
     assert.strictEqual(parsed.success, false);
   });
 
-  it("rejects more than 5 findings", () => {
+  it("rejects more than 7 findings (WTL3 · cap raised 5 → 7)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
       answerEnvelope: {
-        findings: Array.from({ length: 6 }, (_, i) => ({
+        findings: Array.from({ length: 8 }, (_, i) => ({
           headline: `H${i}`,
           evidence: `E${i}`,
         })),
@@ -105,10 +107,10 @@ describe("W3 · messageSchema.answerEnvelope", () => {
     assert.strictEqual(parsed.success, false);
   });
 
-  it("rejects more than 3 caveats", () => {
+  it("rejects more than 5 caveats (WTL3 · cap raised 3 → 5)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
-      answerEnvelope: { caveats: ["a", "b", "c", "d"] },
+      answerEnvelope: { caveats: ["a", "b", "c", "d", "e", "f"] },
     });
     assert.strictEqual(parsed.success, false);
   });

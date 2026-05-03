@@ -7,6 +7,7 @@ import {
   ChartSpec,
   Dashboard,
   DashboardTableSpec,
+  DashboardPivotSpec,
   type CreateReportDashboardRequest,
   type DashboardNarrativeBlock,
   type DashboardSpec,
@@ -79,6 +80,54 @@ export const getUserDashboards = async (username: string): Promise<Dashboard[]> 
   } catch (error) {
     console.error("Failed to get user dashboards:", error);
     return [];
+  }
+};
+
+/**
+ * Superadmin shadow-viewer · cross-partition list of every dashboard. Caller
+ * MUST verify `isSuperadminEmail(email)` before invoking. Read-only — same
+ * write-surface guarantees as `getChatBySessionIdForSuperadmin`.
+ */
+export const listAllDashboardsForSuperadmin = async (): Promise<Dashboard[]> => {
+  try {
+    const dashboardsContainer = await waitForDashboardsContainer();
+    const { resources } = await dashboardsContainer.items
+      .query(
+        { query: "SELECT * FROM c" },
+        { enableCrossPartitionQuery: true, maxItemCount: 1000 }
+      )
+      .fetchAll();
+    const list = (resources ?? []) as unknown as Dashboard[];
+    return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  } catch (error) {
+    console.error("Failed to list all dashboards for superadmin:", error);
+    return [];
+  }
+};
+
+/**
+ * Superadmin shadow-viewer · fetch any dashboard by id, bypassing the
+ * collaborator check. Cross-partition because we don't know the owner. Caller
+ * MUST verify `isSuperadminEmail(email)` before invoking.
+ */
+export const getDashboardByIdForSuperadmin = async (
+  id: string
+): Promise<Dashboard | null> => {
+  try {
+    const dashboardsContainer = await waitForDashboardsContainer();
+    const { resources } = await dashboardsContainer.items
+      .query(
+        {
+          query: "SELECT * FROM c WHERE c.id = @id OFFSET 0 LIMIT 1",
+          parameters: [{ name: "@id", value: id }],
+        },
+        { enableCrossPartitionQuery: true }
+      )
+      .fetchAll();
+    return ((resources?.[0] ?? null) as unknown) as Dashboard | null;
+  } catch (error) {
+    console.error("Failed to fetch dashboard for superadmin:", error);
+    return null;
   }
 };
 
@@ -882,6 +931,124 @@ export const removeTableFromDashboard = async (
 };
 
 /**
+ * Add pivot tile to dashboard. Idempotent on pivot id — re-adding the same
+ * id replaces the prior entry (so a chat re-edit of an already-promoted pivot
+ * doesn't create duplicates).
+ */
+export const addPivotToDashboard = async (
+  id: string,
+  username: string,
+  pivot: DashboardPivotSpec,
+  sheetId?: string
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const dashboardOwner = dashboard.username?.toLowerCase();
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    dashboard.sheets = [
+      {
+        id: "default",
+        name: "Overview",
+        charts: [...dashboard.charts],
+        order: 0,
+      },
+    ];
+  }
+
+  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+  if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
+
+  if (!targetSheet.pivots) targetSheet.pivots = [];
+
+  const existingIdx = targetSheet.pivots.findIndex((p) => p.id === pivot.id);
+  if (existingIdx >= 0) {
+    targetSheet.pivots[existingIdx] = pivot;
+  } else {
+    targetSheet.pivots.push(pivot);
+  }
+
+  return updateDashboard(dashboard);
+};
+
+/**
+ * Remove pivot from dashboard sheet by index.
+ */
+export const removePivotFromDashboard = async (
+  id: string,
+  username: string,
+  predicate: { index: number; sheetId?: string }
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const dashboardOwner = dashboard.username?.toLowerCase();
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    throw new Error("No sheets found");
+  }
+
+  const targetSheetId = predicate.sheetId || dashboard.sheets[0].id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+  if (!targetSheet) throw new Error(`Sheet with id "${targetSheetId}" not found`);
+
+  if (!targetSheet.pivots || targetSheet.pivots.length === 0) {
+    throw new Error("No pivots found on the selected sheet");
+  }
+
+  if (predicate.index < 0 || predicate.index >= targetSheet.pivots.length) {
+    throw new Error(`Pivot index ${predicate.index} is out of range`);
+  }
+
+  targetSheet.pivots.splice(predicate.index, 1);
+  return updateDashboard(dashboard);
+};
+
+/**
  * Update table caption/title
  */
 export const updateTableCaption = async (
@@ -994,15 +1161,6 @@ export const createReportDashboardFromAnalysis = async (
           order: 2,
         });
       }
-      if (body.question?.trim()) {
-        narrativeBlocks.push({
-          id: randomUUID(),
-          role: "custom",
-          title: "Original question",
-          body: body.question.trim(),
-          order: 3,
-        });
-      }
       const charts = body.charts ?? [];
       dashboard.sheets = [
         {
@@ -1044,7 +1202,10 @@ export const createReportDashboardFromAnalysis = async (
  */
 export const createDashboardFromSpec = async (
   username: string,
-  spec: DashboardSpec
+  spec: DashboardSpec,
+  // W59 · Optional session this dashboard came from — used to record a
+  // `dashboard_promoted` entry in the per-session Memory journal.
+  sessionId?: string
 ): Promise<Dashboard> => {
   const baseName = spec.name.trim().slice(0, 200) || "Analysis dashboard";
   let name = baseName;
@@ -1058,6 +1219,7 @@ export const createDashboardFromSpec = async (
         id: s.id || `sheet_${idx}`,
         name: s.name,
         charts: s.charts ? [...s.charts] : [],
+        ...(s.pivots && s.pivots.length > 0 ? { pivots: [...s.pivots] } : {}),
         ...(s.tables && s.tables.length > 0 ? { tables: [...s.tables] } : {}),
         ...(s.narrativeBlocks && s.narrativeBlocks.length > 0
           ? { narrativeBlocks: [...s.narrativeBlocks] }
@@ -1075,7 +1237,43 @@ export const createDashboardFromSpec = async (
 
       dashboard.sheets = sheets;
       dashboard.charts = unionCharts;
-      return updateDashboard(dashboard);
+      if (spec.answerEnvelope) {
+        dashboard.answerEnvelope = spec.answerEnvelope;
+      }
+      // Wave-FA6 · Snapshot active filter into the dashboard for provenance.
+      if (spec.capturedActiveFilter) {
+        dashboard.capturedActiveFilter = spec.capturedActiveFilter;
+      }
+      const persisted = await updateDashboard(dashboard);
+      // W59 · record `dashboard_promoted` in the per-session Memory journal so
+      // resume-after-days shows the dashboard as a milestone in the timeline.
+      if (sessionId) {
+        void (async () => {
+          try {
+            const { buildDashboardPromotedEntry, scheduleLifecycleMemory } =
+              await import(
+                "../lib/agents/runtime/memoryLifecycleBuilders.js"
+              );
+            scheduleLifecycleMemory(
+              buildDashboardPromotedEntry({
+                sessionId,
+                username,
+                dashboardId: persisted.id,
+                dashboardName: persisted.name,
+                sheetCount: sheets.length,
+                chartCount: unionCharts.length,
+                createdAt: Date.now(),
+              })
+            );
+          } catch (e) {
+            console.warn(
+              "⚠️ analysisMemory dashboard_promoted hook failed:",
+              e
+            );
+          }
+        })();
+      }
+      return persisted;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("already exists") && attempt < 7) {

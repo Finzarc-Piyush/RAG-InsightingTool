@@ -1,6 +1,22 @@
 import React, { createContext, useContext, ReactNode } from 'react';
 import { useDashboardState, DashboardData } from '../modules/useDashboardState';
 
+/**
+ * HMR-RESILIENT CONTEXT INSTANCE.
+ *
+ * In dev, when any file in the DashboardContext dependency graph is edited,
+ * Vite's HMR re-evaluates `DashboardContext.tsx`, which calls `createContext`
+ * a second time. The eager App-level `<DashboardProvider>` stays bound to
+ * the original context instance; lazy-loaded consumers (e.g. /dashboard
+ * route) get the new instance — and `useContext` returns `undefined`,
+ * throwing "useDashboardContext must be used within a DashboardProvider".
+ *
+ * The fix is the same pattern the codebase uses for `cachedMsalInstance` in
+ * App.tsx — keep the singleton on `globalThis` so it survives module
+ * re-evaluation. Type signatures + exports below are unchanged.
+ */
+const CONTEXT_KEY = "__MARICO_DASHBOARD_CONTEXT_V1__";
+
 interface DashboardContextType {
   dashboards: DashboardData[];
   currentDashboard: DashboardData | null;
@@ -36,7 +52,13 @@ interface DashboardContextType {
   refetch: () => Promise<any>;
 }
 
-export const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
+export const DashboardContext: React.Context<DashboardContextType | undefined> =
+  ((globalThis as Record<string, unknown>)[CONTEXT_KEY] as
+    | React.Context<DashboardContextType | undefined>
+    | undefined) ??
+  ((globalThis as Record<string, unknown>)[CONTEXT_KEY] = createContext<
+    DashboardContextType | undefined
+  >(undefined)) as React.Context<DashboardContextType | undefined>;
 
 interface DashboardProviderProps {
   children: ReactNode;
@@ -55,6 +77,14 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
 export function useDashboardContext() {
   const context = useContext(DashboardContext);
   if (context === undefined) {
+    // Surface HMR-related context-mismatch hints in dev.
+    if (typeof console !== "undefined") {
+      console.error(
+        "[DashboardContext] consumer saw `undefined` despite Provider in tree. " +
+          "If this fired during an HMR update, do a hard refresh (Cmd+Shift+R) " +
+          "to flush the stale chunk."
+      );
+    }
     throw new Error('useDashboardContext must be used within a DashboardProvider');
   }
   return context;

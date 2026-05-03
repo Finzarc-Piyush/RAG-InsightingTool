@@ -116,11 +116,11 @@ describe("W19 · enrichStepInsights — backfill", () => {
     delete process.env.RICH_STEP_INSIGHTS_ENABLED;
   });
 
-  it("clips enriched text to 200 chars with ellipsis", async () => {
+  it("clips enriched text to 400 chars with ellipsis (WTL2 · 200 → 400)", async () => {
     process.env.RICH_STEP_INSIGHTS_ENABLED = "true";
     installLlmStub({
       [LLM_PURPOSE.INSIGHT_GEN]: () => ({
-        insights: [{ id: "plan-1", text: "x".repeat(400) }],
+        insights: [{ id: "plan-1", text: "x".repeat(800) }],
       }),
     });
     const workbench = buildWorkbench();
@@ -129,7 +129,7 @@ describe("W19 · enrichStepInsights — backfill", () => {
       finalAnswer: "answer",
       turnId: "t3",
     });
-    assert.equal(workbench[0].insight!.length, 200);
+    assert.equal(workbench[0].insight!.length, 400);
     assert.match(workbench[0].insight!, /…$/);
     delete process.env.RICH_STEP_INSIGHTS_ENABLED;
   });

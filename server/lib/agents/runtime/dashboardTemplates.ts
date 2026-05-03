@@ -16,7 +16,9 @@ import type { DashboardSpec, DashboardTemplate } from "../../../shared/schema.js
 type GridItem = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number };
 
 const COLS = 12;
-const CHART_DEFAULT = { w: 6, h: 12, minW: 3, minH: 4 };
+// 3-up: charts span 4 of 12 columns by default. Height bumped to 16 to leave
+// room for the inline keyInsight rendered below each chart in DashboardTiles.tsx.
+const CHART_DEFAULT = { w: 4, h: 16, minW: 3, minH: 6 };
 
 interface ChartCell {
   x: number;
@@ -29,25 +31,25 @@ function executiveCells(count: number): ChartCell[] {
   const cells: ChartCell[] = [];
   if (count === 0) return cells;
   // Hero: full-width, slightly taller.
-  cells.push({ x: 0, y: 0, w: 12, h: 12 });
+  cells.push({ x: 0, y: 0, w: 12, h: 16 });
   if (count === 1) return cells;
-  // Remaining charts in a two-column grid below the hero.
+  // Remaining charts in a 3-up grid below the hero.
   const remaining = count - 1;
   for (let i = 0; i < remaining; i++) {
-    const row = Math.floor(i / 2);
-    const col = i % 2;
-    cells.push({ x: col * 6, y: 12 + row * 10, w: 6, h: 10 });
+    const row = Math.floor(i / 3);
+    const col = i % 3;
+    cells.push({ x: col * 4, y: 16 + row * 16, w: 4, h: 16 });
   }
   return cells;
 }
 
 function deepDiveCells(count: number): ChartCell[] {
-  // Uniform 2-column grid, w=6 h=12.
+  // Uniform 3-column grid, w=4 h=16 (chart + inline insight).
   const cells: ChartCell[] = [];
   for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / 2);
-    const col = i % 2;
-    cells.push({ x: col * 6, y: row * 12, w: 6, h: 12 });
+    const row = Math.floor(i / 3);
+    const col = i % 3;
+    cells.push({ x: col * 4, y: row * 16, w: 4, h: 16 });
   }
   return cells;
 }

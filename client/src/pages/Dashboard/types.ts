@@ -1,11 +1,17 @@
-import { ChartSpec, DashboardNarrativeBlock, DashboardTableSpec } from '@/shared/schema';
+import {
+  ChartSpec,
+  DashboardNarrativeBlock,
+  DashboardPivotSpec,
+  DashboardTableSpec,
+} from '@/shared/schema';
 
 export type DashboardTile =
   | DashboardChartTile
   | DashboardInsightTile
   | DashboardTableTile
   | DashboardActionTile
-  | DashboardNarrativeTile;
+  | DashboardNarrativeTile
+  | DashboardPivotTile;
 
 export interface DashboardNarrativeTile {
   kind: 'narrative';
@@ -51,6 +57,14 @@ export interface DashboardActionTile {
   recommendation: string;
   impactEstimate?: string;
   relatedChartId?: string;
+}
+
+export interface DashboardPivotTile {
+  kind: 'pivot';
+  id: string;
+  title: string;
+  pivot: DashboardPivotSpec;
+  index: number;
 }
 
 export interface DashboardSection {

@@ -28,6 +28,7 @@ import {
   BookOpen,
   Sparkles,
   Target,
+  ListOrdered,
 } from "lucide-react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 
@@ -120,6 +121,61 @@ export function AnswerCard({
       {supplementaryMarkdown?.trim() && (
         <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
           <MarkdownRenderer content={supplementaryMarkdown} />
+        </div>
+      )}
+
+      {/* RNK2 · leaderboard hint — present when the agent answered a ranking
+          / leaderboard / entity-max question. The full ranked rows are
+          rendered by the existing DataPreviewTable pivot below this card;
+          this strip just labels the message so users know to scroll. */}
+      {message.rankingMeta && (
+        <div
+          className="rounded-brand-md border border-border/60 bg-muted/30 px-4 py-2.5"
+          aria-label="Ranking summary"
+        >
+          <div className="flex items-start gap-2">
+            <ListOrdered
+              className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <p className="text-[13px] leading-[20px] text-muted-foreground">
+              {(() => {
+                const meta = message.rankingMeta;
+                const dirNote =
+                  meta.direction === "asc" ? "lowest first" : "highest first";
+                const entityLabel = meta.entityColumn;
+                const total = meta.totalEntities.toLocaleString();
+                if (meta.intentKind === "entityList") {
+                  return (
+                    <>
+                      <span className="font-medium text-foreground">
+                        Full {entityLabel} list ({total})
+                      </span>{" "}
+                      available in the table below.
+                    </>
+                  );
+                }
+                const metricSuffix = meta.metricColumn
+                  ? ` by ${meta.metricColumn}`
+                  : "";
+                return (
+                  <>
+                    <span className="font-medium text-foreground">
+                      Full leaderboard ({total} {entityLabel}
+                      {meta.totalEntities === 1 ? "" : "s"})
+                    </span>{" "}
+                    available in the table below — sorted{metricSuffix} (
+                    {dirNote}).
+                    {meta.truncationNote ? (
+                      <span className="ml-1 italic">
+                        {meta.truncationNote}.
+                      </span>
+                    ) : null}
+                  </>
+                );
+              })()}
+            </p>
+          </div>
         </div>
       )}
 

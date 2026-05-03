@@ -41,29 +41,32 @@ describe("chartGridItemsForTemplate", () => {
     assert.equal(chartGridItemsForTemplate("executive", 0), undefined);
   });
 
-  it("executive: first chart is a full-width hero, remaining in a 2-column grid", () => {
+  it("executive: first chart is a full-width hero, remaining in a 3-up grid", () => {
     const items = chartGridItemsForTemplate("executive", 3)!;
     assert.equal(items.length, 3);
     assert.deepEqual(
       { x: items[0].x, y: items[0].y, w: items[0].w, h: items[0].h },
-      { x: 0, y: 0, w: 12, h: 12 }
+      { x: 0, y: 0, w: 12, h: 16 }
     );
-    // Two support charts, side-by-side below the hero.
-    assert.equal(items[1].y, 12);
-    assert.equal(items[1].w, 6);
-    assert.equal(items[2].y, 12);
-    assert.equal(items[2].x, 6);
+    // Two support charts, 3-up below the hero (cols 0 and 1 of row 0 below hero).
+    assert.equal(items[1].y, 16);
+    assert.equal(items[1].x, 0);
+    assert.equal(items[1].w, 4);
+    assert.equal(items[2].y, 16);
+    assert.equal(items[2].x, 4);
+    assert.equal(items[2].w, 4);
   });
 
-  it("deep_dive: uniform 2-column grid", () => {
+  it("deep_dive: uniform 3-column grid", () => {
     const items = chartGridItemsForTemplate("deep_dive", 6)!;
     assert.equal(items.length, 6);
     for (const item of items) {
-      assert.equal(item.w, 6);
-      assert.equal(item.h, 12);
+      assert.equal(item.w, 4);
+      assert.equal(item.h, 16);
     }
-    // Third chart starts a new row.
-    assert.equal(items[2].y, 12);
+    // Fourth chart starts a new row (3-up wraps after the third).
+    assert.equal(items[3].y, 16);
+    assert.equal(items[3].x, 0);
   });
 
   it("monitoring: uniform 3-column compact grid", () => {

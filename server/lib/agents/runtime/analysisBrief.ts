@@ -1,6 +1,7 @@
 import { analysisBriefSchema, type AnalysisBrief } from "../../../shared/schema.js";
 import type { AgentExecutionContext } from "./types.js";
 import { userMessageHasReportIntent } from "../../reportIntent.js";
+import { EXPLICIT_RX as DASHBOARD_EXPLICIT_RX } from "./dashboardIntent.js";
 import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 import {
   tagMarketingColumns,
@@ -14,6 +15,7 @@ export function shouldBuildAnalysisBrief(ctx: AgentExecutionContext): boolean {
   if (ctx.analysisSpec?.mode === "diagnostic") return true;
   if (userMessageHasReportIntent(ctx.question)) return true;
   if (looksLikeBudgetReallocationQuestion(ctx.question)) return true;
+  if (DASHBOARD_EXPLICIT_RX.test(ctx.question)) return true;
   return false;
 }
 
@@ -34,12 +36,80 @@ export function looksLikeBudgetReallocationQuestion(question: string): boolean {
   return REALLOC_VERB_RX.test(question) && REALLOC_NOUN_RX.test(question);
 }
 
-function columnListForBrief(ctx: AgentExecutionContext): string {
-  return ctx.summary.columns
-    .map((c) => c.name)
-    .slice(0, 120)
-    .join(", ");
+/**
+ * DB2 · The brief LLM drives `candidateDriverDimensions`, which in turn drives
+ * the planner's per-dimension `build_chart` fan-out and the deterministic
+ * post-hoc feature sweep. Pre-DB2, the user message sent only column NAMES,
+ * so when the LLM was told "list every plausible categorical dimension", it
+ * had no signal to pick column X over Y other than name semantics — for
+ * large schemas, half the dimensions were silently overlooked.
+ *
+ * For dashboard-shaped intent we now emit a structured per-column table with
+ * cardinality and value examples (sourced from the existing `topValues` /
+ * `sampleValues`). For all other intents we keep the cheap comma-separated
+ * name list (cost-neutral with prior behaviour).
+ */
+const BRIEF_COLUMN_CAP_DASHBOARD = 200;
+const BRIEF_COLUMN_CAP_DEFAULT = 120;
+const BRIEF_EXAMPLES_PER_COL = 3;
+
+function looksLikeDashboardOrReport(question: string): boolean {
+  return DASHBOARD_EXPLICIT_RX.test(question) || userMessageHasReportIntent(question);
 }
+
+function describeColumnForBrief(
+  col: AgentExecutionContext["summary"]["columns"][number],
+  numericSet: ReadonlySet<string>,
+  dateSet: ReadonlySet<string>
+): string {
+  const name = col.name;
+  const type = col.type;
+  if (numericSet.has(name) || type === "number") {
+    return `${name} | number`;
+  }
+  if (dateSet.has(name) || type === "date") {
+    return `${name} | date`;
+  }
+  const topValues = Array.isArray(col.topValues) ? col.topValues : [];
+  if (topValues.length === 0) return `${name} | ${type}`;
+  const examples = topValues
+    .slice(0, BRIEF_EXAMPLES_PER_COL)
+    .map((t) => String(t.value).trim())
+    .filter(Boolean);
+  const cardinalityHint =
+    topValues.length >= 48 ? "distinct≥48" : `distinct≈${topValues.length}`;
+  return `${name} | ${type} | ${cardinalityHint} | top=[${examples.join("|")}]`;
+}
+
+function columnListForBrief(ctx: AgentExecutionContext): string {
+  const dashboardShape = looksLikeDashboardOrReport(ctx.question);
+  if (!dashboardShape) {
+    return ctx.summary.columns
+      .map((c) => c.name)
+      .slice(0, BRIEF_COLUMN_CAP_DEFAULT)
+      .join(", ");
+  }
+
+  // Dashboard intent → emit a metadata-rich one-line-per-column table so the
+  // brief LLM has cardinality + value-shape signals when populating
+  // candidateDriverDimensions exhaustively.
+  const numericSet = new Set(ctx.summary.numericColumns ?? []);
+  const dateSet = new Set(ctx.summary.dateColumns ?? []);
+  const columns = ctx.summary.columns.slice(0, BRIEF_COLUMN_CAP_DASHBOARD);
+  const lines = columns.map((c) => `  - ${describeColumnForBrief(c, numericSet, dateSet)}`);
+  const truncated =
+    ctx.summary.columns.length > BRIEF_COLUMN_CAP_DASHBOARD
+      ? `\n  - (truncated · showing first ${BRIEF_COLUMN_CAP_DASHBOARD} of ${ctx.summary.columns.length} columns)`
+      : "";
+  return `(format: name | type | cardinality-hint | top-values)\n${lines.join("\n")}${truncated}`;
+}
+
+// DB2 · exposed for tests so the dashboard-mode prompt shape is pinned.
+export const __test__ = {
+  columnListForBrief,
+  describeColumnForBrief,
+  looksLikeDashboardOrReport,
+};
 
 /**
  * One structured LLM call before the planner when diagnostic or report intent is detected.
@@ -68,7 +138,7 @@ questionShape classification (pick at most one; leave unset if unclear):
 - "descriptive" — lookup/summary question ("what's my top region by revenue?").
 - "budget_reallocation" — user asks how to redistribute / reallocate / optimize media spend across channels. Trigger phrases: "redistribute my budget", "reallocate spend", "optimize media mix", "where should I spend", "MMM". Requires a marketing-mix dataset (multiple channel-spend columns + outcome + time). When this shape applies, set outcomeMetricColumn to the conversion metric (revenue/sales/conversions) and put each channel-spend column into segmentationDimensions.
 
-candidateDriverDimensions: set for driver_discovery, variance_diagnostic, OR whenever requestsDashboard is true. Propose up to 24 column names from the Columns line that might plausibly drive the outcomeMetricColumn (ordinarily categorical dimensions: region/category/segment/channel/account/SKU-like columns). Must not overlap segmentationDimensions. When requestsDashboard is true, err on the side of LISTING every plausible categorical dimension (the dashboard is meant to be exhaustive); when in doubt, include it — downstream cardinality guards will skip dimensions with too many unique values.
+candidateDriverDimensions: set for driver_discovery, variance_diagnostic, OR whenever requestsDashboard is true. Propose up to 24 column names from the Columns line that might plausibly drive the outcomeMetricColumn (ordinarily categorical dimensions: region/category/segment/channel/account/SKU-like columns). Must not overlap segmentationDimensions. When requestsDashboard is true, the Columns block carries a metadata table (\`name | type | cardinality-hint | top-values\`); list EVERY column whose cardinality-hint is \`distinct≈N\` with 2 ≤ N ≤ 200 — the dashboard is meant to be exhaustive and a downstream coverage gate will reject the plan if any such dimension is omitted without a one-line justification in epistemicNotes (e.g. "Excluded ProductSKU because it is row-identifier shaped"). When in doubt, include it; high-cardinality dims will be top-N+Other bucketed by the deterministic feature sweep.
 
 requestsDashboard (Phase-2): set to true when the user explicitly asks to build / create / turn-into a dashboard, a report, or a monitoring view. Trigger phrases include "make me a dashboard", "turn this into a dashboard", "give me a dashboard for X", "build a report for X", "monitoring view". Do NOT set true for plain analytical questions even if they're broad.
 
@@ -87,7 +157,10 @@ comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly 
   const out = await completeJson(system, user, analysisBriefSchema, {
     turnId,
     temperature: 0.15,
-    maxTokens: 1200,
+    // WTL2 · 1_200 → 2_000. Brief includes outcome/dimensions/filters/
+    // timeWindow/clarifyingQuestions/epistemicNotes/comparisonPeriods
+    // and a successCriteria string (≤1.2k chars) — clipped on rich briefs.
+    maxTokens: 2000,
     onLlmCall,
     purpose: LLM_PURPOSE.ANALYSIS_BRIEF,
   });

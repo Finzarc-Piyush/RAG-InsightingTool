@@ -3,6 +3,8 @@ import type {
   TemporalDisplayGrain,
   TemporalFacetColumnMeta,
   SessionAnalysisContext,
+  ColumnCurrency,
+  WideFormatTransform,
 } from '@/shared/schema';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
 import { suggestedFollowUpsFromSession } from '@/lib/initialAnalysisMessage';
@@ -36,6 +38,13 @@ interface UseSessionLoaderProps {
    * itself silently.
    */
   setSessionAnalysisContext?: (sac: SessionAnalysisContext | undefined) => void;
+  /**
+   * Wave SR2 · parity with `applySessionHydration` (post-upload path) —
+   * populate the wide-format banner and per-column currency map so the
+   * WF9 banner / đồng badges survive a browser refresh, not just an upload.
+   */
+  setWideFormatTransform?: (transform: WideFormatTransform | undefined) => void;
+  setCurrencyByColumn?: (map: Record<string, ColumnCurrency>) => void;
 }
 
 /**
@@ -60,6 +69,8 @@ export const useSessionLoader = ({
   setSuggestions,
   setCollaborators,
   setSessionAnalysisContext,
+  setWideFormatTransform,
+  setCurrencyByColumn,
 }: UseSessionLoaderProps) => {
   useEffect(() => {
     if (!loadedSessionData) return;
@@ -102,6 +113,19 @@ export const useSessionLoader = ({
       setTemporalFacetColumns(session.dataSummary.temporalFacetColumns ?? []);
       setTotalRows(session.dataSummary.rowCount || 0);
       setTotalColumns(session.dataSummary.columnCount || 0);
+      // Wave SR2 — wide-format banner + per-column currency map. Mirrors
+      // the post-upload `applyPreviewState` path so refresh and upload
+      // produce identical UI state.
+      if (setWideFormatTransform) {
+        setWideFormatTransform(session.dataSummary.wideFormatTransform);
+      }
+      if (setCurrencyByColumn && Array.isArray(session.dataSummary.columns)) {
+        const map: Record<string, ColumnCurrency> = {};
+        for (const col of session.dataSummary.columns) {
+          if (col?.currency) map[col.name] = col.currency;
+        }
+        setCurrencyByColumn(map);
+      }
     }
 
     if (Array.isArray(session.messages) && session.messages.length > 0) {

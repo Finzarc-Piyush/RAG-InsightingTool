@@ -12,6 +12,7 @@ export type {
 } from './types';
 export type {
   FilterDistinctSnapshotRef,
+  FilterDistinctProvenanceRef,
   CreateInitialPivotConfigOpts,
 } from './buildPivotModel';
 export {

@@ -53,6 +53,7 @@ import {
   LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
+import { MAX_X_AXIS_LABELS } from '@/lib/charts/xAxisLabelCap';
 import { formatChartTooltipValue, rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 
@@ -70,6 +71,8 @@ interface ChartRendererProps {
   loadingProgress?: { processed: number; total: number; message?: string }; // Progress info
   /** Enables on-demand Key Insight fetch in the modal when the chart has no insight. */
   keyInsightSessionId?: string | null;
+  /** Forwarded to ChartModal so the trailing "Next, …" insight chip can pre-fill the composer. */
+  onSuggestedQuestionClick?: (question: string) => void;
 }
 
 const MAX_COMPACT_X_TICKS = 6;
@@ -168,6 +171,7 @@ export function ChartRenderer({
   isLoading = false,
   loadingProgress,
   keyInsightSessionId = null,
+  onSuggestedQuestionClick,
 }: ChartRendererProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
@@ -506,7 +510,20 @@ export function ChartRenderer({
 
     return values.length > 0 ? values : undefined;
   }, [visibleBarData, shouldCompactView, x]);
-  
+
+  // Bar charts with many categories: cap x-axis labels at MAX_X_AXIS_LABELS
+  // even outside compact mode so a 50-SKU breakdown doesn't render 50 labels.
+  const barXTicks = useMemo(() => {
+    if (type !== 'bar') return undefined;
+    if (compactXAxisTicks) return compactXAxisTicks;
+    if (typeof x !== 'string') return undefined;
+    return evenlySpacedDataKeys(
+      visibleBarData as Record<string, unknown>[],
+      x,
+      MAX_X_AXIS_LABELS
+    );
+  }, [type, compactXAxisTicks, visibleBarData, x]);
+
   const showNoDataState = chartData.length === 0;
 
   const activeFilterChips = useMemo(() => {
@@ -775,7 +792,8 @@ export function ChartRenderer({
           specSeriesKeys && specSeriesKeys.length > 0 ? filteredSeriesKeys : [];
 
         if (lineMultiKeys.length > 0) {
-          const combinedVals = lineMultiKeys.flatMap((k) =>
+          const lineEffectiveKeys = lineMultiKeys.filter((k) => !hiddenSeries.has(k));
+          const combinedVals = lineEffectiveKeys.flatMap((k) =>
             getNumericValues(lineRows, k)
           );
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
@@ -828,26 +846,30 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
-                {(specSeriesKeys ?? []).map((k, i) => {
-                  const c = COLORS[i % COLORS.length];
-                  const isHidden = hiddenSeries.has(k);
-                  return (
-                    <Line
-                      key={k}
-                      type="monotone"
-                      dataKey={k}
-                      name={k}
-                      stroke={c}
-                      strokeWidth={2}
-                      strokeOpacity={isHidden ? 0 : 1}
-                      dot={false}
-                      activeDot={isHidden ? false : { r: 4 }}
-                    />
-                  );
-                })}
+                {(specSeriesKeys ?? [])
+                  .map((k, i) => ({ k, i }))
+                  .filter(({ k }) => !hiddenSeries.has(k))
+                  .map(({ k, i }) => {
+                    const c = COLORS[i % COLORS.length];
+                    return (
+                      <Line
+                        key={k}
+                        type="monotone"
+                        dataKey={k}
+                        name={k}
+                        stroke={c}
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
+                      />
+                    );
+                  })}
               </LineChart>
             </ResponsiveContainer>
-            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1">
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'line' as const }))}
                 iconType="line"
@@ -1023,10 +1045,20 @@ export function ChartRenderer({
             ? filteredSeriesKeys
             : [];
         const stacked = barLayout !== 'grouped';
+        // G1-P1.d — when fillParent (chart card uses 100% height), the
+        // ResponsiveContainer and the multi-series legend below it must
+        // share vertical space cleanly. The wrapper uses `h-full` (not
+        // flex-1) because its parent (chart container at line 1754) is a
+        // `flex-1` flex *item*, not a flex *container* — so flex-1 here
+        // would resolve to 0 height and the chart would render invisible
+        // until a re-paint. `h-full` inherits the parent's computed
+        // height directly and ResponsiveContainer's `height="100%"`
+        // resolves on first render.
         return (
-          <>
+          <div className={fillParent ? "flex h-full w-full flex-col" : "w-full"}>
+          <div className={fillParent ? "flex-1 min-h-0" : ""}>
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <BarChart data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 120 : isSingleChart ? 100 : 80 }}>
+            <BarChart data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 90 : isSingleChart ? 100 : 80 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -1034,9 +1066,9 @@ export function ChartRenderer({
                 angle={-45}
                 textAnchor="end"
                 interval={0}
-                ticks={compactXAxisTicks}
+                ticks={barXTicks}
                 label={{ value: xLabel || x, position: 'bottom', offset: 10, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
-                height={fillParent ? 100 : isSingleChart ? 90 : 70}
+                height={fillParent ? 80 : isSingleChart ? 90 : 70}
               />
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
@@ -1052,27 +1084,30 @@ export function ChartRenderer({
               <Tooltip formatter={rechartsTooltipValueFormatter} />
               {multiKeys.length > 0 ? (
                 <>
-                  {(specSeriesKeys ?? []).map((k, i) => {
-                    const isHidden = hiddenSeries.has(k);
-                    return (
+                  {(specSeriesKeys ?? [])
+                    .map((k, i) => ({ k, i }))
+                    .filter(({ k }) => !hiddenSeries.has(k))
+                    .map(({ k, i }) => (
                       <Bar
                         key={k}
                         dataKey={k}
                         stackId={stacked ? 'stack' : undefined}
                         fill={COLORS[i % COLORS.length]}
-                        fillOpacity={isHidden ? 0 : 1}
                         radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
                       />
-                    );
-                  })}
+                    ))}
                 </>
               ) : (
                 <Bar dataKey={y} fill={chartColor} radius={[4, 4, 0, 0]} />
               )}
             </BarChart>
           </ResponsiveContainer>
+          </div>
           {multiKeys.length > 0 && (
-            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+            <div className="shrink-0 max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1">
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'rect' as const }))}
                 hiddenSeries={hiddenSeries}
@@ -1081,7 +1116,7 @@ export function ChartRenderer({
               />
             </div>
           )}
-          </>
+          </div>
         );
       }
 
@@ -1413,7 +1448,8 @@ export function ChartRenderer({
         const stackedArea = barLayout !== 'grouped';
 
         if (areaMultiKeys.length > 0) {
-          const combinedVals = areaMultiKeys.flatMap((k) =>
+          const areaEffectiveKeys = areaMultiKeys.filter((k) => !hiddenSeries.has(k));
+          const combinedVals = areaEffectiveKeys.flatMap((k) =>
             getNumericValues(areaRows, k)
           );
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
@@ -1465,27 +1501,31 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
-                {(specSeriesKeys ?? []).map((k, i) => {
-                  const c = COLORS[i % COLORS.length];
-                  const isHidden = hiddenSeries.has(k);
-                  return (
-                    <Area
-                      key={k}
-                      type="monotone"
-                      dataKey={k}
-                      name={k}
-                      stackId={stackedArea ? 'areaStack' : undefined}
-                      stroke={c}
-                      fill={c}
-                      strokeOpacity={isHidden ? 0 : 1}
-                      fillOpacity={isHidden ? 0 : stackedArea ? 0.55 : 0.3}
-                      strokeWidth={2}
-                    />
-                  );
-                })}
+                {(specSeriesKeys ?? [])
+                  .map((k, i) => ({ k, i }))
+                  .filter(({ k }) => !hiddenSeries.has(k))
+                  .map(({ k, i }) => {
+                    const c = COLORS[i % COLORS.length];
+                    return (
+                      <Area
+                        key={k}
+                        type="monotone"
+                        dataKey={k}
+                        name={k}
+                        stackId={stackedArea ? 'areaStack' : undefined}
+                        stroke={c}
+                        fill={c}
+                        fillOpacity={stackedArea ? 0.55 : 0.3}
+                        strokeWidth={2}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
+                      />
+                    );
+                  })}
               </AreaChart>
             </ResponsiveContainer>
-            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1" onClick={(e) => e.stopPropagation()}>
+            <div className="max-h-[100px] overflow-y-auto border-t border-border/30 pt-1 mt-1">
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: COLORS[i % COLORS.length], type: 'line' as const }))}
                 iconType="line"
@@ -1567,13 +1607,13 @@ export function ChartRenderer({
 
   return (
     <>
-      <div 
+      <div
         ref={containerRef}
-        className="group relative flex h-full flex-col rounded-lg border border-border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
+        className="group relative flex h-full cursor-pointer flex-col rounded-lg border border-border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
+        onClick={handleCardClick}
       >
         <div
-          className={`cursor-pointer flex flex-col gap-3 ${fillParent ? 'h-full' : ''}`}
-          onClick={handleCardClick}
+          className={`flex flex-col gap-3 ${fillParent ? 'h-full' : ''}`}
         >
           {!fillParent && (
             <div className="mb-2 flex items-start justify-between gap-2">
@@ -1807,6 +1847,7 @@ export function ChartRenderer({
         formatDateForDisplay={formatDateForDisplay}
         determineSliderStep={determineSliderStep}
         keyInsightSessionId={keyInsightSessionId}
+        onSuggestedQuestionClick={onSuggestedQuestionClick}
       />
       )}
       <DashboardModal

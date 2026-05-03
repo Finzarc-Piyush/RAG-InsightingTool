@@ -89,3 +89,50 @@ describe("feedbackController · validation guards", () => {
   // exhaustively cover the validation logic (Zod enum + min(1) on every
   // string field).
 });
+
+describe("feedbackController · target validation (granular feedback)", () => {
+  it("returns 400 when target.type is not in the enum", async () => {
+    const req = makeReq({
+      email: "u@example.com",
+      body: {
+        sessionId: "s",
+        turnId: "t",
+        feedback: "up",
+        target: { type: "invalid_target", id: "answer" },
+      },
+    });
+    const res = makeRes();
+    await feedbackController(req, res as unknown as Response);
+    assert.strictEqual(res.statusCode, 400);
+  });
+
+  it("returns 400 when target.id is empty", async () => {
+    const req = makeReq({
+      email: "u@example.com",
+      body: {
+        sessionId: "s",
+        turnId: "t",
+        feedback: "up",
+        target: { type: "subanswer", id: "" },
+      },
+    });
+    const res = makeRes();
+    await feedbackController(req, res as unknown as Response);
+    assert.strictEqual(res.statusCode, 400);
+  });
+
+  it("returns 400 when target.id exceeds 64 chars", async () => {
+    const req = makeReq({
+      email: "u@example.com",
+      body: {
+        sessionId: "s",
+        turnId: "t",
+        feedback: "down",
+        target: { type: "subanswer", id: "x".repeat(65) },
+      },
+    });
+    const res = makeRes();
+    await feedbackController(req, res as unknown as Response);
+    assert.strictEqual(res.statusCode, 400);
+  });
+});

@@ -4,7 +4,13 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { ColumnsDisplay } from './ColumnsDisplay';
-import type { TemporalDisplayGrain, TemporalFacetColumnMeta } from '@/shared/schema';
+import type {
+  ColumnCurrency,
+  DimensionHierarchy,
+  TemporalDisplayGrain,
+  TemporalFacetColumnMeta,
+  WideFormatTransform,
+} from '@/shared/schema';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import { facetColumnHeaderLabel, isTemporalFacetFieldId } from '@/lib/temporalFacetDisplay';
 import { parseDateLike } from '@/lib/parseDateLike';
@@ -50,13 +56,23 @@ interface DataPreviewProps {
     totalRows: number;
     totalColumns: number;
   } | null;
+  /** WF9 — per-column currency tag (server-detected). */
+  currencyByColumn?: Record<string, ColumnCurrency>;
+  /** WF9 — wide-format auto-melt metadata; renders the banner. */
+  wideFormatTransform?: WideFormatTransform;
+  /** H6 — declared dimension hierarchies; renders the banner. */
+  dimensionHierarchies?: DimensionHierarchy[];
+  /** EU1 — when present, banner shows ✕ Remove buttons. */
+  sessionIdForHierarchyEdit?: string;
+  /** EU1 — callback after successful hierarchy remove. */
+  onHierarchiesChange?: (next: DimensionHierarchy[]) => void;
 }
 
-export function DataPreview({ 
-  data, 
-  columns, 
-  numericColumns = [], 
-  dateColumns = [], 
+export function DataPreview({
+  data,
+  columns,
+  numericColumns = [],
+  dateColumns = [],
   temporalDisplayGrainsByColumn = {},
   temporalFacetColumns = [],
   totalRows,
@@ -64,6 +80,11 @@ export function DataPreview({
   defaultExpanded = false,
   preEnrichmentSnapshot = null,
   postEnrichmentSnapshot = null,
+  currencyByColumn,
+  wideFormatTransform,
+  dimensionHierarchies,
+  sessionIdForHierarchyEdit,
+  onHierarchiesChange,
 }: DataPreviewProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [compareMode, setCompareMode] = useState(false);
@@ -166,12 +187,17 @@ export function DataPreview({
   return (
     <div className="mt-4" data-testid="data-preview-container">
       {/* Columns Display */}
-      <ColumnsDisplay 
+      <ColumnsDisplay
         columns={visibleColumns}
         numericColumns={numericColumns}
         dateColumns={dateColumns}
         totalRows={totalRows}
         totalColumns={totalColumns}
+        currencyByColumn={currencyByColumn}
+        wideFormatTransform={wideFormatTransform}
+        dimensionHierarchies={dimensionHierarchies}
+        sessionId={sessionIdForHierarchyEdit}
+        onHierarchiesChange={onHierarchiesChange}
       />
       
       {/* Data Preview Table */}

@@ -304,16 +304,82 @@ function dateFromNumericCell(raw: number): Date | null {
   return null;
 }
 
+/**
+ * Detect "duck-typed" date wrappers — driver-side value objects (e.g. DuckDB
+ * `DATE` / `TIMESTAMP` returned through node bindings) that have no enumerable
+ * own properties (so `JSON.stringify` renders them as `{}`) but expose dates
+ * via methods or numeric internals. Returns null if `raw` doesn't look like
+ * one of the recognised shapes.
+ */
+function dateFromObjectWrapper(raw: object): Date | null {
+  const o = raw as Record<string, unknown>;
+
+  if (typeof o.toISOString === "function") {
+    try {
+      const iso = (o.toISOString as () => unknown).call(o);
+      if (typeof iso === "string") {
+        const t = Date.parse(iso);
+        if (!isNaN(t)) return new Date(t);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  if (typeof o.epochMs === "number" && Number.isFinite(o.epochMs)) {
+    return new Date(o.epochMs);
+  }
+  if (typeof o.epochSeconds === "number" && Number.isFinite(o.epochSeconds)) {
+    return new Date(o.epochSeconds * 1000);
+  }
+  if (typeof o.micros === "bigint") {
+    const ms = Number(o.micros / 1000n);
+    if (Number.isFinite(ms)) return new Date(ms);
+  }
+  if (typeof o.micros === "number" && Number.isFinite(o.micros)) {
+    return new Date(o.micros / 1000);
+  }
+  if (typeof o.days === "number" && Number.isFinite(o.days)) {
+    return new Date(o.days * MS_PER_DAY);
+  }
+  if (typeof o.days === "bigint") {
+    const ms = Number(o.days) * MS_PER_DAY;
+    if (Number.isFinite(ms)) return new Date(ms);
+  }
+
+  if (typeof o.toString === "function" && o.toString !== Object.prototype.toString) {
+    try {
+      const s = String(o);
+      if (s && s !== "[object Object]") {
+        const flex = parseFlexibleDate(s);
+        if (flex) return flex;
+        const t = Date.parse(s);
+        if (!isNaN(t)) return new Date(t);
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return null;
+}
+
 /** Parse cell values the same way temporal facets do (incl. Date.parse fallback for M/D/YY). */
 export function parseRowDate(raw: unknown): Date | null {
   if (raw === null || raw === undefined || raw === "") return null;
   if (raw instanceof Date && !isNaN(raw.getTime())) return raw;
+  if (Array.isArray(raw)) return null;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     const d = dateFromNumericCell(raw);
     if (d) return d;
   }
+  if (typeof raw === "object") {
+    const d = dateFromObjectWrapper(raw as object);
+    if (d && !isNaN(d.getTime())) return d;
+    return null;
+  }
   const s = String(raw).trim();
-  if (!s) return null;
+  if (!s || s === "[object Object]") return null;
   const flex = parseFlexibleDate(s);
   if (flex) return flex;
   if (/^\d{4}$/.test(s)) {

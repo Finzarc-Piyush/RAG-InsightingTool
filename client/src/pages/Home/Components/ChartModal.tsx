@@ -20,6 +20,7 @@ import {
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
@@ -71,6 +72,8 @@ interface ChartModalProps {
   determineSliderStep?: (min: number, max: number) => number;
   /** When set and the chart has no keyInsight, fetch one on open (pivot preview / chart builder). */
   keyInsightSessionId?: string | null;
+  /** Pre-fills the chat composer with the trailing "Next, …" investigation suggestion. No auto-send. */
+  onSuggestedQuestionClick?: (question: string) => void;
 }
 
 const TABLE_V1_PREFIX = 'TABLE_V1|';
@@ -100,6 +103,18 @@ const formatAxisLabel = (value: number): string => {
   // Handle integers and small numbers
   return value.toFixed(0);
 };
+
+// Splits off a trailing "Next, …" / "Next: …" investigation sentence (the
+// prompt-enforced NEXT-CHECK clause from insightGenerator) so it can be
+// rendered as a clickable suggestion chip. Returns nextStep: null when no such
+// sentence is present, so callers fall back to the original full render.
+function splitTrailingNextStep(text: string): { body: string; nextStep: string | null } {
+  const match = text.match(/(^|[.!?]\s+|\n\s*)(Next[,:\s][^.!?\n]+[.!?])\s*$/i);
+  if (!match || match.index === undefined) return { body: text, nextStep: null };
+  const nextStep = match[2].trim();
+  const body = text.slice(0, match.index + match[1].length).trim();
+  return { body, nextStep };
+}
 
 const formatDateForDisplayLocal = (value?: string) => {
   if (!value) return undefined;
@@ -170,6 +185,7 @@ export function ChartModal({
   formatDateForDisplay = formatDateForDisplayLocal,
   determineSliderStep = determineSliderStepLocal,
   keyInsightSessionId = null,
+  onSuggestedQuestionClick,
 }: ChartModalProps) {
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
   const [isDashboardTableModalOpen, setIsDashboardTableModalOpen] = useState(false);
@@ -400,11 +416,13 @@ export function ChartModal({
           specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
 
         if (lineMultiKeys.length > 0) {
-          const combinedVals = lineMultiKeys.flatMap((k) => getNumericValues(lineRows, k));
+          const lineEffectiveKeys = lineMultiKeys.filter((k) => !hiddenSeries.has(k));
+          const combinedVals = lineEffectiveKeys.flatMap((k) => getNumericValues(lineRows, k));
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
-            <>
-            <ResponsiveContainer width="100%" height={440}>
+            <div className="flex flex-1 min-h-0 flex-col">
+            <div className="flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
@@ -447,26 +465,31 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                {(specSeriesKeys ?? []).map((k, i) => {
-                  const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
-                  const isHidden = hiddenSeries.has(k);
-                  return (
-                    <Line
-                      key={k}
-                      type="monotone"
-                      dataKey={k}
-                      name={k}
-                      stroke={c}
-                      strokeWidth={2}
-                      strokeOpacity={isHidden ? 0 : 1}
-                      dot={isHidden ? false : showDots ? { r: 4, fill: c } : false}
-                      activeDot={isHidden ? false : { r: 8 }}
-                    />
-                  );
-                })}
+                {(specSeriesKeys ?? [])
+                  .map((k, i) => ({ k, i }))
+                  .filter(({ k }) => !hiddenSeries.has(k))
+                  .map(({ k, i }) => {
+                    const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                    return (
+                      <Line
+                        key={k}
+                        type="monotone"
+                        dataKey={k}
+                        name={k}
+                        stroke={c}
+                        strokeWidth={2}
+                        dot={showDots ? { r: 4, fill: c } : false}
+                        activeDot={{ r: 8 }}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
+                      />
+                    );
+                  })}
               </LineChart>
             </ResponsiveContainer>
-            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+            </div>
+            <div className="shrink-0 max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'line' as const }))}
                 iconType="line"
@@ -475,7 +498,7 @@ export function ChartModal({
                 onToggleAll={handleToggleAllSeriesLegend}
               />
             </div>
-            </>
+            </div>
           );
         }
 
@@ -487,7 +510,8 @@ export function ChartModal({
         const rightDomain = chart.y2 ? getDynamicDomain(rightValues) : undefined;
 
         return (
-          <ResponsiveContainer width="100%" height={440}>
+          <div className="flex flex-1 min-h-0 flex-col">
+          <ResponsiveContainer width="100%" height="100%">
             <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -597,6 +621,7 @@ export function ChartModal({
               )}
             </LineChart>
           </ResponsiveContainer>
+          </div>
         );
       }
 
@@ -605,8 +630,9 @@ export function ChartModal({
           specSeriesKeys && specSeriesKeys.length > 0 ? modalVisibleSeriesKeys : [];
         const stacked = barLayout !== 'grouped';
         return (
-          <>
-          <ResponsiveContainer width="100%" height={440}>
+          <div className="flex flex-1 min-h-0 flex-col">
+          <div className="flex-1 min-h-0">
+          <ResponsiveContainer width="100%" height="100%">
             <BarChart data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -646,27 +672,30 @@ export function ChartModal({
               />
               {(specSeriesKeys?.length ?? 0) > 0 ? (
                 <>
-                  {(specSeriesKeys ?? []).map((k, i) => {
-                    const isHidden = hiddenSeries.has(k);
-                    return (
+                  {(specSeriesKeys ?? [])
+                    .map((k, i) => ({ k, i }))
+                    .filter(({ k }) => !hiddenSeries.has(k))
+                    .map(({ k, i }) => (
                       <Bar
                         key={k}
                         dataKey={k}
                         stackId={stacked ? 'stack' : undefined}
                         fill={CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length]}
-                        fillOpacity={isHidden ? 0 : 1}
                         radius={stacked ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
                       />
-                    );
-                  })}
+                    ))}
                 </>
               ) : (
                 <Bar dataKey={y} fill={chartColor} radius={[6, 6, 0, 0]} maxBarSize={60} />
               )}
             </BarChart>
           </ResponsiveContainer>
+          </div>
           {(specSeriesKeys?.length ?? 0) > 0 && (
-            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+            <div className="shrink-0 max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'rect' as const }))}
                 hiddenSeries={hiddenSeries}
@@ -675,7 +704,7 @@ export function ChartModal({
               />
             </div>
           )}
-          </>
+          </div>
         );
       }
 
@@ -764,7 +793,8 @@ export function ChartModal({
         }
 
         return (
-          <ResponsiveContainer width="100%" height={400}>
+          <div className="flex flex-1 min-h-0 flex-col">
+          <ResponsiveContainer width="100%" height="100%">
             <ComposedChart margin={{ left: 60, right: 20, top: 20, bottom: 40 }} data={optimizedScatterData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -829,11 +859,13 @@ export function ChartModal({
               )}
             </ComposedChart>
           </ResponsiveContainer>
+          </div>
         );
 
       case 'pie':
         return (
-          <ResponsiveContainer width="100%" height={400}>
+          <div className="flex flex-1 min-h-0 flex-col">
+          <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
                 data={data}
@@ -876,6 +908,7 @@ export function ChartModal({
               />
             </PieChart>
           </ResponsiveContainer>
+          </div>
         );
 
       case 'area': {
@@ -885,11 +918,13 @@ export function ChartModal({
         const stackedArea = barLayout !== 'grouped';
 
         if (areaMultiKeys.length > 0) {
-          const combinedVals = areaMultiKeys.flatMap((k) => getNumericValues(areaRows, k));
+          const areaEffectiveKeys = areaMultiKeys.filter((k) => !hiddenSeries.has(k));
+          const combinedVals = areaEffectiveKeys.flatMap((k) => getNumericValues(areaRows, k));
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
-            <>
-            <ResponsiveContainer width="100%" height={440}>
+            <div className="flex flex-1 min-h-0 flex-col">
+            <div className="flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
@@ -932,27 +967,32 @@ export function ChartModal({
                   labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, fontSize: '14px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))', fontSize: '14px' }}
                 />
-                {(specSeriesKeys ?? []).map((k, i) => {
-                  const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
-                  const isHidden = hiddenSeries.has(k);
-                  return (
-                    <Area
-                      key={k}
-                      type="monotone"
-                      dataKey={k}
-                      name={k}
-                      stackId={stackedArea ? 'areaStack' : undefined}
-                      stroke={c}
-                      fill={c}
-                      strokeOpacity={isHidden ? 0 : 1}
-                      fillOpacity={isHidden ? 0 : stackedArea ? 0.55 : 0.3}
-                      strokeWidth={2}
-                    />
-                  );
-                })}
+                {(specSeriesKeys ?? [])
+                  .map((k, i) => ({ k, i }))
+                  .filter(({ k }) => !hiddenSeries.has(k))
+                  .map(({ k, i }) => {
+                    const c = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length];
+                    return (
+                      <Area
+                        key={k}
+                        type="monotone"
+                        dataKey={k}
+                        name={k}
+                        stackId={stackedArea ? 'areaStack' : undefined}
+                        stroke={c}
+                        fill={c}
+                        fillOpacity={stackedArea ? 0.55 : 0.3}
+                        strokeWidth={2}
+                        isAnimationActive
+                        animationDuration={350}
+                        animationEasing="ease-out"
+                      />
+                    );
+                  })}
               </AreaChart>
             </ResponsiveContainer>
-            <div className="max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
+            </div>
+            <div className="shrink-0 max-h-[120px] overflow-y-auto border-t border-border/30 pt-2 mt-2" onClick={(e) => e.stopPropagation()}>
               <RechartsWideLegendContent
                 payload={(specSeriesKeys ?? []).map((k, i) => ({ value: k, color: CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length], type: 'line' as const }))}
                 iconType="line"
@@ -961,12 +1001,13 @@ export function ChartModal({
                 onToggleAll={handleToggleAllSeriesLegend}
               />
             </div>
-            </>
+            </div>
           );
         }
 
         return (
-          <ResponsiveContainer width="100%" height={440}>
+          <div className="flex flex-1 min-h-0 flex-col">
+          <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
@@ -1008,6 +1049,7 @@ export function ChartModal({
               />
             </AreaChart>
           </ResponsiveContainer>
+          </div>
         );
       }
 
@@ -1019,7 +1061,7 @@ export function ChartModal({
   return (
     <>
       <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="max-w-7xl w-full max-h-[90vh] flex flex-col overflow-hidden [&>button]:hidden">
+        <DialogContent className="max-w-7xl w-full h-[90vh] max-h-[90vh] flex flex-col overflow-hidden [&>button]:hidden">
           <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-4 gap-4">
             <div className="flex flex-col gap-1 flex-1 min-w-0">
               <DialogTitle className="text-xl truncate">
@@ -1488,8 +1530,8 @@ export function ChartModal({
 
           <div className="flex gap-6 flex-1 min-h-0">
             {/* Left side - Chart */}
-            <div className="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden">
-              <div className="w-full pt-1">
+            <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
+              <div className="flex flex-1 min-h-0 flex-col w-full pt-1">
                 {renderChart()}
               </div>
             </div>
@@ -1522,11 +1564,34 @@ export function ChartModal({
                       {keyInsightError ? (
                         <p className="text-sm text-destructive break-words">{keyInsightError}</p>
                       ) : null}
-                      {displayKeyInsight ? (
-                        <p className="text-sm leading-relaxed text-blue-800 dark:text-blue-200 break-words">
-                          {displayKeyInsight}
-                        </p>
-                      ) : null}
+                      {displayKeyInsight ? (() => {
+                        const { body, nextStep } = splitTrailingNextStep(displayKeyInsight);
+                        const composerText = nextStep
+                          ? nextStep.replace(/^Next[,:\s]+/i, '').trim()
+                          : '';
+                        return (
+                          <div className="text-sm leading-relaxed text-blue-800 dark:text-blue-200 break-words">
+                            <MarkdownRenderer content={nextStep ? body : displayKeyInsight} />
+                            {nextStep && onSuggestedQuestionClick && composerText ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-xs rounded-full h-auto py-1.5 px-3 whitespace-normal text-left"
+                                  aria-label={`Try this follow-up: ${composerText}`}
+                                  onClick={() => {
+                                    onSuggestedQuestionClick(composerText);
+                                    onClose();
+                                  }}
+                                >
+                                  {nextStep}
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })() : null}
                     </div>
                   </div>
                 </div>

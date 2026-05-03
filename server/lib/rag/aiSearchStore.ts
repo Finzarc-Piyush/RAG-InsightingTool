@@ -71,10 +71,33 @@ export async function upsertRagDocuments(docs: RagSearchDocument[]): Promise<voi
 /**
  * List all document ids for a session (paginated) then delete in batches.
  */
-export async function deleteRagDocumentsBySessionId(sessionId: string): Promise<void> {
+/**
+ * W64 · Build the OData filter used by `deleteRagDocumentsBySessionId`.
+ * Exported for unit tests so the `memory_entry` exclusion default is locked
+ * in (regressing it would silently delete memory entries on every data-RAG
+ * reindex).
+ */
+export function buildSessionDeleteFilter(
+  sessionId: string,
+  excludeChunkTypes: string[] = ["memory_entry"]
+): string {
+  const excludes = excludeChunkTypes
+    .map((t) => ` and chunkType ne '${t.replace(/'/g, "''")}'`)
+    .join("");
+  return `sessionId eq '${sessionId.replace(/'/g, "''")}'${excludes}`;
+}
+
+export async function deleteRagDocumentsBySessionId(
+  sessionId: string,
+  // W64 · Memory entries (chunkType="memory_entry") live in the same per-session
+  // index but represent durable, append-only events. They must survive a data-RAG
+  // reindex (which fires on every saveModifiedData via scheduleIndexSessionRag).
+  // Default excludes them; pass `[]` to wipe the entire session including memory.
+  excludeChunkTypes: string[] = ["memory_entry"]
+): Promise<void> {
   const { client } = getClient();
   const ids: string[] = [];
-  const filter = `sessionId eq '${sessionId.replace(/'/g, "''")}'`;
+  const filter = buildSessionDeleteFilter(sessionId, excludeChunkTypes);
   const pageSize = 1000;
   let skip = 0;
   for (;;) {
@@ -121,18 +144,50 @@ export async function deleteRagDocumentsBySessionId(sessionId: string): Promise<
   }
 }
 
+/**
+ * W57 · Build the optional chunkType include/exclude clause. Memory entries
+ * use `chunkType = "memory_entry"`; data RAG callers pass
+ * `excludeChunkTypes: ["memory_entry"]` to keep their retrieval clean, while
+ * the memory recall block (W60) passes `includeChunkTypes: ["memory_entry"]`.
+ */
+function buildChunkTypeClause(opts: {
+  includeChunkTypes?: string[];
+  excludeChunkTypes?: string[];
+}): string {
+  const parts: string[] = [];
+  if (opts.includeChunkTypes && opts.includeChunkTypes.length > 0) {
+    const list = opts.includeChunkTypes
+      .map((t) => `chunkType eq '${t.replace(/'/g, "''")}'`)
+      .join(" or ");
+    parts.push(`(${list})`);
+  }
+  if (opts.excludeChunkTypes && opts.excludeChunkTypes.length > 0) {
+    for (const t of opts.excludeChunkTypes) {
+      parts.push(`chunkType ne '${t.replace(/'/g, "''")}'`);
+    }
+  }
+  return parts.length === 0 ? "" : ` and ${parts.join(" and ")}`;
+}
+
 export async function vectorSearchSession(params: {
   sessionId: string;
   queryVector: number[];
   topK?: number;
   dataVersion?: number;
+  /** W66 · Lower bound on dataVersion (inclusive) — hits older than this are excluded. */
+  minDataVersion?: number;
+  includeChunkTypes?: string[];
+  excludeChunkTypes?: string[];
 }): Promise<RagHit[]> {
   const { client } = getClient();
   const topK = params.topK ?? getRagTopK();
   let filter = `sessionId eq '${params.sessionId.replace(/'/g, "''")}'`;
   if (params.dataVersion != null) {
     filter += ` and dataVersion eq ${params.dataVersion}`;
+  } else if (params.minDataVersion != null) {
+    filter += ` and dataVersion ge ${params.minDataVersion}`;
   }
+  filter += buildChunkTypeClause(params);
 
   const vectorQuery: VectorizedQuery<RagSearchDocument> = {
     kind: "vector",
@@ -174,6 +229,8 @@ export async function keywordSearchSession(params: {
   query: string;
   topK?: number;
   dataVersion?: number;
+  includeChunkTypes?: string[];
+  excludeChunkTypes?: string[];
 }): Promise<RagHit[]> {
   const queryText = (params.query || "").trim();
   if (!queryText) return [];
@@ -183,6 +240,7 @@ export async function keywordSearchSession(params: {
   if (params.dataVersion != null) {
     filter += ` and dataVersion eq ${params.dataVersion}`;
   }
+  filter += buildChunkTypeClause(params);
   const results = await withSearchRetry("keywordSearchSession", () =>
     client.search<RagSearchDocument>(queryText, {
       filter,

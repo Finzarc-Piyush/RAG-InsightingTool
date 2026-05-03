@@ -50,6 +50,11 @@ export async function ensureAuthoritativeDataTable(
 
     const rows = await loadLatestData(chat, undefined, undefined, {
       mode: "authoritativeRematerialize",
+      // Wave-FA2 · Canonical `data` table is the unfiltered authoritative
+      // source. The active-filter overlay lives on top as a `data_filtered`
+      // view (see `resolveSessionDataTable`); never bake the filter into
+      // the base table.
+      skipActiveFilter: true,
     });
 
     if (!rows.length) {

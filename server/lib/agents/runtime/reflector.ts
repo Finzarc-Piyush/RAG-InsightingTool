@@ -21,6 +21,26 @@ export async function runReflector(
      *  reflector choose replan vs continue based on what has actually been
      *  explored. */
     workingMemorySuggestedColumns?: string[];
+    /**
+     * Wave B6 · prior reflector verdicts emitted earlier in THIS turn. Lets
+     * the reflector detect repetition ("I already said replan at step 3
+     * and was suppressed; don't say it again") and converge.
+     */
+    priorReflectorVerdicts?: ReadonlyArray<{
+      stepIndex: number;
+      action: string;
+      rationale: string;
+    }>;
+    /**
+     * Wave B6 · prior verifier verdicts emitted earlier in THIS turn. Lets
+     * the reflector escalate if the verifier already flagged something
+     * the current plan keeps reasserting.
+     */
+    priorVerifierVerdicts?: ReadonlyArray<{
+      stepIndex: number;
+      verdict: string;
+      rationale: string;
+    }>;
   },
   turnId: string,
   onLlmCall: () => void,
@@ -43,9 +63,10 @@ If "Columns explored so far" is present and the question asks about a dimension 
 W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE ANOMALOUS pattern (a spike, drop, or outlier with specific numbers that is NOT explained by the current plan), emit up to 3 sub-questions as spawnedQuestions:[{"question":string,"spawnReason":string,"priority":"high"|"medium"|"low","suggestedColumns":[]}]. ONLY spawn for anomalies where a follow-up investigation would substantially improve the root answer. Do NOT spawn for routine findings, expected patterns, or when the question is already fully answered.`;
 
   const appendix = appendixForReflectorPrompt(ctx);
+  // WTL2 · 4_000 → 6_000.
   const digestBlock =
     interAgentDigest?.trim().length ?
-      `Coordinator handoff log (this turn):\n${interAgentDigest.trim().slice(0, 4000)}\n\n`
+      `Coordinator handoff log (this turn):\n${interAgentDigest.trim().slice(0, 6_000)}\n\n`
       : "";
   const metaLine =
     payload.lastAnalyticalMeta ?
@@ -56,8 +77,33 @@ W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE
       ? `Columns explored so far (from prior tool suggestedColumns): ${payload.workingMemorySuggestedColumns.slice(0, 20).join(", ")}\n`
       : "";
   // W11: inject blackboard hypothesis state so the reflector can identify uncovered hypotheses.
-  const bbBlock = ctx.blackboard ? `${formatForPlanner(ctx.blackboard).slice(0, 2000)}\n\n` : "";
-  const head = `Question: ${ctx.question}${appendix}\n${digestBlock}${bbBlock}${metaLine}${columnsLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
+  // WTL2 · 2_000 → 4_000. Reflector quality gates replans; don't starve it.
+  const bbBlock = ctx.blackboard ? `${formatForPlanner(ctx.blackboard).slice(0, 4_000)}\n\n` : "";
+  // Wave B6 · prior in-turn verdict history so the reflector can detect
+  // repetition ("I already said replan at step 3") and the verifier
+  // pattern ("verifier flagged FABRICATED_MAGNITUDES at step 2; the
+  // current plan still asserts it").
+  const priorReflectorBlock =
+    payload.priorReflectorVerdicts && payload.priorReflectorVerdicts.length > 0
+      ? `Past reflector verdicts in this turn (most recent last):\n${payload.priorReflectorVerdicts
+          .slice(-8)
+          .map(
+            (v) =>
+              `  step ${v.stepIndex}: ${v.action} — ${v.rationale.slice(0, 280)}`
+          )
+          .join("\n")}\n\n`
+      : "";
+  const priorVerifierBlock =
+    payload.priorVerifierVerdicts && payload.priorVerifierVerdicts.length > 0
+      ? `Past verifier verdicts in this turn (most recent last):\n${payload.priorVerifierVerdicts
+          .slice(-8)
+          .map(
+            (v) =>
+              `  step ${v.stepIndex}: ${v.verdict} — ${v.rationale.slice(0, 280)}`
+          )
+          .join("\n")}\n\n`
+      : "";
+  const head = `Question: ${ctx.question}${appendix}\n${digestBlock}${bbBlock}${priorReflectorBlock}${priorVerifierBlock}${metaLine}${columnsLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
   // P-A3: bump observation cap so the reflector can reason on real error/summary text.
   const obsMax = Math.max(0, 12000 - head.length);
   const user = `${head}${payload.observations.join("\n---\n").slice(0, obsMax)}`;

@@ -15,24 +15,61 @@ import { logDomainContextStartup } from "./lib/domainContext/loadEnabledDomainCo
 
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
 
+// RL2 · `chart-preview`, `chart-key-insight`, and the `/pivot/*` family are
+// intrinsically pacing-controlled: a 500 ms client debounce on the
+// chart-preview effect, a per-session mutex on the chart-key-insight handler,
+// and the pivot endpoints are pure data shaping (no LLM cost). During a
+// dashboard build the agent emits ~14 chart bubbles whose effects each fire
+// chart-preview + chart-key-insight + pivot/preview + pivot/fields within the
+// same window — counting these against the coarse 400/15-min global limiter
+// caused user-visible 429s without protecting anything (the real cost is the
+// downstream LLM call, which the per-session mutex already serialises).
+// Excluding these paths lets dashboard / pivot work finish without cascades.
+const RATE_LIMIT_EXEMPT_SUFFIXES: ReadonlyArray<string> = [
+  "/chart-preview",
+  "/chart-key-insight",
+  "/pivot/preview",
+  "/pivot/query",
+  "/pivot/fields",
+  "/pivot/drillthrough",
+];
+
+function isExemptFromRateLimit(req: import("express").Request): boolean {
+  if (req.method === "OPTIONS" || req.path === "/health") return true;
+  return RATE_LIMIT_EXEMPT_SUFFIXES.some((suffix) => req.path.endsWith(suffix));
+}
+
 const apiRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.API_RATE_LIMIT_MAX || 400),
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+  skip: isExemptFromRateLimit,
 });
 
 // P-031: Tight per-IP limiter dedicated to pre-auth paths. Unauthenticated
 // token-verify attempts force JWKS cache lookups; a noisy client can thrash
-// Azure AD round-trips. 20/min is plenty for legitimate cold starts.
-const AUTH_PREFLIGHT_BURST = Number(process.env.AUTH_PREFLIGHT_BURST || 20);
+// Azure AD round-trips. RL2-followup: this limiter was previously enforced
+// for every /api/* request — authenticated or not — at 20/min. Multi-chart
+// dashboard turns + pivot work easily blew past 20 in seconds, surfacing 429
+// to the user even though the limiter's stated purpose was protecting JWKS.
+// Now skip when (a) the path is one of the known-safe high-traffic
+// suffixes, or (b) the request carries a Bearer token (auth middleware
+// downstream still validates it; failed validations are caught by the
+// downstream limiter — the JWKS cache-miss attack vector requires *no* token
+// or a structurally invalid one, which we still throttle).
+const AUTH_PREFLIGHT_BURST = Number(process.env.AUTH_PREFLIGHT_BURST || 60);
 const authPreflightLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: AUTH_PREFLIGHT_BURST,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === "OPTIONS" || req.path === "/health",
+  skip: (req) => {
+    if (isExemptFromRateLimit(req)) return true;
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && /^Bearer\s+\S{20,}/.test(auth)) return true;
+    return false;
+  },
 });
 
 // Factory function to create the Express app

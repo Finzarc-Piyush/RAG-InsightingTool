@@ -19,3 +19,6 @@ export * from "./sharedAnalysis.model.js";
 // Shared Dashboard model
 export * from "./sharedDashboard.model.js";
 
+// Analysis Memory model (W56)
+export * from "./analysisMemory.model.js";
+

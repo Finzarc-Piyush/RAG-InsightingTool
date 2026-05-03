@@ -59,6 +59,27 @@ independently is when the single-writer helper earns its keep.
 
 ## Recent changes
 
+- **Initial-message robustness** —
+  `buildInitialAssistantContentFromContext`
+  ([`server/lib/sessionAnalysisContext.ts`](../../server/lib/sessionAnalysisContext.ts))
+  now synthesises a deterministic "Columns at a glance" section directly
+  from `DataSummary` (numeric / date / categorical groupings, capped at six
+  names per group with a `+N more` suffix) when `dataset.columnRoles` is
+  empty. Date columns are annotated with their available temporal grains
+  (e.g. `order_date *(can group by year, quarter, month)*`) read from
+  `summary.temporalFacetColumns`, so the welcome message advertises the
+  same aggregation surface the agent uses (the agent prompt at
+  [`dataOpsOrchestrator.ts:1755-1764`](../../server/lib/dataOps/dataOpsOrchestrator.ts)
+  groups by the hidden `__tf_*` columns for "by year/quarter/month"
+  requests). Internal `__tf_*` column names are never exposed in the
+  user-facing message. Previously a fresh upload with a sparse heuristic
+  context would produce a one-line message because `columnRoles` is
+  populated by the fire-and-forget `seedSessionAnalysisContextLLM`, which
+  often hasn't landed by the time the understanding checkpoint persists
+  the welcome message. The richer fallback aligns with the
+  non-blocking-startup invariant: initial artifacts must be useful from
+  automatic understanding alone. Covered by
+  [`server/tests/buildInitialAssistantContent.test.ts`](../../server/tests/buildInitialAssistantContent.test.ts).
 - **Context-first modal + regeneration** — The "Add Context" modal now
   opens immediately after the upload returns a `sessionId`, not after
   the preview loads. Background preview + enrichment continue behind the

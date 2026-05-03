@@ -7,6 +7,7 @@ import {
 import { getChatBySessionIdEfficient } from "../../models/chat.model.js";
 import type { AgentExecutionContext } from "./runtime/types.js";
 import type { ChartSpec, Insight } from "../../shared/schema.js";
+import { applyActiveFilter } from "../activeFilter/applyActiveFilter.js";
 
 /** Same routing as orchestrator: correlation-style questions are analysis, not data ops. */
 function isCorrelationStyleQuestion(text: string): boolean {
@@ -49,9 +50,12 @@ export async function runDataOpsFromAgentContext(exec: AgentExecutionContext): P
     };
   }
 
+  // Wave-FA5 · Apply active filter to whichever source we choose. `exec.data`
+  // already came through `loadLatestData` so it's filtered, but `rawData` is
+  // a direct field read and must be filtered explicitly here.
   const dataset =
     Array.isArray(sessionDoc.rawData) && sessionDoc.rawData.length > 0
-      ? sessionDoc.rawData
+      ? applyActiveFilter(sessionDoc.rawData, sessionDoc.activeFilter)
       : exec.data;
 
   let dataOpsIntent: DataOpsIntent;

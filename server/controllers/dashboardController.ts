@@ -14,6 +14,8 @@ import {
   addTableToDashboardRequestSchema,
   removeTableFromDashboardRequestSchema,
   updateTableCaptionRequestSchema,
+  addPivotToDashboardRequestSchema,
+  removePivotFromDashboardRequestSchema,
 } from "../shared/schema.js";
 import {
   addChartToDashboard,
@@ -30,6 +32,8 @@ import {
   addTableToDashboard,
   removeTableFromDashboard,
   updateTableCaption,
+  addPivotToDashboard,
+  removePivotFromDashboard,
   createReportDashboardFromAnalysis,
   createDashboardFromSpec,
   patchDashboard,
@@ -186,6 +190,43 @@ export const addTableToDashboardController = async (req: Request, res: Response)
       return;
     }
     res.status(400).json({ error: error?.message || 'Failed to add table' });
+  }
+};
+
+export const addPivotToDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = addPivotToDashboardRequestSchema.parse(req.body);
+
+    const updated = await addPivotToDashboard(dashboardId, username, parsed.pivot, parsed.sheetId);
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || 'Failed to add pivot' });
+  }
+};
+
+export const removePivotFromDashboardController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = removePivotFromDashboardRequestSchema.parse(req.body);
+
+    const updated = await removePivotFromDashboard(dashboardId, username, {
+      index: parsed.index,
+      sheetId: parsed.sheetId,
+    });
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || 'Failed to remove pivot' });
   }
 };
 
@@ -393,7 +434,41 @@ export const createDashboardFromSpecController = async (
   try {
     const username = requireUsername(req);
     const parsed = createDashboardFromSpecRequestSchema.parse(req.body);
-    const dashboard = await createDashboardFromSpec(username, parsed.spec);
+
+    // Wave-FA6 · If the spec was authored client-side without an explicit
+    // `capturedActiveFilter` but the parent session has an active filter,
+    // capture the session's current spec for provenance. The chart data
+    // inside the spec is already filtered at the time the spec was built;
+    // this just records *which* filter produced the snapshot.
+    let specToPersist = parsed.spec;
+    if (!specToPersist.capturedActiveFilter && parsed.sessionId) {
+      try {
+        const { getChatBySessionIdForUser } = await import(
+          "../models/chat.model.js"
+        );
+        const chatDoc = await getChatBySessionIdForUser(
+          parsed.sessionId,
+          username
+        );
+        if (chatDoc?.activeFilter && chatDoc.activeFilter.conditions.length > 0) {
+          specToPersist = {
+            ...specToPersist,
+            capturedActiveFilter: chatDoc.activeFilter,
+          };
+        }
+      } catch (e) {
+        console.warn(
+          "⚠️ from-spec: failed to capture session active filter",
+          e
+        );
+      }
+    }
+
+    const dashboard = await createDashboardFromSpec(
+      username,
+      specToPersist,
+      parsed.sessionId
+    );
     // Phase 2.E · Best-effort remember the dashboard so future agent
     // turns can call patch_dashboard without the user restating the id.
     if (parsed.sessionId) {

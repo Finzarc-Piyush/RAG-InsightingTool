@@ -11,13 +11,31 @@ import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import type { SpawnedQuestion } from "./investigationTree.js";
 import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 
-export const AGENT_TRACE_MAX_BYTES = 48_000;
+// WTL1 · trace / workbench caps are now env-overridable so prod can dial
+// them down without a redeploy. Defaults bumped (48k → 96k for trace, 48k →
+// 80k for workbench, 24k → 40k for per-block code) to give the persisted
+// step-by-step debugging surface more room for richer findings. Cosmos
+// document soft cap is 1 MB; total here + message metadata stays <300 KB.
+const _envInt = (key: string, fallback: number): number => {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
 
-/** Total JSON size budget for persisted message.agentWorkbench (aligned with trace cap). */
-export const AGENT_WORKBENCH_MAX_BYTES = 48_000;
+export const AGENT_TRACE_MAX_BYTES = _envInt("AGENT_TRACE_MAX_BYTES", 96_000);
+
+/** Total JSON size budget for persisted message.agentWorkbench. */
+export const AGENT_WORKBENCH_MAX_BYTES = _envInt(
+  "AGENT_WORKBENCH_MAX_BYTES",
+  80_000
+);
 
 /** Max characters per workbench block code field. */
-export const AGENT_WORKBENCH_ENTRY_CODE_MAX = 24_000;
+export const AGENT_WORKBENCH_ENTRY_CODE_MAX = _envInt(
+  "AGENT_WORKBENCH_ENTRY_CODE_MAX",
+  40_000
+);
 
 /** Payload for throttled Cosmos merges during runAgentTurn (tool + plan milestones). */
 export type AgentMidTurnSessionPayload = {
@@ -103,10 +121,13 @@ export function loadAgentConfigFromEnv(): AgentConfig {
     // Default of 2 preserves prior hardcoded behaviour (P-020).
     maxReplansPerStep: num(process.env.AGENT_MAX_REPLANS_PER_STEP, 2),
     maxTotalLlmCallsPerTurn: num(process.env.AGENT_MAX_LLM_CALLS, 100),
-    sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 200),
-    // W4 · 20_000 → 24_000. Claude Opus 4.7 has plenty of context headroom;
-    // earlier truncations dropped late-arriving tool observations from synthesis.
-    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 24_000),
+    // WTL1 · 200 → 500. FMCG dimensions routinely have 100s of values;
+    // 200 was over-aggressive on observation sampling.
+    sampleRowsCap: num(process.env.AGENT_SAMPLE_ROWS_CAP, 500),
+    // WTL1 · W4 bumped 20k → 24k; we now go 24k → 40k. Claude Opus 4.7
+    // has plenty of context headroom and richer growth tables / RAG
+    // hits / investigation digests were getting clipped at 24k.
+    observationMaxChars: num(process.env.AGENT_OBSERVATION_MAX_CHARS, 40_000),
   };
 }
 
@@ -186,6 +207,14 @@ export interface AgentExecutionContext {
   onMidTurnSessionContext?: (payload: AgentMidTurnSessionPayload) => Promise<void>;
   /** Set when analytical tools replace ctx.data; used for chart validation and enrichment fallbacks. */
   lastAnalyticalTable?: LastAnalyticalTable;
+  /**
+   * W-PivotState · pivot/chart UI state of the most recent assistant message.
+   * Captured at turn start from `chatHistory` so the planner and synthesizer
+   * can see what view the user is currently looking at — useful for follow-up
+   * questions like "now break it down by category" where the prior pivot's
+   * rows/values define the implicit baseline.
+   */
+  lastAssistantPivotState?: Message["pivotState"];
   /** Shared evidence store for all agents in this turn / investigation node. */
   blackboard?: AnalyticalBlackboard;
   /** Emit a preliminary table to the chat stream (segmented thinking UX). */
@@ -194,7 +223,21 @@ export interface AgentExecutionContext {
     insight?: string;
     /** Matches preview column ids (temporal facets, Sales_sum, etc.) for initial Rows/Values. */
     pivotDefaults?: Message["pivotDefaults"];
+    /**
+     * Last analytical tool emitted a single-row aggregate with no row dimensions.
+     * Receivers must suppress the pivot/chart instead of falling back to schema
+     * heuristics (which fabricate Postal-Code-by-week-style nonsense).
+     */
+    executionScalar?: boolean;
   }) => void;
+  /**
+   * Aborted when the SSE client disconnects (req.on("close")). The agent loop
+   * checks `signal.aborted` between major steps (synthesis, visual planner,
+   * narrator, repair) and exits early to avoid burning LLM budget after the
+   * user has hung up. Pass-through; tools and LLM calls may also forward this
+   * signal to cancel in-flight network requests.
+   */
+  abortSignal?: AbortSignal;
 }
 
 export interface PlanStep {
@@ -207,6 +250,13 @@ export interface PlanStep {
   parallelGroup?: string;
   /** O2: ID of the hypothesis (from INVESTIGATION_HYPOTHESES) this step primarily tests. */
   hypothesisId?: string;
+  /**
+   * Populated by `coalesceQueryPlanSteps` when this step absorbed siblings with
+   * the same query shape (groupBy/filters/sort/limit) but different aggregations.
+   * The agent loop resolves all listed hypotheses when the merged step succeeds.
+   * `hypothesisId` is preserved as the primary; this list always includes it.
+   */
+  hypothesisIds?: string[];
 }
 
 export interface ToolCallRecord {
@@ -350,4 +400,12 @@ export interface AgentLoopResult {
    * Findings / Open-questions card above the step-by-step panel.
    */
   investigationSummary?: import("../../../shared/schema.js").InvestigationSummary;
+  /**
+   * Wave A1/A2 · full in-memory turn state (workingMemory, reflector + verifier
+   * verdicts, full blackboard snapshot, per-step tool I/O). Persisted onto the
+   * assistant message so a follow-up turn's `priorTurnState` handle (Wave B9)
+   * can read prior structured state instead of TEXT digests, and so crash
+   * recovery / debugging can replay the turn losslessly.
+   */
+  agentInternals?: import("../../../shared/schema.js").AgentInternals;
 }

@@ -12,7 +12,15 @@ interface AuthContextType {
   logout: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// HMR-resilient singleton — see DashboardContext.tsx for rationale.
+const AUTH_CONTEXT_KEY = "__MARICO_AUTH_CONTEXT_V1__";
+const AuthContext: React.Context<AuthContextType | undefined> =
+  ((globalThis as Record<string, unknown>)[AUTH_CONTEXT_KEY] as
+    | React.Context<AuthContextType | undefined>
+    | undefined) ??
+  ((globalThis as Record<string, unknown>)[AUTH_CONTEXT_KEY] = createContext<
+    AuthContextType | undefined
+  >(undefined)) as React.Context<AuthContextType | undefined>;
 
 export const useAuth = () => {
   const context = useContext(AuthContext);

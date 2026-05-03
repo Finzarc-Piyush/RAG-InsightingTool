@@ -763,6 +763,20 @@ export const datasetProfileSchema = z.object({
   idColumns: z.array(z.string()).optional(),
   grainGuess: z.string().optional(),
   notes: z.string().optional(),
+  /** WF8: Disambiguate currency for columns whose symbol is ambiguous
+   * (e.g. "$" → USD/CAD/AUD/SGD/HKD, "kr" → SEK/DKK/NOK, "¥" →
+   * JPY/CNY). The LLM picks the ISO code from market values, brand
+   * names, and dataset description. uploadQueue applies these
+   * overrides to dataSummary.columns[i].currency.isoCode. Optional —
+   * empty when no ambiguous symbols exist. */
+  currencyOverrides: z
+    .array(
+      z.object({
+        columnName: z.string(),
+        isoCode: z.string().min(3).max(3),
+      })
+    )
+    .optional(),
 });
 
 export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
@@ -773,6 +787,22 @@ export const sessionAnalysisColumnRoleSchema = z.object({
   role: z.string().max(200),
   notes: z.string().max(500).optional(),
 });
+
+/**
+ * Declared dimension hierarchy: a value in `column` that is a category total
+ * which rolls up the other values in the same column. When present, the agent
+ * auto-excludes `rollupValue` from peer-comparison aggregations on `column`,
+ * and frames it in narrative as a category, not a competing item.
+ */
+export const dimensionHierarchySchema = z.object({
+  column: z.string().min(1).max(200),
+  rollupValue: z.string().min(1).max(200),
+  itemValues: z.array(z.string().min(1).max(200)).max(200).optional(),
+  source: z.enum(["user", "auto"]).default("user"),
+  description: z.string().max(500).optional(),
+});
+
+export type DimensionHierarchy = z.infer<typeof dimensionHierarchySchema>;
 
 export const sessionAnalysisFactSchema = z.object({
   statement: z.string().max(1000),
@@ -799,6 +829,16 @@ export const sessionAnalysisContextSchema = z.object({
     grainGuess: z.string().max(500).optional(),
     columnRoles: z.array(sessionAnalysisColumnRoleSchema).max(80),
     caveats: z.array(z.string().max(500)).max(20),
+    /** Manager-facing scope bullets ("4 years · 2015–2018", "4 regions · 17 categories",
+     *  "$2.3M total sales"). Rendered on the welcome card in place of the technical
+     *  "Columns at a glance" breakdown. Optional for back-compat with pre-existing
+     *  Cosmos docs; the renderer falls back to deterministic facts from `DataSummary`. */
+    keyHighlights: z.array(z.string().max(240)).max(6).optional(),
+    /** Manager-facing themes ("Compare regional sales performance",
+     *  "Track shipping efficiency by mode"). Replaces the "Data caveats" section
+     *  on the welcome card. Optional with the same back-compat / fallback logic. */
+    whatYouCanAnalyze: z.array(z.string().max(240)).max(6).optional(),
+    dimensionHierarchies: z.array(dimensionHierarchySchema).max(20).optional(),
   }),
   userIntent: z.object({
     verbatimNotes: z.string().max(8000).optional(),
@@ -853,6 +893,233 @@ export const pivotDefaultsSchema = z.object({
   filterSelections: z.record(z.array(z.string())).optional(),
 });
 
+/**
+ * RNK2 · metadata stamped on a message when the agent answered a ranking /
+ * leaderboard / entity-max question. Drives the "Full leaderboard available
+ * below" hint in AnswerCard and helps the client know when to scroll the
+ * pivot view into focus. The full ranked rows ride on `pivotDefaults` →
+ * the existing `DataPreviewTable` pivot UI; this just labels the message.
+ */
+export const rankingMetaSchema = z.object({
+  /** Question shape that triggered the ranking pipeline. */
+  intentKind: z.enum(["topN", "extremum", "entityList"]),
+  /** Sort direction the planner used (desc for "top/highest", asc for "bottom/lowest"). */
+  direction: z.enum(["desc", "asc"]),
+  /** Entity column the leaderboard is grouped by. */
+  entityColumn: z.string().max(200),
+  /** Metric column being ranked (omitted for entityList). */
+  metricColumn: z.string().max(200).optional(),
+  /** Total number of ranked entities returned (pre-truncation). */
+  totalEntities: z.number().int().nonnegative(),
+  /** Set when the persisted pivot was capped below totalEntities for size safety. */
+  truncationNote: z.string().max(200).optional(),
+});
+
+export type RankingMeta = z.infer<typeof rankingMetaSchema>;
+
+/**
+ * W-PivotState — full per-message pivot + chart UI state, persisted so the
+ * user's view (rows / columns / values / filters / view tab / chart axes) is
+ * restored exactly on session reopen and is available to the agent on
+ * follow-up turns. Distinct from `pivotDefaults`: defaults are the agent's
+ * server-side seed; pivotState is the user's live-edited state.
+ *
+ * Optional and back-compat — legacy messages without it fall back to
+ * `pivotDefaults`-driven hydration (and ultimately to empty defaults).
+ */
+export const pivotStateSchema = z.object({
+  schemaVersion: z.literal(1),
+  config: z.object({
+    rows: z.array(z.string().max(200)).max(20),
+    columns: z.array(z.string().max(200)).max(20),
+    values: z
+      .array(
+        z.object({
+          id: z.string().max(120),
+          field: z.string().max(200),
+          agg: z.enum(['sum', 'mean', 'count', 'min', 'max']),
+        })
+      )
+      .max(20),
+    filters: z.array(z.string().max(200)).max(20),
+    unused: z.array(z.string().max(200)).max(200),
+    rowSort: z
+      .object({
+        byValueSpecId: z.string().max(120).optional(),
+        direction: z.enum(['asc', 'desc']),
+        primary: z.enum(['measure', 'rowLabel']).optional(),
+      })
+      .optional(),
+  }),
+  filterSelections: z.record(z.array(z.string().max(500)).max(2000)).optional(),
+  analysisView: z.enum(['chart', 'pivot', 'flat']).optional(),
+  chart: z
+    .object({
+      type: z.enum(['bar', 'line', 'area', 'scatter', 'pie', 'heatmap']),
+      xCol: z.string().max(200),
+      yCol: z.string().max(200),
+      zCol: z.string().max(200).optional(),
+      seriesCol: z.string().max(200),
+      barLayout: z.enum(['stacked', 'grouped']),
+    })
+    .optional(),
+  pinned: z.boolean().optional(),
+  customName: z.string().max(120).optional(),
+});
+
+export type PivotState = z.infer<typeof pivotStateSchema>;
+
+/**
+ * Wave A1 · `agentInternals` — full in-memory turn state that previously
+ * survived only as digests. Lets the next turn's planner / verifier / reflector
+ * reason against typed prior state instead of summarised prose, and lets crash
+ * recovery / debugging replay the turn without losing structure.
+ *
+ * Every field is optional + per-field byte-capped at zod-validation time so a
+ * single richly-instrumented turn cannot blow the Cosmos 2 MB doc limit. When
+ * the budget is exceeded, the agent loop trims FIFO-from-oldest before save.
+ */
+export const agentInternalsSchema = z.object({
+  schemaVersion: z.literal(1),
+  /** Last N inter-step working-memory entries, each tool call's mnemonic state. */
+  workingMemory: z
+    .array(
+      z.object({
+        callId: z.string().max(120),
+        tool: z.string().max(120),
+        ok: z.boolean(),
+        summaryPreview: z.string().max(800),
+        suggestedColumns: z.array(z.string().max(200)).max(40).optional(),
+        slots: z.record(z.unknown()).optional(),
+      })
+    )
+    .max(60)
+    .optional(),
+  /** Structured per-step reflector decisions (was: only `reflectorNotes` string). */
+  reflectorVerdicts: z
+    .array(
+      z.object({
+        stepIndex: z.number().int().min(0),
+        action: z.enum([
+          "continue",
+          "finish",
+          "replan",
+          "clarify",
+          "investigate_gap",
+        ]),
+        rationale: z.string().max(2000),
+        suggestedQuestions: z.array(z.string().max(400)).max(8).optional(),
+        gapFill: z
+          .object({
+            hypothesisId: z.string().max(120).optional(),
+            tool: z.string().max(120),
+            rationale: z.string().max(1000).optional(),
+          })
+          .optional(),
+      })
+    )
+    .max(40)
+    .optional(),
+  /** Structured per-step + final verifier verdicts. */
+  verifierVerdicts: z
+    .array(
+      z.object({
+        stepIndex: z.number().int().min(-1), // -1 = final
+        verdict: z.string().max(60),
+        rationale: z.string().max(2000),
+        evidence: z.string().max(4000).optional(),
+      })
+    )
+    .max(40)
+    .optional(),
+  /** Snapshot of the analytical blackboard at turn end (full, not just digest). */
+  blackboardSnapshot: z
+    .object({
+      hypotheses: z
+        .array(
+          z.object({
+            id: z.string().max(120),
+            text: z.string().max(600),
+            status: z.enum([
+              "open",
+              "confirmed",
+              "refuted",
+              "partial",
+              "inconclusive",
+            ]),
+            evidenceFindingIds: z.array(z.string().max(120)).max(20).optional(),
+            parentId: z.string().max(120).optional(),
+            alternatives: z.array(z.string().max(120)).max(8).optional(),
+          })
+        )
+        .max(40)
+        .optional(),
+      findings: z
+        .array(
+          z.object({
+            id: z.string().max(120),
+            sourceRef: z.string().max(200),
+            label: z.string().max(400),
+            detail: z.string().max(2000),
+            significance: z.enum(["anomalous", "notable", "routine"]),
+            relatedColumns: z.array(z.string().max(200)).max(20).optional(),
+            hypothesisId: z.string().max(120).optional(),
+            confidence: z.enum(["low", "medium", "high"]).optional(),
+          })
+        )
+        .max(60)
+        .optional(),
+      openQuestions: z
+        .array(
+          z.object({
+            id: z.string().max(120),
+            text: z.string().max(600),
+            spawnedFromStepId: z.string().max(120).optional(),
+            priority: z.enum(["low", "medium", "high"]).optional(),
+          })
+        )
+        .max(20)
+        .optional(),
+      domainContext: z
+        .array(
+          z.object({
+            id: z.string().max(120),
+            text: z.string().max(2000),
+            sourceRound: z.enum(["rag_round1", "rag_round2", "web", "injected"]),
+          })
+        )
+        .max(20)
+        .optional(),
+    })
+    .optional(),
+  /** Per-step tool I/O — full structured result up to ~8 KB per step. */
+  toolIO: z
+    .array(
+      z.object({
+        stepId: z.string().max(120),
+        tool: z.string().max(120),
+        ok: z.boolean(),
+        argsJson: z.string().max(4000),
+        resultSummary: z.string().max(2000),
+        resultPayload: z.string().max(8000).optional(), // JSON-stringified table/numericPayload
+        analyticalMeta: z
+          .object({
+            inputRowCount: z.number().int().nonnegative().optional(),
+            outputRowCount: z.number().int().nonnegative().optional(),
+            appliedAggregation: z.boolean().optional(),
+          })
+          .optional(),
+        durationMs: z.number().int().nonnegative().optional(),
+      })
+    )
+    .max(60)
+    .optional(),
+  /** Coarse byte budget actually used; surfaced for size-monitoring telemetry. */
+  budgetBytes: z.number().int().nonnegative().optional(),
+});
+
+export type AgentInternals = z.infer<typeof agentInternalsSchema>;
+
 export const messageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -860,6 +1127,15 @@ export const messageSchema = z.object({
   insights: z.array(insightSchema).optional(),
   /** LLM-suggested starter questions (initial upload message). */
   suggestedQuestions: z.array(z.string()).optional(),
+  /**
+   * Spawned sub-questions from the reflector with their stable ids. Distinct
+   * from `suggestedQuestions` (text-only): these carry an id so per-question
+   * feedback (thumbs up/down) survives reload via `pastAnalysisFeedbackTargetSchema`.
+   */
+  spawnedQuestions: z
+    .array(z.object({ id: z.string(), question: z.string() }))
+    .max(16)
+    .optional(),
   /** Agent synthesis CTAs; rendered as clickable follow-up chips (max 3). */
   followUpPrompts: z.array(z.string()).max(3).optional(),
   /** Phase-1: 2–4 numeric magnitudes that back the main claim. */
@@ -885,22 +1161,28 @@ export const messageSchema = z.object({
    * synthesizer fallback path emits none. Caveats and findings are arrays so
    * their order matters; renderers must preserve it.
    */
+  // WTL3 · envelope `.max()` constraints loosened across the board.
+  // Lengthening is forward-compatible (existing shorter outputs validate
+  // trivially); shortening would break, so we only go up. Direct response
+  // to the user request to "give a higher limit for all text outputs the
+  // app gives to the user". The W17/W22/W35 deterministic gates still
+  // enforce *presence* — only the upper-bound character / item caps move.
   answerEnvelope: z
     .object({
-      tldr: z.string().max(280).optional(),
+      tldr: z.string().max(400).optional(),
       findings: z
         .array(
           z.object({
-            headline: z.string().max(200),
-            evidence: z.string().max(600),
-            magnitude: z.string().max(80).optional(),
+            headline: z.string().max(280),
+            evidence: z.string().max(1200),
+            magnitude: z.string().max(120).optional(),
           })
         )
-        .max(5)
+        .max(7)
         .optional(),
-      methodology: z.string().max(500).optional(),
-      caveats: z.array(z.string().max(200)).max(3).optional(),
-      nextSteps: z.array(z.string().max(200)).max(3).optional(),
+      methodology: z.string().max(1400).optional(),
+      caveats: z.array(z.string().max(280)).max(5).optional(),
+      nextSteps: z.array(z.string().max(280)).max(5).optional(),
       /**
        * W8 · "So what" reading of each headline finding. Each entry pairs the
        * observed `statement` with its business-meaning `soWhat`, framed using
@@ -910,12 +1192,12 @@ export const messageSchema = z.object({
       implications: z
         .array(
           z.object({
-            statement: z.string().max(280),
-            soWhat: z.string().max(280),
+            statement: z.string().max(400),
+            soWhat: z.string().max(400),
             confidence: z.enum(["low", "medium", "high"]).optional(),
           })
         )
-        .max(4)
+        .max(6)
         .optional(),
       /**
        * W8 · concrete recommended actions, grouped by horizon. Rendered as a
@@ -924,19 +1206,19 @@ export const messageSchema = z.object({
       recommendations: z
         .array(
           z.object({
-            action: z.string().max(200),
-            rationale: z.string().max(280),
+            action: z.string().max(280),
+            rationale: z.string().max(400),
             horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
           })
         )
-        .max(4)
+        .max(6)
         .optional(),
       /**
        * W8 · one-paragraph framing of the findings against FMCG/Marico domain
        * priors. Cite the pack id (e.g. `marico-haircare-portfolio`). Rendered
        * as an italic preamble pill above the body.
        */
-      domainLens: z.string().max(500).optional(),
+      domainLens: z.string().max(900).optional(),
     })
     .optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview; not yet persisted to Cosmos). */
@@ -964,6 +1246,14 @@ export const messageSchema = z.object({
   intermediateInsight: z.string().optional(),
   /** Query-derived default pivot fields for auto-shown analysis tables. */
   pivotDefaults: pivotDefaultsSchema.optional(),
+  /**
+   * RNK2 · set when the message is the answer to a ranking / leaderboard
+   * / entity-max question. Used by the client to render a "Full leaderboard
+   * available below" hint above findings (the pivot itself comes from
+   * `pivotDefaults` which the existing DataPreviewTable already auto-renders).
+   * Optional + back-compat — legacy messages render unchanged.
+   */
+  rankingMeta: rankingMetaSchema.optional(),
   /**
    * W13 · compact digest of the analytical blackboard for this turn —
    * hypotheses tested with status, headline findings, unresolved open
@@ -1000,6 +1290,21 @@ export const messageSchema = z.object({
     )
     .max(12)
     .optional(),
+  /**
+   * W-PivotState — per-message pivot + chart view state. Captured client-side
+   * via debounced PATCH whenever the user mutates the pivot panel; restored on
+   * reopen. Also surfaced (latest assistant message only) into agent context
+   * so follow-up turns know what view the user is on.
+   */
+  pivotState: pivotStateSchema.optional(),
+  /**
+   * Wave A1 · full in-memory turn state. Previously only digests survived;
+   * now the working memory, reflector + verifier verdicts, full blackboard
+   * snapshot, and per-step tool I/O are persisted. The next turn's
+   * `priorTurnState` handle (Wave B9) reads this field to give planner /
+   * reflector / verifier typed access to prior state.
+   */
+  agentInternals: agentInternalsSchema.optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;
@@ -1020,6 +1325,42 @@ export const temporalFacetColumnMetaSchema = z.object({
   sourceColumn: z.string(),
   grain: temporalFacetGrainSchema,
 });
+
+// Per-column currency tag, populated by detectCurrencyInValues at
+// upload time. Optional — non-currency numeric columns and all
+// string/date columns leave this unset. See WF2.
+export const columnCurrencySchema = z.object({
+  /** Raw symbol seen in cells (e.g. "đ", "R$", "kr"). */
+  symbol: z.string(),
+  /** ISO 4217 code (e.g. "VND", "BRL", "SEK"). */
+  isoCode: z.string(),
+  /** Where the symbol sat relative to the digits. */
+  position: z.enum(["prefix", "suffix"]),
+  /** 0..1 — votes-agreement ratio across sample values. */
+  confidence: z.number(),
+});
+
+export type ColumnCurrency = z.infer<typeof columnCurrencySchema>;
+
+// Wide-format transform metadata, populated by meltDataset when an
+// uploaded dataset is detected as wide and reshaped to long. See WF4.
+export const wideFormatTransformSchema = z.object({
+  detected: z.literal(true),
+  shape: z.enum(["pure_period", "compound", "pivot_metric_row"]),
+  idColumns: z.array(z.string()),
+  /** Original wide-format column headers that were melted away. */
+  meltedColumns: z.array(z.string()),
+  periodCount: z.number(),
+  periodColumn: z.string(),
+  periodIsoColumn: z.string(),
+  periodKindColumn: z.string(),
+  valueColumn: z.string(),
+  metricColumn: z.string().optional(),
+  /** Dominant currency symbol seen across melted values, if any. */
+  detectedCurrencySymbol: z.string().nullable().optional(),
+});
+
+export type WideFormatTransform = z.infer<typeof wideFormatTransformSchema>;
 
 // Data Summary
 export const dataSummarySchema = z.object({
@@ -1042,11 +1383,17 @@ export const dataSummarySchema = z.object({
     /** Set when this column is a derived __tf_* bucket from a source date column. */
     temporalFacetGrain: temporalFacetGrainSchema.optional(),
     temporalFacetSource: z.string().optional(),
+    /** Currency tag for numeric columns whose cells carried a currency
+     * symbol at parse time (e.g. "đ", "$", "R$"). See WF2/WF5. */
+    currency: columnCurrencySchema.optional(),
   })),
   numericColumns: z.array(z.string()),
   dateColumns: z.array(z.string()),
   /** Hidden __tf_* columns derived from dateColumns for coarse time group-bys */
   temporalFacetColumns: z.array(temporalFacetColumnMetaSchema).optional(),
+  /** Set when the upload pipeline detected a wide-format input and
+   * melted it to long form. See WF3/WF4/WF7. */
+  wideFormatTransform: wideFormatTransformSchema.optional(),
 });
 
 export type DataSummary = z.infer<typeof dataSummarySchema>;
@@ -1432,10 +1779,32 @@ export const dashboardNarrativeBlockSchema = z.object({
 
 export type DashboardNarrativeBlock = z.infer<typeof dashboardNarrativeBlockSchema>;
 
+/**
+ * A pivot tile on a dashboard sheet. Lifted from the per-message
+ * `pivotStateSchema` so a frozen pivot snapshot (rows/columns/values/filters
+ * + view tab + chart axes) can live alongside chart tiles. Data is fetched
+ * client-side via the existing pivot query endpoint scoped to
+ * `sourceSessionId`.
+ */
+export const dashboardPivotSpecSchema = z.object({
+  id: z.string().min(1).max(120),
+  title: z.string().min(1).max(200),
+  pivotConfig: pivotStateSchema.shape.config,
+  filterSelections: pivotStateSchema.shape.filterSelections,
+  analysisView: pivotStateSchema.shape.analysisView,
+  chart: pivotStateSchema.shape.chart,
+  sourceSessionId: z.string().max(200).optional(),
+  sourceMessageId: z.string().max(200).optional(),
+  createdAt: z.number().optional(),
+});
+
+export type DashboardPivotSpec = z.infer<typeof dashboardPivotSpecSchema>;
+
 export const dashboardSheetSchema = z.object({
   id: z.string(),
   name: z.string().min(1),
   charts: z.array(chartSpecSchema),
+  pivots: z.array(dashboardPivotSpecSchema).max(12).optional(),
   tables: z.array(dashboardTableSpecSchema).optional(),
   narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
   /** react-grid-layout `layouts` keyed by breakpoint (lg, md, sm, xs, xxs). */
@@ -1450,6 +1819,104 @@ export const dashboardCollaboratorSchema = z.object({
   permission: z.enum(["view", "edit"]), // Permission level
 });
 
+/**
+ * Slim AnswerEnvelope persisted alongside the dashboard so the export
+ * pipeline (cover slide, exec summary, recommendations, methodology) can
+ * render rich content without re-running the agent. Mirrors the subset
+ * of `narratorOutputSchema` that downstream surfaces actually consume.
+ */
+export const dashboardAnswerEnvelopeSchema = z.object({
+  tldr: z.string().max(280).optional(),
+  findings: z
+    .array(
+      z.object({
+        headline: z.string().max(200),
+        evidence: z.string().max(600),
+        magnitude: z.string().max(80).optional(),
+      })
+    )
+    .max(5)
+    .optional(),
+  implications: z
+    .array(
+      z.object({
+        statement: z.string().max(280),
+        soWhat: z.string().max(280),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  recommendations: z
+    .array(
+      z.object({
+        action: z.string().max(200),
+        rationale: z.string().max(280),
+        horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
+      })
+    )
+    .max(4)
+    .optional(),
+  methodology: z.string().max(500).optional(),
+  caveats: z.array(z.string().max(200)).max(3).optional(),
+  domainLens: z.string().max(500).optional(),
+  magnitudes: z
+    .array(
+      z.object({
+        label: z.string().max(120),
+        value: z.string().max(120),
+        confidence: z.enum(["low", "medium", "high"]).optional(),
+      })
+    )
+    .max(8)
+    .optional(),
+});
+
+export type DashboardAnswerEnvelope = z.infer<typeof dashboardAnswerEnvelopeSchema>;
+
+/**
+ * Wave-FA1 · Active filter spec.
+ *
+ * Per-session, non-destructive overlay applied at row-load and DuckDB query
+ * time. The canonical dataset (currentDataBlob / rawData / blobInfo) is never
+ * mutated by filter changes — see `server/lib/activeFilter/`.
+ *
+ * Conditions across columns are AND. Within an `in` condition, values are OR.
+ * `range` requires a numeric column (min/max optional individually). `dateRange`
+ * uses ISO strings and supports either bound being absent.
+ *
+ * Defined here (above `dashboardSchema`) so the dashboard can reference it
+ * for filter-provenance metadata; `ChatDocument.activeFilter` consumes it too.
+ */
+export const activeFilterConditionSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("in"),
+    column: z.string().min(1).max(200),
+    values: z.array(z.string()).max(5000),
+  }),
+  z.object({
+    kind: z.literal("range"),
+    column: z.string().min(1).max(200),
+    min: z.number().optional(),
+    max: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal("dateRange"),
+    column: z.string().min(1).max(200),
+    from: z.string().optional(),
+    to: z.string().optional(),
+  }),
+]);
+export type ActiveFilterCondition = z.infer<typeof activeFilterConditionSchema>;
+
+export const activeFilterSpecSchema = z.object({
+  conditions: z.array(activeFilterConditionSchema).max(50),
+  /** Bumped on every change; used as a cache-key component. */
+  version: z.number().int().nonnegative(),
+  updatedAt: z.number(),
+});
+export type ActiveFilterSpec = z.infer<typeof activeFilterSpecSchema>;
+
 export const dashboardSchema = z.object({
   id: z.string(),
   username: z.string(),
@@ -1460,6 +1927,19 @@ export const dashboardSchema = z.object({
   charts: z.array(chartSpecSchema), // Keep for backward compatibility
   sheets: z.array(dashboardSheetSchema).optional(), // New: multiple sheets
   collaborators: z.array(dashboardCollaboratorSchema).optional(), // Users with access and their permissions
+  /** W4 · slim envelope captured at dashboard-creation time so the export
+   *  pipeline can render exec summary / methodology / recommendations
+   *  without re-running the agent. */
+  answerEnvelope: dashboardAnswerEnvelopeSchema.optional(),
+  /**
+   * Wave-FA6 · Snapshot of the session's `activeFilter` at dashboard-creation
+   * time. The chart data inside the dashboard is already filtered (charts are
+   * captured as snapshots, not refreshed live), so this field is purely
+   * provenance metadata: the dashboard view renders a banner explaining what
+   * slice of the dataset the dashboard was built from. Absent on dashboards
+   * created without an active filter.
+   */
+  capturedActiveFilter: activeFilterSpecSchema.optional(),
 });
 
 export type Dashboard = z.infer<typeof dashboardSchema>;
@@ -1489,6 +1969,16 @@ export const addTableToDashboardRequestSchema = z.object({
 });
 
 export const removeTableFromDashboardRequestSchema = z.object({
+  index: z.number().min(0),
+  sheetId: z.string().optional(),
+});
+
+export const addPivotToDashboardRequestSchema = z.object({
+  pivot: dashboardPivotSpecSchema,
+  sheetId: z.string().optional(),
+});
+
+export const removePivotFromDashboardRequestSchema = z.object({
   index: z.number().min(0),
   sheetId: z.string().optional(),
 });
@@ -1536,6 +2026,7 @@ export const dashboardSheetSpecSchema = z.object({
   name: z.string().min(1).max(200),
   narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
   charts: z.array(chartSpecSchema).max(24).optional(),
+  pivots: z.array(dashboardPivotSpecSchema).max(12).optional(),
   tables: z.array(dashboardTableSpecSchema).max(8).optional(),
   gridLayout: dashboardGridLayoutsSchema.optional(),
   order: z.number().optional(),
@@ -1548,8 +2039,19 @@ export const dashboardSpecSchema = z.object({
   template: dashboardTemplateSchema,
   sheets: z.array(dashboardSheetSpecSchema).min(1).max(6),
   defaultSheetId: z.string().max(120).optional(),
-  /** Original user question — preserved for the "Original question" narrative block. */
+  /** Original user question — kept on the spec for provenance and exports. */
   question: z.string().max(4000).optional(),
+  /** Slim envelope of structured findings/recommendations/methodology to
+   *  render in the export's cover, exec summary, and methodology slides. */
+  answerEnvelope: dashboardAnswerEnvelopeSchema.optional(),
+  /**
+   * Wave-FA6 · Snapshot of the session's `activeFilter` at the moment the
+   * spec was authored. Persists to `dashboard.capturedActiveFilter` so the
+   * dashboard view can render a provenance banner ("Captured under filter:
+   * Region ∈ {North}"). Chart data is already filtered at capture time —
+   * this is metadata, not a re-applied predicate.
+   */
+  capturedActiveFilter: activeFilterSpecSchema.optional(),
 });
 
 export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
@@ -1783,6 +2285,31 @@ export const pastAnalysisFeedbackReasonSchema = z.enum([
 ]);
 export type PastAnalysisFeedbackReason = z.infer<typeof pastAnalysisFeedbackReasonSchema>;
 
+/**
+ * Granular feedback target. Lets a single turn carry sentiment for distinct
+ * surfaces: the main answer, a spawned sub-question, and the pivot view.
+ *
+ * - `type: "answer"` → `id: "answer"` (one per turn).
+ * - `type: "pivot"`  → `id: "pivot"` (one pivot per message).
+ * - `type: "subanswer"` → `id` is the spawned-question's stable id (UUID
+ *   generated at reflector spawn time).
+ */
+export const pastAnalysisFeedbackTargetSchema = z.object({
+  type: z.enum(["answer", "subanswer", "pivot"]),
+  id: z.string().min(1).max(64),
+});
+export type PastAnalysisFeedbackTarget = z.infer<typeof pastAnalysisFeedbackTargetSchema>;
+
+export const pastAnalysisFeedbackDetailSchema = z.object({
+  target: pastAnalysisFeedbackTargetSchema,
+  feedback: pastAnalysisFeedbackSchema,
+  reasons: z.array(pastAnalysisFeedbackReasonSchema).max(7).default([]),
+  comment: z.string().max(500).nullable().default(null),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+});
+export type PastAnalysisFeedbackDetail = z.infer<typeof pastAnalysisFeedbackDetailSchema>;
+
 export const pastAnalysisDocSchema = z.object({
   /** `${sessionId}__${turnId}` — deterministic, no random suffix so a replay overwrites. */
   id: z.string(),
@@ -1819,8 +2346,79 @@ export const pastAnalysisDocSchema = z.object({
   feedbackReasons: z.array(pastAnalysisFeedbackReasonSchema).max(7).default([]),
   /** Optional free-text the user typed when picking "other". Capped to keep doc light. */
   feedbackComment: z.string().max(500).optional(),
+  /**
+   * Granular feedback per (target.type, target.id). The "answer" target is
+   * mirrored onto the top-level `feedback`/`feedbackReasons`/`feedbackComment`
+   * fields above so the AI Search index merge keeps surfacing answer-level
+   * sentiment without changes.
+   */
+  feedbackDetails: z.array(pastAnalysisFeedbackDetailSchema).max(64).default([]),
   /** ms epoch. */
   createdAt: z.number(),
 });
 export type PastAnalysisDoc = z.infer<typeof pastAnalysisDocSchema>;
+
+/**
+ * W56 · Analysis Memory — append-only per-session journal of every analytical
+ * event (questions, hypotheses, findings, charts, computed columns, filters,
+ * dashboards, data-ops, user notes, conclusions). Lives in its own Cosmos
+ * container partitioned by `/sessionId` and is mirrored into the per-session
+ * Azure AI Search index for semantic recall (W57). The chat doc remains the
+ * live state; this is the immutable projection that powers the user-visible
+ * Memory page (W62) and the agent's semantic recall block (W60).
+ *
+ * Idempotency: `id = ${sessionId}__${turnId ?? 'lifecycle'}__${type}__${sequence}`.
+ * Producers should upsert (not create) so retries / replays do not double-write.
+ */
+export const analysisMemoryEntryTypeSchema = z.enum([
+  "analysis_created",
+  "enrichment_complete",
+  "question_asked",
+  "hypothesis",
+  "finding",
+  "chart_created",
+  "computed_column_added",
+  "filter_applied",
+  "data_op",
+  "dashboard_drafted",
+  "dashboard_promoted",
+  // W65 · A subsequent edit to an already-promoted dashboard via the
+  // `patch_dashboard` agent tool (add / remove charts, rename sheet).
+  "dashboard_patched",
+  "user_note",
+  "conclusion",
+]);
+export type AnalysisMemoryEntryType = z.infer<typeof analysisMemoryEntryTypeSchema>;
+
+export const analysisMemoryActorSchema = z.enum(["user", "agent", "system"]);
+export type AnalysisMemoryActor = z.infer<typeof analysisMemoryActorSchema>;
+
+export const analysisMemoryEntrySchema = z.object({
+  id: z.string().min(1).max(400),
+  sessionId: z.string().min(1).max(200),
+  username: z.string().min(1).max(320),
+  createdAt: z.number(),
+  turnId: z.string().max(120).optional(),
+  sequence: z.number().int().nonnegative(),
+  type: analysisMemoryEntryTypeSchema,
+  actor: analysisMemoryActorSchema,
+  title: z.string().min(1).max(200),
+  summary: z.string().max(1500),
+  body: z.record(z.unknown()).optional(),
+  refs: z
+    .object({
+      messageTimestamp: z.number().optional(),
+      dashboardId: z.string().max(200).optional(),
+      chartId: z.string().max(200).optional(),
+      dataVersion: z.number().int().nonnegative().optional(),
+      blobName: z.string().max(400).optional(),
+    })
+    .optional(),
+  dataVersion: z.number().int().nonnegative().optional(),
+  significance: z.enum(["anomalous", "notable", "routine"]).optional(),
+});
+export type AnalysisMemoryEntry = z.infer<typeof analysisMemoryEntrySchema>;
+
+// Wave-FA1 · Active filter spec moved to before `dashboardSchema` so the
+// dashboard can reference it. See definitions earlier in this file.
 

@@ -23,13 +23,18 @@ const REGION_OBSERVATION =
   ']';
 
 describe("renderFallbackAnswer (Wave W3)", () => {
-  it("renders the latest Sample[] block as a markdown table", () => {
+  it("renders the latest Sample[] block as a markdown table with K/M/B compact numbers (G3-P3)", () => {
     const out = renderFallbackAnswer([REGION_OBSERVATION]);
     assert.ok(out.tableMarkdown, "expected a table to be rendered");
     assert.match(out.tableMarkdown!, /\| Region \| Total_Sales \|/);
     assert.match(out.tableMarkdown!, /\| --- \| --- \|/);
-    assert.match(out.tableMarkdown!, /\| West \| 710,212\.40 \|/);
-    assert.match(out.tableMarkdown!, /\| South \| 389,151\.46 \|/);
+    // G3-P3 — numbers ≥ 1000 are now rendered compactly (710K) instead of
+    // raw decimals (710,212.40). Readers are managers / CXOs.
+    assert.match(out.tableMarkdown!, /\| West \| 710K \|/);
+    assert.match(out.tableMarkdown!, /\| South \| 389K \|/);
+    // The legacy raw-decimal format must be gone.
+    assert.doesNotMatch(out.tableMarkdown!, /710,212\.40/);
+    assert.doesNotMatch(out.tableMarkdown!, /389,151\.46/);
   });
 
   it("never emits the literal 'Summary from tool output:' prefix", () => {
@@ -120,12 +125,15 @@ describe("renderFallbackAnswer (Wave W3)", () => {
     );
   });
 
-  it("formats integers with comma grouping and floats with two decimals", () => {
+  it("renders large numbers compactly (K/M/B) for non-statistician readers (G3-P3)", () => {
     const obs =
       '[execute_query_plan] Sales\nSample: [{"Region":"X","RowCount":1000000,"Avg":1234.567}]';
     const out = renderFallbackAnswer([obs]);
     assert.ok(out.tableMarkdown);
-    assert.match(out.tableMarkdown!, /\| X \| 1,000,000 \| 1,234\.57 \|/);
+    // G3-P3 — values ≥ 1000 render as K/M/B (1M, 1.23K) instead of raw decimal
+    // strings (1,000,000 and 1,234.57). Smaller numbers (< 1000) keep their
+    // precision so percentages, ratios, and counts are readable.
+    assert.match(out.tableMarkdown!, /\| X \| 1M \| 1\.23K \|/);
   });
 
   it("escapes pipes in cell values so they do not break the table", () => {

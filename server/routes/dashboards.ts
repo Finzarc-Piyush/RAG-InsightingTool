@@ -2,6 +2,8 @@ import { Router } from "express";
 import {
   addChartToDashboardController,
   addTableToDashboardController,
+  addPivotToDashboardController,
+  removePivotFromDashboardController,
   addSheetToDashboardController,
   createDashboardController,
   createDashboardFromSpecController,
@@ -44,6 +46,10 @@ router.patch('/dashboards/:dashboardId/charts/:chartIndex', updateChartInsightOr
 router.post('/dashboards/:dashboardId/tables', addTableToDashboardController);
 router.delete('/dashboards/:dashboardId/tables', removeTableFromDashboardController);
 router.patch('/dashboards/:dashboardId/tables/:tableIndex', updateTableCaptionController);
+
+// Pivots in a dashboard
+router.post('/dashboards/:dashboardId/pivots', addPivotToDashboardController);
+router.delete('/dashboards/:dashboardId/pivots', removePivotFromDashboardController);
 
 // Sheets in a dashboard
 router.post('/dashboards/:dashboardId/sheets', addSheetToDashboardController);

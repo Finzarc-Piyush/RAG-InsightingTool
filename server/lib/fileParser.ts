@@ -18,6 +18,10 @@ import {
   isTemporalFacetColumnKey,
   temporalFacetMetadataForDateColumns,
 } from './temporalFacetColumns.js';
+import {
+  stripCurrencyAndParse,
+  isoForSymbol,
+} from './wideFormat/currencyVocabulary.js';
 
 export type CsvParseDiagnostics = {
   totalRows: number;
@@ -33,6 +37,69 @@ export function getAndClearLastCsvParseDiagnostics(): CsvParseDiagnostics | unde
   const out = lastCsvParseDiagnostics;
   lastCsvParseDiagnostics = undefined;
   return out;
+}
+
+/** Per-column currency tally captured during the parseFile coercion
+ * pass. Strings are coerced to numbers via stripCurrencyAndParse, so
+ * by the time createDataSummary runs the symbol is gone — we record
+ * it here as a side-channel. Reset at the start of each parseFile
+ * call. Read by createDataSummary. */
+type CurrencyTally = {
+  bySymbol: Map<string, { symbol: string; iso: string; position: 'prefix' | 'suffix'; count: number }>;
+  total: number;
+};
+const currencyTallyByColumn: Map<string, CurrencyTally> = new Map();
+
+function resetCurrencyTally(): void {
+  currencyTallyByColumn.clear();
+}
+
+function recordCurrencySymbol(
+  column: string,
+  symbol: string,
+  position: 'prefix' | 'suffix'
+): void {
+  let tally = currencyTallyByColumn.get(column);
+  if (!tally) {
+    tally = { bySymbol: new Map(), total: 0 };
+    currencyTallyByColumn.set(column, tally);
+  }
+  tally.total++;
+  const key = `${symbol}|${position}`;
+  const entry = tally.bySymbol.get(key);
+  if (entry) {
+    entry.count++;
+  } else {
+    // Lazy import: isoForSymbol is in the wideFormat module already.
+    // We resolve the iso later in finaliseCurrencyForColumn.
+    tally.bySymbol.set(key, { symbol, iso: '', position, count: 1 });
+  }
+}
+
+/** Finalise a per-column tally into a `currency` annotation.
+ * Exported so callers (e.g. uploadQueue's wide-format melt) can
+ * propagate the dominant currency from soon-to-be-melted source
+ * columns onto the new long-format `Value` column. */
+export function finaliseCurrencyForColumn(column: string):
+  | { symbol: string; isoCode: string; position: 'prefix' | 'suffix'; confidence: number }
+  | undefined {
+  const tally = currencyTallyByColumn.get(column);
+  if (!tally || tally.total === 0) return undefined;
+  let best: { symbol: string; iso: string; position: 'prefix' | 'suffix'; count: number } | null = null;
+  for (const e of tally.bySymbol.values()) {
+    if (!best || e.count > best.count) best = e;
+  }
+  if (!best) return undefined;
+  const ratio = best.count / tally.total;
+  if (ratio < 0.8) return undefined;
+  const iso = isoForSymbol(best.symbol);
+  if (!iso) return undefined;
+  return {
+    symbol: best.symbol,
+    isoCode: iso,
+    position: best.position,
+    confidence: ratio,
+  };
 }
 
 /** Warn when preview sample Row IDs collapse — often misclassified date canonicalization. */
@@ -73,6 +140,7 @@ export async function parseFile(
   opts: ParseFileOptions = {}
 ): Promise<Record<string, any>[]> {
   lastCsvParseDiagnostics = undefined;
+  resetCurrencyTally();
   const ext = filename.split('.').pop()?.toLowerCase();
 
   if (ext === 'csv') {
@@ -164,14 +232,19 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
             continue;
           }
           
-          // Try to convert string numbers
-          const cleaned = trimmed.replace(/[%,$€£¥₹\s]/g, '').trim();
-          const num = Number(cleaned);
-          // Only convert if it's a valid number and the cleaned string is not empty
-          if (cleaned !== '' && !isNaN(num) && isFinite(num)) {
-            processedRow[key] = num;
+          // Try to convert string numbers — currency-aware: strips
+          // leading/trailing currency symbols (đ, $, €, £, ¥, ₹, R$,
+          // S$, HK$, RM, Rp, kr, …) before parsing. The symbol is
+          // tallied via `recordCurrencySymbol` and finalised onto
+          // `ColumnInfo.currency` by `createDataSummary`.
+          const parsed = stripCurrencyAndParse(trimmed);
+          if (parsed !== null) {
+            processedRow[key] = parsed.num;
+            if (parsed.symbol && parsed.position) {
+              recordCurrencySymbol(key, parsed.symbol, parsed.position);
+            }
           } else {
-            processedRow[key] = trimmed; // Keep as string if not numeric
+            processedRow[key] = trimmed;
           }
         } else if (typeof value === 'number') {
           // If already a number, keep it
@@ -233,14 +306,16 @@ function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string,
           continue;
         }
         
-        // Try to convert string numbers
-        const cleaned = trimmed.replace(/[%,$€£¥₹\s]/g, '').trim();
-        const num = Number(cleaned);
-        // Only convert if it's a valid number and the cleaned string is not empty
-        if (cleaned !== '' && !isNaN(num) && isFinite(num)) {
-          processedRow[key] = num;
+        // Currency-aware string→number coercion (mirror of the CSV
+        // path above — see comment there).
+        const parsed = stripCurrencyAndParse(trimmed);
+        if (parsed !== null) {
+          processedRow[key] = parsed.num;
+          if (parsed.symbol && parsed.position) {
+            recordCurrencySymbol(key, parsed.symbol, parsed.position);
+          }
         } else {
-          processedRow[key] = trimmed; // Keep as string if not numeric
+          processedRow[key] = trimmed;
         }
       } else if (typeof value === 'number') {
         // If already a number, keep it
@@ -545,22 +620,10 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
         // If it looks like a date, don't treat as numeric
         if (hasMonthName || hasDateSeparators) return false;
         
-        // Strip common formatting: %, commas, spaces, currency symbols, em-dash, en-dash
-        const cleaned = str.replace(/[%,$€£¥₹\s\u2013\u2014\u2015]/g, '').trim();
-        
-        // Skip if empty after cleaning
-        if (cleaned === '') return false;
-        
-        // Check if it's a valid number (including scientific notation and negative numbers)
-        const num = Number(cleaned);
-        if (isNaN(num) || !isFinite(num)) return false;
-        
-        // Additional validation: if cleaned string is just digits (with optional decimal point and minus),
-        // it's definitely numeric
-        if (/^-?\d+\.?\d*$/.test(cleaned)) return true;
-        
-        // For other formats, if Number() successfully parsed it, accept it
-        return cleaned !== '';
+        // Currency-aware numeric check: covers đ (VND), R$, S$, HK$,
+        // RM, Rp, kr, ₩, ₪, ₺, ฿ etc. in addition to the legacy
+        // $/€/£/¥/₹ set. Returns null when the value is non-numeric.
+        return stripCurrencyAndParse(str) !== null;
       }).length;
     }
     
@@ -582,7 +645,13 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       }
     }
 
-    if (isNumeric && !isIdentifierLikeNumericColumn(col, nonNullValues)) {
+    // Currency-tagged columns (those whose source strings carried a
+    // currency symbol at parse time) are always real measures, never
+    // identifier-like — bypass the high-cardinality / fixed-width
+    // heuristic that would otherwise misclassify a column of unique
+    // large currency amounts (e.g. 24 unique đX,XXX,XXX,XXX values).
+    const hasCurrencyTally = currencyTallyByColumn.has(col);
+    if (isNumeric && (hasCurrencyTally || !isIdentifierLikeNumericColumn(col, nonNullValues))) {
       type = 'number';
       numericColumns.push(col);
     } else if (isDate) {
@@ -617,12 +686,22 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     const topValues =
       type === 'string' ? computeTopStringValues(data, col, 12_000, 48, 24) : undefined;
 
+    // Currency tag — finalised from the per-column tally captured
+    // during parseFile coercion. By the time createDataSummary runs
+    // numeric values are already coerced, so the tally side-channel
+    // is the only source of the original symbol. Non-numeric columns
+    // and uploads with no symbol-bearing strings produce undefined.
+    const currency = type === 'number'
+      ? finaliseCurrencyForColumn(col)
+      : undefined;
+
     return {
       name: col,
       type,
       sampleValues,
       ...(topValues?.length ? { topValues } : {}),
       ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
+      ...(currency ? { currency } : {}),
     };
   });
 

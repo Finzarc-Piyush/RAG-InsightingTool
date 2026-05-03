@@ -9,6 +9,7 @@ import {
   Insight,
   DatasetProfile,
   SessionAnalysisContext,
+  ActiveFilterSpec,
 } from "../shared/schema.js";
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
@@ -138,6 +139,31 @@ export interface ChatDocument {
    * the user re-stating the id.
    */
   lastCreatedDashboardId?: string;
+  /**
+   * Wave A4 · running turn checkpoint. Updated debounced (~3 s) during the
+   * agent turn so a process crash mid-turn leaves a partial state in Cosmos
+   * the client can render as "your last turn was interrupted; here's what we
+   * had". Cleared at turn end (success path or fatal error). Optional + back-
+   * compat — the absence of the field on a chat doc means no in-flight turn.
+   */
+  currentTurnCheckpoint?: {
+    sessionId: string;
+    question: string;
+    startedAt: number;
+    lastUpdatedAt: number;
+    /** AgentInternals snapshot at the latest persisted step boundary. */
+    agentInternals?: import("../shared/schema.js").AgentInternals;
+    /** Number of plan steps completed when this snapshot was written. */
+    stepsCompleted?: number;
+  };
+  /**
+   * Wave-FA1 · Excel-style active filter overlay. Non-destructive — the
+   * canonical `currentDataBlob` / `rawData` / `blobInfo` are never altered
+   * by filter changes. Applied at `loadLatestData` and DuckDB query time.
+   * Absent or `conditions: []` means "no active filter" (analysis sees the
+   * canonical rows). See `server/lib/activeFilter/` for the implementation.
+   */
+  activeFilter?: ActiveFilterSpec;
 }
 
 /** Lightweight row for session list APIs (avoids loading messages/charts/rawData from Cosmos). */
@@ -455,6 +481,24 @@ export const createPlaceholderSession = async (
     invalidateSessionDoc(sessionId);
     invalidateSessionList(normalizedUsername);
     console.log(`✅ Created placeholder session: ${chatId} for sessionId: ${sessionId}`);
+    // W59 · record `analysis_created` in the durable Memory journal.
+    void (async () => {
+      try {
+        const { buildAnalysisCreatedEntry, scheduleLifecycleMemory } =
+          await import("../lib/agents/runtime/memoryLifecycleBuilders.js");
+        scheduleLifecycleMemory(
+          buildAnalysisCreatedEntry({
+            sessionId,
+            username: normalizedUsername,
+            fileName: uniqueFileName,
+            fileSize,
+            createdAt: timestamp,
+          })
+        );
+      } catch (e) {
+        console.warn("⚠️ analysisMemory analysis_created hook failed:", e);
+      }
+    })();
     return resource as ChatDocument;
   } catch (error: any) {
     console.error("❌ Failed to create placeholder session:", error);
@@ -543,6 +587,36 @@ export const getChatDocument = async (
   }
 };
 
+// Cosmos's per-document hard limit is 2 MB. Warn well before, error before
+// the cliff so the failing turn doesn't disappear silently.
+const COSMOS_DOC_SIZE_WARN_BYTES = 1_600_000;
+const COSMOS_DOC_SIZE_ERROR_BYTES = 1_900_000;
+
+export class CosmosDocSizeError extends Error {
+  readonly bytes: number;
+  readonly sessionId: string;
+  constructor(bytes: number, sessionId: string) {
+    super(
+      `Chat document for session ${sessionId} is ${bytes} bytes — too large to persist (Cosmos 2 MB limit). Start a new session or remove older messages.`,
+    );
+    this.name = "CosmosDocSizeError";
+    this.bytes = bytes;
+    this.sessionId = sessionId;
+  }
+}
+
+function assertDocSizeUnderLimit(chatDocument: ChatDocument): void {
+  const bytes = Buffer.byteLength(JSON.stringify(chatDocument), "utf8");
+  if (bytes >= COSMOS_DOC_SIZE_ERROR_BYTES) {
+    throw new CosmosDocSizeError(bytes, chatDocument.sessionId);
+  }
+  if (bytes >= COSMOS_DOC_SIZE_WARN_BYTES) {
+    console.warn(
+      `⚠️ chat doc size ${bytes} bytes (session ${chatDocument.sessionId}, messages=${chatDocument.messages?.length ?? 0}) — approaching Cosmos 2 MB limit`,
+    );
+  }
+}
+
 /**
  * Update chat document
  */
@@ -554,6 +628,7 @@ export const updateChatDocument = async (chatDocument: ChatDocument): Promise<Ch
     ensureCollaborators(chatDocument);
 
     chatDocument.lastUpdatedAt = Date.now();
+    assertDocSizeUnderLimit(chatDocument);
     const { resource } = await containerInstance.items.upsert(chatDocument);
     const result = resource as unknown as ChatDocument;
     // Repopulate cache with the freshly-written doc so reads immediately after a write hit the cache.
@@ -1004,6 +1079,19 @@ export const getChatBySessionIdForUser = async (
   return chatDocument;
 };
 
+/**
+ * Superadmin shadow-viewer fetch — bypasses the collaborator check that
+ * `getChatBySessionIdForUser` enforces. Caller MUST verify
+ * `isSuperadminEmail(email)` before invoking this. Read-only by convention:
+ * the only superadmin code path is GETs, so the bypass cannot widen the
+ * write surface.
+ */
+export const getChatBySessionIdForSuperadmin = async (
+  sessionId: string
+): Promise<ChatDocument | null> => {
+  return await getChatBySessionIdEfficient(sessionId);
+};
+
 /** Queue a user message while enrichment is incomplete (single slot; latest wins). */
 export const setPendingUserMessageForSession = async (
   sessionId: string,
@@ -1201,6 +1289,26 @@ export const updateSessionPermanentContext = async (
 
     const updated = await updateChatDocument(freshDoc);
     console.log(`✅ Updated session permanent context: ${sessionId}`);
+
+    // W59 · record the user_note in the Memory journal so resume-after-days
+    // shows the note as part of the analysis timeline.
+    if (incoming.length > 0) {
+      void (async () => {
+        try {
+          const { buildUserNoteEntry, scheduleLifecycleMemory } =
+            await import("../lib/agents/runtime/memoryLifecycleBuilders.js");
+          const entry = buildUserNoteEntry({
+            sessionId,
+            username: normalizedUsername,
+            noteText: incoming,
+            createdAt: Date.now(),
+          });
+          if (entry) scheduleLifecycleMemory(entry);
+        } catch (e) {
+          console.warn("⚠️ analysisMemory user_note hook failed:", e);
+        }
+      })();
+    }
 
     // W2/W3: index the user context into RAG (fire-and-forget).
     if (combined.length > 0) {

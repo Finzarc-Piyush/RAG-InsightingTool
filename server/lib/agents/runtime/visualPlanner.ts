@@ -29,13 +29,13 @@ const chartProposalSchema = z.object({
 });
 
 const visualPlannerOutputSchema = z.object({
-  addCharts: z.array(chartProposalSchema).max(2),
+  addCharts: z.array(chartProposalSchema).max(8),
   narrativeNote: z.string().optional(),
 });
 
 export type VisualPlannerOutput = z.infer<typeof visualPlannerOutputSchema>;
 
-const SYSTEM = `You are a visualization advisor. Given the user question, column list, analytical snippet, and (when present) the final answer draft, propose at most 2 charts that support that answer.
+const SYSTEM = `You are a visualization advisor. Given the user question, column list, analytical snippet, and (when present) the final answer draft, propose at most \`maxCharts\` charts (see input) that support that answer. When \`maxCharts\` is 3, the user has explicitly asked for a dashboard — span complementary angles (e.g. trend, segmentation, drivers/outliers) rather than three views of the same metric.
 
 Rules:
 - Use ONLY exact column names from AVAILABLE_COLUMNS and/or ANALYTICAL_RESULT_COLUMNS when the latter is present.
@@ -55,10 +55,18 @@ export async function proposeAndBuildExtraCharts(
   existingCharts: ChartSpec[],
   synthesizedAnswerPreview?: string
 ): Promise<{ charts: ChartSpec[]; note?: string }> {
-  const maxExtra = Math.max(
-    0,
-    Math.min(2, parseInt(process.env.AGENT_MAX_EXTRA_CHARTS_PER_TURN || "2", 10) || 2)
-  );
+  // When the user explicitly asked for a dashboard, allow up to 8 extra
+  // charts so the dashboard can reach exhaustive coverage across the brief's
+  // segmentationDimensions ∪ candidateDriverDimensions. The downstream
+  // deterministic feature sweep fills any further gaps. For plain analytical
+  // answers keep the original 2-chart cap to control latency.
+  const dashboardMode = ctx.analysisBrief?.requestsDashboard === true;
+  const ceiling = dashboardMode ? 8 : 2;
+  const envCap = parseInt(
+    process.env.AGENT_MAX_EXTRA_CHARTS_PER_TURN || String(ceiling),
+    10
+  ) || ceiling;
+  const maxExtra = Math.max(0, Math.min(ceiling, envCap));
   if (maxExtra === 0 || ctx.mode !== "analysis") {
     return { charts: [] };
   }

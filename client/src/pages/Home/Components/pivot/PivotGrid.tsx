@@ -110,9 +110,7 @@ export function PivotGrid({
   }
 
   const shellClass =
-    layout === 'expanded'
-      ? 'overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full border border-border/80 rounded-lg bg-card/60 shadow-inner'
-      : 'overflow-x-auto max-h-[500px] overflow-y-auto border border-border/80 rounded-lg bg-card/60 shadow-inner';
+    'overflow-x-auto overflow-y-auto flex-1 min-h-0 max-h-full border border-border/80 rounded-lg bg-card/60 shadow-inner';
 
   return (
     <div className={shellClass}>
@@ -123,13 +121,13 @@ export function PivotGrid({
         </p>
       )}
       <table className="w-max min-w-full border-collapse text-sm">
-        <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur-sm">
+        <thead className="sticky top-0 z-20 bg-muted/60 backdrop-blur-sm">
           {hasMatrix ? (
             <>
               <tr className="border-b border-border">
                 <th
                   rowSpan={valueSpecs.length > 1 ? 2 : 1}
-                  className="px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap align-bottom min-w-[10rem]"
+                  className="sticky left-0 z-30 bg-muted/60 px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap align-bottom min-w-[10rem]"
                 >
                   <div className="flex items-center gap-2 flex-wrap">
                     <span>Row labels</span>
@@ -231,7 +229,7 @@ export function PivotGrid({
             </>
           ) : (
             <tr className="border-b border-border">
-              <th className="px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap min-w-[10rem]">
+              <th className="sticky left-0 z-30 bg-muted/60 px-3 py-2.5 text-left font-semibold text-foreground whitespace-nowrap min-w-[10rem]">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span>Row labels</span>
                   {sliceFilter?.rowField ? (
@@ -302,7 +300,11 @@ export function PivotGrid({
               >
                 <td
                   className={cn(
-                    'px-3 py-2 text-foreground align-middle',
+                    'sticky left-0 z-10 px-3 py-2 text-foreground align-middle',
+                    row.kind === 'grand' && 'bg-muted',
+                    row.kind === 'subtotal' && 'bg-muted',
+                    row.kind === 'collapsed' && 'bg-muted',
+                    (row.kind === 'data' || row.kind === 'header') && 'bg-card',
                     isStrong && 'font-semibold text-foreground'
                   )}
                   style={{ paddingLeft: pad }}

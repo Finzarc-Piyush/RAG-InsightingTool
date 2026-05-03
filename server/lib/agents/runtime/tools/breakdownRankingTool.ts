@@ -19,9 +19,22 @@ export const breakdownRankingArgsSchema = z
     breakdownColumn: z.string(),
     dimensionFilters: z.array(dimensionFilterSchema).max(12).optional(),
     aggregation: z.enum(["sum", "mean", "count"]).default("sum"),
-    topN: z.number().int().min(2).max(50).default(20),
+    /**
+     * RNK1 · the prior `max(50)` silently truncated "top 300 salespeople"
+     * questions. The cap is now lifted; safety against runaway prose comes
+     * from the observation slimmer below (only top-K=10 rows are stringified
+     * into the narrator's observation context — the full table rides on
+     * `ToolResult.table` and bypasses the 40k/20k char observation caps).
+     */
+    topN: z.number().int().min(1).default(20),
+    direction: z.enum(["desc", "asc"]).default("desc"),
   })
   .strict();
+
+/** RNK1 · Number of rows surfaced in the textual observation summary that
+ *  the narrator and replans see. The full table is always returned on
+ *  `ToolResult.table`; this only caps the JSON snippet inside `summary`. */
+const OBSERVATION_TOP_K = 10;
 
 type BreakdownArgs = z.infer<typeof breakdownRankingArgsSchema>;
 
@@ -81,8 +94,15 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           summary: `Invalid args for run_breakdown_ranking: ${parsed.error.message}`,
         };
       }
-      const { metricColumn, breakdownColumn, dimensionFilters, aggregation, topN } =
-        parsed.data;
+      const {
+        metricColumn,
+        breakdownColumn,
+        dimensionFilters,
+        aggregation,
+        topN,
+        direction,
+      } = parsed.data;
+      const sortDirection = direction;
       const allow = new Set(ctx.exec.summary.columns.map((c) => c.name));
       if (!allow.has(metricColumn) || !allow.has(breakdownColumn)) {
         return {
@@ -124,20 +144,32 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           _rowCount: nRows,
         });
       }
+      const aggKey = `${metricColumn}_${aggregation}`;
+      const sortMul = sortDirection === "asc" ? 1 : -1;
       rowsOut.sort(
         (a, b) =>
-          Number(b[`${metricColumn}_${aggregation}`]) -
-          Number(a[`${metricColumn}_${aggregation}`])
+          (Number(a[aggKey]) - Number(b[aggKey])) * sortMul
       );
       const trimmed = rowsOut.slice(0, topN);
       const cols =
         trimmed.length > 0 ?
           Object.keys(trimmed[0] as Record<string, unknown>)
-        : [breakdownColumn, `${metricColumn}_${aggregation}`];
-      const sample = JSON.stringify(trimmed, null, 2);
+        : [breakdownColumn, aggKey];
+      // RNK1 · slim the narrator-facing observation to top-K rows even when
+      // the user asked for top 300 — the full table rides on ToolResult.table
+      // and powers the message-level pivotDefaults (RNK2). Without this, a
+      // 300-row JSON dump would blow the 40k/20k observation char caps and
+      // truncate other tool observations from the same turn.
+      const observationSlice = trimmed.slice(0, OBSERVATION_TOP_K);
+      const sample = JSON.stringify(observationSlice, null, 2);
+      const showingNote =
+        trimmed.length > OBSERVATION_TOP_K
+          ? ` (showing first ${OBSERVATION_TOP_K} of ${trimmed.length} ranked rows in this snippet; full table available downstream)`
+          : "";
+      const dirNote = sortDirection === "asc" ? " ascending" : "";
       return {
         ok: true,
-        summary: `run_breakdown_ranking: ${aggregation} of ${metricColumn} by ${breakdownColumn}, top ${topN} (n_input=${frame.length}${base.length > cap ? `, capped_from=${base.length}` : ""}).\n${sample.slice(0, 4500)}`,
+        summary: `run_breakdown_ranking: ${aggregation} of ${metricColumn} by ${breakdownColumn}, top ${topN}${dirNote} (n_input=${frame.length}${base.length > cap ? `, capped_from=${base.length}` : ""})${showingNote}.\n${sample.slice(0, 4500)}`,
         table: {
           rows: trimmed,
           columns: cols,
@@ -150,9 +182,9 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
     },
     {
       description:
-        "Deterministic segment breakdown: aggregate a numeric metric by a categorical column after optional dimensionFilters (uses row-level turn-start frame, capped). Use for 'top contributors', 'who drove the decline', mix analysis. Prefer after slicing the cohort.",
+        "Deterministic segment breakdown: aggregate a numeric metric by a categorical column after optional dimensionFilters (uses row-level turn-start frame, capped). Use for 'top contributors', 'top N salespeople', 'who has the highest/lowest X', 'who drove the decline', mix analysis. Prefer after slicing the cohort. topN is unbounded — use the literal N from the question (top 300 → topN: 300; who has the highest X → topN: 1). For ascending leaderboards (lowest, least, fewest) set direction: 'asc'.",
       argsHelp:
-        '{"metricColumn": string, "breakdownColumn": string, "dimensionFilters"?: [{"column","op":"in"|"not_in","values":[]}], "aggregation"?: "sum"|"mean"|"count", "topN"?: number}',
+        '{"metricColumn": string, "breakdownColumn": string, "dimensionFilters"?: [{"column","op":"in"|"not_in","values":[]}], "aggregation"?: "sum"|"mean"|"count", "topN"?: number, "direction"?: "desc"|"asc"}',
     }
   );
 }

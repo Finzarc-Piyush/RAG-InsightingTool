@@ -8,9 +8,13 @@ import { agentWorkbenchEntrySchema } from "../shared/schema.js";
  *
  * The agent loop emits `flow_decision` events with specific payload shapes for
  * reflector replan, per-step verifier rewriteNarrative, final verifier
- * rewriteNarrative, and coordinator decompose. This test pins the shapes that
- * actually flow through the SSE pipeline so a renaming or schema drift breaks
- * the test instead of silently dropping the entry on the client.
+ * rewriteNarrative, and coordinator decompose. W11-W13 changed the runtime to
+ * suppress these overrides under the single-flow policy: instead of mutating
+ * the plan or rewriting the narrative, the runtime emits a flow_decision with
+ * `chosen: "continue-as-planned"` or `chosen: "kept-original"` (no
+ * overriddenBy field). This test pins both the suppressed shapes (current
+ * runtime) and the legacy override shapes (still valid against the schema, in
+ * case the suppression is ever re-enabled or wired behind a flag).
  */
 
 function expectValidEntry(payload: Record<string, unknown>) {
@@ -24,41 +28,57 @@ function expectValidEntry(payload: Record<string, unknown>) {
 }
 
 describe("flow_decision runtime payloads (Wave W3)", () => {
-  it("reflector-replan payload validates and renders override title", () => {
+  it("reflector-replan suppressed payload (W11): chosen='continue-as-planned', no overriddenBy", () => {
     const e = expectValidEntry({
       layer: "reflector-replan",
-      chosen: "new-plan",
-      overriddenBy: "reflector",
-      reason: "schema_mismatch: column 'foo' not present",
+      chosen: "continue-as-planned",
+      reason:
+        "Replan suggested but suppressed (single-flow policy). Reflector note: schema_mismatch",
       candidates: ["s1:get_schema_summary", "s2:execute_query_plan"],
     });
-    assert.match(e.title, /^Override:/);
+    assert.match(e.title, /^Routed:/);
     assert.equal(e.flowDecision?.layer, "reflector-replan");
-    assert.equal(e.flowDecision?.overriddenBy, "reflector");
+    assert.equal(e.flowDecision?.chosen, "continue-as-planned");
+    assert.equal(e.flowDecision?.overriddenBy, undefined);
   });
 
-  it("verifier-rewrite-step payload validates and includes char delta", () => {
-    const reason = "Numeric mismatch: 50M vs 52M | 240→312 chars";
+  it("verifier-rewrite-step suppressed payload (W12): chosen='kept-original'", () => {
+    const reason = "Rewrite suppressed (single-flow policy); Numeric mismatch: 50M vs 52M";
     const e = expectValidEntry({
       layer: "verifier-rewrite-step",
-      chosen: "rewritten",
-      overriddenBy: "verifier",
+      chosen: "kept-original",
       reason,
       candidates: ["NUMERIC_MISMATCH"],
     });
-    assert.equal(e.flowDecision?.reason, reason);
+    assert.equal(e.flowDecision?.chosen, "kept-original");
+    assert.equal(e.flowDecision?.overriddenBy, undefined);
     assert.deepEqual(e.flowDecision?.candidates, ["NUMERIC_MISMATCH"]);
   });
 
-  it("verifier-rewrite-final payload validates", () => {
+  it("verifier-rewrite-final suppressed payload (W12): chosen='kept-original'", () => {
     const e = expectValidEntry({
+      layer: "verifier-rewrite-final",
+      chosen: "kept-original",
+      reason: "Rewrite suppressed (single-flow policy); Unsupported claim about Q1 revenue",
+      candidates: ["UNSUPPORTED_CLAIM", "NUMERIC_MISMATCH"],
+    });
+    assert.equal(e.flowDecision?.chosen, "kept-original");
+    assert.equal(e.flowDecision?.overriddenBy, undefined);
+  });
+
+  it("legacy override shapes still validate (kept for opt-in re-enabling)", () => {
+    expectValidEntry({
+      layer: "reflector-replan",
+      chosen: "new-plan",
+      overriddenBy: "reflector",
+      reason: "x",
+    });
+    expectValidEntry({
       layer: "verifier-rewrite-final",
       chosen: "rewritten",
       overriddenBy: "verifier",
-      reason: "Unsupported claim about Q1 revenue | 800→820 chars",
-      candidates: ["UNSUPPORTED_CLAIM", "NUMERIC_MISMATCH"],
+      reason: "y",
     });
-    assert.equal(e.flowDecision?.layer, "verifier-rewrite-final");
   });
 
   it("coordinator-decompose payload validates with N thread topics", () => {

@@ -3,11 +3,45 @@
  * Finds matching column names using fuzzy matching
  */
 
+import type { WideFormatTransform } from "../../../shared/schema.js";
+
+export interface FindMatchingColumnOptions {
+  /**
+   * WPF5 · When the dataset was melted from wide format at upload, the
+   * original wide column names (e.g. "Q1 23 Value Sales") no longer exist.
+   * If the agent or user mentions one of those names, our fuzzy matcher
+   * silently binds to a substring like `Value` or `Period` — silent
+   * corruption. When this option is set and the requested name matches an
+   * entry in `meltedColumns` (case-insensitive), we refuse the match and
+   * return null so the caller can emit a corrective error.
+   */
+  wideFormatTransform?: WideFormatTransform;
+}
+
 /**
  * Find matching column name (case-insensitive, handles spaces/underscores, partial matching)
  */
-export function findMatchingColumn(searchName: string, availableColumns: string[]): string | null {
+export function findMatchingColumn(
+  searchName: string,
+  availableColumns: string[],
+  options?: FindMatchingColumnOptions
+): string | null {
   if (!searchName) return null;
+
+  // WPF5 · Refuse matches against original wide-format columns that were
+  // melted away. Without this, fuzzy substring matching binds "Q1 23 Value
+  // Sales" → "Value" silently and runs the analysis on the wrong column.
+  const meltedColumns = options?.wideFormatTransform?.detected
+    ? options.wideFormatTransform.meltedColumns
+    : undefined;
+  if (meltedColumns && meltedColumns.length > 0) {
+    const searchLower = searchName.trim().toLowerCase();
+    for (const stale of meltedColumns) {
+      if (stale.trim().toLowerCase() === searchLower) {
+        return null;
+      }
+    }
+  }
   
   // Trim whitespace from search name
   const trimmedSearch = searchName.trim();

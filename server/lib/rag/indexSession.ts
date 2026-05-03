@@ -8,6 +8,25 @@ import {
   type RagSearchDocument,
 } from "./aiSearchStore.js";
 import { getSampleFromDuckDB } from "../duckdbPlanExecutor.js";
+import type { AnalysisMemoryEntry } from "../../shared/schema.js";
+
+/**
+ * W57 · Single chunkType used for every Memory Entry indexed into the
+ * per-session AI Search index. Distinct from data-chunk types
+ * ("data_sample", "column_metadata", "user_context", "suggested_question") so
+ * data-RAG callers can exclude memory entries with `excludeChunkTypes` and
+ * memory-recall callers (W60) can include only this type.
+ */
+export const MEMORY_ENTRY_CHUNK_TYPE = "memory_entry";
+
+function memoryEntryChunkId(entry: AnalysisMemoryEntry): string {
+  const turn = entry.turnId ?? "lifecycle";
+  return `mem__${turn}__${entry.type}__${entry.sequence}`;
+}
+
+function memoryEntryEmbeddingText(entry: AnalysisMemoryEntry): string {
+  return `[${entry.type}] ${entry.title}\n${entry.summary}`.slice(0, 32000);
+}
 
 function dataVersion(doc: ChatDocument): number {
   return doc.currentDataBlob?.version ?? 1;
@@ -180,6 +199,59 @@ export function scheduleUpsertUserContextChunk(
   setImmediate(() => {
     upsertUserContextChunk(sessionId, permanentContext).catch((e) =>
       console.error("scheduleUpsertUserContextChunk:", e)
+    );
+  });
+}
+
+/**
+ * W57 · Embed and upsert a batch of Analysis Memory entries into the per-
+ * session AI Search index. Reuses the existing index (no schema change): each
+ * entry is one search document with `chunkType: "memory_entry"`. The original
+ * entry's structured data lives in Cosmos (W56); this is just the semantic
+ * retrieval mirror.
+ *
+ * Idempotent on `id` — replays overwrite cleanly. RAG-disabled environments
+ * no-op so the producer hooks (W58/W59) never fail because of missing creds.
+ */
+export async function indexMemoryEntries(
+  entries: AnalysisMemoryEntry[]
+): Promise<void> {
+  if (!isRagEnabled() || entries.length === 0) return;
+  const dim = getEmbeddingDimensions();
+  const texts = entries.map(memoryEntryEmbeddingText);
+  const vectors = await embedTexts(texts);
+
+  const docs: RagSearchDocument[] = entries.map((e, i) => {
+    let v = vectors[i];
+    if (!v || v.length !== dim) {
+      v = v?.length ? v : new Array(dim).fill(0);
+    }
+    const chunkId = memoryEntryChunkId(e);
+    return {
+      id: `${e.sessionId}__${chunkId}`.replace(/[^\w-]/g, "_"),
+      sessionId: e.sessionId,
+      chunkId,
+      chunkType: MEMORY_ENTRY_CHUNK_TYPE,
+      dataVersion: e.dataVersion ?? 0,
+      content: memoryEntryEmbeddingText(e),
+      contentVector: v,
+    };
+  });
+
+  await upsertRagDocuments(docs);
+}
+
+/**
+ * Fire-and-forget variant — never blocks the caller. Producer hooks (W58/W59)
+ * use this so a Search outage cannot fail a chat turn.
+ */
+export function scheduleIndexMemoryEntries(
+  entries: AnalysisMemoryEntry[]
+): void {
+  if (entries.length === 0) return;
+  setImmediate(() => {
+    indexMemoryEntries(entries).catch((e) =>
+      console.error("scheduleIndexMemoryEntries:", e)
     );
   });
 }

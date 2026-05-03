@@ -9,6 +9,8 @@ import { getFileFromBlob } from "../lib/blobStorage.js";
 import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";
 import { getDataForAnalysis } from "../lib/largeFileProcessor.js";
 import { applyTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
+import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
+import { applyWideFormatMeltIfNeeded } from "../lib/wideFormat/applyWideFormatMeltIfNeeded.js";
 
 /**
  * Normalize data by converting string numbers to actual numbers
@@ -135,6 +137,18 @@ export type LoadLatestDataMode = "default" | "authoritativeRematerialize";
 
 export type LoadLatestDataOptions = {
   mode?: LoadLatestDataMode;
+  /**
+   * Wave-FA2 · When true, skip the per-session active-filter overlay and
+   * return canonical rows. Used by:
+   *   - the DuckDB rematerialize path (we never want the canonical `data`
+   *     table to contain only filtered rows; the filter is a view on top),
+   *   - the filter UI's distinct-values endpoint,
+   *   - the `revert` data-op,
+   *   - admin tooling / RAG reindex.
+   * Defaults to false — virtually every analytical caller wants the filter
+   * applied so users see consistent slices across answers.
+   */
+  skipActiveFilter?: boolean;
 };
 
 /** Reject rematerializing a tiny preview when the session claims a large dataset (avoids wrong pivot). */
@@ -158,10 +172,16 @@ function assertAuthoritativeRowCoverage(
 function finishLoadedRows(
   rows: Record<string, any>[],
   chatDocument: ChatDocument,
-  mode: LoadLatestDataMode | undefined
+  mode: LoadLatestDataMode | undefined,
+  skipActiveFilter: boolean
 ): Record<string, any>[] {
   assertAuthoritativeRowCoverage(chatDocument, rows, mode);
-  return canonicalizeLoadedData(rows, chatDocument);
+  const canonical = canonicalizeLoadedData(rows, chatDocument);
+  // Active-filter overlay applied AFTER canonicalization so dateColumn ISO
+  // normalization and temporal facet keys are in place when the filter's
+  // dateRange / `__tf_*__` predicates run.
+  if (skipActiveFilter || !chatDocument.activeFilter) return canonical;
+  return applyActiveFilter(canonical, chatDocument.activeFilter);
 }
 
 /**
@@ -205,6 +225,7 @@ export async function loadLatestData(
   loadOptions?: LoadLatestDataOptions
 ): Promise<Record<string, any>[]> {
   const mode = loadOptions?.mode;
+  const skipActiveFilter = loadOptions?.skipActiveFilter === true;
   let fullData: Record<string, any>[] = [];
   
   console.log(`🔍 Loading latest data for session ${chatDocument.sessionId}`);
@@ -238,7 +259,7 @@ export async function loadLatestData(
         fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
         
         console.log(`✅ Loaded ${fullData.length} rows from ${relevantChunks.length} chunks`);
-        return finishLoadedRows(fullData, chatDocument, mode);
+        return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
       }
     } catch (error) {
       console.error('⚠️ Failed to load from chunked storage, trying other sources:', error);
@@ -263,7 +284,7 @@ export async function loadLatestData(
       fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
       
       console.log(`✅ Loaded ${fullData.length} rows from columnar storage`);
-      return finishLoadedRows(fullData, chatDocument, mode);
+      return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
     } catch (error) {
       console.error('⚠️ Failed to load from columnar storage, trying other sources:', error);
       // Fall through to other methods
@@ -296,14 +317,29 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return finishLoadedRows(fullData, chatDocument, mode);
+          return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
-        const parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
+        let parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
           sheetName: chatDocument.selectedSheetName,
         });
         if (parsedData && parsedData.length > 0) {
+          // WPF4 · Re-apply the wide-format melt that ran at upload time so
+          // analytical tools see long-form rows. Without this, parsing the
+          // original wide buffer here returns Q1-23-Value-Sales-style columns
+          // that don't match the post-melt dataSummary; tools silently run on
+          // the wrong shape.
+          const wfApplied = applyWideFormatMeltIfNeeded(
+            parsedData,
+            chatDocument.dataSummary
+          );
+          if (wfApplied.remelted) {
+            parsedData = wfApplied.rows as Record<string, any>[];
+            console.log(
+              `[dataLoader] re-applied wide-format melt on currentDataBlob re-parse path → ${parsedData.length} long rows`
+            );
+          }
           fullData = normalizeNumericColumns(parsedData);
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
@@ -317,7 +353,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return finishLoadedRows(fullData, chatDocument, mode);
+          return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       }
     } catch (error) {
@@ -341,7 +377,7 @@ export async function loadLatestData(
       console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
     }
     
-    return finishLoadedRows(fullData, chatDocument, mode);
+    return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
   }
   
   // If rawData is empty in document but we have blob storage, it means the dataset was too large
@@ -370,14 +406,29 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return finishLoadedRows(fullData, chatDocument, mode);
+          return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       } catch {
         // If not JSON, try parsing as CSV/Excel
-        const parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
+        let parsedData = await parseFile(blobBuffer, chatDocument.fileName, {
           sheetName: chatDocument.selectedSheetName,
         });
         if (parsedData && parsedData.length > 0) {
+          // WPF4 · Re-melt for the large-file path: wide files >10k rows have
+          // empty `rawData` and no `currentDataBlob`, so this is the typical
+          // hot path. Without re-melt every analytical tool sees Q1-23-Value-
+          // Sales-style columns and the post-melt summary's `Value` /
+          // `numericColumns: ["Value"]` no longer matches.
+          const wfApplied = applyWideFormatMeltIfNeeded(
+            parsedData,
+            chatDocument.dataSummary
+          );
+          if (wfApplied.remelted) {
+            parsedData = wfApplied.rows as Record<string, any>[];
+            console.log(
+              `[dataLoader] re-applied wide-format melt on original blob re-parse path → ${parsedData.length} long rows`
+            );
+          }
           fullData = normalizeNumericColumns(parsedData);
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
@@ -391,7 +442,7 @@ export async function loadLatestData(
             console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
-          return finishLoadedRows(fullData, chatDocument, mode);
+          return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       }
     } catch (error) {
@@ -408,7 +459,7 @@ export async function loadLatestData(
   ) {
     fullData = chatDocument.sampleRows;
     console.log(`⚠️ Using sampleRows as fallback: ${fullData.length} rows (limited data)`);
-    return finishLoadedRows(fullData, chatDocument, mode);
+    return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
   }
 
   if (mode === "authoritativeRematerialize") {

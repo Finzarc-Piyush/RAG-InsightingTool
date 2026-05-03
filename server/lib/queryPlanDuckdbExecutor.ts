@@ -8,6 +8,7 @@ import type { DataSummary } from "../shared/schema.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { isDuckDBAvailable } from "./columnarStorage.js";
 import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
+import { resolveSessionDataTable } from "./activeFilter/resolveSessionDataTable.js";
 import type { QueryPlanBody } from "./queryPlanExecutor.js";
 import { clearRedundantDateAggregationForTemporalFacets } from "./queryPlanExecutor.js";
 import { isIdColumn, getCountNameForIdColumn } from "./columnIdHeuristics.js";
@@ -142,12 +143,22 @@ export interface BuildQueryPlanDuckdbSqlResult {
   aggregateSql: string;
   countSql: string;
   descriptions: string[];
+  /** WPF3 · Columns the executor must strip from result rows after the query
+   *  runs (currently the hidden PeriodIso column added for chronological
+   *  ORDER BY when groupBy includes the wide-format Period column). */
+  hiddenColumns?: string[];
 }
 
 /** When set, facet columns in the plan use UI ids; DuckDB may still store legacy `__tf_*` names. */
 export interface DuckDbQueryPlanBuildContext {
   tableColumns: Set<string>;
   summary: DataSummary;
+  /**
+   * Wave-FA2 · Override the table name the SQL should target. Default `data`
+   * (canonical authoritative table). Pass `data_filtered` (resolved via
+   * `resolveSessionDataTable`) to apply the per-session active-filter overlay.
+   */
+  tableName?: string;
 }
 
 export function buildQueryPlanDuckdbSql(
@@ -175,6 +186,23 @@ export function buildQueryPlanDuckdbSql(
   const groupBy = p.groupBy ?? [];
   const selectParts: string[] = [];
   const groupParts: string[] = [];
+
+  // WPF3 · When the dataset was melted from wide format AND the planner
+  // grouped by the human-readable Period column, also add the canonical
+  // PeriodIso column so we can ORDER BY it (chronological order). The ISO
+  // column is stripped from result rows below so the planner / narrator /
+  // chart compiler don't see the duplicate.
+  const wf = ctx?.summary.wideFormatTransform;
+  const periodColumn = wf?.detected ? wf.periodColumn : undefined;
+  const periodIsoColumn = wf?.detected ? wf.periodIsoColumn : undefined;
+  const groupedByPeriod = !!(
+    periodColumn && periodIsoColumn && groupBy.includes(periodColumn)
+  );
+  const isoInTable = !!(
+    periodIsoColumn && ctx?.tableColumns.has(periodIsoColumn)
+  );
+  const shouldHideIsoFromResults =
+    groupedByPeriod && isoInTable && !groupBy.includes(periodIsoColumn!);
 
   for (const g of groupBy) {
     const qLog = quoteIdent(g);
@@ -213,20 +241,52 @@ export function buildQueryPlanDuckdbSql(
     selectParts.push(`${expr} AS ${quoteIdent(alias)}`);
   }
 
-  let sql = `SELECT ${selectParts.join(", ")} FROM ${DATA_TABLE} WHERE ${whereSql}`;
+  // WPF3 · Hidden ISO column: include in SELECT + GROUP BY so we can ORDER
+  // BY it chronologically. Stripped from result rows below.
+  if (shouldHideIsoFromResults && periodIsoColumn) {
+    const qIso = quoteIdent(periodIsoColumn);
+    selectParts.push(`${qIso} AS ${qIso}`);
+    groupParts.push(qIso);
+  }
+
+  const tableExpr = quoteIdent(ctx?.tableName ?? DATA_TABLE);
+  let sql = `SELECT ${selectParts.join(", ")} FROM ${tableExpr} WHERE ${whereSql}`;
   if (groupParts.length) {
     sql += ` GROUP BY ${groupParts.join(", ")}`;
   }
 
   const sortParts: string[] = [];
   const allowedSort = new Set<string>(groupBy);
+  if (shouldHideIsoFromResults && periodIsoColumn) {
+    allowedSort.add(periodIsoColumn);
+  }
   for (const agg of p.aggregations ?? []) {
     const alias = outputAliasForAgg(agg.column, agg.operation, agg.alias);
     allowedSort.add(alias);
   }
+  // WPF3 · Rewrite explicit Period sorts to PeriodIso so ordering is
+  // chronological ("Q1 23" < "Q2 23" < "Q1 24") instead of lexicographic.
+  const sortRemap = (col: string): string =>
+    shouldHideIsoFromResults && periodColumn && periodIsoColumn && col === periodColumn
+      ? periodIsoColumn
+      : col;
+  let explicitSortHandlesPeriod = false;
   for (const s of p.sort ?? []) {
     if (!allowedSort.has(s.column)) continue;
-    sortParts.push(`${quoteIdent(s.column)} ${s.direction.toUpperCase() === "DESC" ? "DESC" : "ASC"}`);
+    if (groupedByPeriod && periodColumn && s.column === periodColumn) {
+      explicitSortHandlesPeriod = true;
+    }
+    const remapped = sortRemap(s.column);
+    sortParts.push(`${quoteIdent(remapped)} ${s.direction.toUpperCase() === "DESC" ? "DESC" : "ASC"}`);
+  }
+  // WPF3 · Default chronological order for Period group-bys when the planner
+  // didn't supply an explicit sort referencing Period.
+  if (
+    shouldHideIsoFromResults &&
+    periodIsoColumn &&
+    !explicitSortHandlesPeriod
+  ) {
+    sortParts.push(`${quoteIdent(periodIsoColumn)} ASC`);
   }
   if (sortParts.length) {
     sql += ` ORDER BY ${sortParts.join(", ")}`;
@@ -235,7 +295,7 @@ export function buildQueryPlanDuckdbSql(
     sql += ` LIMIT ${Math.min(p.limit, 50_000)}`;
   }
 
-  const countSql = `SELECT COUNT(*)::BIGINT AS cnt FROM ${DATA_TABLE} WHERE ${whereSql}`;
+  const countSql = `SELECT COUNT(*)::BIGINT AS cnt FROM ${tableExpr} WHERE ${whereSql}`;
 
   const aggDesc =
     groupBy.length ?
@@ -246,6 +306,8 @@ export function buildQueryPlanDuckdbSql(
     aggregateSql: sql,
     countSql,
     descriptions: [...filterDesc, aggDesc],
+    hiddenColumns:
+      shouldHideIsoFromResults && periodIsoColumn ? [periodIsoColumn] : undefined,
   };
 }
 
@@ -280,7 +342,13 @@ export async function executeQueryPlanOnDuckDb(
     const tableColumns = new Set(
       descRows.map((r) => String((r as { column_name?: string }).column_name ?? ""))
     );
-    const built = buildQueryPlanDuckdbSql(plan, { tableColumns, summary });
+    // Wave-FA2 · Resolve to `data_filtered` view when the session has an
+    // active filter; canonical `data` otherwise. View is `CREATE OR REPLACE`d
+    // idempotently per filter version.
+    const tableName = chat
+      ? await resolveSessionDataTable(storage, chat)
+      : DATA_TABLE;
+    const built = buildQueryPlanDuckdbSql(plan, { tableColumns, summary, tableName });
     if (!built) {
       return { ok: false, error: "Plan not supported on DuckDB executor" };
     }
@@ -290,7 +358,20 @@ export async function executeQueryPlanOnDuckDb(
     const inputRowCount =
       typeof rawCnt === "bigint" ? Number(rawCnt) : Number(rawCnt);
 
-    const rows = await storage.executeQuery<Record<string, unknown>>(built.aggregateSql);
+    const rawRows = await storage.executeQuery<Record<string, unknown>>(built.aggregateSql);
+    // WPF3 · Strip hidden columns (e.g. PeriodIso added for chronological
+    // ORDER BY) so callers see only the planner-requested groupBy + aggregations.
+    const rows =
+      built.hiddenColumns && built.hiddenColumns.length > 0
+        ? rawRows.map((r) => {
+            const out: Record<string, unknown> = {};
+            for (const k of Object.keys(r)) {
+              if (built.hiddenColumns!.includes(k)) continue;
+              out[k] = r[k];
+            }
+            return out;
+          })
+        : rawRows;
     return {
       ok: true,
       rows,

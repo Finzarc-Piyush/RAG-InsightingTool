@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChartSpec, Dashboard as ServerDashboard, DashboardSheet, DashboardTableSpec } from '@/shared/schema';
+import { ChartSpec, Dashboard as ServerDashboard, DashboardAnswerEnvelope, DashboardSheet, DashboardTableSpec, ActiveFilterSpec } from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api';
 
 export interface DashboardData {
@@ -18,6 +18,11 @@ export interface DashboardData {
   permission?: "view" | "edit"; // Computed permission (for convenience)
   hasCollaborators?: boolean; // Whether this dashboard has been shared with others (owned by current user but shared)
   collaborators?: Array<{ userId: string; permission: "view" | "edit" }>; // List of collaborators
+  /** W4 · slim envelope captured at create-time. Drives the export's cover,
+   *  exec summary, recommendations, and methodology slides. */
+  answerEnvelope?: DashboardAnswerEnvelope;
+  /** Wave-FA6 · session active filter snapshot at dashboard-creation time. */
+  capturedActiveFilter?: ActiveFilterSpec;
 }
 
 export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boolean; sharedPermission?: "view" | "edit"; sharedBy?: string }): DashboardData => {
@@ -37,6 +42,8 @@ export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boo
     // Check if dashboard has collaborators (has been shared by owner)
     collaborators: (dashboard as any).collaborators || [],
     hasCollaborators: ((dashboard as any).collaborators && (dashboard as any).collaborators.length > 0) || false,
+    answerEnvelope: (dashboard as any).answerEnvelope,
+    capturedActiveFilter: (dashboard as any).capturedActiveFilter,
   };
   
   // Set permission for convenience (use sharedPermission if it's a shared dashboard)

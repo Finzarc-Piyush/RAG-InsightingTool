@@ -100,19 +100,38 @@ export interface PivotFieldsColumnDistinctResponse {
 
 /**
  * Distinct string values for a column from the session `data` table (full dataset).
- * Used for pivot filter UI when preview rows omit the column.
+ *
+ * Used by the pivot FILTERS shelf and per-header slice filters. Returns the
+ * full distinct set — the same authoritative DuckDB `data` table the agent
+ * tools see — so the FILTERS popover never silently truncates the user's
+ * choices. The 100k limit is a defensive ceiling, not a paging window: any
+ * realistic FMCG dimension column (regions, brands, products, SKUs, months)
+ * is well below it. If a column ever genuinely has >100k distinct values,
+ * a checkbox-list filter is the wrong UX shape anyway.
+ *
+ * Wave-FA · `excludeColumn` opt-in produces Excel cross-column filtering: the
+ * server narrows the value list by other active-filter conditions but
+ * excludes any condition on the column being requested (so "Region" filter
+ * shows all Regions, narrowed only by "Country", "Year", etc.).
+ *
+ * `unfiltered=true` forces the canonical, unfiltered value list — used by the
+ * filter UI's first-load to show the user every possible value.
  */
 export async function fetchPivotColumnDistincts(
   sessionId: string,
   column: string,
-  limit = 2000
+  limit = 100_000,
+  options?: { excludeColumn?: string; unfiltered?: boolean }
 ): Promise<string[]> {
+  const params = new URLSearchParams({ column, limit: String(limit) });
+  if (options?.excludeColumn) params.set("excludeColumn", options.excludeColumn);
+  if (options?.unfiltered) params.set("unfiltered", "true");
   const res = await api.get<PivotFieldsColumnDistinctResponse>(
-    `/api/data/${encodeURIComponent(sessionId)}/pivot/fields?column=${encodeURIComponent(column)}&limit=${limit}`
+    `/api/data/${encodeURIComponent(sessionId)}/pivot/fields?${params.toString()}`
   );
-  const vals = res.fields?.[0]?.distinctValues;
-  if (!Array.isArray(vals)) return [];
-  return vals.map((v) => (v === null || v === undefined ? '' : String(v)));
+  const raw = res.fields?.[0]?.distinctValues;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((v) => (v === null || v === undefined ? '' : String(v)));
 }
 
 export interface PivotDrillthroughRequest {
