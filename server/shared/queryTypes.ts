@@ -33,9 +33,30 @@ export interface ExclusionFilter {
 /** Categorical / string dimension filters (use instead of valueFilters for non-numeric columns). */
 export type DimensionMatchMode = 'exact' | 'case_insensitive' | 'contains';
 
+/**
+ * CMP1 · DimensionFilter operator set.
+ * - Categorical: `in` / `not_in` (multi-value, list semantics).
+ * - Scalar comparison: `eq` / `neq` / `lt` / `lte` / `gt` / `gte` use `values[0]`.
+ * - Range: `between` uses `values[0]` (low) and `values[1]` (high), inclusive.
+ *
+ * Comparison ops compare lexicographically on string-typed columns (correct for
+ * HH:MM:SS time-of-day, ISO dates) and as casted DOUBLE on numeric columns —
+ * the SQL builder picks the right path automatically.
+ */
+export type DimensionFilterOp =
+  | 'in'
+  | 'not_in'
+  | 'eq'
+  | 'neq'
+  | 'lt'
+  | 'lte'
+  | 'gt'
+  | 'gte'
+  | 'between';
+
 export interface DimensionFilter {
   column: string;
-  op: 'in' | 'not_in';
+  op: DimensionFilterOp;
   values: string[];
   match?: DimensionMatchMode;
 }
@@ -46,12 +67,32 @@ export interface TopBottomRequest {
   count: number;
 }
 
-export type AggregationOperation = 'sum' | 'mean' | 'avg' | 'count' | 'min' | 'max' | 'median' | 'percent_change';
+export type AggregationOperation =
+  | 'sum'
+  | 'mean'
+  | 'avg'
+  | 'count'
+  | 'min'
+  | 'max'
+  | 'median'
+  | 'percent_change'
+  // PCT1 · conditional aggregations for "what % / share / proportion of X" questions.
+  // Predicate is a DimensionFilter[] (ANDed). `countIf` ignores `column`; `sumIf` requires it.
+  | 'countIf'
+  | 'sumIf'
+  // Wave QL7 · COUNT(DISTINCT col). First-class denominator for "average per X"
+  // rate questions when paired with a SUM aggregation + a computed ratio
+  // column (`computedAggregations`). Simpler than the nested perDimension
+  // shape; emitted directly by the planner and the QL2 aggregation-intent
+  // floor as the default shape for rate questions.
+  | 'count_distinct';
 
 export interface AggregationRequest {
   column: string;
   operation: AggregationOperation;
   alias?: string;
+  /** PCT1 · required for countIf/sumIf; otherwise ignored. ANDed across entries. */
+  predicate?: DimensionFilter[];
 }
 
 export interface SortRequest {

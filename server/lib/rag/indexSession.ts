@@ -9,6 +9,37 @@ import {
 } from "./aiSearchStore.js";
 import { getSampleFromDuckDB } from "../duckdbPlanExecutor.js";
 import type { AnalysisMemoryEntry } from "../../shared/schema.js";
+import { withSessionWriteLock } from "../sessionWriteLock.js";
+
+/**
+ * Wave A6 · Locked, targeted update of `doc.ragIndex` only.
+ *
+ * Pre-A6 the indexing flow read the chat doc, embedded for several
+ * seconds (network calls), and called `updateChatDocument(doc)` to
+ * write back the WHOLE doc with the new `ragIndex` field. If a
+ * concurrent upload or chat turn modified the doc in Cosmos during
+ * those few seconds, the final `updateChatDocument(doc)` would clobber
+ * those concurrent changes (last-writer-wins on full upsert) because
+ * the in-memory `doc` was a stale snapshot.
+ *
+ * The fix: acquire the unified per-session write lock, re-fetch the
+ * doc inside the lock, set ONLY the `ragIndex` field, and write. The
+ * concurrent paths' changes are preserved.
+ */
+async function updateRagIndexField(
+  sessionId: string,
+  patch: Partial<NonNullable<ChatDocument["ragIndex"]>>
+): Promise<void> {
+  await withSessionWriteLock(sessionId, async () => {
+    const fresh = await getChatBySessionIdEfficient(sessionId);
+    if (!fresh) return;
+    fresh.ragIndex = {
+      ...(fresh.ragIndex || {}),
+      ...patch,
+    } as ChatDocument["ragIndex"];
+    await updateChatDocument(fresh);
+  });
+}
 
 /**
  * W57 · Single chunkType used for every Memory Entry indexed into the
@@ -34,6 +65,13 @@ function dataVersion(doc: ChatDocument): number {
 
 /**
  * Index or reindex all RAG chunks for a session. Non-fatal on failure (logs + Cosmos error status).
+ *
+ * Wave A6 · Captures `dataVersion` once at spawn time. All three Cosmos
+ * writes to `ragIndex` (mid-flight `indexing`, terminal `ready`, error
+ * fallback `error`) go through `updateRagIndexField`, which acquires
+ * the per-session write lock and re-fetches the doc so concurrent
+ * upload / chat-turn writes during the long embedding phase aren't
+ * clobbered by a stale-snapshot upsert.
  */
 export async function indexSessionRag(sessionId: string): Promise<void> {
   if (!isRagEnabled()) {
@@ -46,15 +84,17 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
     if (!doc?.dataSummary) {
       return;
     }
+    // Wave A6 · Capture the version IMMEDIATELY so the embedded chunks
+    // are tagged with the version of the data we actually sampled —
+    // never a later version that a concurrent upload bumped to mid-
+    // flight.
+    const ver = dataVersion(doc);
 
-    doc.ragIndex = {
-      ...(doc.ragIndex || {}),
+    await updateRagIndexField(sessionId, {
       status: "indexing",
       lastError: undefined,
-    };
-    await updateChatDocument(doc);
+    });
 
-    const ver = dataVersion(doc);
     await deleteRagDocumentsBySessionId(sessionId);
 
     const columnar = Boolean(doc.columnarStoragePath);
@@ -101,28 +141,27 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
 
     await upsertRagDocuments(docs);
 
-    doc.ragIndex = {
+    // Wave A6 · Targeted update through the lock so a concurrent upload
+    // / chat-turn write during the long embedding phase isn't clobbered.
+    // The captured `ver` is the version of the data we actually
+    // sampled — never a later version that bumped mid-flight.
+    await updateRagIndexField(sessionId, {
       status: "ready",
       indexedAt: Date.now(),
       chunkCount: docs.length,
       dataVersion: ver,
-    };
-    await updateChatDocument(doc);
+    });
     console.log(`✅ RAG indexed session ${sessionId}: ${docs.length} chunks`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("❌ RAG indexSession failed:", e);
-    if (doc) {
-      doc.ragIndex = {
-        ...(doc.ragIndex || {}),
+    try {
+      await updateRagIndexField(sessionId, {
         status: "error",
         lastError: msg.slice(0, 500),
-      };
-      try {
-        await updateChatDocument(doc);
-      } catch {
-        /* ignore */
-      }
+      });
+    } catch {
+      /* ignore — error reporting must never throw */
     }
   }
 }

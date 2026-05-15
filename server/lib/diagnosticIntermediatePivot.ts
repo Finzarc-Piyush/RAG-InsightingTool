@@ -103,5 +103,15 @@ export function mergeIntermediateSegmentPivotDefaults(params: {
   if (Object.keys(mergedSlice.filterSelections).length) {
     out.filterSelections = mergedSlice.filterSelections;
   }
+  // Wave PAG1 · preserve agent-supplied aggregator hints across the
+  // diagnostic-pivot filter merge — the merge enriches `filterFields` /
+  // `filterSelections` but must not drop the per-value aggregator the
+  // segment carried in.
+  if (
+    segmentPivot.valueAggregators &&
+    Object.keys(segmentPivot.valueAggregators).length > 0
+  ) {
+    out.valueAggregators = { ...segmentPivot.valueAggregators };
+  }
   return out;
 }

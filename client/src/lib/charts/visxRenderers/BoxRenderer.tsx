@@ -25,6 +25,7 @@ import {
 import { aggregate, groupBy } from "@/lib/charts/dataEngine";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 
 export interface BoxRendererProps {
   spec: ChartSpecV2;
@@ -123,7 +124,7 @@ export function BoxRenderer({
           stroke="hsl(var(--border))"
           strokeOpacity={0.25}
           strokeDasharray="2,2"
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
         {stats.map((s, i) => {
           const x = xScale(s.category);
@@ -187,7 +188,7 @@ export function BoxRenderer({
             dx: -4,
             dy: 3,
           })}
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
       </Group>
     </svg>

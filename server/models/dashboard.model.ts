@@ -575,6 +575,44 @@ export const renameSheet = async (
 };
 
 /**
+ * Wave DR5 · reorder sheets atomically. Caller submits the full ordered
+ * list of sheet ids; we validate set-equality against the current sheets
+ * (no missing or extra ids) then reassign each sheet's `order` field by
+ * its position in the input. Idempotent; submitting the current order
+ * is a no-op write.
+ */
+export const reorderSheets = async (
+  id: string,
+  username: string,
+  orderedSheetIds: string[]
+): Promise<Dashboard> => {
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    throw new Error("Dashboard has no sheets to reorder");
+  }
+  const currentIds = new Set(dashboard.sheets.map((s) => s.id));
+  const requestedIds = new Set(orderedSheetIds);
+  if (
+    requestedIds.size !== orderedSheetIds.length ||
+    requestedIds.size !== currentIds.size ||
+    [...requestedIds].some((sid) => !currentIds.has(sid))
+  ) {
+    throw new Error(
+      "orderedSheetIds must contain every existing sheet id exactly once",
+    );
+  }
+  // Rebuild the sheets array in the requested order; set `order` to position
+  // so existing sort-by-order callers behave consistently.
+  const byId = new Map(dashboard.sheets.map((s) => [s.id, s]));
+  dashboard.sheets = orderedSheetIds.map((sid, idx) => {
+    const sheet = byId.get(sid)!;
+    return { ...sheet, order: idx };
+  });
+  return updateDashboard(dashboard);
+};
+
+/**
  * Remove chart from dashboard
  */
 export const removeChartFromDashboard = async (
@@ -1179,6 +1217,10 @@ export const createReportDashboardFromAnalysis = async (
         },
       ];
       dashboard.charts = [...charts];
+      // Wave DR15 · same source-session linkage as the from-spec path.
+      if (body.sessionId && body.sessionId.trim().length > 0) {
+        dashboard.sessionId = body.sessionId.trim().slice(0, 200);
+      }
       return updateDashboard(dashboard);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1237,12 +1279,40 @@ export const createDashboardFromSpec = async (
 
       dashboard.sheets = sheets;
       dashboard.charts = unionCharts;
+      // Wave DR15 · persist the source session id so the dashboard view
+      // can surface an "Open chat" affordance back to the originating
+      // analysis. Only stamped when a non-empty value was supplied.
+      if (sessionId && sessionId.trim().length > 0) {
+        dashboard.sessionId = sessionId.trim().slice(0, 200);
+      }
       if (spec.answerEnvelope) {
         dashboard.answerEnvelope = spec.answerEnvelope;
       }
       // Wave-FA6 · Snapshot active filter into the dashboard for provenance.
       if (spec.capturedActiveFilter) {
         dashboard.capturedActiveFilter = spec.capturedActiveFilter;
+      }
+      // DPF2 · persist the message-mirroring fields (when the spec carries
+      // them). Auto-create populates `followUpPrompts`,
+      // `investigationSummary`, `priorInvestigationsSnapshot` synchronously;
+      // `businessActions` arrives later via `patchDashboardBusinessActions`
+      // (BAI1 post-verifier promise). Manual create-from-spec from
+      // `DashboardDraftCard` (DPF3) augments any of these from the message
+      // the user is acting on.
+      if (spec.businessActions && spec.businessActions.length > 0) {
+        dashboard.businessActions = spec.businessActions;
+      }
+      if (spec.followUpPrompts && spec.followUpPrompts.length > 0) {
+        dashboard.followUpPrompts = spec.followUpPrompts;
+      }
+      if (spec.investigationSummary) {
+        dashboard.investigationSummary = spec.investigationSummary;
+      }
+      if (
+        spec.priorInvestigationsSnapshot &&
+        spec.priorInvestigationsSnapshot.length > 0
+      ) {
+        dashboard.priorInvestigationsSnapshot = spec.priorInvestigationsSnapshot;
       }
       const persisted = await updateDashboard(dashboard);
       // W59 · record `dashboard_promoted` in the per-session Memory journal so

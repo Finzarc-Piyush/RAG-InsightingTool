@@ -33,6 +33,7 @@ export const LLM_PURPOSE = {
   CLARIFY_QUESTION: "clarify_question",
   SUGGEST_FOLLOW_UPS: "suggest_follow_ups",
   VERIFIER_SIMPLE: "verifier_simple",
+  BUSINESS_ACTIONS: "business_actions",
 
   // ── Reasoning / synthesis (→ keep on PRIMARY / flagship) ──
   HYPOTHESIS: "hypothesis",
@@ -53,6 +54,39 @@ export const LLM_PURPOSE = {
   CHART_JSON_REPAIR: "chart_json_repair",
   CONVERSATIONAL: "conversational",
   ML_MODEL_SUMMARY: "ml_model_summary",
+  /**
+   * W-EXP-2 · Dashboard export deck-planner. Composes a `SlideDeckPlan` from
+   * the dashboard's `answerEnvelope` + chart inventory + business actions.
+   * PRIMARY-tier (Opus 4.7) because action-title quality and structural
+   * reasoning are the whole product here — Mini-tier output is the exact
+   * "shitty deck" failure mode this rewrite exists to fix.
+   */
+  DECK_PLANNER: "deck_planner",
+  /**
+   * Wave A7 · Automation column-remap. Given a saved automation's
+   * expected column descriptors and a fresh dataset's columns, propose
+   * a saved-name → new-name mapping for any unmatched-by-name columns.
+   * MINI-tier — name-similarity reasoning is shallow + cheap.
+   */
+  AUTOMATION_REMAP: "automation_remap",
+  /**
+   * Wave SU-IC2 · Indicator-column semantic enrichment. For each indicator
+   * detected by SU-IC1 (Yes/No/etc. shaped pre-computed answer columns),
+   * the LLM emits `answersQuestions: string[]` — natural-language phrasings
+   * the column directly answers — and adjudicates positive/negative polarity
+   * when the heuristic dictionary couldn't. MINI-tier: short structured
+   * output, name + topValues input only.
+   */
+  INDICATOR_ENRICH: "indicator_enrich",
+  /**
+   * Wave QL1 · Quick-lookup planner. Single MINI-tier call that generates a
+   * schema-grounded `QueryPlanBody` for simple top-N / list / count / sum /
+   * average style questions. Bypasses the full hypothesis/brief/planner/
+   * reflector/narrator/verifier pipeline — the result table + 3 deterministic
+   * follow-up chips IS the answer. Falls back to the full agentic loop on
+   * any failure, so this is strictly an opt-in fast path.
+   */
+  QUICK_LOOKUP_PLANNER: "quick_lookup_planner",
 } as const;
 
 export type LlmCallPurpose = (typeof LLM_PURPOSE)[keyof typeof LLM_PURPOSE];
@@ -78,6 +112,7 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.CLARIFY_QUESTION]: "MINI",
   [LLM_PURPOSE.SUGGEST_FOLLOW_UPS]: "MINI",
   [LLM_PURPOSE.VERIFIER_SIMPLE]: "MINI",
+  [LLM_PURPOSE.BUSINESS_ACTIONS]: "MINI",
   // PRIMARY
   [LLM_PURPOSE.HYPOTHESIS]: "PRIMARY",
   [LLM_PURPOSE.PLANNER]: "PRIMARY",
@@ -97,6 +132,10 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.CHART_JSON_REPAIR]: "PRIMARY",
   [LLM_PURPOSE.CONVERSATIONAL]: "PRIMARY",
   [LLM_PURPOSE.ML_MODEL_SUMMARY]: "PRIMARY",
+  [LLM_PURPOSE.DECK_PLANNER]: "PRIMARY",
+  [LLM_PURPOSE.AUTOMATION_REMAP]: "MINI",
+  [LLM_PURPOSE.INDICATOR_ENRICH]: "MINI",
+  [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
 };
 
 /** Build the per-purpose override env-var name: `mode_classify` → `OPENAI_MODEL_FOR_MODE_CLASSIFY`. */

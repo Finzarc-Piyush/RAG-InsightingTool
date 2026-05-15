@@ -15,7 +15,7 @@ export default function NotFound() {
             Page not found
           </CardTitle>
           <CardDescription className="text-base">
-            This URL does not match any workspace in Marico RAGAlytics. You may have followed an old link or mistyped the address.
+            This URL does not match any workspace in Marico RAG Brand-Optix. You may have followed an old link or mistyped the address.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 pt-2">

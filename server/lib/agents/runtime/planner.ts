@@ -25,8 +25,14 @@ import {
   injectRollupExcludeFilters,
   injectCompoundShapeMetricGuard,
   extractDistinctMetricValues,
+  detectPerXIntent,
+  injectPerDimensionForRateIntent,
+  detectMultiPerIntent,
+  injectMultiPerIntent,
   extractRankingIntent,
   enforceRankingPlanShape,
+  synthesizeAggregationStep,
+  planAlreadyCoversAggregation,
 } from "./planArgRepairs.js";
 import { coalesceQueryPlanSteps } from "./coalescePlanSteps.js";
 
@@ -89,12 +95,29 @@ function normalizeExecuteQueryPlanStepArgs(
     );
   }
   if (Array.isArray(plan.aggregations)) {
-    for (const a of plan.aggregations as { column?: string }[]) {
-      if (!a?.column) continue;
-      const resolved = resolveAuthoritative(a.column);
-      a.column = columns.some((c) => c.name === resolved)
-        ? resolved
-        : resolveMetricAliasToSchemaColumn(a.column, columns, preferredNumeric);
+    for (const a of plan.aggregations as {
+      column?: string;
+      operation?: string;
+      predicate?: { column?: string }[];
+    }[]) {
+      // PCT1 · countIf doesn't use the column meaningfully; leave as-is so the
+      // schema validator's "*"-placeholder pattern survives. sumIf still needs
+      // a real numeric column.
+      if (a?.operation === "countIf") {
+        // pass through column unchanged
+      } else if (a?.column) {
+        const resolved = resolveAuthoritative(a.column);
+        a.column = columns.some((c) => c.name === resolved)
+          ? resolved
+          : resolveMetricAliasToSchemaColumn(a.column, columns, preferredNumeric);
+      }
+      // PCT1 · resolve predicate columns the same way top-level dimensionFilter
+      // columns get resolved.
+      if (Array.isArray(a?.predicate)) {
+        for (const f of a.predicate) {
+          if (f?.column) f.column = resolveAuthoritative(f.column);
+        }
+      }
     }
   }
   if (Array.isArray(plan.dimensionFilters)) {
@@ -284,8 +307,16 @@ function firstInvalidQueryPlanColumn(
   for (const c of (plan.groupBy as string[] | undefined) ?? []) {
     if (!check(c)) return c;
   }
-  for (const a of (plan.aggregations as { column: string; alias?: string }[] | undefined) ?? []) {
-    if (!a?.column || !check(a.column)) return a.column;
+  for (const a of (plan.aggregations as
+    | { column: string; operation?: string; alias?: string }[]
+    | undefined) ?? []) {
+    // PCT1 · count / countIf use column "*" as a placeholder — the executor
+    // emits COUNT(*) / COUNT(CASE WHEN <pred> THEN 1 END) and ignores the
+    // column. The normalizer leaves "*" intact for these ops; the validator
+    // must mirror that or the planner aborts on every percent-of-rows plan.
+    const isStarPlaceholder =
+      a?.column === "*" && (a?.operation === "count" || a?.operation === "countIf");
+    if (!a?.column || (!isStarPlaceholder && !check(a.column))) return a.column;
     if (a.alias && a.alias === a.column) {
       return `invalid_aggregation_alias:${a.alias}`;
     }
@@ -362,6 +393,18 @@ function validateAddComputedColumnsStep(step: PlanStep, cumulative: Set<string>)
       const r = (def as { rightColumn?: string }).rightColumn;
       if (typeof l !== "string" || !stepCumulative.has(l)) return "add_computed_columns_leftColumn";
       if (typeof r !== "string" || !stepCumulative.has(r)) return "add_computed_columns_rightColumn";
+    } else if (def.type === "datetime_concat") {
+      // SU-DT2 · combine a date column + paired time-of-day column into a
+      // sortable ISO datetime string. Both source columns must already
+      // exist (no chaining off a same-step add_computed_columns output).
+      const dateCol = (def as { dateColumn?: string }).dateColumn;
+      const timeCol = (def as { timeColumn?: string }).timeColumn;
+      if (typeof dateCol !== "string" || !stepCumulative.has(dateCol)) {
+        return "add_computed_columns_dateColumn";
+      }
+      if (typeof timeCol !== "string" || !stepCumulative.has(timeCol)) {
+        return "add_computed_columns_timeColumn";
+      }
     } else {
       return "add_computed_columns_def_type";
     }
@@ -426,9 +469,15 @@ Rules:
 - Tool query keys: retrieve_semantic_context.args.query (required, string) is the ONLY tool that takes "query"; never put "query" on run_analytical_query (only optional question_override).
 - get_schema_summary first when the question is broad. clarify_user only when critical info is genuinely missing.
 - execute_query_plan: use for exact groupBy + aggregations with args.plan JSON; column names must match the schema exactly. Prefer over NL whenever totals/sums must be correct. aggregations[].column MUST be an existing numeric column on the current frame OR a column added earlier in this plan by add_computed_columns (e.g. date_diff_days → numeric). Custom labels like Total_Revenue belong in aggregations[].alias only.
+- CMP1 — dimensionFilters supports scalar comparison + range ops alongside categorical \`in\`/\`not_in\`. Use \`{column, op: "lt"|"lte"|"gt"|"gte"|"eq"|"neq", values: ["<scalar>"]}\` for numeric thresholds (\`Sales > 100000\`) or time-of-day cutoffs (\`"Clock-In Time" < "09:30:00"\`); use \`{column, op: "between", values: ["<low>","<high>"]}\` for inclusive ranges. String values are compared lexicographically — correct for HH:MM:SS time-of-day and ISO date strings; numeric-looking strings auto-cast to DOUBLE. When comparing a time-of-day column, also exclude any sentinel non-time values ("Absent" etc.) with a separate \`not_in\` filter — see the TIME-OF-DAY block in DATA UNDERSTANDING when present.
+- PCT1 — RATE / SHARE / PERCENT questions ("what % of X are Y", "share of rows where", "proportion of"): emit ONE execute_query_plan with TWO aggregations — \`{operation: "countIf", column: "*", predicate: [<dimensionFilters>], alias: "matching"}\` AND \`{operation: "count", column: "*", alias: "total"}\`. The narrator surfaces matching/total*100 as the percentage with magnitude (n of N, x.x%). Use \`sumIf\` instead of \`countIf\` when the user asked about a numeric SHARE (e.g. "what % of revenue came from premium SKUs" → predicate filters to premium, column is the revenue measure, paired with a normal sum on the same column to get total revenue). The predicate uses the same DimensionFilter shape as plan.dimensionFilters. Worked example for "what % of clock-ins are before 9:30" against a column \`Clock-In <09:30\` (Yes/No/Absent values): plan.aggregations = [{operation: "countIf", column: "*", predicate: [{column: "Clock-In <09:30", op: "in", values: ["Yes"]}], alias: "matching"}, {operation: "countIf", column: "*", predicate: [{column: "Clock-In <09:30", op: "in", values: ["Yes","No"]}], alias: "total"}] — total excludes Absent rows because Absent isn't a clock-in. CRITICAL: predicate \`values\` MUST come from the column's ACTUAL stored values (CATEGORICAL VALUES block / topValues / PRE-COMPUTED INDICATOR COLUMNS block), NOT from this worked example. If the column shows \`{TRUE, FALSE, Absent}\` or \`{Adherent, Non-Adherent}\` or \`{Compliant, Non-Compliant}\`, use those literal strings — copying ["Yes"]/["No"] verbatim from this example into a predicate against a TRUE/FALSE-shaped column matches zero rows and produces "0 of 0" answers.
+- PD1/PD3 — AVG PER (temporal) questions ("average X per day", "average X per day per cluster", "daily average X by region"): PREFER the simple ratio shape — ONE GROUP BY with SUM(metric) + COUNT(DISTINCT denom) + a computed ratio column. Worked example for "average compliance visits per day across all clusters": plan = { groupBy: ["Cluster Name"], aggregations: [{ column: "Compliance Visit", operation: "sum", alias: "total_visits" }, { column: "Date", operation: "count_distinct", alias: "num_days" }], computedAggregations: [{ alias: "avg_visits_per_day", expression: "total_visits / num_days" }] } — ONE row per cluster, the ratio column IS the answer. NEVER put the date (or any Day/Week/Month/Quarter/Year facet over it) in groupBy alongside the answer dimension — that produces a (cluster × date) trend grid, NOT the rate-per-cluster the user asked for. The COUNT(DISTINCT) MUST be on the SOURCE date column (e.g. "Date"), not on a derived facet ("Day · Date") — facets all have the same cardinality as the source for daily data and the source is the natural denominator. Use this shape for any "average per <temporal unit>" question regardless of whether the answer dimension is named or implicit. computedAggregations is a [{alias, expression}] array; expression supports + - * / ( ) and bare aggregation aliases only (no SQL functions); max 8 entries.
+- PD1/PD3 NESTED perDimension fallback — use ONLY when the user explicitly asks for "average of daily TOTALS", "median daily X", "max daily X", or non-mean outer ops over a temporal denominator (where SUM/COUNT_DISTINCT doesn't apply). Shape: { groupBy: ["Cluster Name"], aggregations: [{ column: "Visits", operation: "median", perDimension: "Day · Date", innerOperation: "sum" }] } — buckets rows by (groupBy ∪ perDimension), applies innerOperation per bucket, then operation across bucket totals. perDimension is incompatible with operation:"percent_change"/"countIf"/"sumIf". For NON-temporal per-clauses ("average X per customer"), use this shape too — count_distinct(customer) doesn't have the same physical meaning as per-row average.
+- PD1 CRITICAL — single-pass mean/avg of raw rows is WRONG when each row is already a per-day record (it returns mean-per-row, not mean-per-day-total). NEVER emit \`groupBy: ["Cluster Name", "Date"], aggregations: [{column: "Visits", operation: "mean"}]\` for an "average per day per cluster" question — that's a 2D grid; the user wanted one row per cluster. Use the QL7 ratio shape (SUM / COUNT_DISTINCT) by default; deterministic post-passes also synthesize it for you when you forget.
 - Trends / time series: the dataset exposes derived time-bucket columns (Day · Order Date, Month · Order Date, Year · Order Date, etc.). Prefer coarse grain (month or year). Two valid patterns: (a) groupBy the derived column and omit dateAggregationPeriod (already bucketed); (b) groupBy the raw date column WITH dateAggregationPeriod. Never raw-daily groupBy on a date column when it would yield many points. Match the question's grain when explicit (daily/weekly/monthly/yearly).
 - derive_dimension_bucket: run before execute_query_plan (with dependsOn) to map categories into custom buckets, then groupBy the new column name. Args: sourceColumn, newColumnName, buckets: [{ "label", "values": [...] }], optional matchMode (exact|case_insensitive), optional defaultLabel.
-- add_computed_columns: row-wise derived numeric columns (safe defs only). Use before execute_query_plan when a needed metric doesn't exist (e.g. date_diff_days with startColumn/endColumn/clampNegative; or numeric_binary with op add|subtract|multiply|divide and leftColumn/rightColumn). Args: columns: [{ "name", "def" }] (max 12). Optional persistToSession (default false; true only if the user asked to save permanently) + persistDescription.
+- add_computed_columns: row-wise derived numeric or datetime columns (safe defs only). Use before execute_query_plan when a needed metric doesn't exist (e.g. date_diff_days with startColumn/endColumn/clampNegative; or numeric_binary with op add|subtract|multiply|divide and leftColumn/rightColumn). Args: columns: [{ "name", "def" }] (max 12). Optional persistToSession (default false; true only if the user asked to save permanently) + persistDescription.
+- DTC1 — DATETIME composition: when the user's question requires reasoning about a combined datetime (e.g. "earliest weekday clock-in by region", "% of late check-ins on Mondays") and the TIME-OF-DAY block in DATA UNDERSTANDING shows a \`↔ paired with date column "<X>"\` annotation, emit \`add_computed_columns\` once with def: { "type": "datetime_concat", "dateColumn": "<X>", "timeColumn": "<Y>" }, then groupBy / filter / sort against the new column normally. Output is a sortable ISO YYYY-MM-DD HH:MM:SS string; sentinel time values ("Absent" etc.) collapse to NULL automatically and drop out of comparisons. Both source columns must exist in the schema BEFORE this step (no chaining within the same plan step).
 - run_readonly_sql (analysis only): last-resort SELECT-only single statement over table \`dataset\`; no DDL/DML.
 - run_correlation: when the user asks what drives / affects / correlates with a numeric column. Pass dimensionFilters when scoping to a segment so the tool sees row-level data, not aggregates left in ctx.data. If a prior step aggregated ctx.data (run_aggregation, execute_query_plan with groupBy), the tool auto-recovers row-level data from turnStartDataRef when the frame doesn't fit — but planning an aggregation step *before* run_correlation in the same plan is a smell; place run_correlation in its own parallelGroup or chain it after a non-aggregating step.
 - run_segment_driver_analysis (when listed): one-shot driver path for a filtered segment + outcome column. Use for "what's driving the difference between A and B".
@@ -537,6 +586,46 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     parallelGroup: s.parallelGroup,
   }));
 
+  // PD1 · detect "average X per Y" rate intent ONCE per turn (independent of
+  // step iteration). The detector reads only the question + dataset profile.
+  // Null when the question isn't a rate intent — most questions.
+  const perXIntent = detectPerXIntent(ctx.question, ctx.summary);
+
+  // PD3 · detect multi-per intent ("<agg> X per Y per Z" / "<agg> X per Y by Z"
+  // / "<adverb> <agg> X by Z"). When present, the planner often emits the
+  // wrong interpretation (trend-with-breakdown instead of rate-per-group).
+  const multiPerIntent = detectMultiPerIntent(ctx.question, ctx.summary);
+
+  // Wave QL2 · Aggregation-intent floor — synthesize a deterministic
+  // `execute_query_plan` step when the question matches an aggregation shape
+  // AND no existing step covers it. Closes the failure mode where the planner
+  // LLM emits only exploratory steps (or zero steps), leaving the narrator
+  // with no observations and forcing a "not computable" answer despite the
+  // dataset having the literal columns the question names.
+  //
+  // The synthesized step flows through the existing PD1/PD3/etc. repair
+  // pipeline like any LLM-emitted step. Idempotent: if any existing step
+  // already covers the intent (same outer op + metric + groupBy contains
+  // the answer dim), this is a no-op.
+  const synthFloor = synthesizeAggregationStep(
+    ctx.question,
+    ctx.summary,
+    perXIntent,
+    multiPerIntent,
+    { idPrefix: "ql2" }
+  );
+  if (
+    synthFloor &&
+    !planAlreadyCoversAggregation(stepsWithMeta, synthFloor, {
+      dateColumns: ctx.summary.dateColumns ?? [],
+    })
+  ) {
+    stepsWithMeta.unshift(synthFloor.step);
+    console.warn(
+      `[planner] ql2_aggregation_floor synthesized step=${synthFloor.step.id} reason=${synthFloor.reason} groupBy=[${synthFloor.groupBy.join(",")}] metric=${synthFloor.metricColumn} outerOp=${synthFloor.outerOp}`
+    );
+  }
+
   if (stepsWithMeta.length === 0) {
     logReject({ reason: "empty_steps" }, turnId);
     return { ok: false, reason: "empty_steps" };
@@ -573,6 +662,27 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         : extractDistinctMetricValues(ctx.data ?? [], wideFormat.metricColumn);
   }
 
+  // (PD1 / PD3 intents are hoisted above the empty-steps check so the QL2
+  // aggregation-intent floor can synthesize a step BEFORE the early reject.)
+
+  // Wave T2 · hoist per-date-column span metadata once per turn so the
+  // grain patch can pick Day / Week / Month / Quarter from the dataset's
+  // actual range instead of hard-coding "month". Missing dateRange (absent
+  // pre-T1 schema, or column with no parseable cells) → patch falls back
+  // to its prior "month" default.
+  const dateRangeByColumn = new Map<
+    string,
+    { spanDays: number; distinctDayCount: number }
+  >();
+  for (const col of ctx.summary.columns) {
+    if (col.dateRange) {
+      dateRangeByColumn.set(col.name, {
+        spanDays: col.dateRange.spanDays,
+        distinctDayCount: col.dateRange.distinctDayCount,
+      });
+    }
+  }
+
   for (const step of stepsWithMeta) {
     normalizeExecuteQueryPlanStepArgs(
       step,
@@ -593,7 +703,8 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     patchExecuteQueryPlanTrendCoarserGrain(
       step,
       ctx.question,
-      ctx.summary.dateColumns
+      ctx.summary.dateColumns,
+      dateRangeByColumn,
     );
     patchExecuteQueryPlanTrendMissingGroupBy(
       step,
@@ -651,6 +762,52 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       } else if (guard.reason === "no_metrics_known") {
         console.warn(
           `[planner] WARNING: compound-shape ${step.tool} step ${step.id} touches ${wideFormat.valueColumn} but no Metric values are known — values may mix incompatible metrics`
+        );
+      }
+    }
+    // PD3 · multi-per intent fires FIRST: when the question contains
+    // "<agg> X per Y per Z" (or "per Y by Z", or adverbial "<adverb> <agg>
+    // X by Z"), the planner LLM often picks the trend-with-breakdown
+    // interpretation (groupBy: [Z, Y]) when the user wanted rate-per-group
+    // (groupBy: [Z], perDimension: Y_facet). PD3 moves Y out of groupBy
+    // into perDimension. When PD3 rewrites the plan, PD1's single-per
+    // injector is short-circuited (the aggregation is now already nested).
+    let multiPerHandled = false;
+    if (multiPerIntent) {
+      const multiResult = injectMultiPerIntent(step, multiPerIntent);
+      if (multiResult.rewrittenAggColumns.length) {
+        multiPerHandled = true;
+        console.warn(
+          `[planner] multi_per_intent_injected step=${step.id} ` +
+            `outerOp=${multiPerIntent.outerOp} rateDim="${multiPerIntent.rateDenominator.column}" ` +
+            `removedFromGroupBy=${multiResult.removedFromGroupBy.join(",")} ` +
+            `cols=${multiResult.rewrittenAggColumns.join(",")}`
+        );
+      } else if (
+        multiResult.skipReason &&
+        multiResult.skipReason !== "not_execute_query_plan" &&
+        multiResult.skipReason !== "rate_not_in_group_by"
+      ) {
+        console.warn(
+          `[planner] multi_per_intent_skipped step=${step.id} reason=${multiResult.skipReason}`
+        );
+      }
+    }
+
+    // PD1 · "average X per Y" rate intent: when the user's question maps to
+    // <verb> ... per <unit>, rewrite single-pass mean/avg/sum/min/max
+    // aggregations to use the nested `perDimension` primitive. Idempotent;
+    // skips plans where the agent already decomposed the intent itself.
+    // Short-circuited when PD3 already rewrote the plan.
+    if (perXIntent && !multiPerHandled) {
+      const perXResult = injectPerDimensionForRateIntent(step, perXIntent);
+      if (perXResult.rewrittenAggColumns.length) {
+        console.warn(
+          `[planner] per_x_intent_injected step=${step.id} outerOp=${perXIntent.outerOp} perDimension="${perXIntent.perDimension}" cols=${perXResult.rewrittenAggColumns.join(",")}`
+        );
+      } else if (perXResult.skipReason && perXResult.skipReason !== "not_execute_query_plan") {
+        console.warn(
+          `[planner] per_x_intent_skipped step=${step.id} reason=${perXResult.skipReason}`
         );
       }
     }

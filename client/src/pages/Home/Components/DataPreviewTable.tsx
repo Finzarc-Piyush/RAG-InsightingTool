@@ -144,7 +144,34 @@ interface DataPreviewTableProps {
     columns?: string[];
     filterFields?: string[];
     filterSelections?: Record<string, string[]>;
+    /**
+     * Wave PAG1 · Per-value pivot aggregator hints derived from the agent's
+     * `execute_query_plan.aggregations[]`. Forwarded to
+     * `createInitialPivotConfig` so the value chip pre-selects the agent's
+     * aggregation function (Mean for "average X per Y") instead of falling
+     * back to the numeric-default Sum.
+     */
+    valueAggregators?: Record<string, "sum" | "mean" | "count" | "min" | "max">;
+    /**
+     * Wave P1 · When the agent's analytical step emitted `computedAggregations`
+     * (e.g. AOV = SUM(Revenue)/COUNT(DISTINCT Order)), the pivot defaults
+     * embed the result rows here and set `dataSource: "agent_result"`. The
+     * client forwards both fields into the `pivot/query` request body so
+     * the server bypasses DuckDB and aggregates the embedded rows in
+     * memory — alias columns like `aov` that don't exist on the base
+     * `data` table are now first-class pivot values.
+     */
+    dataSource?: "base" | "agent_result";
+    agentResultRows?: Record<string, unknown>[];
+    agentResultColumns?: string[];
   };
+  /**
+   * PVT5 · the agent ran an analytical step but the unified pivot-defaults
+   * safety contract failed (too many fields, alias-only values, etc.). The
+   * chart and answer are still correct; we render an elegant fallback
+   * inside the Pivot tab instead of an exploded or empty drag-and-drop UI.
+   */
+  pivotUnavailable?: boolean;
   /** Shown above the analysis table when the agent emits an intermediate summary (e.g. tool row count). */
   analysisIntermediateInsight?: string;
   /** Insight from the final answer envelope — shown in the Key insight box for non-intermediate pivot responses. */
@@ -258,6 +285,7 @@ export function DataPreviewTable({
   variant = "dataset",
   onChartAdded,
   pivotDefaults,
+  pivotUnavailable,
   analysisIntermediateInsight,
   pivotInsight,
   userQuestion,
@@ -605,6 +633,10 @@ export function DataPreviewTable({
       {
         defaultFilterKeys,
         defaultColumnKeys: Array.isArray(hintedColumns) ? hintedColumns : [],
+        // Wave PAG1 · forward the agent's per-column aggregator hint so the
+        // debug log shows what the pivot WOULD have committed to. The actual
+        // commit happens in the setPivotConfig effect below.
+        valueAggregators: pivotDefaults?.valueAggregators,
       }
     );
     logger.debug('[DataPreviewTable] Pivot defaults from message', {
@@ -810,6 +842,16 @@ export function DataPreviewTable({
         ? filterSelectionsPayload
         : undefined;
 
+    // Wave P1 · When the message's pivotDefaults selected the agent-result
+    // data source (computed-alias columns can't be re-queried against the
+    // base `data` table), forward the embedded rows + flag to the server.
+    // The server's executePivotQuery short-circuits when dataSource is
+    // "agent_result" and aggregates the sourceRows in-memory.
+    const agentResultMode =
+      pivotDefaults?.dataSource === "agent_result" &&
+      Array.isArray(pivotDefaults.agentResultRows) &&
+      pivotDefaults.agentResultRows.length > 0;
+
     return {
       rowFields,
       colFields,
@@ -817,6 +859,12 @@ export function DataPreviewTable({
       filterSelections: filterSelectionsForRequest,
       valueSpecs: normalizedPivotConfig.values,
       rowSort: normalizedPivotConfig.rowSort,
+      ...(agentResultMode
+        ? {
+            dataSource: "agent_result" as const,
+            sourceRows: pivotDefaults!.agentResultRows!,
+          }
+        : {}),
     };
   }, [
     variant,
@@ -824,6 +872,7 @@ export function DataPreviewTable({
     canPivot,
     normalizedPivotConfig,
     filterSelections,
+    pivotDefaults,
   ]);
 
   const pivotFilterPayloadForChart = useMemo(() => {
@@ -874,6 +923,12 @@ export function DataPreviewTable({
               defaultColumnKeys: defaultPivotColumnKeys.filter((k) =>
                 pivotFieldKeys.includes(k)
               ),
+              // Wave PAG1 · pre-set the value chip aggregator from the
+              // agent's executed `aggregations[]`. For "average X per Y"
+              // questions the chip now reads Mean (not Sum), so the pivot
+              // queries DuckDB with AVG() instead of SUM() on the canonical
+              // data table.
+              valueAggregators: pivotDefaults?.valueAggregators,
             }
           )
         )
@@ -1751,12 +1806,21 @@ export function DataPreviewTable({
       }
       setDownloadingFormat(format);
       try {
+        const SAMPLE_CAP = 2000;
+        const flatSheetNote =
+          variant === 'analysis' &&
+          serverPivotModel != null &&
+          pivotRows.length >= SAMPLE_CAP
+            ? `Underlying rows used to build the pivot (sample of ${pivotRows.length} rows). For the full canonical dataset, use the 'Download Dataset' button at the top-left of the chat surface.`
+            : undefined;
         downloadPivotGridAsXlsx(
           effectivePivotModel as unknown as PivotModel,
           pivotExportFlatRows,
           temporalFacetColumns ?? [],
           showValuesAs,
-          title
+          title,
+          pivotRows,
+          flatSheetNote ? { flatSheetNote } : undefined,
         );
         toast({
           title: 'Success',
@@ -2287,6 +2351,25 @@ export function DataPreviewTable({
     pivotResultRowCount !== toolPreviewRowCount;
 
   const renderPivotDataWorkspace = (forExpandedView: boolean) => {
+    // PVT5 · the agent ran an analytical step but pivot defaults failed
+    // the safety contract on the server. Render an elegant fallback in
+    // place of the pivot UI — the chart and answer above are still valid.
+    if (pivotUnavailable) {
+      return (
+        <div className="flex flex-1 min-h-[12rem] items-center justify-center px-6 py-8">
+          <div className="max-w-md text-center space-y-2">
+            <p className="text-sm font-medium text-foreground">
+              Pivot view unavailable for this query.
+            </p>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              The chart and answer above are correct — we just couldn&apos;t auto-generate
+              a useful pivot configuration here. You can still build your own
+              by dragging fields into the panel.
+            </p>
+          </div>
+        </div>
+      );
+    }
     if (forExpandedView && serverPivotLoading && !effectivePivotModel) {
       return (
         <div className="flex flex-1 min-h-[12rem] items-center justify-center text-muted-foreground gap-2">
@@ -2819,8 +2902,16 @@ export function DataPreviewTable({
                   ) : null}
                   {chartPreview ? (
                     <div className="flex flex-1 min-h-0 flex-col">
+                      {/* PremiumChart's `height` prop defaults to 280 px when
+                          omitted — that's smaller than this 480 px container, so
+                          v2 marks (donut/radar/bubble/waterfall) used to render
+                          shrunken with empty space below. v1 marks routed via
+                          `legacy()` use `fillParent` and weren't affected. Pass
+                          an explicit height (480 - 16 padding - 2 border ≈ 460)
+                          so both paths fill the box. */}
                       <ChartShim
                         spec={chartPreview}
+                        height={460}
                         legacy={() => (
                           <ChartRenderer
                             chart={chartPreviewForRender ?? (chartPreview as ChartSpec)}
@@ -2949,7 +3040,11 @@ export function DataPreviewTable({
               key="pivot-panel"
               initial={false}
               animate={{
-                width: pivotPanelOpen ? 300 : 44,
+                // PVT6 · 300 → 360. Pre-fix: ~236px content area after rail
+                // + padding clipped the trailing ✕ button on long field
+                // labels (e.g. "Half-year · TSOE-Date Combo"). 360 leaves
+                // ~296px content — enough for grip + label + remove button.
+                width: pivotPanelOpen ? 360 : 44,
                 opacity: 1,
               }}
               transition={{ type: 'spring', stiffness: 380, damping: 32 }}

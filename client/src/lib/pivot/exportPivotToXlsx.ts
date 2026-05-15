@@ -141,13 +141,65 @@ export function sanitizeExportBasename(
   return cleaned || fallback;
 }
 
-export function downloadPivotGridAsXlsx(
+function coerceFlatCell(v: unknown): string | number | boolean {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+  if (v instanceof Date) return v.toISOString();
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function unionKeysInOrder(rows: Record<string, unknown>[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const row of rows) {
+    if (!row) continue;
+    for (const k of Object.keys(row)) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      ordered.push(k);
+    }
+  }
+  return ordered;
+}
+
+export function buildFlatTableSheet(
+  flatTableRows: Record<string, unknown>[],
+  note?: string
+): XLSX.WorkSheet {
+  const headers = unionKeysInOrder(flatTableRows);
+  const coerced = flatTableRows.map((row) => {
+    const out: Record<string, string | number | boolean> = {};
+    for (const k of headers) {
+      out[k] = coerceFlatCell(row?.[k]);
+    }
+    return out;
+  });
+
+  if (note && note.length > 0) {
+    const ws = XLSX.utils.aoa_to_sheet([[note]]);
+    XLSX.utils.sheet_add_json(ws, coerced, {
+      origin: "A3",
+      header: headers,
+      skipHeader: false,
+    });
+    return ws;
+  }
+
+  return XLSX.utils.json_to_sheet(coerced, { header: headers });
+}
+
+export function buildPivotWorkbook(
   model: PivotModel,
   flatRows: PivotFlatRow[],
   temporalFacetColumns: TemporalFacetColumnMeta[],
   showValuesAs: PivotShowValuesAsExportMode,
-  baseName: string | undefined | null
-): void {
+  flatTableRows?: Record<string, unknown>[],
+  options?: { flatSheetNote?: string }
+): XLSX.WorkBook {
   const rows = pivotGridToSheetRows(
     model,
     flatRows,
@@ -157,6 +209,32 @@ export function downloadPivotGridAsXlsx(
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Pivot");
+
+  if (flatTableRows && flatTableRows.length > 0) {
+    const ws2 = buildFlatTableSheet(flatTableRows, options?.flatSheetNote);
+    XLSX.utils.book_append_sheet(wb, ws2, "Flat Table");
+  }
+
+  return wb;
+}
+
+export function downloadPivotGridAsXlsx(
+  model: PivotModel,
+  flatRows: PivotFlatRow[],
+  temporalFacetColumns: TemporalFacetColumnMeta[],
+  showValuesAs: PivotShowValuesAsExportMode,
+  baseName: string | undefined | null,
+  flatTableRows?: Record<string, unknown>[],
+  options?: { flatSheetNote?: string }
+): void {
+  const wb = buildPivotWorkbook(
+    model,
+    flatRows,
+    temporalFacetColumns,
+    showValuesAs,
+    flatTableRows,
+    options
+  );
   const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   const blob = new Blob([buf], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

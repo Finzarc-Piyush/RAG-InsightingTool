@@ -28,14 +28,17 @@ export type CompletenessResult =
       courseCorrection: string;
     };
 
-const MIN_IMPLICATIONS = 2;
-const MIN_RECOMMENDATIONS = 2;
+const MIN_IMPLICATIONS = 1;
+const MIN_RECOMMENDATIONS = 1;
 
 /**
  * @param envelope Optional — when undefined we always pass (the synthesizer
  *   fallback path emits no envelope; nothing to enforce).
- * @param questionShape From `ctx.analysisBrief?.questionShape`. When `undefined`
- *   or `"none"` (conversational turn) the check always passes.
+ * @param questionShape From `ctx.analysisBrief?.questionShape`. When `undefined`,
+ *   `"none"` (conversational turn), or `"descriptive"` (lookup/summary) the
+ *   check always passes — these question shapes don't require padded
+ *   implications/recommendations sections, and forcing them produces the
+ *   manufactured-content bloat we explicitly want to avoid.
  * @param domainContextWasSupplied `Boolean(ctx.domainContext?.trim())` at the
  *   call site. Required so we don't demand `domainLens` on turns where no
  *   pack was loaded — the narrator would have nothing to cite.
@@ -46,7 +49,9 @@ export function checkEnvelopeCompleteness(
   domainContextWasSupplied: boolean
 ): CompletenessResult {
   if (!envelope) return { ok: true };
-  if (!questionShape || questionShape === "none") return { ok: true };
+  if (!questionShape || questionShape === "none" || questionShape === "descriptive") {
+    return { ok: true };
+  }
 
   const missing: string[] = [];
   const implCount = envelope.implications?.length ?? 0;
@@ -171,4 +176,100 @@ export function extractSuppliedPackIds(domainContext: string | undefined): strin
     ids.add(match[1]);
   }
   return [...ids];
+}
+
+// =============================================================================
+// Wave QL4 · "Aggregation question not addressed" envelope gate
+// =============================================================================
+//
+// Defense-in-depth for Wave QL2's deterministic synthesis floor. If QL2
+// misfires (column binding ambiguous, intent regex misses an unusual
+// phrasing) and the narrator still says "not computable" on a question whose
+// columns clearly exist, this gate forces ONE repair round with explicit
+// instructions to run the aggregation before narrating.
+//
+// Triggers strictly when ALL of:
+//   1. The question carries aggregation intent (PD1, PD3, or simple-agg verb).
+//   2. The narrator's tldr / findings text contains "not computable",
+//      "cannot compute", "lack of aggregation", or similar give-up phrasing.
+//   3. Zero `execute_query_plan` tool calls ran in the trace.
+//
+// Conservative — single false positive is preferable to silently shipping a
+// "not computable" answer for a literal aggregation question.
+
+const NOT_COMPUTABLE_RE =
+  /\b(?:not\s+computable|cannot\s+(?:be\s+)?compute(?:d)?|unable\s+to\s+(?:compute|determine|calculate)|lack(?:s|ing)?\s+of\s+(?:direct\s+)?aggregation|no\s+aggregation\s+results?|insufficient\s+(?:direct\s+)?aggregation)\b/i;
+
+export type AggregationAddressedResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code: "AGGREGATION_QUESTION_NOT_ADDRESSED";
+      description: string;
+      courseCorrection: string;
+    };
+
+export interface AggregationAddressedInputs {
+  /** The user's literal question. */
+  question: string;
+  /** Whether the trace ran AT LEAST ONE `execute_query_plan` tool call. */
+  ranExecuteQueryPlan: boolean;
+  /**
+   * Whether deterministic aggregation intent was detected for this question
+   * by the QL2 pipeline (PD1 / PD3 / simple-agg with metric resolvable).
+   * Passed by the call site — the gate itself is question-agnostic.
+   */
+  hasAggregationIntent: boolean;
+}
+
+/**
+ * Wave QL4 · Returns `{ ok: false }` only when the narrator's draft claims
+ * the question is uncomputable AND aggregation intent was detected AND no
+ * analytical query ran. Otherwise passes. The combined trigger makes false
+ * positives nearly impossible — a why/driver/comparison question with a
+ * legitimate "data doesn't support that" narration will not fire because
+ * `hasAggregationIntent` is false.
+ */
+export function checkAggregationQuestionAddressed(
+  envelope: AnswerEnvelope | undefined,
+  inputs: AggregationAddressedInputs
+): AggregationAddressedResult {
+  if (!envelope) return { ok: true };
+  if (!inputs.hasAggregationIntent) return { ok: true };
+  if (inputs.ranExecuteQueryPlan) return { ok: true };
+
+  const candidates: string[] = [];
+  if (typeof envelope.tldr === "string") candidates.push(envelope.tldr);
+  if (Array.isArray(envelope.findings)) {
+    for (const f of envelope.findings) {
+      if (typeof f?.headline === "string") candidates.push(f.headline);
+      if (typeof f?.evidence === "string") candidates.push(f.evidence);
+    }
+  }
+  // Also scan recommendations/caveats — sometimes the narrator buries the
+  // not-computable admission there instead of the tldr.
+  if (Array.isArray(envelope.recommendations)) {
+    for (const r of envelope.recommendations) {
+      if (typeof r?.action === "string") candidates.push(r.action);
+      if (typeof r?.rationale === "string") candidates.push(r.rationale);
+    }
+  }
+  if (Array.isArray(envelope.caveats)) {
+    for (const c of envelope.caveats) {
+      if (typeof c === "string") candidates.push(c);
+    }
+  }
+  const sawNotComputable = candidates.some((t) => NOT_COMPUTABLE_RE.test(t));
+  if (!sawNotComputable) return { ok: true };
+
+  const description = `The user asked a literal aggregation question (${JSON.stringify(
+    inputs.question.slice(0, 140)
+  )}) and the dataset has the columns needed to answer it, but the draft says the answer is not computable. No execute_query_plan tool was run during this turn.`;
+  const courseCorrection = `Run the aggregation. Emit a plan step now with execute_query_plan: pick the groupBy from the dimension the user named ("by X" / "across X" / "per X" when the per-target is non-temporal), set the metric column from the numeric column the user named, and use perDimension + innerOperation:"sum" when the user asked for a rate ("per day" / "daily average"). Re-narrate the envelope using the resulting rows; do not claim the answer is not computable when the dataset contains the columns the question names.`;
+  return {
+    ok: false,
+    code: "AGGREGATION_QUESTION_NOT_ADDRESSED",
+    description,
+    courseCorrection,
+  };
 }

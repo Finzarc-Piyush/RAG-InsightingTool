@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { recordUsageEvent } from "../models/usageEvent.model.js";
 import {
   addChartToDashboardRequestSchema,
   createDashboardFromSpecRequestSchema,
@@ -9,6 +10,7 @@ import {
   patchDashboardRequestSchema,
   patchDashboardSheetRequestSchema,
   removeChartFromDashboardRequestSchema,
+  dashboardReorderSheetsRequestSchema,
 } from "../shared/schema.js";
 import {
   addTableToDashboardRequestSchema,
@@ -27,6 +29,7 @@ import {
   removeChartFromDashboard,
   removeSheetFromDashboard,
   renameSheet,
+  reorderSheets,
   renameDashboard,
   updateChartInsightOrRecommendation,
   addTableToDashboard,
@@ -129,6 +132,12 @@ export const getDashboardController = async (req: Request, res: Response) => {
     if (!dashboard) {
       return res.status(404).json({ error: 'Dashboard not found' });
     }
+    // Wave AD3 · admin-dashboard observability. Fire-and-forget; never affects response.
+    void recordUsageEvent({
+      eventType: "dashboard.opened",
+      userEmail: username,
+      dashboardId,
+    });
     res.json(dashboard);
   } catch (error: any) {
     if (error instanceof AuthenticationError) {
@@ -290,6 +299,26 @@ export const renameSheetController = async (req: Request, res: Response) => {
     } else {
       res.status(400).json({ error: error?.message || 'Failed to rename sheet' });
     }
+  }
+};
+
+export const reorderSheetsController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const parsed = dashboardReorderSheetsRequestSchema.parse(req.body);
+    const updated = await reorderSheets(
+      dashboardId,
+      username,
+      parsed.orderedSheetIds,
+    );
+    res.json(updated);
+  } catch (error: any) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(400).json({ error: error?.message || "Failed to reorder sheets" });
   }
 };
 
@@ -549,6 +578,19 @@ export const exportDashboardController = async (req: Request, res: Response) => 
         "Content-Disposition",
         `attachment; filename="${safeName}.pdf"`
       );
+      // Wave AD3 · log the export for the admin metrics dashboard.
+      void recordUsageEvent({
+        eventType: "dashboard.exported",
+        userEmail: username,
+        dashboardId,
+        metadata: {
+          format: "pdf",
+          sheetCount: Array.isArray((dashboard as { sheets?: unknown[] }).sheets)
+            ? (dashboard as { sheets: unknown[] }).sheets.length
+            : undefined,
+          sizeBytes: buf.byteLength,
+        },
+      });
       res.send(buf);
       return;
     }
@@ -561,6 +603,18 @@ export const exportDashboardController = async (req: Request, res: Response) => 
       "Content-Disposition",
       `attachment; filename="${safeName}.pptx"`
     );
+    void recordUsageEvent({
+      eventType: "dashboard.exported",
+      userEmail: username,
+      dashboardId,
+      metadata: {
+        format: "pptx",
+        sheetCount: Array.isArray((dashboard as { sheets?: unknown[] }).sheets)
+          ? (dashboard as { sheets: unknown[] }).sheets.length
+          : undefined,
+        sizeBytes: buf.byteLength,
+      },
+    });
     res.send(buf);
   } catch (error: any) {
     if (error instanceof AuthenticationError) {

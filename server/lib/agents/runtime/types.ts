@@ -238,6 +238,21 @@ export interface AgentExecutionContext {
    * signal to cancel in-flight network requests.
    */
   abortSignal?: AbortSignal;
+  /**
+   * AMR3 · Per-turn capture buffer for analytical pivot results emitted by
+   * successful `execute_query_plan` steps. The agent loop pushes one raw
+   * entry per qualifying step BEFORE preview-row truncation (so the cache
+   * recall path can re-render the full pivot). The chatStream service drains
+   * the buffer after the turn returns, runs `materializePivotArtifact` on
+   * each entry (inline-vs-blob policy, idempotent on artifactId), then
+   * patches the resulting array onto the `past_analyses` doc via
+   * `patchPastAnalysisPivotArtifacts`. Empty / undefined ⇒ no pivots
+   * captured (data-prep tools, scalar aggregates, errored steps).
+   *
+   * Imported lazily via `import("../../pastAnalysisPivotArtifact.js")` to
+   * avoid pulling Azure-blob SDK init into the agent runtime's module graph.
+   */
+  pivotArtifactsBuffer?: import("../../pastAnalysisPivotArtifact.js").RawPivotArtifact[];
 }
 
 export interface PlanStep {
@@ -408,4 +423,35 @@ export interface AgentLoopResult {
    * recovery / debugging can replay the turn losslessly.
    */
   agentInternals?: import("../../../shared/schema.js").AgentInternals;
+  /**
+   * W3 · structured AnswerEnvelope from narrator (TL;DR, findings,
+   * methodology, caveats, implications, recommendations, domainLens).
+   * Optional — absent on synthesis-fallback / dataOps turns. The
+   * agent-loop spread at the end of `runAgentTurn` populates this from
+   * the local `envelopeAnswerEnvelope` accumulator.
+   */
+  answerEnvelope?: import("../../../shared/schema.js").Message["answerEnvelope"];
+  /**
+   * Promise that resolves to the post-verifier business-actions agent's
+   * output. Async-decoupled from the answer envelope so the response event
+   * fires at exactly the moment it does today; the caller (chatStream
+   * service) awaits this with a timeout AFTER emitting the response event,
+   * then sends a separate `business_actions` SSE event and patches the
+   * persisted message. Resolves to `[]` on timeout / failure / empty
+   * self-gate; absent when the seam was hard-skipped (env flag off,
+   * fallback synthesis, no envelope).
+   */
+  businessActionsPromise?: Promise<
+    NonNullable<import("../../../shared/schema.js").Message["businessActions"]>
+  >;
+  /**
+   * AMR3 · Drained snapshot of `ctx.pivotArtifactsBuffer` at the end of
+   * `runAgentTurn`. The chatStream service iterates these, runs
+   * `materializePivotArtifact` (inline-vs-blob policy), and patches the
+   * resulting `PastAnalysisPivotArtifact[]` onto the same `past_analyses`
+   * doc that was just upserted. Surfaced via this typed seam (rather than
+   * read off `ctx` after-the-fact) so the contract is explicit and
+   * traceable: agent loop → answerQuestion → chatStream.
+   */
+  pivotArtifacts?: import("../../pastAnalysisPivotArtifact.js").RawPivotArtifact[];
 }

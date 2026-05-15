@@ -8,9 +8,13 @@
  * `rawData`, `dataSummary`, and `blobInfo` are never altered. The filter is
  * applied at read time via `loadLatestData` and `resolveSessionDataTable`.
  *
- * Per-session in-process mutex (W40 pattern) prevents concurrent PUT/DELETEs
- * from clobbering each other. Single-instance correctness only — multi-instance
- * scaling would need Cosmos `ifMatch` / external lock.
+ * Wave A2 · Per-session in-process mutex moved into the unified
+ * `withSessionWriteLock` helper. Pre-A2 this controller held its own
+ * `activeFilterLocks` map that only serialised filter-vs-filter PUT/DELETEs;
+ * concurrent writes from `sessionAnalysisContext.ts` (assistant merge,
+ * hierarchy updates) or `patchAssistantBusinessActions.ts` would race
+ * against this controller's RMW of the chat doc. Single-instance correctness
+ * only — multi-instance scaling would need Cosmos `ifMatch` / external lock.
  */
 import { Request, Response } from "express";
 import { z } from "zod";
@@ -29,9 +33,10 @@ import {
 } from "../lib/activeFilter/applyActiveFilter.js";
 import { invalidateFilteredDataView } from "../lib/activeFilter/resolveSessionDataTable.js";
 import { loadLatestData } from "../utils/dataLoader.js";
-
-/** Per-session mutex — see W40 / `messagePivotStateLocks` for the pattern. */
-const activeFilterLocks = new Map<string, Promise<unknown>>();
+import {
+  withSessionWriteLock,
+  __resetSessionWriteChainForTesting,
+} from "../lib/sessionWriteLock.js";
 
 /**
  * Body for PUT — accepts a partial spec where the server fills in `version` /
@@ -111,15 +116,7 @@ export const putActiveFilterEndpoint = async (req: Request, res: Response) => {
     }
     const conditions = parsed.data.conditions;
 
-    const previous = activeFilterLocks.get(sessionId);
-    const work = (async () => {
-      if (previous) {
-        try {
-          await previous;
-        } catch {
-          /* ignore prior failure */
-        }
-      }
+    await withSessionWriteLock(sessionId, async () => {
       const doc = await getChatBySessionIdForUser(sessionId, username);
       if (!doc) {
         const err = new Error("Session not found") as Error & { statusCode?: number };
@@ -138,16 +135,7 @@ export const putActiveFilterEndpoint = async (req: Request, res: Response) => {
       doc.lastUpdatedAt = Date.now();
       await updateChatDocument(doc);
       invalidateFilteredDataView(sessionId);
-    })();
-
-    activeFilterLocks.set(sessionId, work);
-    try {
-      await work;
-    } finally {
-      if (activeFilterLocks.get(sessionId) === work) {
-        activeFilterLocks.delete(sessionId);
-      }
-    }
+    });
 
     const out = await buildResponse(sessionId, username);
     return res.json(out);
@@ -162,15 +150,7 @@ export const deleteActiveFilterEndpoint = async (req: Request, res: Response) =>
     if (!sessionId) return res.status(400).json({ error: "Session ID is required" });
     const username = requireUsername(req);
 
-    const previous = activeFilterLocks.get(sessionId);
-    const work = (async () => {
-      if (previous) {
-        try {
-          await previous;
-        } catch {
-          /* ignore */
-        }
-      }
+    await withSessionWriteLock(sessionId, async () => {
       const doc = await getChatBySessionIdForUser(sessionId, username);
       if (!doc) {
         const err = new Error("Session not found") as Error & { statusCode?: number };
@@ -183,16 +163,7 @@ export const deleteActiveFilterEndpoint = async (req: Request, res: Response) =>
         await updateChatDocument(doc);
       }
       invalidateFilteredDataView(sessionId);
-    })();
-
-    activeFilterLocks.set(sessionId, work);
-    try {
-      await work;
-    } finally {
-      if (activeFilterLocks.get(sessionId) === work) {
-        activeFilterLocks.delete(sessionId);
-      }
-    }
+    });
 
     const out = await buildResponse(sessionId, username);
     return res.json(out);
@@ -216,10 +187,11 @@ function handleError(res: Response, err: unknown, fallback: string): Response {
 
 /**
  * Test seam — clears the per-session locks. Used by tests that rely on
- * deterministic mutex state.
+ * deterministic mutex state. Wave A2 redirected the lock to the unified
+ * `withSessionWriteLock` map; the reset hook now drains that shared map.
  */
 export function __resetActiveFilterLocksForTests(): void {
-  activeFilterLocks.clear();
+  __resetSessionWriteChainForTesting();
 }
 
 // applyActiveFilter is exported for completeness (route tests use it).

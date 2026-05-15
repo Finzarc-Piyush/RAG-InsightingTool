@@ -34,17 +34,22 @@ const ROTATING_BY_STEP: Record<EnrichmentStep, string[]> = {
   ],
 };
 
-function estimateBand(rows: number, cols: number, step?: EnrichmentStep) {
+export function estimateBand(rows: number, cols: number, step?: EnrichmentStep) {
+  // PVT6 · recalibrated to observed wall-clock (~15s for a 10k × 44 dataset).
+  // Pre-fix: rowTerm capped at 22 alone for any dataset ≥ 10k rows, low band
+  // landed at 45-58s — 2-3× over actual. Real measurements skew much lower
+  // because the heavy paths (DuckDB materialize, RAG index) are I/O-bound
+  // and don't scale linearly with rows. Constants tuned so 10k × 44 → 15-27s.
   const r = Math.max(0, rows);
   const c = Math.max(0, cols);
-  const rowTerm = Math.min(22, Math.log10(Math.max(r, 50)) * 9);
-  const colTerm = Math.min(18, c * 0.35);
-  let low = Math.round(14 + rowTerm + colTerm);
-  low = Math.max(15, Math.min(low, 58));
-  if (step === 'building_context') low = Math.max(12, low - 4);
-  if (step === 'persisting') low = Math.max(8, low - 8);
-  let high = Math.min(95, low + (step === 'persisting' ? 18 : 24));
-  if (high <= low) high = low + 12;
+  const rowTerm = Math.min(7, Math.log10(Math.max(r, 100)) * 1.75);
+  const colTerm = Math.min(4, c * 0.06);
+  let low = Math.round(5 + rowTerm + colTerm);
+  low = Math.max(8, Math.min(low, 35));
+  if (step === 'building_context') low = Math.max(7, low - 3);
+  if (step === 'persisting') low = Math.max(5, low - 5);
+  let high = Math.min(60, low + (step === 'persisting' ? 10 : 12));
+  if (high <= low) high = low + 6;
   return { low, high };
 }
 

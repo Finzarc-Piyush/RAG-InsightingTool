@@ -2,6 +2,7 @@
  * Chat Service
  * Main business logic for chat operations
  */
+import { randomUUID } from "node:crypto";
 import { Message } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
@@ -337,7 +338,13 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         // runtime payload is JSON-serialisable either way — an unchecked cast
         // here matches what the streaming path already does and avoids
         // touching Message's schema (which other code paths depend on).
-        agentTrace: answerResult.agentTrace as unknown as Record<string, unknown> | undefined,
+        // Wave AD1 · ensure turnId is always present so FeedbackButtons mount
+        // and past_analyses persistence has a stable doc id.
+        agentTrace: ((): Record<string, unknown> => {
+          const trace = (answerResult.agentTrace ?? {}) as Record<string, unknown>;
+          if (typeof (trace as { turnId?: unknown }).turnId === "string") return trace;
+          return { ...trace, turnId: randomUUID() };
+        })(),
         timestamp: assistantMessageTimestamp,
         ...(mergedSuggestedQuestions.length > 0
           ? { suggestedQuestions: mergedSuggestedQuestions }

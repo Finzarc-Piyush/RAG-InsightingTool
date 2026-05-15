@@ -67,6 +67,9 @@ import { registerWebSearchTool } from "./webSearchTool.js";
 import { registerBudgetOptimizerTool } from "./budgetOptimizerTool.js";
 import { registerComputeGrowthTool } from "./computeGrowthTool.js";
 import { registerDetectSeasonalityTool } from "./detectSeasonalityTool.js";
+import { registerForecastTool } from "./forecastTool.js";
+import { registerAnomalyDetectionTool } from "./anomalyDetectionTool.js";
+import { registerSignificanceTestTool } from "./significanceTestTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -654,6 +657,27 @@ export function registerDefaultTools(registry: ToolRegistry) {
         Boolean(ctx.exec.sessionId) &&
         canExecuteQueryPlanOnDuckDb(normalizedPlan);
 
+      // Wave QL6 · DuckDB-first for analytical aggregations. When the plan
+      // has aggregations we MUST hit DuckDB (the authoritative analytical
+      // surface). The in-memory fallback only fires for:
+      //   (a) plans with NO aggregations (projections, sample-style queries)
+      //     — these legitimately need the in-memory frame for per-turn
+      //     computed columns and row-level chart enrichment.
+      //   (b) DuckDB column-binding failures on per-turn computed columns
+      //     (add_computed_columns produced a column DuckDB doesn't have).
+      //     We keep the safety net there so the agent can still chain
+      //     row-wise transforms; for everything else, hard fail.
+      const hasAggregations = (normalizedPlan.aggregations ?? []).length > 0;
+      const planLooksLikePerTurnComputedColumn = (errMsg: string): boolean => {
+        const m = errMsg.toLowerCase();
+        return (
+          m.includes("binder error") ||
+          m.includes("referenced column") ||
+          m.includes("does not have a column") ||
+          m.includes("not found in")
+        );
+      };
+
       if (tryDuck) {
         const duck = await executeQueryPlanOnDuckDb(
           ctx.exec.sessionId,
@@ -666,9 +690,44 @@ export function registerDefaultTools(registry: ToolRegistry) {
           descriptions = duck.descriptions;
           inputRowCount = duck.inputRowCount;
         } else {
+          // PD2 · Surface perDimension (nested aggregation) failures with the
+          // resolved perDimension and a sample of tableColumns so production
+          // logs make column-not-found cases debuggable.
+          const nestedPerDims = (normalizedPlan.aggregations ?? [])
+            .map((a) => a.perDimension)
+            .filter((p): p is string => typeof p === "string" && p.length > 0);
+          if (nestedPerDims.length > 0) {
+            agentLog("execute_query_plan_duckdb_fail_nested", {
+              sessionId: ctx.exec.sessionId,
+              perDimensions: nestedPerDims.join(","),
+              error: duck.error.slice(0, 400),
+            });
+          }
+          // Wave QL6 · Hard-fail on DuckDB execution errors when the plan
+          // has aggregations AND the error is NOT a column-binding failure.
+          // Column-binding failures usually mean a per-turn computed column
+          // isn't materialized in DuckDB yet — that's the only case where
+          // we keep the in-memory fallback, because the in-memory frame
+          // carries the just-added column.
+          const isColumnBindingErr = planLooksLikePerTurnComputedColumn(
+            duck.error
+          );
+          if (hasAggregations && !isColumnBindingErr) {
+            agentLog("execute_query_plan_duckdb_hard_fail", {
+              sessionId: ctx.exec.sessionId,
+              error: duck.error.slice(0, 400),
+            });
+            return {
+              ok: false,
+              summary: `DuckDB execution failed for this aggregation: ${duck.error.slice(0, 240)}. The dataset may not be materialized yet — re-open the session or wait a moment, then retry.`,
+            };
+          }
           agentLog("execute_query_plan_duckdb_fallback", {
             sessionId: ctx.exec.sessionId,
             error: duck.error.slice(0, 400),
+            reason: isColumnBindingErr
+              ? "per_turn_computed_column"
+              : "no_aggregation",
           });
           const mem = executeQueryPlan(
             memFrame,
@@ -684,6 +743,22 @@ export function registerDefaultTools(registry: ToolRegistry) {
           inputRowCount = memFrame.length;
         }
       } else {
+        // Wave QL6 · No DuckDB materialization available. For aggregations,
+        // this is a hard fail — we never silently grind through Cosmos-loaded
+        // rows for what should be a DuckDB query. For non-aggregation plans
+        // (projections, row lists, sample fetches), the in-memory path is
+        // legitimate.
+        if (hasAggregations) {
+          agentLog("execute_query_plan_no_duckdb_hard_fail", {
+            sessionId: ctx.exec.sessionId,
+            columnarStoragePath: ctx.exec.columnarStoragePath ?? "(missing)",
+          });
+          return {
+            ok: false,
+            summary:
+              "DuckDB execution surface is not available for this session yet. Re-open the session or wait a moment for materialization, then retry.",
+          };
+        }
         const mem = executeQueryPlan(
           memFrame,
           ctx.exec.summary,
@@ -1448,4 +1523,13 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // WSE3 · within-year recurring seasonality (month-of-year / quarter-of-year).
   // Use for trend questions on multi-year monthly/quarterly data.
   registerDetectSeasonalityTool(registry);
+  // Wave F1 · time-series forecasting (linear trend + optional seasonal).
+  // Gated by FORECAST_ENABLED=true; surfaces a clear off-message otherwise.
+  registerForecastTool(registry);
+  // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
+  // ANOMALY_DETECTION_ENABLED=true.
+  registerAnomalyDetectionTool(registry);
+  // Wave F3 · statistical significance tests (Welch's t, paired t, χ²).
+  // Gated by SIGNIFICANCE_TESTS_ENABLED=true.
+  registerSignificanceTestTool(registry);
 }

@@ -35,6 +35,7 @@ import {
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
   ChartLegend,
   useChartLegendState,
@@ -220,7 +221,7 @@ export function PointRenderer({
             stroke="hsl(var(--border))"
             strokeOpacity={0.25}
             strokeDasharray="2,2"
-            numTicks={4}
+            numTicks={targetYTickCount(innerHeight)}
           />
           {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
             <line
@@ -293,7 +294,7 @@ export function PointRenderer({
               fontFamily: "var(--font-sans)",
               textAnchor: "middle",
             })}
-            numTicks={6}
+            numTicks={targetYTickCount(innerWidth)}
           />
           <AxisLeft
             scale={yScale}
@@ -308,7 +309,7 @@ export function PointRenderer({
               dx: -4,
               dy: 3,
             })}
-            numTicks={4}
+            numTicks={targetYTickCount(innerHeight)}
           />
         </Group>
       </svg>

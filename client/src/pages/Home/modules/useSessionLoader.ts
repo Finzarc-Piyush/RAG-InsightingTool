@@ -4,8 +4,10 @@ import type {
   TemporalFacetColumnMeta,
   SessionAnalysisContext,
   ColumnCurrency,
+  DateTimeColumnPair,
   WideFormatTransform,
 } from '@/shared/schema';
+import type { IndicatorEntry } from '@/components/IndicatorColumnsBanner';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
 import { suggestedFollowUpsFromSession } from '@/lib/initialAnalysisMessage';
 import {
@@ -45,6 +47,10 @@ interface UseSessionLoaderProps {
    */
   setWideFormatTransform?: (transform: WideFormatTransform | undefined) => void;
   setCurrencyByColumn?: (map: Record<string, ColumnCurrency>) => void;
+  /** SU-UX1 · populate the date×time pair banner state on session load. */
+  setDateTimeColumnPairs?: (next: DateTimeColumnPair[]) => void;
+  /** SU-UX1 · populate the indicator-columns banner state on session load. */
+  setIndicators?: (next: IndicatorEntry[]) => void;
 }
 
 /**
@@ -71,6 +77,8 @@ export const useSessionLoader = ({
   setSessionAnalysisContext,
   setWideFormatTransform,
   setCurrencyByColumn,
+  setDateTimeColumnPairs,
+  setIndicators,
 }: UseSessionLoaderProps) => {
   useEffect(() => {
     if (!loadedSessionData) return;
@@ -125,6 +133,35 @@ export const useSessionLoader = ({
           if (col?.currency) map[col.name] = col.currency;
         }
         setCurrencyByColumn(map);
+      }
+      // SU-UX1 · publish the schema-annotation arrays so the banners survive
+      // refresh, not just the upload-completion path.
+      if (setDateTimeColumnPairs) {
+        setDateTimeColumnPairs(session.dataSummary.dateTimeColumnPairs ?? []);
+      }
+      if (setIndicators && Array.isArray(session.dataSummary.columns)) {
+        const next: IndicatorEntry[] = [];
+        for (const c of session.dataSummary.columns) {
+          if (!c?.indicator) continue;
+          next.push({
+            column: c.name,
+            kind: c.indicator.kind,
+            ...(c.indicator.positiveValues
+              ? { positiveValues: c.indicator.positiveValues }
+              : {}),
+            ...(c.indicator.negativeValues
+              ? { negativeValues: c.indicator.negativeValues }
+              : {}),
+            ...(c.indicator.sentinelValues
+              ? { sentinelValues: c.indicator.sentinelValues }
+              : {}),
+            source: c.indicator.source,
+            ...(c.answersQuestions
+              ? { answersQuestions: c.answersQuestions }
+              : {}),
+          });
+        }
+        setIndicators(next);
       }
     }
 

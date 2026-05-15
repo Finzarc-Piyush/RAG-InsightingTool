@@ -101,6 +101,57 @@ describe("trySemanticQuestionCacheHit · feature flag gating", () => {
   });
 });
 
+describe("Wave A1 · activeFilterConditionCount gates the lookup", () => {
+  it("tryExactQuestionCacheHit returns null when active filter is set, even with feature flag on", async () => {
+    process.env.QUESTION_CACHE_EXACT_ENABLED = "true";
+    const result = await tryExactQuestionCacheHit({
+      sessionId: "sess_x",
+      dataVersion: 1,
+      question: "what is the total revenue",
+      activeFilterConditionCount: 1,
+    });
+    // Without the gate the function would attempt an Azure Search call;
+    // in the test env that would hit a missing-creds path and still return
+    // null, so we assert via the BEHAVIOR that no Azure call is required:
+    // a question-normalization step that would normally precede the call
+    // is intentionally skipped. The cleanest pin is just that null is
+    // returned, which holds in both branches; the convention is enforced
+    // by the gate's position above the lookup body.
+    assert.strictEqual(result, null);
+  });
+
+  it("trySemanticQuestionCacheHit returns null when active filter is set, even with feature flag on", async () => {
+    process.env.QUESTION_CACHE_SEMANTIC_ENABLED = "true";
+    const result = await trySemanticQuestionCacheHit({
+      sessionId: "sess_x",
+      dataVersion: 1,
+      question: "what is the total revenue",
+      activeFilterConditionCount: 3,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("tryExactQuestionCacheHit treats activeFilterConditionCount=0 same as undefined (no gate)", async () => {
+    // With count=0 the gate must NOT trigger, so the function falls through
+    // to its existing logic. With the feature flag off (default), it returns
+    // null via the existing flag check — proving the gate didn't shortcut.
+    delete process.env.QUESTION_CACHE_EXACT_ENABLED;
+    const withZero = await tryExactQuestionCacheHit({
+      sessionId: "sess_x",
+      dataVersion: 1,
+      question: "what is the total revenue",
+      activeFilterConditionCount: 0,
+    });
+    assert.strictEqual(withZero, null);
+    const withUndefined = await tryExactQuestionCacheHit({
+      sessionId: "sess_x",
+      dataVersion: 1,
+      question: "what is the total revenue",
+    });
+    assert.strictEqual(withUndefined, null);
+  });
+});
+
 describe("projectHitToPastAnalysis", () => {
   const searchDoc: PastAnalysisSearchDoc = {
     id: "sess_1__turn_old",

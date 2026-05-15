@@ -413,6 +413,42 @@ function buildWhereClause(
   };
 }
 
+/**
+ * Wave P1 · In-memory filter for the agent-result data source. Applies
+ * `filterFields` + `filterSelections` to `sourceRows` using the same
+ * normalisation rule the SQL path uses (`pivotDimensionStringKey` for
+ * value comparison), so the UI filter chips behave identically whether
+ * the pivot reads from the base table or from agent rows.
+ *
+ * Empty `filterSelections` (or omitted) → no narrowing.
+ */
+function filterSourceRowsForAgentResult(
+  sourceRows: Record<string, unknown>[],
+  request: PivotQueryRequest
+): Record<string, unknown>[] {
+  const selections = request.filterSelections ?? {};
+  const filterFields = request.filterFields ?? [];
+  if (filterFields.length === 0) return sourceRows;
+  // Build a (field → Set<normalisedAllowedValues>) map. A field listed
+  // in filterFields with no selections is treated as "no filter" (matches
+  // server's SQL path: empty IN list ⇒ pass).
+  const allowed: Map<string, Set<string>> = new Map();
+  for (const f of filterFields) {
+    const vals = selections[f];
+    if (Array.isArray(vals) && vals.length > 0) {
+      allowed.set(f, new Set(vals.map((v) => pivotDimensionStringKey(v))));
+    }
+  }
+  if (allowed.size === 0) return sourceRows;
+  return sourceRows.filter((row) => {
+    for (const [field, allowedSet] of allowed) {
+      const cellKey = pivotDimensionStringKey(row[field]);
+      if (!allowedSet.has(cellKey)) return false;
+    }
+    return true;
+  });
+}
+
 async function fetchFilteredRows(
   storage: ColumnarStorageService,
   request: PivotQueryRequest,
@@ -465,6 +501,58 @@ export async function executePivotQuery(
         };
       })()
     : null;
+
+  // Wave P1 · Agent-result branch. When the request carries `dataSource:
+  // "agent_result"` + `sourceRows`, the pivot operates on those rows
+  // directly — NO DuckDB query, NO cache key (sourceRows are message-
+  // scoped and may differ across messages with the same config hash).
+  // This is the fix for "AOV by region" / "avg daily sales by brand"
+  // type questions where the agent's `computedAggregations` produced
+  // alias columns (e.g. `aov`) that don't exist on the base `data`
+  // table. The pivot reuses the existing in-memory aggregator
+  // (`buildPivotTree`) which already operates on `Record<string, unknown>[]`.
+  if (request.dataSource === "agent_result") {
+    const start = Date.now();
+    const sourceRows = Array.isArray(request.sourceRows) ? request.sourceRows : [];
+    // UI-side filters (filterFields + filterSelections) apply in-memory.
+    // We deliberately do NOT run the SQL filter builder because
+    // sourceRows aren't a SQL table; the existing applyAgg / aggregatePivot
+    // / buildPivotTree path filters via the `WHERE` clause's row-by-row
+    // semantics applied here directly.
+    const filteredRows = filterSourceRowsForAgentResult(sourceRows, request);
+    const colField = request.colFields[0] ?? null;
+    const colKeys = colField ? collectColKeys(filteredRows, colField) : [];
+    const treeObj = buildPivotTree(
+      filteredRows,
+      request.rowFields,
+      colField,
+      colKeys,
+      request.valueSpecs,
+      request.rowSort
+    );
+    const model: PivotModel = {
+      rowFields: request.rowFields,
+      colField,
+      columnFields: [...request.colFields],
+      colKeys,
+      valueSpecs: request.valueSpecs,
+      tree: treeObj,
+      columnFieldTruncated: request.colFields.length > 1,
+    };
+    const response: PivotQueryResponse = {
+      model,
+      meta: {
+        source: "sample", // closest existing source enum; "agent_result" would need a schema bump
+        rowCount: filteredRows.length,
+        colKeyCount: colKeys.length,
+        truncated: request.colFields.length > 1,
+        cached: false,
+        cacheHit: false,
+        durationMs: Date.now() - start,
+      },
+    };
+    return pivotQueryResponseSchema.parse(response);
+  }
 
   const configHash = stableHashJson({
     rowFields: request.rowFields,

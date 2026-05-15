@@ -6,6 +6,10 @@ import {
   listDomainContextPacks,
   setDomainContextPackEnabled,
 } from "../controllers/adminDomainContextController.js";
+import {
+  __setSuperadminEmailsForTesting,
+  __resetSuperadminEmailsForTesting,
+} from "../lib/superadmin.js";
 
 function fakeRes(): Response & {
   status: (code: number) => Response;
@@ -39,10 +43,14 @@ function fakeReq(args: {
   } as unknown as Request;
 }
 
+// Wave AD2 · the admin gate consolidated to the hardcoded SUPERADMIN_EMAILS
+// allowlist; the env-driven ADMIN_EMAILS path was retired. Tests below use
+// `__setSuperadminEmailsForTesting` to widen the allowlist for the duration
+// of a single test, then `__resetSuperadminEmailsForTesting` to restore the
+// production "piyush@finzarc.com only" default.
+
 test("listDomainContextPacks: 403 when caller is not admin", async () => {
-  // No ADMIN_EMAILS set → no email matches
-  const before = process.env.ADMIN_EMAILS;
-  delete process.env.ADMIN_EMAILS;
+  __resetSuperadminEmailsForTesting();
   process.env.DISABLE_AUTH = "true";
   try {
     const res = fakeRes();
@@ -50,14 +58,12 @@ test("listDomainContextPacks: 403 when caller is not admin", async () => {
     assert.equal(res._status, 403);
     assert.deepEqual(res._body, { error: "admin_required" });
   } finally {
-    if (before) process.env.ADMIN_EMAILS = before;
     delete process.env.DISABLE_AUTH;
   }
 });
 
 test("listDomainContextPacks: 200 returns packs when caller is admin", async () => {
-  const before = process.env.ADMIN_EMAILS;
-  process.env.ADMIN_EMAILS = "admin@example.com";
+  __setSuperadminEmailsForTesting(["admin@example.com"]);
   process.env.DISABLE_AUTH = "true";
   try {
     const res = fakeRes();
@@ -69,15 +75,13 @@ test("listDomainContextPacks: 200 returns packs when caller is admin", async () 
     assert.ok(body.totalEnabledTokens > 0);
     assert.ok(body.packs.find((p) => p.id === "marico-company-profile"));
   } finally {
-    if (before) process.env.ADMIN_EMAILS = before;
-    else delete process.env.ADMIN_EMAILS;
+    __resetSuperadminEmailsForTesting();
     delete process.env.DISABLE_AUTH;
   }
 });
 
 test("setDomainContextPackEnabled: 400 when body.enabled is not a boolean", async () => {
-  const before = process.env.ADMIN_EMAILS;
-  process.env.ADMIN_EMAILS = "admin@example.com";
+  __setSuperadminEmailsForTesting(["admin@example.com"]);
   process.env.DISABLE_AUTH = "true";
   try {
     const res = fakeRes();
@@ -92,15 +96,13 @@ test("setDomainContextPackEnabled: 400 when body.enabled is not a boolean", asyn
     assert.equal(res._status, 400);
     assert.deepEqual(res._body, { error: "enabled_must_be_boolean" });
   } finally {
-    if (before) process.env.ADMIN_EMAILS = before;
-    else delete process.env.ADMIN_EMAILS;
+    __resetSuperadminEmailsForTesting();
     delete process.env.DISABLE_AUTH;
   }
 });
 
 test("setDomainContextPackEnabled: 404 for unknown pack id", async () => {
-  const before = process.env.ADMIN_EMAILS;
-  process.env.ADMIN_EMAILS = "admin@example.com";
+  __setSuperadminEmailsForTesting(["admin@example.com"]);
   process.env.DISABLE_AUTH = "true";
   try {
     const res = fakeRes();
@@ -114,17 +116,15 @@ test("setDomainContextPackEnabled: 404 for unknown pack id", async () => {
     );
     assert.equal(res._status, 404);
   } finally {
-    if (before) process.env.ADMIN_EMAILS = before;
-    else delete process.env.ADMIN_EMAILS;
+    __resetSuperadminEmailsForTesting();
     delete process.env.DISABLE_AUTH;
   }
 });
 
 test("setDomainContextPackEnabled: 500 when Cosmos store unavailable for write", async () => {
   // Cosmos is not configured in the test env, so the store throws on writes.
-  const before = process.env.ADMIN_EMAILS;
   const beforeCosmos = process.env.COSMOS_ENDPOINT;
-  process.env.ADMIN_EMAILS = "admin@example.com";
+  __setSuperadminEmailsForTesting(["admin@example.com"]);
   process.env.DISABLE_AUTH = "true";
   delete process.env.COSMOS_ENDPOINT;
   try {
@@ -141,8 +141,7 @@ test("setDomainContextPackEnabled: 500 when Cosmos store unavailable for write",
     const body = res._body as { error: string };
     assert.equal(body.error, "admin_domain_context_patch_failed");
   } finally {
-    if (before) process.env.ADMIN_EMAILS = before;
-    else delete process.env.ADMIN_EMAILS;
+    __resetSuperadminEmailsForTesting();
     if (beforeCosmos) process.env.COSMOS_ENDPOINT = beforeCosmos;
     delete process.env.DISABLE_AUTH;
   }

@@ -1,11 +1,17 @@
 /**
  * useSuperadmin · TanStack-Query-cached check for whether the current user is
- * one of the two hardcoded shadow-viewer emails. Used by Layout.tsx to gate
- * the "Admin View" navbar item, and by superadmin pages to redirect non-
- * superadmins to /analysis (defence in depth — URL guessing should not work).
+ * one of the hardcoded admin emails (Wave AD2 reduced the list to just
+ * `piyush@finzarc.com`). Used by Layout.tsx to gate the "Admin View" navbar
+ * item and by admin pages to gate their content.
  *
- * Cached for the session — superadmin status doesn't change without a
- * deploy. Refetch on mount/focus is wasteful, hence the long staleTime.
+ * Wave AD7 follow-up · refetch on mount + 60s staleTime so a stale `false`
+ * from before AD2 shipped (or any transient network blip) can't trap the
+ * user out of the admin surface for an hour. Status is cheap (one tiny
+ * Cosmos-free endpoint) so refetching on every page mount is fine.
+ *
+ * `hasResolved` lets callers distinguish "we know the answer is false" from
+ * "we haven't received a response yet" so they can avoid redirecting on
+ * the brief loading flash.
  */
 
 import { useQuery } from "@tanstack/react-query";
@@ -16,18 +22,20 @@ const QUERY_KEY = ["superadmin", "me"] as const;
 export function useSuperadmin(): {
   isSuperadmin: boolean;
   isLoading: boolean;
+  hasResolved: boolean;
   email: string | null;
 } {
-  const { data, isLoading } = useQuery<SuperadminMeResponse>({
+  const { data, isLoading, isSuccess } = useQuery<SuperadminMeResponse>({
     queryKey: QUERY_KEY,
     queryFn: fetchSuperadminMe,
-    staleTime: 60 * 60 * 1000, // 1 hour
+    staleTime: 60 * 1000, // 60s
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
+    refetchOnMount: "always",
   });
   return {
     isSuperadmin: data?.isSuperadmin ?? false,
     isLoading,
+    hasResolved: isSuccess,
     email: data?.email ?? null,
   };
 }

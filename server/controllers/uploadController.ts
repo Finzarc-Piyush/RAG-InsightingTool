@@ -4,6 +4,7 @@ import { uploadQueue } from "../utils/uploadQueue.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
 import { getExcelSheetNames } from "../lib/fileParser.js";
+import { createPlaceholderSession } from "../models/chat.model.js";
 
 /**
  * Upload file endpoint - now uses async queue processing
@@ -53,7 +54,35 @@ export const uploadFile = async (
       }
     }
 
-    // Enqueue immediately; placeholder/blob best-effort work happens in queue worker
+    // Wave QL10 · Create the placeholder chat document BEFORE enqueueing
+    // the background job, so the sessionId we return in the 202 response
+    // is GUARANTEED to be queryable by the client's immediate polls. Mirrors
+    // the existing pattern in `snowflakeController.ts` (which has always
+    // done this and so never hit the "No chat document found" race). Without
+    // this, the queue worker creates the placeholder ~500ms–2s after the
+    // 202 response (after dynamic imports + Azure blob upload finish), and
+    // the client polls land in that gap with "No chat document found".
+    try {
+      await createPlaceholderSession(
+        username,
+        req.file.originalname,
+        sessionId,
+        req.file.size,
+        undefined
+      );
+    } catch (placeholderErr) {
+      console.error(
+        "❌ Failed to create placeholder session for upload:",
+        placeholderErr
+      );
+      return res.status(500).json({
+        error:
+          "Failed to create session record. Please retry the upload.",
+      });
+    }
+
+    // Enqueue the heavy work; the worker's idempotent re-check at L246–260
+    // of uploadQueue.ts short-circuits because we just created the row.
     const jobId = await uploadQueue.enqueue(
       sessionId,
       username,

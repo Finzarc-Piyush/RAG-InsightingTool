@@ -13,7 +13,7 @@ import { StreamingPreviewCard } from '@/pages/Home/Components/StreamingPreviewCa
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download, Save } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -28,7 +28,9 @@ import { ChartBuilderDialog } from '@/components/ChartBuilderDialog';
 import type { ChartSpec } from '@/shared/schema';
 import { FilterDataPanel } from '@/components/FilterDataPanel';
 import { ActiveFilterChips } from '@/components/ActiveFilterChips';
+import { SaveAutomationModal } from '@/components/SaveAutomationModal';
 import { sessionsApi, type ActiveFilterResponse } from '@/lib/api/sessions';
+import { useSessionBroadcast } from '@/lib/sessionBroadcast.hook';
 import { downloadWorkingDatasetXlsx } from '@/lib/api';
 import type { ActiveFilterCondition, ActiveFilterSpec } from '@/shared/schema';
 import { debounce } from '@/lib/debounce';
@@ -103,6 +105,18 @@ interface ChatInterfaceProps {
   onHierarchiesChange?: (
     next: import('@/shared/schema').DimensionHierarchy[],
   ) => void;
+  /** SU-UX1 — date×time pair annotations (from dataSummary.dateTimeColumnPairs). */
+  dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[];
+  /** SU-UX1 — callback after a successful date×time pair remove. */
+  onDateTimePairsChange?: (
+    next: import('@/shared/schema').DateTimeColumnPair[],
+  ) => void;
+  /** SU-UX1 — indicator-column annotations (derived from dataSummary). */
+  indicators?: import('@/components/IndicatorColumnsBanner').IndicatorEntry[];
+  /** SU-UX1 — callback after a successful indicator remove. */
+  onIndicatorsChange?: (
+    next: import('@/components/IndicatorColumnsBanner').IndicatorEntry[],
+  ) => void;
   previewSource?: 'none' | 'local' | 'server';
   localPreviewParseStatus?: 'full' | 'headers_only' | 'failed';
   uploadStartError?: string | null;
@@ -116,6 +130,10 @@ interface ChatInterfaceProps {
    * (default) or no chunks have arrived yet.
    */
   streamingNarratorPreview?: string;
+  /** Wave A11 — when set, the chat-surface "Save as Automation"
+   *  button is rendered. Provides the source filename used as the
+   *  automation's default name. */
+  fileNameForAutomation?: string;
 }
 
 // Suggested questions are server-derived only (no hardcoded fallbacks).
@@ -179,11 +197,16 @@ export function ChatInterface({
   wideFormatTransform,
   dimensionHierarchies,
   onHierarchiesChange,
+  dateTimeColumnPairs,
+  onDateTimePairsChange,
+  indicators,
+  onIndicatorsChange,
   previewSource = 'none',
   localPreviewParseStatus = 'full',
   uploadStartError = null,
   onAppendAssistantChart,
   streamingNarratorPreview = "",
+  fileNameForAutomation,
 }: ChatInterfaceProps) {
   const { scrollRequest, clearPivotScrollRequest } = useChatSidebarNav();
   const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -192,6 +215,7 @@ export function ChatInterface({
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isDownloadingDataset, setIsDownloadingDataset] = useState(false);
+  const [saveAutomationOpen, setSaveAutomationOpen] = useState(false);
   const { toast } = useToast();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
@@ -389,28 +413,55 @@ export function ChatInterface({
   const [savingFilter, setSavingFilter] = useState(false);
   const filterRequestSeqRef = useRef(0);
 
-  // Load the server-persisted filter on session change.
+  // Load the server-persisted filter (used on session change AND on
+  // cross-tab `active_filter` broadcasts from peer tabs).
+  const refetchActiveFilter = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const out = (await sessionsApi.getActiveFilter(sessionId)) as ActiveFilterResponse;
+      setActiveFilter(out.activeFilter);
+      setFilteredRows(out.filteredRows);
+      setFilterTotalRows(out.totalRows);
+    } catch {
+      // Endpoint not yet enabled or session not found — silently fall back to
+      // unfiltered view. The button still works once the user clicks it.
+    }
+  }, [sessionId]);
+
+  // Wave E2 · Cross-tab broadcast handler. When a peer tab writes the
+  // active filter (set / clear), refetch the authoritative state so
+  // this tab's chips + filtered row counts match. Same when columns,
+  // hierarchies, or permanent context change in a peer tab — those
+  // affect the data preview / column sidebar shape. Messages are
+  // handled by E3 separately.
+  const { emitSessionBroadcast } = useSessionBroadcast(sessionId, (event) => {
+    if (event.kind === 'active_filter') {
+      void refetchActiveFilter();
+    }
+  });
+
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const out = (await sessionsApi.getActiveFilter(sessionId)) as ActiveFilterResponse;
-        if (cancelled) return;
-        setActiveFilter(out.activeFilter);
-        setFilteredRows(out.filteredRows);
-        setFilterTotalRows(out.totalRows);
-      } catch {
-        // Endpoint not yet enabled or session not found — silently fall back to
-        // unfiltered view. The button still works once the user clicks it.
-      }
+      if (cancelled) return;
+      await refetchActiveFilter();
     })();
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, refetchActiveFilter]);
 
   // Push a conditions array to the server (debounced — see invokers).
+  //
+  // Wave C3 · On server error, ROLL BACK the optimistic local state by
+  // re-fetching the server's authoritative current state. Pre-C3 a
+  // server rejection only toasted — the optimistic local change stayed,
+  // and subsequent reads would diverge from the server (the server kept
+  // the OLD filter, the UI showed the NEW one). Refetching is more
+  // robust than restoring a captured-previous snapshot because debounce
+  // + rapid edits can stack multiple optimistic mutations before any
+  // server error surfaces; the server is the source of truth.
   const pushConditions = useCallback(
     async (conditions: ActiveFilterCondition[]) => {
       if (!sessionId) return;
@@ -425,12 +476,31 @@ export function ChatInterface({
         setActiveFilter(out.activeFilter);
         setFilteredRows(out.filteredRows);
         setFilterTotalRows(out.totalRows);
+        // Wave E2 · broadcast to peer tabs so their pivot/chart caches
+        // refetch on the new filter version.
+        emitSessionBroadcast('active_filter');
       } catch (err) {
         toast({
           title: "Couldn't apply filter",
           description: err instanceof Error ? err.message : "Try again",
           variant: "destructive",
         });
+        // Wave C3 · roll back optimistic local change by refetching
+        // the server's authoritative state. Best-effort — if this also
+        // fails we leave the toast in place; user can retry.
+        try {
+          const out = (await sessionsApi.getActiveFilter(
+            sessionId
+          )) as ActiveFilterResponse;
+          if (seq !== filterRequestSeqRef.current) return;
+          setActiveFilter(out.activeFilter);
+          setFilteredRows(out.filteredRows);
+          setFilterTotalRows(out.totalRows);
+        } catch {
+          /* refetch failed too — UI stays divergent but the toast
+             already warned the user, and the next successful filter
+             interaction will overwrite. */
+        }
       } finally {
         if (seq === filterRequestSeqRef.current) setSavingFilter(false);
       }
@@ -466,12 +536,27 @@ export function ChatInterface({
       setActiveFilter(out.activeFilter);
       setFilteredRows(out.filteredRows);
       setFilterTotalRows(out.totalRows);
+      // Wave E2 · broadcast clear to peer tabs.
+      emitSessionBroadcast('active_filter');
     } catch (err) {
       toast({
         title: "Couldn't clear filter",
         description: err instanceof Error ? err.message : "Try again",
         variant: "destructive",
       });
+      // Wave C3 · roll back via refetch on server error. Same pattern
+      // as `pushConditions` above.
+      try {
+        const out = (await sessionsApi.getActiveFilter(
+          sessionId
+        )) as ActiveFilterResponse;
+        if (seq !== filterRequestSeqRef.current) return;
+        setActiveFilter(out.activeFilter);
+        setFilteredRows(out.filteredRows);
+        setFilterTotalRows(out.totalRows);
+      } catch {
+        /* refetch failed; UI stays divergent until next successful op */
+      }
     } finally {
       if (seq === filterRequestSeqRef.current) setSavingFilter(false);
     }
@@ -808,7 +893,38 @@ export function ChatInterface({
             )}
             <span className="hidden sm:inline">Download Dataset</span>
           </Button>
+          {fileNameForAutomation && (
+            <Button
+              onClick={() => setSaveAutomationOpen(true)}
+              variant="outline"
+              size="sm"
+              disabled={messages.filter((m) => m.role === 'user').length === 0}
+              className="border-border/80 bg-card/95 shadow-md backdrop-blur-sm transition-all hover:border-primary hover:shadow-lg"
+              title="Save this chat as a re-runnable Automation"
+            >
+              <Save className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Save as Automation</span>
+            </Button>
+          )}
         </div>
+      )}
+      {sessionId && fileNameForAutomation && (
+        <SaveAutomationModal
+          open={saveAutomationOpen}
+          onOpenChange={setSaveAutomationOpen}
+          sessionId={sessionId}
+          fileName={fileNameForAutomation}
+          preview={{
+            questionCount: messages.filter((m) => m.role === 'user').length,
+            chartCount: messages.reduce(
+              (sum, m) => sum + (m.charts?.length ?? 0),
+              0
+            ),
+            dashboardCount: messages.filter(
+              (m) => m.createdDashboardId || m.dashboardDraft
+            ).length,
+          }}
+        />
       )}
       
       {/* Loading Overlay when replacing analysis */}
@@ -823,13 +939,6 @@ export function ChatInterface({
             <h3 className="mb-1 text-lg font-semibold text-foreground">Replacing analysis…</h3>
             <p className="text-sm text-muted-foreground">Uploading and analyzing your new data file</p>
             <p className="mt-2 text-xs text-muted-foreground">This may take a moment</p>
-          </div>
-        </div>
-      )}
-      {previewSource === 'local' && (
-        <div className="absolute left-0 right-0 top-16 z-30 px-4">
-          <div className="mx-auto max-w-6xl rounded-lg border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-foreground">
-            Local preview ({localPreviewParseStatus === 'full' ? 'first 100 rows' : 'headers only'}) is shown for speed. It will be replaced by server preview once ready.
           </div>
         </div>
       )}
@@ -1002,7 +1111,17 @@ export function ChatInterface({
                   thinkingPanelStreaming={false}
                   onSuggestedQuestionClick={applySuggestionToComposer}
                   showDatasetEnrichmentLoader={
-                    (isEnrichmentMessage || isDatasetPreviewSystemMessage(message)) &&
+                    // During enrichment, `normalizeDatasetSystemMessages` always
+                    // emits BOTH the dataset-preview and dataset-enrichment
+                    // system messages (uploadSystemMessages.ts). The pre-fix
+                    // gate `(isEnrichmentMessage || isDatasetPreviewSystemMessage)`
+                    // therefore mounted the loader twice — once per system
+                    // message — producing the visible duplicate "Enriching your
+                    // data understanding" cards. Mount only on the enrichment
+                    // system message; the preview message keeps its
+                    // `uploadPreviewThinking` mini-indicator for the preview-
+                    // loading phase via the prop below.
+                    isEnrichmentMessage &&
                     isDatasetEnriching &&
                     !isDatasetPreviewLoading
                   }
@@ -1017,6 +1136,10 @@ export function ChatInterface({
                   dimensionHierarchies={hasDatasetSchema ? dimensionHierarchies : undefined}
                   hierarchyEditSessionId={hasDatasetSchema ? sessionId ?? undefined : undefined}
                   onHierarchiesChange={hasDatasetSchema ? onHierarchiesChange : undefined}
+                  dateTimeColumnPairs={hasDatasetSchema ? dateTimeColumnPairs : undefined}
+                  onDateTimePairsChange={hasDatasetSchema ? onDateTimePairsChange : undefined}
+                  indicators={hasDatasetSchema ? indicators : undefined}
+                  onIndicatorsChange={hasDatasetSchema ? onIndicatorsChange : undefined}
                   allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
                   allowPivotAutoShow={allowPivotAutoShow}
                   onAppendAssistantChart={onAppendAssistantChart}

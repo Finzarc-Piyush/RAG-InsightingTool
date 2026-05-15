@@ -18,6 +18,7 @@ import {
   removeTableFromDashboardController,
   removeSheetFromDashboardController,
   renameSheetController,
+  reorderSheetsController,
   renameDashboardController,
   updateTableCaptionController,
   updateChartInsightOrRecommendationController,
@@ -55,6 +56,8 @@ router.delete('/dashboards/:dashboardId/pivots', removePivotFromDashboardControl
 router.post('/dashboards/:dashboardId/sheets', addSheetToDashboardController);
 router.delete('/dashboards/:dashboardId/sheets/:sheetId', removeSheetFromDashboardController);
 router.patch('/dashboards/:dashboardId/sheets/:sheetId', renameSheetController);
+// Wave DR5 · atomic reorder. Body: { orderedSheetIds: string[] }
+router.post('/dashboards/:dashboardId/sheets/reorder', reorderSheetsController);
 router.patch(
   '/dashboards/:dashboardId/sheets/:sheetId/content',
   patchDashboardSheetController

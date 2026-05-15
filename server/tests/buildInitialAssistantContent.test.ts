@@ -68,7 +68,7 @@ test("includes the row/column overview line without column-type breakdown", () =
 
 test("renders 'What's in this data' with deterministic bullets in the heuristic-only state", () => {
   const out = buildInitialAssistantContentFromContext(baseSummary, heuristicCtx());
-  assert.match(out, /\*\*What's in this data:\*\*/);
+  assert.match(out, /\*\*What's in this data basis top 5k Rows:\*\*/);
   assert.match(out, /3 regions/);
   assert.match(out, /records in scope/);
 });

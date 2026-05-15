@@ -7,6 +7,7 @@ import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '.
 import { createDataSummary, canonicalizeDateColumnValues } from '../fileParser.js';
 import { applyTemporalFacetColumns } from '../temporalFacetColumns.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
+import { withSessionWriteLock } from '../sessionWriteLock.js';
 
 export interface SaveDataResult {
   version: number;
@@ -19,9 +20,39 @@ export interface SaveDataResult {
 // Removed SaveDataOptions - we'll generate preview from rawData instead
 
 /**
- * Save modified data to blob storage and update CosmosDB metadata
+ * Save modified data to blob storage and update CosmosDB metadata.
+ *
+ * Wave A4 · Now serialised with EVERY other Cosmos-facing RMW on the
+ * same chat document via `withSessionWriteLock` (Wave A2). Pre-A4 the
+ * computed-column persist (`add_computed_columns(persistToSession:true)`)
+ * could race against turn-end `persistMergeAssistantSessionContext`,
+ * a BAI patch, or an active-filter PUT — last-writer-wins on the upsert
+ * meant a turn-end persist following a computed-column persist could
+ * silently drop the new column. The lock closes that window.
+ *
+ * Note about `sessionDoc`: callers pass a previously-fetched chat
+ * document, often with their own in-flight mutations (e.g. the orchestrator
+ * stamps `dataOpsContext` onto it before calling). The lock guarantees
+ * write serialisation, but the doc-mutation pattern (mutate locally then
+ * call save) still has a stale-read risk if a concurrent path wrote in
+ * between the caller's fetch and the call here. Recorded as a follow-up:
+ * future cleanup wave should re-fetch inside the lock and copy any
+ * caller-mutated fields onto the fresh doc. For Wave A4 the minimal fix
+ * is just the lock; concurrent fields rarely overlap in practice.
  */
 export async function saveModifiedData(
+  sessionId: string,
+  modifiedData: Record<string, any>[],
+  operation: string,
+  description: string,
+  sessionDoc?: ChatDocument
+): Promise<SaveDataResult> {
+  return withSessionWriteLock(sessionId, () =>
+    saveModifiedDataLocked(sessionId, modifiedData, operation, description, sessionDoc)
+  );
+}
+
+async function saveModifiedDataLocked(
   sessionId: string,
   modifiedData: Record<string, any>[],
   operation: string,

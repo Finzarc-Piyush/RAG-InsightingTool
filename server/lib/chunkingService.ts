@@ -7,7 +7,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { uploadFileToBlob, getFileFromBlob } from './blobStorage.js';
+import { uploadBufferToBlobAtExactPath, getFileFromBlob } from './blobStorage.js';
 import { streamParseCsv } from './streamingFileParser.js';
 import { parseFile } from './fileParser.js';
 import { DataSummary } from '../shared/schema.js';
@@ -178,10 +178,9 @@ export async function chunkFile(
 
   // Save chunk index to blob storage
   const indexBlobName = `chunks/${sessionId}/index.json`;
-  await uploadFileToBlob(
+  await uploadBufferToBlobAtExactPath(
     Buffer.from(JSON.stringify(chunkIndexData, null, 2)),
     indexBlobName,
-    'system',
     'application/json'
   );
 
@@ -275,7 +274,7 @@ async function saveChunk(
 
   // Save chunk as JSON to blob storage
   const chunkBuffer = Buffer.from(JSON.stringify(chunk));
-  await uploadFileToBlob(chunkBuffer, blobName, 'system', 'application/json');
+  await uploadBufferToBlobAtExactPath(chunkBuffer, blobName, 'application/json');
 
   return {
     chunkId,
@@ -298,6 +297,7 @@ export async function loadChunkIndex(sessionId: string): Promise<ChunkIndex | nu
     const indexBlobName = `chunks/${sessionId}/index.json`;
     const buffer = await getFileFromBlob(indexBlobName);
     const indexData = JSON.parse(buffer.toString('utf-8')) as ChunkIndex;
+    console.log(`📥 Loaded chunk artifact: ${indexBlobName}`);
     return indexData;
   } catch (error) {
     console.error('Failed to load chunk index:', error);
@@ -464,6 +464,7 @@ export async function loadChunkData(
     const chunkDataPromises = chunkBatch.map(async (chunk) => {
       try {
         const buffer = await getFileFromBlob(chunk.blobName);
+        console.log(`📥 Loaded chunk artifact: ${chunk.blobName}`);
         const chunkData = JSON.parse(buffer.toString('utf-8')) as Record<string, any>[];
 
         // Filter columns if required

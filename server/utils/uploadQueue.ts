@@ -207,7 +207,6 @@ class UploadQueue {
         getChatBySessionIdEfficient,
         updateChatDocument,
         ensureChatDocumentForUploadJob,
-        createPlaceholderSession,
       } = await import('../models/chat.model.js');
       const { saveChartsToBlob, uploadFileToBlob } = await import('../lib/blobStorage.js');
       const queryCache = (await import('../lib/cache.js')).default;
@@ -243,17 +242,28 @@ class UploadQueue {
         job.blobPersisted = true;
       }
 
-      // Best-effort early placeholder creation for smoother session UX.
+      // Wave QL10 · Idempotent placeholder ensure. Normally the upload
+      // controller (uploadController.ts) has already created the doc
+      // synchronously before enqueue; `ensureChatDocumentForUploadJob`
+      // checks existence first and short-circuits when found, so this is
+      // a no-op on the happy path. The fallback path remains for non-HTTP
+      // callers (tests, recovery flows, the Snowflake controller which
+      // does its own pre-create).
+      //
+      // Using the bare `createPlaceholderSession` here would have created
+      // a SECOND chat row (chatId is derived from `${fileName}_${ts}` —
+      // different ts → different id, but same sessionId), polluting the
+      // user's session list.
       try {
-        await createPlaceholderSession(
-          job.username,
-          job.fileName,
-          job.sessionId,
-          job.fileBuffer?.length ?? 0,
-          job.blobInfo
-        );
+        await ensureChatDocumentForUploadJob({
+          sessionId: job.sessionId,
+          username: job.username,
+          fileName: job.fileName,
+          fileSize: job.fileBuffer?.length ?? 0,
+          blobInfo: job.blobInfo,
+        });
       } catch (placeholderError: any) {
-        console.warn("⚠️ Queue placeholder creation skipped (will self-heal later):", {
+        console.warn("⚠️ Queue placeholder ensure skipped (will self-heal later):", {
           sessionId: job.sessionId,
           error: placeholderError?.message || String(placeholderError),
         });
@@ -555,9 +565,36 @@ class UploadQueue {
         // pick a 3-letter ISO code. WF8.
         const interimSummary = createDataSummary(data);
         decorateSummaryWithWideFormat(interimSummary);
+        // Wave B5 · Surface user-context + domain-context so the LLM can
+        // (a) disambiguate currency for symbols like "$" / "kr" / "¥",
+        // (b) describe the dataset in the user's own terms, (c) suggest
+        // questions that align with FMCG/Marico vocabulary. The chat
+        // doc may already have `permanentContext` if the user uploads
+        // to an existing session with notes; the domain context is
+        // process-memoised and cheap.
+        let datasetProfilePermanentContext: string | undefined;
+        let datasetProfileDomainContext: string | undefined;
+        try {
+          const existing = await getChatBySessionIdEfficient(job.sessionId);
+          datasetProfilePermanentContext = existing?.permanentContext;
+        } catch {
+          /* not fatal — fall through with undefined */
+        }
+        try {
+          const { loadEnabledDomainContext } = await import(
+            '../lib/domainContext/loadEnabledDomainContext.js'
+          );
+          const dc = await loadEnabledDomainContext();
+          datasetProfileDomainContext = dc.text || undefined;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`B5 · domain context load for dataset profile failed: ${msg}`);
+        }
         datasetProfile = await inferDatasetProfile(data, {
           fileName: job.fileName,
           dataSummary: interimSummary,
+          permanentContext: datasetProfilePermanentContext,
+          domainContext: datasetProfileDomainContext,
         });
         const enableDirtyDateLlm =
           process.env.ENABLE_DIRTY_DATE_LLM === 'true' ||
@@ -662,6 +699,72 @@ class UploadQueue {
                 }
               } catch (err) {
                 console.warn('⚠️ detectRollupHierarchies skipped:', err);
+              }
+              // SU-DT1 · auto-detect (date column, time-of-day column) pairs
+              // so the agent can compose a combined datetime via SU-DT2's
+              // add_computed_columns.datetimeConcat. Persisted on the
+              // DataSummary so the planner-prompt block (context.ts) and
+              // the SU-UX1 banner can read it.
+              try {
+                const { detectDateTimePairs } = await import(
+                  '../lib/detectDateTimePairs.js'
+                );
+                const pairs = detectDateTimePairs({ data, summary });
+                if (pairs.length > 0) {
+                  summary.dateTimeColumnPairs = pairs;
+                  console.log(
+                    `📐 detectDateTimePairs: ${pairs
+                      .map((p) => `${p.timeColumn}↔${p.dateColumn}`)
+                      .join(', ')}`
+                  );
+                }
+              } catch (err) {
+                console.warn('⚠️ detectDateTimePairs skipped:', err);
+              }
+              // SU-IC1 · auto-detect pre-computed "indicator" columns
+              // (Yes/No/Absent shaped, e.g. "Clock-In <09:30") so the
+              // planner can prefer them when a question matches a column's
+              // pre-computed answer shape — faster + more accurate than
+              // deriving from raw values. Stamped via applyIndicatorsToSummary
+              // so the per-column metadata flows through every downstream
+              // surface (planner prompt, schema-binding, UI badge).
+              try {
+                const { detectIndicatorColumns, applyIndicatorsToSummary } =
+                  await import('../lib/detectIndicatorColumns.js');
+                const indicators = detectIndicatorColumns({ data, summary });
+                if (indicators.length > 0) {
+                  applyIndicatorsToSummary(summary, indicators);
+                  console.log(
+                    `📐 detectIndicatorColumns: ${indicators
+                      .map((i) => `${i.column}(${i.kind})`)
+                      .join(', ')}`
+                  );
+                  // SU-IC2 · LLM enrichment for the indicator columns
+                  // SU-IC1 just flagged. Adds answersQuestions per column +
+                  // adjudicates positive/negative polarity when the heuristic
+                  // dictionary couldn't. Fire-and-forget — failure leaves
+                  // the heuristic-only state intact.
+                  try {
+                    const { enrichIndicatorColumns } = await import(
+                      '../lib/enrichIndicatorColumns.js'
+                    );
+                    const { enriched } = await enrichIndicatorColumns(summary, {
+                      shortDescription: datasetProfile?.shortDescription,
+                    });
+                    if (enriched > 0) {
+                      console.log(
+                        `📐 enrichIndicatorColumns: ${enriched} indicator(s) annotated with answersQuestions`
+                      );
+                    }
+                  } catch (enrichErr) {
+                    console.warn(
+                      '⚠️ enrichIndicatorColumns skipped:',
+                      enrichErr
+                    );
+                  }
+                }
+              } catch (err) {
+                console.warn('⚠️ detectIndicatorColumns skipped:', err);
               }
               const doc = await getChatBySessionIdEfficient(job.sessionId);
               if (!doc) return;
@@ -1097,6 +1200,48 @@ class UploadQueue {
       if (chatDocument?.sessionId) {
         const { scheduleIndexSessionRag } = await import("../lib/rag/indexSession.js");
         scheduleIndexSessionRag(job.sessionId);
+      }
+
+      // Wave QL6 · Eagerly materialize the DuckDB `data` table at upload
+      // completion so the very first chat turn finds it ready. Without this,
+      // materialization happens lazily on the first analytical query — which
+      // adds 0.5–2s of latency and, more importantly, sets up the silent
+      // fallback to in-memory execution when materialization races with the
+      // first turn. Eager materialization is the architectural counterpart
+      // to the user's "DuckDB always, never Cosmos for aggregations"
+      // contract: by the time a user can type a question, the analytical
+      // table is ready.
+      //
+      // Fire-and-forget. Failures are logged but never block the response
+      // (the lazy path remains as a safety net for the analytical tools).
+      // Tests can hook the `__onEagerMaterializeAttempt` callback below.
+      if (chatDocument?.sessionId) {
+        const sessionIdForMaterialize = chatDocument.sessionId;
+        const chatDocForMaterialize = chatDocument;
+        void (async () => {
+          try {
+            const { ColumnarStorageService } = await import("../lib/columnarStorage.js");
+            const { ensureAuthoritativeDataTable } = await import(
+              "../lib/ensureSessionDuckdbMaterialized.js"
+            );
+            const storage = new ColumnarStorageService({
+              sessionId: sessionIdForMaterialize,
+            });
+            await storage.initialize();
+            await ensureAuthoritativeDataTable(storage, chatDocForMaterialize);
+            console.log(
+              `🟢 eager DuckDB materialization complete for session ${sessionIdForMaterialize}`
+            );
+          } catch (materializeErr) {
+            const msg =
+              materializeErr instanceof Error
+                ? materializeErr.message
+                : String(materializeErr);
+            console.warn(
+              `⚠️ eager DuckDB materialization failed for ${sessionIdForMaterialize}: ${msg.slice(0, 300)}`
+            );
+          }
+        })();
       }
 
       // Step 10: Complete

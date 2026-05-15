@@ -501,6 +501,76 @@
       box-shadow: 0 0 0 6px hsl(var(--primary) / 0);
     }
   }
+  /*
+   * DR18F · widen edge resize handles so the entire edge is a
+   * draggable hot zone, not just a 20×20 dot at the midpoint of each
+   * side. Pre-DR18F the user could only resize from the four corner
+   * grippers and the centre dot of each edge; the edge handles
+   * existed but were tiny and hard to find. Corners stay 20×20 with
+   * their SVG gripper for fine corner-resize. Scoped to
+   * `.dashboard-grid` so this doesn't leak into other react-resizable
+   * surfaces (Explore, ChatChartCard, etc.).
+   *
+   * `!important` is required throughout because react-resizable's
+   * base stylesheet is unlayered (no `@layer`) and per CSS cascade
+   * spec unlayered styles win over layered ones regardless of
+   * specificity. The same pattern is used by `.react-grid-placeholder`
+   * just above. Without `!important` the base `width: 20px;
+   * left: 50%; margin-left: -10px;` rules silently re-emerge.
+   */
+  .dashboard-grid .react-resizable-handle-n,
+  .dashboard-grid .react-resizable-handle-s {
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    height: 10px !important;
+    margin-left: 0 !important;
+    background-image: none !important;
+    transform: none !important;
+    cursor: ns-resize !important;
+    /* Float the edges above any tile content that might create its
+       own stacking context (chart libraries, etc.). The corner
+       handles ship later in DOM and override this at the corners. */
+    z-index: 5 !important;
+  }
+  .dashboard-grid .react-resizable-handle-e,
+  .dashboard-grid .react-resizable-handle-w {
+    top: 0 !important;
+    bottom: 0 !important;
+    height: auto !important;
+    width: 10px !important;
+    margin-top: 0 !important;
+    background-image: none !important;
+    transform: none !important;
+    cursor: ew-resize !important;
+    z-index: 5 !important;
+  }
+  .dashboard-grid .react-resizable-handle-n { top: 0 !important; }
+  .dashboard-grid .react-resizable-handle-s { bottom: 0 !important; }
+  .dashboard-grid .react-resizable-handle-e { right: 0 !important; }
+  .dashboard-grid .react-resizable-handle-w { left: 0 !important; }
+  /*
+   * Subtle hover hint so users sense the edge is grab-able. The
+   * corner handles already advertise themselves via the gripper SVG;
+   * the edges had no visual cue at all.
+   */
+  .dashboard-grid .react-resizable-handle-n:hover,
+  .dashboard-grid .react-resizable-handle-s:hover,
+  .dashboard-grid .react-resizable-handle-e:hover,
+  .dashboard-grid .react-resizable-handle-w:hover {
+    background-color: hsl(var(--primary) / 0.18);
+  }
+  /*
+   * Corner handles must keep stacking above the edge handles at the
+   * exact corner pixel so the diagonal nw/ne/sw/se cursors win on
+   * hover and the user gets combined width+height resize there.
+   */
+  .dashboard-grid .react-resizable-handle-nw,
+  .dashboard-grid .react-resizable-handle-ne,
+  .dashboard-grid .react-resizable-handle-sw,
+  .dashboard-grid .react-resizable-handle-se {
+    z-index: 6 !important;
+  }
   /* WC1.5 · chart mark entry animation. Applied to PremiumChart's
      wrapper so the whole chart fades + scales in on mount. Per-mark
      stagger animations (bar grow, line draw, etc.) land in subsequent

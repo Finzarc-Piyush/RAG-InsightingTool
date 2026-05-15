@@ -134,7 +134,10 @@ export async function analyzeUpload(
         });
       });
     });
-    insights = combined.slice(0, 7).map((ins, i) => ({ ...ins, id: i + 1 }));
+    // PVT4 · per user request, the Key Insights panel shouldn't be capped
+    // around 6. Bump combined-insight cap so split-pipeline runs aren't
+    // truncated to ~7. The InsightCard's "Show more" handles long lists.
+    insights = combined.slice(0, 20).map((ins, i) => ({ ...ins, id: i + 1 }));
     console.log(`✅ Combined ${insightArrays.map((a) => a.length).join('+')} insights from ${splits.length} parts → ${insights.length} total`);
   } else {
     // Single path: chart specs and insights in parallel (no split)
@@ -258,7 +261,7 @@ export async function analyzeUploadWithPython(
 
   const chartsList = chartSpecs.map(s => `- ${s.type}: "${s.title}" (x=${s.x}, y=${s.y})`).join('\n');
 
-  const insightPrompt = `From the statistics and chart list below, produce 3-5 insights. Each insight should tie specific numbers to business meaning (risk, opportunity, concentration, volatility) and, when appropriate, a measurable next step. Vary wording; avoid repeating the same template. Use only numbers from the data.
+  const insightPrompt = `From the statistics and chart list below, produce 5-12 insights. Each insight should tie specific numbers to business meaning (risk, opportunity, concentration, volatility) and, when appropriate, a measurable next step. Vary wording; avoid repeating the same template. Use only numbers from the data.
 
 DATA SUMMARY:
 - ${summary.rowCount} rows, ${summary.columnCount} columns
@@ -296,7 +299,9 @@ Output valid JSON only: {"insights":[{"id":1,"text":"..."}, ...]}. Do not use P7
   try {
     const parsed = JSON.parse(insightContent);
     const arr = parsed.insights || [];
-    insights = arr.slice(0, 7).map((item: { id?: number; text?: string }, i: number) => ({
+    // PVT4 · raise from 7 to 20 — the InsightCard handles long lists with
+    // "Show more / Show less"; the user explicitly wants no cap around 6.
+    insights = arr.slice(0, 20).map((item: { id?: number; text?: string }, i: number) => ({
       id: (item.id ?? i + 1) as number,
       text: item.text || String(item),
     }));
@@ -443,13 +448,18 @@ export async function answerQuestion(
   dashboardDraft?: import('../shared/schema.js').DashboardSpec;
   appliedFilters?: Array<{
     column: string;
-    op: 'in' | 'not_in';
+    // CMP1 · widened to match DimensionFilterOp from queryTypes
+    op: 'in' | 'not_in' | 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte' | 'between';
     values: string[];
     match?: 'exact' | 'case_insensitive' | 'contains';
   }>;
   // W13 · compact blackboard digest persisted onto the assistant message
   // for the Investigation summary card.
   investigationSummary?: import('../shared/schema.js').InvestigationSummary;
+  // AMR3 · raw pivot captures from execute_query_plan steps; the chatStream
+  // service materializes (inline-vs-blob policy) and patches them onto the
+  // past_analyses doc for cross-session recall.
+  pivotArtifacts?: import('./agents/runtime/types.js').AgentLoopResult['pivotArtifacts'];
 }> {
   // CRITICAL: This log should ALWAYS appear first
   console.log('🚀 answerQuestion() CALLED with question:', question);
@@ -512,6 +522,20 @@ export async function answerQuestion(
           ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
           ...(loopResult.appliedFilters?.length ? { appliedFilters: loopResult.appliedFilters } : {}),
           ...(loopResult.investigationSummary ? { investigationSummary: loopResult.investigationSummary } : {}),
+          // Carry through the structured envelope and the post-verifier
+          // business-actions promise. Declaring them explicitly here makes
+          // the data flow traceable end-to-end (agentLoop → answerQuestion
+          // → chatStream).
+          ...(loopResult.answerEnvelope
+            ? { answerEnvelope: loopResult.answerEnvelope }
+            : {}),
+          ...(loopResult.businessActionsPromise
+            ? { businessActionsPromise: loopResult.businessActionsPromise }
+            : {}),
+          // AMR3 · pivot captures forwarded for cross-session recall.
+          ...(loopResult.pivotArtifacts?.length
+            ? { pivotArtifacts: loopResult.pivotArtifacts }
+            : {}),
         };
       }
       console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
@@ -1002,7 +1026,7 @@ export async function generateInsights(
 
   const insightCountInstruction = divisionContext
     ? 'Provide 2-3 insights for **this segment only** (combined later with other segments).'
-    : 'Provide 5-7 insights.';
+    : 'Provide 5-12 insights.';
   const prompt = `${divisionNote}You are synthesizing insights from the statistics below. Each insight should combine (1) grounded numbers from the data, (2) what that pattern could mean for a real business (concentration, volatility, upside, risk), and (3) a concrete next step or metric to watch—only when the data supports it. Vary structure: some insights can be short paragraphs; others can use TABLE_V1|{"caption":...,"columns":...,"rows":...} on one line when a table is clearer than prose. Skip trite filler; if a finding is obvious, say so briefly or pick a different angle.
 
 ${insightCountInstruction}
@@ -1065,7 +1089,8 @@ Rules:
     const parsed = JSON.parse(content);
     const insightArray = parsed.insights || [];
     
-    return insightArray.slice(0, 7).map((item: any, index: number) => ({
+    // PVT4 · raise from 7 to 20 (InsightCard already supports show-more).
+    return insightArray.slice(0, 20).map((item: any, index: number) => ({
       id: index + 1,
       text: item.text || item.insight || String(item),
     }));

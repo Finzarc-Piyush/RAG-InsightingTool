@@ -14,6 +14,10 @@ import type {
   Message,
 } from "../../../shared/schema.js";
 import { buildMemoryEntryId } from "../../../models/analysisMemory.model.js";
+import {
+  previewMaterializedArtifact,
+  type RawPivotArtifact,
+} from "../../pastAnalysisPivotArtifact.js";
 
 export interface TurnEndContext {
   sessionId: string;
@@ -36,6 +40,16 @@ export interface TurnEndContext {
     values: string[];
     match?: "exact" | "case_insensitive" | "contains";
   }>;
+  /**
+   * AMR7 · Raw pivot captures from `execute_query_plan` steps. Each entry
+   * also flows through `materializePivotArtifact` to be persisted on the
+   * cross-session `past_analyses` doc (AMR3). Here we emit one
+   * `pivot_computed` analysis_memory entry per capture; the body references
+   * the deterministic `artifactId` (sha256 of session|turn|step) so a
+   * client opening the entry can fetch rows via the AMR3c recall endpoint.
+   * Storage isn't duplicated — past_analyses owns the rows.
+   */
+  pivotArtifacts?: RawPivotArtifact[];
 }
 
 const TITLE_MAX = 200;
@@ -121,31 +135,96 @@ function chartTitle(c: ChartSpec, idx: number): string {
 
 function buildChartEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
   const charts = ctx.assistant.charts ?? [];
-  return charts.map((c, i) => ({
-    id: buildMemoryEntryId(ctx.sessionId, "chart_created", i, ctx.turnId),
-    sessionId: ctx.sessionId,
-    username: ctx.username,
-    createdAt: ctx.createdAt + i,
-    turnId: ctx.turnId,
-    sequence: i,
-    type: "chart_created",
-    actor: "agent",
-    title: clip(chartTitle(c, i), TITLE_MAX),
-    summary: clipNonEmpty(
-      c.keyInsight || c.businessCommentary || chartTitle(c, i),
-      SUMMARY_MAX,
-      chartTitle(c, i)
-    ),
-    body: {
-      chartType: c.type,
-      x: c.x,
-      y: c.y,
-      seriesColumn: c.seriesColumn,
-      aggregate: c.aggregate,
-    },
-    dataVersion: ctx.dataVersion,
-    refs: { messageTimestamp: ctx.createdAt, dataVersion: ctx.dataVersion },
-  }));
+  return charts.map((c, i) => {
+    // AMR7 · richer chart_created body: carry the per-chart insight +
+    // commentary and a stripped-data chart spec so the AnalysisMemory
+    // page renders the original narrative + a recreatable spec, not just
+    // axis identifiers. `data` is excluded — heavy rows live in the
+    // past_analyses pivot artifact / are reconstructible from the query.
+    const { data: _data, ...specWithoutData } = c as ChartSpec & { data?: unknown };
+    return {
+      id: buildMemoryEntryId(ctx.sessionId, "chart_created", i, ctx.turnId),
+      sessionId: ctx.sessionId,
+      username: ctx.username,
+      createdAt: ctx.createdAt + i,
+      turnId: ctx.turnId,
+      sequence: i,
+      type: "chart_created" as const,
+      actor: "agent" as const,
+      title: clip(chartTitle(c, i), TITLE_MAX),
+      summary: clipNonEmpty(
+        c.keyInsight || c.businessCommentary || chartTitle(c, i),
+        SUMMARY_MAX,
+        chartTitle(c, i)
+      ),
+      body: {
+        chartType: c.type,
+        x: c.x,
+        y: c.y,
+        seriesColumn: c.seriesColumn,
+        aggregate: c.aggregate,
+        ...(c.keyInsight ? { keyInsight: c.keyInsight } : {}),
+        ...(c.businessCommentary
+          ? { businessCommentary: c.businessCommentary }
+          : {}),
+        chartSpec: specWithoutData,
+      },
+      dataVersion: ctx.dataVersion,
+      refs: { messageTimestamp: ctx.createdAt, dataVersion: ctx.dataVersion },
+    };
+  });
+}
+
+function buildPivotEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
+  const pivots = ctx.pivotArtifacts ?? [];
+  return pivots.map((raw, i) => {
+    const { artifactId, storageKind, bytes, blobName } =
+      previewMaterializedArtifact(raw);
+    const title = clipNonEmpty(
+      raw.questionContext || `Pivot computed: ${raw.columnHeaders.join(" × ")}`,
+      TITLE_MAX,
+      `Pivot computed #${i + 1}`
+    );
+    const rowCount = raw.rows.length;
+    const summary = clip(
+      `${rowCount} row${rowCount === 1 ? "" : "s"} across [${raw.columnHeaders
+        .slice(0, 8)
+        .join(", ")}${raw.columnHeaders.length > 8 ? ", …" : ""}]${
+        raw.questionContext ? ` — ${raw.questionContext}` : ""
+      }`,
+      SUMMARY_MAX
+    );
+    return {
+      id: buildMemoryEntryId(ctx.sessionId, "pivot_computed", i, ctx.turnId),
+      sessionId: ctx.sessionId,
+      username: ctx.username,
+      createdAt: ctx.createdAt + i,
+      turnId: ctx.turnId,
+      sequence: i,
+      type: "pivot_computed" as const,
+      actor: "agent" as const,
+      title,
+      summary,
+      body: {
+        artifactRef: {
+          artifactId,
+          storage:
+            storageKind === "inline"
+              ? { kind: "inline" as const, bytes }
+              : { kind: "blob" as const, blobName, bytes },
+        },
+        plan: raw.plan,
+        pivotDefaults: raw.pivotDefaults,
+        columnHeaders: raw.columnHeaders,
+        rowCount,
+      },
+      dataVersion: ctx.dataVersion,
+      refs: {
+        messageTimestamp: ctx.createdAt,
+        dataVersion: ctx.dataVersion,
+      },
+    };
+  });
 }
 
 function buildFilterEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
@@ -269,6 +348,7 @@ export function buildTurnEndMemoryEntries(
   entries.push(...buildHypothesisEntries(ctx));
   entries.push(...buildFindingEntries(ctx));
   entries.push(...buildChartEntries(ctx));
+  entries.push(...buildPivotEntries(ctx));
   entries.push(...buildFilterEntries(ctx));
   const draft = buildDashboardDraftEntry(ctx);
   if (draft) entries.push(draft);

@@ -5,16 +5,17 @@ import { DashboardData } from './modules/useDashboardState';
 import { DashboardList } from './Components/DashboardList';
 import { DashboardView } from './Components/DashboardView';
 import { DeleteDashboardDialog } from './Components/DeleteDashboardDialog';
-import { SharedDashboardsPanel } from './Components/SharedDashboardsPanel';
+import { PendingInvitesBanner } from './Components/PendingInvitesBanner';
 import { Dashboard as ServerDashboard } from '@/shared/schema';
 import { normalizeDashboard } from './modules/useDashboardState';
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
-  const { 
-    dashboards, 
-    currentDashboard, 
-    setCurrentDashboard, 
+  const {
+    dashboards,
+    currentDashboard,
+    setCurrentDashboard,
+    createDashboard,
     deleteDashboard,
     removeChartFromDashboard,
     removeTableFromDashboard,
@@ -154,23 +155,13 @@ export default function Dashboard() {
     }
   };
 
-  const handleViewSharedDashboard = async (dashboardId: string, permission: "view" | "edit") => {
-    try {
-      const dashboard = await fetchDashboardById(dashboardId);
-      const dashboardWithPermission = {
-        ...dashboard,
-        permission,
-        isShared: true,
-        sharedPermission: permission,
-        // Preserve collaborators if they exist
-        collaborators: dashboard.collaborators,
-        hasCollaborators: dashboard.hasCollaborators,
-      };
-      setCurrentDashboard(dashboardWithPermission);
-    } catch (error) {
-      console.error('Failed to load shared dashboard:', error);
-    }
-  };
+  // DR16 · `handleViewSharedDashboard` removed alongside the
+  // `SharedDashboardsPanel`. Accepted shared dashboards are now in the
+  // main grid (filterable via the Owned/Shared toggle) and clicking
+  // their View button routes through `handleViewDashboard` like any
+  // other dashboard. The shared metadata (`isShared`, `sharedPermission`,
+  // `sharedBy`) is already on the cached `DashboardData` so the
+  // permission-aware UI inside `DashboardView` continues to work.
 
   if (currentDashboard) {
     return (
@@ -196,23 +187,32 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="h-[calc(100vh-72px)] flex gap-6 p-6">
-        {/* Left Column: Shared Dashboards Panel */}
-        <div className="w-96 flex-shrink-0 flex flex-col min-h-0">
-          <SharedDashboardsPanel 
-            onAccepted={handleSharedDashboardAccepted}
-            onViewDashboard={handleViewSharedDashboard}
-          />
-        </div>
-
-        {/* Right Column: Dashboard List */}
-        <div className="flex-1 flex flex-col min-w-0">
+      {/* DR16 · single full-width column. The pre-DR16 384-px shared-
+          dashboards panel duplicated what the All / Owned / Shared
+          toggle already shows; only its accept/decline UI for pending
+          invites was load-bearing, and that's now in
+          `<PendingInvitesBanner>` which auto-hides when the queue is
+          empty. */}
+      <div className="h-[calc(100vh-72px)] flex flex-col p-6">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          <PendingInvitesBanner onAccepted={handleSharedDashboardAccepted} />
           <DashboardList
             dashboards={dashboards}
             isLoading={status.isLoading}
             isRefreshing={status.refreshing}
             onViewDashboard={handleViewDashboard}
             onDeleteDashboard={handleDeleteClick}
+            onCreateDashboard={async () => {
+              // Generate a unique untitled name to avoid the server's
+              // duplicate-name guard when the user clicks repeatedly.
+              const stamp = new Date().toLocaleString();
+              try {
+                const created = await createDashboard(`Untitled · ${stamp}`);
+                await handleViewDashboard(created);
+              } catch (e) {
+                console.error('Create dashboard failed:', e);
+              }
+            }}
           />
         </div>
       </div>

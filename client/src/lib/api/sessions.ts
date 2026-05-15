@@ -3,8 +3,18 @@ import type {
   PivotState,
   ActiveFilterSpec,
   ActiveFilterCondition,
+  DateTimeColumnPair,
   DimensionHierarchy,
 } from "@/shared/schema";
+
+/** SU-UX1 · payload shape mirroring the per-column indicator metadata. */
+export interface IndicatorAnnotationPayload {
+  column: string;
+  kind: "boolean" | "categorical";
+  positiveValues?: string[];
+  negativeValues?: string[];
+  sentinelValues?: string[];
+}
 
 /** Server response from /sessions/:sessionId/active-filter (PUT/DELETE/GET). */
 export interface ActiveFilterResponse {
@@ -54,6 +64,14 @@ export const sessionsApi = {
   updateSessionName: (sessionId: string, fileName: string) =>
     api.patch(`/api/sessions/${sessionId}`, { fileName }),
 
+  /**
+   * Toggle/set the sidebar pin flag on a session. Pinned sessions sort to the
+   * top of the Recent Sessions list. Server stamps `pinnedAt` to now when
+   * `pinned=true`, clears it when `pinned=false`.
+   */
+  updateSessionPinned: (sessionId: string, pinned: boolean) =>
+    api.patch(`/api/sessions/${sessionId}`, { pinned }),
+
   updateSessionContext: (sessionId: string, permanentContext: string) =>
     api.patch(`/api/sessions/${sessionId}/context`, { permanentContext }),
 
@@ -65,6 +83,27 @@ export const sessionsApi = {
     api.put(`/api/sessions/${encodeURIComponent(sessionId)}/hierarchies`, {
       hierarchies,
     }),
+
+  /**
+   * SU-UX1 — replace dataSummary's schema-annotation arrays. Either field is
+   * optional; pass `[]` to clear. The server stamps `source: "user"` on
+   * everything in the new arrays.
+   */
+  updateSchemaAnnotations: (
+    sessionId: string,
+    payload: {
+      dateTimeColumnPairs?: DateTimeColumnPair[];
+      indicators?: IndicatorAnnotationPayload[];
+    },
+  ) =>
+    api.put<{
+      success: true;
+      dateTimeColumnPairs?: DateTimeColumnPair[];
+      indicators: Array<{ column: string; kind: "boolean" | "categorical" }>;
+    }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/schema-annotations`,
+      payload,
+    ),
 
   deleteSession: (sessionId: string) => api.delete(`/api/sessions/${sessionId}`),
 

@@ -26,6 +26,7 @@ import {
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
@@ -252,7 +253,7 @@ export function AreaRenderer({
           stroke="hsl(var(--border))"
           strokeOpacity={0.25}
           strokeDasharray="2,2"
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
         {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
           <line
@@ -319,7 +320,7 @@ export function AreaRenderer({
             dx: -4,
             dy: 3,
           })}
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
       </Group>
     </svg>

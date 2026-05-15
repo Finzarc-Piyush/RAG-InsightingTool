@@ -13,14 +13,31 @@ import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
 import { DashboardData } from '@/pages/Dashboard/modules/useDashboardState';
 import { useContext } from 'react';
+import { composeChartForSave } from '@/pages/Home/lib/composeChartForSave';
 
 interface DashboardModalProps {
   isOpen: boolean;
   onClose: () => void;
   chart: ChartSpec;
+  /**
+   * Wave DR18C · the live insight currently visible alongside this
+   * chart in the chat surface (fetched per-chart from the
+   * chart-key-insight endpoint). When supplied, it's merged onto
+   * `chart.keyInsight` at submission time IF the chart doesn't
+   * already carry a curated insight — see `composeChartForSave`.
+   * Optional; when absent the existing flow is unchanged.
+   */
+  liveInsight?: string | null;
 }
 
-export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) {
+export function DashboardModal({ isOpen, onClose, chart, liveInsight }: DashboardModalProps) {
+  // DR18C · merged once per render so all three submit paths below
+  // reference the same value. Identity-stable when no live insight or
+  // when the chart already has one.
+  const chartToSave = useMemo(
+    () => composeChartForSave(chart, liveInsight ?? null),
+    [chart, liveInsight],
+  );
   const [step, setStep] = useState<'select' | 'confirm'>('select');
   const [newDashboardName, setNewDashboardName] = useState('');
   const [selectedDashboard, setSelectedDashboard] = useState('');
@@ -289,7 +306,7 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
                         console.log('Creating new dashboard:', newDashboardName.trim());
                         const newDashboard = await createDashboard(newDashboardName.trim());
                         // New dashboards have a default "Overview" sheet, so we can add directly
-                        await addChartToDashboard(newDashboard.id, chart);
+                        await addChartToDashboard(newDashboard.id, chartToSave);
                         toast({
                           title: 'Success',
                           description: `Dashboard "${newDashboardName.trim()}" created and chart added successfully.`,
@@ -426,7 +443,7 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
                         const finalSheetId = (targetSheetId === 'default' && selectedDashboardData?.sheets && selectedDashboardData.sheets.length === 0) 
                           ? undefined 
                           : targetSheetId || undefined;
-                        await addChartToDashboard(selectedDashboard, chart, finalSheetId);
+                        await addChartToDashboard(selectedDashboard, chartToSave, finalSheetId);
                         toast({
                           title: 'Success',
                           description: 'Chart added to dashboard successfully.',
@@ -438,7 +455,7 @@ export function DashboardModal({ isOpen, onClose, chart }: DashboardModalProps) 
                           console.log('Creating new dashboard:', newDashboardName.trim());
                           const newDashboard = await createDashboard(newDashboardName.trim());
                           // New dashboards have a default "Overview" sheet, so we can add directly
-                          await addChartToDashboard(newDashboard.id, chart);
+                          await addChartToDashboard(newDashboard.id, chartToSave);
                           toast({
                             title: 'Success',
                             description: `Dashboard "${newDashboardName.trim()}" created and chart added successfully.`,

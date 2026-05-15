@@ -6,6 +6,7 @@ import {
   isTemporalWhitelistColumnName,
   parseFlexibleDate,
   sanitizeDateStringForParse,
+  classifyAsTimeOfDay,
 } from './dateUtils.js';
 import { isLikelyIdentifierColumnName, isIdentifierLikeNumericColumn } from './columnIdHeuristics.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
@@ -22,6 +23,42 @@ import {
   stripCurrencyAndParse,
   isoForSymbol,
 } from './wideFormat/currencyVocabulary.js';
+
+/**
+ * SU-FU1 · Canonicalise boolean-shaped cell values to "Yes"/"No" at parse time.
+ *
+ * Excel native TRUE/FALSE cells round-trip through SheetJS (`raw: false`) as
+ * uppercased "TRUE"/"FALSE" strings. CSV parsers (`cast: true`) sometimes
+ * yield native JS booleans. Pre-fix the agent's PCT1 path, the planner LLM
+ * was emitting `predicate.values: ["Yes"]` (from the prompt's worked example)
+ * but the actual stored values were "TRUE"/"FALSE" — so the predicate
+ * matched zero rows and the agent answered "0 of 0 clocked in before 9:30"
+ * even when the data clearly had matching rows.
+ *
+ * Normalising once at parse time means downstream (DuckDB column store,
+ * topValues catalog, planner prompt, in-app preview, XLSX download) all see
+ * the same canonical "Yes"/"No" strings. Existing string columns whose
+ * literal values happen to be "TRUE"/"FALSE" are deliberately rewritten —
+ * this is the same canonicalisation the data preview UI already applies on
+ * the read side, just done at write-time so the storage matches the display.
+ *
+ * Returns `null` when the value isn't boolean-shaped, so callers can fall
+ * through to existing handling (currency parse, etc.).
+ */
+function coerceBooleanCellToYesNo(value: unknown): string | null {
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+  if (typeof value === 'string') {
+    const t = value.trim();
+    if (!t) return null;
+    if (t.length > 5) return null;
+    const lower = t.toLowerCase();
+    if (lower === 'true') return 'Yes';
+    if (lower === 'false') return 'No';
+  }
+  return null;
+}
 
 export type CsvParseDiagnostics = {
   totalRows: number;
@@ -223,7 +260,16 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
           processedRow[key] = null;
           continue;
         }
-        
+
+        // SU-FU1 · canonicalise booleans (native bool from `cast: true`
+        // OR pre-stringified "true"/"false") to "Yes"/"No" so the
+        // planner's PCT1 path matches the actual stored values.
+        const boolCanon = coerceBooleanCellToYesNo(value);
+        if (boolCanon !== null) {
+          processedRow[key] = boolCanon;
+          continue;
+        }
+
         if (typeof value === 'string') {
           const trimmed = value.trim();
           // Convert empty strings or whitespace-only strings to null
@@ -231,7 +277,7 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
             processedRow[key] = null;
             continue;
           }
-          
+
           // Try to convert string numbers — currency-aware: strips
           // leading/trailing currency symbols (đ, $, €, £, ¥, ₹, R$,
           // S$, HK$, RM, Rp, kr, …) before parsing. The symbol is
@@ -297,7 +343,16 @@ function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string,
         processedRow[key] = null;
         continue;
       }
-      
+
+      // SU-FU1 · canonicalise booleans (native or pre-stringified
+      // "TRUE"/"FALSE" from XLSX `raw: false`) to "Yes"/"No" so the
+      // planner's PCT1 path matches the actual stored values.
+      const boolCanon = coerceBooleanCellToYesNo(value);
+      if (boolCanon !== null) {
+        processedRow[key] = boolCanon;
+        continue;
+      }
+
       if (typeof value === 'string') {
         const trimmed = value.trim();
         // Convert empty strings or whitespace-only strings to null
@@ -305,7 +360,7 @@ function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string,
           processedRow[key] = null;
           continue;
         }
-        
+
         // Currency-aware string→number coercion (mirror of the CSV
         // path above — see comment there).
         const parsed = stripCurrencyAndParse(trimmed);
@@ -631,8 +686,29 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     const isNumeric = nonNullValues.length > 0 && numericMatches >= numericThreshold;
 
     const nn = nonNullValues.filter((v) => v !== null && v !== undefined && v !== '');
+
+    // TOD1 · Time-of-day classification runs BEFORE the date check. When a
+    // column's values look like HH:MM:SS strings (no calendar date), we tag
+    // it as text + timeOfDay annotation rather than letting it trip the
+    // word-"time" hint in isDateColumnName (which would mis-tag it as `date`
+    // and cause silent shape mismatches against DuckDB's VARCHAR storage).
+    let timeOfDayInfo: { sentinelValues?: string[] } | undefined;
+    if (!isNumeric && nn.length > 0) {
+      const verdict = classifyAsTimeOfDay(col, nn);
+      if (verdict.isTimeOfDay) {
+        timeOfDayInfo = verdict.sentinelValues.length
+          ? { sentinelValues: verdict.sentinelValues }
+          : {};
+      }
+    }
+
     let isDate = false;
-    if (!isNumeric && !isLikelyIdentifierColumnName(col) && nn.length > 0) {
+    if (
+      !timeOfDayInfo &&
+      !isNumeric &&
+      !isLikelyIdentifierColumnName(col) &&
+      nn.length > 0
+    ) {
       if (isTemporalWhitelistColumnName(col)) {
         isDate = true;
       } else if (
@@ -695,6 +771,42 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       ? finaliseCurrencyForColumn(col)
       : undefined;
 
+    // Wave T1 · post-parse dateRange. Iterates the full dataset (not the
+    // 1000-row sample) so the span is accurate for date-sorted uploads where
+    // the first 1000 rows would cluster at one end. Cost is O(rows) per date
+    // column at upload time — fine for the once-per-upload pipeline.
+    let dateRange:
+      | { minIso: string; maxIso: string; distinctDayCount: number; spanDays: number }
+      | undefined;
+    if (isDate) {
+      let minMs = Number.POSITIVE_INFINITY;
+      let maxMs = Number.NEGATIVE_INFINITY;
+      const distinctDays = new Set<string>();
+      for (const row of data) {
+        const v = row[col];
+        if (v === null || v === undefined || v === "") continue;
+        let d: Date | null = null;
+        if (v instanceof Date && !isNaN(v.getTime())) {
+          d = v;
+        } else if (typeof v === "string" || typeof v === "number") {
+          d = parseFlexibleDate(String(v));
+        }
+        if (!d) continue;
+        const ms = d.getTime();
+        if (ms < minMs) minMs = ms;
+        if (ms > maxMs) maxMs = ms;
+        distinctDays.add(d.toISOString().slice(0, 10));
+      }
+      if (Number.isFinite(minMs) && Number.isFinite(maxMs)) {
+        dateRange = {
+          minIso: new Date(minMs).toISOString().slice(0, 10),
+          maxIso: new Date(maxMs).toISOString().slice(0, 10),
+          distinctDayCount: distinctDays.size,
+          spanDays: Math.max(0, Math.floor((maxMs - minMs) / 86_400_000)),
+        };
+      }
+    }
+
     return {
       name: col,
       type,
@@ -702,6 +814,8 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       ...(topValues?.length ? { topValues } : {}),
       ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
       ...(currency ? { currency } : {}),
+      ...(timeOfDayInfo ? { timeOfDay: timeOfDayInfo } : {}),
+      ...(dateRange ? { dateRange } : {}),
     };
   });
 
@@ -784,9 +898,29 @@ export function resolveApprovedDateColumns(
   const llmCols = resolveEffectiveDateColumns(data, profile, opts?.columnOrderBeforeClean);
   const approved: string[] = [];
 
+  // SU-FU1 · sample once per column for the time-of-day veto so we don't
+  // re-walk the data inside the LLM-col loop below.
+  const sampleSizeForTodCheck = Math.min(data.length, 200);
+  const isTimeOfDayColumn = (col: string): boolean => {
+    if (!columns.includes(col)) return false;
+    const vals = data
+      .slice(0, sampleSizeForTodCheck)
+      .map((r) => r[col])
+      .filter((v) => v !== null && v !== undefined && v !== '');
+    if (vals.length === 0) return false;
+    return classifyAsTimeOfDay(col, vals).isTimeOfDay;
+  };
+
   for (const col of columns) {
     if (isLikelyIdentifierColumnName(col)) continue;
-    if (isTemporalWhitelistColumnName(col)) approved.push(col);
+    if (!isTemporalWhitelistColumnName(col)) continue;
+    // SU-FU1 · refuse the whitelist approval when the column's values
+    // are HH:MM:SS time-of-day strings. The whitelist regex matches "time"
+    // substrings ("Clock-In Time") that should NEVER be treated as
+    // calendar-date columns — `parseRowDate("09:45:34")` returns null,
+    // which would generate empty Day/Week/Month facet columns.
+    if (isTimeOfDayColumn(col)) continue;
+    approved.push(col);
   }
 
   const sampleSize = Math.min(data.length, 1000);
@@ -795,6 +929,9 @@ export function resolveApprovedDateColumns(
     if (approved.includes(col)) continue;
     if (isLikelyIdentifierColumnName(col)) continue;
     if (!columns.includes(col)) continue;
+    // SU-FU1 · refuse time-of-day columns even when the LLM dataset
+    // profile labelled them as dates. See helper above.
+    if (isTimeOfDayColumn(col)) continue;
     const values = data.slice(0, sampleSize).map((r) => r[col]);
     if (isDateParseableAtThreshold(values, llmThresholdRatio)) {
       approved.push(col);

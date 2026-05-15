@@ -35,10 +35,10 @@ describe("Phase-1 rich envelope — chatResponseSchema", () => {
     assert.equal(out.success, false);
   });
 
-  it("caps magnitudes at 6", () => {
+  it("caps magnitudes at 10", () => {
     const out = chatResponseSchema.safeParse({
       ...base,
-      magnitudes: Array.from({ length: 7 }, (_, i) => ({
+      magnitudes: Array.from({ length: 11 }, (_, i) => ({
         label: `m${i}`,
         value: `${i}%`,
       })),

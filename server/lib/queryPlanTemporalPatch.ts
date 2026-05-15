@@ -30,18 +30,45 @@ export function patchExecuteQueryPlanDateAggregation(
   plan.dateAggregationPeriod = hint;
 }
 
-const TREND_OVER_TIME_RE =
+export const TREND_OVER_TIME_RE =
   /\b(trend|over\s+time|time\s+series|evolution|trajectory|how\s+.+\s+(changed|evolved)|temporal\s+pattern)\b/i;
+
+/** Wave T2 · per-source-date-column span metadata, as populated by
+ * `createDataSummary` (Wave T1). Optional input to the grain patch; when
+ * absent the patch falls back to the pre-T2 behaviour ("month"). */
+export type DateRangeByColumn = ReadonlyMap<
+  string,
+  { spanDays: number; distinctDayCount: number }
+>;
+
+/** Wave T2 · pure picker. Mirrors the display-side thresholds in
+ * `temporalGrain.ts`. Returns the SQL aggregation period the
+ * planner should bind to `plan.dateAggregationPeriod`. */
+export function pickTrendGrainForSpan(
+  spanDays: number,
+  distinctDayCount: number,
+): "day" | "week" | "month" | "quarter" {
+  if (!Number.isFinite(spanDays) || spanDays <= 0 || distinctDayCount <= 1) {
+    return "month";
+  }
+  if (spanDays <= 90) return "day";
+  if (spanDays <= 365) return "week";
+  if (spanDays <= 365 * 5) return "month";
+  return "quarter";
+}
 
 /**
  * When the user asks for a trend / over time and the plan groups only by a raw date column with no
- * period, default to monthly aggregation to avoid one row per day and unreadable charts.
+ * period, pick a calibrated aggregation period (Day / Week / Month / Quarter) from the dataset's
+ * post-parse date span. Falls back to "month" when no span metadata is provided (pre-T2 behaviour).
+ *
  * Runs after {@link patchExecuteQueryPlanDateAggregation} so explicit period phrases still win.
  */
 export function patchExecuteQueryPlanTrendCoarserGrain(
   step: ExecuteQueryPlanStepLike,
   question: string,
-  dateColumns: readonly string[]
+  dateColumns: readonly string[],
+  dateRangeByColumn?: DateRangeByColumn,
 ): void {
   if (step.tool !== "execute_query_plan") return;
   const q = question.trim();
@@ -61,7 +88,10 @@ export function patchExecuteQueryPlanTrendCoarserGrain(
   if (!dateSet.has(g0)) return;
   if (isTemporalFacetColumnKey(g0)) return;
 
-  plan.dateAggregationPeriod = "month";
+  const range = dateRangeByColumn?.get(g0);
+  plan.dateAggregationPeriod = range
+    ? pickTrendGrainForSpan(range.spanDays, range.distinctDayCount)
+    : "month";
 }
 
 /**

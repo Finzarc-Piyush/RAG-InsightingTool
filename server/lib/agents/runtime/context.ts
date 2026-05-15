@@ -259,6 +259,106 @@ export function formatWideFormatShapeBlock(summary: DataSummary): string {
   );
 }
 
+/**
+ * TOD1 · Surface time-of-day columns (HH:MM:SS strings, no calendar date) so
+ * the planner reasons about them as text values, not dates. Lists the columns,
+ * notes lexicographic comparison semantics for HH:MM:SS, and surfaces sentinel
+ * non-time placeholders ("Absent" etc.) so the planner can exclude them with
+ * `dimensionFilters` when comparing times. Empty when no TOD columns exist.
+ */
+export function formatTimeOfDayBlock(summary: DataSummary): string {
+  const todColumns = summary.columns.filter(
+    (c) => c.timeOfDay !== undefined
+  );
+  if (todColumns.length === 0) return "";
+
+  // SU-DT1 · index pairings by time-column name so each TOD line can show
+  // its paired date column inline.
+  const pairsByTime = new Map<string, string>();
+  for (const p of summary.dateTimeColumnPairs ?? []) {
+    pairsByTime.set(p.timeColumn, p.dateColumn);
+  }
+
+  const lines = todColumns.map((c) => {
+    const sentinels = c.timeOfDay?.sentinelValues ?? [];
+    const sentinelStr = sentinels.length
+      ? ` · sentinel non-time values present: ${sentinels.join(", ")}`
+      : "";
+    const pairedDate = pairsByTime.get(c.name);
+    const pairStr = pairedDate
+      ? ` ↔ paired with date column "${pairedDate}"`
+      : "";
+    return `- ${c.name}${pairStr}${sentinelStr}`;
+  });
+
+  const pairingGuidance =
+    pairsByTime.size > 0
+      ? ` To compose a combined datetime from a paired (date, time) column ` +
+        `pair, call add_computed_columns once with ` +
+        `\`def: { kind: "datetimeConcat", dateColumn, timeColumn }\` ` +
+        `(see SU-DT2), then groupBy / filter / sort against the new column ` +
+        `normally. The compute returns NULL on sentinel rows, so they drop ` +
+        `out of comparisons automatically.`
+      : "";
+
+  return (
+    `\n### TIME-OF-DAY columns (HH:MM:SS strings, NOT calendar dates):\n` +
+    `${lines.join("\n")}\n` +
+    `Compare with quoted HH:MM:SS string literals (e.g. dimensionFilters: ` +
+    `[{column: "<col>", op: "lt", values: ["09:30:00"]}]) — lexicographic ` +
+    `comparison on HH:MM:SS strings is correct (DuckDB CAST AS VARCHAR). ` +
+    `When sentinel values are listed, ALWAYS exclude them with a paired ` +
+    `{op: "not_in", values: [...]} filter on the same column so they don't ` +
+    `pollute time comparisons. For "% of rows where <time-col> meets a cutoff" ` +
+    `questions, use PCT1's countIf pattern with the comparison predicate.` +
+    pairingGuidance
+  );
+}
+
+/**
+ * SU-IC3 · Surface pre-computed "indicator" columns (Yes/No/etc. shaped
+ * pre-computed answer columns) so the planner prefers them when a user
+ * question matches the column's semantic intent. Empty when no
+ * indicators exist on the dataset.
+ */
+export function formatIndicatorColumnsBlock(summary: DataSummary): string {
+  const indicatorColumns = summary.columns.filter((c) => c.indicator);
+  if (indicatorColumns.length === 0) return "";
+
+  const lines = indicatorColumns.map((c) => {
+    const ind = c.indicator!;
+    const polarity =
+      ind.kind === "boolean"
+        ? `boolean ${(ind.positiveValues ?? ["Yes"]).join("/")} vs ${(
+            ind.negativeValues ?? ["No"]
+          ).join("/")}`
+        : "categorical";
+    const sentinelStr = ind.sentinelValues?.length
+      ? `, sentinel: ${ind.sentinelValues.join("/")}`
+      : "";
+    const answers = c.answersQuestions?.length
+      ? ` — answers: ${c.answersQuestions
+          .slice(0, 3)
+          .map((q) => `"${q}"`)
+          .join(", ")}`
+      : "";
+    return `- "${c.name}" (${polarity}${sentinelStr})${answers}`;
+  });
+
+  return (
+    `\n### PRE-COMPUTED INDICATOR COLUMNS ` +
+    `(use these directly when the user question matches — faster + more accurate than deriving from raw values):\n` +
+    `${lines.join("\n")}\n` +
+    `When a user question matches one of the "answers" phrasings (or is a paraphrase), ` +
+    `prefer the indicator column over deriving the answer from raw underlying data. ` +
+    `For percent-of-rows shape, PCT1's countIf pattern with predicate ` +
+    `\`{column: "<indicator>", op: "in", values: [<positiveValue>]}\` for matching and ` +
+    `\`{column: "<indicator>", op: "in", values: [<positiveValue>, <negativeValue>]}\` ` +
+    `for total still applies (sentinel values like "Absent" are excluded by leaving ` +
+    `them out of the total predicate).`
+  );
+}
+
 function formatInferredFiltersBlock(ctx: AgentExecutionContext): string {
   const fs = ctx.inferredFilters;
   if (!fs?.length) return "";
@@ -371,6 +471,8 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const inferredBlock = formatInferredFiltersBlock(ctx);
   const hierarchyBlock = formatDimensionHierarchiesBlock(ctx);
   const wideFormatBlock = formatWideFormatShapeBlock(ctx.summary);
+  const timeOfDayBlock = formatTimeOfDayBlock(ctx.summary);
+  const indicatorBlock = formatIndicatorColumnsBlock(ctx.summary);
   const diag =
     ctx.analysisSpec?.mode === "diagnostic" ?
       `\nDIAGNOSTIC_ANALYSIS_HINT: User question matches driver/factor/deep-dive intent. Prefer: (1) execute_query_plan with dimensionFilters only (no aggregations) OR run_readonly_sql on row-level \`dataset\` to slice the segment; (2) breakdowns (groupBy + sum) **on the sliced frame**; (3) run_correlation with **dimensionFilters** matching the slice and **targetVariable** = numeric outcome (e.g. Sales)—do **not** run correlation only on small aggregate tables from step (1) if that table has one row per group already. When **run_segment_driver_analysis** is available and the question is clearly about drivers in a segment, you may use it as one step. Independent post-slice queries may be planned as parallel-friendly separate steps with the same dependsOn parent if the executor supports it; otherwise keep a short linear plan.\nSuggested outcome column (hint only): ${ctx.analysisSpec.outcomeColumn ?? "(infer from question)"}`
@@ -380,5 +482,5 @@ export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   return `Dataset: ${ctx.summary.rowCount} rows, columns: ${cols}.
 dateColumns: ${dates}
 numericColumns: ${numerics}${facetBlock}${categoricalBlock}${hints}${atMentionNote}${temporalLine}
-Mode: ${ctx.mode}${inferredBlock}${hierarchyBlock}${wideFormatBlock}${diag}${briefBlock}${pivotStateBlock}${blocks}`;
+Mode: ${ctx.mode}${inferredBlock}${hierarchyBlock}${wideFormatBlock}${timeOfDayBlock}${indicatorBlock}${diag}${briefBlock}${pivotStateBlock}${blocks}`;
 }

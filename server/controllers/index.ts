@@ -24,6 +24,7 @@ export {
   addSheetToDashboardController,
   removeSheetFromDashboardController,
   renameSheetController,
+  reorderSheetsController,
   renameDashboardController,
   updateChartInsightOrRecommendationController,
   updateTableCaptionController,

@@ -40,7 +40,7 @@ function buildLlmPayload(data: Record<string, any>[]) {
   return { columns, sampleRows };
 }
 
-const SYSTEM_PROMPT = `You are a data analyst. You receive JSON with "columns" (header names in order), "sampleRows" (up to 100 raw rows — values may be messy: mixed date formats, text, numbers), and optionally "ambiguousCurrencyColumns" listing numeric columns whose currency symbol is ambiguous (e.g. "$" could be USD / CAD / AUD / SGD / HKD; "kr" could be SEK / DKK / NOK; "¥" could be JPY or CNY).
+const SYSTEM_PROMPT = `You are a data analyst. You receive JSON with "columns" (header names in order), "sampleRows" (up to 100 raw rows — values may be messy: mixed date formats, text, numbers), optionally "ambiguousCurrencyColumns" listing numeric columns whose currency symbol is ambiguous (e.g. "$" could be USD / CAD / AUD / SGD / HKD; "kr" could be SEK / DKK / NOK; "¥" could be JPY or CNY), optionally "userContext" (verbatim notes the user set on the session — apply when describing the dataset and choosing suggested questions; standing instructions like "always exclude Central region" should NOT override the schema but SHOULD influence which questions you suggest), and optionally "domainContext" (FMCG / Marico domain vocabulary — use only to resolve metric/dimension names the dataset's column headers borrow from this vocabulary, NEVER to invent fields not present in "columns").
 
 Return ONLY a JSON object with these keys:
 - shortDescription: 1–3 sentences describing what the dataset is about. If the dataset has been pre-melted from wide format (you'll see a "Period" / "PeriodIso" / "Value" column triple), describe it as period-over-period and mention the period range.
@@ -64,10 +64,29 @@ Do not invent column names. Only use names from "columns".`;
  * columns whose detected symbol is ambiguous (`$`, `kr`, `¥`) are
  * surfaced to the LLM so it can pick a 3-letter ISO code from
  * context. The override is returned in `currencyOverrides`.
+ *
+ * Wave B5 · Optionally pass `permanentContext` and/or `domainContext` so
+ * the LLM has more signal to (a) describe the dataset in the user's own
+ * terms, (b) pick currency overrides for ambiguous symbols, (c) suggest
+ * questions that align with the user's stated interests and the
+ * relevant FMCG/Marico domain vocabulary.
+ *
+ * Both blocks are OPTIONAL. The upload-pipeline caller passes them when
+ * the chat doc already has permanentContext set (re-uploads / user has
+ * declared standing context before uploading) and always passes the
+ * process-memoised domainContext.
  */
 export async function inferDatasetProfile(
   data: Record<string, any>[],
-  options?: { fileName?: string; timeoutMs?: number; dataSummary?: DataSummary }
+  options?: {
+    fileName?: string;
+    timeoutMs?: number;
+    dataSummary?: DataSummary;
+    /** Wave B5 · user's free-text notes from the "Add additional context" UI. */
+    permanentContext?: string;
+    /** Wave B5 · composed FMCG/Marico domain pack text from loadEnabledDomainContext. */
+    domainContext?: string;
+  }
 ): Promise<DatasetProfile> {
   if (!data.length) {
     return { ...emptyDatasetProfile(), shortDescription: 'No rows to analyze.' };
@@ -84,12 +103,21 @@ export async function inferDatasetProfile(
       }
     }
   }
+  // Wave B5 · Cap each context block tightly because the profile call is
+  // run at upload time on a payload that already includes the sample
+  // rows; we don't want it to balloon. The values are passed alongside
+  // the JSON payload as labelled string fields rather than as separate
+  // sections, so the LLM reads them as part of the same input doc.
+  const permanentContext = options?.permanentContext?.trim().slice(0, 800) || undefined;
+  const domainContext = options?.domainContext?.trim().slice(0, 2000) || undefined;
   const userContent = JSON.stringify({
     fileName: options?.fileName,
     ...payload,
     ...(ambiguousCurrencyColumns.length > 0
       ? { ambiguousCurrencyColumns }
       : {}),
+    ...(permanentContext ? { userContext: permanentContext } : {}),
+    ...(domainContext ? { domainContext } : {}),
   });
 
   const runLlm = async (): Promise<DatasetProfile> => {

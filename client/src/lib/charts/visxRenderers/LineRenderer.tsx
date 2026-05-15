@@ -40,6 +40,7 @@ import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
   detectOutliers,
   fitLinearTrend,
@@ -473,7 +474,7 @@ export function LineRenderer({
             stroke="hsl(var(--border))"
             strokeOpacity={0.25}
             strokeDasharray="2,2"
-            numTicks={4}
+            numTicks={targetYTickCount(innerHeight)}
           />
           {/* Brush rectangle while dragging */}
           {brushStart !== null && brushEnd !== null && (
@@ -824,7 +825,7 @@ export function LineRenderer({
               dx: -4,
               dy: 3,
             })}
-            numTicks={4}
+            numTicks={targetYTickCount(innerHeight)}
           />
           {y2Series && y2Scale && y2TickFormat && (
             <AxisRight
@@ -841,7 +842,7 @@ export function LineRenderer({
                 dx: 4,
                 dy: 3,
               })}
-              numTicks={4}
+              numTicks={targetYTickCount(innerHeight)}
             />
           )}
         </Group>

@@ -24,6 +24,7 @@ import {
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 
 export interface RegressionRendererProps {
   spec: ChartSpecV2;
@@ -162,7 +163,7 @@ export function RegressionRenderer({
           stroke="hsl(var(--border))"
           strokeOpacity={0.25}
           strokeDasharray="2,2"
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
         {points.map((p, i) => (
           <Circle
@@ -212,7 +213,7 @@ export function RegressionRenderer({
             fontFamily: "var(--font-sans)",
             textAnchor: "middle",
           })}
-          numTicks={6}
+          numTicks={targetYTickCount(innerWidth)}
         />
         <AxisLeft
           scale={yScale}
@@ -227,7 +228,7 @@ export function RegressionRenderer({
             dx: -4,
             dy: 3,
           })}
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
       </Group>
     </svg>

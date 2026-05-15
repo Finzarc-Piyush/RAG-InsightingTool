@@ -147,13 +147,15 @@ function ChartCard({
 
   return (
     <div className="flex flex-col overflow-hidden rounded-brand-lg border border-border bg-card shadow-elev-1">
-      {/* Title bar */}
+      {/* DR14 · title bar matches the saved-dashboard tile chrome
+          (TileHeader): `text-sm font-semibold text-foreground` so the
+          chat preview and the persisted tile read identically. */}
       <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-4 py-2.5">
         <ChartTypeIcon
           type={chart.type}
           className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground"
         />
-        <span className="flex-1 truncate text-sm font-medium text-foreground">{chart.title}</span>
+        <span className="flex-1 truncate text-sm font-semibold text-foreground">{chart.title}</span>
       </div>
 
       {/* Chart body */}
@@ -171,10 +173,16 @@ function ChartCard({
         </Suspense>
       </div>
 
-      {/* Per-chart insight callout (suppressed when narrative envelope is rich) */}
+      {/* DR14 · keyInsight footer aligned with DR3's saved-tile redesign
+          (top-border + muted surface, `text-sm`, "Insight" label) so the
+          chat preview is visually identical to the persisted tile. */}
       {!suppressKeyInsight && chart.keyInsight && (
-        <div className="mx-4 mb-3 mt-0 rounded-r-brand-sm border-l-2 border-primary/60 bg-primary/5 px-3 py-2">
-          <div className="text-xs leading-relaxed text-muted-foreground">
+        <div className="border-t border-border/40 bg-muted/30 px-4 py-2 max-h-[200px] overflow-y-auto">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            <span aria-hidden="true">✦</span>
+            Insight
+          </div>
+          <div className="mt-1 text-sm leading-relaxed text-foreground/90">
             <MarkdownRenderer content={chart.keyInsight} />
           </div>
         </div>

@@ -76,6 +76,12 @@ export const dashboardsApi = {
   /** Phase 2.E — atomic follow-up edits to an existing dashboard. */
   patch: (dashboardId: string, patch: DashboardPatch) =>
     api.post<Dashboard>(`/api/dashboards/${dashboardId}/patch`, { patch }),
+  /** Wave DR5 · atomic sheet reorder. Body: full ordered id list. */
+  reorderSheets: (dashboardId: string, orderedSheetIds: string[]) =>
+    api.post<Dashboard>(
+      `/api/dashboards/${dashboardId}/sheets/reorder`,
+      { orderedSheetIds }
+    ),
   patchSheetContent: (
     dashboardId: string,
     sheetId: string,

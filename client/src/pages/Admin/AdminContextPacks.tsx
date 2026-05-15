@@ -18,6 +18,7 @@ import {
 } from "@/lib/api/admin";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AdminNav } from "../Superadmin/AdminNav";
 import { Switch } from "@/components/ui/switch";
 
 const TOKEN_BUDGET_WARN = 12_000;
@@ -107,30 +108,36 @@ export default function AdminContextPacks() {
 
   if (loading && !data) {
     return (
-      <div className="p-6 text-muted-foreground" data-testid="admin-context-packs-loading">
-        Loading domain context packs…
-      </div>
+      <>
+        <AdminNav />
+        <div className="p-6 text-muted-foreground" data-testid="admin-context-packs-loading">
+          Loading domain context packs…
+        </div>
+      </>
     );
   }
 
   if (error) {
     const isForbidden = /\b403\b/.test(error);
     return (
-      <div className="p-6">
-        <Card className="p-6 border-destructive/30">
-          <h2 className="text-lg font-semibold text-foreground mb-2">
-            {isForbidden ? "Not authorized" : "Failed to load domain context packs"}
-          </h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            {isForbidden
-              ? "Your account isn't on the ADMIN_EMAILS allow-list."
-              : error}
-          </p>
-          <Button onClick={() => void load()} variant="outline">
-            Retry
-          </Button>
-        </Card>
-      </div>
+      <>
+        <AdminNav />
+        <div className="p-6">
+          <Card className="p-6 border-destructive/30">
+            <h2 className="text-lg font-semibold text-foreground mb-2">
+              {isForbidden ? "Not authorized" : "Failed to load domain context packs"}
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {isForbidden
+                ? "Your account isn't on the ADMIN_EMAILS allow-list."
+                : error}
+            </p>
+            <Button onClick={() => void load()} variant="outline">
+              Retry
+            </Button>
+          </Card>
+        </div>
+      </>
     );
   }
 
@@ -140,6 +147,8 @@ export default function AdminContextPacks() {
   const enabledCount = data.packs.filter((p) => p.enabled).length;
 
   return (
+    <>
+    <AdminNav />
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <header className="flex items-center justify-between">
         <div>
@@ -235,5 +244,6 @@ export default function AdminContextPacks() {
         </Card>
       ))}
     </div>
+    </>
   );
 }

@@ -30,6 +30,7 @@ import {
   formatChartValue,
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 
 export interface WaterfallRendererProps {
   spec: ChartSpecV2;
@@ -131,7 +132,7 @@ export function WaterfallRenderer({
           stroke="hsl(var(--border))"
           strokeOpacity={0.25}
           strokeDasharray="2,2"
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
         {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
           <line
@@ -219,7 +220,7 @@ export function WaterfallRenderer({
             dx: -4,
             dy: 3,
           })}
-          numTicks={4}
+          numTicks={targetYTickCount(innerHeight)}
         />
       </Group>
     </svg>

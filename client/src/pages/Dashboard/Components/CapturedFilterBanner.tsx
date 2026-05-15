@@ -1,5 +1,6 @@
 /**
  * Wave-FA6 · Captured-filter provenance banner for dashboards.
+ * Wave DR2 · adds a compact chip-with-popover variant for the header.
  *
  * Renders only when the dashboard was created while a session active filter
  * was set. The dashboard's chart data is already a snapshot of the filtered
@@ -9,6 +10,11 @@
  */
 import { Filter as FilterIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import type { ActiveFilterSpec, ActiveFilterCondition } from "@/shared/schema";
 
 function chipLabel(c: ActiveFilterCondition): string {
@@ -34,6 +40,11 @@ function chipLabel(c: ActiveFilterCondition): string {
   return c.column;
 }
 
+/**
+ * Full-width banner — used pre-DR2 above the canvas; retained for
+ * any caller that still wants the prominent treatment. Post-DR2 the
+ * `DashboardHeader` uses the chip variant below instead.
+ */
 export function CapturedFilterBanner({ spec }: { spec: ActiveFilterSpec }) {
   if (!spec.conditions || spec.conditions.length === 0) return null;
   return (
@@ -56,5 +67,51 @@ export function CapturedFilterBanner({ spec }: { spec: ActiveFilterSpec }) {
         Numbers reflect the filtered slice at the time this dashboard was created.
       </span>
     </div>
+  );
+}
+
+/**
+ * Compact chip mounted in the header. Shows a count; clicking opens
+ * a popover that lists the conditions plus the same disclaimer as
+ * the full banner. Renders nothing when the spec has no conditions.
+ */
+export function CapturedFilterChip({ spec }: { spec: ActiveFilterSpec }) {
+  if (!spec.conditions || spec.conditions.length === 0) return null;
+  const n = spec.conditions.length;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-foreground hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          data-testid="captured-filter-chip"
+          aria-label={`Captured under ${n} active filter ${n === 1 ? "condition" : "conditions"}`}
+        >
+          <FilterIcon className="h-3 w-3 text-primary" />
+          <span className="font-medium">
+            Captured slice · {n} {n === 1 ? "condition" : "conditions"}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[320px] space-y-2 p-3 text-xs"
+      >
+        <div className="font-medium text-foreground">
+          Captured with filter
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {spec.conditions.map((c) => (
+            <Badge key={c.column} variant="secondary" className="text-[11px]">
+              {chipLabel(c)}
+            </Badge>
+          ))}
+        </div>
+        <p className="text-muted-foreground">
+          Numbers reflect the filtered slice at the time this dashboard was
+          created.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }

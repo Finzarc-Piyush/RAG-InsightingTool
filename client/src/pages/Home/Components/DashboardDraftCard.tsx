@@ -20,12 +20,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { dashboardsApi } from "@/lib/api/dashboards";
-import { dashboardSpecSchema, type DashboardSpec } from "@/shared/schema";
+import {
+  dashboardSpecSchema,
+  type DashboardSpec,
+  type Message,
+} from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, LayoutDashboard, ArrowUpRight, Share2, Download } from "lucide-react";
 // W7.7 · share the just-created dashboard via the existing analysis-share dialog.
 import { ShareAnalysisDialog } from "@/pages/Analysis/ShareAnalysisDialog";
+// DPF3 · fold message-only fields (businessActions, etc.) into the spec
+// before POSTing so the dashboard mirrors what the user sees in chat.
+import { augmentSpecFromMessage } from "@/lib/dashboard/augmentSpecFromMessage";
 
 interface DashboardDraftCardProps {
   /** Raw draft from `message.dashboardDraft` — record<unknown> on the wire. */
@@ -45,6 +52,15 @@ interface DashboardDraftCardProps {
    * exists and the user has typically been auto-navigated to it.
    */
   createdDashboardId?: string;
+  /**
+   * DPF3 · the parent assistant `Message`. Used to fold message-only fields
+   * (`businessActions`, `followUpPrompts`, `investigationSummary`,
+   * `priorInvestigationsSnapshot`) onto the spec before POST. The agent's
+   * auto-create spec already carries the three sync fields when populated;
+   * `businessActions` resolves post-verifier and is patched onto the
+   * persisted message — the manual-create path threads it through here.
+   */
+  message?: Message;
 }
 
 function parseDraft(raw: unknown): DashboardSpec | null {
@@ -57,6 +73,7 @@ export function DashboardDraftCard({
   draft,
   sessionId,
   createdDashboardId,
+  message,
 }: DashboardDraftCardProps) {
   const parsed = useMemo(() => parseDraft(draft), [draft]);
   const [status, setStatus] = useState<
@@ -95,17 +112,18 @@ export function DashboardDraftCard({
   const handleCreate = async () => {
     setStatus({ kind: "creating" });
     try {
-      const dashboard = await dashboardsApi.createFromSpec(parsed, sessionId);
+      const augmented = augmentSpecFromMessage(parsed, message);
+      const dashboard = await dashboardsApi.createFromSpec(augmented, sessionId);
       setStatus({ kind: "created", dashboardId: dashboard.id });
       toast({
         title: "Dashboard created",
         description: parsed.name,
       });
     } catch (err) {
-      const message =
+      const errMessage =
         err instanceof Error ? err.message : "Could not create dashboard";
       logger.error("createFromSpec failed", err);
-      setStatus({ kind: "error", message });
+      setStatus({ kind: "error", message: errMessage });
     }
   };
 
@@ -116,7 +134,8 @@ export function DashboardDraftCard({
   const handleCreateAndExport = async () => {
     setStatus({ kind: "creating_with_export" });
     try {
-      const dashboard = await dashboardsApi.createFromSpec(parsed, sessionId);
+      const augmented = augmentSpecFromMessage(parsed, message);
+      const dashboard = await dashboardsApi.createFromSpec(augmented, sessionId);
       try {
         await dashboardsApi.exportDashboard(dashboard.id, "pptx");
         toast({
@@ -134,10 +153,10 @@ export function DashboardDraftCard({
       }
       setStatus({ kind: "created", dashboardId: dashboard.id });
     } catch (err) {
-      const message =
+      const errMessage =
         err instanceof Error ? err.message : "Could not create dashboard";
       logger.error("createFromSpec failed", err);
-      setStatus({ kind: "error", message });
+      setStatus({ kind: "error", message: errMessage });
     }
   };
 

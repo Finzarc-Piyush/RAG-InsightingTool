@@ -426,10 +426,19 @@ export function resolveFacetSourceBindings(
 /**
  * Mutates rows: migrates legacy facet keys, removes prior facet keys, then adds
  * facet fields for each date column. Returns metadata for columns written.
+ *
+ * SU-FU1 · `excludeTimeOfDayColumns` (optional) — defense in depth against
+ * the case where an upstream caller (e.g. the dataset-profile LLM) labelled
+ * a time-only column ("Clock-In Time" with values "09:45:34") as a date.
+ * `parseRowDate` returns null on every cell of such a column, so the facet
+ * fields it generates would be entirely null and only pollute the schema +
+ * the XLSX download. When the caller supplies this set, those columns are
+ * skipped from facet generation entirely.
  */
 export function applyTemporalFacetColumns(
   data: Record<string, any>[],
-  dateColumns: string[]
+  dateColumns: string[],
+  options?: { excludeTimeOfDayColumns?: ReadonlySet<string> }
 ): TemporalFacetColumnMeta[] {
   if (
     process.env.DISABLE_TEMPORAL_FACETS === "1" ||
@@ -439,10 +448,16 @@ export function applyTemporalFacetColumns(
   }
   if (data.length === 0 || !dateColumns.length) return [];
 
-  migrateLegacyTemporalFacetRowKeys(data, dateColumns);
+  const excluded = options?.excludeTimeOfDayColumns;
+  const effectiveDateColumns = excluded
+    ? dateColumns.filter((c) => !excluded.has(c))
+    : dateColumns;
+  if (effectiveDateColumns.length === 0) return [];
+
+  migrateLegacyTemporalFacetRowKeys(data, effectiveDateColumns);
 
   const keys = new Set(Object.keys(data[0]));
-  const bindings = resolveFacetSourceBindings(keys, dateColumns);
+  const bindings = resolveFacetSourceBindings(keys, effectiveDateColumns);
   // Never strip facet keys unless we can re-derive them from a bound source date column.
   // Otherwise columnar rows that already carry materialized facets would lose them.
   if (!bindings.length) return [];

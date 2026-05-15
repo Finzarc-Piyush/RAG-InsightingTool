@@ -1,35 +1,103 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, BarChart3, Calendar, Download, Loader2, Edit2, Check, X, Share2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  BarChart3,
+  Calendar,
+  Check,
+  ChevronRight,
+  Download,
+  Edit2,
+  FilePieChart,
+  FileText,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  Share2,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { ActiveFilterSpec } from "@/shared/schema";
+import { CapturedFilterChip } from "./CapturedFilterBanner";
+import { useDashboardEditMode } from "../context/DashboardEditModeContext";
+import { OpenChatButton } from "./OpenChatButton";
+import type { DashboardData } from "../modules/useDashboardState";
+
+/**
+ * Wave DR2 · header restructure.
+ *
+ * Single sticky row replacing the previous two-row stack + above-canvas
+ * provenance banner.
+ *
+ * Layout:
+ *   left   — back arrow, breadcrumb, title (inline-rename), meta line
+ *   middle — captured-filter chip (popover; replaces the full-width banner)
+ *   right  — edit-mode toggle (when canEdit), summary trigger, export menu,
+ *            share, kebab overflow (delete / duplicate)
+ *
+ * Theming: every accent goes through semantic tokens. The pre-DR2
+ * `text-emerald-600 hover:bg-emerald-50` violation on the Share button
+ * is fixed here.
+ */
 
 interface DashboardHeaderProps {
   name: string;
   lastOpenedAt?: Date;
-  updatedAt: Date; // Use updatedAt as fallback
+  updatedAt: Date;
   sheetCount: number;
   isExporting: boolean;
   onBack: () => void;
-  onExport: () => void;
+  onExportPptx: () => void;
+  onExportPdf?: () => void;
+  isExportingPdf?: boolean;
   onRename?: (newName: string) => Promise<void>;
   onShare?: () => void;
+  onDelete?: () => void;
+  onOpenSummary?: () => void;
+  hasSummary?: boolean;
+  capturedActiveFilter?: ActiveFilterSpec;
+  /**
+   * Wave DR15 · the dashboard reference threaded through to render an
+   * "Open chat" back-link. We only need the fields `OpenChatButton`
+   * inspects; passing the full `DashboardData` keeps the header's
+   * prop surface stable as the linkage logic evolves.
+   */
+  dashboard?: Pick<DashboardData, "sessionId" | "sheets" | "isShared">;
 }
 
-export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
+export function DashboardHeader({
   name,
   lastOpenedAt,
   updatedAt,
   sheetCount,
   isExporting,
   onBack,
-  onExport,
+  onExportPptx,
+  onExportPdf,
+  isExportingPdf = false,
   onRename,
   onShare,
-}) => {
+  onDelete,
+  onOpenSummary,
+  hasSummary = false,
+  capturedActiveFilter,
+  dashboard,
+}: DashboardHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(name);
   const [isRenaming, setIsRenaming] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { mode, toggle, canToggle } = useDashboardEditMode();
 
   useEffect(() => {
     setEditName(name);
@@ -48,14 +116,12 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
       setEditName(name);
       return;
     }
-
     setIsRenaming(true);
     try {
       await onRename(editName.trim());
       setIsEditing(false);
-    } catch (error: any) {
-      // Error will be shown via toast from the mutation
-      setEditName(name); // Reset on error
+    } catch {
+      setEditName(name);
     } finally {
       setIsRenaming(false);
     }
@@ -67,29 +133,51 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSave();
-    } else if (e.key === 'Escape') {
-      handleCancel();
-    }
+    if (e.key === "Enter") handleSave();
+    else if (e.key === "Escape") handleCancel();
   };
 
+  const lastTouched = lastOpenedAt ?? updatedAt;
+  const lastTouchedFormatted = `${lastTouched.toLocaleDateString()} ${lastTouched.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+
   return (
-    <div className="flex flex-wrap items-center gap-4">
-      <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back to dashboards">
+    <div className="flex flex-wrap items-center gap-3">
+      {/* Left: back + breadcrumb + title */}
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onBack}
+        aria-label="Back to dashboards"
+        className="flex-shrink-0"
+      >
         <ArrowLeft className="h-4 w-4" />
       </Button>
 
-      <div className="flex-1 min-w-[200px]">
+      <div className="flex-1 min-w-[220px]">
+        <nav
+          aria-label="Breadcrumb"
+          className="flex items-center gap-1 text-xs text-muted-foreground"
+        >
+          <button
+            type="button"
+            onClick={onBack}
+            className="hover:text-foreground transition-colors"
+          >
+            Dashboards
+          </button>
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+          <span className="text-foreground/80">{name}</span>
+        </nav>
+
         {isEditing ? (
-          <div className="flex items-center gap-2">
+          <div className="mt-0.5 flex items-center gap-2">
             <Input
               ref={inputRef}
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={isRenaming}
-              className="text-2xl font-semibold h-9"
+              className="text-xl font-semibold h-9"
             />
             <Button
               variant="ghost"
@@ -111,8 +199,10 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             </Button>
           </div>
         ) : (
-          <div className="flex items-center gap-2 group">
-            <h1 className="text-2xl font-semibold text-foreground">{name}</h1>
+          <div className="mt-0.5 flex items-center gap-2 group">
+            <h1 className="text-xl font-semibold text-foreground leading-tight">
+              {name}
+            </h1>
             {onRename && (
               <Button
                 variant="ghost"
@@ -126,46 +216,128 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             )}
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground mt-1">
+
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1">
-            <Calendar className="h-4 w-4" />
-            Last updated {lastOpenedAt 
-              ? `${lastOpenedAt.toLocaleDateString()} ${lastOpenedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-              : `${updatedAt.toLocaleDateString()} ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+            <Calendar className="h-3.5 w-3.5" />
+            Updated {lastTouchedFormatted}
           </span>
           <span className="inline-flex items-center gap-1">
-            <BarChart3 className="h-4 w-4" />
-            {sheetCount} view{sheetCount === 1 ? '' : 's'}
+            <BarChart3 className="h-3.5 w-3.5" />
+            {sheetCount} view{sheetCount === 1 ? "" : "s"}
           </span>
+          {capturedActiveFilter ? (
+            <CapturedFilterChip spec={capturedActiveFilter} />
+          ) : null}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 ml-auto">
+      {/* Right: actions */}
+      <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+        {canToggle ? (
+          <Button
+            variant={mode === "edit" ? "default" : "outline"}
+            size="sm"
+            onClick={toggle}
+            aria-pressed={mode === "edit"}
+            title={
+              mode === "edit"
+                ? "Exit edit mode (e)"
+                : "Enter edit mode (e)"
+            }
+          >
+            <Pencil className="h-4 w-4 mr-2" />
+            {mode === "edit" ? "Editing" : "Edit"}
+          </Button>
+        ) : null}
+
+        {dashboard ? <OpenChatButton dashboard={dashboard} variant="header" /> : null}
+
+        {hasSummary && onOpenSummary ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onOpenSummary}
+            title="Open analysis summary"
+          >
+            <Sparkles className="h-4 w-4 mr-2" />
+            Summary
+          </Button>
+        ) : null}
+
         {onShare && (
           <Button
             variant="outline"
+            size="sm"
             onClick={onShare}
-            className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+            className="text-primary hover:bg-primary/10"
           >
             <Share2 className="h-4 w-4 mr-2" />
             Share
           </Button>
         )}
-        <Button onClick={onExport} disabled={isExporting}>
-          {isExporting ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Exporting…
-            </>
-          ) : (
-            <>
-              <Download className="h-4 w-4 mr-2" />
-              Export PPT
-            </>
-          )}
-        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="default"
+              size="sm"
+              disabled={isExporting || isExportingPdf}
+            >
+              {isExporting || isExportingPdf ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4 mr-2" />
+              )}
+              Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel>Download as</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => onExportPptx()}
+              disabled={isExporting}
+            >
+              <FilePieChart className="h-4 w-4 mr-2" />
+              PowerPoint (.pptx)
+            </DropdownMenuItem>
+            {onExportPdf ? (
+              <DropdownMenuItem
+                onSelect={() => onExportPdf()}
+                disabled={isExportingPdf}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                PDF
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {onDelete ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="More actions"
+                className="h-9 w-9"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onSelect={() => onDelete()}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete dashboard
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
     </div>
   );
-};
-
+}

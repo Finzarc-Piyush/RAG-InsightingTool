@@ -135,6 +135,66 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   [LLM_PURPOSE.CLARIFY_QUESTION]: () => ({ question: "" }),
   [LLM_PURPOSE.SUGGEST_FOLLOW_UPS]: () => ({ suggestions: [] }),
   [LLM_PURPOSE.VERIFIER_SIMPLE]: () => ({ verdict: "pass", issues: [] }),
+  // Default to empty self-gate so existing tests don't suddenly grow a
+  // Business Action Items section in their persisted envelope. Tests that
+  // exercise the agent override this handler explicitly.
+  [LLM_PURPOSE.BUSINESS_ACTIONS]: () => ({ items: [] }),
+  // W-EXP-2 · minimal-valid SlideDeckPlan: TitleSlide + ExecSummary +
+  // Methodology placed in the back third (slide 3 of 3). Action titles
+  // contain a verb + a number, so the W-EXP-3 verifier passes too. Tests
+  // that exercise specific layouts override this handler with a richer
+  // plan inline.
+  [LLM_PURPOSE.DECK_PLANNER]: () => ({
+    title: "Stub deck",
+    generatedAt: "2026-05-05",
+    slides: [
+      {
+        layout: "TitleSlide",
+        actionTitle: "Stub deck · Marico Q3 review with 3 findings",
+        speakerNotes: "Open the deck. Cover slide for the stub fixture used in tests.",
+        slots: {},
+      },
+      {
+        layout: "ExecSummary",
+        actionTitle: "3 takeaways shape the response to the Q3 9% sales decline",
+        speakerNotes: "Walk through the 3 takeaway bullets at a steady pace; no chart on this slide.",
+        slots: {
+          bullets: [
+            "Sales fell 12% in Q3 driven by category mix shift",
+            "MARICO held share at 9.1% within FEMALE SHOWER GEL",
+            "Distribution gains in modern trade offset 4pp of the decline",
+          ],
+        },
+      },
+      {
+        layout: "Methodology",
+        actionTitle: "Methodology · 6 weeks of Nielsen scan, 2,341 stores",
+        speakerNotes: "Closing slide explaining the data sources and 1 caveat.",
+        slots: {
+          body:
+            "Source data: Nielsen MAT scan, weeks ending 2025-W36 through 2025-W41. Coverage: 2,341 modern-trade stores in HCMC + Hanoi.",
+          caveats: ["Modern trade only; traditional trade not included."],
+        },
+      },
+    ],
+  }),
+  // Wave A7 · Default automation-remap stub: every saved column treated
+  // as identity-mapped (suggested === saved). Tests that exercise close-
+  // but-not-identical name matching override this.
+  [LLM_PURPOSE.AUTOMATION_REMAP]: () => ({ proposedMappings: [] }),
+  // Wave SU-IC2 · Default indicator-enrich stub: empty enrichment so
+  // existing tests that hit upload paths don't suddenly grow per-column
+  // answersQuestions strings. Tests exercising the enrichment override.
+  [LLM_PURPOSE.INDICATOR_ENRICH]: () => ({ enrichments: [] }),
+  // Wave QL1 · Default quick-lookup planner stub: emits an obviously-
+  // invalid plan (no aggregations, no groupBy, no filters, no limit) so
+  // `normalizeAndValidateQueryPlanBody` rejects it and the fast path
+  // falls through to the full loop. Tests exercising the fast path
+  // override this handler with a concrete plan.
+  [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: () => ({
+    plan: {},
+    questionRestated: "stub quick-lookup",
+  }),
 };
 
 /** Track installed handlers so `clearLlmStub` is a clean teardown. */

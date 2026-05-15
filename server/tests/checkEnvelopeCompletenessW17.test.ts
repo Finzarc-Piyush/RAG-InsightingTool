@@ -54,6 +54,13 @@ describe("W17 · checkEnvelopeCompleteness — passes", () => {
     assert.equal(r.ok, true);
   });
 
+  it("passes when questionShape is 'descriptive' (lookup/summary; no padding required)", () => {
+    // A descriptive question deserves a small answer; the gate must not
+    // force-pad implications/recommendations on lookups.
+    const r = checkEnvelopeCompleteness({ tldr: "Total revenue is $12.4M." }, "descriptive", true);
+    assert.equal(r.ok, true);
+  });
+
   it("passes when all required sections are populated and domain context was supplied", () => {
     const r = checkEnvelopeCompleteness(completeEnvelope, "driver_discovery", true);
     assert.equal(r.ok, true);
@@ -64,24 +71,34 @@ describe("W17 · checkEnvelopeCompleteness — passes", () => {
     const r = checkEnvelopeCompleteness(env, "driver_discovery", false);
     assert.equal(r.ok, true);
   });
+
+  it("passes when implications and recommendations each carry exactly 1 entry (floor lowered to 1)", () => {
+    const env: AnswerEnvelope = {
+      ...completeEnvelope,
+      implications: [completeEnvelope.implications![0]],
+      recommendations: [completeEnvelope.recommendations![0]],
+    };
+    const r = checkEnvelopeCompleteness(env, "driver_discovery", true);
+    assert.equal(r.ok, true);
+  });
 });
 
 describe("W17 · checkEnvelopeCompleteness — fails", () => {
-  it("fails when implications < 2", () => {
-    const env: AnswerEnvelope = { ...completeEnvelope, implications: [completeEnvelope.implications![0]] };
+  it("fails when implications is empty for a non-descriptive analytical shape", () => {
+    const env: AnswerEnvelope = { ...completeEnvelope, implications: [] };
     const r = checkEnvelopeCompleteness(env, "driver_discovery", true);
     assert.equal(r.ok, false);
     if (!r.ok) {
       assert.equal(r.code, "MISSING_DECISION_GRADE_SECTIONS");
-      assert.match(r.description, /implications \(have 1, need ≥2/);
+      assert.match(r.description, /implications \(have 0, need ≥1/);
     }
   });
 
-  it("fails when recommendations < 2", () => {
+  it("fails when recommendations is empty for a non-descriptive analytical shape", () => {
     const env: AnswerEnvelope = { ...completeEnvelope, recommendations: [] };
     const r = checkEnvelopeCompleteness(env, "variance_diagnostic", true);
     assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.description, /recommendations \(have 0, need ≥2/);
+    if (!r.ok) assert.match(r.description, /recommendations \(have 0, need ≥1/);
   });
 
   it("fails when domainLens missing AND domain context was supplied", () => {

@@ -238,20 +238,47 @@ export function validateAndEnrichResponse(result: any, chatDocument: ChatDocumen
     throw new Error('Empty answer from answerQuestion');
   }
 
+  // Wave QL5 · `loopResult.pivotArtifacts` carries RAW pivot captures (with
+  // `rows`) for the async materializer at
+  // `chatStream.service.ts:342-373`, which turns them into the schema-shaped
+  // form (`artifactId` / `rowCount` / `storage`) before patching the
+  // past_analyses doc. The chat-response schema expects the materialized
+  // form, so feeding raw artifacts into `chatResponseSchema.parse` crashes
+  // the whole turn with a Zod error and the dashboard never builds. Strip
+  // them out before validation; re-attach after so the downstream
+  // materializer's `transformedResponse.pivotArtifacts` read still works.
+  // Behaviour-neutral for legacy turns that don't carry pivotArtifacts.
+  let rawPivotArtifacts: unknown = undefined;
+  let inputForValidation: any = result;
+  if (result && typeof result === "object" && "pivotArtifacts" in result) {
+    rawPivotArtifacts = (result as { pivotArtifacts?: unknown }).pivotArtifacts;
+    const { pivotArtifacts: _unused, ...rest } = result as Record<string, unknown>;
+    void _unused;
+    inputForValidation = rest;
+  }
+
   // Validate response schema
-  let validated = chatResponseSchema.parse(result);
+  let validated = chatResponseSchema.parse(inputForValidation);
+
+  if (rawPivotArtifacts !== undefined) {
+    (validated as { pivotArtifacts?: unknown }).pivotArtifacts = rawPivotArtifacts;
+  }
 
   // Ensure overall chat insights always present.
   // Preferred source (analytical turns): the narrator's structured answerEnvelope
   // — its findings + implications + recommendations give the final InsightCard
   // the same analytical depth as the intermediate body bubble. The envelope is
-  // stripped by `chatResponseSchema.parse`, so read it from the unparsed
-  // `result` object before falling back to chart captions.
+  // now part of `chatResponseSchema` (named `messageAnswerEnvelopeSchema`), so
+  // `validated.answerEnvelope` is preserved through `parse`. We still read from
+  // the raw `result` here so synthesizer fallbacks that ship an envelope-shaped
+  // object outside the schema's surface (e.g. dataOps turns) keep working.
   // Fallback (legacy / dataOps turns without an envelope): derive numbered
   // bullets from each chart's `keyInsight` as before.
   let insightsFromEnvelope = false;
   if (!validated.insights || validated.insights.length === 0) {
-    const envelope = (result as any)?.answerEnvelope;
+    const envelope =
+      (validated as { answerEnvelope?: unknown }).answerEnvelope ??
+      (result as any)?.answerEnvelope;
     const fromEnvelope = deriveInsightsFromEnvelope(envelope);
     if (fromEnvelope.length > 0) {
       validated = { ...validated, insights: fromEnvelope } as any;

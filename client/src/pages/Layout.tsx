@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -14,13 +15,17 @@ import {
   ChevronDown,
   ChevronRight,
   Table2,
-  Loader2,
   BookOpen,
   Shield,
   Pin,
   PinOff,
   Pencil,
   Check,
+  LayoutDashboard,
+  Receipt,
+  Library,
+  ArrowLeft,
+  type LucideIcon,
 } from 'lucide-react';
 import { useSuperadmin } from '@/auth/useSuperadmin';
 import { cn } from '@/lib/utils';
@@ -34,6 +39,8 @@ import {
 } from '@/components/ui/tooltip';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
+import { useSessionSidebarMutations } from '@/pages/Home/modules/useSessionSidebarMutations';
+import { SessionNavRow } from '@/pages/Layout/SessionNavRow';
 import { sessionsApi } from '@/lib/api';
 import { getUserEmail } from '@/utils/userStorage';
 import { useToast } from '@/hooks/use-toast';
@@ -43,7 +50,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { RagContextPanel } from '@/components/RagContextPanel';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -85,6 +91,49 @@ const PAGE_COPY: Record<
 };
 
 const RECENT_SESSIONS_LIMIT = 10;
+
+interface AdminNavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  isActive: (loc: string) => boolean;
+}
+
+const ADMIN_NAV_ITEMS: ReadonlyArray<AdminNavItem> = [
+  {
+    href: '/superadmin',
+    label: 'Overview',
+    icon: Shield,
+    isActive: (loc) =>
+      loc === '/superadmin' ||
+      loc === '/superadmin/' ||
+      loc.startsWith('/superadmin?'),
+  },
+  {
+    href: '/superadmin/sessions',
+    label: 'Sessions',
+    icon: MessageSquare,
+    isActive: (loc) => loc.startsWith('/superadmin/sessions'),
+  },
+  {
+    href: '/superadmin/dashboards',
+    label: 'Dashboards',
+    icon: LayoutDashboard,
+    isActive: (loc) => loc.startsWith('/superadmin/dashboards'),
+  },
+  {
+    href: '/admin/costs',
+    label: 'Costs',
+    icon: Receipt,
+    isActive: (loc) => loc.startsWith('/admin/costs'),
+  },
+  {
+    href: '/admin/context-packs',
+    label: 'Context packs',
+    icon: Library,
+    isActive: (loc) => loc.startsWith('/admin/context-packs'),
+  },
+];
 
 type PivotNavRowProps = {
   entry: import('@/pages/Home/lib/chatPivotNav').ChatPivotNavEntry;
@@ -221,7 +270,7 @@ function PivotNavRow({
                 e.stopPropagation();
                 setEditing(true);
               }}
-              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-sidebar-accent group-hover:opacity-100 focus:opacity-100"
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-50 hover:bg-sidebar-accent group-hover:opacity-100 focus:opacity-100"
             >
               <Pencil className="h-3.5 w-3.5" aria-hidden />
             </button>
@@ -255,6 +304,8 @@ export function Layout({
   const { pivotEntries, requestPivotScroll, togglePivotPin, renamePivot } =
     useChatSidebarNav();
   const { isSuperadmin } = useSuperadmin();
+  const [location, setRouterLocation] = useLocation();
+  const isAdminMode = currentPage === 'superadmin';
 
   const { data: sessionsData, isPending: sessionsPending } =
     useQuery<SessionsResponse>({
@@ -263,10 +314,20 @@ export function Layout({
       enabled: !!userEmail,
     });
 
+  const { renameSession, toggleSessionPin } = useSessionSidebarMutations();
+
   const recentSessions = useMemo(() => {
     const list = sessionsData?.sessions ?? [];
     return [...list]
-      .sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt)
+      .sort((a, b) => {
+        const ap = a.pinned ? 1 : 0;
+        const bp = b.pinned ? 1 : 0;
+        if (ap !== bp) return bp - ap; // pinned first
+        if (a.pinned && b.pinned) {
+          return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+        }
+        return b.lastUpdatedAt - a.lastUpdatedAt;
+      })
       .slice(0, RECENT_SESSIONS_LIMIT);
   }, [sessionsData]);
 
@@ -286,7 +347,7 @@ export function Layout({
       ? [
           {
             id: 'memory' as const,
-            label: 'Memory',
+            label: 'Analysis Memory',
             icon: BookOpen,
           },
         ]
@@ -410,16 +471,6 @@ export function Layout({
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-background">
-      <a
-        href="#main-content"
-        className={cn(
-          'fixed left-4 top-4 z-[100] -translate-y-[120%] rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-md',
-          'transition-transform focus:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
-        )}
-      >
-        Skip to main content
-      </a>
-
       {/* Sidebar */}
       <aside
         id="app-sidebar"
@@ -439,7 +490,7 @@ export function Layout({
                 Marico
               </p>
               <h1 className="truncate font-display text-[22px] font-semibold leading-7 tracking-[-0.02em] text-foreground">
-                RAGAlytics
+                RAG Brand-Optix
               </h1>
             </div>
           )}
@@ -465,8 +516,102 @@ export function Layout({
 
         <nav
           className="flex flex-1 flex-col gap-1 overflow-y-auto p-3"
-          aria-label="App sections"
+          aria-label={isAdminMode ? 'Admin sections' : 'App sections'}
         >
+          {isAdminMode ? (
+            <>
+              {ADMIN_NAV_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const active = item.isActive(location);
+                const button = (
+                  <Button
+                    key={item.href}
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setRouterLocation(item.href)}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={!sidebarOpen ? item.label : undefined}
+                    className={cn(
+                      'relative min-h-11 w-full justify-start gap-3 rounded-brand-md px-3 py-2.5 transition-colors duration-quick ease-standard motion-reduce:transition-none',
+                      active
+                        ? 'bg-primary/10 text-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-accent/80',
+                      !sidebarOpen && 'justify-center px-0'
+                    )}
+                  >
+                    {active ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-1 top-1.5 bottom-1.5 w-[2px] rounded-full bg-primary animate-brand-underline origin-top"
+                      />
+                    ) : null}
+                    <Icon
+                      className={cn(
+                        'h-5 w-5 shrink-0',
+                        active ? 'text-primary' : undefined
+                      )}
+                      aria-hidden
+                    />
+                    {sidebarOpen && (
+                      <span
+                        className={cn(
+                          'min-w-0 truncate text-start font-medium leading-none',
+                          active ? 'text-foreground' : undefined
+                        )}
+                      >
+                        {item.label}
+                      </span>
+                    )}
+                  </Button>
+                );
+                return sidebarOpen ? (
+                  button
+                ) : (
+                  <Tooltip key={item.href} delayDuration={300}>
+                    <TooltipTrigger asChild>{button}</TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-[14rem] font-normal">
+                      <p className="font-medium">{item.label}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
+
+              <div className="my-3 border-t border-sidebar-border/60" aria-hidden />
+
+              {(() => {
+                const backButton = (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setRouterLocation('/analysis')}
+                    aria-label={!sidebarOpen ? 'Back to user view' : undefined}
+                    className={cn(
+                      'min-h-11 w-full justify-start gap-3 rounded-brand-md px-3 py-2.5 text-sidebar-foreground hover:bg-sidebar-accent/80',
+                      !sidebarOpen && 'justify-center px-0'
+                    )}
+                  >
+                    <ArrowLeft className="h-5 w-5 shrink-0" aria-hidden />
+                    {sidebarOpen && (
+                      <span className="min-w-0 truncate text-start font-medium leading-none">
+                        Back to user view
+                      </span>
+                    )}
+                  </Button>
+                );
+                return sidebarOpen ? (
+                  backButton
+                ) : (
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>{backButton}</TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-[14rem] font-normal">
+                      <p className="font-medium">Back to user view</p>
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })()}
+            </>
+          ) : (
+            <>
           <NavButton
             key="home"
             item={navigationItems[0]}
@@ -507,10 +652,6 @@ export function Layout({
                 </CollapsibleContent>
               </Collapsible>
             )}
-
-          {sidebarOpen && sessionId && currentPage === 'home' && (
-            <RagContextPanel sessionId={sessionId} sidebarOpen={sidebarOpen} />
-          )}
 
           <NavButton
             key="dashboard"
@@ -569,23 +710,14 @@ export function Layout({
                     const busy =
                       loadingSidebarSessionId === session.sessionId;
                     return (
-                      <Button
+                      <SessionNavRow
                         key={session.sessionId}
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={busy}
-                        className="h-auto min-h-9 w-full justify-start gap-2 whitespace-normal rounded-lg px-3 py-1.5 text-left text-xs font-normal text-sidebar-foreground hover:bg-sidebar-accent/80"
-                        onClick={() => handleRecentSessionClick(session)}
-                      >
-                        {busy ? (
-                          <Loader2
-                            className="h-3.5 w-3.5 shrink-0 animate-spin"
-                            aria-hidden
-                          />
-                        ) : null}
-                        <span className="line-clamp-2">{session.fileName}</span>
-                      </Button>
+                        session={session}
+                        busy={busy}
+                        onNavigate={() => handleRecentSessionClick(session)}
+                        onTogglePin={toggleSessionPin}
+                        onRename={renameSession}
+                      />
                     );
                   })}
                 <Button
@@ -609,6 +741,8 @@ export function Layout({
                 </p>
               </TooltipContent>
             </Tooltip>
+          )}
+            </>
           )}
         </nav>
 
@@ -693,7 +827,7 @@ export function Layout({
                   Share analysis
                 </Button>
               )}
-              {onUploadNew && (
+              {!isAdminMode && onUploadNew && (
                 <Button
                   onClick={onUploadNew}
                   variant="secondary"

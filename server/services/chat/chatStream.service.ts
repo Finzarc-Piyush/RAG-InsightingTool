@@ -2,6 +2,7 @@
  * Chat Stream Service
  * Handles streaming chat operations with SSE
  */
+import { randomUUID } from "node:crypto";
 import { AgentWorkbenchEntry, Message, ThinkingStep } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
@@ -42,7 +43,16 @@ import {
 } from "../../lib/pivotDefaultsFromExecution.js";
 import { extractRankingIntent } from "../../lib/agents/runtime/planArgRepairs.js";
 import type { RankingMeta } from "../../shared/schema.js";
-import { upsertPastAnalysisDoc } from "../../models/pastAnalysis.model.js";
+import {
+  patchPastAnalysisBusinessActions,
+  patchPastAnalysisPivotArtifacts,
+  upsertPastAnalysisDoc,
+} from "../../models/pastAnalysis.model.js";
+import { stripChartDataForPastAnalysis } from "../../lib/pastAnalysisChartStrip.js";
+import {
+  materializePivotArtifact,
+  type RawPivotArtifact,
+} from "../../lib/pastAnalysisPivotArtifact.js";
 import { appendMemoryEntries } from "../../models/analysisMemory.model.js";
 import { scheduleIndexMemoryEntries } from "../../lib/rag/indexSession.js";
 import { buildTurnEndMemoryEntries } from "../../lib/agents/runtime/memoryEntryBuilders.js";
@@ -105,30 +115,61 @@ async function serveCachedExactAnswer(params: {
 }): Promise<void> {
   const { hit, res, sessionId, username, userMessage, chatDocument } = params;
   const cachedAnswer = hit.doc.answer || "";
+  const sourceSessionId = hit.doc.sessionId;
+  const sourceTurnId = hit.doc.turnId;
+  const sourceDocId = `${sourceSessionId}__${sourceTurnId}`;
+
+  // AMR4 · fetch the full Cosmos doc by id so we can rehydrate the rich
+  // payload (answerEnvelope, businessActions, charts with insights, pivot
+  // artifact metadata, investigation summary). AI Search projects only the
+  // lookup-relevant subset of fields; the rest live in Cosmos. Failure to
+  // fetch is non-fatal — we degrade to the text-only cache-hit shape.
+  let richDoc: PastAnalysisDoc | null = null;
+  try {
+    const { getPastAnalysisDoc } = await import(
+      "../../models/pastAnalysis.model.js"
+    );
+    richDoc = await getPastAnalysisDoc(sourceSessionId, sourceDocId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `⚠️ AMR4 · failed to fetch rich past_analyses doc on cache hit (${msg})`
+    );
+  }
+
+  const { buildCachedResponsePayload } = await import(
+    "../../lib/cache/buildCachedResponsePayload.js"
+  );
+  const { responsePayload, assistantMessageExtras } = buildCachedResponsePayload(
+    {
+      richDoc,
+      matchKind: hit.source as "exact" | "semantic",
+      originalSessionId: sourceSessionId,
+      originalTurnId: sourceTurnId,
+      fallbackAnswer: cachedAnswer,
+      fallbackCreatedAt: hit.doc.createdAt,
+      cachedAgeMs: hit.ageMs,
+    }
+  );
 
   // Informational SSE for telemetry / UI — purely additive, clients can ignore.
   sendSSE(res, "cache_hit", {
     source: hit.source,
     ageMs: hit.ageMs,
-    sourceTurnId: hit.doc.turnId,
+    sourceTurnId,
     dataVersion: hit.doc.dataVersion,
   });
 
-  // Build a minimal response envelope. Clients that already handle the non-
-  // cached shape render this correctly — unused fields are simply empty.
-  sendSSE(res, "response", {
-    answer: cachedAnswer,
-    charts: [],
-    suggestions: [],
-    cached: true,
-    cachedAgeMs: hit.ageMs,
-    cachedSourceTurnId: hit.doc.turnId,
-  });
+  // AMR4 · rich response payload. Legacy clients render `answer` markdown
+  // unchanged; AMR5-aware clients pick up the envelope / charts / pivot /
+  // business actions / provenance chip.
+  sendSSE(res, "response", responsePayload);
   sendSSE(res, "done", {});
 
   // Persist the pair of messages so the session history stays correct across
-  // cache hits. Missing charts/insights on the assistant row are acceptable —
-  // the original doc still exists in past_analyses + Cosmos for audit.
+  // cache hits. The assistant row now carries the rich shape so a reload
+  // reproduces the same AnswerCard / charts / pivot / BusinessActionsCard
+  // mount that the live render just got.
   try {
     const nowMs = Date.now();
     await addMessagesBySessionId(sessionId, [
@@ -137,6 +178,12 @@ async function serveCachedExactAnswer(params: {
         role: "assistant" as const,
         content: cachedAnswer,
         timestamp: nowMs,
+        // Wave AD1 NOTE · cache-hit messages mark agentTrace.fromCache=true
+        // (no turnId) so the client's FeedbackButtons mount-gate skips this
+        // path. Routing cache-hit feedback back to the source past_analyses
+        // doc via cacheSource hints is tracked as a follow-up wave.
+        agentTrace: { fromCache: true } as Record<string, unknown>,
+        ...assistantMessageExtras,
       },
     ]);
   } catch (err) {
@@ -149,7 +196,7 @@ async function serveCachedExactAnswer(params: {
   }
   // Identity hint in the log for rollup dashboards.
   console.log(
-    `💡 served from ${hit.source} cache (ageMs=${hit.ageMs}, sourceTurnId=${hit.doc.turnId}, user=${username})`
+    `💡 served from ${hit.source} cache (ageMs=${hit.ageMs}, sourceTurnId=${sourceTurnId}, user=${username}, rich=${richDoc ? "yes" : "no"})`
   );
 }
 
@@ -191,6 +238,12 @@ function maybeWritePastAnalysisDoc(params: {
   turnStartedAt: number;
 }): void {
   if (process.env.PAST_ANALYSIS_WRITER_ENABLED === "false") return;
+  // Wave A1 · Skip cache writes when an active filter is set. Otherwise
+  // future identical questions on the same dataVersion (filter cleared)
+  // would hit a cached answer that was actually computed against the
+  // filtered slice, silently serving wrong numbers. Mirror of the
+  // lookup-side gate in `questionCacheLookup.ts`.
+  if ((params.chatDocument.activeFilter?.conditions?.length ?? 0) > 0) return;
   try {
     const turnId: string | undefined = params.transformedResponse?.agentTrace?.turnId;
     if (!turnId) return; // non-agentic paths (legacy) — skip for now
@@ -198,9 +251,10 @@ function maybeWritePastAnalysisDoc(params: {
     const answer = typeof params.transformedResponse.answer === "string"
       ? params.transformedResponse.answer
       : "";
-    const charts = Array.isArray(params.transformedResponse.charts)
+    const rawCharts = Array.isArray(params.transformedResponse.charts)
       ? (params.transformedResponse.charts as ChartSpec[])
       : undefined;
+    const charts = rawCharts ? stripChartDataForPastAnalysis(rawCharts) : undefined;
     const toolCalls: PastAnalysisDoc["toolCalls"] = (params.transformedResponse?.agentTrace?.toolCalls || [])
       .slice(0, 40) // cap to keep Cosmos row small
       .map((tc: any) => ({
@@ -213,6 +267,23 @@ function maybeWritePastAnalysisDoc(params: {
       params.chatDocument.currentDataBlob?.version ??
       params.chatDocument.ragIndex?.dataVersion ??
       0;
+    // AMR2 · capture the structured envelope + investigation digest so a
+    // future cache-hit on this question can restore the rich AnswerCard +
+    // InvestigationSummaryCard instead of plain markdown. Business actions
+    // are NOT captured here — they resolve after this fire-and-forget write
+    // (see the `business_actions` SSE branch below); the corresponding
+    // `patchPastAnalysisBusinessActions` call in that branch attaches them
+    // to this same doc once the agent returns.
+    const answerEnvelope =
+      params.transformedResponse?.answerEnvelope &&
+      typeof params.transformedResponse.answerEnvelope === "object"
+        ? (params.transformedResponse.answerEnvelope as PastAnalysisDoc["answerEnvelope"])
+        : undefined;
+    const investigationSummary =
+      params.transformedResponse?.investigationSummary &&
+      typeof params.transformedResponse.investigationSummary === "object"
+        ? (params.transformedResponse.investigationSummary as PastAnalysisDoc["investigationSummary"])
+        : undefined;
     const doc: PastAnalysisDoc = {
       id: `${params.sessionId}__${turnId}`,
       sessionId: params.sessionId,
@@ -240,6 +311,8 @@ function maybeWritePastAnalysisDoc(params: {
       feedbackReasons: [],
       feedbackDetails: [],
       createdAt: Date.now(),
+      ...(answerEnvelope ? { answerEnvelope } : {}),
+      ...(investigationSummary ? { investigationSummary } : {}),
     };
     // W6.2 · accumulate cost/tokens against today's user budget. Fire-and-forget;
     // recordTurnSpend swallows its own errors. Done in parallel with the
@@ -258,12 +331,52 @@ function maybeWritePastAnalysisDoc(params: {
       sessionId: params.sessionId,
     });
     void upsertPastAnalysisDoc(doc)
-      .then(() => {
+      .then(async () => {
         // W2.4 · mirror into the AI Search index for the semantic cache.
         // Gated by PAST_ANALYSES_INDEX_ENABLED (default off until the index
         // exists and has been created via `npm run create-past-analyses-index`).
-        if (process.env.PAST_ANALYSES_INDEX_ENABLED !== "true") return;
-        return indexPastAnalysis(doc);
+        if (process.env.PAST_ANALYSES_INDEX_ENABLED === "true") {
+          await indexPastAnalysis(doc);
+        }
+        // AMR3 · materialize pivot captures (inline-vs-blob policy) and
+        // patch the resulting `PastAnalysisPivotArtifact[]` onto the doc.
+        // Runs AFTER the initial upsert so the row exists; uses the same
+        // read-modify-upsert pattern as `patchPastAnalysisBusinessActions`.
+        // Fire-and-forget — pivot recall is a nice-to-have, not load-bearing
+        // for the cache-hit text path. Errors are swallowed and logged so a
+        // single blob-upload failure never blocks the next live turn.
+        const rawPivots = (
+          params.transformedResponse as {
+            pivotArtifacts?: RawPivotArtifact[];
+          }
+        )?.pivotArtifacts;
+        if (rawPivots && rawPivots.length > 0) {
+          try {
+            const materialized = await Promise.all(
+              rawPivots
+                .slice(0, 12) // hard cap matches schema's `.max(12)` on the doc field
+                .map((raw) => materializePivotArtifact(raw))
+            );
+            if (materialized.length > 0) {
+              const patch = await patchPastAnalysisPivotArtifacts({
+                sessionId: doc.sessionId,
+                turnId: doc.turnId,
+                artifacts: materialized,
+              });
+              if (!patch.ok) {
+                console.warn(
+                  `⚠️ past_analyses pivotArtifacts patch skipped: ${patch.reason}`
+                );
+              }
+            }
+          } catch (pivotErr) {
+            const msg =
+              pivotErr instanceof Error ? pivotErr.message : String(pivotErr);
+            console.warn(
+              `⚠️ past_analyses pivotArtifacts materialize/patch failed for turn ${turnId}: ${msg}`
+            );
+          }
+        }
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -354,6 +467,16 @@ export function mergePivotDefaultsForResponse(params: {
   }
   if (Object.keys(mergedSlice.filterSelections).length) {
     out.filterSelections = mergedSlice.filterSelections;
+  }
+  // Wave PAG1 · Forward the per-column aggregator hints derived in
+  // `mergePivotDefaultRowsAndValues`. Parser-side never knew aggregators,
+  // so it has nothing to merge — straight pass-through of the execution
+  // side. Dropped entirely when the execution path didn't emit any.
+  if (
+    executionPivot?.valueAggregators &&
+    Object.keys(executionPivot.valueAggregators).length > 0
+  ) {
+    out.valueAggregators = { ...executionPivot.valueAggregators };
   }
   return out;
 }
@@ -589,10 +712,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       chatDocument.currentDataBlob?.version ??
       chatDocument.ragIndex?.dataVersion ??
       0;
+    const activeFilterConditionCount =
+      chatDocument.activeFilter?.conditions?.length ?? 0;
     const exactHit = await tryExactQuestionCacheHit({
       sessionId,
       dataVersion: cacheDataVersion,
       question: message,
+      activeFilterConditionCount,
     });
     if (exactHit) {
       await serveCachedExactAnswer({
@@ -611,6 +737,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       sessionId,
       dataVersion: cacheDataVersion,
       question: message,
+      activeFilterConditionCount,
     });
     if (semanticHit) {
       await serveCachedExactAnswer({
@@ -641,6 +768,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       workbench: AgentWorkbenchEntry[];
       pivotDefaults?: Message["pivotDefaults"];
       insight?: string;
+      pivotUnavailable?: boolean;
     };
     const pendingIntermediates: PendingIntermediate[] = [];
     let intermediateSeq = 0;
@@ -657,7 +785,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       rawPreview: Record<string, unknown>[],
       insight?: string,
       segmentPivotDefaults?: Message["pivotDefaults"],
-      executionScalar?: boolean
+      executionScalar?: boolean,
+      pivotUnavailable?: boolean
     ) => {
       if (!rawPreview.length) return;
       if (!checkConnection()) return;
@@ -681,7 +810,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       const snapSteps = [...thinkingSteps];
       const snapWb = [...agentWorkbench];
       let pivotDefaultsForSegment: Message["pivotDefaults"] | undefined;
-      if (segmentPivotDefaults?.rows?.length && segmentPivotDefaults?.values?.length) {
+      // PVT1 · accept rows-only segment pivots (filter-projection). Previously
+      // required both rows AND values, which silently dropped filter-projection
+      // hints from the agent and replaced them with parser-side defaults.
+      if (segmentPivotDefaults?.rows?.length || segmentPivotDefaults?.values?.length) {
         pivotDefaultsForSegment = mergeIntermediateSegmentPivotDefaults({
           dataSummary: chatDocument.dataSummary,
           userMessage: message,
@@ -692,6 +824,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         // Scalar agent step (single-row aggregate, no row dims). Suppress the
         // pivot/chart entirely — the schema-heuristic fallback would render a
         // misleading multi-dim view unrelated to the question.
+        pivotDefaultsForSegment = undefined;
+      } else if (pivotUnavailable === true) {
+        // PVT5 · the agent ran an analytical step but its pivot-defaults
+        // failed the unified safety contract (too many fields / unresolvable
+        // values). Do NOT fall back to the parser-side provisional pivot —
+        // we explicitly want the elegant "pivot unavailable" fallback to
+        // render on this segment, not a backup pivot from the NL parser.
         pivotDefaultsForSegment = undefined;
       } else {
         pivotDefaultsForSegment = filterProvisionalPivotDefaultsToPreviewKeys(
@@ -713,6 +852,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 previewTotalRows: rawPreview.length,
               }
             : {}),
+          ...(pivotUnavailable ? { pivotUnavailable: true } : {}),
         })
       ) {
         return;
@@ -725,7 +865,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         workbench: snapWb,
         pivotDefaults: pivotDefaultsForSegment,
         insight,
-      });
+        ...(pivotUnavailable ? { pivotUnavailable: true } : {}),
+      } as PendingIntermediate);
       thinkingSteps.length = 0;
       agentWorkbench.length = 0;
     };
@@ -886,6 +1027,38 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       );
     }
 
+    // Wave D1 + D2 · Multi-part question detection. When
+    // DEEP_INVESTIGATION_ENABLED=true AND the question matches a
+    // multi-part conjunction shape ("show X AND tell me Y", "compare A,
+    // also explain B"), surface a `flow_decision` SSE row using the
+    // existing `{layer, chosen, candidates, reason}` schema (W8 / W11
+    // contract) so the workbench renders it via the existing
+    // `agentWorkbench.util.ts:260` converter — no client UI work needed.
+    // The actual decomposition wiring (parallel agent turns, merged
+    // narrator envelope) lands in Wave D3; today this is
+    // observability-only so we can validate the detector against real
+    // questions before committing to behaviour change.
+    if (process.env.DEEP_INVESTIGATION_ENABLED === "true") {
+      try {
+        const { detectMultiPartQuestion } = await import(
+          "../../lib/agents/runtime/detectMultiPartQuestion.js"
+        );
+        const intent = detectMultiPartQuestion(message);
+        if (intent && intent.subQuestions.length > 1) {
+          sendSSE(res, "flow_decision", {
+            layer: "coordinator",
+            chosen: `single_flow (${intent.subQuestions.length}-part question — decomposition deferred to Wave D3)`,
+            overriddenBy: "single_flow_policy",
+            candidates: intent.subQuestions,
+            reason: `Multi-part question detected (trigger: ${intent.trigger}). With DEEP_INVESTIGATION_ENABLED=true, this would decompose into ${intent.subQuestions.length} parallel sub-investigations once the orchestrator wiring lands.`,
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`D1 · multi-part detection failed: ${msg}`);
+      }
+    }
+
     let detectedMode: 'analysis' | 'dataOps' | 'modeling' = 'analysis';
     try {
       onThinkingStep({
@@ -894,10 +1067,36 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         timestamp: Date.now(),
       });
 
+      // Wave B4 · Thread the same ambient context the rest of the agent
+      // pipeline already uses. Pre-B4 the classifier saw only the question,
+      // recent chat history, and the columns list — so ambiguous follow-ups
+      // ("yes do it", "use MAT for this") missed user notes / domain vocab
+      // and could mis-route between analysis/dataOps/modeling. We resolve
+      // `domainContext` here (process-memoised; near-free) once per turn.
+      let modeDomainContext: string | undefined;
+      try {
+        const { loadEnabledDomainContext } = await import(
+          "../../lib/domainContext/loadEnabledDomainContext.js"
+        );
+        const dc = await loadEnabledDomainContext();
+        modeDomainContext = dc.text || undefined;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`B4 · domain context load for mode classifier failed: ${msg}`);
+      }
       const modeClassification = await classifyMode(
         message,
         modeDetectionChatHistory,
-        chatDocument.dataSummary
+        chatDocument.dataSummary,
+        undefined,
+        {
+          permanentContext: chatDocument.permanentContext,
+          domainContext: modeDomainContext,
+          userIntentVerbatim:
+            chatDocument.sessionAnalysisContext?.userIntent?.verbatimNotes,
+          userIntentConstraints:
+            chatDocument.sessionAnalysisContext?.userIntent?.interpretedConstraints,
+        }
       );
 
       detectedMode = modeClassification.mode;
@@ -1060,18 +1259,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               insight?: string;
               pivotDefaults?: import("../../shared/schema.js").Message["pivotDefaults"];
               executionScalar?: boolean;
+              pivotUnavailable?: boolean;
             }) => {
               const {
                 preview,
                 insight,
                 pivotDefaults: segmentPivotDefaults,
                 executionScalar,
+                pivotUnavailable,
               } = payload;
               flushIntermediateSegment(
                 preview as Record<string, unknown>[],
                 insight,
                 segmentPivotDefaults,
-                executionScalar
+                executionScalar,
+                pivotUnavailable
               );
             },
           }
@@ -1191,6 +1393,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if ((result as any).agentTrace) {
       transformedResponse.agentTrace = (result as any).agentTrace;
     }
+    // Wave AD1 · ensure every assistant message carries a stable turnId so
+    // FeedbackButtons mount and past_analyses persistence has a valid doc id
+    // (`${sessionId}__${turnId}`). Non-agentic paths (dataOps, synthesis-fallback
+    // edge cases, repair branches) historically left agentTrace undefined, which
+    // silently hid thumbs-up/down on the rendered message.
+    {
+      const existingTurnId = (transformedResponse.agentTrace as { turnId?: string } | undefined)?.turnId;
+      if (!existingTurnId) {
+        transformedResponse.agentTrace = {
+          ...(transformedResponse.agentTrace || {}),
+          turnId: randomUUID(),
+        };
+      }
+    }
     // Lightweight client hint for smart pivot/table visibility.
     transformedResponse.pivotAutoShow = Boolean(
       ((result as any).table && Array.isArray((result as any).table) && (result as any).table.length > 0) ||
@@ -1214,6 +1430,22 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     });
     if (executionPivotDefaults?.scalar === true) {
       transformedResponse.pivotAutoShow = false;
+    }
+    // PVT5 · the agent ran an analytical step (we have a non-scalar trace
+    // table) but `mergePivotDefaultsForResponse` couldn't ship a usable
+    // pivot — the unified safety contract suppressed it. Signal the client
+    // to render an elegant "pivot unavailable" fallback instead of silently
+    // hiding the pivot or showing an empty drag-and-drop area.
+    const hadAnalyticalTable = (() => {
+      const t = (result as { table?: { rows?: unknown[] } }).table;
+      return Array.isArray(t?.rows) && (t!.rows!.length ?? 0) > 0;
+    })();
+    if (
+      hadAnalyticalTable
+      && executionPivotDefaults?.scalar !== true
+      && !transformedResponse.pivotDefaults
+    ) {
+      (transformedResponse as { pivotUnavailable?: boolean }).pivotUnavailable = true;
     }
     // RNK2 · stamp `rankingMeta` when the question is a ranking / leaderboard
     // / entity-max question AND we have row data to surface. This does NOT
@@ -1391,6 +1623,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         isIntermediate: true,
         intermediateInsight: pi.insight,
         thinkingBefore: { steps: pi.thinkingSteps, workbench: pi.workbench },
+        ...(pi.pivotUnavailable ? { pivotUnavailable: true } : {}),
       }));
 
       const userSave: Message = {
@@ -1415,6 +1648,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         summary: transformedResponse.summary || undefined,
         agentTrace: transformedResponse.agentTrace,
         pivotDefaults: transformedResponse.pivotDefaults,
+        // PVT5 · persist the elegant-fallback signal so refreshing the
+        // session shows the same "pivot unavailable" card as the active
+        // turn, never silently drops the user back to a broken pivot.
+        ...((transformedResponse as { pivotUnavailable?: boolean }).pivotUnavailable
+          ? { pivotUnavailable: true }
+          : {}),
         ...(transformedResponse.rankingMeta
           ? { rankingMeta: transformedResponse.rankingMeta as RankingMeta }
           : {}),
@@ -1611,6 +1850,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 }>;
               }
             ).appliedFilters,
+            // AMR7 · raw pivot captures from execute_query_plan steps. The
+            // `pivot_computed` analysis_memory entries reference the same
+            // deterministic artifactId that past_analyses uses, so the
+            // AnalysisMemory page can deep-link to the captured rows via
+            // the AMR3c recall endpoint without duplicating storage.
+            pivotArtifacts: (
+              result as {
+                pivotArtifacts?: import("../../lib/pastAnalysisPivotArtifact.js").RawPivotArtifact[];
+              }
+            ).pivotArtifacts,
           });
           if (memoryEntries.length > 0) {
             await appendMemoryEntries(memoryEntries);
@@ -1713,6 +1962,121 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       })
     ) {
       return; // Client disconnected
+    }
+
+    // Post-verifier business-actions seam. The agent loop spawned this
+    // promise after the verifier returned `pass`; we await here so the
+    // response event has already fired (giving the user immediate
+    // AnswerCard) but `done` is held back until the agent resolves or
+    // times out. On non-empty resolution, fire a dedicated SSE event the
+    // client can fold into the rendered envelope, and patch the persisted
+    // message in Cosmos so a refresh shows the same actions.
+    try {
+      const baPromise = (
+        result as { businessActionsPromise?: Promise<unknown> }
+      ).businessActionsPromise;
+      if (baPromise) {
+        const timeoutMs = Number(
+          process.env.BUSINESS_ACTIONS_TIMEOUT_MS ?? "12000"
+        );
+        const timeoutSentinel: { __timeout: true } = { __timeout: true };
+        const raced = await Promise.race([
+          baPromise,
+          new Promise<typeof timeoutSentinel>((resolve) =>
+            setTimeout(() => resolve(timeoutSentinel), Math.max(1000, timeoutMs))
+          ),
+        ]);
+        if (raced && (raced as typeof timeoutSentinel).__timeout) {
+          console.warn("⌛ businessActionsAgent timed out — skipping section");
+        } else if (Array.isArray(raced) && raced.length > 0) {
+          const items = raced as NonNullable<
+            import("../../shared/schema.js").Message["businessActions"]
+          >;
+          sendSSE(res, "business_actions", {
+            messageTimestamp: assistantMessageTimestamp,
+            items,
+          });
+          try {
+            const { patchAssistantBusinessActions } = await import(
+              "../../lib/patchAssistantBusinessActions.js"
+            );
+            const patchResult = await patchAssistantBusinessActions({
+              sessionId,
+              username,
+              messageTimestamp: assistantMessageTimestamp,
+              items,
+            });
+            if (!patchResult.ok) {
+              console.warn(
+                `⚠️ businessActions patch skipped: ${patchResult.reason}`
+              );
+            }
+          } catch (patchErr) {
+            console.warn("⚠️ businessActions patch failed:", patchErr);
+          }
+          // AMR2 · also patch the cross-session past_analyses cache row so a
+          // future cache-hit serves the same business actions. Read-modify-
+          // upsert (mirrors `patchAssistantBusinessActions`). Fire-and-
+          // forget — failures are swallowed; the live response is already
+          // out the door at this point.
+          try {
+            const turnIdForCache: string | undefined = (
+              transformedResponse as { agentTrace?: { turnId?: string } }
+            )?.agentTrace?.turnId;
+            if (turnIdForCache) {
+              const cachePatchResult = await patchPastAnalysisBusinessActions({
+                sessionId,
+                turnId: turnIdForCache,
+                items,
+              });
+              if (!cachePatchResult.ok) {
+                console.warn(
+                  `⚠️ past_analyses businessActions patch skipped: ${cachePatchResult.reason}`
+                );
+              }
+            }
+          } catch (cachePatchErr) {
+            console.warn(
+              "⚠️ past_analyses businessActions patch failed:",
+              cachePatchErr
+            );
+          }
+          // DPF2 · also patch the auto-created dashboard for this turn (if
+          // any) so the dashboard view shows the same business actions the
+          // chat message does. Best-effort, fire-and-forget — failure to
+          // patch the dashboard never blocks the message-level patch above
+          // or the SSE `done` event.
+          try {
+            const { getChatBySessionIdForUser } = await import(
+              "../../models/chat.model.js"
+            );
+            const chatDoc = await getChatBySessionIdForUser(sessionId, username);
+            const dashboardId = chatDoc?.lastCreatedDashboardId;
+            if (dashboardId) {
+              const { patchDashboardBusinessActions } = await import(
+                "../../lib/patchDashboardBusinessActions.js"
+              );
+              const dashPatchResult = await patchDashboardBusinessActions({
+                dashboardId,
+                username,
+                items,
+              });
+              if (!dashPatchResult.ok) {
+                console.warn(
+                  `⚠️ dashboard businessActions patch skipped: ${dashPatchResult.reason}`
+                );
+              }
+            }
+          } catch (dashPatchErr) {
+            console.warn(
+              "⚠️ dashboard businessActions patch failed:",
+              dashPatchErr
+            );
+          }
+        }
+      }
+    } catch (baErr) {
+      console.warn("⚠️ businessActions post-verifier hook errored:", baErr);
     }
 
     if (!sendSSE(res, 'done', {})) {

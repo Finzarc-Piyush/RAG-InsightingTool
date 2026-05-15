@@ -25,6 +25,18 @@ function getMaxVisualizationPoints(totalRows: number): number {
 
 const CHUNK_SIZE = 10000; // Process in chunks to avoid blocking event loop
 
+export function formatSlopeForTitle(slope: number): string {
+  if (!Number.isFinite(slope)) return '0';
+  const abs = Math.abs(slope);
+  if (abs === 0) return '0';
+  if (abs >= 1000 || abs < 0.001) return slope.toExponential(1);
+  if (abs >= 100) return slope.toFixed(0);
+  if (abs >= 10) return slope.toFixed(1);
+  if (abs >= 1) return slope.toFixed(2);
+  if (abs >= 0.1) return slope.toFixed(2);
+  return slope.toFixed(3);
+}
+
 interface CorrelationComputationResult {
   correlation: number;
   nPairs: number;
@@ -190,7 +202,7 @@ export async function generateStreamingCorrelationChart(
 
   return {
     type: 'scatter',
-    title: `${factorVariable} vs ${targetVariable} (r=${result.correlation.toFixed(2)})`,
+    title: `${factorVariable} vs ${targetVariable} (r=${result.correlation.toFixed(2)}, slope=${formatSlopeForTitle(result.slope)})`,
     x: factorVariable,
     y: targetVariable,
     xLabel: factorVariable,
@@ -208,6 +220,8 @@ export async function generateStreamingCorrelationChart(
       method: result.method,
       totalDataPoints: result.nPairs,
       visualizationPoints: result.visualizationData.length,
+      slope: result.slope,
+      intercept: result.intercept,
     },
   };
 }

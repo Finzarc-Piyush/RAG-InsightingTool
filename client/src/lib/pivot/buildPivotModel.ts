@@ -536,6 +536,15 @@ export type CreateInitialPivotConfigOpts = {
   defaultFilterKeys?: string[];
   /** Non-numeric dimensions for the pivot Columns axis (after rows are resolved). */
   defaultColumnKeys?: string[];
+  /**
+   * Wave PAG1 · Per-value pivot aggregator hints from the agent's executed
+   * `aggregations[]`. Keyed by value column name. When present, the value
+   * chip is pre-set to the agent's actual aggregation function (e.g.
+   * "mean" for "average X per Y" questions) instead of falling back to
+   * the numeric default "sum". Missing entries fall through to the
+   * legacy default.
+   */
+  valueAggregators?: Partial<Record<string, PivotAgg>>;
 };
 
 export function createInitialPivotConfig(
@@ -556,14 +565,21 @@ export function createInitialPivotConfig(
     .filter((k) => allDims.includes(k) && !rows.includes(k))
     .filter((k, i, arr) => arr.indexOf(k) === i);
 
+  const valueAggregators = opts?.valueAggregators;
   const values: PivotValueSpec[] = defaultValueKeys
     .filter((k) => allKeys.includes(k))
-    .map((field) => ({
-      id: `meas_${field}`,
-      field,
-      // If numericSet says it's numeric, sum it; otherwise count it.
-      agg: numericSet.has(field) ? ("sum" as PivotAgg) : ("count" as PivotAgg),
-    }));
+    .map((field) => {
+      // Wave PAG1 · prefer the agent-supplied aggregator when present; else
+      // fall back to the numeric-default Sum / non-numeric Count.
+      const hinted = valueAggregators?.[field];
+      const agg: PivotAgg = hinted
+        ?? (numericSet.has(field) ? ("sum" as PivotAgg) : ("count" as PivotAgg));
+      return {
+        id: `meas_${field}`,
+        field,
+        agg,
+      };
+    });
 
   const filters = (opts?.defaultFilterKeys ?? []).filter(
     (k) => allDims.includes(k) && !rows.includes(k) && !columns.includes(k)

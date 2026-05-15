@@ -13,6 +13,10 @@ export interface Session {
   chartCount: number;
   sessionId: string;
   collaborators?: string[];
+  /** Sidebar pin flag — pinned sessions sort to the top. */
+  pinned?: boolean;
+  /** Timestamp (ms) when `pinned` was set true. */
+  pinnedAt?: number;
 }
 
 export interface SessionsResponse {

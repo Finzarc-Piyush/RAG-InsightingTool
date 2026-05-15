@@ -4,9 +4,11 @@ import {
   UploadResponse,
   TemporalDisplayGrain,
   type ColumnCurrency,
+  type DateTimeColumnPair,
   type TemporalFacetColumnMeta,
   type WideFormatTransform,
 } from '@/shared/schema';
+import type { IndicatorEntry } from '@/components/IndicatorColumnsBanner';
 
 export interface HomeState {
   sessionId: string | null;
@@ -24,6 +26,10 @@ export interface HomeState {
   totalColumns: number;
   currencyByColumn: Record<string, ColumnCurrency>;
   wideFormatTransform?: WideFormatTransform;
+  /** SU-UX1 · per-session date×time pair annotations (from dataSummary.dateTimeColumnPairs). */
+  dateTimeColumnPairs: DateTimeColumnPair[];
+  /** SU-UX1 · per-session indicator-column annotations (derived from dataSummary). */
+  indicators: IndicatorEntry[];
 }
 
 export const useHomeState = () => {
@@ -46,6 +52,8 @@ export const useHomeState = () => {
   const [wideFormatTransform, setWideFormatTransform] = useState<WideFormatTransform | undefined>(
     undefined
   );
+  const [dateTimeColumnPairs, setDateTimeColumnPairs] = useState<DateTimeColumnPair[]>([]);
+  const [indicators, setIndicators] = useState<IndicatorEntry[]>([]);
 
   const resetState = useCallback(() => {
     setSessionId(null);
@@ -63,6 +71,8 @@ export const useHomeState = () => {
     setTotalColumns(0);
     setCurrencyByColumn({});
     setWideFormatTransform(undefined);
+    setDateTimeColumnPairs([]);
+    setIndicators([]);
   }, []);
 
   return {
@@ -81,6 +91,8 @@ export const useHomeState = () => {
     totalColumns,
     currencyByColumn,
     wideFormatTransform,
+    dateTimeColumnPairs,
+    indicators,
 
     setSessionId,
     setFileName,
@@ -97,6 +109,8 @@ export const useHomeState = () => {
     setTotalColumns,
     setCurrencyByColumn,
     setWideFormatTransform,
+    setDateTimeColumnPairs,
+    setIndicators,
 
     resetState,
   };

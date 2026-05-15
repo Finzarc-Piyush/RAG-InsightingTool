@@ -96,6 +96,39 @@ export const uploadFileToBlob = async (
   }
 };
 
+/**
+ * Upload a buffer to blob storage at a caller-controlled exact path.
+ *
+ * Use this for internal artifacts that need deterministic, well-known paths
+ * (e.g. `chunks/{sessionId}/index.json`). Unlike `uploadFileToBlob`, this does
+ * NOT prepend a username/timestamp or sanitize slashes — the `exactBlobName`
+ * is used verbatim, so the reader can look it up by reconstructing the same
+ * path from a sessionId alone. Do not use for user-uploaded files; those want
+ * the sanitization in `uploadFileToBlob`.
+ */
+export const uploadBufferToBlobAtExactPath = async (
+  fileBuffer: Buffer,
+  exactBlobName: string,
+  contentType: string
+): Promise<{ blobUrl: string; blobName: string }> => {
+  try {
+    const blockBlobClient = containerClient.getBlockBlobClient(exactBlobName);
+
+    const uploadResult = await blockBlobClient.upload(fileBuffer, fileBuffer.length, {
+      blobHTTPHeaders: { blobContentType: contentType },
+    });
+    void uploadResult;
+
+    const blobUrl = blockBlobClient.url;
+    console.log(`📦 Internal artifact uploaded: ${exactBlobName}`);
+
+    return { blobUrl, blobName: exactBlobName };
+  } catch (error) {
+    console.error("❌ Failed to upload internal artifact to blob storage:", error);
+    throw error;
+  }
+};
+
 // Get file from blob storage
 export const getFileFromBlob = async (blobName: string): Promise<Buffer> => {
   try {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardTile } from '@/pages/Dashboard/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -13,22 +13,45 @@ import { EditInsightModal } from './EditInsightModal';
 import { EditTableCaptionModal } from './EditTableCaptionModal';
 import { useToast } from '@/hooks/use-toast';
 import { useDashboardContext } from '../context/DashboardContext';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PivotTile } from './PivotTile';
 
-// Lazy load ChartRenderer to reduce initial bundle size
-const ChartRenderer = lazy(() => import('@/pages/Home/Components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
-// WC9.3 · v1→v2 shim
-import { ChartShim } from '@/components/charts/ChartShim';
+// DR18D · chart rendering and ErrorBoundary moved into `ChartTileBody`
+// when the chart-tile case was extracted to host the chart/pivot
+// view-mode hook. Suspense / Skeleton / lazy(ChartRenderer) /
+// ChartShim / AlertTriangle now live there.
+
+// DR11 · right-click context menu for tiles. Items mirror the inline
+// hover affordances but are discoverable via the standard OS gesture
+// for power users.
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
-import { resolveLayoutsDropBySwap } from './dashboardGridLogic';
+// DR18G · resolveLayoutsDropBySwap is no longer called. The helper
+// + its tests stay in the codebase (deprecated) for revival if a
+// future spec wants explicit swap-on-drop layered on top of vertical
+// compaction. Removing the import here keeps tsc clean.
 import { useLayoutHistory } from '@/pages/Dashboard/hooks/useLayoutHistory';
 import { cn } from '@/lib/utils';
+import { TileHeader } from './TileHeader';
+import { useDashboardEditMode } from '../context/DashboardEditModeContext';
+import { contentDrivenHeight } from '../contentDrivenHeight';
+// DR18D · chart-tile body extracted so the per-tile chart/pivot
+// view-mode hook (`useChartTileViewMode`) can host its state. The
+// extraction also collects DR3 / DR8 / DR18B markup into one place.
+import { ChartTileBody } from './ChartTileBody';
+import { chartSpecToPivotConfig } from '@/components/charts/chartSpecToPivotConfig';
+import { useChartTileViewMode } from '../hooks/useChartTileViewMode';
+import { Table2 } from 'lucide-react';
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -39,6 +62,13 @@ interface DashboardTilesProps {
   /** Source session powering pivot tile data fetches. */
   sessionId?: string | null;
   filtersByTile: Record<string, ActiveChartFilters>;
+  /**
+   * DR4 · per-tile list of column names from the global filter that the
+   * tile's data does not carry. Surfaced as a small badge in the tile
+   * header so users see which globals don't apply where, instead of
+   * silently no-op-ping. Empty / missing entry → no badge.
+   */
+  inapplicableColumnsByTile?: Record<string, string[]>;
   onTileFiltersChange: (tileId: string, filters: ActiveChartFilters) => void;
   sheetId?: string;
   onUpdate?: () => void;
@@ -53,7 +83,9 @@ interface DashboardTilesProps {
 
 const COLS = { lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 } as const;
 const ROW_HEIGHT = 32;
-const GRID_MARGIN: [number, number] = [24, 24];
+// DR8 · tighter gutters give the canvas a denser, dashboard-grade feel
+// without compromising drag-grip ergonomics.
+const GRID_MARGIN: [number, number] = [16, 16];
 const STORAGE_PREFIX = 'dashboard-grid-layout:';
 const HIDDEN_TILE_PREFIX = 'dashboard-hidden-tiles:';
 
@@ -66,10 +98,9 @@ type TileConfig = {
 
 const TILE_CONFIG: Record<DashboardTile['kind'], TileConfig> = {
   // 3-up by default: w=4 of a 12-col grid for chart/pivot tiles.
-  // Chart tiles include their inline keyInsight, so h is bumped from the
-  // pre-inline default (12) to give the insight room without cramping the
-  // chart visual.
-  chart: { w: 4, h: 16, minW: 3, minH: 6 },
+  // DR8 · default height drops 16 → 14 since the keyInsight footer
+  // (DR3) carries less vertical chrome than the pre-DR3 strip.
+  chart: { w: 4, h: 14, minW: 3, minH: 6 },
   insight: { w: 4, h: 7, minW: 2, minH: 2 }, // Legacy standalone-insight kind; no longer emitted by DashboardView.
   action: { w: 4, h: 7, minW: 2, minH: 2 }, // Kept for backward compatibility but no longer used
   table: { w: 4, h: 8, minW: 2, minH: 3 },
@@ -87,7 +118,10 @@ const placeTilesForCols = (tiles: DashboardTile[], cols: number): Layout[] => {
     const config = TILE_CONFIG[tile.kind];
     const w = Math.min(config.w, cols);
     const minW = Math.min(config.minW, cols);
-    const h = config.h;
+    // DR18A · narrative tiles seed at content-aware height; other
+    // kinds stay at the fixed default. Persisted layouts are
+    // unaffected (this code only runs at fresh-seed time).
+    const h = contentDrivenHeight(tile, config, w);
     const minH = config.minH;
 
     let bestX = 0;
@@ -172,12 +206,16 @@ const ensureLayoutsForTiles = (layouts: Layouts, tiles: DashboardTile[], fallbac
         filtered.push({ ...fallbackItem });
       } else {
         const config = TILE_CONFIG[tile.kind];
+        const w = Math.min(config.w, COLS[key]);
         filtered.push({
           i: tile.id,
           x: 0,
           y: filtered.length > 0 ? Math.max(...filtered.map((item) => item.y + item.h)) : 0,
-          w: Math.min(config.w, COLS[key]),
-          h: config.h,
+          w,
+          // DR18A · same content-aware seed for tiles inserted by the
+          // ensure-layouts path (e.g. a narrative tile freshly added
+          // via the AddTileMenu).
+          h: contentDrivenHeight(tile, config, w),
           minW: Math.min(config.minW, COLS[key]),
           minH: config.minH,
         });
@@ -222,6 +260,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   onDeletePivot,
   sessionId,
   filtersByTile,
+  inapplicableColumnsByTile,
   onTileFiltersChange,
   sheetId,
   onUpdate,
@@ -246,6 +285,11 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const { toast } = useToast();
   const { updateChartInsightOrRecommendation, updateTableCaption } = useDashboardContext();
+  // DR3 · drag/resize affordances and the action-slot inside TileHeader
+  // are gated on edit mode. Permission (canEdit) is still enforced at
+  // mutation time; mode is the user's *current* intent.
+  const { mode: editMode } = useDashboardEditMode();
+  const isEditing = canEdit && editMode === 'edit';
 
   useEffect(() => {
     setHiddenIds(loadHiddenTiles(dashboardId));
@@ -336,12 +380,20 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     setLayouts((prev) => ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts));
   }, [visibleTiles, fallbackLayouts]);
 
-  // Drag-drop swap semantics (fixes cascade-push UX):
-  //  - Snapshot layouts when a drag begins.
-  //  - While dragging, update visuals but don't persist (drag emits many layout changes).
-  //  - On drag stop, resolve the final position via resolveLayoutsDropBySwap
-  //    which swaps overlapped tiles, cancels cascade pushes on non-dragged
-  //    tiles, and reverts on ambiguous drops.
+  // DR18G · drag-drop with vertical compaction. The grid is configured
+  // with `compactType="vertical"` (see `<ResponsiveGridLayout>` below)
+  // so RGL packs tiles toward the top after every drop. Drop on
+  // another tile pushes it (and others) aside, then everything
+  // compacts up to fill any gaps. The pre-DR18G swap-on-collision
+  // logic is removed — vertical compaction handles the cascade-push
+  // UX naturally.
+  //
+  //  - Snapshot layouts when a drag begins (still used for undo via
+  //    layoutHistory).
+  //  - While dragging, update visuals but don't persist (drag emits
+  //    many onLayoutChange events).
+  //  - On drag stop, persist the as-is layout (RGL has already
+  //    compacted it) and record an undo entry.
   const isDraggingRef = useRef(false);
   const layoutsAtDragStartRef = useRef<Layouts | null>(null);
   const draggedIdRef = useRef<string | null>(null);
@@ -403,43 +455,23 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   );
 
   const handleDragStop = useCallback(() => {
-    const before = layoutsAtDragStartRef.current;
+    // DR18G · with vertical compaction enabled on the grid, RGL has
+    // already laid out + compacted `layouts` by the time onDragStop
+    // fires (via the upstream `onLayoutChange`). The pre-DR18G
+    // `resolveLayoutsDropBySwap` call has been removed: it existed
+    // to undo cascade-pushes that vertical compaction now naturally
+    // resolves. Persist the as-is layout, push to history, announce.
     const draggedId = draggedIdRef.current;
     isDraggingRef.current = false;
     layoutsAtDragStartRef.current = null;
     draggedIdRef.current = null;
-    if (!before || !draggedId) {
-      persistLayouts(dashboardId, layouts, sheetId);
-      onPersistServerGrid?.(layouts);
-      layoutHistory.push(layouts);
-      return;
-    }
-    const resolved = resolveLayoutsDropBySwap(before, layouts, draggedId);
-    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
-    setLayouts(sanitized);
+    const sanitized = ensureLayoutsForTiles(layouts, visibleTiles, fallbackLayouts);
+    if (sanitized !== layouts) setLayouts(sanitized);
     persistLayouts(dashboardId, sanitized, sheetId);
     onPersistServerGrid?.(sanitized);
     layoutHistory.push(sanitized);
-    // Dashboard UX polish · announce the outcome so screen-reader users
-    // get the same feedback as the visual lift.
-    const draggedName = tileNameById.get(draggedId) ?? "Tile";
-    const breakpointKey =
-      (Object.keys(sanitized)[0] as keyof Layouts | undefined) ?? "lg";
-    const resolvedArr = sanitized[breakpointKey] ?? [];
-    const beforeArr = before[breakpointKey] ?? [];
-    const beforeDragged = beforeArr.find((l) => l.i === draggedId);
-    const swappedWith =
-      beforeDragged &&
-      resolvedArr.find(
-        (l) =>
-          l.i !== draggedId &&
-          l.x === beforeDragged.x &&
-          l.y === beforeDragged.y
-      );
-    if (swappedWith) {
-      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
-      setLayoutAnnouncement(`${draggedName} swapped with ${otherName}.`);
-    } else {
+    if (draggedId) {
+      const draggedName = tileNameById.get(draggedId) ?? "Tile";
       setLayoutAnnouncement(`${draggedName} moved.`);
     }
   }, [
@@ -492,32 +524,27 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   );
 
   const commitGrab = useCallback(() => {
-    const before = layoutsAtGrabRef.current;
+    // DR18G · same simplification as `handleDragStop`. Vertical
+    // compaction in the grid means RGL has already arranged the
+    // layout to its final compacted form via onLayoutChange; this
+    // commit just persists that state and advances the history
+    // stack. Keyboard arrow up/down become near-no-ops with vertical
+    // compact (the tile bubbles back to its compacted slot); left/
+    // right still relocate horizontally. Documented limitation —
+    // future polish wave can reframe up/down as "swap with vertical
+    // neighbor" if requested.
     const id = grabbedTileId;
-    if (!before || !id) {
+    if (!id) {
       setGrabbedTileId(null);
       return;
     }
-    const resolved = resolveLayoutsDropBySwap(before, layouts, id);
-    const sanitized = ensureLayoutsForTiles(resolved, visibleTiles, fallbackLayouts);
-    setLayouts(sanitized);
+    const sanitized = ensureLayoutsForTiles(layouts, visibleTiles, fallbackLayouts);
+    if (sanitized !== layouts) setLayouts(sanitized);
     persistLayouts(dashboardId, sanitized, sheetId);
     onPersistServerGrid?.(sanitized);
     layoutHistory.push(sanitized);
     const name = tileNameById.get(id) ?? "Tile";
-    const lg = sanitized.lg ?? [];
-    const beforeDragged = (before.lg ?? []).find((l) => l.i === id);
-    const swappedWith =
-      beforeDragged &&
-      lg.find(
-        (l) => l.i !== id && l.x === beforeDragged.x && l.y === beforeDragged.y
-      );
-    if (swappedWith) {
-      const otherName = tileNameById.get(swappedWith.i) ?? swappedWith.i;
-      setLayoutAnnouncement(`${name} placed. Swapped with ${otherName}.`);
-    } else {
-      setLayoutAnnouncement(`${name} placed.`);
-    }
+    setLayoutAnnouncement(`${name} placed.`);
     setGrabbedTileId(null);
     layoutsAtGrabRef.current = null;
   }, [
@@ -719,164 +746,178 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     persistHiddenTiles(dashboardId, hiddenIds);
   }, [dashboardId, hiddenIds]);
 
+  /**
+   * DR11 · wrap a tile body in a right-click context menu when there
+   * are items to show. In view mode `items` is empty and the wrapper
+   * is skipped so the user never sees an empty popover.
+   */
+  const withContextMenu = (
+    node: React.ReactNode,
+    items: React.ReactNode,
+  ): React.ReactNode => {
+    if (!isEditing) return node;
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{node}</ContextMenuTrigger>
+        <ContextMenuContent className="w-48">{items}</ContextMenuContent>
+      </ContextMenu>
+    );
+  };
+
   const renderTileContent = (tile: DashboardTile) => {
     switch (tile.kind) {
-      case 'chart':
-        return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-background shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="chart">
-            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
-            <div className="flex items-center justify-between w-full">
-                <CardTitle className="text-base text-foreground">
-                  {tile.title || `Chart ${tile.index + 1}`}
-                </CardTitle>
-                {canEdit && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      aria-label="Remove chart from dashboard"
-                      onClick={() => handleDeleteClick(tile)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
-              <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
-                <Suspense fallback={<Skeleton className="h-full w-full" />}>
-                  <ChartShim
-                    spec={tile.chart}
-                    legacy={() => (
-                      <ChartRenderer
-                        chart={tile.chart}
-                        index={tile.index}
-                        isSingleChart={false}
-                        showAddButton={false}
-                        useChartOnlyModal
-                        fillParent
-                        enableFilters
-                        filters={filtersByTile[tile.id]}
-                        onFiltersChange={(next) => onTileFiltersChange(tile.id, next)}
-                      />
-                    )}
-                  />
-                </Suspense>
-              </div>
-              {tile.chart.keyInsight && (
-                <div className="relative flex-shrink-0 group/insight">
-                  <div className="max-h-[200px] overflow-y-auto rounded-r-brand-sm border-l-2 border-primary/60 bg-primary/5 px-3 py-2 pr-9">
-                    <div className="text-xs leading-relaxed text-muted-foreground">
-                      <MarkdownRenderer content={tile.chart.keyInsight} />
-                    </div>
-                  </div>
-                  {canEdit && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1 h-6 w-6 opacity-0 group-hover/insight:opacity-100 transition-opacity"
-                      aria-label="Edit insight"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingTile({
-                          type: 'insight',
-                          chartIndex: tile.index,
-                          text: tile.chart.keyInsight ?? '',
-                        });
-                      }}
-                    >
-                      <Edit2 className="h-3 w-3" />
-                    </Button>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+      case 'chart': {
+        const inapplicable = inapplicableColumnsByTile?.[tile.id] ?? [];
+        const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
+        const chartContextItems = (
+          <>
+            {canPivot ? (
+              <ChartTilePivotMenuItem dashboardId={dashboardId} tileId={tile.id} />
+            ) : null}
+            {tile.chart.keyInsight !== undefined ? (
+              <ContextMenuItem
+                onSelect={() =>
+                  setEditingTile({
+                    type: 'insight',
+                    chartIndex: tile.index,
+                    text: tile.chart.keyInsight ?? '',
+                  })
+                }
+              >
+                <Edit2 className="h-3.5 w-3.5 mr-2" />
+                Edit insight
+              </ContextMenuItem>
+            ) : null}
+            {canEdit ? (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onSelect={() => handleDeleteClick(tile)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-2" />
+                  Delete chart
+                </ContextMenuItem>
+              </>
+            ) : null}
+          </>
         );
+        return withContextMenu(
+          <ChartTileBody
+            tile={tile}
+            dashboardId={dashboardId}
+            canEdit={canEdit}
+            isEditing={isEditing}
+            inapplicableColumns={inapplicable}
+            filters={filtersByTile[tile.id]}
+            onFiltersChange={(next) => onTileFiltersChange(tile.id, next)}
+            onDeleteClick={() => handleDeleteClick(tile)}
+            onEditInsight={() =>
+              setEditingTile({
+                type: 'insight',
+                chartIndex: tile.index,
+                text: tile.chart.keyInsight ?? '',
+              })
+            }
+          />,
+          chartContextItems,
+        );
+      }
       case 'insight': {
         const chartIndex = tile.relatedChartId ? parseInt(tile.relatedChartId.replace('chart-', ''), 10) : -1;
         return (
           <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="insight">
-            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
-              <div className="flex items-center justify-between w-full">
-                {tile.title && (
-                  <CardTitle className="text-sm font-semibold text-primary flex-1 min-w-0">{tile.title}</CardTitle>
-                )}
-                {canEdit && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-primary hover:text-primary/80"
-                      aria-label="Edit insight"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (chartIndex >= 0) {
-                          setEditingTile({ type: 'insight', chartIndex, text: tile.narrative });
-                        }
-                      }}
-                    >
-                      <Edit2 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      aria-label="Remove insight tile"
-                      onClick={() => handleDeleteClick(tile)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardHeader>
+            <TileHeader
+              title={tile.title || 'Insight'}
+              titleClassName="text-primary"
+              actions={canEdit ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-primary hover:text-primary/80"
+                    aria-label="Edit insight"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (chartIndex >= 0) {
+                        setEditingTile({ type: 'insight', chartIndex, text: tile.narrative });
+                      }
+                    }}
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    aria-label="Remove insight tile"
+                    onClick={() => handleDeleteClick(tile)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </>
+              ) : undefined}
+            />
             <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
               <p className="text-sm text-foreground/90 leading-relaxed">{tile.narrative}</p>
             </CardContent>
           </Card>
         );
       }
-      case 'narrative':
-        return (
+      case 'narrative': {
+        // Narrative delete is intentionally absent — the existing
+        // dispatcher (`handleDeleteClick`) has no narrative branch and
+        // adding one needs the patchSheetContent path. Edit covers the
+        // common case for this wave.
+        const narrativeContextItems = canEdit && onNarrativeSave ? (
+          <ContextMenuItem
+            onSelect={() =>
+              setEditingNarrative({
+                blockId: tile.block.id,
+                title: tile.block.title,
+                body: tile.block.body,
+              })
+            }
+          >
+            <Edit2 className="h-3.5 w-3.5 mr-2" />
+            Edit narrative
+          </ContextMenuItem>
+        ) : null;
+        return withContextMenu(
           <Card
             className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-muted/20 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group"
             data-dashboard-tile="narrative"
           >
-            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
-              <div className="flex items-center justify-between w-full gap-2">
-                <CardTitle className="text-base text-foreground flex-1 min-w-0">
-                  {tile.title}
-                </CardTitle>
-                {canEdit && onNarrativeSave && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 flex-shrink-0"
-                    aria-label="Edit narrative"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingNarrative({
-                        blockId: tile.block.id,
-                        title: tile.block.title,
-                        body: tile.block.body,
-                      });
-                    }}
-                  >
-                    <Edit2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            </CardHeader>
+            <TileHeader
+              title={tile.title}
+              actions={canEdit && onNarrativeSave ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 flex-shrink-0"
+                  aria-label="Edit narrative"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingNarrative({
+                      blockId: tile.block.id,
+                      title: tile.block.title,
+                      body: tile.block.body,
+                    });
+                  }}
+                >
+                  <Edit2 className="h-3.5 w-3.5" />
+                </Button>
+              ) : undefined}
+            />
             <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
               <div className="text-sm text-foreground/90 leading-relaxed prose prose-sm dark:prose-invert max-w-none">
                 <MarkdownRenderer content={tile.block.body} />
               </div>
             </CardContent>
-          </Card>
+          </Card>,
+          narrativeContextItems,
         );
+      }
       case 'pivot': {
         return (
           <PivotTile
@@ -888,40 +929,54 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         );
       }
       case 'table': {
-        return (
-          <Card className="relative flex h-full flex-col overflow-hidden border border-primary/20 bg-primary/5 shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="table">
-            <CardHeader className="flex w-full items-center justify-between pb-2 pt-3 px-4">
-              <div className="flex items-center justify-between w-full">
-                <CardTitle className="text-sm font-semibold text-primary flex-1 min-w-0">
-                  {tile.title || `Table ${tile.index + 1}`}
-                </CardTitle>
-                {canEdit && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-primary hover:text-primary/80"
-                      aria-label="Edit table caption"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingTable({ tableIndex: tile.index, caption: tile.title });
-                      }}
-                    >
-                      <Edit2 className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      aria-label="Remove table tile"
-                      onClick={() => handleDeleteClick(tile)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </CardHeader>
+        const tableContextItems = canEdit ? (
+          <>
+            <ContextMenuItem
+              onSelect={() => setEditingTable({ tableIndex: tile.index, caption: tile.title })}
+            >
+              <Edit2 className="h-3.5 w-3.5 mr-2" />
+              Edit caption
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => handleDeleteClick(tile)}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5 mr-2" />
+              Delete table
+            </ContextMenuItem>
+          </>
+        ) : null;
+        return withContextMenu(
+          <Card className="relative flex h-full flex-col overflow-hidden border border-border/60 bg-card shadow-elev-1 transition-[transform,box-shadow] duration-base ease-standard hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:hover:translate-y-0 dashboard-tile-grab-area group" data-dashboard-tile="table">
+            <TileHeader
+              title={tile.title || `Table ${tile.index + 1}`}
+              actions={canEdit ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    aria-label="Edit table caption"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingTable({ tableIndex: tile.index, caption: tile.title });
+                    }}
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    aria-label="Remove table tile"
+                    onClick={() => handleDeleteClick(tile)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </>
+              ) : undefined}
+            />
             <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
               <div className="max-h-[220px] overflow-y-auto rounded-md border bg-background/50">
                 {/* Reuse the existing table primitive for consistent styling */}
@@ -949,7 +1004,8 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                 </Table>
               </div>
             </CardContent>
-          </Card>
+          </Card>,
+          tableContextItems,
         );
       }
       default:
@@ -967,14 +1023,27 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
         cols={COLS}
         rowHeight={ROW_HEIGHT}
         margin={GRID_MARGIN}
-        isResizable={canEdit}
-        isDraggable={canEdit}
-        resizeHandles={canEdit ? ['s', 'e', 'n', 'w', 'se', 'sw', 'ne', 'nw'] : []}
+        isResizable={isEditing}
+        isDraggable={isEditing}
+        resizeHandles={isEditing ? ['s', 'e', 'n', 'w', 'se', 'sw', 'ne', 'nw'] : []}
         onLayoutChange={handleLayoutChange}
         onDragStart={handleDragStart}
         onDragStop={handleDragStop}
-        draggableHandle={canEdit ? ".dashboard-tile-grab-area" : ""}
-        compactType={null}
+        draggableHandle={isEditing ? ".dashboard-tile-grab-area" : ""}
+        // DR18G · vertical compaction. Pre-DR18G the grid ran with
+        // `compactType={null}` + custom `resolveLayoutsDropBySwap` on
+        // drop, which produced a cascade-push bug: dropping a chart
+        // onto another shoved the target (and everything below) down,
+        // and they stayed shifted because there was no compaction. The
+        // custom restore logic could itself create new overlaps,
+        // re-triggering RGL's collision push and leaving tiles
+        // "pushed by a thousand miles." Vertical compaction makes
+        // tiles always pack toward the top — drop on a tile pushes
+        // it aside, then everything compacts. Empty space below is
+        // automatically reclaimed. Existing dashboards self-heal:
+        // gaps close on first render, persisting their compacted
+        // form on the next layout-change event.
+        compactType="vertical"
         preventCollision={false}
         draggableCancel="[data-dashboard-tile='chart'] button, [data-dashboard-tile='insight'] button, [data-dashboard-tile='table'] button, [data-dashboard-tile='narrative'] button, [data-dashboard-tile='narrative'] textarea, [data-dashboard-tile='narrative'] input, [data-dashboard-tile='pivot'] button"
       >
@@ -997,7 +1066,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
               aria-roledescription="dashboard tile"
               aria-label={tileNameById.get(tile.id) ?? tile.id}
               aria-grabbed={isGrabbed || undefined}
-              tabIndex={canEdit ? 0 : -1}
+              tabIndex={isEditing ? 0 : -1}
               onKeyDown={handleTileKeyDown(tile.id)}
             >
               {renderTileContent(tile)}
@@ -1213,4 +1282,28 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     </div>
   );
 };
+
+/**
+ * DR18D · context-menu item that flips the chart tile between chart
+ * and pivot view. Renders inside the chart-tile context menu (DR11).
+ * Lives at the end of the file because it needs `useChartTileViewMode`
+ * — the chart tile's body itself is in `ChartTileBody.tsx`, but the
+ * context menu items are composed in `DashboardTiles.renderTileContent`
+ * outside the body, so this thin wrapper bridges the two.
+ */
+function ChartTilePivotMenuItem({
+  dashboardId,
+  tileId,
+}: {
+  dashboardId: string;
+  tileId: string;
+}) {
+  const { mode, toggle } = useChartTileViewMode(dashboardId, tileId);
+  return (
+    <ContextMenuItem onSelect={() => toggle()}>
+      <Table2 className="h-3.5 w-3.5 mr-2" />
+      {mode === 'pivot' ? 'View as chart' : 'View as pivot table'}
+    </ContextMenuItem>
+  );
+}
 

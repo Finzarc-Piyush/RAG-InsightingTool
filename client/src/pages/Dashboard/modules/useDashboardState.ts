@@ -1,6 +1,17 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChartSpec, Dashboard as ServerDashboard, DashboardAnswerEnvelope, DashboardSheet, DashboardTableSpec, ActiveFilterSpec } from '@/shared/schema';
+import {
+  ChartSpec,
+  Dashboard as ServerDashboard,
+  DashboardAnswerEnvelope,
+  DashboardSheet,
+  DashboardTableSpec,
+  ActiveFilterSpec,
+  // DPF1/DPF4 · message-mirroring fields the live dashboard view now renders.
+  BusinessActionItem,
+  InvestigationSummary,
+  PriorInvestigationItem,
+} from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api';
 
 export interface DashboardData {
@@ -23,6 +34,50 @@ export interface DashboardData {
   answerEnvelope?: DashboardAnswerEnvelope;
   /** Wave-FA6 · session active filter snapshot at dashboard-creation time. */
   capturedActiveFilter?: ActiveFilterSpec;
+  /** DPF1 · BAI1 business action items, patched onto the dashboard after
+   *  the post-verifier `businessActionsAgent` resolves. */
+  businessActions?: BusinessActionItem[];
+  /** DPF1 · synthesizer follow-up CTAs from the originating chat turn. */
+  followUpPrompts?: string[];
+  /** DPF1 · W13 investigation digest at create-time. */
+  investigationSummary?: InvestigationSummary;
+  /** DPF1 · W30 prior-investigations snapshot at create-time. */
+  priorInvestigationsSnapshot?: PriorInvestigationItem[];
+  /**
+   * Wave DR15 · source session id. Persisted by the server's
+   * `from-spec` / `from-analysis` create paths when supplied. Drives
+   * the dashboard surface's "Open chat" back-link. Absent on bare
+   * `+ New dashboard` creations and on dashboards predating DR15.
+   */
+  sessionId?: string;
+}
+
+/**
+ * Wave DR17 · "Step N" tool-call narrative blocks were emitted by the
+ * pre-DR17 `buildAllArtefactsNarrativeBlocks` server function. They
+ * dump raw tool-call internals
+ * (`get_schema_summary: rows=…`, `execute_query_plan: …`) onto the
+ * All Artefacts sheet — internal audit data that shouldn't surface
+ * on a user-facing dashboard.
+ *
+ * Server emission stops at DR17, but dashboards already persisted in
+ * Cosmos still carry these blocks. This helper strips them at read
+ * time so existing dashboards render clean without a one-shot
+ * migration script. The match is intentionally narrow — title is
+ * exactly "Step <number>" — to avoid clobbering legitimate
+ * user-authored narrative whose title happens to start with "Step".
+ */
+const STEP_BLOCK_TITLE = /^step\s+\d+$/i;
+
+function stripLegacyStepBlocks<S extends DashboardSheet>(sheet: S): S {
+  if (!Array.isArray(sheet.narrativeBlocks) || sheet.narrativeBlocks.length === 0) {
+    return sheet;
+  }
+  const filtered = sheet.narrativeBlocks.filter(
+    (b) => !STEP_BLOCK_TITLE.test((b.title ?? "").trim()),
+  );
+  if (filtered.length === sheet.narrativeBlocks.length) return sheet;
+  return { ...sheet, narrativeBlocks: filtered };
 }
 
 export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boolean; sharedPermission?: "view" | "edit"; sharedBy?: string }): DashboardData => {
@@ -30,7 +85,7 @@ export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boo
     id: dashboard.id,
     name: dashboard.name,
     charts: dashboard.charts || [],
-    sheets: dashboard.sheets || [],
+    sheets: (dashboard.sheets || []).map(stripLegacyStepBlocks),
     createdAt: new Date(dashboard.createdAt),
     updatedAt: new Date(dashboard.updatedAt),
     lastOpenedAt: dashboard.lastOpenedAt ? new Date(dashboard.lastOpenedAt) : undefined,
@@ -44,6 +99,13 @@ export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boo
     hasCollaborators: ((dashboard as any).collaborators && (dashboard as any).collaborators.length > 0) || false,
     answerEnvelope: (dashboard as any).answerEnvelope,
     capturedActiveFilter: (dashboard as any).capturedActiveFilter,
+    // DPF1 · the four message-mirroring fields. All optional + back-compat
+    // — pre-DPF1 dashboards return undefined and the panel renders nothing.
+    businessActions: (dashboard as any).businessActions,
+    followUpPrompts: (dashboard as any).followUpPrompts,
+    investigationSummary: (dashboard as any).investigationSummary,
+    priorInvestigationsSnapshot: (dashboard as any).priorInvestigationsSnapshot,
+    sessionId: (dashboard as any).sessionId,
   };
   
   // Set permission for convenience (use sharedPermission if it's a shared dashboard)
@@ -264,6 +326,30 @@ export const useDashboardState = () => {
     [renameSheetMutation]
   );
 
+  // Wave DR5 · atomic sheet reorder.
+  const reorderSheetsMutation = useMutation({
+    mutationFn: async ({ dashboardId, orderedSheetIds }: { dashboardId: string; orderedSheetIds: string[] }) => {
+      const updated = await dashboardsApi.reorderSheets(dashboardId, orderedSheetIds);
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+    onError: (error: any) => {
+      throw error;
+    },
+  });
+
+  const reorderSheets = useCallback(
+    (dashboardId: string, orderedSheetIds: string[]) =>
+      reorderSheetsMutation.mutateAsync({ dashboardId, orderedSheetIds }),
+    [reorderSheetsMutation]
+  );
+
   const removeSheetMutation = useMutation({
     mutationFn: async ({ dashboardId, sheetId }: { dashboardId: string; sheetId: string }) => {
       const updated = await dashboardsApi.removeSheet(dashboardId, sheetId);
@@ -426,6 +512,7 @@ export const useDashboardState = () => {
     deleteDashboard,
     renameDashboard,
     renameSheet,
+    reorderSheets,
     addSheet,
     removeSheet,
     updateChartInsightOrRecommendation,

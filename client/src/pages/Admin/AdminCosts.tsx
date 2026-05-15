@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { fetchAdminCosts, type AdminCostsSnapshot } from "@/lib/api/admin";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AdminNav } from "../Superadmin/AdminNav";
 
 function formatUsd(n: number): string {
   return `$${n.toFixed(4)}`;
@@ -56,34 +57,42 @@ export default function AdminCosts() {
 
   if (loading && !data) {
     return (
-      <div className="p-6 text-muted-foreground" data-testid="admin-costs-loading">
-        Loading admin cost snapshot…
-      </div>
+      <>
+        <AdminNav />
+        <div className="p-6 text-muted-foreground" data-testid="admin-costs-loading">
+          Loading admin cost snapshot…
+        </div>
+      </>
     );
   }
 
   if (error) {
     const isForbidden = /\b403\b/.test(error);
     return (
-      <div className="p-6">
-        <Card className="p-6 border-destructive/30">
-          <h2 className="text-lg font-semibold text-foreground mb-2">
-            {isForbidden ? "Not authorized" : "Failed to load admin costs"}
-          </h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            {isForbidden
-              ? "Your account isn't on the ADMIN_EMAILS allow-list."
-              : error}
-          </p>
-          <Button onClick={() => void load()} variant="outline">Retry</Button>
-        </Card>
-      </div>
+      <>
+        <AdminNav />
+        <div className="p-6">
+          <Card className="p-6 border-destructive/30">
+            <h2 className="text-lg font-semibold text-foreground mb-2">
+              {isForbidden ? "Not authorized" : "Failed to load admin costs"}
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {isForbidden
+                ? "Your account isn't on the ADMIN_EMAILS allow-list."
+                : error}
+            </p>
+            <Button onClick={() => void load()} variant="outline">Retry</Button>
+          </Card>
+        </div>
+      </>
     );
   }
 
   if (!data) return null;
 
   return (
+    <>
+    <AdminNav />
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <header className="flex items-center justify-between">
         <div>
@@ -234,5 +243,6 @@ export default function AdminCosts() {
         )}
       </Card>
     </div>
+    </>
   );
 }

@@ -36,7 +36,13 @@ const LOW_CARDINALITY_MAX = 60;
 const MEDIUM_CARDINALITY_MAX = 500;
 const TOP_N_BUCKET = 15;
 const OTHER_BUCKET_LABEL = "Other";
-const DEFAULT_MAX_SWEEP_CHARTS = 18;
+// DPF6 · 18 → 24 to align with `DASHBOARD_CHART_HARD_CAP` and the
+// per-sheet schema ceiling (`dashboardSheetSpecSchema.charts.max(24)`).
+// This is only the FALLBACK ceiling — agentLoop.service.ts always passes
+// `maxAdds: remaining = DASHBOARD_CHART_HARD_CAP - mergedCharts.length`
+// so the effective ceiling matches the hard cap. Tests / direct callers
+// that don't pass `maxAdds` get the same 24 ceiling now.
+const DEFAULT_MAX_SWEEP_CHARTS = 24;
 
 export interface FeatureSweepOptions {
   /** Hard cap on net-new charts the sweep will emit. */

@@ -5,7 +5,7 @@ import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { formatCompactNumber } from './formatCompactNumber.js';
 import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
-import { generateStreamingCorrelationChart } from './streamingCorrelationAnalyzer.js';
+import { generateStreamingCorrelationChart, formatSlopeForTitle } from './streamingCorrelationAnalyzer.js';
 import {
   toNumber,
   type CorrelationResult,
@@ -261,9 +261,13 @@ export async function analyzeCorrelations(
     const metadata = (chart as any)._correlationMetadata || {};
     console.log(`Scatter chart ${idx}: ${corr.variable} vs ${targetVariable}, correlation: ${corr.correlation.toFixed(2)}, total pairs: ${corr.nPairs}, visualization points: ${chart.data?.length || 0}`);
 
+    const slopeForTitle =
+      typeof metadata.slope === 'number' && Number.isFinite(metadata.slope)
+        ? `, slope=${formatSlopeForTitle(metadata.slope)}`
+        : '';
     return {
       ...chart,
-      title: `${corr.variable} vs ${targetVariable} (r=${corr.correlation.toFixed(2)})`,
+      title: `${corr.variable} vs ${targetVariable} (r=${corr.correlation.toFixed(2)}${slopeForTitle})`,
       _correlationMetadata: {
         ...metadata,
         correlation: corr.correlation, // Use correlation from ranking

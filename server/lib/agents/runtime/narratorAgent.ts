@@ -49,45 +49,46 @@ const narratorOutputSchema = z.object({
   unexplained: z.string().optional(),
   // W3 · AnswerEnvelope — optional structured rendering hints. Narrator may
   // emit any subset; the UI's AnswerCard renders whichever fields are present
-  // and falls back to `body` markdown for the rest. WTL3 · caps loosened in
-  // lockstep with shared/schema.ts answerEnvelope.
-  tldr: z.string().max(400).optional(),
+  // and falls back to `body` markdown for the rest. Caps loosened in lockstep
+  // with shared/schema.ts answerEnvelope so output that passes the local
+  // validator also passes the persistence schema.
+  tldr: z.string().max(600).optional(),
   findings: z
     .array(
       z.object({
-        headline: z.string().max(280),
-        evidence: z.string().max(1200),
-        magnitude: z.string().max(120).optional(),
+        headline: z.string().max(400),
+        evidence: z.string().max(3000),
+        magnitude: z.string().max(160).optional(),
       })
     )
-    .max(7)
+    .max(15)
     .optional(),
-  methodology: z.string().max(1400).optional(),
-  caveats: z.array(z.string().max(280)).max(5).optional(),
+  methodology: z.string().max(3500).optional(),
+  caveats: z.array(z.string().max(400)).max(10).optional(),
   // W8 · "So what" reading of the headline findings.
   implications: z
     .array(
       z.object({
-        statement: z.string().max(400),
-        soWhat: z.string().max(400),
+        statement: z.string().max(600),
+        soWhat: z.string().max(800),
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(6)
+    .max(12)
     .optional(),
   // W8 · concrete next actions, grouped by horizon.
   recommendations: z
     .array(
       z.object({
-        action: z.string().max(280),
-        rationale: z.string().max(400),
+        action: z.string().max(400),
+        rationale: z.string().max(800),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )
-    .max(6)
+    .max(12)
     .optional(),
   // W8 · one-paragraph framing of the findings against FMCG/Marico priors.
-  domainLens: z.string().max(900).optional(),
+  domainLens: z.string().max(2000).optional(),
 });
 
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
@@ -176,10 +177,15 @@ Your job: narrate the investigation clearly in the following JSON format:
 - "body": main markdown answer. Lead with the most important finding. For each confirmed
   hypothesis, cite the supporting evidence. For refuted hypotheses, say what was ruled out.
   Do not repeat the user question verbatim.
-  LENGTH: aim for 600–1200 words for analytical questions, 80–150 words for simple/
-  conversational questions. Do not pad with filler — every paragraph must add either a
-  finding, a numeric claim, an interpretation grounded in the domain context, or a
-  recommendation. Prefer 4–7 paragraphs of grounded prose over bullet-spam.
+  LENGTH — calibrate to the question, not to a fixed band. A "descriptive" lookup
+  ("what's the total revenue?") is one or two sentences with the number, no surrounding
+  paragraphs. A "comparison" between two segments is a few short paragraphs. A
+  "driver_discovery" or "variance_diagnostic" or open "exploration" may warrant a
+  multi-paragraph dive with several findings, implications, and recommendations.
+  Never pad with filler — every paragraph must add either a finding, a numeric claim,
+  an interpretation grounded in the domain context, or a recommendation. Brevity is a
+  feature; an answer that says less than the question deserves is wrong, but so is an
+  answer that says more. Match length and structure to what the user actually asked.
   HARD CONSTRAINTS on body content:
   • Do NOT open with a methodology recap — phrases like "X has been calculated by
     grouping…", "the analysis was performed by summing…", "we computed X by aggregating…"
@@ -196,35 +202,51 @@ Your job: narrate the investigation clearly in the following JSON format:
 - Do NOT invent numbers not present in the findings. If a hypothesis has no evidence, say
   it remains open and explain why.
 
-W3 · AnswerEnvelope — REQUIRED for analytical questions, omit each field independently
-when not applicable:
-- "tldr": ≤280 chars, ONE sentence that states the headline answer up-front. The reader
-  should be able to stop after this sentence and still walk away with the right takeaway.
-- "findings": 2–5 ordered entries, each {headline (≤200 chars), evidence (≤600 chars),
-  magnitude?}. The headline is the claim; the evidence is the data that backs it
-  (cite numbers from the blackboard verbatim); the magnitude is the single most
-  important number in human-readable form (e.g. "+12.4% YoY", "$3.2M shortfall").
-- "methodology": ≤500 chars on what tools / data / time-window were used. Plain prose,
-  no JSON. Helps the reader judge the answer's reliability.
-- "caveats": 0–3 short bullets on what limits the conclusion (sample-size,
-  missing-data, ambiguous definitions, etc.). Omit when nothing material is missing.
+W3 · AnswerEnvelope — emit each field only when it adds value. Calibrate volume to
+the question; do not pad sections to hit a target count. For a "descriptive" lookup
+many of these fields will be omitted entirely; for an open analytical dive several
+fields will carry multiple entries.
+- "tldr": ONE sentence stating the headline answer up-front. The reader should be able
+  to stop after this sentence and still walk away with the right takeaway.
+- "findings": as many ordered entries as the answer warrants — could be one for a
+  lookup, several for a deep analytical dive. Each {headline, evidence, magnitude?}.
+  The headline is the claim; the evidence cites numbers from the blackboard verbatim
+  and explains them; the magnitude is the single most important number in
+  human-readable form (e.g. "+12.4% YoY", "$3.2M shortfall").
+- "methodology": plain prose on what tools / data / time-window were used. Length
+  should match how complex the methodology actually was — one sentence for a single
+  aggregation, a paragraph for a multi-step analysis. No JSON.
+- "caveats": short bullets on what materially limits the conclusion (sample-size,
+  missing-data, ambiguous definitions, etc.). Often zero. Empty array is fine.
+  Wave T4 · MANDATORY when the user asked for a temporal trend (verbs/phrases like
+  "over time", "trend", "evolution", "trajectory", "how X changed", "temporal pattern")
+  AND the executed query's grouped temporal axis (a "Day · …", "Week · …", "Month · …",
+  "Quarter · …", "Half-year · …" or "Year · …" column) returned only ONE distinct
+  bucket. The caveat must (a) name the dataset's actual temporal scope verbatim from
+  the methodology / observations (e.g. "Dataset spans only April 2026") and (b) state
+  that a multi-period trend cannot be plotted from this slice. Reframe the answer as
+  cross-sectional variation across the non-temporal dimension within that scope. NEVER
+  invent additional periods to fake a trend.
 
-W8 · Decision-grade extensions — REQUIRED for analytical questions:
-- "implications": 2–4 entries, each {statement, soWhat, confidence?}. \`statement\` is the
-  observed fact (one sentence, grounded in findings); \`soWhat\` is the business meaning
-  for an FMCG operator — a buyer, brand manager, channel head — framed using DOMAIN
-  KNOWLEDGE when relevant. Confidence is "low" / "medium" / "high".
-- "recommendations": 2–4 entries, each {action, rationale, horizon?}. \`action\` is a
-  concrete next step the team can take; \`rationale\` ties it to a specific finding and
-  the domain context. \`horizon\` is "now" (this week), "this_quarter", or "strategic".
-- "domainLens": ≤500 chars, one paragraph framing the findings against the relevant
-  FMCG/Marico domain context. Cite the pack id verbatim when you reference it (e.g.
-  "Per \`marico-haircare-portfolio\`, …"). Omit when no domain pack is relevant.
-  Treat domain packs as orientation only — never invent domain facts.
+W8 · Decision-grade extensions — emit only those grounded in the findings:
+- "implications": each {statement, soWhat, confidence?}. \`statement\` is the observed
+  fact (one sentence, grounded in findings); \`soWhat\` is the business meaning for an
+  FMCG operator — a buyer, brand manager, channel head — framed using DOMAIN KNOWLEDGE
+  when relevant. Confidence is "low" / "medium" / "high". For a simple lookup this
+  array may be empty or contain a single entry; for a deep analytical dive it may
+  carry several. Never invent implications to hit a count.
+- "recommendations": each {action, rationale, horizon?}. \`action\` is a concrete next
+  step the team can take; \`rationale\` ties it to a specific finding and the domain
+  context. \`horizon\` is "now" (this week), "this_quarter", or "strategic". Same
+  calibration as implications — only emit recommendations the data actually supports.
+- "domainLens": one paragraph framing the findings against the relevant FMCG/Marico
+  domain context. Cite the pack id verbatim when you reference it (e.g.
+  "Per \`marico-haircare-portfolio\`, …"). Omit when no domain pack is materially
+  relevant. Treat domain packs as orientation only — never invent domain facts.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
-- "magnitudes": 2–4 entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent.
-- "unexplained": one sentence (≤180 chars) on what could NOT be determined. Omit if nothing material is missing.
+- "magnitudes": entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent. Emit zero when the answer carries no numeric backbone.
+- "unexplained": one sentence on what could NOT be determined. Omit if nothing material is missing.
 When the user message says "questionShape: none" you may omit magnitudes and unexplained.
 
 VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
@@ -261,6 +283,15 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   AGAINST the rollup as the denominator — divide the member's value by the
   rollup's value (e.g. MARICO 6000 / FSG 68751 = ~9 %), NOT by the sum of the
   remaining members.
+- PCT1 — RATE / SHARE / PERCENT framing: when a step result row contains both
+  a \`countIf\`/\`sumIf\` aggregation alias (e.g. "matching", "<col>_sumIf") AND
+  a paired \`count\`/\`sum\` total (e.g. "total", "<col>_sum"), surface the ratio
+  as a percentage in the lede + magnitudes. Magnitude format: "x.x% (n of N)"
+  for countIf/count pairs; "x.x% of <metric>" for sumIf/sum pairs. Findings
+  should call out both the rate AND the absolute counts (matching, total) so
+  the reader sees the denominator. Never report a bare countIf number ("matching:
+  482") without the total or the percentage — that's the failure mode this rule
+  exists to prevent.
 - WGR5 — GROWTH PROMINENCE: when the blackboard or tool observations contain
   growth output (the compute_growth tool emits memorySlots like growth_grain,
   growth_top_dimension, growth_top_pct and rows with prior_value/growth_pct),
@@ -319,12 +350,12 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   const result = useStreaming
     ? await completeJsonStreaming(system, user, narratorOutputSchema, {
         turnId: `${turnId}_narrator_stream`,
-        // WTL2 · 6_000 → 10_000. Narrator output IS the user-visible answer.
-        // Rich envelopes (findings + implications + recommendations + caveats
-        // + methodology + domainLens) plus the WGR5 growth-prominence rule
-        // routinely brushed against 6k. Claude Opus 4.7 has plenty of output
-        // headroom; this gives the answer room to be substantive.
-        maxTokens: 10_000,
+        // 10_000 → 24_000. With rigid length bands removed and per-field
+        // schema caps relaxed, deep analytical dives can legitimately produce
+        // 15 findings + 12 implications + 12 recommendations + extended
+        // methodology and domainLens. Claude Opus 4.7 has plenty of output
+        // headroom; the cap exists only as runaway protection.
+        maxTokens: 24_000,
         temperature: 0.25,
         onLlmCall,
         purpose: LLM_PURPOSE.NARRATOR,
@@ -332,16 +363,8 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
       })
     : await completeJson(system, user, narratorOutputSchema, {
         turnId: `${turnId}_narrator${repair ? "_repair" : ""}`,
-        // W8 · 4000 → 6000. The W8 prompt now requires implications,
-        // recommendations, and a domainLens paragraph on top of the existing
-        // envelope — earlier we sometimes hit the 4k cap and silently truncated
-        // late findings. 6k still leaves ~2k headroom for prose.
-        // WTL2 · 6_000 → 10_000. Narrator output IS the user-visible answer.
-        // Rich envelopes (findings + implications + recommendations + caveats
-        // + methodology + domainLens) plus the WGR5 growth-prominence rule
-        // routinely brushed against 6k. Claude Opus 4.7 has plenty of output
-        // headroom; this gives the answer room to be substantive.
-        maxTokens: 10_000,
+        // 10_000 → 24_000. See streaming branch above for rationale.
+        maxTokens: 24_000,
         temperature: 0.25,
         onLlmCall,
         purpose: LLM_PURPOSE.NARRATOR,

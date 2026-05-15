@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { __test__ } from "./InteractiveChartCard";
-import type { ChartSpec } from "@/shared/schema";
+import type { ChartSpec, ChartSpecV2 } from "@/shared/schema";
 
 const baseBar: ChartSpec = {
   type: "bar",
@@ -87,5 +87,52 @@ describe("chartIdentityKey", () => {
     const a = __test__.chartIdentityKey({ ...baseBar, data: rows });
     const b = __test__.chartIdentityKey({ ...baseBar, data: [...rows] });
     expect(a).toBe(b);
+  });
+});
+
+describe("canShowPivotToggle", () => {
+  const baseWithData: ChartSpec = {
+    ...baseBar,
+    data: [
+      { month: "2024-01", revenue: 10, region: "A" },
+      { month: "2024-02", revenue: 12, region: "B" },
+    ],
+  };
+
+  it("returns true for a v1 chart with x, y, and non-empty data", () => {
+    expect(__test__.canShowPivotToggle(baseWithData)).toBe(true);
+  });
+
+  it("returns false when chart is null", () => {
+    expect(__test__.canShowPivotToggle(null)).toBe(false);
+  });
+
+  it("returns false for v2 specs (pivot pipeline doesn't traverse them)", () => {
+    const v2: ChartSpecV2 = {
+      version: 2,
+      mark: "bar",
+      title: "v2",
+      data: { rows: [] },
+      encoding: { x: { field: "month" }, y: { field: "revenue" } },
+    } as unknown as ChartSpecV2;
+    expect(__test__.canShowPivotToggle(v2)).toBe(false);
+  });
+
+  it("returns false when data array is empty (streaming pre-data state)", () => {
+    expect(__test__.canShowPivotToggle({ ...baseWithData, data: [] })).toBe(false);
+  });
+
+  it("returns false when chart is missing y (chartSpecToPivotConfig null)", () => {
+    expect(
+      __test__.canShowPivotToggle({
+        ...baseWithData,
+        y: "" as ChartSpec["y"],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when chart.data is undefined", () => {
+    const { data: _omit, ...withoutData } = baseWithData;
+    expect(__test__.canShowPivotToggle(withoutData as ChartSpec)).toBe(false);
   });
 });

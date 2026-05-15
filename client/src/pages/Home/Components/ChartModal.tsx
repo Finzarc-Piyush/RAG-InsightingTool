@@ -8,7 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
-import { Filter, X, Plus, Settings2, Table2, Loader2 } from 'lucide-react';
+import { BarChart3, Filter, X, Plus, Settings2, Table2, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { ChartTilePivotView } from '@/components/charts/ChartTilePivotView';
+import { chartSpecToPivotConfig } from '@/components/charts/chartSpecToPivotConfig';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec, DashboardTableSpec } from '@/shared/schema';
 import { api } from '@/lib/httpClient';
@@ -20,6 +23,7 @@ import {
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
@@ -74,6 +78,8 @@ interface ChartModalProps {
   keyInsightSessionId?: string | null;
   /** Pre-fills the chat composer with the trailing "Next, …" investigation suggestion. No auto-send. */
   onSuggestedQuestionClick?: (question: string) => void;
+  /** Position of this chart in its parent grid; selects the palette color so the modal matches the inline render. */
+  index?: number;
 }
 
 const TABLE_V1_PREFIX = 'TABLE_V1|';
@@ -186,6 +192,7 @@ export function ChartModal({
   determineSliderStep = determineSliderStepLocal,
   keyInsightSessionId = null,
   onSuggestedQuestionClick,
+  index,
 }: ChartModalProps) {
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
   const [isDashboardTableModalOpen, setIsDashboardTableModalOpen] = useState(false);
@@ -199,6 +206,19 @@ export function ChartModal({
   const [fetchedKeyInsight, setFetchedKeyInsight] = useState<string | null>(null);
   const [keyInsightLoading, setKeyInsightLoading] = useState(false);
   const [keyInsightError, setKeyInsightError] = useState<string | null>(null);
+  // Chart ↔ pivot view toggle. Transient per-open (resets when the modal
+  // reopens) so the modal mirrors the "Show dots" / "Hide outliers" pattern
+  // — fresh opens default to the chart, regardless of inline-card state.
+  const [view, setView] = useState<'chart' | 'pivot'>('chart');
+  useEffect(() => {
+    if (isOpen) setView('chart');
+  }, [isOpen]);
+  const canPivot = useMemo(() => {
+    if (chartSpecToPivotConfig(chart) === null) return false;
+    const filtered = enableFilters && Array.isArray(chartData) ? chartData : chart.data;
+    return Array.isArray(filtered) && filtered.length > 0;
+  }, [chart, chartData, enableFilters]);
+  const effectiveView: 'chart' | 'pivot' = canPivot ? view : 'chart';
 
   const {
     type,
@@ -214,7 +234,7 @@ export function ChartModal({
     seriesKeys: specSeriesKeys,
     barLayout,
   } = chart;
-  const chartColor = CHART_SERIES_COLORS[0];
+  const chartColor = CHART_SERIES_COLORS[(index ?? 0) % CHART_SERIES_COLORS.length];
 
   const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
     if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;
@@ -452,6 +472,7 @@ export function ChartModal({
                     style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                   }}
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip
                   formatter={rechartsTooltipValueFormatter}
@@ -534,6 +555,7 @@ export function ChartModal({
                     label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                     yAxisId="left"
                     domain={leftDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                   <YAxis
                     orientation="right"
@@ -544,6 +566,7 @@ export function ChartModal({
                     width={90}
                     label={{ value: chart.y2Label || chart.y2, angle: 90, position: 'right', style: { textAnchor: 'middle', fill: rightAxisColor, fontSize: 16, fontWeight: 600 } }}
                     domain={rightDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                 </>
               ) : (
@@ -554,6 +577,7 @@ export function ChartModal({
                   width={90}
                   label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                   domain={leftDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
               )}
               <Tooltip
@@ -657,6 +681,7 @@ export function ChartModal({
                   position: 'left',
                   style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                 }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip
                 formatter={rechartsTooltipValueFormatter}
@@ -954,6 +979,7 @@ export function ChartModal({
                     style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                   }}
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip
                   formatter={rechartsTooltipValueFormatter}
@@ -1026,6 +1052,7 @@ export function ChartModal({
                 tickFormatter={formatAxisLabel}
                 width={90}
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip
                 formatter={rechartsTooltipValueFormatter}
@@ -1087,7 +1114,46 @@ export function ChartModal({
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {type === 'line' && (
+              {canPivot && (
+                <div
+                  className="inline-flex rounded-md border border-border overflow-hidden"
+                  role="group"
+                  aria-label="Chart or pivot view"
+                  data-testid="chart-modal-pivot-toggle"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setView('chart')}
+                    aria-pressed={effectiveView === 'chart'}
+                    title="View as chart"
+                    className={cn(
+                      'px-1.5 py-1 text-xs transition-colors',
+                      effectiveView === 'chart'
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                    )}
+                  >
+                    <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="sr-only">View as chart</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView('pivot')}
+                    aria-pressed={effectiveView === 'pivot'}
+                    title="View as pivot table"
+                    className={cn(
+                      'px-1.5 py-1 text-xs transition-colors border-l border-border',
+                      effectiveView === 'pivot'
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                    )}
+                  >
+                    <Table2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="sr-only">View as pivot table</span>
+                  </button>
+                </div>
+              )}
+              {effectiveView === 'chart' && type === 'line' && (
                 <div className="flex items-center gap-2 px-2">
                   <Checkbox
                     id="show-dots-modal"
@@ -1102,7 +1168,7 @@ export function ChartModal({
                   </Label>
                 </div>
               )}
-              {type === 'scatter' && (
+              {effectiveView === 'chart' && type === 'scatter' && (
                 <>
                   <div className="flex items-center gap-2 px-2">
                     <Checkbox
@@ -1529,10 +1595,17 @@ export function ChartModal({
           )}
 
           <div className="flex gap-6 flex-1 min-h-0">
-            {/* Left side - Chart */}
+            {/* Left side - Chart or read-only pivot view */}
             <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
               <div className="flex flex-1 min-h-0 flex-col w-full pt-1">
-                {renderChart()}
+                {effectiveView === 'pivot' ? (
+                  <ChartTilePivotView
+                    chart={chart}
+                    data={enableFilters && Array.isArray(chartData) ? chartData : undefined}
+                  />
+                ) : (
+                  renderChart()
+                )}
               </div>
             </div>
 
@@ -1605,6 +1678,12 @@ export function ChartModal({
       isOpen={isDashboardModalOpen}
       onClose={() => setIsDashboardModalOpen(false)}
       chart={chart}
+      // DR18C · forward the live insight fetched from
+      // /chart-key-insight so it travels with the chart onto the
+      // dashboard. `composeChartForSave` inside the modal is the
+      // gate that decides whether to use it (only when the chart
+      // doesn't already carry a curated keyInsight).
+      liveInsight={fetchedKeyInsight}
     />
     {dashboardTableForModal && (
       <DashboardTableModal

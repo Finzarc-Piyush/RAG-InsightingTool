@@ -113,8 +113,11 @@ function buildAnthropicRequest(
   const body: Record<string, unknown> = {
     model: params.model,
     messages: turns,
-    // WTL2 · default fallback 2048 → 4096. Per-call max_tokens still wins.
-    max_tokens: params.max_tokens ?? 4096,
+    // Default fallback used only when caller does not pass an explicit
+    // max_tokens. Per-call max_tokens still wins. Bumped 4096 → 16000 so
+    // helper LLM calls that don't care about budget tuning don't silently
+    // truncate long outputs.
+    max_tokens: params.max_tokens ?? 16000,
   };
   if (systems.length) body.system = systems.join("\n\n");
   if (typeof params.temperature === "number") body.temperature = params.temperature;

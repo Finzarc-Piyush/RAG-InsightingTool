@@ -16,6 +16,8 @@ import { useToast } from '@/hooks/use-toast';
 import { getUserEmail } from '@/utils/userStorage';
 import { useLocation } from 'wouter';
 import { useRef, useEffect, useState } from 'react';
+import { findBusinessActionsTargetIndex } from '@/lib/chat/findBusinessActionsTarget';
+import { useSessionBroadcast } from '@/lib/sessionBroadcast.hook';
 import { logger } from '@/lib/logger';
 import { temporalGrainsFromSummaryColumns } from '@/lib/dataSummaryGrains';
 import {
@@ -50,6 +52,14 @@ interface UseHomeMutationsProps {
   ) => void;
   setWideFormatTransform?: (
     t: import('@/shared/schema').WideFormatTransform | undefined
+  ) => void;
+  /** SU-UX1 — populate from dataSummary.dateTimeColumnPairs on session load + upload. */
+  setDateTimeColumnPairs?: (
+    next: import('@/shared/schema').DateTimeColumnPair[]
+  ) => void;
+  /** SU-UX1 — populate from dataSummary.columns[].indicator on session load + upload. */
+  setIndicators?: (
+    next: import('@/components/IndicatorColumnsBanner').IndicatorEntry[]
   ) => void;
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setSuggestions?: (suggestions: string[]) => void;
@@ -87,6 +97,8 @@ export const useHomeMutations = ({
   setTotalColumns,
   setCurrencyByColumn,
   setWideFormatTransform,
+  setDateTimeColumnPairs,
+  setIndicators,
   setMessages,
   setSuggestions,
   setIsDatasetPreviewLoading,
@@ -102,6 +114,22 @@ export const useHomeMutations = ({
   const userEmail = getUserEmail();
   const abortControllerRef = useRef<AbortController | null>(null);
   /**
+   * Wave C2 · mounted-flag ref. Flipped to false in the unmount cleanup
+   * useEffect below. Long-lived SSE callbacks (`onAgentEvent`,
+   * `onThinkingStep`, `onIntermediate`) check this and bail before
+   * calling any setX setter. Without this guard, an in-flight SSE chunk
+   * delivered AFTER the user navigated away calls setMessages /
+   * setColumns / etc. on an unmounted component — React 18 warns but
+   * the deeper hazard is leaked work + stale promise chains.
+   *
+   * Note: the existing P-017 cleanup ALSO aborts the chat fetch. The
+   * abort tells the server to stop streaming, but bytes already in
+   * flight on the wire still trigger `onAgentEvent` callbacks once
+   * before the abort surfaces in the stream reader. This ref catches
+   * those tail-end callbacks.
+   */
+  const isMountedRef = useRef(true);
+  /**
    * Captures the dashboard the agent auto-created during a streaming turn.
    * onSuccess inspects this to navigate the user to /dashboard?open=<id>
    * once the answer settles. Cleared on each new turn.
@@ -111,6 +139,34 @@ export const useHomeMutations = ({
   );
   const uploadPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const uploadPollInFlightRef = useRef(false);
+
+  // Wave E3 · Cross-tab broadcast. Peer-tab events fire when ANOTHER
+  // browser tab on the same session completes a turn / updates SAC /
+  // changes columns. We refetch the sessions cache so this tab's
+  // messages + lifted state aren't stale.
+  //
+  // We deliberately invalidate the TanStack Query cache rather than
+  // re-loading lifted state directly — the prefetched `sessions` query
+  // key (warmed in App.tsx) is the authoritative source, and
+  // invalidating it triggers TanStack to refetch and the relevant
+  // selectors (Home.tsx) to re-read.
+  const { emitSessionBroadcast } = useSessionBroadcast(sessionId, (event) => {
+    if (!isMountedRef.current) return;
+    if (
+      event.kind === 'messages' ||
+      event.kind === 'columns' ||
+      event.kind === 'hierarchies' ||
+      event.kind === 'permanent_context'
+    ) {
+      // Invalidate the sessions list (carries per-session message
+      // count + lastUpdated) and the per-session fetch (carries the
+      // full chat doc).
+      queryClient.invalidateQueries({ queryKey: ['sessions', userEmail] });
+      if (sessionId) {
+        queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      }
+    }
+  });
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
   const previewStateRef = useRef<{ rows: Record<string, any>[]; columns: string[] }>({
     rows: [],
@@ -149,6 +205,10 @@ export const useHomeMutations = ({
 
   useEffect(() => {
     return () => {
+      // Wave C2 · Flip the mounted flag BEFORE aborting so any callback
+      // racing with the abort sees `isMountedRef.current === false` and
+      // bails before calling setX.
+      isMountedRef.current = false;
       if (uploadPollIntervalRef.current) {
         clearInterval(uploadPollIntervalRef.current);
         uploadPollIntervalRef.current = null;
@@ -226,9 +286,18 @@ export const useHomeMutations = ({
     summaryColumns?: Array<{
       name: string;
       currency?: import('@/shared/schema').ColumnCurrency;
+      indicator?: {
+        kind: 'boolean' | 'categorical';
+        positiveValues?: string[];
+        negativeValues?: string[];
+        sentinelValues?: string[];
+        source: 'auto' | 'llm' | 'user';
+      };
+      answersQuestions?: string[];
     }>;
     temporalFacetColumns?: TemporalFacetColumnMeta[];
     wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+    dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[];
     allowEmptyRowsOverwrite?: boolean;
   }) => {
     const nextColumns = payload.columns ?? [];
@@ -266,6 +335,36 @@ export const useHomeMutations = ({
     if (setWideFormatTransform) {
       setWideFormatTransform(payload.wideFormatTransform);
     }
+    // SU-UX1 · populate the per-session date×time pairs + indicator lists
+    // from the dataSummary we just hydrated. Both come back in lockstep
+    // with the rest of the schema metadata so the banners refresh on
+    // every session-load + upload-complete event.
+    if (setDateTimeColumnPairs) {
+      setDateTimeColumnPairs(payload.dateTimeColumnPairs ?? []);
+    }
+    if (setIndicators && payload.summaryColumns) {
+      const next: import('@/components/IndicatorColumnsBanner').IndicatorEntry[] =
+        [];
+      for (const c of payload.summaryColumns) {
+        if (!c.indicator) continue;
+        next.push({
+          column: c.name,
+          kind: c.indicator.kind,
+          ...(c.indicator.positiveValues
+            ? { positiveValues: c.indicator.positiveValues }
+            : {}),
+          ...(c.indicator.negativeValues
+            ? { negativeValues: c.indicator.negativeValues }
+            : {}),
+          ...(c.indicator.sentinelValues
+            ? { sentinelValues: c.indicator.sentinelValues }
+            : {}),
+          source: c.indicator.source,
+          ...(c.answersQuestions ? { answersQuestions: c.answersQuestions } : {}),
+        });
+      }
+      setIndicators(next);
+    }
 
     return {
       hasColumns: hasColumns || previewStateRef.current.columns.length > 0,
@@ -290,6 +389,7 @@ export const useHomeMutations = ({
         summaryColumns: session.dataSummary.columns,
         temporalFacetColumns: session.dataSummary.temporalFacetColumns ?? [],
         wideFormatTransform: session.dataSummary.wideFormatTransform,
+        dateTimeColumnPairs: session.dataSummary.dateTimeColumnPairs ?? [],
         rowCount: session.dataSummary.rowCount || 0,
         columnCount: session.dataSummary.columnCount || 0,
         allowEmptyRowsOverwrite: opts.allowEmptyRowsOverwrite,
@@ -344,6 +444,12 @@ export const useHomeMutations = ({
       numericColumns: summary.numericColumns || [],
       dateColumns: summary.dateColumns || [],
       summaryColumns: summary.columns as any,
+      // SU-UX1 · forward the upload-time pair detection so the banner
+      // appears the moment the dataset preview finishes (no need to wait
+      // for the next session-load round-trip).
+      dateTimeColumnPairs:
+        (summary as { dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[] })
+          .dateTimeColumnPairs ?? [],
       rowCount: summary.rowCount || 0,
       columnCount: summary.columnCount || 0,
       allowEmptyRowsOverwrite: false,
@@ -409,9 +515,9 @@ export const useHomeMutations = ({
           const rowsNow =
             previewStateRef.current.rows.length ||
             (Array.isArray(hydratedSession?.sampleRows) ? hydratedSession.sampleRows.length : 0);
-          const stopPreviewLoading =
-            rowsNow > 0 || st.enrichmentStatus === 'complete' || st.status === 'completed';
-          setIsDatasetPreviewLoading?.(stopPreviewLoading);
+          const previewStillLoading =
+            !(rowsNow > 0 || st.enrichmentStatus === 'complete' || st.status === 'completed');
+          setIsDatasetPreviewLoading?.(previewStillLoading);
           const enriching =
             !st.understandingReady &&
             st.enrichmentStatus === 'pending' ||
@@ -739,6 +845,9 @@ export const useHomeMutations = ({
               } as ChatResponse & { queuedUntilEnrichment?: boolean });
             },
             onThinkingStep: (step: ThinkingStep) => {
+              // Wave C2 · Bail if unmounted (catches tail-end SSE chunks
+              // that arrive after the user navigated away).
+              if (!isMountedRef.current) return;
               logger.log('🧠 Thinking step received:', step);
               setThinkingSteps((prev) => {
                 const existingIndex = prev.findIndex(s => s.step === step.step);
@@ -760,6 +869,11 @@ export const useHomeMutations = ({
               });
             },
             onAgentEvent: (event: string, data: unknown) => {
+              // Wave C2 · Bail if unmounted. Every SSE event handled
+              // below (workbench, workbench_enriched, session_context_updated,
+              // business_actions, answer_chunk, thinking, flow_decision,
+              // …) calls setX setters; this early-return covers them all.
+              if (!isMountedRef.current) return;
               if (event === 'workbench') {
                 const entry = (data as { entry?: AgentWorkbenchEntry }).entry;
                 if (!entry) return;
@@ -816,6 +930,57 @@ export const useHomeMutations = ({
                           }
                         : prev.dataset,
                     };
+                  });
+                }
+                // Wave E3 · Broadcast to peer tabs so they refetch this
+                // session's chat doc. Both hierarchy and priorInvestigations
+                // changes go through this single event — peer tabs need
+                // a refresh regardless.
+                if (hasPriors || hasHierarchies) {
+                  emitSessionBroadcast('hierarchies');
+                }
+              } else if (event === 'business_actions') {
+                // Server emits this after the post-verifier
+                // businessActionsAgent resolves with non-empty items.
+                // Arrives AFTER the response event.
+                //
+                // Wave C1 · Prefer EXACT messageTimestamp match (within
+                // ±2000ms tolerance) over the pre-C1 recency-only
+                // strategy. Pre-C1 we matched the "most recent
+                // assistant message" because client/server clocks
+                // diverge in the W38 streaming-narrator path. That was
+                // FINE while the user only had one turn in flight, but
+                // broke when the user regenerated mid-stream OR fired
+                // a fresh turn before the prior turn's BAI promise
+                // resolved (the 12-second post-verifier timeout window
+                // is large). In those cases the items attached to the
+                // wrong message. Now: exact match first, recency as
+                // fallback only.
+                const payload = data as {
+                  messageTimestamp?: number;
+                  items?: Array<{
+                    title: string;
+                    rationale: string;
+                    horizon: 'now' | 'this_quarter' | 'strategic';
+                    confidence: 'low' | 'medium' | 'high';
+                    dependencies?: string;
+                    expectedImpact?: string;
+                  }>;
+                };
+                const items = Array.isArray(payload.items) ? payload.items : [];
+                const serverTs = typeof payload.messageTimestamp === 'number'
+                  ? payload.messageTimestamp
+                  : null;
+                if (items.length > 0) {
+                  setMessages((prev) => {
+                    const targetIdx = findBusinessActionsTargetIndex(prev, serverTs);
+                    if (targetIdx === -1) return prev;
+                    const next = [...prev];
+                    next[targetIdx] = {
+                      ...next[targetIdx],
+                      businessActions: items,
+                    };
+                    return next;
                   });
                 }
               } else if (event === 'answer_chunk') {
@@ -880,6 +1045,8 @@ export const useHomeMutations = ({
               }
             },
             onIntermediate: (payload: StreamIntermediatePayload) => {
+              // Wave C2 · bail if unmounted (mid-stream tail callbacks).
+              if (!isMountedRef.current) return;
               hadIntermediateSegmentsRef.current = true;
               setThinkingLiveAnchorTimestamp(payload.assistantTimestamp);
               turnTraceRef.current = { steps: [], workbench: [] };
@@ -899,10 +1066,18 @@ export const useHomeMutations = ({
                     steps: payload.thinkingSteps ?? [],
                     workbench: payload.workbench ?? [],
                   },
-                },
+                  // PVT5 · ride the unavailable flag onto the intermediate
+                  // assistant row so DataPreviewTable renders the elegant
+                  // fallback in the Pivot tab.
+                  ...((payload as { pivotUnavailable?: boolean }).pivotUnavailable
+                    ? { pivotUnavailable: true }
+                    : {}),
+                } as Message,
               ]);
             },
             onResponse: (response: ChatResponse) => {
+              // Wave C2 · bail if unmounted.
+              if (!isMountedRef.current) return;
               logger.log('✅ API response received:', response);
               responseData = response;
               if (pendingCharts !== undefined && responseData) {
@@ -953,8 +1128,67 @@ export const useHomeMutations = ({
                       pivotDefaults:
                         (response as Message & { pivotDefaults?: Message['pivotDefaults'] })
                           .pivotDefaults,
+                      // PVT5 · ride the unavailable flag onto the assistant
+                      // message so DataPreviewTable renders the elegant
+                      // fallback when the agent ran an analytical step but
+                      // pivot defaults failed the safety contract.
+                      ...((response as { pivotUnavailable?: boolean }).pivotUnavailable
+                        ? { pivotUnavailable: true }
+                        : {}),
                       thinkingBefore: (response as Message & { thinkingBefore?: Message['thinkingBefore'] })
                         .thinkingBefore,
+                      // Forward the structured answerEnvelope so AnswerCard
+                      // renders the TL;DR / findings / implications /
+                      // recommendations / domainLens block on the active turn
+                      // (not just on session refresh).
+                      ...((response as { answerEnvelope?: Message['answerEnvelope'] }).answerEnvelope
+                        ? {
+                            answerEnvelope: (
+                              response as { answerEnvelope: Message['answerEnvelope'] }
+                            ).answerEnvelope,
+                          }
+                        : {}),
+                      // BAI1 · top-level businessActions when the chatResponse
+                      // shipped them inline (rare today — the field is
+                      // typically populated via the separate `business_actions`
+                      // SSE event after the response, but the schema allows it
+                      // and we forward it for forward-compatibility).
+                      ...((response as { businessActions?: Message['businessActions'] }).businessActions
+                        ? {
+                            businessActions: (
+                              response as { businessActions: Message['businessActions'] }
+                            ).businessActions,
+                          }
+                        : {}),
+                      // AMR5 · cross-session recall provenance + rich payload.
+                      // Set on a cache-hit response; absent on fresh turns.
+                      // Drives the "Recalled from prior analysis" chip in
+                      // MessageBubble and tells DataPreviewTable to mount the
+                      // rehydrated pivot directly (inline rows) or fetch the
+                      // offloaded artifact on demand (AMR6).
+                      ...((response as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+                        .recalledFromPriorAnalysis
+                        ? {
+                            recalledFromPriorAnalysis: (
+                              response as { recalledFromPriorAnalysis: Message['recalledFromPriorAnalysis'] }
+                            ).recalledFromPriorAnalysis,
+                          }
+                        : {}),
+                      ...((response as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts
+                        ? {
+                            pivotArtifacts: (
+                              response as { pivotArtifacts: Message['pivotArtifacts'] }
+                            ).pivotArtifacts,
+                          }
+                        : {}),
+                      ...((response as { investigationSummary?: Message['investigationSummary'] })
+                        .investigationSummary
+                        ? {
+                            investigationSummary: (
+                              response as { investigationSummary: Message['investigationSummary'] }
+                            ).investigationSummary,
+                          }
+                        : {}),
                       ...(response.followUpPrompts?.length
                         ? { followUpPrompts: response.followUpPrompts }
                         : {}),
@@ -1086,6 +1320,50 @@ export const useHomeMutations = ({
         summary: (data as any).summary,
         pivotDefaults: (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
         thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+        // Forward the structured answerEnvelope so AnswerCard renders on the
+        // active turn. Without this, message.answerEnvelope is undefined and
+        // MessageBubble falls back to the markdown-only block.
+        ...((data as { answerEnvelope?: Message['answerEnvelope'] }).answerEnvelope
+          ? {
+              answerEnvelope: (
+                data as { answerEnvelope: Message['answerEnvelope'] }
+              ).answerEnvelope,
+            }
+          : {}),
+        // Top-level businessActions if shipped inline. The standard path is
+        // the separate `business_actions` SSE event that fires AFTER the
+        // response — but if the server ever pre-populates it, surface it.
+        ...((data as { businessActions?: Message['businessActions'] }).businessActions
+          ? {
+              businessActions: (
+                data as { businessActions: Message['businessActions'] }
+              ).businessActions,
+            }
+          : {}),
+        // AMR5 · cross-session recall provenance + rich payload (cache hit).
+        ...((data as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+          .recalledFromPriorAnalysis
+          ? {
+              recalledFromPriorAnalysis: (
+                data as { recalledFromPriorAnalysis: Message['recalledFromPriorAnalysis'] }
+              ).recalledFromPriorAnalysis,
+            }
+          : {}),
+        ...((data as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts
+          ? {
+              pivotArtifacts: (
+                data as { pivotArtifacts: Message['pivotArtifacts'] }
+              ).pivotArtifacts,
+            }
+          : {}),
+        ...((data as { investigationSummary?: Message['investigationSummary'] })
+          .investigationSummary
+          ? {
+              investigationSummary: (
+                data as { investigationSummary: Message['investigationSummary'] }
+              ).investigationSummary,
+            }
+          : {}),
         ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
         ...(autoDashboardId ? { createdDashboardId: autoDashboardId } : {}),
       };
@@ -1117,6 +1395,18 @@ export const useHomeMutations = ({
           );
           if (aiIdx >= 0) {
             const next = [...prev];
+            const existingEnvelope = (
+              next[aiIdx] as { answerEnvelope?: Message['answerEnvelope'] }
+            ).answerEnvelope;
+            const incomingEnvelope = (
+              data as { answerEnvelope?: Message['answerEnvelope'] }
+            ).answerEnvelope;
+            const existingActions = (
+              next[aiIdx] as { businessActions?: Message['businessActions'] }
+            ).businessActions;
+            const incomingActions = (
+              data as { businessActions?: Message['businessActions'] }
+            ).businessActions;
             next[aiIdx] = {
               ...next[aiIdx],
               content: data.answer,
@@ -1128,6 +1418,56 @@ export const useHomeMutations = ({
                 (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
               agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
               thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+              // Prefer the freshly-arrived envelope from the response payload;
+              // keep the early-bubble envelope (if onResponse already attached
+              // one) as a fallback so a missing field on the final payload
+              // can never erase it.
+              ...(incomingEnvelope || existingEnvelope
+                ? { answerEnvelope: incomingEnvelope ?? existingEnvelope }
+                : {}),
+              // BAI1 · businessActions land via a dedicated `business_actions`
+              // SSE event AFTER the response; the SSE handler may have
+              // populated `next[aiIdx].businessActions` already. Only overwrite
+              // with the response payload if it actually carries them.
+              ...(incomingActions || existingActions
+                ? { businessActions: incomingActions ?? existingActions }
+                : {}),
+              // AMR5 · merge recall provenance + rich payload into the
+              // early-bubble updated path. Same incoming-OR-existing pattern
+              // so a missing field on the final response can never erase one
+              // already attached.
+              ...(((data as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+                .recalledFromPriorAnalysis ??
+                (next[aiIdx] as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+                  .recalledFromPriorAnalysis)
+                ? {
+                    recalledFromPriorAnalysis:
+                      (data as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+                        .recalledFromPriorAnalysis ??
+                      (next[aiIdx] as { recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'] })
+                        .recalledFromPriorAnalysis,
+                  }
+                : {}),
+              ...(((data as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts ??
+                (next[aiIdx] as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts)
+                ? {
+                    pivotArtifacts:
+                      (data as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts ??
+                      (next[aiIdx] as { pivotArtifacts?: Message['pivotArtifacts'] }).pivotArtifacts,
+                  }
+                : {}),
+              ...(((data as { investigationSummary?: Message['investigationSummary'] })
+                .investigationSummary ??
+                (next[aiIdx] as { investigationSummary?: Message['investigationSummary'] })
+                  .investigationSummary)
+                ? {
+                    investigationSummary:
+                      (data as { investigationSummary?: Message['investigationSummary'] })
+                        .investigationSummary ??
+                      (next[aiIdx] as { investigationSummary?: Message['investigationSummary'] })
+                        .investigationSummary,
+                  }
+                : {}),
               ...(data.followUpPrompts?.length ? { followUpPrompts: data.followUpPrompts } : {}),
               ...(autoDashboardId ? { createdDashboardId: autoDashboardId } : {}),
             };
@@ -1196,6 +1536,12 @@ export const useHomeMutations = ({
         setLocation(`/dashboard?open=${encodeURIComponent(autoDashboardId)}`);
       }
       autoCreatedDashboardRef.current = null;
+      // Wave E3 · Broadcast to peer tabs that this session got a new
+      // assistant message so they can refresh their history. Fires at
+      // the END of onSuccess so the broadcast carries the FULL turn
+      // state (including business actions, charts, pivot artifacts if
+      // present inline).
+      emitSessionBroadcast('messages');
     },
     onError: (error, variables) => {
       // Clear pending message ref

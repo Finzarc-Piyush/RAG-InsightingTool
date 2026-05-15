@@ -26,7 +26,284 @@ const aggOpSchema = z.enum([
   "max",
   "median",
   "percent_change",
+  // PCT1
+  "countIf",
+  "sumIf",
+  // Wave QL7 · count_distinct — first-class denominator for "average per X"
+  // rate questions. Emits `COUNT(DISTINCT col)` in DuckDB and a Set-based
+  // count in the in-memory executor. Pairs with `computedAggregations` on
+  // the plan body to express `SUM(metric) / COUNT(DISTINCT denom) AS ratio`
+  // as a single GROUP BY query (simpler than the nested perDimension shape).
+  "count_distinct",
 ]);
+
+// PCT1 · DimensionFilter shape — exported so countIf/sumIf predicates can reuse
+// it. CMP1 will extend the `op` enum with comparison operators (lt/lte/gt/gte/
+// eq/neq/between); both top-level dimensionFilters AND predicates pick up the
+// extension automatically because they share this schema.
+export const dimensionFilterSchema = z
+  .object({
+    column: z.string().min(1),
+    // CMP1 · scalar comparison + range ops alongside categorical in/not_in.
+    op: z.enum([
+      "in",
+      "not_in",
+      "eq",
+      "neq",
+      "lt",
+      "lte",
+      "gt",
+      "gte",
+      "between",
+    ]),
+    values: z.array(z.string()),
+    match: z.enum(["exact", "case_insensitive", "contains"]).optional(),
+  })
+  .superRefine((f, ctx) => {
+    if (f.op === "between") {
+      if (f.values.length !== 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "between requires exactly two values: [low, high]",
+          path: ["values"],
+        });
+      }
+    } else if (
+      f.op === "eq" ||
+      f.op === "neq" ||
+      f.op === "lt" ||
+      f.op === "lte" ||
+      f.op === "gt" ||
+      f.op === "gte"
+    ) {
+      if (f.values.length !== 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${f.op} requires exactly one value`,
+          path: ["values"],
+        });
+      }
+    } else if (f.values.length === 0) {
+      // in / not_in
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${f.op} requires at least one value`,
+        path: ["values"],
+      });
+    }
+  });
+
+const aggregationEntrySchema = z
+  .object({
+    column: z.string().min(1),
+    operation: aggOpSchema,
+    alias: z.string().optional(),
+    // PCT1 · predicate for countIf/sumIf. Ignored for other ops.
+    predicate: z.array(dimensionFilterSchema).optional(),
+    // PD1 · nested aggregation: bucket rows by `perDimension` and apply
+    // `innerOperation` within each bucket (default "sum"), then apply
+    // `operation` ACROSS the bucket totals. Closes the "average X per Y"
+    // semantic gap — single-pass mean of raw rows averages per-row values,
+    // which is wrong when each row is already a per-period aggregate.
+    perDimension: z.string().min(1).optional(),
+    innerOperation: aggOpSchema.optional(),
+  })
+  .superRefine((agg, ctx) => {
+    if (agg.operation === "countIf" || agg.operation === "sumIf") {
+      if (!agg.predicate || agg.predicate.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${agg.operation} requires a non-empty predicate`,
+          path: ["predicate"],
+        });
+      }
+    }
+    if (agg.perDimension !== undefined) {
+      // PD1 · percent_change across bucket totals isn't well-defined
+      // (which buckets do you compare?). Predicates apply to row-level
+      // filtering — use plan.dimensionFilters or innerOperation:"countIf"
+      // / "sumIf" if you need a conditional inside the bucket.
+      if (agg.operation === "percent_change") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "perDimension is incompatible with operation:percent_change",
+          path: ["operation"],
+        });
+      }
+      if (agg.predicate && agg.predicate.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "perDimension is incompatible with aggregation predicate (use plan.dimensionFilters for row-level filtering before bucketing)",
+          path: ["predicate"],
+        });
+      }
+      if (
+        agg.innerOperation === "countIf" ||
+        agg.innerOperation === "sumIf"
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "innerOperation must be a non-conditional aggregator (sum/mean/avg/count/min/max/median)",
+          path: ["innerOperation"],
+        });
+      }
+      if (agg.innerOperation === "percent_change") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "innerOperation:percent_change is not supported (apply percent_change at the outer level only)",
+          path: ["innerOperation"],
+        });
+      }
+    }
+  });
+
+// Wave QL7 · Post-aggregation computed columns. After the GROUP BY produces
+// the aggregation rows, wrap them in a SELECT that evaluates each
+// `{alias, expression}` against the aggregation aliases. Used to express
+// ratios like `SUM(metric) / COUNT(DISTINCT denom)` as a single plan
+// (simpler than the nested perDimension shape).
+//
+// `expression` is a restricted arithmetic mini-language — only `+ - * /
+// ( )`, numeric literals, and bare alias identifiers (no SQL functions,
+// no string operations, no subqueries). The executors validate the
+// expression character-set before emission to prevent SQL injection.
+export const computedAggregationSchema = z
+  .object({
+    alias: z.string().min(1).max(64),
+    expression: z.string().min(1).max(240),
+  })
+  .strict();
+
+export type ComputedAggregation = z.infer<typeof computedAggregationSchema>;
+
+const ALLOWED_EXPRESSION_CHARS_RE = /^[A-Za-z0-9_\s+\-*/().]+$/;
+
+/** Wave QL7 · Validate the restricted arithmetic mini-language for computed
+ *  aggregations. Returns the list of alias identifiers the expression references
+ *  so the planner can verify each one matches an aggregation alias. */
+export function parseComputedAggregationExpression(
+  expression: string
+): { ok: true; aliasesReferenced: string[] } | { ok: false; error: string } {
+  const trimmed = expression.trim();
+  if (!trimmed) return { ok: false, error: "expression is empty" };
+  if (!ALLOWED_EXPRESSION_CHARS_RE.test(trimmed)) {
+    return {
+      ok: false,
+      error:
+        "expression contains disallowed characters (only A-Z, a-z, 0-9, _, whitespace, + - * / ( ) allowed)",
+    };
+  }
+  // Strip numeric literals and operators; what remains are identifier candidates.
+  const identifiers = new Set<string>();
+  const tokens = trimmed.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  for (const t of tokens) {
+    // Reject suspiciously SQL-keyword-looking tokens.
+    if (/^(?:select|from|where|group|order|join|union|drop|insert|update|delete|exec|execute|case|when|then|else|end|null|true|false|and|or|not|is|in|like)$/i.test(t)) {
+      return { ok: false, error: `identifier '${t}' is not allowed (reserved)` };
+    }
+    identifiers.add(t);
+  }
+  return { ok: true, aliasesReferenced: [...identifiers] };
+}
+
+/**
+ * Wave W1 · Window-function aggregations.
+ *
+ * Expressed at the ROW level (not after GROUP BY). The executor runs
+ * BEFORE the optional GROUP BY pass — the window's output column is
+ * materialised onto every row, then the rest of the query (filters,
+ * GROUP BY, aggregations, sort, limit) sees it as if it were a regular
+ * source column. This is how rolling averages, cumulative sums, and
+ * rank-within-group get exposed without a Window-function escape hatch
+ * to `run_readonly_sql`.
+ *
+ * Supported operations (all map to DuckDB window functions):
+ *   - `sum` / `mean` / `min` / `max` / `count` — aggregate over a
+ *     `partitionBy` group, ordered by `orderBy`, with the `frame`
+ *     defining how many rows participate (default: full partition).
+ *   - `row_number` / `rank` / `dense_rank` — positional ranking; ignore
+ *     `column` and `frame`.
+ *   - `lag` / `lead` — value at the previous/next row in the partition;
+ *     uses `column`; `offset` defaults to 1.
+ *
+ * Frame shapes (only the two most-used ones — keeping the surface
+ * small enough for the planner LLM to emit reliably):
+ *   - `{ rows: N }` → ROWS BETWEEN N-1 PRECEDING AND CURRENT ROW
+ *     (rolling window: rolling 4-week avg ⇒ `rows: 4`).
+ *   - `{ range: "unbounded_preceding" }` → ROWS BETWEEN UNBOUNDED
+ *     PRECEDING AND CURRENT ROW (cumulative sum / running total).
+ *
+ * If `frame` is omitted, the window covers the entire partition
+ * (matches DuckDB's default for the windowed aggregates).
+ *
+ * Cap: 6 window aggregations per plan — tight to keep the planner
+ * prompt focused and the executor's per-row work bounded.
+ */
+export const windowAggregationSchema = z
+  .object({
+    alias: z.string().min(1).max(64),
+    operation: z.enum([
+      "sum",
+      "mean",
+      "min",
+      "max",
+      "count",
+      "row_number",
+      "rank",
+      "dense_rank",
+      "lag",
+      "lead",
+    ]),
+    /** Required for windowed aggregates + lag/lead; ignored for row_number/rank/dense_rank. */
+    column: z.string().min(1).max(200).optional(),
+    /** Empty = window spans the entire dataset (no partition). */
+    partitionBy: z.array(z.string().min(1).max(200)).max(4).optional(),
+    /** Required for every window function — defines row ordering within each partition. */
+    orderBy: z
+      .array(
+        z.object({
+          column: z.string().min(1).max(200),
+          direction: z.enum(["asc", "desc"]).optional(),
+        })
+      )
+      .min(1)
+      .max(4),
+    /** Default: full partition. Two supported shapes (see comment above). */
+    frame: z
+      .union([
+        z.object({ rows: z.number().int().positive().max(365) }),
+        z.object({ range: z.literal("unbounded_preceding") }),
+      ])
+      .optional(),
+    /** Offset for lag/lead (default 1). Ignored for other operations. */
+    offset: z.number().int().positive().max(50).optional(),
+  })
+  .strict()
+  .superRefine((w, ctx) => {
+    const NEEDS_COLUMN = new Set(["sum", "mean", "min", "max", "lag", "lead"]);
+    if (NEEDS_COLUMN.has(w.operation) && !w.column) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `windowAggregations[${w.alias}]: '${w.operation}' requires 'column'`,
+        path: ["column"],
+      });
+    }
+    // row_number / rank / dense_rank ignore `column` if supplied.
+    if (
+      ["row_number", "rank", "dense_rank"].includes(w.operation) &&
+      w.frame
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `windowAggregations[${w.alias}]: ranking operations don't use 'frame'`,
+        path: ["frame"],
+      });
+    }
+  });
+export type WindowAggregation = z.infer<typeof windowAggregationSchema>;
 
 export const queryPlanBodySchema = z
   .object({
@@ -35,27 +312,18 @@ export const queryPlanBodySchema = z
       .enum(["day", "week", "half_year", "month", "monthOnly", "quarter", "year"])
       .nullable()
       .optional(),
-    aggregations: z
-      .array(
-        z.object({
-          column: z.string().min(1),
-          operation: aggOpSchema,
-          alias: z.string().optional(),
-        })
-      )
+    aggregations: z.array(aggregationEntrySchema).optional(),
+    // Wave QL7 · Optional post-aggregation computed columns. Evaluated AFTER
+    // the GROUP BY against the aggregation aliases. Up to 8 per plan.
+    computedAggregations: z
+      .array(computedAggregationSchema)
+      .max(8)
       .optional(),
-    dimensionFilters: z
-      .array(
-        z.object({
-          column: z.string().min(1),
-          op: z.enum(["in", "not_in"]),
-          values: z.array(z.string()),
-          match: z
-            .enum(["exact", "case_insensitive", "contains"])
-            .optional(),
-        })
-      )
-      .optional(),
+    // Wave W1 · Optional window-function aggregations. Evaluated at the
+    // ROW level BEFORE GROUP BY so the output alias columns can be
+    // referenced downstream (filters, aggregations, sort).
+    windowAggregations: z.array(windowAggregationSchema).max(6).optional(),
+    dimensionFilters: z.array(dimensionFilterSchema).optional(),
     limit: z.number().int().positive().max(50_000).optional(),
     sort: z
       .array(
@@ -93,6 +361,18 @@ export function normalizeLegacyTemporalFacetKeysInPlan(
       ...a,
       column: norm(a.column),
       ...(a.alias !== undefined ? { alias: norm(a.alias) } : {}),
+      // PCT1 · remap predicate filter columns the same way top-level
+      // dimensionFilters get remapped, so countIf/sumIf predicates pick up
+      // the same display-facet → physical column rewrites.
+      ...(a.predicate?.length
+        ? { predicate: a.predicate.map((f) => ({ ...f, column: norm(f.column) })) }
+        : {}),
+      // PD1 · perDimension is a column reference (often a temporal facet
+      // like "Day · Order Date"); normalize legacy `__tf_day__Order_Date`
+      // → display facet just like groupBy entries.
+      ...(a.perDimension !== undefined
+        ? { perDimension: norm(a.perDimension) }
+        : {}),
     }));
   }
   if (plan.dimensionFilters?.length) {
@@ -249,8 +529,17 @@ function assertPlanColumnsAllowed(
     if (e) return e;
   }
   for (const a of plan.aggregations ?? []) {
-    const e = check(a.column);
-    if (e) return e;
+    // PCT1 · countIf has no meaningful column (counts predicate-matching rows);
+    // tolerate any non-empty placeholder so the planner doesn't have to invent
+    // a real column name when emitting countIf with `column: "*"`.
+    if (a.operation !== "countIf") {
+      const e = check(a.column);
+      if (e) return e;
+    }
+    for (const f of a.predicate ?? []) {
+      const e = check(f.column);
+      if (e) return e;
+    }
   }
   for (const d of plan.dimensionFilters ?? []) {
     const e = check(d.column);
@@ -308,16 +597,36 @@ export function normalizeAndValidateQueryPlanBody(
   }
 
   const hasAggregations = (normalizedPlan.aggregations?.length ?? 0) > 0;
+  const hasWindowAggregations =
+    Array.isArray((normalizedPlan as QueryPlanBody).windowAggregations) &&
+    ((normalizedPlan as QueryPlanBody).windowAggregations?.length ?? 0) > 0;
   if (
     !hasAggregations &&
     (normalizedPlan.dimensionFilters?.length ?? 0) === 0 &&
-    !normalizedPlan.limit
+    !normalizedPlan.limit &&
+    !hasWindowAggregations
   ) {
     return {
       ok: false,
       error:
         "Plan must include aggregations, and/or dimensionFilters, and/or limit — avoid full-table scans with no structure.",
     };
+  }
+
+  // PD2 · The in-memory executor's applyQueryTransformations path predates
+  // PD1 and doesn't understand `perDimension` (nested aggregation). Rather
+  // than silently compute the wrong number (treating perDimension as a
+  // no-op), fail closed. Production always has DuckDB (`isDuckDBAvailable()`
+  // === true), so this only fires in test/edge environments and protects
+  // the user from incorrect math.
+  for (const a of normalizedPlan.aggregations ?? []) {
+    if (a.perDimension) {
+      return {
+        ok: false,
+        error:
+          "perDimension (nested aggregation) requires DuckDB; the in-memory executor cannot run this plan.",
+      };
+    }
   }
 
   return { ok: true, normalizedPlan };
@@ -338,14 +647,273 @@ export function executeQueryPlan(
   }
   const { normalizedPlan } = v;
 
+  // Wave W1 · Apply window aggregations BEFORE the rest of the plan so
+  // the output alias columns become first-class source columns for
+  // filters, GROUP BY, and downstream aggregations. The DuckDB executor
+  // does this via a CTE wrapper; the in-memory path materialises the
+  // alias columns onto every row.
+  const windowAggs = (normalizedPlan as QueryPlanBody).windowAggregations;
+  let rowsForExec = data;
+  if (Array.isArray(windowAggs) && windowAggs.length > 0) {
+    const winResult = applyWindowAggregationsInMemory(data, windowAggs);
+    if (!winResult.ok) {
+      return { ok: false, error: winResult.error };
+    }
+    rowsForExec = winResult.rows;
+  }
+
   const parsed = queryPlanToParsedQuery(normalizedPlan);
   const { data: out, descriptions } = applyQueryTransformations(
-    data,
+    rowsForExec,
     summary,
     parsed
   );
 
-  return { ok: true, data: out, descriptions, parsed };
+  // Wave QL7 · Post-aggregation computed columns. Evaluated against the
+  // aggregation aliases after GROUP BY. Same semantics as the DuckDB
+  // wrapping SELECT — see queryPlanDuckdbExecutor.ts.
+  const computed = (normalizedPlan as QueryPlanBody).computedAggregations;
+  let finalRows = out;
+  if (Array.isArray(computed) && computed.length > 0) {
+    const evalResult = applyComputedAggregationsInMemory(out, computed);
+    if (!evalResult.ok) {
+      return { ok: false, error: evalResult.error };
+    }
+    finalRows = evalResult.rows;
+  }
+
+  return { ok: true, data: finalRows, descriptions, parsed };
+}
+
+/**
+ * Wave QL7 · Evaluate `computedAggregations` against the aggregated rows.
+ * For each row, the computed alias columns are appended via a restricted
+ * arithmetic expression over the existing column names. Errors out on
+ * unknown identifier or invalid expression syntax — never silently swallows.
+ *
+ * Mirrors the DuckDB-side wrapping SELECT so in-memory + SQL paths produce
+ * the same result. Production aggregations hit DuckDB; this is the fallback
+ * for chart-enrichment and small-dataset paths.
+ */
+function applyComputedAggregationsInMemory(
+  rows: Record<string, any>[],
+  computed: ReadonlyArray<ComputedAggregation>
+):
+  | { ok: true; rows: Record<string, any>[] }
+  | { ok: false; error: string } {
+  if (rows.length === 0) return { ok: true, rows };
+  const knownAliases = new Set(Object.keys(rows[0] ?? {}));
+  // Validate every expression first so we don't half-mutate.
+  for (const c of computed) {
+    const parsed = parseComputedAggregationExpression(c.expression);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        error: `computedAggregations[${c.alias}]: ${parsed.error}`,
+      };
+    }
+    for (const id of parsed.aliasesReferenced) {
+      if (!knownAliases.has(id)) {
+        return {
+          ok: false,
+          error: `computedAggregations[${c.alias}]: identifier '${id}' is not an existing aggregation alias`,
+        };
+      }
+    }
+  }
+  const out: Record<string, any>[] = [];
+  for (const row of rows) {
+    const next: Record<string, any> = { ...row };
+    for (const c of computed) {
+      try {
+        // Restricted arithmetic — the expression character-set check above
+        // already rejects anything outside [A-Za-z0-9_+\-*/(). ]. Substitute
+        // bare identifiers with their numeric values from the row, then
+        // evaluate via Function constructor. (Function over eval — no
+        // closure access; the substituted expression is pure arithmetic.)
+        const subbed = c.expression.replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g, (id) => {
+          const v = Number(next[id]);
+          return Number.isFinite(v) ? `(${v})` : "(null)";
+        });
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(`return (${subbed});`);
+        const val = fn();
+        next[c.alias] = typeof val === "number" && Number.isFinite(val) ? val : null;
+      } catch {
+        next[c.alias] = null;
+      }
+    }
+    out.push(next);
+  }
+  return { ok: true, rows: out };
+}
+
+/**
+ * Wave W1 · Apply windowAggregations to row-level data BEFORE any
+ * GROUP BY / aggregation pass. The output alias columns are materialised
+ * onto every row so downstream filters / aggregations / sort can
+ * reference them as normal source columns.
+ *
+ * Algorithm:
+ *   1. Validate operations + frames; reject unknown identifiers up front
+ *      so partial mutations never escape.
+ *   2. For each window aggregation: partition rows by `partitionBy`,
+ *      sort each partition by `orderBy`, then walk each partition
+ *      computing the window value for each row (frame-aware).
+ *   3. Materialise alias columns onto a NEW rows array (never mutate
+ *      input). The input array can contain thousands of rows but each
+ *      window pass is O(N log N) for the sort + O(N · frameSize) for
+ *      the walk.
+ *
+ * Conservative cap: input ≤ 100k rows. Above that, callers fall back
+ * to the DuckDB executor where SQL window functions are O(N log N)
+ * with hardware-native sort and constant memory.
+ */
+function applyWindowAggregationsInMemory(
+  rows: Record<string, any>[],
+  windows: ReadonlyArray<WindowAggregation>
+):
+  | { ok: true; rows: Record<string, any>[] }
+  | { ok: false; error: string } {
+  if (rows.length === 0) return { ok: true, rows: [] };
+  if (rows.length > 100_000) {
+    return {
+      ok: false,
+      error: `windowAggregations: input row count (${rows.length}) exceeds 100k cap for the in-memory path; route through DuckDB executor instead.`,
+    };
+  }
+
+  const out: Record<string, any>[] = rows.map((r) => ({ ...r }));
+
+  for (const w of windows) {
+    // Build partition key for each row.
+    const partitionKey = (row: Record<string, any>): string =>
+      (w.partitionBy ?? [])
+        .map((c) => String(row[c] ?? "__NULL__"))
+        .join("\x1f");
+    const partitions = new Map<string, number[]>();
+    for (let i = 0; i < out.length; i++) {
+      const k = partitionKey(out[i]!);
+      if (!partitions.has(k)) partitions.set(k, []);
+      partitions.get(k)!.push(i);
+    }
+
+    // Sort each partition by orderBy.
+    const orderBy = w.orderBy;
+    for (const indices of partitions.values()) {
+      indices.sort((a, b) => {
+        for (const ob of orderBy) {
+          const av = out[a]![ob.column];
+          const bv = out[b]![ob.column];
+          // Null-last for asc, null-first for desc — mirrors SQL default.
+          if (av == null && bv == null) continue;
+          if (av == null) return ob.direction === "desc" ? -1 : 1;
+          if (bv == null) return ob.direction === "desc" ? 1 : -1;
+          if (typeof av === "number" && typeof bv === "number") {
+            if (av !== bv) return ob.direction === "desc" ? bv - av : av - bv;
+            continue;
+          }
+          const as = String(av);
+          const bs = String(bv);
+          if (as !== bs) {
+            const cmp = as.localeCompare(bs, undefined, { numeric: true });
+            return ob.direction === "desc" ? -cmp : cmp;
+          }
+        }
+        return 0;
+      });
+    }
+
+    // Compute the window value per row.
+    const isRanking =
+      w.operation === "row_number" ||
+      w.operation === "rank" ||
+      w.operation === "dense_rank";
+    const isLagLead = w.operation === "lag" || w.operation === "lead";
+    const offset = w.offset ?? 1;
+
+    for (const indices of partitions.values()) {
+      if (isRanking) {
+        // row_number: 1..N strictly. rank: ties get the same rank, gaps after.
+        // dense_rank: ties get the same rank, no gaps after.
+        let prevKey: string | null = null;
+        let assigned = 0;
+        let nextRank = 1;
+        for (let pos = 0; pos < indices.length; pos++) {
+          const idx = indices[pos]!;
+          const key = orderBy
+            .map((ob) => String(out[idx]![ob.column] ?? "__NULL__"))
+            .join("\x1f");
+          if (w.operation === "row_number") {
+            out[idx]![w.alias] = pos + 1;
+          } else if (w.operation === "rank") {
+            if (key !== prevKey) nextRank = pos + 1;
+            out[idx]![w.alias] = nextRank;
+            prevKey = key;
+          } else {
+            // dense_rank
+            if (key !== prevKey) assigned += 1;
+            out[idx]![w.alias] = Math.max(1, assigned);
+            prevKey = key;
+          }
+        }
+        continue;
+      }
+
+      if (isLagLead) {
+        const col = w.column!;
+        for (let pos = 0; pos < indices.length; pos++) {
+          const targetPos = w.operation === "lag" ? pos - offset : pos + offset;
+          const idx = indices[pos]!;
+          out[idx]![w.alias] =
+            targetPos >= 0 && targetPos < indices.length
+              ? out[indices[targetPos]!]![col] ?? null
+              : null;
+        }
+        continue;
+      }
+
+      // Windowed aggregate (sum/mean/min/max/count).
+      const col = w.column!;
+      const frameRows = w.frame && "rows" in w.frame ? w.frame.rows : undefined;
+      const unbounded =
+        w.frame && "range" in w.frame && w.frame.range === "unbounded_preceding";
+      for (let pos = 0; pos < indices.length; pos++) {
+        const idx = indices[pos]!;
+        let startPos = 0;
+        const endPos = pos; // inclusive
+        if (frameRows !== undefined) {
+          startPos = Math.max(0, pos - (frameRows - 1));
+        } else if (unbounded) {
+          startPos = 0;
+        } else {
+          // No frame → entire partition.
+          startPos = 0;
+        }
+        const slice: number[] = [];
+        for (let j = startPos; j <= endPos; j++) {
+          const v = Number(out[indices[j]!]![col]);
+          if (Number.isFinite(v)) slice.push(v);
+        }
+        let value: number | null = null;
+        if (slice.length === 0 && w.operation !== "count") {
+          value = null;
+        } else if (w.operation === "sum") {
+          value = slice.reduce((a, b) => a + b, 0);
+        } else if (w.operation === "mean") {
+          value = slice.reduce((a, b) => a + b, 0) / slice.length;
+        } else if (w.operation === "min") {
+          value = Math.min(...slice);
+        } else if (w.operation === "max") {
+          value = Math.max(...slice);
+        } else if (w.operation === "count") {
+          value = slice.length;
+        }
+        out[idx]![w.alias] = value;
+      }
+    }
+  }
+  return { ok: true, rows: out };
 }
 
 /** Upper bounds for group count when calendar bucketing is expected to collapse rows. */

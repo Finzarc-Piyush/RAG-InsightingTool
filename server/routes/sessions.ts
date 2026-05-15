@@ -15,6 +15,7 @@ import {
   postChartPreviewEndpoint,
   postChartKeyInsightEndpoint,
   putSessionHierarchiesEndpoint,
+  putSessionSchemaAnnotationsEndpoint,
 } from "../controllers/sessionController.js";
 import {
   getMemoryEntriesEndpoint,
@@ -77,6 +78,14 @@ router.patch('/sessions/:sessionId/context', updateSessionContextEndpoint);
 // EU1 · Replace the dimensionHierarchies array on a session.
 // Body: { hierarchies: DimensionHierarchy[] }. Returns the new array.
 router.put('/sessions/:sessionId/hierarchies', putSessionHierarchiesEndpoint);
+
+// SU-UX1 · Replace dataSummary schema annotations (date×time pairs +
+// per-column indicator metadata). Body: { dateTimeColumnPairs?, indicators? }.
+// Either field is optional; clients patch independently. Empty arrays clear.
+router.put(
+  '/sessions/:sessionId/schema-annotations',
+  putSessionSchemaAnnotationsEndpoint,
+);
 
 // W-PivotState · update one assistant message's pivot/chart UI state. Body:
 // `{ pivotState: PivotState | null }`. The `messageTimestamp` path param is the

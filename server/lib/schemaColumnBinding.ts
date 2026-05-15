@@ -50,7 +50,30 @@ export async function bindSchemaColumnsForAgentic(
     .map((msg) => `${msg.role}: ${msg.content}`)
     .join("\n");
 
-  const columnsInfo = summary.columns.map((c) => `${c.name} [${c.type}]`).join(", ");
+  // SU-IC3 · annotate indicator columns inline so the binding LLM can
+  // prefer pre-computed answer columns by *meaning*, not just by name
+  // token overlap. Format: `Name [type] [INDICATOR — answers: "...", "..."]`
+  // when the column is tagged. Adds nothing to the prompt for non-indicators.
+  const columnsInfo = summary.columns
+    .map((c) => {
+      const base = `${c.name} [${c.type}]`;
+      if (!c.indicator) return base;
+      const polarity =
+        c.indicator.kind === "boolean"
+          ? `${(c.indicator.positiveValues ?? ["Yes"]).join("/")}|${(
+              c.indicator.negativeValues ?? ["No"]
+            ).join("/")}`
+          : "categorical";
+      const answersHint =
+        c.answersQuestions?.length
+          ? ` — answers: ${c.answersQuestions
+              .slice(0, 2)
+              .map((q) => `"${q}"`)
+              .join(", ")}`
+          : "";
+      return `${base} [INDICATOR ${polarity}${answersHint}]`;
+    })
+    .join(", ");
   const numericColumns = summary.numericColumns.join(", ") || "None";
   const dateColumns = summary.dateColumns.join(", ") || "None";
   const categoricalColumns =
@@ -90,6 +113,7 @@ COLUMN MATCHING RULES:
 - Match synonyms: revenue, sales, amount, value → the appropriate numeric column
 - Match related terms: "category", "categories", "product type" → the categorical dimension column
 - Be case-insensitive; prefer the column whose name best matches the question
+- INDICATOR-COLUMN PREFERENCE: when the question matches the meaning of an [INDICATOR] column (its "answers:" phrasings or a paraphrase), pick that indicator column instead of deriving the answer from a raw column. E.g. "what % of staff clocked in before 9:30?" → prefer a "Clock-In <09:30" [INDICATOR Yes|No] column over the raw "Clock-In Time" column.
 
 OUTPUT FORMAT (JSON only):
 {

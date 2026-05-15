@@ -1,27 +1,26 @@
 /**
- * Admin allow-list. Reads `ADMIN_EMAILS` env (comma-separated, case-insensitive)
- * and returns true when the supplied email matches any entry. Centralised here
- * so admin-gated routes (W6.4) all use the same source of truth.
+ * Admin allow-list. Wave AD2 · consolidated to delegate to the hardcoded
+ * superadmin allowlist in `server/lib/superadmin.ts` so /admin/costs,
+ * /admin/context-packs, and the new /admin/dashboard surface (Wave AD6+)
+ * all share one source of truth.
+ *
+ * Pre-AD2 this was env-driven via the `ADMIN_EMAILS` env var. That env is
+ * no longer consulted — production access is hardcoded to a single email
+ * per user requirement. Tests that previously toggled `process.env.ADMIN_EMAILS`
+ * should call `__setSuperadminEmailsForTesting` from `server/lib/superadmin.ts`
+ * instead.
  */
 
 import type { Request } from "express";
-import { getAuthenticatedEmail } from "./auth.helper.js";
-
-function adminSet(): Set<string> {
-  const raw = process.env.ADMIN_EMAILS || "";
-  return new Set(
-    raw
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean)
-  );
-}
+import {
+  isSuperadminEmail,
+  isSuperadminRequest,
+} from "../lib/superadmin.js";
 
 export function isAdminEmail(email: string | undefined): boolean {
-  if (!email) return false;
-  return adminSet().has(email.toLowerCase());
+  return isSuperadminEmail(email);
 }
 
 export function isAdminRequest(req: Request): boolean {
-  return isAdminEmail(getAuthenticatedEmail(req));
+  return isSuperadminRequest(req);
 }

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/use-toast';
 import { sessionsApi } from '@/lib/api';
 import { getUserEmail } from '@/utils/userStorage';
-import { Session } from '../types';
+import { Session, SessionsResponse } from '../types';
 
 interface UseSessionManagementProps {
   onLoadSession?: (sessionId: string, sessionData: any) => void;
@@ -125,21 +125,42 @@ export const useSessionManagement = ({
     if (!sessionToEdit || !editFileName.trim()) return;
 
     setIsUpdating(true);
+    const newName = editFileName.trim();
+    const targetId = sessionToEdit.sessionId;
+    const queryKey = ['sessions', userEmail] as const;
+
+    // Optimistic cache write so the new name lands immediately in every
+    // surface keyed off ['sessions', userEmail] (Analysis page list AND the
+    // sidebar in Layout.tsx). The pre-fix path only invalidated, so the
+    // user saw a stale label until the refetch resolved.
+    const previous = queryClient.getQueryData<SessionsResponse>(queryKey);
+    queryClient.setQueryData<SessionsResponse>(queryKey, (old) =>
+      old
+        ? {
+            ...old,
+            sessions: old.sessions.map((s) =>
+              s.sessionId === targetId ? { ...s, fileName: newName } : s,
+            ),
+          }
+        : old,
+    );
+
     try {
-      await sessionsApi.updateSessionName(sessionToEdit.sessionId, editFileName.trim());
+      await sessionsApi.updateSessionName(targetId, newName);
 
       toast({
         title: 'Analysis Name Updated',
-        description: `Analysis name has been updated to "${editFileName.trim()}".`,
+        description: `Analysis name has been updated to "${newName}".`,
       });
 
-      queryClient.invalidateQueries({ queryKey: ['sessions', userEmail] });
+      queryClient.invalidateQueries({ queryKey });
       refetch();
 
       setEditDialogOpen(false);
       setSessionToEdit(null);
       setEditFileName('');
     } catch (error) {
+      if (previous) queryClient.setQueryData(queryKey, previous);
       console.error('❌ Failed to update session name:', error);
       toast({
         title: 'Error Updating Name',

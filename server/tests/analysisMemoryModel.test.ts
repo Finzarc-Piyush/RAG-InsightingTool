@@ -118,10 +118,11 @@ describe("analysisMemoryEntrySchema", () => {
     }
   });
 
-  it("entry-type enum is exhaustive (W56 / W65 design)", () => {
+  it("entry-type enum is exhaustive (W56 / W65 / AMR1 design)", () => {
     const all = [...analysisMemoryEntryTypeSchema.options].sort();
     assert.deepStrictEqual(all, [
       "analysis_created",
+      "answer_summary",
       "chart_created",
       "computed_column_added",
       "conclusion",
@@ -133,6 +134,7 @@ describe("analysisMemoryEntrySchema", () => {
       "filter_applied",
       "finding",
       "hypothesis",
+      "pivot_computed",
       "question_asked",
       "user_note",
     ]);

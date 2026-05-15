@@ -14,10 +14,12 @@
 import { useEffect, useMemo } from "react";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { useSuperadmin } from "@/auth/useSuperadmin";
 import { API_BASE_URL } from "@/lib/config";
 import { getAuthorizationHeader } from "@/auth/msalToken";
 import { getUserEmail } from "@/utils/userStorage";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { FeedbackButtons } from "@/pages/Home/Components/FeedbackButtons";
@@ -78,6 +80,28 @@ export default function SuperadminSessionViewer() {
     <div className="min-h-screen flex flex-col">
       <ShadowBanner ownerEmail={data?.username ?? null} />
       <div className="container mx-auto py-4 px-4 sm:px-6 max-w-4xl flex-1">
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setLocation("/superadmin/sessions")}
+            className="gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden />
+            Back to sessions
+          </Button>
+          <span className="text-xs text-muted-foreground" aria-hidden>
+            ·
+          </span>
+          <button
+            type="button"
+            onClick={() => setLocation("/superadmin")}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Admin overview
+          </button>
+        </div>
         <div className="mb-4 text-xs text-muted-foreground">
           Dataset:{" "}
           <span className="text-foreground font-medium">

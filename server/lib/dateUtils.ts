@@ -395,6 +395,97 @@ export function detectPeriodFromQuery(query: string): DatePeriod | null {
   return null;
 }
 
+// ─── TOD1 · Time-of-day detection ────────────────────────────────────────────
+//
+// "Clock-In Time" style columns whose values are HH:MM:SS / HH:MM strings
+// (no calendar date). The existing parseFlexibleDate has no time-only path,
+// so without this helper such columns trip isDateColumnName ("\btime\b") and
+// get tagged as `date`, causing two failures: (a) DuckDB stores VARCHAR while
+// DataSummary advertises `date` (silent shape mismatch), (b) dirtyDateEnrichment
+// would invent a fake calendar anchor (e.g. 2024-01-01T09:45:34) if it ran on
+// these columns. Detecting them as `text + timeOfDay:true` short-circuits
+// both and lets the planner reason about HH:MM:SS comparisons via CMP1.
+
+const TIME_OF_DAY_REGEX = /^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+
+const DEFAULT_TIME_OF_DAY_SENTINELS = new Set<string>([
+  "absent",
+  "n/a",
+  "na",
+  "-",
+  "--",
+  "",
+  "null",
+  "none",
+]);
+
+/** True iff `value` is a plain HH:MM or HH:MM:SS string (24-hour, no AM/PM). */
+export function isTimeOfDayValue(value: string): boolean {
+  if (typeof value !== "string") return false;
+  return TIME_OF_DAY_REGEX.test(value.trim());
+}
+
+const TIME_COLUMN_NAME_HINT =
+  /\b(time|clock|hour|in[ _-]?at|out[ _-]?at|start|end|punch)\b/i;
+
+export interface TimeOfDayClassification {
+  isTimeOfDay: boolean;
+  sentinelValues: string[];
+}
+
+/**
+ * Heuristic classifier for time-of-day columns.
+ *
+ * Returns isTimeOfDay=true when ≥85% of non-sentinel non-empty samples match
+ * HH:MM(:SS) AND the column name carries a time hint, OR when the sample
+ * share is ≥95% (high enough to override the name check). Rejects when too
+ * few non-sentinel samples (< 5) — not enough signal to commit.
+ *
+ * `sentinelValues` is the subset of provided sample strings that look like
+ * non-time placeholders ("Absent", "N/A", etc.) so the prompt block can
+ * surface them and the planner can exclude them with `dimensionFilters`.
+ */
+export function classifyAsTimeOfDay(
+  columnName: string,
+  samples: ReadonlyArray<unknown>,
+  extraSentinels: ReadonlyArray<string> = []
+): TimeOfDayClassification {
+  const sentinelSet = new Set([
+    ...DEFAULT_TIME_OF_DAY_SENTINELS,
+    ...extraSentinels.map((s) => s.trim().toLowerCase()),
+  ]);
+  const sentinelHits = new Set<string>();
+  let timeMatches = 0;
+  let nonSentinel = 0;
+
+  for (const raw of samples) {
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (s.length === 0) continue;
+    const lower = s.toLowerCase();
+    if (sentinelSet.has(lower)) {
+      sentinelHits.add(s);
+      continue;
+    }
+    nonSentinel++;
+    if (isTimeOfDayValue(s)) timeMatches++;
+  }
+
+  if (nonSentinel < 5) {
+    return { isTimeOfDay: false, sentinelValues: [] };
+  }
+  const share = timeMatches / nonSentinel;
+  const nameHinted = TIME_COLUMN_NAME_HINT.test(columnName);
+  const passes = (share >= 0.85 && nameHinted) || share >= 0.95;
+  if (!passes) {
+    return { isTimeOfDay: false, sentinelValues: [] };
+  }
+  return {
+    isTimeOfDay: true,
+    sentinelValues: Array.from(sentinelHits).sort(),
+  };
+}
+
 /** Conservative date-like column name detection. */
 export function isDateColumnName(columnName: string): boolean {
   const n = columnName.trim().toLowerCase().replace(/[_-]+/g, ' ');

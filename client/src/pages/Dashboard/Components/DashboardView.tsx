@@ -1,14 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DashboardData } from '../modules/useDashboardState';
 import { useToast } from '@/hooks/use-toast';
-import * as htmlToImage from 'html-to-image';
-import PptxGenJS from 'pptxgenjs';
+// W-EXP-12 · The client html-to-image + pptxgenjs imports were the engine
+// of the rastered-screenshot deck path. They're gone — the server now does
+// agentic deck composition (W-EXP-7) and ships a consultant-grade PPTX
+// with native editable charts + tables.
 import { DashboardSection, DashboardTile } from '../types';
 import type { Layouts } from 'react-grid-layout';
 import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
 import { DashboardTiles } from './DashboardTiles';
-import { CapturedFilterBanner } from './CapturedFilterBanner';
+// DPF4 · the analytical content lived above the canvas pre-DR2 via
+// `AnalysisSummaryPanel`. DR2 moved it to a right-side drawer triggered
+// from the header so the canvas leads the page on first paint.
+import { DashboardSummaryDrawer, hasAnySummaryContent } from './DashboardSummaryDrawer';
+import { DashboardSheetTabs } from './DashboardSheetTabs';
+import { DashboardGlobalFilterBar } from './DashboardGlobalFilterBar';
+import { AddTileMenu } from './AddTileMenu';
+import {
+  capturedActiveFilterToChartFilters,
+  extractTileColumns,
+  globalForTile,
+} from '../dashboardGlobalFilters';
 import { ShareDashboardDialog } from './ShareDashboardDialog';
 import { ActiveChartFilters, hasActiveFilters } from '@/lib/chartFilters';
 import { Button } from '@/components/ui/button';
@@ -16,17 +29,15 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { ChevronLeft, ChevronRight, FileText, Edit2, Check, X, Trash2, Download, Loader2, Plus } from 'lucide-react';
+import { Trash2, Loader2, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDashboardContext } from '../context/DashboardContext';
+import { DashboardEditModeProvider } from '../context/DashboardEditModeContext';
 import { getUserEmail } from '@/utils/userStorage';
-import {
-  EXPORT_BRAND,
-  EXPORT_FONT_FAMILY,
-  EXPORT_PIXEL_RATIO,
-  SLIDE_HEIGHT_IN,
-  SLIDE_WIDTH_IN,
-} from '../exportTheme';
+// W-EXP-12 · exportTheme constants were consumed only by the deleted
+// client-side renderer; the server-side renderer has its own brand
+// palette source of truth. Keeping the file in case a future feature
+// (e.g. inline preview) needs them — no current consumer.
 
 interface DashboardViewProps {
   dashboard: DashboardData;
@@ -38,14 +49,14 @@ interface DashboardViewProps {
   permission?: "view" | "edit"; // Optional permission, defaults to checking ownership
 }
 
-const PPT_LAYOUT = 'LAYOUT_16x9';
-
 export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [serverExportBusy, setServerExportBusy] = useState<"pdf" | "pptx" | null>(null);
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null);
-  const [isSheetSidebarOpen, setIsSheetSidebarOpen] = useState(true);
-  const [tileFilters, setTileFilters] = useState<Record<string, ActiveChartFilters>>({});
+  // DR4 · two-tier filter state. `global` applies to every chart whose
+  // data carries the column; `perTile` overrides global for that one tile.
+  const [globalFilters, setGlobalFilters] = useState<ActiveChartFilters>({});
+  const [perTileFilters, setPerTileFilters] = useState<Record<string, ActiveChartFilters>>({});
   const [editingSheetId, setEditingSheetId] = useState<string | null>(null);
   const [editSheetName, setEditSheetName] = useState('');
   const [deleteSheetDialogOpen, setDeleteSheetDialogOpen] = useState(false);
@@ -55,12 +66,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const [addSheetDialogOpen, setAddSheetDialogOpen] = useState(false);
   const [newSheetName, setNewSheetName] = useState('');
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [summaryDrawerOpen, setSummaryDrawerOpen] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const { toast } = useToast();
   const {
+    addChartToDashboard,
     renameDashboard,
     renameSheet,
+    reorderSheets,
     addSheet,
     removeSheet,
+    deleteDashboard,
     refetch: refetchDashboards,
     patchSheetContent,
   } = useDashboardContext();
@@ -243,6 +259,42 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     ]
   );
 
+  // Wave DR6 · prepend a new narrative block via the existing
+  // patchSheetContent endpoint. AddTileMenu calls this with a fully-
+  // formed block (id + role + title + body); we slot it in at order 0
+  // and re-number the rest so the new tile lands at the top of the
+  // canvas. Existing block ordering is preserved.
+  const handleAddNarrativeBlock = useCallback(
+    async (block: {
+      id: string;
+      role: 'custom';
+      title: string;
+      body: string;
+      order: number;
+    }) => {
+      if (!canEdit || !currentSheetId) return;
+      const existing = (activeSheet?.narrativeBlocks ?? []).slice();
+      // Re-number existing blocks so the new one sits first.
+      const renumbered = existing.map((b, idx) => ({
+        ...b,
+        order: idx + 1,
+      }));
+      const next = [{ ...block, order: 0 }, ...renumbered];
+      await patchSheetContent(dashboard.id, currentSheetId, { narrativeBlocks: next });
+      if (onRefresh) await onRefresh();
+      await refetchDashboards();
+    },
+    [
+      activeSheet?.narrativeBlocks,
+      canEdit,
+      currentSheetId,
+      dashboard.id,
+      onRefresh,
+      patchSheetContent,
+      refetchDashboards,
+    ]
+  );
+
   const chartTiles = useMemo(
     () => sections.flatMap((section) => section.tiles).filter((tile): tile is DashboardTile & { kind: 'chart' } => tile.kind === 'chart'),
     [sections]
@@ -254,7 +306,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     const validIds = new Set(
       sections.flatMap((section) => section.tiles.map((tile) => tile.id))
     );
-    setTileFilters((prev) => {
+    setPerTileFilters((prev) => {
       let changed = false;
       const next: Record<string, ActiveChartFilters> = {};
       Object.entries(prev).forEach(([tileId, filters]) => {
@@ -268,12 +320,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     });
   }, [sections]);
 
+  // DR4 · seed `globalFilters` from the dashboard's captured-active-filter
+  // (FA6) when the dashboard is first opened. Resetting on dashboard /
+  // sheet change clears any per-tile overrides; users get a clean
+  // starting point.
   useEffect(() => {
-    setTileFilters({});
-  }, [dashboard.id, activeSheetId]);
+    setGlobalFilters(capturedActiveFilterToChartFilters(dashboard.capturedActiveFilter));
+    setPerTileFilters({});
+  }, [dashboard.id, dashboard.capturedActiveFilter, activeSheetId]);
 
   const handleTileFiltersChange = useCallback((tileId: string, filters: ActiveChartFilters) => {
-    setTileFilters((prev) => {
+    setPerTileFilters((prev) => {
       const next = { ...prev };
       if (hasActiveFilters(filters)) {
         next[tileId] = filters;
@@ -283,6 +340,40 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       return next;
     });
   }, []);
+
+  // Effective filter per tile = perTile override (when set) else the
+  // global filter restricted to columns the tile actually has. The
+  // restriction list also drives the "doesn't apply here" badge.
+  const tileFiltersForRender = useMemo(() => {
+    const result: Record<string, ActiveChartFilters> = {};
+    const inapplicable: Record<string, string[]> = {};
+    for (const section of sections) {
+      for (const tile of section.tiles) {
+        const r = globalForTile(tile, globalFilters, perTileFilters[tile.id]);
+        result[tile.id] = r.applicable;
+        if (r.inapplicableColumns.length > 0 && !perTileFilters[tile.id]) {
+          inapplicable[tile.id] = r.inapplicableColumns;
+        }
+      }
+    }
+    return { effective: result, inapplicable };
+  }, [sections, globalFilters, perTileFilters]);
+
+  // For the global filter bar's "applies to N of M" hint.
+  const globalFilterCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    let totalChartTiles = 0;
+    for (const section of sections) {
+      for (const tile of section.tiles) {
+        if (tile.kind !== 'chart') continue;
+        totalChartTiles++;
+        for (const col of extractTileColumns(tile)) {
+          if (col in globalFilters) counts[col] = (counts[col] ?? 0) + 1;
+        }
+      }
+    }
+    return { counts, totalChartTiles };
+  }, [sections, globalFilters]);
 
 
   // Handle adding a new sheet
@@ -331,452 +422,38 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     }
   };
 
-  // W12 · rich PPTX assembly. Slide order:
-  //   1. Cover (dashboard name + envelope.tldr + date + brand band)
-  //   2. Executive Summary block (one slide per featured chart/pivot, with
-  //      keyInsight / matching finding alongside)
-  //   3. Recommendations (envelope.recommendations grouped by horizon)
-  //   4. All Artefacts slides (every captured tile, no exec chrome)
-  //   5. Methodology + caveats (envelope.methodology / caveats / domainLens)
-  //   6. Closing (original question + footer)
+  // W-EXP-12 · Client html-to-image PPT path replaced with server-side
+  // agentic deck generation. The server endpoint (W-EXP-7 wiring) runs:
+  //   runDeckPlanner (Claude Opus 4.7) → verifyDeckPlan (deterministic gate;
+  //   one repair round on fail) → renderDeckPlanToPptxBuffer (pptxgenjs
+  //   native shapes / addChart / addTable). Action-titled, exec-summary-up-
+  //   front, methodology-at-the-back — see /Users/tida/.claude/plans/
+  //   the-dashboard-download-feature-cozy-flask.md.
+  //
+  // Sheet selection from the dialog is preserved as informational context
+  // (logged + sent in a non-load-bearing query param); the planner picks
+  // its own layout sequence from the dashboard's answerEnvelope + chart
+  // inventory. Per-sheet exports remain a future enhancement.
   const handleExport = async (sheetIdsToExport?: string[]) => {
     if (isExporting) return;
-
     const sheetsToExport = sheetIdsToExport || Array.from(selectedSheetIds);
-
     if (sheetsToExport.length === 0) {
       toast({ title: 'No views selected', description: 'Please select at least one view to export.' });
       return;
     }
-
     setIsExporting(true);
     setExportDialogOpen(false);
-
     try {
-      const pptx = new PptxGenJS();
-      pptx.layout = PPT_LAYOUT;
-      pptx.author = 'Marico Insighting Tool';
-
-      const slideW = SLIDE_WIDTH_IN;
-      const slideH = SLIDE_HEIGHT_IN;
-      const envelope = dashboard.answerEnvelope;
-      const today = new Date().toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-
-      // ── Cover slide ─────────────────────────────────────────────────
-      const cover = pptx.addSlide();
-      cover.background = { color: EXPORT_BRAND.background };
-      // brand accent band on the left edge
-      cover.addShape(pptx.ShapeType.rect, {
-        x: 0,
-        y: 0,
-        w: 0.18,
-        h: slideH,
-        fill: { color: EXPORT_BRAND.primary },
-        line: { color: EXPORT_BRAND.primary },
-      });
-      cover.addText(dashboard.name || 'Dashboard', {
-        x: 0.7,
-        y: 2.2,
-        w: slideW - 1.4,
-        h: 1.0,
-        fontSize: 36,
-        bold: true,
-        color: EXPORT_BRAND.title,
-        fontFace: EXPORT_FONT_FAMILY,
-      });
-      if (envelope?.tldr) {
-        cover.addText(envelope.tldr, {
-          x: 0.7,
-          y: 3.4,
-          w: slideW - 1.4,
-          h: 1.6,
-          fontSize: 16,
-          color: EXPORT_BRAND.foreground,
-          fontFace: EXPORT_FONT_FAMILY,
-          valign: 'top',
-        });
-      }
-      cover.addText(today, {
-        x: 0.7,
-        y: slideH - 0.8,
-        w: slideW - 1.4,
-        h: 0.4,
-        fontSize: 11,
-        color: EXPORT_BRAND.muted,
-        fontFace: EXPORT_FONT_FAMILY,
-      });
-      cover.addText('Marico Insighting Tool', {
-        x: 0.7,
-        y: slideH - 0.45,
-        w: slideW - 1.4,
-        h: 0.3,
-        fontSize: 10,
-        color: EXPORT_BRAND.muted,
-        fontFace: EXPORT_FONT_FAMILY,
-      });
-
-      // ── Capture every tile across all selected sheets ──────────────
-      const originalActiveSheetId = activeSheetId;
-      type CapturedTile = {
-        sheetName: string;
-        kind: 'chart' | 'pivot';
-        title: string;
-        keyInsight?: string;
-        imgData?: string;
-      };
-      const captured: CapturedTile[] = [];
-
-      for (const sheetId of sheetsToExport) {
-        const sheet = sheets.find((s) => s.id === sheetId);
-        if (!sheet) continue;
-
-        setActiveSheetId(sheetId);
-        // Allow PivotTile fetches + chart renders to settle before capture.
-        await new Promise((r) => setTimeout(r, 800));
-
-        const chartNodes = Array.from(
-          document.querySelectorAll('[data-dashboard-chart-node]')
-        ) as HTMLElement[];
-        for (let i = 0; i < (sheet.charts?.length ?? 0); i++) {
-          const node = chartNodes[i];
-          let imgData: string | undefined;
-          if (node) {
-            try {
-              imgData = await htmlToImage.toPng(node, {
-                cacheBust: true,
-                backgroundColor: '#FFFFFF',
-                style: { boxShadow: 'none' },
-                pixelRatio: EXPORT_PIXEL_RATIO,
-                quality: 1.0,
-              });
-            } catch (err) {
-              console.warn('Chart capture failed', err);
-            }
-          }
-          captured.push({
-            sheetName: sheet.name,
-            kind: 'chart',
-            title: sheet.charts[i]?.title ?? `Chart ${i + 1}`,
-            keyInsight: sheet.charts[i]?.keyInsight,
-            imgData,
-          });
-        }
-
-        // Pivot capture (W11) — uses the same pixelRatio path.
-        const pivotNodes = Array.from(
-          document.querySelectorAll('[data-dashboard-pivot-node]')
-        ) as HTMLElement[];
-        for (let i = 0; i < (sheet.pivots?.length ?? 0); i++) {
-          const node = pivotNodes[i];
-          let imgData: string | undefined;
-          if (node) {
-            try {
-              imgData = await htmlToImage.toPng(node, {
-                cacheBust: true,
-                backgroundColor: '#FFFFFF',
-                style: { boxShadow: 'none' },
-                pixelRatio: EXPORT_PIXEL_RATIO,
-                quality: 1.0,
-              });
-            } catch (err) {
-              console.warn('Pivot capture failed', err);
-            }
-          }
-          captured.push({
-            sheetName: sheet.name,
-            kind: 'pivot',
-            title: sheet.pivots![i]?.title ?? `Pivot ${i + 1}`,
-            imgData,
-          });
-        }
-      }
-
-      setActiveSheetId(originalActiveSheetId);
-
-      // Helper: a content slide with the brand header band.
-      const addContentSlide = (title: string) => {
-        const s = pptx.addSlide();
-        s.background = { color: EXPORT_BRAND.background };
-        s.addShape(pptx.ShapeType.rect, {
-          x: 0,
-          y: 0,
-          w: slideW,
-          h: 0.18,
-          fill: { color: EXPORT_BRAND.primary },
-          line: { color: EXPORT_BRAND.primary },
-        });
-        s.addText(title, {
-          x: 0.4,
-          y: 0.3,
-          w: slideW - 0.8,
-          h: 0.6,
-          fontSize: 22,
-          bold: true,
-          color: EXPORT_BRAND.title,
-          fontFace: EXPORT_FONT_FAMILY,
-        });
-        return s;
-      };
-
-      // Helper: render a captured tile onto a slide with insight panel.
-      const addTileSlide = (
-        title: string,
-        imgData: string | undefined,
-        insightPairs: Array<{ heading: string; body: string }>
-      ) => {
-        const s = addContentSlide(title);
-        const imgX = 0.4;
-        const imgY = 1.1;
-        const imgW = 7.6;
-        const imgH = 5.5;
-        if (imgData) {
-          s.addImage({ data: imgData, x: imgX, y: imgY, w: imgW, h: imgH });
-        } else {
-          s.addText('(Image capture unavailable)', {
-            x: imgX,
-            y: imgY,
-            w: imgW,
-            h: imgH,
-            fontSize: 12,
-            color: EXPORT_BRAND.muted,
-            fontFace: EXPORT_FONT_FAMILY,
-          });
-        }
-        const rightX = imgX + imgW + 0.3;
-        const rightW = slideW - rightX - 0.4;
-        let y = imgY;
-        for (const p of insightPairs) {
-          if (!p.body?.trim()) continue;
-          s.addText(p.heading, {
-            x: rightX,
-            y,
-            w: rightW,
-            h: 0.3,
-            fontSize: 12,
-            bold: true,
-            color: EXPORT_BRAND.primary,
-            fontFace: EXPORT_FONT_FAMILY,
-          });
-          y += 0.35;
-          s.addText(p.body, {
-            x: rightX,
-            y,
-            w: rightW,
-            h: 1.6,
-            fontSize: 11,
-            color: EXPORT_BRAND.foreground,
-            fontFace: EXPORT_FONT_FAMILY,
-            wrap: true,
-            valign: 'top',
-          });
-          y += 1.7;
-        }
-        return s;
-      };
-
-      // ── Executive summary slides ──────────────────────────────────
-      const execSheet = sheets.find(
-        (s) => s.id === 'sheet_summary' || s.name.toLowerCase().includes('executive')
-      );
-      const execChartTitles = new Set(
-        (execSheet?.charts ?? []).map((c) => c.title?.toLowerCase()).filter(Boolean) as string[]
-      );
-      const execPivotTitles = new Set(
-        (execSheet?.pivots ?? []).map((p) => p.title?.toLowerCase()).filter(Boolean) as string[]
-      );
-      const execTiles = captured.filter((t) =>
-        t.kind === 'chart'
-          ? execChartTitles.has(t.title.toLowerCase())
-          : execPivotTitles.has(t.title.toLowerCase())
-      );
-      const findingByTitle = new Map<string, string>();
-      for (const f of envelope?.findings ?? []) {
-        if (f.headline) findingByTitle.set(f.headline.toLowerCase(), f.evidence ?? '');
-      }
-      for (const t of execTiles) {
-        const matchedFinding = findingByTitle.get(t.title.toLowerCase());
-        addTileSlide(`Executive summary — ${t.title}`, t.imgData, [
-          { heading: 'Key insight', body: t.keyInsight ?? '' },
-          { heading: 'Evidence', body: matchedFinding ?? '' },
-        ]);
-      }
-
-      // ── Recommendations slide ─────────────────────────────────────
-      if (envelope?.recommendations?.length) {
-        const s = addContentSlide('Recommendations');
-        const groups: Record<string, string[]> = { now: [], this_quarter: [], strategic: [] };
-        for (const r of envelope.recommendations) {
-          const horizon = r.horizon ?? 'now';
-          (groups[horizon] ??= []).push(`• ${r.action} — ${r.rationale}`);
-        }
-        const labels: Record<string, string> = {
-          now: 'Now',
-          this_quarter: 'This quarter',
-          strategic: 'Strategic',
-        };
-        let y = 1.2;
-        for (const horizon of ['now', 'this_quarter', 'strategic'] as const) {
-          const items = groups[horizon];
-          if (!items?.length) continue;
-          s.addText(labels[horizon], {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 0.4,
-            fontSize: 14,
-            bold: true,
-            color: EXPORT_BRAND.primary,
-            fontFace: EXPORT_FONT_FAMILY,
-          });
-          y += 0.45;
-          s.addText(items.join('\n'), {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 0.5 * items.length + 0.4,
-            fontSize: 12,
-            color: EXPORT_BRAND.foreground,
-            fontFace: EXPORT_FONT_FAMILY,
-            valign: 'top',
-            wrap: true,
-          });
-          y += 0.5 * items.length + 0.5;
-        }
-      }
-
-      // ── All Artefacts slides ──────────────────────────────────────
-      // Includes every captured tile not already on Sheet 1 (avoid dupes).
-      const execTitleSet = new Set(execTiles.map((t) => `${t.kind}::${t.title.toLowerCase()}`));
-      const restTiles = captured.filter(
-        (t) => !execTitleSet.has(`${t.kind}::${t.title.toLowerCase()}`)
-      );
-      for (const t of restTiles) {
-        addTileSlide(t.title, t.imgData, t.keyInsight ? [{ heading: 'Key insight', body: t.keyInsight }] : []);
-      }
-
-      // ── Methodology + caveats slide ───────────────────────────────
-      if (envelope?.methodology || envelope?.caveats?.length || envelope?.domainLens) {
-        const s = addContentSlide('Methodology');
-        let y = 1.2;
-        if (envelope.methodology) {
-          s.addText(envelope.methodology, {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 1.6,
-            fontSize: 12,
-            color: EXPORT_BRAND.foreground,
-            fontFace: EXPORT_FONT_FAMILY,
-            valign: 'top',
-            wrap: true,
-          });
-          y += 1.7;
-        }
-        if (envelope.caveats?.length) {
-          s.addText('Caveats', {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 0.4,
-            fontSize: 14,
-            bold: true,
-            color: EXPORT_BRAND.primary,
-            fontFace: EXPORT_FONT_FAMILY,
-          });
-          y += 0.45;
-          s.addText(envelope.caveats.map((c: string) => `• ${c}`).join('\n'), {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 0.4 * envelope.caveats.length + 0.3,
-            fontSize: 12,
-            color: EXPORT_BRAND.foreground,
-            fontFace: EXPORT_FONT_FAMILY,
-            valign: 'top',
-            wrap: true,
-          });
-          y += 0.4 * envelope.caveats.length + 0.4;
-        }
-        if (envelope.domainLens) {
-          s.addText('Domain context', {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 0.4,
-            fontSize: 14,
-            bold: true,
-            color: EXPORT_BRAND.primary,
-            fontFace: EXPORT_FONT_FAMILY,
-          });
-          y += 0.45;
-          s.addText(envelope.domainLens, {
-            x: 0.4,
-            y,
-            w: slideW - 0.8,
-            h: 1.2,
-            fontSize: 12,
-            color: EXPORT_BRAND.foreground,
-            fontFace: EXPORT_FONT_FAMILY,
-            valign: 'top',
-            wrap: true,
-          });
-        }
-      }
-
-      // ── Closing slide ─────────────────────────────────────────────
-      const closing = addContentSlide('Original question');
-      // Original question lives in sheet narrative blocks — find a "custom" block
-      // titled "Original question" or fall back to the dashboard name.
-      const originalQ = (() => {
-        for (const s of sheets) {
-          for (const b of s.narrativeBlocks ?? []) {
-            if (b.title?.toLowerCase().startsWith('original question')) return b.body;
-          }
-        }
-        return '';
-      })();
-      if (originalQ) {
-        closing.addText(originalQ, {
-          x: 0.4,
-          y: 1.2,
-          w: slideW - 0.8,
-          h: 4.5,
-          fontSize: 16,
-          color: EXPORT_BRAND.foreground,
-          fontFace: EXPORT_FONT_FAMILY,
-          valign: 'top',
-          wrap: true,
-        });
-      }
-      closing.addText('Generated by Marico Insighting Tool', {
-        x: 0.4,
-        y: slideH - 0.55,
-        w: slideW - 0.8,
-        h: 0.3,
-        fontSize: 10,
-        color: EXPORT_BRAND.muted,
-        fontFace: EXPORT_FONT_FAMILY,
-      });
-
-      const fileName =
-        sheetsToExport.length === sheets.length
-          ? `${dashboard.name || 'dashboard'}.pptx`
-          : `${dashboard.name || 'dashboard'}_${sheetsToExport.length}_sheets.pptx`;
-
-      await pptx.writeFile({ fileName });
+      await dashboardsApi.exportDashboard(dashboard.id, 'pptx');
       toast({
         title: 'Export complete',
-        description: `Downloaded ${fileName}.`,
+        description: 'Downloaded a consultant-grade slide deck (action titles, exec summary, methodology).',
       });
-    } catch (err) {
-      console.error(err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Please try again.';
       toast({
         title: 'Export failed',
-        description: 'Please try again or contact support.',
+        description: msg,
         variant: 'destructive',
       });
     } finally {
@@ -806,17 +483,60 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   };
 
   return (
+    <DashboardEditModeProvider dashboardId={dashboard.id} canEdit={canEdit}>
     <div className="bg-muted/30 h-[calc(100vh-72px)] flex flex-col overflow-y-auto">
-      <div className="flex-shrink-0 px-4 pt-8 pb-4 lg:px-8">
+      <div className="flex-shrink-0 px-4 pt-6 pb-3 lg:px-8">
         <DashboardHeader
+          dashboard={dashboard}
           name={dashboard.name}
           lastOpenedAt={dashboard.lastOpenedAt}
           updatedAt={dashboard.updatedAt}
           sheetCount={sheets.length}
           isExporting={isExporting}
+          isExportingPdf={isExportingPdf}
           onBack={onBack}
-          onExport={handleExportClick}
+          onExportPptx={handleExportClick}
+          onExportPdf={async () => {
+            if (isExportingPdf) return;
+            setIsExportingPdf(true);
+            try {
+              await dashboardsApi.exportDashboard(dashboard.id, 'pdf');
+            } catch (e) {
+              toast({
+                title: 'PDF export failed',
+                description: e instanceof Error ? e.message : 'Try again.',
+                variant: 'destructive',
+              });
+            } finally {
+              setIsExportingPdf(false);
+            }
+          }}
           onShare={canEdit ? () => setShareDialogOpen(true) : undefined}
+          onDelete={canEdit ? async () => {
+            const confirmed = window.confirm(
+              `Delete "${dashboard.name}"? This cannot be undone.`,
+            );
+            if (!confirmed) return;
+            try {
+              await deleteDashboard(dashboard.id);
+              onBack();
+            } catch (e) {
+              toast({
+                title: 'Could not delete dashboard',
+                description: e instanceof Error ? e.message : 'Try again.',
+                variant: 'destructive',
+              });
+            }
+          } : undefined}
+          onOpenSummary={() => setSummaryDrawerOpen(true)}
+          hasSummary={hasAnySummaryContent({
+            envelope: dashboard.answerEnvelope,
+            businessActions: dashboard.businessActions,
+            followUpPrompts: dashboard.followUpPrompts,
+            investigationSummary: dashboard.investigationSummary,
+            priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
+          })}
+          capturedActiveFilter={dashboard.capturedActiveFilter}
           onRename={canEdit ? async (newName) => {
             try {
               await renameDashboard(dashboard.id, newName);
@@ -834,230 +554,72 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
             }
           } : undefined}
         />
-
-        {/* Wave-FA6 · Provenance banner: when the dashboard was captured under
-            an active filter, surface the filter conditions so the viewer knows
-            this dashboard reflects a slice of the dataset, not the whole. */}
-        {dashboard.capturedActiveFilter && dashboard.capturedActiveFilter.conditions.length > 0 && (
-          <CapturedFilterBanner spec={dashboard.capturedActiveFilter} />
-        )}
       </div>
 
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* Collapsible Sheet Sidebar */}
+      <DashboardSummaryDrawer
+        open={summaryDrawerOpen}
+        onOpenChange={setSummaryDrawerOpen}
+        envelope={dashboard.answerEnvelope}
+        businessActions={dashboard.businessActions}
+        followUpPrompts={dashboard.followUpPrompts}
+        investigationSummary={dashboard.investigationSummary}
+        priorInvestigationsSnapshot={dashboard.priorInvestigationsSnapshot}
+      />
+
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {sheets.length > 0 && (
-          <>
-            <div
-              className={cn(
-                "flex-shrink-0 bg-background border-r border-border transition-all duration-300 ease-in-out overflow-hidden",
-                isSheetSidebarOpen ? "w-64" : "w-0"
-              )}
-            >
-              <div className="h-full flex flex-col">
-                <div className="flex items-center justify-between p-4 border-b">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-sm text-foreground">Views</h3>
-                    {canEdit && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => {
-                          setNewSheetName('');
-                          setAddSheetDialogOpen(true);
-                        }}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={() => setIsSheetSidebarOpen(false)}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-2">
-                  <div className="space-y-1">
-                    {sheets.map((sheet) => {
-                      const isActive = activeSheetId === sheet.id;
-                      const isEditing = editingSheetId === sheet.id;
-                      
-                      const handleStartEdit = (e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        setEditingSheetId(sheet.id);
-                        setEditSheetName(sheet.name);
-                      };
-
-                      const handleSaveSheet = async (e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        if (!editSheetName.trim() || editSheetName.trim() === sheet.name) {
-                          setEditingSheetId(null);
-                          return;
-                        }
-                        try {
-                          await renameSheet(dashboard.id, sheet.id, editSheetName.trim());
-                          setEditingSheetId(null);
-                          if (onRefresh) {
-                            await onRefresh();
-                          }
-                          await refetchDashboards();
-                        } catch (error: any) {
-                          toast({
-                            title: 'Error',
-                            description: error?.message || 'Failed to rename view',
-                            variant: 'destructive',
-                          });
-                        }
-                      };
-
-                      const handleCancelEdit = (e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        setEditingSheetId(null);
-                        setEditSheetName('');
-                      };
-
-                      const handleKeyDown = (e: React.KeyboardEvent) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleSaveSheet(e as any);
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          handleCancelEdit(e as any);
-                        }
-                      };
-
-                      const handleDeleteClick = (e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        setSheetToDelete({ id: sheet.id, name: sheet.name });
-                        setDeleteSheetDialogOpen(true);
-                      };
-
-                      return (
-                        <div
-                          key={sheet.id}
-                          className={cn(
-                            // UX-4 · Sheet sidebar row. Active = left
-                            // accent bar + subtle primary tint; hover =
-                            // surface-hover utility from the tokens.
-                            "relative w-full flex items-center gap-2 px-3 py-2.5 rounded-brand-md transition-colors duration-quick ease-standard group",
-                            isActive && !isEditing
-                              ? "bg-primary/10 text-foreground"
-                              : "text-foreground hover:surface-hover"
-                          )}
-                        >
-                          {isActive && !isEditing ? (
-                            <span
-                              aria-hidden="true"
-                              className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-primary animate-brand-underline origin-top"
-                            />
-                          ) : null}
-                          <FileText
-                            className={cn(
-                              "h-4 w-4 flex-shrink-0",
-                              isActive && !isEditing
-                                ? "text-primary"
-                                : "text-muted-foreground"
-                            )}
-                          />
-                          {isEditing ? (
-                            <div className="flex-1 flex items-center gap-1">
-                              <Input
-                                value={editSheetName}
-                                onChange={(e) => setEditSheetName(e.target.value)}
-                                onKeyDown={handleKeyDown}
-                                onClick={(e) => e.stopPropagation()}
-                                className="h-7 text-sm"
-                                autoFocus
-                              />
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={handleSaveSheet}
-                                className="h-6 w-6"
-                              >
-                                <Check className="h-3 w-3" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={handleCancelEdit}
-                                className="h-6 w-6"
-                              >
-                                <X className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <>
-                              <button
-                                onClick={() => setActiveSheetId(sheet.id)}
-                                className="flex-1 min-w-0 text-left"
-                              >
-                                <div
-                                  className={cn(
-                                    "font-medium text-sm truncate",
-                                    isActive && "text-foreground"
-                                  )}
-                                >
-                                  {sheet.name}
-                                </div>
-                                <div className="text-xs truncate text-muted-foreground">
-                                  {sheet.charts.length} chart{sheet.charts.length !== 1 ? 's' : ''}
-                                </div>
-                              </button>
-                              {canEdit && (
-                                <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-quick ease-standard">
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={handleStartEdit}
-                                    className="h-6 w-6 flex-shrink-0"
-                                    aria-label="Rename view"
-                                  >
-                                    <Edit2 className="h-3 w-3" />
-                                  </Button>
-                                  {sheets.length > 1 && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={handleDeleteClick}
-                                      className="h-6 w-6 flex-shrink-0 hover:text-destructive"
-                                      aria-label="Delete view"
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                  )}
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {/* Collapsed Sidebar Toggle Button */}
-            {!isSheetSidebarOpen && (
-              <div className="flex-shrink-0 border-r border-border">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-full w-8 rounded-none"
-                  onClick={() => setIsSheetSidebarOpen(true)}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-          </>
+          <div className="flex-shrink-0 px-4 lg:px-8">
+            <DashboardSheetTabs
+              sheets={sheets.map((s) => ({
+                id: s.id,
+                name: s.name,
+                chartCount: s.charts.length,
+              }))}
+              activeSheetId={activeSheetId}
+              onSelect={setActiveSheetId}
+              onRename={canEdit ? async (sheetId, newName) => {
+                try {
+                  await renameSheet(dashboard.id, sheetId, newName);
+                  if (onRefresh) await onRefresh();
+                  await refetchDashboards();
+                } catch (error: any) {
+                  toast({
+                    title: 'Error',
+                    description: error?.message || 'Failed to rename view',
+                    variant: 'destructive',
+                  });
+                  throw error;
+                }
+              } : undefined}
+              onDelete={canEdit ? (sheetId) => {
+                const target = sheets.find((s) => s.id === sheetId);
+                if (target) {
+                  setSheetToDelete({ id: target.id, name: target.name });
+                  setDeleteSheetDialogOpen(true);
+                }
+              } : undefined}
+              onAdd={canEdit ? () => {
+                setNewSheetName('');
+                setAddSheetDialogOpen(true);
+              } : undefined}
+              onReorder={canEdit ? async (orderedIds) => {
+                try {
+                  await reorderSheets(dashboard.id, orderedIds);
+                  if (onRefresh) await onRefresh();
+                  await refetchDashboards();
+                } catch (error: any) {
+                  toast({
+                    title: 'Error',
+                    description: error?.message || 'Failed to reorder views',
+                    variant: 'destructive',
+                  });
+                }
+              } : undefined}
+            />
+          </div>
         )}
 
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         <div className="flex-1 min-h-0 flex flex-col gap-8 px-4 pb-8 lg:px-8 overflow-hidden">
           <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
             {activeSection ? (
@@ -1067,12 +629,41 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                 className="space-y-4"
                 data-dashboard-section={activeSection.id}
               >
-                <div>
-                  <h2 className="text-lg font-semibold text-foreground">{activeSection.title}</h2>
-                  {activeSection.description && (
-                    <p className="text-sm text-muted-foreground">{activeSection.description}</p>
-                  )}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">{activeSection.title}</h2>
+                    {activeSection.description && (
+                      <p className="text-sm text-muted-foreground">{activeSection.description}</p>
+                    )}
+                  </div>
+                  {canEdit ? (
+                    <AddTileMenu
+                      onAddNarrative={handleAddNarrativeBlock}
+                      onAddChart={async (chart) => {
+                        if (!currentSheetId) return;
+                        try {
+                          await addChartToDashboard(dashboard.id, chart, currentSheetId);
+                          if (onRefresh) await onRefresh();
+                          await refetchDashboards();
+                        } catch (e) {
+                          toast({
+                            title: 'Could not add chart',
+                            description: e instanceof Error ? e.message : 'Try again.',
+                            variant: 'destructive',
+                          });
+                          throw e;
+                        }
+                      }}
+                    />
+                  ) : null}
                 </div>
+
+                <DashboardGlobalFilterBar
+                  global={globalFilters}
+                  appliesToCountByColumn={globalFilterCounts.counts}
+                  totalChartTiles={globalFilterCounts.totalChartTiles}
+                  onChange={setGlobalFilters}
+                />
 
                 <DashboardTiles
                   dashboardId={dashboard.id}
@@ -1092,7 +683,8 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                     const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
                     onDeleteTable(tableIndex, sheetIdToUse || undefined);
                   } : undefined}
-                  filtersByTile={tileFilters}
+                  filtersByTile={tileFiltersForRender.effective}
+                  inapplicableColumnsByTile={tileFiltersForRender.inapplicable}
                   onTileFiltersChange={handleTileFiltersChange}
                   sheetId={currentSheetId || undefined}
                   onUpdate={onRefresh}
@@ -1106,6 +698,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {/* Export Sheet Selection Dialog */}
@@ -1348,5 +941,6 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         dashboardName={dashboard.name}
       />
     </div>
+    </DashboardEditModeProvider>
   );
 }

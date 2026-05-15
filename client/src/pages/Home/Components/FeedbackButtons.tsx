@@ -290,17 +290,20 @@ function FeedbackButtonsImpl({
               );
             })}
           </div>
-          {selectedReasons.includes("other") && (
-            <Textarea
-              id={commentId}
-              value={comment}
-              onChange={(e) => setComment(e.target.value.slice(0, 500))}
-              placeholder="Tell us more (optional, ≤500 chars)"
-              aria-label="Free-text feedback"
-              className="min-h-[60px] text-sm mb-2"
-              maxLength={500}
-            />
-          )}
+          {/* Wave AD1 · always show the comment textarea on thumbs-down so
+              users can describe the problem without first selecting a reason
+              chip. Pre-AD1 this was gated on the "other" chip being active,
+              which made the field invisible to users who picked one of the
+              other chips OR none at all. */}
+          <Textarea
+            id={commentId}
+            value={comment}
+            onChange={(e) => setComment(e.target.value.slice(0, 500))}
+            placeholder="What was wrong, or what would've been better? (optional, ≤500 chars)"
+            aria-label="Free-text feedback"
+            className="min-h-[60px] text-sm mb-2"
+            maxLength={500}
+          />
           <div className="flex items-center justify-end gap-2">
             <Button
               type="button"

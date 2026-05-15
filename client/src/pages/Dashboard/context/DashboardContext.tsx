@@ -29,6 +29,7 @@ interface DashboardContextType {
   deleteDashboard: (dashboardId: string) => Promise<void>;
   renameDashboard: (dashboardId: string, name: string) => Promise<DashboardData>;
   renameSheet: (dashboardId: string, sheetId: string, name: string) => Promise<DashboardData>;
+  reorderSheets: (dashboardId: string, orderedSheetIds: string[]) => Promise<DashboardData>;
   addSheet: (dashboardId: string, name: string) => Promise<DashboardData>;
   removeSheet: (dashboardId: string, sheetId: string) => Promise<DashboardData>;
   updateChartInsightOrRecommendation: (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) => Promise<DashboardData>;

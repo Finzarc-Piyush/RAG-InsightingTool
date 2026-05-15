@@ -17,10 +17,17 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { dashboardsApi } from "@/lib/api/dashboards";
-import { dashboardSpecSchema, type DashboardSpec } from "@/shared/schema";
+import {
+  dashboardSpecSchema,
+  type DashboardSpec,
+  type Message,
+} from "@/shared/schema";
 import { logger } from "@/lib/logger";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, LayoutDashboard, ArrowUpRight, Sparkles } from "lucide-react";
+// DPF3 · share the message-augmentation helper with DashboardDraftCard so
+// both manual-create paths fold the same fields onto the spec at POST time.
+import { augmentSpecFromMessage } from "@/lib/dashboard/augmentSpecFromMessage";
 
 interface BuildDashboardCalloutProps {
   /** Raw draft from `message.dashboardDraft` — record<unknown> on the wire. */
@@ -31,6 +38,13 @@ interface BuildDashboardCalloutProps {
    * bit more top margin; `below-answer` sits at the tail of the answer card.
    */
   variant: "above-answer" | "below-answer";
+  /**
+   * DPF3 · the parent assistant `Message` so the helper can fold message-only
+   * fields (notably `businessActions`, which arrives post-verifier) onto the
+   * spec at POST time. Optional + back-compat — when absent the spec is
+   * posted unchanged.
+   */
+  message?: Message;
 }
 
 function parseDraft(raw: unknown): DashboardSpec | null {
@@ -43,6 +57,7 @@ export function BuildDashboardCallout({
   draft,
   sessionId,
   variant,
+  message,
 }: BuildDashboardCalloutProps) {
   const parsed = useMemo(() => parseDraft(draft), [draft]);
   const [status, setStatus] = useState<
@@ -64,17 +79,18 @@ export function BuildDashboardCallout({
     if (status.kind === "creating") return;
     setStatus({ kind: "creating" });
     try {
-      const dashboard = await dashboardsApi.createFromSpec(parsed, sessionId);
+      const augmented = augmentSpecFromMessage(parsed, message);
+      const dashboard = await dashboardsApi.createFromSpec(augmented, sessionId);
       toast({
         title: "Dashboard created",
         description: `Opening "${dashboard.name}"…`,
       });
       setLocation(`/dashboard?open=${encodeURIComponent(dashboard.id)}`);
     } catch (err) {
-      const message =
+      const errMessage =
         err instanceof Error ? err.message : "Could not create dashboard";
       logger.error("BuildDashboardCallout createFromSpec failed", err);
-      setStatus({ kind: "error", message });
+      setStatus({ kind: "error", message: errMessage });
     }
   };
 

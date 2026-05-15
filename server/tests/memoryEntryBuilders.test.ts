@@ -80,6 +80,11 @@ describe("W58 · buildTurnEndMemoryEntries", () => {
             x: "Region",
             y: "Sales",
             aggregate: "sum",
+            // AMR7 · richer body — insight + commentary survive when present;
+            // the spec (sans inline `data`) ships for spec-replay on recall.
+            keyInsight: "East leads at 38% of Q3 total sales.",
+            businessCommentary:
+              "Watch West softening — drove the bulk of the YoY decline.",
           },
         ],
       },
@@ -88,13 +93,27 @@ describe("W58 · buildTurnEndMemoryEntries", () => {
     const c = entries.find((e) => e.type === "chart_created");
     assert.ok(c);
     assert.strictEqual(c!.title, "Sales by Region");
-    assert.deepStrictEqual(c!.body, {
-      chartType: "bar",
-      x: "Region",
-      y: "Sales",
-      seriesColumn: undefined,
-      aggregate: "sum",
-    });
+    const body = c!.body as Record<string, unknown>;
+    assert.strictEqual(body.chartType, "bar");
+    assert.strictEqual(body.x, "Region");
+    assert.strictEqual(body.y, "Sales");
+    assert.strictEqual(body.seriesColumn, undefined);
+    assert.strictEqual(body.aggregate, "sum");
+    assert.strictEqual(body.keyInsight, "East leads at 38% of Q3 total sales.");
+    assert.strictEqual(
+      body.businessCommentary,
+      "Watch West softening — drove the bulk of the YoY decline."
+    );
+    // chartSpec carries the spec (no inline `data`).
+    const spec = body.chartSpec as Record<string, unknown>;
+    assert.strictEqual(spec.type, "bar");
+    assert.strictEqual(spec.title, "Sales by Region");
+    assert.strictEqual(spec.x, "Region");
+    assert.strictEqual(spec.y, "Sales");
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(spec, "data"),
+      false
+    );
   });
 
   it("emits filter_applied entries from appliedFilters", () => {
@@ -167,5 +186,113 @@ describe("W58 · buildTurnEndMemoryEntries", () => {
       a.map((e) => e.id),
       b.map((e) => e.id)
     );
+  });
+
+  it("AMR7 · emits pivot_computed entries that reference past_analyses artifacts", () => {
+    const ctx = baseCtx({
+      pivotArtifacts: [
+        {
+          sessionId: "sess_abc",
+          turnId: "turn_001",
+          stepId: "exec_step_0",
+          plan: { groupBy: ["Region"], aggregations: [] },
+          pivotDefaults: { rows: ["Region"], values: ["Sales"] },
+          columnHeaders: ["Region", "Sales"],
+          rows: Array.from({ length: 8 }, (_, i) => ({
+            Region: `R${i}`,
+            Sales: 100 * (i + 1),
+          })),
+          questionContext: "Sales by region",
+        },
+      ],
+    });
+    const entries = buildTurnEndMemoryEntries(ctx);
+    const p = entries.find((e) => e.type === "pivot_computed");
+    assert.ok(p, "expected a pivot_computed entry");
+    assert.strictEqual(p!.actor, "agent");
+    assert.match(p!.title, /Sales by region/i);
+    const body = p!.body as Record<string, unknown>;
+    const ref = body.artifactRef as {
+      artifactId: string;
+      storage: { kind: "inline" | "blob" };
+    };
+    assert.ok(ref);
+    // Deterministic id from (sessionId|turnId|stepId).
+    assert.match(ref.artifactId, /^[0-9a-f]{32}$/);
+    assert.strictEqual(ref.storage.kind, "inline");
+    assert.strictEqual(body.rowCount, 8);
+    assert.deepStrictEqual(body.columnHeaders, ["Region", "Sales"]);
+  });
+
+  it("AMR7 · pivot_computed entry id is stable across re-invocations (idempotent)", () => {
+    const ctx = baseCtx({
+      pivotArtifacts: [
+        {
+          sessionId: "sess_abc",
+          turnId: "turn_001",
+          stepId: "exec_step_0",
+          plan: {},
+          pivotDefaults: { rows: ["Region"] },
+          columnHeaders: ["Region"],
+          rows: [{ Region: "East" }],
+        },
+      ],
+    });
+    const a = buildTurnEndMemoryEntries(ctx).find(
+      (e) => e.type === "pivot_computed"
+    );
+    const b = buildTurnEndMemoryEntries(ctx).find(
+      (e) => e.type === "pivot_computed"
+    );
+    assert.ok(a);
+    assert.ok(b);
+    assert.strictEqual(a!.id, b!.id);
+    const aRef = (a!.body as Record<string, unknown>).artifactRef as {
+      artifactId: string;
+    };
+    const bRef = (b!.body as Record<string, unknown>).artifactRef as {
+      artifactId: string;
+    };
+    assert.strictEqual(aRef.artifactId, bRef.artifactId);
+  });
+
+  it("AMR7 · no pivot_computed entries when pivotArtifacts is empty / undefined", () => {
+    const entries = buildTurnEndMemoryEntries(baseCtx({ pivotArtifacts: [] }));
+    assert.strictEqual(
+      entries.find((e) => e.type === "pivot_computed"),
+      undefined
+    );
+    const entries2 = buildTurnEndMemoryEntries(baseCtx());
+    assert.strictEqual(
+      entries2.find((e) => e.type === "pivot_computed"),
+      undefined
+    );
+  });
+
+  it("AMR7 · large pivot row sets produce a blob storage reference", () => {
+    const big = Array.from({ length: 3000 }, (_, i) => ({ x: i }));
+    const ctx = baseCtx({
+      pivotArtifacts: [
+        {
+          sessionId: "sess_abc",
+          turnId: "turn_001",
+          stepId: "exec_step_big",
+          plan: {},
+          pivotDefaults: { rows: ["x"] },
+          columnHeaders: ["x"],
+          rows: big,
+        },
+      ],
+    });
+    const p = buildTurnEndMemoryEntries(ctx).find(
+      (e) => e.type === "pivot_computed"
+    );
+    assert.ok(p);
+    const body = p!.body as Record<string, unknown>;
+    const ref = body.artifactRef as {
+      storage: { kind: "inline" | "blob"; blobName?: string };
+    };
+    assert.strictEqual(ref.storage.kind, "blob");
+    assert.match(ref.storage.blobName ?? "", /^past-analyses-pivots\//);
   });
 });

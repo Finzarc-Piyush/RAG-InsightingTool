@@ -164,6 +164,13 @@ export interface ChatDocument {
    * canonical rows). See `server/lib/activeFilter/` for the implementation.
    */
   activeFilter?: ActiveFilterSpec;
+  /**
+   * Sidebar pin flag — pinned sessions sort to the top of the Recent
+   * Sessions list. Optional, no default; absent means unpinned.
+   */
+  pinned?: boolean;
+  /** Timestamp (ms) when `pinned` was set true. Used as a tiebreaker. */
+  pinnedAt?: number;
 }
 
 /** Lightweight row for session list APIs (avoids loading messages/charts/rawData from Cosmos). */
@@ -178,10 +185,12 @@ export interface SessionListSummary {
   sessionId: string;
   messageCount: number;
   chartCount: number;
+  pinned?: boolean;
+  pinnedAt?: number;
 }
 
 const SESSION_LIST_SELECT =
-  "SELECT c.id, c.username, c.fileName, c.uploadedAt, c.createdAt, c.lastUpdatedAt, c.collaborators, c.sessionId, " +
+  "SELECT c.id, c.username, c.fileName, c.uploadedAt, c.createdAt, c.lastUpdatedAt, c.collaborators, c.sessionId, c.pinned, c.pinnedAt, " +
   "IIF(IS_DEFINED(c.messages) AND IS_ARRAY(c.messages), ARRAY_LENGTH(c.messages), 0) AS messageCount, " +
   "IIF(IS_DEFINED(c.charts) AND IS_ARRAY(c.charts), ARRAY_LENGTH(c.charts), 0) AS chartCount FROM c";
 
@@ -220,6 +229,8 @@ const finalizeSessionListSummary = (raw: Record<string, unknown>): SessionListSu
     sessionId: String(raw.sessionId ?? ""),
     messageCount: Number(raw.messageCount ?? 0),
     chartCount: Number(raw.chartCount ?? 0),
+    pinned: typeof raw.pinned === "boolean" ? raw.pinned : undefined,
+    pinnedAt: typeof raw.pinnedAt === "number" ? raw.pinnedAt : undefined,
   };
   const stub = {
     username: row.username,
@@ -618,7 +629,26 @@ function assertDocSizeUnderLimit(chatDocument: ChatDocument): void {
 }
 
 /**
- * Update chat document
+ * Update chat document.
+ *
+ * **Cache contract (Wave A5 verified — load-bearing).** Every successful
+ * upsert here repopulates `sessionDocCache` with the resource Cosmos
+ * returned, so a read immediately after a write sees the new state
+ * within the same process. This is the ONLY write path to the chat
+ * container — there are no direct `containerInstance.items.upsert` /
+ * `.patch` calls elsewhere in the server tree (verified by grep). New
+ * code that wants to mutate a chat doc MUST go through `updateChatDocument`
+ * (or a helper that ultimately delegates to it) — never call
+ * `containerInstance.items.upsert(chatDoc)` directly, otherwise the
+ * cache will hand out stale state for up to `SESSION_DOC_CACHE_TTL_MS`
+ * after the bypass-write.
+ *
+ * The audit that flagged "sessionDocCache not invalidated on hierarchy /
+ * permanent-context updates" was a false positive — every legitimate
+ * write path (sessionAnalysisContext.ts, activeFilterController.ts,
+ * patchAssistantBusinessActions.ts, dataPersistence.ts) routes through
+ * `updateChatDocument` and inherits this cache freshness automatically.
+ * This comment exists to keep that invariant load-bearing for future code.
  */
 export const updateChatDocument = async (chatDocument: ChatDocument): Promise<ChatDocument> => {
   try {
@@ -631,7 +661,9 @@ export const updateChatDocument = async (chatDocument: ChatDocument): Promise<Ch
     assertDocSizeUnderLimit(chatDocument);
     const { resource } = await containerInstance.items.upsert(chatDocument);
     const result = resource as unknown as ChatDocument;
-    // Repopulate cache with the freshly-written doc so reads immediately after a write hit the cache.
+    // Wave A5 · Repopulate cache with the freshly-written doc so reads
+    // immediately after a write hit the cache. Load-bearing — see the
+    // doc comment above for the cross-module contract.
     sessionDocCache.set(result.sessionId, { doc: result, expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS });
     console.log(`✅ Updated chat document: ${chatDocument.id}`);
     return result;
@@ -1184,6 +1216,38 @@ export const updateSessionFileName = async (
     return updated;
   } catch (error) {
     console.error("❌ Failed to update session fileName:", error);
+    throw error;
+  }
+};
+
+/**
+ * Update session pin flag by session ID. Sets `pinnedAt` to now when pinning,
+ * clears it when unpinning. Sidebar consumers sort pinned-first.
+ */
+export const updateSessionPinned = async (
+  sessionId: string,
+  username: string,
+  pinned: boolean
+): Promise<ChatDocument> => {
+  try {
+    const chatDocument = await getChatBySessionIdEfficient(sessionId);
+
+    if (!chatDocument) {
+      throw new Error(`Session not found for sessionId: ${sessionId}`);
+    }
+
+    if (chatDocument.username !== username) {
+      throw new Error('Unauthorized: Session does not belong to this user');
+    }
+
+    chatDocument.pinned = pinned;
+    chatDocument.pinnedAt = pinned ? Date.now() : undefined;
+
+    const updated = await updateChatDocument(chatDocument);
+    console.log(`✅ Updated session pinned: ${sessionId} -> ${pinned}`);
+    return updated;
+  } catch (error) {
+    console.error("❌ Failed to update session pinned:", error);
     throw error;
   }
 };

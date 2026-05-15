@@ -42,6 +42,7 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   [LLM_PURPOSE.CLARIFY_QUESTION]: "MINI",
   [LLM_PURPOSE.SUGGEST_FOLLOW_UPS]: "MINI",
   [LLM_PURPOSE.VERIFIER_SIMPLE]: "MINI",
+  [LLM_PURPOSE.BUSINESS_ACTIONS]: "MINI",
   // PRIMARY — reasoning / synthesis / quality-sensitive output
   [LLM_PURPOSE.HYPOTHESIS]: "PRIMARY",
   [LLM_PURPOSE.PLANNER]: "PRIMARY",
@@ -61,6 +62,20 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   [LLM_PURPOSE.CHART_JSON_REPAIR]: "PRIMARY",
   [LLM_PURPOSE.CONVERSATIONAL]: "PRIMARY",
   [LLM_PURPOSE.ML_MODEL_SUMMARY]: "PRIMARY",
+  // W-EXP-2 · Dashboard-export deck planner. PRIMARY because action-title
+  // quality and structural reasoning are the whole product here — Mini-tier
+  // output would re-create the "shitty deck" failure mode this rewrite
+  // exists to fix.
+  [LLM_PURPOSE.DECK_PLANNER]: "PRIMARY",
+  // Wave A7 · Automation column-remap. MINI — name-similarity reasoning
+  // is shallow + cheap; the user confirms the mapping anyway.
+  [LLM_PURPOSE.AUTOMATION_REMAP]: "MINI",
+  [LLM_PURPOSE.INDICATOR_ENRICH]: "MINI",
+  // Wave QL1 · Quick-lookup planner. MINI — schema-grounded `QueryPlanBody`
+  // generation for simple top-N / list / count style questions. The output
+  // is structurally constrained so Mini-tier quality is sufficient; the
+  // fast path falls through to the full loop on Zod fail.
+  [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
 };
 
 describe("W3.11 · model-routing regression guard", () => {

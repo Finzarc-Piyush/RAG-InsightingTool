@@ -48,12 +48,10 @@ function makeReq(opts: { email?: string }): Request {
 describe("superadmin · allowlist", () => {
   it("matches the two hardcoded emails", () => {
     assert.strictEqual(isSuperadminEmail("piyush@finzarc.com"), true);
-    assert.strictEqual(isSuperadminEmail("piyush.kumar@finzarc.com"), true);
   });
 
   it("normalizes case and whitespace", () => {
     assert.strictEqual(isSuperadminEmail("  Piyush@FinZarc.com "), true);
-    assert.strictEqual(isSuperadminEmail("PIYUSH.KUMAR@FINZARC.COM"), true);
   });
 
   it("rejects non-allowlist emails", () => {
@@ -115,7 +113,7 @@ describe("superadmin · requireSuperadmin middleware", () => {
   });
 
   it("calls next() for an allowlisted caller", () => {
-    const req = makeReq({ email: "piyush.kumar@finzarc.com" });
+    const req = makeReq({ email: "piyush@finzarc.com" });
     const res = makeRes();
     let nextCalled = false;
     requireSuperadmin(req, res as unknown as Response, () => {

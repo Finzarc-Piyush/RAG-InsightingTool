@@ -19,6 +19,7 @@ import {
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
+import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import {
   ChartFilterDefinition,
@@ -317,6 +318,7 @@ export function ChartOnlyModal({
                     style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                   }}
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip
                   formatter={rechartsTooltipValueFormatter}
@@ -386,6 +388,7 @@ export function ChartOnlyModal({
                     label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                     yAxisId="left"
                     domain={leftDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                   <YAxis
                     orientation="right"
@@ -396,6 +399,7 @@ export function ChartOnlyModal({
                     label={{ value: chart.y2Label || chart.y2, angle: 90, position: 'right', style: { textAnchor: 'middle', fill: rightAxisColor, fontSize: 16, fontWeight: 600 } }}
                     stroke={rightAxisColor}
                     domain={rightDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                 </>
               ) : (
@@ -406,6 +410,7 @@ export function ChartOnlyModal({
                   width={90}
                   label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                   domain={leftDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
               )}
               <Tooltip
@@ -506,6 +511,7 @@ export function ChartOnlyModal({
                   position: 'left',
                   style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                 }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip
                 formatter={rechartsTooltipValueFormatter}
@@ -763,6 +769,7 @@ export function ChartOnlyModal({
                     style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 },
                   }}
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip
                   formatter={rechartsTooltipValueFormatter}
@@ -822,6 +829,7 @@ export function ChartOnlyModal({
                 tickFormatter={formatAxisLabel}
                 width={90}
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip
                 formatter={rechartsTooltipValueFormatter}

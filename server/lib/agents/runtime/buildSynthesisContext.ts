@@ -130,6 +130,28 @@ function buildDataUnderstandingBlock(
     );
   }
 
+  // TOD1 · Time-of-day columns are HH:MM:SS strings (no calendar date), not
+  // dates. The narrator must phrase them as clock times ("9:30 AM cutoff",
+  // "average clock-in 09:45") and never reach for date-arithmetic phrasing.
+  const todColumns = (summary?.columns ?? []).filter(
+    (c) => c.timeOfDay !== undefined,
+  );
+  if (todColumns.length > 0) {
+    const todList = todColumns
+      .map((c) => {
+        const sentinels = c.timeOfDay?.sentinelValues ?? [];
+        return sentinels.length
+          ? `"${c.name}" (excludes ${sentinels.join(", ")} as non-time placeholders)`
+          : `"${c.name}"`;
+      })
+      .join("; ");
+    lines.push(
+      `Time-of-day columns: ${todList}. These are HH:MM:SS strings, not calendar dates — ` +
+        `phrase findings as clock times (e.g. "before 9:30 AM", "average clock-in 09:45") ` +
+        `and never frame them as dates.`,
+    );
+  }
+
   const grain = sac?.dataset?.grainGuess?.trim();
   if (grain) lines.push(`Grain: ${grain}`);
 
@@ -335,6 +357,32 @@ function buildUserBlock(ctx: AgentExecutionContext): string {
     lines.push(
       `User notes (verbatim):\n${ctx.permanentContext.trim().slice(0, PERMANENT_NOTES_CAP)}`
     );
+  }
+
+  // Wave B7 · Surface userIntent.{verbatimNotes, interpretedConstraints}
+  // explicitly. Pre-B7 the narrator only saw these constraints if the
+  // hypothesis planner happened to encode them in the blackboard; when
+  // the blackboard was empty (synthesis-fallback path) or thin
+  // (single-tool turn), they were lost. Now they ALWAYS appear in the
+  // user block when set. Caps mirror the other text blocks (800 chars
+  // verbatim, 8 constraints × 200 chars each).
+  const userIntent = ctx.sessionAnalysisContext?.userIntent;
+  if (userIntent) {
+    const verbatim = (userIntent.verbatimNotes ?? "").trim();
+    if (verbatim) {
+      lines.push(
+        `User-stated intent (verbatim from earlier turns):\n${verbatim.slice(0, 800)}`
+      );
+    }
+    const constraints = (userIntent.interpretedConstraints ?? [])
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+    if (constraints.length) {
+      lines.push("User-stated constraints (interpreted from prior turns):");
+      for (const c of constraints.slice(0, 8)) {
+        lines.push(`  • ${c.slice(0, 200)}`);
+      }
+    }
   }
 
   const followUps =

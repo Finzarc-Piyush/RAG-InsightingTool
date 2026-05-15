@@ -204,7 +204,80 @@ function normalizeDimensionCell(value: unknown, mode: DimensionFilter['match']):
   return s;
 }
 
+/** PCT1 · Predicate match for countIf/sumIf (ANDed across filters). */
+function rowMatchesAllDimensionFilters(
+  row: Record<string, any>,
+  filters: DimensionFilter[]
+): boolean {
+  for (const f of filters) {
+    if (!rowMatchesDimensionFilter(row, f)) return false;
+  }
+  return true;
+}
+
+function isNumericLike(s: string): boolean {
+  const t = s.trim();
+  if (t.length === 0) return false;
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return false;
+  return Number.isFinite(Number(t));
+}
+
 function rowMatchesDimensionFilter(row: Record<string, any>, filter: DimensionFilter): boolean {
+  // CMP1 · scalar comparison ops: eq/neq/lt/lte/gt/gte
+  if (
+    filter.op === 'eq' ||
+    filter.op === 'neq' ||
+    filter.op === 'lt' ||
+    filter.op === 'lte' ||
+    filter.op === 'gt' ||
+    filter.op === 'gte'
+  ) {
+    const v = filter.values[0]?.trim();
+    if (v === undefined || v.length === 0) return false;
+    const raw = row[filter.column];
+    const cellStr = raw === null || raw === undefined ? '' : String(raw).trim();
+    const numericMode = isNumericLike(v);
+    if (numericMode) {
+      const cellNum = toNumber(raw);
+      const target = Number(v);
+      if (isNaN(cellNum)) return false;
+      switch (filter.op) {
+        case 'eq': return cellNum === target;
+        case 'neq': return cellNum !== target;
+        case 'lt': return cellNum < target;
+        case 'lte': return cellNum <= target;
+        case 'gt': return cellNum > target;
+        case 'gte': return cellNum >= target;
+      }
+    }
+    // String comparison (HH:MM:SS, ISO dates, plain text — lexicographic).
+    switch (filter.op) {
+      case 'eq': return cellStr === v;
+      case 'neq': return cellStr !== v;
+      case 'lt': return cellStr < v;
+      case 'lte': return cellStr <= v;
+      case 'gt': return cellStr > v;
+      case 'gte': return cellStr >= v;
+    }
+  }
+
+  // CMP1 · between
+  if (filter.op === 'between') {
+    if (filter.values.length < 2) return false;
+    const lo = filter.values[0]?.trim();
+    const hi = filter.values[1]?.trim();
+    if (!lo || !hi) return false;
+    const raw = row[filter.column];
+    const cellStr = raw === null || raw === undefined ? '' : String(raw).trim();
+    if (isNumericLike(lo) && isNumericLike(hi)) {
+      const cellNum = toNumber(raw);
+      if (isNaN(cellNum)) return false;
+      return cellNum >= Number(lo) && cellNum <= Number(hi);
+    }
+    return cellStr >= lo && cellStr <= hi;
+  }
+
+  // Categorical in / not_in
   const mode = filter.match || 'exact';
   const raw = row[filter.column];
   const cell = normalizeDimensionCell(raw, mode);
@@ -222,6 +295,30 @@ function rowMatchesDimensionFilter(row: Record<string, any>, filter: DimensionFi
   return filter.op === 'in' ? hit : !hit;
 }
 
+function describeDimensionFilter(filter: DimensionFilter): string {
+  const vals = filter.values.join(', ');
+  switch (filter.op) {
+    case 'in':
+      return `${filter.column} in [${vals}] (${filter.match || 'exact'})`;
+    case 'not_in':
+      return `${filter.column} not in [${vals}] (${filter.match || 'exact'})`;
+    case 'eq':
+      return `${filter.column} = ${filter.values[0] ?? ''}`;
+    case 'neq':
+      return `${filter.column} != ${filter.values[0] ?? ''}`;
+    case 'lt':
+      return `${filter.column} < ${filter.values[0] ?? ''}`;
+    case 'lte':
+      return `${filter.column} <= ${filter.values[0] ?? ''}`;
+    case 'gt':
+      return `${filter.column} > ${filter.values[0] ?? ''}`;
+    case 'gte':
+      return `${filter.column} >= ${filter.values[0] ?? ''}`;
+    case 'between':
+      return `${filter.column} between ${filter.values[0] ?? ''} and ${filter.values[1] ?? ''}`;
+  }
+}
+
 function applyDimensionFilter(
   data: Record<string, any>[],
   filter: DimensionFilter
@@ -230,11 +327,7 @@ function applyDimensionFilter(
     return { data };
   }
   const result = data.filter((row) => rowMatchesDimensionFilter(row, filter));
-  const vals = filter.values.join(', ');
-  const desc =
-    filter.op === 'in'
-      ? `${filter.column} in [${vals}] (${filter.match || 'exact'})`
-      : `${filter.column} not in [${vals}] (${filter.match || 'exact'})`;
+  const desc = describeDimensionFilter(filter);
   if (result.length === 0 && data.length > 0) {
     console.warn(`⚠️ Dimension filter removed ALL rows: ${desc}`);
   }
@@ -582,6 +675,35 @@ function applySort(
   return sorted;
 }
 
+/**
+ * PCT1 · Compute countIf / sumIf against a set of rows. Returns null when
+ * the agg op is not conditional, so callers can fall through to the existing
+ * branches. Centralises the predicate matching so the no-groupBy, percent_change,
+ * and grouped paths stay consistent.
+ */
+function computeConditionalAggregation(
+  rows: Record<string, any>[],
+  agg: AggregationRequest
+): number | null {
+  if (agg.operation !== "countIf" && agg.operation !== "sumIf") return null;
+  if (!agg.predicate?.length) return 0;
+  if (agg.operation === "countIf") {
+    let n = 0;
+    for (const r of rows) {
+      if (rowMatchesAllDimensionFilters(r, agg.predicate)) n++;
+    }
+    return n;
+  }
+  // sumIf
+  let total = 0;
+  for (const r of rows) {
+    if (!rowMatchesAllDimensionFilters(r, agg.predicate)) continue;
+    const v = toNumber(r[agg.column]);
+    if (!isNaN(v)) total += v;
+  }
+  return total;
+}
+
 function applyAggregations(
   data: Record<string, any>[],
   summary: DataSummary,
@@ -596,6 +718,18 @@ function applyAggregations(
   if (!groupBy.length) {
     const base: Record<string, any> = {};
     for (const agg of aggregations) {
+      // PCT1 · countIf/sumIf short-circuit before the ID-column heuristic
+      // since they don't use the column the way sum/min/max do.
+      const conditional = computeConditionalAggregation(data, agg);
+      if (conditional !== null) {
+        const targetName =
+          agg.alias ||
+          (agg.operation === "countIf"
+            ? "matching"
+            : `${agg.column}_sumIf`);
+        base[targetName] = conditional;
+        continue;
+      }
       const isIdCol = isIdColumn(agg.column);
       if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
         console.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
@@ -612,11 +746,21 @@ function applyAggregations(
           }
         }
         resultValue = distinctValues.size;
+      } else if (agg.operation === 'count_distinct') {
+        // Wave QL7 · COUNT(DISTINCT) — counts unique non-null/non-empty values.
+        const distinctValues = new Set<string | number>();
+        for (const row of data) {
+          const val = row[agg.column];
+          if (val !== null && val !== undefined && val !== '') {
+            distinctValues.add(val as string | number);
+          }
+        }
+        resultValue = distinctValues.size;
       } else {
         const values = data
           .map((r: Record<string, any>) => toNumber(r[agg.column]))
           .filter((v: number) => !isNaN(v));
-        const op = agg.operation as Exclude<AggregationOperation, 'percent_change'>;
+        const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
         switch (op) {
           case 'sum':
             resultValue = values.reduce((sum: number, val: number) => sum + val, 0);
@@ -659,9 +803,6 @@ function applyAggregations(
                   ? (sortedVals[mid - 1] + sortedVals[mid]) / 2
                   : sortedVals[mid];
             }
-            break;
-          case 'percent_change':
-            resultValue = null;
             break;
         }
       }
@@ -777,7 +918,19 @@ function applyAggregations(
           // Skip percent_change for now, will calculate after sorting
           continue;
         }
-        
+
+        // PCT1 · short-circuit conditional aggregations
+        const conditional = computeConditionalAggregation(rows, agg);
+        if (conditional !== null) {
+          const targetName =
+            agg.alias ||
+            (agg.operation === "countIf"
+              ? "matching"
+              : `${agg.column}_sumIf`);
+          base[targetName] = conditional;
+          continue;
+        }
+
         // Handle ID columns specially - always use COUNT(DISTINCT)
         const isIdCol = isIdColumn(agg.column);
         if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
@@ -785,9 +938,9 @@ function applyAggregations(
           // Switch to count for ID columns
           agg.operation = 'count';
         }
-        
+
         let resultValue: number | null = null;
-        
+
         if (isIdCol) {
           // COUNT(DISTINCT) for ID columns
           const distinctValues = new Set<string | number>();
@@ -798,10 +951,20 @@ function applyAggregations(
             }
           }
           resultValue = distinctValues.size;
+        } else if (agg.operation === 'count_distinct') {
+          // Wave QL7 · COUNT(DISTINCT) on a non-ID column, scoped to the group.
+          const distinctValues = new Set<string | number>();
+          for (const row of rows) {
+            const val = row[agg.column];
+            if (val !== null && val !== undefined && val !== '') {
+              distinctValues.add(val as string | number);
+            }
+          }
+          resultValue = distinctValues.size;
         } else {
           const values = rows.map((r: Record<string, any>) => toNumber(r[agg.column])).filter((v: number) => !isNaN(v));
           // TypeScript: percent_change is already filtered out above, so we can safely narrow the type
-          const op = agg.operation as Exclude<AggregationOperation, 'percent_change'>;
+          const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
           switch (op) {
             case 'sum':
               resultValue = values.reduce((sum, val) => sum + val, 0);
@@ -963,6 +1126,18 @@ function applyAggregations(
       });
 
       for (const agg of aggregations) {
+        // PCT1 · short-circuit conditional aggregations
+        const conditional = computeConditionalAggregation(rows, agg);
+        if (conditional !== null) {
+          const targetName =
+            agg.alias ||
+            (agg.operation === "countIf"
+              ? "matching"
+              : `${agg.column}_sumIf`);
+          base[targetName] = conditional;
+          continue;
+        }
+
         // Handle ID columns specially - always use COUNT(DISTINCT)
         const isIdCol = isIdColumn(agg.column);
         if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
@@ -970,9 +1145,9 @@ function applyAggregations(
           // Switch to count for ID columns
           agg.operation = 'count';
         }
-        
+
         let resultValue: number | null = null;
-        
+
         if (isIdCol) {
           // COUNT(DISTINCT) for ID columns
           const distinctValues = new Set<string | number>();
@@ -983,10 +1158,20 @@ function applyAggregations(
             }
           }
           resultValue = distinctValues.size;
+        } else if (agg.operation === 'count_distinct') {
+          // Wave QL7 · COUNT(DISTINCT) on a non-ID column, scoped to the group.
+          const distinctValues = new Set<string | number>();
+          for (const row of rows) {
+            const val = row[agg.column];
+            if (val !== null && val !== undefined && val !== '') {
+              distinctValues.add(val as string | number);
+            }
+          }
+          resultValue = distinctValues.size;
         } else {
           const values = rows.map((r: Record<string, any>) => toNumber(r[agg.column])).filter((v: number) => !isNaN(v));
           // TypeScript: percent_change is handled separately, so we can safely narrow the type
-          const op = agg.operation as Exclude<AggregationOperation, 'percent_change'>;
+          const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
           switch (op) {
             case 'sum':
               resultValue = values.reduce((sum: number, val: number) => sum + val, 0);
@@ -1202,7 +1387,13 @@ function mergeAggregatedResults(
           newRow[col] = row[col];
         });
         aggregations.forEach(agg => {
-          const targetName = agg.alias || `${agg.column}_${agg.operation}`;
+          const targetName =
+            agg.alias ||
+            (agg.operation === "countIf"
+              ? "matching"
+              : agg.operation === "sumIf"
+                ? `${agg.column}_sumIf`
+                : `${agg.column}_${agg.operation}`);
           newRow[targetName] = 0;
         });
         merged.set(key, newRow);
@@ -1212,7 +1403,14 @@ function mergeAggregatedResults(
       // "slot has never received a real value" from "slot is legitimately 0",
       // otherwise Math.min(0 || Infinity, …) swallows real zeros.
       aggregations.forEach(agg => {
-        const targetName = agg.alias || `${agg.column}_${agg.operation}`;
+        // PCT1 · countIf/sumIf use the same alias-resolution as the main path.
+        const targetName =
+          agg.alias ||
+          (agg.operation === "countIf"
+            ? "matching"
+            : agg.operation === "sumIf"
+              ? `${agg.column}_sumIf`
+              : `${agg.column}_${agg.operation}`);
         const bucket = merged.get(key)!;
         const rawExisting = bucket[targetName];
         const hasExisting = typeof rawExisting === 'number' && Number.isFinite(rawExisting);
@@ -1222,15 +1420,24 @@ function mergeAggregatedResults(
         if (!isNaN(newValue)) {
           switch (agg.operation) {
             case 'sum':
+            case 'count':
+            case 'countIf':
+            case 'sumIf':
+              // PCT1 · all sum-style merges across batches.
+              bucket[targetName] = existingValue + newValue;
+              break;
+            case 'count_distinct':
+              // Wave QL7 · OVER-COUNTS across batches (we don't carry the Set
+              // membership through the batch boundary). Acceptable because the
+              // streaming/batch path is for datasets too large for one-shot
+              // aggregation; production turns hit DuckDB anyway via the
+              // analytical paths. Sum-merge keeps the column populated.
               bucket[targetName] = existingValue + newValue;
               break;
             case 'mean':
             case 'avg':
               // For mean, we need to track count - simplified for now
               bucket[targetName] = hasExisting ? (existingValue + newValue) / 2 : newValue;
-              break;
-            case 'count':
-              bucket[targetName] = existingValue + newValue;
               break;
             case 'max':
               bucket[targetName] = hasExisting ? Math.max(existingValue, newValue) : newValue;

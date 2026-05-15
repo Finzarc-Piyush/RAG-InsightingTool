@@ -14,7 +14,48 @@ import { getChatBySessionIdForUser, type ChatDocument } from '../models/chat.mod
 import { getAuthenticatedEmail } from '../utils/auth.helper.js';
 import { sendError, sendValidationError } from '../utils/responseFormatter.js';
 import { executePivotQuery } from '../lib/pivotQueryService.js';
+import { recordUsageEvent } from '../models/usageEvent.model.js';
 import { z } from 'zod';
+
+// Wave AD3 · per-session in-process dedupe so the admin metrics dashboard
+// counts distinct pivot CONFIGURATIONS (one row per unique rows×cols×values
+// shape per session per turn), not raw fetch hits. Pivot grids tend to
+// re-fetch on every drag / column resize / filter narrow; a 5-minute TTL is
+// enough to catch the user's exploration of one shape and emit ONE event.
+const pivotEventDedupe = new Map<string, number>();
+const PIVOT_DEDUPE_TTL_MS = 5 * 60 * 1000;
+function shouldEmitPivotEvent(sessionId: string, configHash: string): boolean {
+  const now = Date.now();
+  // GC stale entries opportunistically; the map stays bounded across long uptime.
+  if (pivotEventDedupe.size > 5000) {
+    for (const [k, ts] of pivotEventDedupe) {
+      if (now - ts > PIVOT_DEDUPE_TTL_MS) pivotEventDedupe.delete(k);
+    }
+  }
+  const key = `${sessionId}__${configHash}`;
+  const last = pivotEventDedupe.get(key);
+  if (last != null && now - last < PIVOT_DEDUPE_TTL_MS) return false;
+  pivotEventDedupe.set(key, now);
+  return true;
+}
+function pivotConfigShape(body: unknown): {
+  hash: string;
+  rowsCount: number;
+  colsCount: number;
+  valuesCount: number;
+} {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const rows = Array.isArray(b.rows) ? (b.rows as unknown[]) : [];
+  const cols = Array.isArray(b.columns) ? (b.columns as unknown[]) : [];
+  const values = Array.isArray(b.values) ? (b.values as unknown[]) : [];
+  // Lightweight stable hash (length + concat) — adequate for this dedupe horizon.
+  const hash = JSON.stringify({
+    r: rows.map(String).sort(),
+    c: cols.map(String).sort(),
+    v: values.map((v) => (typeof v === "object" && v ? JSON.stringify(v) : String(v))).sort(),
+  });
+  return { hash, rowsCount: rows.length, colsCount: cols.length, valuesCount: values.length };
+}
 
 const router = Router();
 
@@ -292,6 +333,28 @@ router.post('/:sessionId/pivot/query', async (req: Request, res: Response) => {
       chat.currentDataBlob?.version ?? chat.ragIndex?.dataVersion ?? 0;
 
     const out = await executePivotQuery(sessionId, req.body, { dataVersion, chat });
+    // Wave AD3 · log pivot generation events — only when the configuration
+    // is meaningful (≥1 row / col / value) AND we haven't logged the same
+    // shape for this session in the last 5 minutes.
+    const shape = pivotConfigShape(req.body);
+    if (
+      shape.rowsCount + shape.colsCount + shape.valuesCount > 0 &&
+      shouldEmitPivotEvent(sessionId, shape.hash)
+    ) {
+      const userEmail = getAuthenticatedEmail(req);
+      if (userEmail) {
+        void recordUsageEvent({
+          eventType: "pivot.generated",
+          userEmail,
+          sessionId,
+          metadata: {
+            rowsCount: shape.rowsCount,
+            colsCount: shape.colsCount,
+            valuesCount: shape.valuesCount,
+          },
+        });
+      }
+    }
     res.json(out);
   } catch (error) {
     console.error('Error executing pivot query:', error);

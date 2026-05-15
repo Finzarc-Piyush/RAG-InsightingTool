@@ -86,6 +86,15 @@ export function buildChartFromAnalyticalTable(
   if (rows.length === 0 || rows.length > ROW_COUNT_CAP) return null;
   if (columns.length < 2) return null;
 
+  // Wave QL9.C · Pure scalars (1 row) don't have a meaningful x-axis. The
+  // QL7 ratio shape returns `[{ total_visits: 104870, num_days: 30,
+  // avg_per_day: 3495.67 }]` — three numerics, zero dimensions. Promoting
+  // this to a bar chart picks one numeric as x (e.g. num_days=30) and the
+  // other as y (avg=3.5K), producing a single bar with a number on the
+  // x-axis that the user can't interpret. Skip; the user sees the AnswerCard
+  // text + the pivot's flat 3-column row (from Wave QL9.A) instead.
+  if (rows.length === 1) return null;
+
   const sample = rows.slice(0, 80);
   const numericCols = columns.filter((c) => isNumericishOnSample(c, sample));
   const dimCols = columns.filter((c) => !isNumericishOnSample(c, sample));

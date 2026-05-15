@@ -36,5 +36,13 @@ export type {
   DataOpsResponse,
   StreamIntermediatePayload,
 } from "./chat";
+export { automationsApi, runAutomationStream } from "./automations";
+export { fetchRecalledPivotRows } from "./pastAnalyses";
+export type { RecalledPivotRowsResponse } from "./pastAnalyses";
+export type {
+  RunAutomationCallbacks,
+  RunAutomationOptions,
+  AutomationSseEvent,
+} from "./automations";
 
 

@@ -6,11 +6,13 @@ import { Switch } from '@/components/ui/switch';
 import { ColumnsDisplay } from './ColumnsDisplay';
 import type {
   ColumnCurrency,
+  DateTimeColumnPair,
   DimensionHierarchy,
   TemporalDisplayGrain,
   TemporalFacetColumnMeta,
   WideFormatTransform,
 } from '@/shared/schema';
+import type { IndicatorEntry } from '@/components/IndicatorColumnsBanner';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import { facetColumnHeaderLabel, isTemporalFacetFieldId } from '@/lib/temporalFacetDisplay';
 import { parseDateLike } from '@/lib/parseDateLike';
@@ -66,6 +68,14 @@ interface DataPreviewProps {
   sessionIdForHierarchyEdit?: string;
   /** EU1 — callback after successful hierarchy remove. */
   onHierarchiesChange?: (next: DimensionHierarchy[]) => void;
+  /** SU-UX1 — date×time pair annotations; renders the banner + inline tag. */
+  dateTimeColumnPairs?: DateTimeColumnPair[];
+  /** SU-UX1 — callback after successful pair remove. */
+  onDateTimePairsChange?: (next: DateTimeColumnPair[]) => void;
+  /** SU-UX1 — indicator-column annotations; renders the banner + badge. */
+  indicators?: IndicatorEntry[];
+  /** SU-UX1 — callback after successful indicator remove. */
+  onIndicatorsChange?: (next: IndicatorEntry[]) => void;
 }
 
 export function DataPreview({
@@ -85,6 +95,10 @@ export function DataPreview({
   dimensionHierarchies,
   sessionIdForHierarchyEdit,
   onHierarchiesChange,
+  dateTimeColumnPairs,
+  onDateTimePairsChange,
+  indicators,
+  onIndicatorsChange,
 }: DataPreviewProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [compareMode, setCompareMode] = useState(false);
@@ -196,8 +210,12 @@ export function DataPreview({
         currencyByColumn={currencyByColumn}
         wideFormatTransform={wideFormatTransform}
         dimensionHierarchies={dimensionHierarchies}
+        dateTimeColumnPairs={dateTimeColumnPairs}
+        indicators={indicators}
         sessionId={sessionIdForHierarchyEdit}
         onHierarchiesChange={onHierarchiesChange}
+        onDateTimePairsChange={onDateTimePairsChange}
+        onIndicatorsChange={onIndicatorsChange}
       />
       
       {/* Data Preview Table */}

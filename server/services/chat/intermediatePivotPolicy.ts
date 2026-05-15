@@ -84,6 +84,19 @@ export function filterProvisionalPivotDefaultsToPreviewKeys(
     }
   }
 
+  // Wave PAG1 · preserve agent-supplied per-column aggregator hints when
+  // forwarding the provisional pivot. Filter to the value set that survived
+  // the preview-key intersection above so a stale aggregator for a dropped
+  // column doesn't leak through.
+  if (provisional.valueAggregators && out.values?.length) {
+    const valueSet = new Set(out.values);
+    const va: Record<string, "sum" | "mean" | "count" | "min" | "max"> = {};
+    for (const [k, v] of Object.entries(provisional.valueAggregators)) {
+      if (valueSet.has(k)) va[k] = v;
+    }
+    if (Object.keys(va).length) out.valueAggregators = va;
+  }
+
   if (!out.rows?.length && !out.values?.length) return undefined;
   return out;
 }

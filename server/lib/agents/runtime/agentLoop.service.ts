@@ -29,6 +29,7 @@ import { createBlackboard, addFinding, addOpenQuestion, resolveHypothesis, forma
 import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
+import { runBusinessActions } from "./businessActionsAgent.js";
 import {
   isBudgetRedistributeOperationResult,
   buildRecommendationsFromBudgetOptimizer,
@@ -48,8 +49,15 @@ import {
   checkEnvelopeCompleteness,
   checkDomainLensCitations,
   extractSuppliedPackIds,
+  checkAggregationQuestionAddressed,
 } from "./checkEnvelopeCompleteness.js";
+import {
+  detectPerXIntent,
+  detectMultiPerIntent,
+  resolveMetricColumnFromQuestion,
+} from "./planArgRepairs.js";
 import { checkMagnitudesAgainstObservations } from "./checkMagnitudesAgainstObservations.js";
+import { checkTemporalTrendBuckets } from "./checkTemporalTrendBuckets.js";
 import { JsonFieldStreamExtractor } from "./jsonFieldStreamExtractor.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
@@ -79,6 +87,7 @@ import {
   type DashboardPivotSpec,
   type DataSummary,
   type Insight,
+  PIVOT_AGENT_RESULT_MAX_ROWS,
 } from "../../../shared/schema.js";
 import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
 import { registerDerivedColumnOnSummary } from "../../deriveDimensionBucket.js";
@@ -93,6 +102,9 @@ import {
 import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
 import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
+import { mergePivotDefaultRowsAndValues } from "../../pivotDefaultsFromExecution.js";
+import type { QueryPlanBody } from "../../queryPlanExecutor.js";
+import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
 import { sanitizeIntermediatePreviewRows } from "../../agentIntermediatePreviewSanitize.js";
 
 function detectSignificance(summary: string): Finding["significance"] {
@@ -189,7 +201,15 @@ function extractStatsFromNumericPayload(
 // stopped before it reached the long-tail high-cardinality dimensions that
 // DB4's top-N+Other bucketing now charts. 18 leaves headroom for the new
 // bucketed entries while keeping the dashboard legible.
-const DASHBOARD_CHART_HARD_CAP = 18;
+// DPF6 · 18 → 24. When the user explicitly asks for a dashboard
+// ("give me a sales dashboard", "hr dashboard", "marketing dashboard")
+// they want comprehensive coverage. 18 silently dropped any sweep-emitted
+// charts that bumped against `finalizeMergedCharts`'s parallel 14-default
+// cap (the two values were inconsistent — finalize would re-cap below
+// the sweep's headroom). 24 matches the per-sheet schema ceiling
+// (`dashboardSheetSpecSchema.charts.max(24)`), so the schema becomes the
+// single source of truth for the max — no runtime cap re-trims below it.
+const DASHBOARD_CHART_HARD_CAP = 24;
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -198,6 +218,20 @@ const INTERMEDIATE_TABLE_TOOLS = new Set([
   "derive_dimension_bucket",
   "add_computed_columns",
   "run_segment_driver_analysis",
+]);
+
+/**
+ * Data-prep tools transform the canonical frame (add a derived column, bucket
+ * a dimension) but do NOT produce an analytical aggregate. Their preview
+ * rows are the row-level dataset, so deriving pivot defaults from them would
+ * categorize every dimension as a pivot row and surface a misleading
+ * "every column on ROWS" cascade. The intermediate artifact still emits (so
+ * the workbench shows what the agent did), but with a smaller sample and no
+ * pivot defaults — the real analytical step that follows owns the pivot.
+ */
+const DATA_PREP_INTERMEDIATE_TOOLS = new Set([
+  "add_computed_columns",
+  "derive_dimension_bucket",
 ]);
 
 function toolTableRowsForIntermediate(tr: ToolResult): Record<string, unknown>[] {
@@ -476,7 +510,8 @@ function materializeDeferredBuildCharts(
 
 /**
  * Final pass over `mergedCharts`: dedupe by axis-signature and cap at
- * `AGENT_MAX_FINAL_CHARTS_PER_TURN` (default 14, matches dashboard mode).
+ * `AGENT_MAX_FINAL_CHARTS_PER_TURN` (default 24, matches the schema
+ * ceiling and the dashboard-turn hard cap).
  * Mutates the array in place; called once at end of turn after all chart
  * sources (per-step promotion, materializeDeferredBuildCharts, visualPlanner,
  * dashboard feature sweep) have populated it.
@@ -484,6 +519,14 @@ function materializeDeferredBuildCharts(
  * Dedupe order: first-seen wins (preserves chart sources earlier in the turn).
  * Cap order: rows-count wins (more informative survives), ties broken by
  * earliest emission.
+ *
+ * DPF6 · default raised 14 → 24 so an explicit dashboard ask ("give me a
+ * sales dashboard") doesn't silently lose charts the feature sweep
+ * deliberately emitted to fill coverage gaps. The sweep budget is gated
+ * by `DASHBOARD_CHART_HARD_CAP` (also 24); aligning the two means no
+ * runtime cap below the schema's per-sheet ceiling
+ * (`dashboardSheetSpecSchema.charts.max(24)`). Operators can still tighten
+ * via the env var; the previous 14 default was the silent regression.
  */
 function finalizeMergedCharts(mergedCharts: ChartSpec[]): void {
   if (mergedCharts.length === 0) return;
@@ -498,8 +541,8 @@ function finalizeMergedCharts(mergedCharts: ChartSpec[]): void {
   }
 
   const capRaw = process.env.AGENT_MAX_FINAL_CHARTS_PER_TURN;
-  const cap = capRaw != null && capRaw !== "" ? parseInt(capRaw, 10) : 14;
-  const effectiveCap = Number.isFinite(cap) && cap > 0 ? cap : 14;
+  const cap = capRaw != null && capRaw !== "" ? parseInt(capRaw, 10) : 24;
+  const effectiveCap = Number.isFinite(cap) && cap > 0 ? cap : 24;
 
   let capped: ChartSpec[];
   if (dedupedInPlace.length <= effectiveCap) {
@@ -581,8 +624,8 @@ function capAgentTrace(trace: AgentTrace): AgentTrace {
 
 /** PR 1.G — rich envelope for Phase-1 shapes. All new fields optional. */
 const magnitudeSchema = z.object({
-  label: z.string().min(1).max(140),
-  value: z.string().min(1).max(80),
+  label: z.string().min(1).max(200),
+  value: z.string().min(1).max(120),
   confidence: z.enum(["low", "medium", "high"]).optional(),
 });
 
@@ -590,36 +633,38 @@ const magnitudeSchema = z.object({
 // return `{ body: "", ctas: [...], magnitudes: [...] }`, which validated
 // silently and cascaded through every downstream check until the final
 // answer became the deterministic observation dump.
+// Caps mirror the loosened narrator/messageAnswerEnvelope schemas so the
+// fallback path can also produce calibrated-length output.
 const finalAnswerEnvelopeSchema = z.object({
   body: z.string().min(1),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
-  magnitudes: z.array(magnitudeSchema).max(6).optional(),
-  unexplained: z.string().max(800).optional(),
+  magnitudes: z.array(magnitudeSchema).max(10).optional(),
+  unexplained: z.string().max(1200).optional(),
   // W8 · decision-grade extensions, mirrored from the narrator schema so the
   // synthesizer fallback path produces the same envelope shape and the
   // AnswerCard renders identical sections regardless of which writer ran.
   implications: z
     .array(
       z.object({
-        statement: z.string().max(280),
-        soWhat: z.string().max(280),
+        statement: z.string().max(600),
+        soWhat: z.string().max(800),
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(4)
+    .max(12)
     .optional(),
   recommendations: z
     .array(
       z.object({
-        action: z.string().max(200),
-        rationale: z.string().max(280),
+        action: z.string().max(400),
+        rationale: z.string().max(800),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )
-    .max(4)
+    .max(12)
     .optional(),
-  domainLens: z.string().max(500).optional(),
+  domainLens: z.string().max(2000).optional(),
 });
 
 function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefined {
@@ -703,7 +748,7 @@ async function synthesizeFinalAnswerEnvelope(
   const system = `${ANALYST_PREAMBLE}You are a senior data analyst. Using ONLY the observations from tools (figures and quoted facts), produce JSON. The user message also carries a CONTEXT BUNDLE with four labelled sections — DATA UNDERSTANDING, USER CONTEXT, RELATED CONTEXT (RAG / web), and DOMAIN KNOWLEDGE (FMCG/Marico). Use them to enrich interpretation, but figures still come only from observations. RELATED CONTEXT may include open-web hits (tagged \`[web:tavily:N]\`) — cite them inline when material; never use them as numeric evidence.
 
 Required:
-- "body": main markdown answer. Lead with the direct answer; expand into 4–7 paragraphs of grounded prose. LENGTH: 600–1200 words for analytical questions, 80–150 words for purely conversational ones. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Do not duplicate the full keyInsight inside body.
+- "body": main markdown answer. Lead with the direct answer. LENGTH — calibrate to the question, not to a fixed band. A "descriptive" lookup is one or two sentences with the number. A "comparison" between segments is a few short paragraphs. A "driver_discovery" / "variance_diagnostic" / open "exploration" may warrant a multi-paragraph dive. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Brevity is a feature; match length to what the user actually asked. Do not duplicate the full keyInsight inside body.
   HARD CONSTRAINTS on body content: (1) Do NOT open with a methodology recap — phrases like "X has been calculated by grouping…", "the analysis was performed by summing…", "we computed X by aggregating…" are banned. The first sentence must state the headline finding with its number. (2) Do NOT include a paragraph describing dataset shape (rows × columns), data-quality assessments ("the dataset is clean", "well-structured for this purpose"), or hypothesis-confirmation language ("the findings align with the hypothesis"). The reader assumes the data was usable; surface genuine limitations only in implications/recommendations, not body prose.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions — segments, risk, opportunity, or "so what" for the business. Use general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
 - "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
@@ -711,22 +756,22 @@ Numeric claims, extremes, and trends must match tool output (aggregated tables, 
 If data is insufficient, say what is missing in body and use minimal ctas. Respect the CONTEXT BUNDLE when it does not contradict the data.
 If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.
 
-W8 · Decision-grade extensions — REQUIRED for analytical questions, omit each independently when not applicable:
-- "implications": 2–4 entries, each {statement, soWhat, confidence?}. \`statement\` is the observed fact; \`soWhat\` is the business meaning for an FMCG operator (buyer, brand manager, channel head), framed using DOMAIN KNOWLEDGE when relevant.
-- "recommendations": 2–4 entries, each {action, rationale, horizon?}. \`action\` is concrete; \`rationale\` ties it to a finding and the domain context; \`horizon\` ∈ {now, this_quarter, strategic}.
-- "domainLens": ≤500 chars, one paragraph framing the findings against the relevant FMCG/Marico context. Cite the pack id verbatim when referenced (e.g. "Per \`marico-haircare-portfolio\`, …"). Treat domain packs as orientation only — never invent domain facts.
+W8 · Decision-grade extensions — emit each only when grounded in the observations. Calibrate count to the question; do not pad to hit a target.
+- "implications": each {statement, soWhat, confidence?}. \`statement\` is the observed fact; \`soWhat\` is the business meaning for an FMCG operator (buyer, brand manager, channel head), framed using DOMAIN KNOWLEDGE when relevant. For a simple lookup this array may be empty; for a deep analytical dive it may carry several. Never invent implications to hit a count.
+- "recommendations": each {action, rationale, horizon?}. \`action\` is concrete; \`rationale\` ties it to a finding and the domain context; \`horizon\` ∈ {now, this_quarter, strategic}. Same calibration as implications.
+- "domainLens": one paragraph framing the findings against the relevant FMCG/Marico context. Cite the pack id verbatim when referenced (e.g. "Per \`marico-haircare-portfolio\`, …"). Omit when no pack is materially relevant. Treat domain packs as orientation only — never invent domain facts.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
-- "magnitudes": 2–4 entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent.
-- "unexplained": one sentence (≤180 chars) on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
+- "magnitudes": entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent. Emit zero when the answer carries no numeric backbone.
+- "unexplained": one sentence on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
 When the user message says "questionShape: none" you may omit magnitudes and unexplained.`;
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
-    // W8 · 2600 → 4500. Synthesizer now produces implications, recommendations,
-    // domainLens on top of the existing envelope and 600–1200-word body. The
-    // previous 2600-token cap was hit on richer turns and silently truncated.
-    maxTokens: 4500,
+    // 4500 → 8000. With rigid length bands removed and per-field schema caps
+    // relaxed, the synthesizer fallback also needs headroom for richer
+    // answers when warranted. Per-call max_tokens still wins.
+    maxTokens: 8000,
     temperature: getInsightTemperatureConservative(),
     model: getInsightModel(),
     onLlmCall,
@@ -873,9 +918,10 @@ async function runNarrativeRetry(
         { role: "user", content: user },
       ],
       temperature: 0.4,
-      // WTL2 · 800 → 1400. Final-answer retry was clipping mid-sentence on
-      // rich envelopes.
-      max_tokens: 1400,
+      // 1400 → 4000. The narrative retry is "2-4 sentences" but for big
+      // analytical questions those sentences carry compact prose with several
+      // numeric citations. Headroom prevents mid-sentence clipping.
+      max_tokens: 4000,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
   );
@@ -909,8 +955,9 @@ async function runPlainTextRetry(
         { role: "user", content: user },
       ],
       temperature: 0.35,
-      // WTL2 · 2_000 → 3_500. Plain-text retry softer prompt — give it room.
-      max_tokens: 3500,
+      // 3500 → 8000. Plain-text retry is the softer fallback path that can
+      // legitimately produce a long answer for a deep analytical question.
+      max_tokens: 8000,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
   );
@@ -1137,6 +1184,36 @@ export async function runAgentTurn(
   );
 
   const deadline = Date.now() + config.maxWallTimeMs;
+
+  // Wave QL1 · Quick-lookup fast path. When the question matches a simple
+  // lookup shape (top-N, list, count, average, latest), bypass the full
+  // hypothesis → brief → planner → reflector → narrator → verifier pipeline
+  // with a single Mini-tier planner call + one DuckDB query. Returns null
+  // for analytical / multi-part / non-analysis questions, in which case the
+  // request flows through the existing loop unchanged. Wired at the very
+  // top of the turn so the only LLM cost paid before the fall-through is
+  // the planner Mini call.
+  try {
+    const { tryQuickAnswer } = await import("./quickAnswerPath.js");
+    const quickResult = await tryQuickAnswer({
+      ctx,
+      turnId,
+      onLlmCall,
+      safeEmit,
+    });
+    if (quickResult) {
+      trace.endedAt = Date.now();
+      return quickResult;
+    }
+  } catch (err) {
+    // Fast path is opt-in and best-effort: any unexpected throw falls
+    // through to the full loop. Logged so prod can spot a regressing
+    // helper without affecting user-visible behaviour.
+    agentLog("quick_lookup.path_threw", {
+      turnId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   if (ctx.mode === "analysis") {
     // W39 · when MERGED_PRE_PLANNER=true, fold the analysisBrief and
@@ -2069,34 +2146,245 @@ export async function runAgentTurn(
           );
           if (intermediateRows.length > 0) {
             const insight = buildIntermediateInsight(step.tool, stepResult);
-            const pivotDefaults = derivePivotDefaultsFromPreviewRows(
-              intermediateRows,
-              ctx.summary,
-              toolTableColumnOrderForIntermediate(stepResult)
-            );
+            const isDataPrep = DATA_PREP_INTERMEDIATE_TOOLS.has(step.tool);
+            const intermediateColumnOrder =
+              toolTableColumnOrderForIntermediate(stepResult);
+            // PVT1 · For execute_query_plan, route through the trace-aware
+            // helper so the pivot respects groupBy + aggregations + dimension
+            // filters. Filter-projection plans (groupBy with no aggregations)
+            // would otherwise dump every numeric in the result slice into
+            // VALUES via the dataset-preview categorizer.
+            const tracePlan: QueryPlanBody | undefined =
+              step.tool === "execute_query_plan"
+                ? ((step.args as Record<string, unknown> | undefined)?.plan as
+                    | QueryPlanBody
+                    | undefined)
+                : undefined;
+            // Data-prep tools return the row-level frame with the new column /
+            // bucket — never derive a pivot from that, it would produce the
+            // "every dim on ROWS" cascade. The intermediate artifact still
+            // emits so the workbench shows the action; just no pivot.
+            let pivotDefaults: ReturnType<
+              typeof mergePivotDefaultRowsAndValues
+            > = undefined;
+            let pivotFromTracePlan = false;
+            if (!isDataPrep) {
+              if (tracePlan && typeof tracePlan === "object") {
+                pivotDefaults = mergePivotDefaultRowsAndValues({
+                  dataSummary: ctx.summary,
+                  tracePlan,
+                  tableRows: intermediateRows,
+                  tableColumns: intermediateColumnOrder ?? [],
+                });
+                pivotFromTracePlan = Boolean(pivotDefaults);
+              } else {
+                pivotDefaults = derivePivotDefaultsFromPreviewRows(
+                  intermediateRows,
+                  ctx.summary,
+                  intermediateColumnOrder
+                );
+              }
+              // PVT1 · Universal "when in doubt, don't auto-explode" guard.
+              // If the derived defaults pile up more than 8 fields across
+              // rows + values AND there's no trace-plan-derived shape we
+              // trust, suppress entirely. Encodes the user's rule: never
+              // fill everything when we don't understand what to do.
+              if (!pivotFromTracePlan && pivotDefaults) {
+                const totalFields =
+                  (pivotDefaults.rows?.length ?? 0) +
+                  (pivotDefaults.values?.length ?? 0);
+                if (totalFields > 8) {
+                  agentLog("pivot_defaults_suppressed_unclear", {
+                    turnId,
+                    tool: step.tool,
+                    rows: pivotDefaults.rows?.length ?? 0,
+                    values: pivotDefaults.values?.length ?? 0,
+                  });
+                  pivotDefaults = undefined;
+                }
+              }
+            }
+            // PVT1 · Filter-projection (rows from groupBy, no values) is now
+            // a valid pivot hint — gate is rows.length > 0 OR values.length > 0,
+            // not both. Empty rows AND empty values still suppresses.
             const hasPivotHint =
-              Boolean(pivotDefaults?.rows?.length) && Boolean(pivotDefaults?.values?.length);
+              !isDataPrep
+              && Boolean(pivotDefaults)
+              && (
+                Boolean(pivotDefaults?.rows?.length)
+                || Boolean(pivotDefaults?.values?.length)
+              );
             // Scalar: a 1-row aggregate with no row dimensions. Flag it so the
             // chat stream skips the schema-heuristic fallback that otherwise
             // renders Postal-Code-by-week-style nonsense beneath the answer.
+            // Data-prep outputs are not scalar (they're full row-level frames)
+            // — they're already handled by skipping pivot derivation above.
             const executionScalar =
-              intermediateRows.length <= 1 && !pivotDefaults?.rows?.length;
+              !isDataPrep
+              && intermediateRows.length <= 1
+              && !pivotDefaults?.rows?.length;
+            // PVT5 · intermediate parallel of the chat-stream signal — the
+            // agent produced a non-scalar analytical table but the safety
+            // contract suppressed the pivot (too many fields, alias-only
+            // values, etc.). Tell the client to render the elegant "pivot
+            // unavailable" fallback in the intermediate's Pivot tab.
+            const intermediateUnavailable =
+              !isDataPrep
+              && !hasPivotHint
+              && !executionScalar
+              && intermediateRows.length > 1;
+            // Wave P1 · Decide whether to embed the agent's result rows on
+            // pivotDefaults so the pivot UI can render computed-alias
+            // columns (e.g. `aov`, `avg_daily_sales`) that don't exist on
+            // the base `data` table. Gate:
+            //   - tool is execute_query_plan
+            //   - trace plan has `computedAggregations` with at least one alias
+            //   - result is non-scalar (rows.length > 0 after pivot hints)
+            //   - result row count ≤ PIVOT_AGENT_RESULT_MAX_ROWS (200 today)
+            // When ALL of these hold, the pivot UI switches to the
+            // `dataSource: "agent_result"` path: it aggregates the embedded
+            // rows in-memory rather than re-querying base data. Closes the
+            // QL9.A non-scalar gap pinned in pivotDefaultsRatioShapeQL9.
+            const computedAggsOnTrace =
+              tracePlan &&
+              typeof tracePlan === "object" &&
+              Array.isArray(
+                (tracePlan as QueryPlanBody).computedAggregations
+              ) &&
+              ((tracePlan as QueryPlanBody).computedAggregations?.length ?? 0) > 0;
+            const eligibleForAgentResultRender =
+              hasPivotHint &&
+              step.tool === "execute_query_plan" &&
+              computedAggsOnTrace &&
+              intermediateRows.length > 0 &&
+              intermediateRows.length <= PIVOT_AGENT_RESULT_MAX_ROWS &&
+              !executionScalar;
+            // When eligible, also UNION any computed-alias columns that
+            // the standard merge dropped via PVT2 (alias not in
+            // dataSummary.numericColumns) back into the values list. The
+            // pivot's agent-result branch operates on the embedded rows,
+            // so alias columns no longer crash the SQL build.
+            let augmentedValues: string[] | undefined =
+              pivotDefaults?.values;
+            if (eligibleForAgentResultRender && computedAggsOnTrace) {
+              const existing = new Set<string>(augmentedValues ?? []);
+              const aliasNames = (
+                (tracePlan as QueryPlanBody).computedAggregations ?? []
+              )
+                .map((c) => c?.alias)
+                .filter(
+                  (a): a is string => typeof a === "string" && a.length > 0
+                );
+              const resultCols = new Set<string>(
+                intermediateColumnOrder ??
+                  Object.keys(intermediateRows[0] ?? {})
+              );
+              const next = [...(augmentedValues ?? [])];
+              for (const a of aliasNames) {
+                if (existing.has(a)) continue;
+                if (!resultCols.has(a)) continue;
+                next.push(a);
+                existing.add(a);
+              }
+              augmentedValues = next;
+            }
             ctx.onIntermediateArtifact({
-              preview: intermediateRows.slice(0, 50),
+              // Smaller preview for data-prep status updates; the user just
+              // needs to see the agent did something, not browse hundreds of
+              // raw rows beneath the answer.
+              preview: intermediateRows.slice(0, isDataPrep ? 5 : 50),
               insight,
               ...(hasPivotHint
                 ? {
                     pivotDefaults: {
                       rows: pivotDefaults!.rows,
-                      values: pivotDefaults!.values,
+                      values: augmentedValues ?? pivotDefaults!.values,
                       ...(pivotDefaults!.columns?.length
                         ? { columns: pivotDefaults!.columns }
+                        : {}),
+                      ...(pivotDefaults!.filterFields?.length
+                        ? { filterFields: pivotDefaults!.filterFields }
+                        : {}),
+                      ...(pivotDefaults!.filterSelections &&
+                      Object.keys(pivotDefaults!.filterSelections).length
+                        ? {
+                            filterSelections: pivotDefaults!.filterSelections,
+                          }
+                        : {}),
+                      // Wave PAG1 · forward per-column aggregator hints so the
+                      // intermediate-card pivot's value chip is pre-set to the
+                      // agent's actual aggregation function (Mean for "average
+                      // X per Y" questions) instead of defaulting to Sum.
+                      ...(pivotDefaults!.valueAggregators &&
+                      Object.keys(pivotDefaults!.valueAggregators).length
+                        ? {
+                            valueAggregators:
+                              pivotDefaults!.valueAggregators,
+                          }
+                        : {}),
+                      // Wave P1 · agent-result render path. Embeds the
+                      // result rows so the pivot can show computed
+                      // aliases that aren't on the base table.
+                      ...(eligibleForAgentResultRender
+                        ? {
+                            dataSource: "agent_result" as const,
+                            agentResultRows: intermediateRows,
+                            ...(intermediateColumnOrder?.length
+                              ? { agentResultColumns: intermediateColumnOrder }
+                              : {}),
+                          }
                         : {}),
                     },
                   }
                 : {}),
               ...(executionScalar ? { executionScalar: true } : {}),
+              ...(intermediateUnavailable ? { pivotUnavailable: true } : {}),
             });
+            // AMR3 · capture the aggregated pivot result for cross-session
+            // recall. Only `execute_query_plan` steps with a real pivot shape
+            // (rows OR values populated) — data-prep tools, scalar aggregates,
+            // and "pivot unavailable" outputs would never benefit from recall.
+            // Stored on `ctx.pivotArtifactsBuffer` (allocated lazily); drained
+            // at the end of `runAgentTurn` onto `AgentLoopResult.pivotArtifacts`
+            // for the chatStream service to materialize + patch.
+            if (
+              step.tool === "execute_query_plan" &&
+              hasPivotHint &&
+              pivotDefaults &&
+              tracePlan &&
+              typeof tracePlan === "object"
+            ) {
+              ctx.pivotArtifactsBuffer ??= [];
+              ctx.pivotArtifactsBuffer.push({
+                sessionId: ctx.sessionId,
+                turnId,
+                stepId: step.id,
+                plan: tracePlan as unknown as Record<string, unknown>,
+                pivotDefaults: {
+                  ...(pivotDefaults.rows?.length ? { rows: pivotDefaults.rows } : {}),
+                  ...(pivotDefaults.values?.length
+                    ? { values: pivotDefaults.values }
+                    : {}),
+                  ...(pivotDefaults.columns?.length
+                    ? { columns: pivotDefaults.columns }
+                    : {}),
+                  ...(pivotDefaults.filterFields?.length
+                    ? { filterFields: pivotDefaults.filterFields }
+                    : {}),
+                  ...(pivotDefaults.filterSelections &&
+                  Object.keys(pivotDefaults.filterSelections).length
+                    ? { filterSelections: pivotDefaults.filterSelections }
+                    : {}),
+                  ...(pivotDefaults.valueAggregators &&
+                  Object.keys(pivotDefaults.valueAggregators).length
+                    ? { valueAggregators: pivotDefaults.valueAggregators }
+                    : {}),
+                },
+                columnHeaders: intermediateColumnOrder ?? Object.keys(intermediateRows[0] ?? {}),
+                rows: intermediateRows,
+                questionContext: insight?.slice(0, 240),
+              });
+            }
           }
         }
 
@@ -2703,9 +2991,19 @@ export async function runAgentTurn(
             if (narResult.findings?.length) env.findings = narResult.findings;
             if (narResult.methodology) env.methodology = narResult.methodology;
             if (narResult.caveats?.length) env.caveats = narResult.caveats;
-            if (envCtas.length) env.nextSteps = envCtas;
+            // PVT3 · for direct factual questions ("What is the average X per
+            // Y?", "Which Z has the most W?"), drop the narrator's
+            // recommendations + suggested next-steps — the user's rule "if
+            // user asks a direct quest, no need to go for further
+            // investigation". Implications stay (those are findings, not
+            // action prompts). Diagnostic / strategy questions retain the
+            // full envelope.
+            const suppressFollowUps = isDirectFactualQuestion(ctx.question);
+            if (envCtas.length && !suppressFollowUps) env.nextSteps = envCtas;
             if (narResult.implications?.length) env.implications = narResult.implications;
-            if (narResult.recommendations?.length) env.recommendations = narResult.recommendations;
+            if (narResult.recommendations?.length && !suppressFollowUps) {
+              env.recommendations = narResult.recommendations;
+            }
             if (narResult.domainLens) env.domainLens = narResult.domainLens;
             // W54 · deterministic recommendations + magnitudes when the
             // run_budget_optimizer tool produced a payload. The numbers must
@@ -2755,9 +3053,14 @@ export async function runAgentTurn(
             const synthEnv: NonNullable<
               import("../../../shared/schema.js").Message["answerEnvelope"]
             > = {};
-            if (envCtas.length) synthEnv.nextSteps = envCtas;
+            // PVT3 · same direct-factual gate as the narrator branch — strip
+            // recommendations + nextSteps for plain "what is X" questions.
+            const suppressFollowUps = isDirectFactualQuestion(ctx.question);
+            if (envCtas.length && !suppressFollowUps) synthEnv.nextSteps = envCtas;
             if (env.implications?.length) synthEnv.implications = env.implications;
-            if (env.recommendations?.length) synthEnv.recommendations = env.recommendations;
+            if (env.recommendations?.length && !suppressFollowUps) {
+              synthEnv.recommendations = env.recommendations;
+            }
             if (env.domainLens) synthEnv.domainLens = env.domainLens;
             // W54 · same deterministic override as the narrator branch — the
             // synthesizer fallback path also needs optimizer-derived numbers.
@@ -2879,7 +3182,50 @@ export async function runAgentTurn(
               domainContext: ctx.domainContext,
             })
           : { ok: true as const };
-        if (completenessGap.ok && citationGap.ok && magnitudesGap.ok) break;
+        // Wave T3 · single-bucket trend safety net. Gated by completeness
+        // so we don't double-correct a fields-missing envelope.
+        const temporalGap = completenessGap.ok
+          ? checkTemporalTrendBuckets(ctx.question, structuredObservations)
+          : { ok: true as const };
+        // Wave QL4 · "Aggregation question not addressed" safety net. Catches
+        // the residual case where Wave QL2's deterministic synthesis floor
+        // misfired (ambiguous column, unusual phrasing) and the narrator
+        // still claims the answer is uncomputable for a question whose
+        // columns clearly exist. Forces ONE repair round; if Wave QL2 fixes
+        // the next plan attempt, the repaired narrator output won't trip
+        // this gate again.
+        const aggregationGap = completenessGap.ok
+          ? (() => {
+              const perXForGate = detectPerXIntent(ctx.question, ctx.summary);
+              const multiPerForGate = detectMultiPerIntent(ctx.question, ctx.summary);
+              const metricResolves = Boolean(
+                resolveMetricColumnFromQuestion(ctx.question, ctx.summary)
+              );
+              const hasAggregationIntent =
+                metricResolves &&
+                (perXForGate !== null ||
+                  multiPerForGate !== null ||
+                  /\b(average|avg|mean|total|sum|count|max|maximum|highest|min|minimum|lowest)\b/i.test(
+                    ctx.question
+                  ));
+              const ranExecuteQueryPlan = trace.toolCalls.some(
+                (t) => t.name === "execute_query_plan" && t.ok
+              );
+              return checkAggregationQuestionAddressed(envelopeAnswerEnvelope, {
+                question: ctx.question,
+                ranExecuteQueryPlan,
+                hasAggregationIntent,
+              });
+            })()
+          : { ok: true as const };
+        if (
+          completenessGap.ok &&
+          citationGap.ok &&
+          magnitudesGap.ok &&
+          temporalGap.ok &&
+          aggregationGap.ok
+        )
+          break;
         // W43 · batch ALL failed checks into a single composite repair so
         // a draft missing implications + citing a fake pack id + with a
         // fabricated magnitude triggers ONE narrator call instead of
@@ -2901,6 +3247,8 @@ export async function runAgentTurn(
         if (!completenessGap.ok) failedGaps.push(completenessGap);
         if (!citationGap.ok) failedGaps.push(citationGap);
         if (!magnitudesGap.ok) failedGaps.push(magnitudesGap);
+        if (!temporalGap.ok) failedGaps.push(temporalGap);
+        if (!aggregationGap.ok) failedGaps.push(aggregationGap);
         if (failedGaps.length === 0) break; // unreachable; guard
         completenessRound++;
         const failedCodes = failedGaps.map((g) => g.code);
@@ -2927,7 +3275,11 @@ export async function runAgentTurn(
                 ? "envelope-citations"
                 : failedCodes[0] === "FABRICATED_MAGNITUDES"
                   ? "envelope-magnitudes"
-                  : "envelope-completeness"
+                  : failedCodes[0] === "TEMPORAL_TREND_SINGLE_BUCKET"
+                    ? "envelope-temporal-trend"
+                    : failedCodes[0] === "AGGREGATION_QUESTION_NOT_ADDRESSED"
+                      ? "envelope-aggregation-floor"
+                      : "envelope-completeness"
               : "envelope-multi-issue",
           chosen: `repair-round-${completenessRound}`,
           reason: composite.description.slice(0, 300),
@@ -3175,6 +3527,18 @@ export async function runAgentTurn(
           turnId,
           sessionId: ctx.sessionId,
         });
+        // DPF2 · message-mirroring fields. Computed here in the same scope
+        // the assistant message persist uses, so the dashboard sees the SAME
+        // followUpPrompts / investigationSummary / priorInvestigationsSnapshot
+        // the message saved to Cosmos. `priorInvestigations` is the BEFORE-
+        // turn snapshot — the W21 append happens later in
+        // `persistMergeAssistantSessionContext`, so the in-memory
+        // `chatDocument.sessionAnalysisContext.sessionKnowledge.priorInvestigations`
+        // still reflects what the agent knew BEFORE this turn ran (parity with
+        // chatStream.service.ts:1500-1503).
+        const dashInvestigationSummary = buildInvestigationSummary(ctx.blackboard);
+        const dashPriorInvestigations =
+          ctx.chatDocument?.sessionAnalysisContext?.sessionKnowledge?.priorInvestigations;
         const spec = await buildDashboardFromTurn({
           question: ctx.question,
           answerBody: answer,
@@ -3187,6 +3551,15 @@ export async function runAgentTurn(
           intermediateSummaries,
           envelope: dashEnvelope,
           pivot: dashPivot,
+          ...(followUpPrompts && followUpPrompts.length > 0
+            ? { followUpPrompts }
+            : {}),
+          ...(dashInvestigationSummary
+            ? { investigationSummary: dashInvestigationSummary }
+            : {}),
+          ...(dashPriorInvestigations && dashPriorInvestigations.length > 0
+            ? { priorInvestigationsSnapshot: dashPriorInvestigations }
+            : {}),
         });
         if (spec) {
           dashboardDraft = spec;
@@ -3448,6 +3821,31 @@ export async function runAgentTurn(
       ragHitCount: lastRagHitCount,
     });
 
+    // Post-verifier business-actions seam. Spawned (not awaited) so the
+    // existing response/SSE timing is unchanged. The chatStream service
+    // awaits this promise AFTER emitting the response event, then sends a
+    // separate `business_actions` SSE event and patches the persisted
+    // message. Hard-skipped when the env flag is off, the synthesis
+    // cascaded to the fallback renderer, or there is no envelope.
+    const businessActionsEnabled =
+      String(process.env.BUSINESS_ACTIONS_ENABLED ?? "true").toLowerCase() !==
+      "false";
+    const businessActionsPromise =
+      businessActionsEnabled &&
+      answerSource !== "fallback" &&
+      envelopeAnswerEnvelope
+        ? runBusinessActions(ctx, envelopeAnswerEnvelope, {
+            turnId,
+            onLlmCall,
+          }).catch((err) => {
+            agentLog("businessActionsAgent.unhandled", {
+              turnId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return [] as Awaited<ReturnType<typeof runBusinessActions>>;
+          })
+        : undefined;
+
     return {
       answer,
       charts: mergedCharts.length ? mergedCharts : undefined,
@@ -3460,6 +3858,14 @@ export async function runAgentTurn(
       ...(envelopeMagnitudes?.length ? { magnitudes: envelopeMagnitudes } : {}),
       ...(envelopeUnexplained ? { unexplained: envelopeUnexplained } : {}),
       ...(envelopeAnswerEnvelope ? { answerEnvelope: envelopeAnswerEnvelope } : {}),
+      ...(businessActionsPromise ? { businessActionsPromise } : {}),
+      // AMR3 · drain the pivot-artifact capture buffer onto the return shape so
+      // the chatStream service can materialize (inline-vs-blob) and patch the
+      // past_analyses doc. Empty buffer / undefined ⇒ no pivots captured this
+      // turn (data-prep tools only, scalar aggregates, errored steps).
+      ...(ctx.pivotArtifactsBuffer?.length
+        ? { pivotArtifacts: ctx.pivotArtifactsBuffer }
+        : {}),
       ...(dashboardDraft ? { dashboardDraft } : {}),
       ...(createdDashboardId ? { createdDashboardId } : {}),
       ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),

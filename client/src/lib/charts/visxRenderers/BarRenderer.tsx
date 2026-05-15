@@ -42,6 +42,7 @@ import {
 } from "@visx/tooltip";
 import { localPoint } from "@visx/event";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
+import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -612,7 +613,7 @@ export function BarRenderer({
               stroke="hsl(var(--border))"
               strokeOpacity={0.25}
               strokeDasharray="2,2"
-              numTicks={5}
+              numTicks={targetYTickCount(innerHeight)}
             />
           ) : (
             <GridColumns
@@ -621,7 +622,7 @@ export function BarRenderer({
               stroke="hsl(var(--border))"
               strokeOpacity={0.25}
               strokeDasharray="2,2"
-              numTicks={5}
+              numTicks={targetYTickCount(innerWidth)}
             />
           )}
           {/* Zero-line emphasis. */}
@@ -901,7 +902,7 @@ export function BarRenderer({
                   dx: -4,
                   dy: 3,
                 })}
-                numTicks={5}
+                numTicks={targetYTickCount(innerHeight)}
               />
               {y2Scale && y2TickFormat && (
                 <AxisRight
@@ -918,7 +919,7 @@ export function BarRenderer({
                     dx: 4,
                     dy: 3,
                   })}
-                  numTicks={4}
+                  numTicks={targetYTickCount(innerHeight)}
                 />
               )}
             </>
@@ -951,7 +952,7 @@ export function BarRenderer({
                   fontFamily: "var(--font-sans)",
                   textAnchor: "middle",
                 })}
-                numTicks={5}
+                numTicks={targetYTickCount(innerWidth)}
               />
               {y2Scale && y2TickFormat && (
                 <AxisTop
@@ -966,7 +967,7 @@ export function BarRenderer({
                     textAnchor: "middle",
                     dy: -2,
                   })}
-                  numTicks={4}
+                  numTicks={targetYTickCount(innerWidth)}
                 />
               )}
             </>

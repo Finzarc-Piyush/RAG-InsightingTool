@@ -17,27 +17,27 @@ import { z } from "zod";
 // superset of the persisted answerEnvelope shape — the loop wires
 // narrator output → answerEnvelope, so any narrator field that lacks a
 // home in the schema would be silently dropped.
-// WTL3 · caps loosened to mirror the bumped narratorOutputSchema in
-// narratorAgent.ts and the answerEnvelope in shared/schema.ts.
+// Mirrors the bumped narratorOutputSchema in narratorAgent.ts and the
+// answerEnvelope in shared/schema.ts.
 const narratorOutputSchemaMirror = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).default([]),
   magnitudes: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
   unexplained: z.string().optional(),
-  tldr: z.string().max(400).optional(),
+  tldr: z.string().max(600).optional(),
   findings: z
     .array(
       z.object({
-        headline: z.string().max(280),
-        evidence: z.string().max(1200),
-        magnitude: z.string().max(120).optional(),
+        headline: z.string().max(400),
+        evidence: z.string().max(3000),
+        magnitude: z.string().max(160).optional(),
       })
     )
-    .max(7)
+    .max(15)
     .optional(),
-  methodology: z.string().max(1400).optional(),
-  caveats: z.array(z.string().max(280)).max(5).optional(),
+  methodology: z.string().max(3500).optional(),
+  caveats: z.array(z.string().max(400)).max(10).optional(),
 });
 
 describe("W3 · messageSchema.answerEnvelope", () => {
@@ -86,19 +86,19 @@ describe("W3 · messageSchema.answerEnvelope", () => {
     assert.strictEqual(parsed.success, true);
   });
 
-  it("rejects TL;DR over 400 chars (WTL3 · cap raised 280 → 400)", () => {
+  it("rejects TL;DR over 600 chars (sanity ceiling)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
-      answerEnvelope: { tldr: "a".repeat(401) },
+      answerEnvelope: { tldr: "a".repeat(601) },
     });
     assert.strictEqual(parsed.success, false);
   });
 
-  it("rejects more than 7 findings (WTL3 · cap raised 5 → 7)", () => {
+  it("rejects more than 15 findings (sanity ceiling)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
       answerEnvelope: {
-        findings: Array.from({ length: 8 }, (_, i) => ({
+        findings: Array.from({ length: 16 }, (_, i) => ({
           headline: `H${i}`,
           evidence: `E${i}`,
         })),
@@ -107,10 +107,10 @@ describe("W3 · messageSchema.answerEnvelope", () => {
     assert.strictEqual(parsed.success, false);
   });
 
-  it("rejects more than 5 caveats (WTL3 · cap raised 3 → 5)", () => {
+  it("rejects more than 10 caveats (sanity ceiling)", () => {
     const parsed = messageSchema.safeParse({
       ...baseMessage,
-      answerEnvelope: { caveats: ["a", "b", "c", "d", "e", "f"] },
+      answerEnvelope: { caveats: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"] },
     });
     assert.strictEqual(parsed.success, false);
   });

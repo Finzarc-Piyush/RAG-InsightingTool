@@ -3,6 +3,10 @@ import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
 import { StartAnalysisView } from '@/pages/Home/Components/StartAnalysisView';
 import { SnowflakeImportFlow } from '@/pages/Home/Components/SnowflakeImportFlow';
 import { ChatInterface } from './Components/ChatInterface';
+import { AutomationPickerSheet } from '@/components/AutomationPickerSheet';
+import { AutomationRemapDialog } from '@/components/AutomationRemapDialog';
+import { AutomationReplayBanner } from './Components/AutomationReplayBanner';
+import { automationsApi, runAutomationStream } from '@/lib/api';
 import { PriorInvestigationsBanner } from './Components/PriorInvestigationsBanner';
 import { ContextModal } from './Components/ContextModal';
 import { DataSummaryModal } from './Components/DataSummaryModal';
@@ -85,6 +89,20 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   const [startMode, setStartMode] = useState<'choice' | 'snowflake'>('choice');
   const contextModalShownRef = useRef<Set<string>>(new Set());
 
+  // Wave A15 — Automation replay state.
+  const [automationPickerOpen, setAutomationPickerOpen] = useState(false);
+  const [pendingAutomation, setPendingAutomation] =
+    useState<import('@/shared/schema').AutomationSummary | null>(null);
+  const [automationDryRun, setAutomationDryRun] =
+    useState<import('@/shared/schema').AutomationDryRunResult | null>(null);
+  const [automationDryRunLoading, setAutomationDryRunLoading] = useState(false);
+  const [automationRemapOpen, setAutomationRemapOpen] = useState(false);
+  const [replayPhase, setReplayPhase] = useState<
+    import('./Components/AutomationReplayBanner').ReplayBannerPhase | null
+  >(null);
+  const replayControllerRef = useRef<{ abort: () => void } | null>(null);
+  const dryRunFiredForSessionRef = useRef<string | null>(null);
+
   const handleComposerDraftConsumed = useCallback(() => {
     setExternalComposerDraft(null);
   }, []);
@@ -126,6 +144,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTotalColumns,
     setCurrencyByColumn,
     setWideFormatTransform,
+    dateTimeColumnPairs,
+    indicators,
+    setDateTimeColumnPairs,
+    setIndicators,
     resetState,
   } = useHomeState();
 
@@ -159,6 +181,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTotalColumns,
     setCurrencyByColumn,
     setWideFormatTransform,
+    setDateTimeColumnPairs,
+    setIndicators,
     setMessages,
     setSuggestions,
     setIsDatasetPreviewLoading,
@@ -338,6 +362,99 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     }
   }, [isDatasetEnriching]);
 
+  // Wave A15 — when an automation is pending AND enrichment is complete
+  // for this session AND we haven't already fired the dry-run for this
+  // session, kick off the dry-run so the remap dialog can open.
+  useEffect(() => {
+    if (!pendingAutomation) return;
+    if (!sessionId) return;
+    if (isDatasetEnriching || isDatasetPreviewLoading) return;
+    if (dryRunFiredForSessionRef.current === sessionId) return;
+    if (replayPhase) return;
+
+    dryRunFiredForSessionRef.current = sessionId;
+    setAutomationDryRunLoading(true);
+    setAutomationRemapOpen(true);
+    automationsApi
+      .dryRun(pendingAutomation.id, sessionId)
+      .then((res) => {
+        setAutomationDryRun(res);
+      })
+      .catch((err) => {
+        toast({
+          title: 'Could not analyse automation compatibility',
+          description: err instanceof Error ? err.message : 'Unknown error',
+          variant: 'destructive',
+        });
+        setAutomationRemapOpen(false);
+        setPendingAutomation(null);
+      })
+      .finally(() => {
+        setAutomationDryRunLoading(false);
+      });
+  }, [
+    pendingAutomation,
+    sessionId,
+    isDatasetEnriching,
+    isDatasetPreviewLoading,
+    replayPhase,
+    toast,
+  ]);
+
+  const startReplay = useCallback(
+    (mapping: import('@/shared/schema').AutomationColumnMapping) => {
+      if (!pendingAutomation || !sessionId) return;
+      setAutomationRemapOpen(false);
+      setReplayPhase({ kind: 'preparing' });
+      const handle = runAutomationStream(
+        pendingAutomation.id,
+        { sessionId, columnMapping: mapping },
+        {
+          onEvent: (evt) => {
+            if (evt.type === 'automation_started') {
+              setReplayPhase({ kind: 'preparing' });
+            } else if (evt.type === 'automation_progress') {
+              if (evt.phase === 'preparing_dataset') {
+                setReplayPhase({ kind: 'preparing', detail: evt.detail });
+              } else {
+                setReplayPhase({
+                  kind: 'replaying',
+                  step: evt.step,
+                  total: evt.total,
+                  currentQuestion: evt.detail,
+                });
+              }
+            } else if (evt.type === 'automation_halted') {
+              setReplayPhase({
+                kind: 'halted',
+                ordinal: evt.ordinal,
+                error: evt.error,
+              });
+            } else if (evt.type === 'automation_complete') {
+              setReplayPhase({
+                kind: 'complete',
+                questionsReplayed: evt.questionsReplayed,
+                dashboardsCreated: evt.dashboardsCreated,
+              });
+            }
+          },
+          onError: (err) => {
+            setReplayPhase({
+              kind: 'halted',
+              ordinal: 0,
+              error: err.message ?? 'Network error',
+            });
+          },
+          onClose: () => {
+            replayControllerRef.current = null;
+          },
+        }
+      );
+      replayControllerRef.current = handle;
+    },
+    [pendingAutomation, sessionId]
+  );
+
   // Reset state only when resetTrigger changes (upload new file)
   useEffect(() => {
     if (resetTrigger > 0 && !loadedSessionData) {
@@ -348,6 +465,18 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
       setIsUploadStarting(false);
       setPreEnrichmentPreviewSnapshot(null);
       setPostEnrichmentPreviewSnapshot(null);
+      // Wave A15 fix · clear automation-replay state too. Without this,
+      // a "New Analysis" click after a completed replay leaves the
+      // green "complete" banner visible and re-fires the dry-run effect
+      // against the next session unexpectedly.
+      replayControllerRef.current?.abort();
+      replayControllerRef.current = null;
+      setPendingAutomation(null);
+      setAutomationDryRun(null);
+      setAutomationDryRunLoading(false);
+      setAutomationRemapOpen(false);
+      setReplayPhase(null);
+      dryRunFiredForSessionRef.current = null;
     }
   }, [resetTrigger, resetState, loadedSessionData]);
 
@@ -434,6 +563,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setSessionAnalysisContext,
     setWideFormatTransform,
     setCurrencyByColumn,
+    setDateTimeColumnPairs,
+    setIndicators,
   });
 
   // Notify parent when sessionId or fileName changes
@@ -474,28 +605,33 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     fetchCollaborators();
   }, [sessionId]);
 
-  // Open context modal immediately after upload (or on resume when no context
-  // has been saved yet). Preview + enrichment continue behind the modal so the
-  // user can type while background work runs — the welcome message is produced
-  // from dataset understanding alone and never waits for user input.
+  // Open context modal immediately after upload, but only the first time per
+  // session. Re-opens (page reload, navigating back) must not re-prompt — the
+  // user has already seen the modal and can re-open it manually via the
+  // "Give Additional Context" button. Persisted in localStorage so the
+  // first-time-only contract survives reloads.
   useEffect(() => {
     if (!sessionId) return;
-    // Always sync the local mirror of permanentContext so the "Give Additional
-    // Context" modal can render the existing text read-only on reopen.
     const resumedSession = loadedSessionData?.session ?? loadedSessionData;
     const stored: string = resumedSession?.permanentContext?.trim?.() ?? '';
     setCurrentPermanentContext(stored);
 
     if (contextModalShownRef.current.has(sessionId)) return;
-    // For resumed sessions, loadedSessionData carries the stored permanentContext.
-    // If it's already set, there's nothing to ask — mark shown and skip.
-    if (stored.length > 0) {
-      contextModalShownRef.current.add(sessionId);
-      return;
+    contextModalShownRef.current.add(sessionId);
+
+    if (stored.length > 0) return;
+
+    const storageKey = `contextModalShown:${sessionId}`;
+    try {
+      if (localStorage.getItem(storageKey) === '1') return;
+      localStorage.setItem(storageKey, '1');
+    } catch {
+      // localStorage unavailable (private mode / quota) — fall back to the
+      // in-memory ref above, which still suppresses re-prompts within the
+      // current page lifetime.
     }
     setContextModalSessionId(sessionId);
     setShowContextModal(true);
-    contextModalShownRef.current.add(sessionId);
   }, [sessionId, loadedSessionData]);
 
   // Reopen the ContextModal in append-mode from the analysis page.
@@ -685,8 +821,37 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
           <StartAnalysisView
             onSelectUpload={handleStartUploadFromChoice}
             onSelectSnowflake={() => setStartMode('snowflake')}
+            onSelectAutomation={() => setAutomationPickerOpen(true)}
             uploadDialogTrigger={resetTrigger > 0 ? resetTrigger : 0}
             isUploadStarting={isUploadStarting}
+          />
+          {pendingAutomation && (
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 max-w-2xl w-[90vw] rounded-lg border border-primary/40 bg-card px-4 py-3 shadow-lg flex items-center gap-3">
+              <span className="text-sm">
+                Will run <strong>{pendingAutomation.name}</strong> ·{' '}
+                <span className="text-muted-foreground">
+                  {pendingAutomation.recipeLength} questions ·{' '}
+                  {pendingAutomation.expectedColumnCount} columns expected
+                </span>
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingAutomation(null)}
+                className="ml-auto"
+              >
+                Clear
+              </Button>
+            </div>
+          )}
+          <AutomationPickerSheet
+            open={automationPickerOpen}
+            onOpenChange={setAutomationPickerOpen}
+            onPick={(a) => {
+              setPendingAutomation(a);
+              setAutomationPickerOpen(false);
+              dryRunFiredForSessionRef.current = null;
+            }}
           />
           {sheetSelectorDialog}
         </>
@@ -700,6 +865,21 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
             onImport={({ database, schema, tableName }) => snowflakeImportMutation.mutate({ database, schema, tableName })}
             isImporting={snowflakeImportMutation.isPending}
           />
+          {pendingAutomation && (
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 max-w-2xl w-[90vw] rounded-lg border border-primary/40 bg-card px-4 py-3 shadow-lg flex items-center gap-3">
+              <span className="text-sm">
+                Will run <strong>{pendingAutomation.name}</strong> after import
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingAutomation(null)}
+                className="ml-auto"
+              >
+                Clear
+              </Button>
+            </div>
+          )}
           {sheetSelectorDialog}
         </>
       );
@@ -713,6 +893,90 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
           digest. Hidden when the array is empty (legacy chats render
           unchanged). */}
       <PriorInvestigationsBanner sessionAnalysisContext={sessionAnalysisContext} />
+      {pendingAutomation && replayPhase && (
+        <AutomationReplayBanner
+          automationName={pendingAutomation.name}
+          phase={replayPhase}
+          onCancel={() => {
+            replayControllerRef.current?.abort();
+            replayControllerRef.current = null;
+            setReplayPhase(null);
+          }}
+          onDismiss={() => {
+            setReplayPhase(null);
+            setPendingAutomation(null);
+            setAutomationDryRun(null);
+            dryRunFiredForSessionRef.current = null;
+          }}
+          onSkipAndContinue={
+            replayPhase.kind === 'halted'
+              ? () => {
+                  // Re-launch from the next ordinal.
+                  if (!pendingAutomation || !sessionId) return;
+                  const nextOrdinal = replayPhase.ordinal + 1;
+                  setReplayPhase({ kind: 'preparing' });
+                  const handle = runAutomationStream(
+                    pendingAutomation.id,
+                    {
+                      sessionId,
+                      resumeFromOrdinal: nextOrdinal,
+                    },
+                    {
+                      onEvent: (evt) => {
+                        if (evt.type === 'automation_progress') {
+                          if (evt.phase === 'preparing_dataset') {
+                            setReplayPhase({
+                              kind: 'preparing',
+                              detail: evt.detail,
+                            });
+                          } else {
+                            setReplayPhase({
+                              kind: 'replaying',
+                              step: evt.step,
+                              total: evt.total,
+                              currentQuestion: evt.detail,
+                            });
+                          }
+                        } else if (evt.type === 'automation_halted') {
+                          setReplayPhase({
+                            kind: 'halted',
+                            ordinal: evt.ordinal,
+                            error: evt.error,
+                          });
+                        } else if (evt.type === 'automation_complete') {
+                          setReplayPhase({
+                            kind: 'complete',
+                            questionsReplayed: evt.questionsReplayed,
+                            dashboardsCreated: evt.dashboardsCreated,
+                          });
+                        }
+                      },
+                      onError: (err) => {
+                        setReplayPhase({
+                          kind: 'halted',
+                          ordinal: nextOrdinal,
+                          error: err.message ?? 'Network error',
+                        });
+                      },
+                      onClose: () => {
+                        replayControllerRef.current = null;
+                      },
+                    }
+                  );
+                  replayControllerRef.current = handle;
+                }
+              : undefined
+          }
+          onStop={
+            replayPhase.kind === 'halted'
+              ? () => {
+                  setReplayPhase(null);
+                  setPendingAutomation(null);
+                }
+              : undefined
+          }
+        />
+      )}
       <ChatInterface
         messages={messages}
         onSendMessage={handleSendMessage}
@@ -744,6 +1008,10 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
               : prev,
           )
         }
+        dateTimeColumnPairs={dateTimeColumnPairs}
+        onDateTimePairsChange={setDateTimeColumnPairs}
+        indicators={indicators}
+        onIndicatorsChange={setIndicators}
         onStopGeneration={handleStopGeneration}
         onEditMessage={handleEditMessage}
         thinkingSteps={thinkingSteps}
@@ -769,6 +1037,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         localPreviewParseStatus={localPreview?.parseStatus}
         uploadStartError={uploadStartError}
         onAppendAssistantChart={handleAppendAssistantChart}
+        fileNameForAutomation={fileName ?? undefined}
       />
       <ContextModal
         isOpen={showContextModal}
@@ -784,6 +1053,25 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onSendMessage={handleSendMessage}
         onDraftMessage={handleDraftMessageFromModal}
       />
+      {pendingAutomation && (
+        <AutomationRemapDialog
+          open={automationRemapOpen}
+          onOpenChange={(open) => {
+            setAutomationRemapOpen(open);
+            if (!open && !replayPhase) {
+              // User cancelled before starting replay — clear pending.
+              setPendingAutomation(null);
+              setAutomationDryRun(null);
+              dryRunFiredForSessionRef.current = null;
+            }
+          }}
+          automationName={pendingAutomation.name}
+          dryRun={automationDryRun}
+          loading={automationDryRunLoading}
+          newDatasetColumns={columns ?? []}
+          onConfirm={(mapping) => startReplay(mapping)}
+        />
+      )}
       {sheetSelectorDialog}
     </>
   );

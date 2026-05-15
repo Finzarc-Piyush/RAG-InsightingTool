@@ -456,7 +456,7 @@ export function ResizableTile({
             bottomLeft: { cursor: lockFullWidth ? 'default' : 'sw-resize' },
             topLeft: { cursor: lockFullWidth ? 'default' : 'nw-resize' },
           }}
-          className={`bg-white border border-border rounded-lg shadow-sm overflow-hidden ${className}`}
+          className={`bg-card border border-border rounded-lg shadow-sm overflow-hidden ${className}`}
         >
           <div className="h-full w-full relative flex flex-col pt-4">
             <div

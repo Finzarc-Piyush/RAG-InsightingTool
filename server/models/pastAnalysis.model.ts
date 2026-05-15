@@ -17,12 +17,81 @@ import {
   type PastAnalysisDoc,
   type PastAnalysisFeedbackTarget,
   type PastAnalysisFeedbackDetail,
+  type PastAnalysisPivotArtifact,
 } from "../shared/schema.js";
+import type { BusinessActionItem } from "../shared/schema.js";
 
 export const COSMOS_PAST_ANALYSES_CONTAINER_ID =
   process.env.COSMOS_PAST_ANALYSES_CONTAINER_ID || "past_analyses";
 
 let pastAnalysesContainerInstance: Container | null = null;
+
+/**
+ * Wave A3 · Per-doc promise chain that serialises every read-modify-write
+ * on a single past-analysis document (keyed by `${sessionId}__${turnId}`).
+ *
+ * Pre-A3 the chat stream fired three independent fire-and-forget writes to
+ * the same doc and let Cosmos's last-writer-wins resolve them:
+ *
+ *   1. `upsertPastAnalysisDoc` (initial doc body, awaited inside a void
+ *      promise chain at `chatStream.service.ts: ~line 327`).
+ *   2. `patchPastAnalysisBusinessActions` — RMW chain (`get → patch → upsert`)
+ *      that ran later, when the post-verifier `businessActionsPromise`
+ *      resolved.
+ *   3. `patchPastAnalysisPivotArtifacts` — RMW chain (`get → patch → upsert`)
+ *      that ran inside the same `.then` branch as the initial upsert.
+ *
+ * If patch (2) reads doc state X and patch (3) reads state Y (== X +
+ * businessActions) but patch (2) writes X back AFTER patch (3), the
+ * pivotArtifacts field disappears. Symmetric collision in the other
+ * order drops businessActions. The cache mirror ends up with at most one
+ * of the three fields when both patches race.
+ *
+ * Fix: per-doc serialisation. Different docs (different turns, different
+ * sessions) still parallelise — this lock is specifically about the
+ * three concurrent writers for the SAME doc.
+ *
+ * Scope decision: NOT the session-level `withSessionWriteLock` (Wave A2)
+ * because this cache mirror should never block the live response path's
+ * Cosmos writes. The chat-doc lock and the past-analyses lock are
+ * orthogonal — they touch different Cosmos containers.
+ */
+const pastAnalysisDocChain = new Map<string, Promise<unknown>>();
+
+async function withPastAnalysisDocLock<T>(
+  docId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = pastAnalysisDocChain.get(docId);
+  const work = (async () => {
+    if (previous) {
+      try {
+        await previous;
+      } catch {
+        /* prior call's failure is its own concern */
+      }
+    }
+    return fn();
+  })();
+  pastAnalysisDocChain.set(docId, work);
+  try {
+    return await work;
+  } finally {
+    if (pastAnalysisDocChain.get(docId) === work) {
+      pastAnalysisDocChain.delete(docId);
+    }
+  }
+}
+
+/** Test-only escape hatch — number of in-flight per-doc locks. */
+export function __pastAnalysisDocChainSizeForTesting(): number {
+  return pastAnalysisDocChain.size;
+}
+
+/** Test-only escape hatch — drop every in-flight lock. */
+export function __resetPastAnalysisDocChainForTesting(): void {
+  pastAnalysisDocChain.clear();
+}
 
 /** Lazily resolve (and create on first call) the `past_analyses` container. */
 export async function waitForPastAnalysesContainer(
@@ -84,8 +153,26 @@ export async function upsertPastAnalysisDoc(
       `Invalid PastAnalysisDoc — refusing to write: ${parsed.error.message}`
     );
   }
+  // Wave A3 · Serialise upserts against concurrent patch RMWs for the
+  // same doc. The patch helpers below read-then-upsert; without this
+  // lock, a late upsert (e.g. cache invalidation re-write) can clobber a
+  // patch that already merged its field in.
+  await withPastAnalysisDocLock(parsed.data.id, () =>
+    upsertPastAnalysisDocUnlocked(parsed.data)
+  );
+}
+
+/**
+ * Wave A3 · Internal: the actual Cosmos upsert. Skips the per-doc lock so
+ * the patch helpers below — which ALREADY hold the lock — can call this
+ * without deadlocking. Schema validation is the caller's responsibility
+ * for this entry point (the public `upsertPastAnalysisDoc` does it).
+ */
+async function upsertPastAnalysisDocUnlocked(
+  doc: PastAnalysisDoc
+): Promise<void> {
   const container = await waitForPastAnalysesContainer();
-  await container.items.upsert(parsed.data);
+  await container.items.upsert(doc);
 }
 
 /**
@@ -138,10 +225,35 @@ export async function setPastAnalysisFeedback(
     id: "answer",
   };
 
-  // We need to read-modify-write to upsert into the feedbackDetails array
-  // (Cosmos PATCH lacks a portable "upsert by key" array op). The doc is small
-  // and writes to a single (sessionId, id) row are not contended, so the
-  // last-writer-wins window is acceptable for thumbs feedback.
+  // Wave A3 · Hold the per-doc lock so a concurrent BAI / pivot upsert
+  // can't clobber the feedback field. Pre-A3 this comment said
+  // "writes to a single row are not contended, so last-writer-wins is
+  // acceptable" — that was true before BAI's late-arriving fire-and-forget
+  // upsert path landed. Now feedback PATCH and BAI upsert both target the
+  // same doc and an interleaved upsert overwrites the patched fields.
+  return withPastAnalysisDocLock(id, async () => {
+    return doSetPastAnalysisFeedback({
+      container,
+      sessionId,
+      id,
+      feedback,
+      reasons,
+      trimmedComment,
+      effectiveTarget,
+    });
+  });
+}
+
+async function doSetPastAnalysisFeedback(args: {
+  container: Container;
+  sessionId: string;
+  id: string;
+  feedback: PastAnalysisDoc["feedback"];
+  reasons: PastAnalysisDoc["feedbackReasons"];
+  trimmedComment: string | null;
+  effectiveTarget: PastAnalysisFeedbackTarget;
+}): Promise<PastAnalysisDoc | null> {
+  const { container, sessionId, id, feedback, reasons, trimmedComment, effectiveTarget } = args;
   const existing = await getPastAnalysisDoc(sessionId, id);
   if (!existing) return null;
 
@@ -187,6 +299,83 @@ export async function setPastAnalysisFeedback(
     if (code === 404) return null;
     throw err;
   }
+}
+
+/**
+ * AMR2 · Patch the post-verifier business actions onto an existing past-
+ * analysis row. The `maybeWritePastAnalysisDoc` fire-and-forget write fires
+ * before `businessActionsPromise` resolves, so this attaches them in a
+ * second pass — mirroring the chat-message-side `patchAssistantBusinessActions`
+ * pattern. Read-modify-upsert (the array isn't Cosmos-native-patchable here).
+ * Best-effort: returns `{ ok: false }` instead of throwing so the SSE branch
+ * stays resilient. The corresponding doc is identified by deterministic
+ * `${sessionId}__${turnId}` id.
+ */
+export async function patchPastAnalysisBusinessActions(params: {
+  sessionId: string;
+  turnId: string;
+  items: BusinessActionItem[];
+}): Promise<{ ok: boolean; reason?: string }> {
+  if (!params.items.length) return { ok: false, reason: "empty" };
+  const id = `${params.sessionId}__${params.turnId}`;
+  return withPastAnalysisDocLock(id, async () => {
+    try {
+      const existing = await getPastAnalysisDoc(params.sessionId, id);
+      if (!existing) return { ok: false, reason: "not_found" };
+      const next: PastAnalysisDoc = {
+        ...existing,
+        businessActions: params.items.slice(0, 8),
+      };
+      // Wave A3 · The lock-bearing variant of the upsert avoids a
+      // recursive lock acquisition (which would deadlock the chain).
+      // Schema validation is performed inside the wrapper.
+      const parsed = pastAnalysisDocSchema.safeParse(next);
+      if (!parsed.success) {
+        return { ok: false, reason: `invalid_doc: ${parsed.error.message}` };
+      }
+      await upsertPastAnalysisDocUnlocked(parsed.data);
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: msg };
+    }
+  });
+}
+
+/**
+ * AMR3 · Patch the pivot artifacts emitted during the turn onto the past-
+ * analysis row. Used by the chatStream service after the agent loop's
+ * `pivotArtifactsBuffer` is materialized (inline or blob-offloaded) so a
+ * future cache-hit can restore the rich pivot UI without re-running the
+ * underlying query. Same read-modify-upsert pattern as the business actions
+ * patch above.
+ */
+export async function patchPastAnalysisPivotArtifacts(params: {
+  sessionId: string;
+  turnId: string;
+  artifacts: PastAnalysisPivotArtifact[];
+}): Promise<{ ok: boolean; reason?: string }> {
+  if (!params.artifacts.length) return { ok: false, reason: "empty" };
+  const id = `${params.sessionId}__${params.turnId}`;
+  return withPastAnalysisDocLock(id, async () => {
+    try {
+      const existing = await getPastAnalysisDoc(params.sessionId, id);
+      if (!existing) return { ok: false, reason: "not_found" };
+      const next: PastAnalysisDoc = {
+        ...existing,
+        pivotArtifacts: params.artifacts.slice(0, 12),
+      };
+      const parsed = pastAnalysisDocSchema.safeParse(next);
+      if (!parsed.success) {
+        return { ok: false, reason: `invalid_doc: ${parsed.error.message}` };
+      }
+      await upsertPastAnalysisDocUnlocked(parsed.data);
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, reason: msg };
+    }
+  });
 }
 
 /**

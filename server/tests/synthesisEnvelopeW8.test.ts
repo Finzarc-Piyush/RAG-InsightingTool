@@ -32,13 +32,13 @@ describe("W8 · answerEnvelope.implications", () => {
     assert.equal(parsed.answerEnvelope?.implications?.[0].confidence, "high");
   });
 
-  it("rejects more than 6 implications (WTL3 · cap raised 4 → 6)", () => {
+  it("rejects more than 12 implications (sanity ceiling)", () => {
     const tooMany = {
       role: "assistant",
       content: "x",
       timestamp: Date.now(),
       answerEnvelope: {
-        implications: Array.from({ length: 7 }, () => ({
+        implications: Array.from({ length: 13 }, () => ({
           statement: "s",
           soWhat: "w",
         })),
@@ -90,7 +90,7 @@ describe("W8 · answerEnvelope.recommendations", () => {
 });
 
 describe("W8 · answerEnvelope.domainLens", () => {
-  it("accepts a paragraph under 500 chars", () => {
+  it("accepts a paragraph under the sanity ceiling", () => {
     const m = {
       role: "assistant",
       content: "x",
@@ -104,12 +104,12 @@ describe("W8 · answerEnvelope.domainLens", () => {
     assert.match(parsed.answerEnvelope!.domainLens!, /marico-haircare-portfolio/);
   });
 
-  it("rejects a domainLens over 900 chars (WTL3 · cap raised 500 → 900)", () => {
+  it("rejects a domainLens over 2000 chars (sanity ceiling)", () => {
     const bad = {
       role: "assistant",
       content: "x",
       timestamp: Date.now(),
-      answerEnvelope: { domainLens: "x".repeat(901) },
+      answerEnvelope: { domainLens: "x".repeat(2001) },
     };
     assert.throws(() => messageSchema.parse(bad));
   });

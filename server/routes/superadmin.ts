@@ -16,6 +16,10 @@ import {
   listAllDashboardsForSuperadminEndpoint,
   getDashboardForSuperadminEndpoint,
 } from "../controllers/superadminController.js";
+import {
+  getSuperadminMetricsOverview,
+  getSuperadminFeedbackStream,
+} from "../controllers/superadminMetricsController.js";
 
 const router = Router();
 
@@ -39,6 +43,17 @@ router.get(
   "/superadmin/dashboards/:dashboardId",
   requireSuperadmin,
   getDashboardForSuperadminEndpoint
+);
+// Wave AD6 · admin metrics + feedback stream.
+router.get(
+  "/superadmin/metrics/overview",
+  requireSuperadmin,
+  getSuperadminMetricsOverview
+);
+router.get(
+  "/superadmin/feedback",
+  requireSuperadmin,
+  getSuperadminFeedbackStream
 );
 
 export { requireSuperadmin };

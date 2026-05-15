@@ -211,6 +211,9 @@ function describeComputedDef(def: ComputedColumnDef): string {
     const clamp = def.clampNegative ? " (clamp negative)" : "";
     return `date_diff_days(${def.startColumn}, ${def.endColumn})${clamp}`;
   }
+  if (def.type === "datetime_concat") {
+    return `datetime_concat(${def.dateColumn}, ${def.timeColumn})`;
+  }
   return `${def.leftColumn} ${def.op} ${def.rightColumn}`;
 }
 

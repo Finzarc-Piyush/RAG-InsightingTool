@@ -43,6 +43,14 @@ export interface CacheLookupInput {
   sessionId: string;
   dataVersion: number;
   question: string;
+  /**
+   * Wave A1 · Number of conditions on the session's active filter (FA1+).
+   * When > 0, the cache MUST miss — cached answers were computed against
+   * unfiltered data and would silently serve stale numbers under a filter.
+   * Pass `chatDocument.activeFilter?.conditions?.length ?? 0` from the caller.
+   * Optional for backwards compatibility with older callers; absent ⇒ 0.
+   */
+  activeFilterConditionCount?: number;
 }
 
 function exactFeatureEnabled(): boolean {
@@ -84,6 +92,10 @@ export async function tryExactQuestionCacheHit(
   input: CacheLookupInput
 ): Promise<CacheHit | null> {
   if (!exactFeatureEnabled()) return null;
+  // Wave A1 · Active filter changes the data the LLM sees, but the cache
+  // is keyed on (sessionId, dataVersion, normalizedQuestion) only. Skip
+  // the lookup so users with a filter applied never get a pre-filter answer.
+  if ((input.activeFilterConditionCount ?? 0) > 0) return null;
   const nq = normalizeQuestionForCache(input.question);
   if (!nq) return null;
 
@@ -123,6 +135,8 @@ export async function trySemanticQuestionCacheHit(
   input: CacheLookupInput
 ): Promise<CacheHit | null> {
   if (!semanticFeatureEnabled()) return null;
+  // Wave A1 · See `tryExactQuestionCacheHit` for rationale.
+  if ((input.activeFilterConditionCount ?? 0) > 0) return null;
   const nq = normalizeQuestionForCache(input.question);
   if (!nq) return null;
 

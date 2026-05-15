@@ -47,6 +47,7 @@ import {
 } from '@/lib/chartFilters';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
+import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import {
   CHART_SERIES_COLORS as COLORS,
   evenlySpacedDataKeys,
@@ -844,6 +845,7 @@ export function ChartRenderer({
                   }}
                   stroke="hsl(var(--foreground))"
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
                 {(specSeriesKeys ?? [])
@@ -941,6 +943,7 @@ export function ChartRenderer({
                     yAxisId="left"
                     stroke={leftAxisColor}
                     domain={leftDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                   <YAxis
                     orientation="right"
@@ -961,6 +964,7 @@ export function ChartRenderer({
                     }}
                     stroke={rightAxisColor}
                     domain={rightDomain}
+                    tickCount={DEFAULT_Y_TICKS}
                   />
                 </>
               ) : (
@@ -981,6 +985,7 @@ export function ChartRenderer({
                   }}
                   stroke={leftAxisColor}
                   domain={leftDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
               )}
               <Tooltip formatter={rechartsTooltipValueFormatter} />
@@ -1080,6 +1085,7 @@ export function ChartRenderer({
                   position: 'left',
                   style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 },
                 }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip formatter={rechartsTooltipValueFormatter} />
               {multiKeys.length > 0 ? (
@@ -1499,6 +1505,7 @@ export function ChartRenderer({
                     },
                   }}
                   domain={unifiedDomain}
+                  tickCount={DEFAULT_Y_TICKS}
                 />
                 <Tooltip formatter={rechartsTooltipValueFormatter} />
                 {(specSeriesKeys ?? [])
@@ -1582,6 +1589,7 @@ export function ChartRenderer({
                     fontWeight: 600,
                   },
                 }}
+                tickCount={DEFAULT_Y_TICKS}
               />
               <Tooltip formatter={rechartsTooltipValueFormatter} />
               <Area
@@ -1832,6 +1840,7 @@ export function ChartRenderer({
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         chart={chart}
+        index={index}
         enableFilters={enableFilters}
         filterDefinitions={filterDefinitions}
         effectiveFilters={effectiveFilters}

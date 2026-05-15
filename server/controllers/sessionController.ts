@@ -9,6 +9,7 @@ import {
   getChatBySessionIdForUser,
   deleteSessionBySessionId,
   updateSessionFileName,
+  updateSessionPinned,
   updateSessionPermanentContext,
   ChatDocument 
 } from "../models/chat.model.js";
@@ -23,13 +24,17 @@ import {
 } from "../lib/statisticalSummary.js";
 import {
   chartSpecSchema,
+  dateTimeColumnPairSchema,
   dimensionHierarchySchema,
   pivotStateSchema,
   type ChartSpec,
   type DataSummary,
 } from "../shared/schema.js";
 import { z } from "zod";
-import { updateSessionDimensionHierarchies } from "../lib/sessionAnalysisContext.js";
+import {
+  updateSessionDimensionHierarchies,
+  updateSessionSchemaAnnotations,
+} from "../lib/sessionAnalysisContext.js";
 import { updateChatDocument } from "../models/chat.model.js";
 import { processChartData } from "../lib/chartGenerator.js";
 import {
@@ -532,33 +537,52 @@ export const getSessionsByUserEndpoint = async (req: Request, res: Response) => 
   }
 };
 
-// Update session fileName by session ID
+// Update session fileName and/or pinned flag by session ID. Either or both may
+// be supplied in the request body; at least one is required.
 export const updateSessionNameEndpoint = async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    const { fileName } = req.body;
-    
+    const { fileName, pinned } = req.body ?? {};
+
     if (!sessionId) {
       return res.status(400).json({ error: 'Session ID is required' });
     }
-    
-    if (!fileName || typeof fileName !== 'string' || fileName.trim().length === 0) {
-      return res.status(400).json({ error: 'File name is required' });
+
+    const hasFileName = typeof fileName === 'string';
+    const hasPinned = typeof pinned === 'boolean';
+
+    if (!hasFileName && !hasPinned) {
+      return res.status(400).json({ error: 'fileName or pinned is required' });
+    }
+
+    if (hasFileName && fileName.trim().length === 0) {
+      return res.status(400).json({ error: 'File name cannot be empty' });
     }
 
     const username = requireUsername(req);
 
-    // Update the session fileName
-    const updatedSession = await updateSessionFileName(sessionId, username, fileName.trim());
-    
+    let updatedSession;
+    if (hasFileName) {
+      updatedSession = await updateSessionFileName(sessionId, username, fileName.trim());
+    }
+    if (hasPinned) {
+      updatedSession = await updateSessionPinned(sessionId, username, pinned);
+    }
+
+    if (!updatedSession) {
+      return res.status(400).json({ error: 'No fields updated' });
+    }
+
     res.json({
       success: true,
-      message: `Session name updated successfully`,
+      message: `Session updated successfully`,
       session: {
         id: updatedSession.id,
         sessionId: updatedSession.sessionId,
         fileName: updatedSession.fileName,
         lastUpdatedAt: updatedSession.lastUpdatedAt,
+        pinned: updatedSession.pinned ?? false,
+        pinnedAt: updatedSession.pinnedAt,
       }
     });
   } catch (error) {
@@ -1489,6 +1513,68 @@ export const putSessionHierarchiesEndpoint = async (req: Request, res: Response)
     const msg = error instanceof Error ? error.message : "Failed to update hierarchies";
     if (/not initialized/.test(msg)) {
       return res.status(503).json({ error: "Database is initializing. Please try again." });
+    }
+    res.status(500).json({ error: msg });
+  }
+};
+
+// SU-UX1 · Replace the dataSummary's schema-annotation arrays for a session.
+// Used by the in-banner remove buttons on DateTimePairsBanner and
+// IndicatorColumnsBanner. Either body field is optional — clients patch
+// independently. Empty arrays explicitly clear the corresponding annotation.
+const putSessionSchemaAnnotationsBodySchema = z.object({
+  dateTimeColumnPairs: z.array(dateTimeColumnPairSchema).max(20).optional(),
+  indicators: z
+    .array(
+      z.object({
+        column: z.string().min(1).max(200),
+        kind: z.enum(["boolean", "categorical"]),
+        positiveValues: z.array(z.string().min(1).max(200)).max(8).optional(),
+        negativeValues: z.array(z.string().min(1).max(200)).max(8).optional(),
+        sentinelValues: z.array(z.string().min(1).max(200)).max(8).optional(),
+      })
+    )
+    .max(50)
+    .optional(),
+});
+
+export const putSessionSchemaAnnotationsEndpoint = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    const parsed = putSessionSchemaAnnotationsBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid schema-annotations payload",
+        details: parsed.error.flatten(),
+      });
+    }
+    const username = requireUsername(req);
+    const updated = await updateSessionSchemaAnnotations({
+      sessionId,
+      username,
+      ...parsed.data,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    res.json({ success: true, ...updated });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    console.error("Put session schema annotations error:", error);
+    const msg =
+      error instanceof Error ? error.message : "Failed to update annotations";
+    if (/not initialized/.test(msg)) {
+      return res
+        .status(503)
+        .json({ error: "Database is initializing. Please try again." });
     }
     res.status(500).json({ error: msg });
   }

@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import ExcelJS from "exceljs";
 import { buildDashboardXlsxBuffer } from "../services/dashboardExport/xlsxExport.service.js";
 import { buildDashboardPptxBuffer } from "../services/dashboardExport/pptxExport.service.js";
+import { installLlmStub, clearLlmStub } from "./helpers/llmStub.js";
 import type { Dashboard } from "../shared/schema.js";
 
 /**
- * W7.3 / W7.4 · Smoke tests for the export services. Build a representative
- * dashboard, render to a Buffer, then validate the magic bytes (XLSX + PPTX
- * are both ZIP archives starting with `PK\x03\x04`) and parse XLSX back to
- * confirm sheets exist as expected.
+ * W7.3 / W7.4 / W-EXP-7 · Smoke tests for the export services. Build a
+ * representative dashboard, render to a Buffer, then validate the magic
+ * bytes (XLSX + PPTX are both ZIP archives starting with `PK\x03\x04`) and
+ * parse XLSX back to confirm sheets exist as expected.
+ *
+ * The PPTX path now runs through the agentic deck-planner pipeline
+ * (W-EXP-1/2/3/4/5/6/7), so the test installs the W18 LLM stub which
+ * provides a minimal-valid SlideDeckPlan for the `DECK_PLANNER` purpose.
+ * This keeps the test offline + deterministic.
  */
 
 const sampleDashboard: Dashboard = {
@@ -124,6 +130,16 @@ describe("buildDashboardXlsxBuffer", () => {
 });
 
 describe("buildDashboardPptxBuffer", () => {
+  before(() => {
+    // W-EXP-7 — the PPTX path now runs through the deck-planner LLM. Install
+    // the W18 stub harness so the test stays offline; the default
+    // DECK_PLANNER handler returns a minimal-valid 3-slide plan.
+    installLlmStub({});
+  });
+  after(() => {
+    clearLlmStub();
+  });
+
   it("produces a non-empty PPTX (ZIP-shaped) buffer", async () => {
     const buf = await buildDashboardPptxBuffer(sampleDashboard);
     assert.ok(buf.length > 0);

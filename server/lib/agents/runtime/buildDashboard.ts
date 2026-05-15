@@ -21,6 +21,8 @@ import {
   type DashboardPivotSpec,
   type DashboardSheetSpec,
   type DashboardSpec,
+  type InvestigationSummary,
+  type PriorInvestigationItem,
 } from "../../../shared/schema.js";
 import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
@@ -80,6 +82,19 @@ export interface BuildDashboardArgs {
    * (when the LLM cites it) to the Executive Summary sheet.
    */
   pivot?: DashboardPivotSpec;
+  /**
+   * DPF2 · message-mirroring fields populated synchronously at auto-create.
+   * `businessActions` is intentionally NOT here — it resolves post-verifier
+   * via a Promise on `AgentLoopResult`, so the dashboard receives it via
+   * `patchDashboardBusinessActions` after initial persist.
+   *
+   * These three are stamped verbatim onto the returned `DashboardSpec`
+   * (see `runDashboardCompletion`) — they are deterministic spec metadata,
+   * not narrative inputs to the LLM, so the prompt is unaffected.
+   */
+  followUpPrompts?: string[];
+  investigationSummary?: InvestigationSummary;
+  priorInvestigationsSnapshot?: PriorInvestigationItem[];
 }
 
 // W7.6 · Pure-logic gating moved to ./dashboardAutogenGate.ts so it can be
@@ -92,6 +107,7 @@ export {
   shouldBuildDashboard,
   dashboardBuildDecision,
 } from "./dashboardAutogenGate.js";
+
 
 /**
  * Produce a DashboardSpec from the current turn's artifacts. Never throws —
@@ -166,18 +182,36 @@ function pickFeaturedCharts(authoritative: ChartSpec[]): ChartSpec[] {
 }
 
 /** Step-by-step narrative blocks for Sheet 2. One block per intermediate
- *  summary, untouched markdown content. */
-function buildAllArtefactsNarrativeBlocks(
-  intermediateSummaries: string[] | undefined
+ *  summary, untouched markdown content.
+ *
+ *  DPF6 · cap raised 8 → 30. The 8-step ceiling silently dropped the
+ *  long-tail step narratives on comprehensive dashboard turns ("give me
+ *  a sales / hr / marketing / finance dashboard") where the planner
+ *  routinely runs 12-20 tool calls. 30 stays well below the per-sheet
+ *  schema ceiling (`dashboardSheetSpecSchema.narrativeBlocks.max(40)`)
+ *  while leaving room for the KPI strip + LLM-curated narrative on
+ *  Sheet 1. The per-summary 1500-char body cap is unchanged — it's a
+ *  defensive bound on runaway tool summaries, not a content-dropping
+ *  cap.
+ *
+ *  Wave DR17 · this function is now a hard `[]` no-op. The "Step N"
+ *  blocks dumped raw tool-call summaries onto the All Artefacts sheet
+ *  (e.g. `get_schema_summary: rows=9800 columns=…`,
+ *  `execute_query_plan: Grouped by Region with sum(Sales)…`) which are
+ *  internal audit data, not a user-facing artefact. The function is
+ *  kept (not deleted) so the existing call sites compile unchanged
+ *  and the DPF6 regression test continues to pin "no Step N blocks
+ *  ever surface". The `intermediateSummaries` argument is preserved
+ *  on the signature for the same reason; if ever re-used it should
+ *  feed a different artefact (a structured per-step audit log on the
+ *  agent trace, not a narrative block on a user dashboard).
+ *
+ *  Exported for unit tests so DPF6 has a focused regression guard. */
+export function buildAllArtefactsNarrativeBlocks(
+  // Kept on the signature for back-compat; deliberately unused — see comment above.
+  _intermediateSummaries: string[] | undefined
 ): DashboardNarrativeBlock[] {
-  if (!intermediateSummaries || intermediateSummaries.length === 0) return [];
-  return intermediateSummaries.slice(0, 8).map((s, i) => ({
-    id: randomUUID(),
-    role: "custom",
-    title: `Step ${i + 1}`,
-    body: s.slice(0, 1500),
-    order: i,
-  }));
+  return [];
 }
 
 /**
@@ -299,6 +333,20 @@ async function runDashboardCompletion(
     if (args.envelope) {
       spec.answerEnvelope = args.envelope;
     }
+    // DPF2 · stamp the three synchronously-available message-mirroring
+    // fields onto the spec so the from-spec persist round-trips them onto
+    // the Cosmos `Dashboard` document. Deterministic — not LLM-rewritten —
+    // so the dashboard view shows the same TL;DR / follow-up CTAs / digest
+    // the user saw in chat.
+    if (args.followUpPrompts && args.followUpPrompts.length > 0) {
+      spec.followUpPrompts = args.followUpPrompts;
+    }
+    if (args.investigationSummary) {
+      spec.investigationSummary = args.investigationSummary;
+    }
+    if (args.priorInvestigationsSnapshot && args.priorInvestigationsSnapshot.length > 0) {
+      spec.priorInvestigationsSnapshot = args.priorInvestigationsSnapshot;
+    }
 
     applyDashboardTemplateLayout(spec);
     return spec;
@@ -337,6 +385,17 @@ async function runDashboardCompletion(
       }
       spec.defaultSheetId = "sheet_summary";
       if (args.envelope) spec.answerEnvelope = args.envelope;
+      // DPF2 · same stamp on the LLM-failure fallback path so a network
+      // hiccup doesn't strip the message-mirroring fields.
+      if (args.followUpPrompts && args.followUpPrompts.length > 0) {
+        spec.followUpPrompts = args.followUpPrompts;
+      }
+      if (args.investigationSummary) {
+        spec.investigationSummary = args.investigationSummary;
+      }
+      if (args.priorInvestigationsSnapshot && args.priorInvestigationsSnapshot.length > 0) {
+        spec.priorInvestigationsSnapshot = args.priorInvestigationsSnapshot;
+      }
       applyDashboardTemplateLayout(spec);
       return spec;
     } catch (fallbackErr) {

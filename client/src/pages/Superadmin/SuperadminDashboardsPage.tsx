@@ -14,6 +14,7 @@ import {
   type SuperadminDashboardRow,
 } from "@/lib/api/superadmin";
 import { Card } from "@/components/ui/card";
+import { AdminNav } from "./AdminNav";
 
 function fmtDate(value: string | null): string {
   if (!value) return "—";
@@ -23,13 +24,11 @@ function fmtDate(value: string | null): string {
 }
 
 export default function SuperadminDashboardsPage() {
-  const { isSuperadmin, isLoading: isAuthLoading } = useSuperadmin();
+  const { isSuperadmin, isLoading: isAuthLoading, hasResolved, email } = useSuperadmin();
   const [, setLocation] = useLocation();
   const [filter, setFilter] = useState("");
-
-  useEffect(() => {
-    if (!isAuthLoading && !isSuperadmin) setLocation("/analysis");
-  }, [isAuthLoading, isSuperadmin, setLocation]);
+  // Wave AD7 follow-up · no destructive redirect — render an authoritative
+  // "Not authorized" branch instead, so a stale cache can't trap the user.
 
   const { data, isLoading, error } = useQuery<SuperadminDashboardRow[]>({
     queryKey: ["superadmin", "dashboards"],
@@ -61,9 +60,37 @@ export default function SuperadminDashboardsPage() {
     return rows;
   }, [data, filter, ownerFromQuery]);
 
-  if (isAuthLoading || !isSuperadmin) return null;
+  if (isAuthLoading || !hasResolved) {
+    return (
+      <>
+        <AdminNav />
+        <div className="container mx-auto py-12 px-4 sm:px-6 max-w-7xl text-sm text-muted-foreground">
+          Checking admin access…
+        </div>
+      </>
+    );
+  }
+  if (!isSuperadmin) {
+    return (
+      <>
+        <AdminNav />
+        <div className="container mx-auto py-12 px-4 sm:px-6 max-w-2xl">
+          <Card className="p-6 border-destructive/30">
+            <h2 className="text-lg font-semibold text-foreground mb-2">Not authorized</h2>
+            <p className="text-sm text-muted-foreground">
+              Admin access is hardcoded to a single email. The server saw{" "}
+              <code className="text-foreground">{email ?? "(no email)"}</code>{" "}
+              for this session.
+            </p>
+          </Card>
+        </div>
+      </>
+    );
+  }
 
   return (
+    <>
+    <AdminNav />
     <div className="container mx-auto py-6 px-4 sm:px-6 max-w-7xl">
       <div className="mb-4 flex items-center gap-3">
         <div className="relative flex-1 max-w-md">
@@ -147,5 +174,6 @@ export default function SuperadminDashboardsPage() {
         </Card>
       )}
     </div>
+    </>
   );
 }

@@ -13,6 +13,12 @@ const temporaryDebtFiles = new Set([
   // UX-4 · sole pre-existing violation is an intentional #FFFFFF for
   // html-to-image PDF/PNG export (paper white, not a UI colour).
   'src/pages/Dashboard/Components/DashboardView.tsx',
+  // DR18C · ChartModal carries a pre-existing recharts trendline
+  // stroke="#3b82f6" at ~L851 (Tailwind blue-500). Unrelated to the
+  // DR18C prop addition that brought the file into theme-check's
+  // git-diff scope. Migrating the trendline to a CSS-var stroke is
+  // a separate concern for the v2 chart shim work.
+  'src/pages/Home/Components/ChartModal.tsx',
   // Wave F4 of the audit-resolution plan migrated the three dark-mode-broken
   // surfaces (DatasetEnrichmentLoader, FilterAppliedMessage, pivot/PivotGrid)
   // to semantic tokens and removed them from this allowlist. The allowlist

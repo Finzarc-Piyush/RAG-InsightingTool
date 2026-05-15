@@ -47,6 +47,29 @@ function removeNulls(obj: any): any {
 }
 
 /**
+ * Wave B4 · Optional ambient context the classifier can use to resolve
+ * ambiguity. Pre-B4 the classifier only saw question + recent chat
+ * history + columns list — and would route based on surface-form regex
+ * even when the user had set a standing context note like "I'm building
+ * a model" or "treat `budget` as cost_cap_eur". With these blocks
+ * threaded in, the classifier can: (a) honour user-stated intent in
+ * permanentContext, (b) resolve FMCG/Marico vocabulary in domainContext
+ * (e.g. "compute MAT" → analysis, not dataOps), (c) read the rolling
+ * SAC's userIntent.interpretedConstraints so a multi-turn modeling
+ * conversation stays in modeling mode even when the user's wording
+ * drifts.
+ *
+ * All four blocks are OPTIONAL. The current callers (chatStream.service,
+ * chat.service) pass them when available; tests don't need to.
+ */
+export interface ClassifyModeContext {
+  permanentContext?: string;
+  domainContext?: string;
+  userIntentVerbatim?: string;
+  userIntentConstraints?: string[];
+}
+
+/**
  * Classify the top-level mode for a user query
  * This determines whether the query should route to analysis, dataOps, or modeling
  */
@@ -54,7 +77,8 @@ export async function classifyMode(
   question: string,
   chatHistory: Message[],
   summary: DataSummary,
-  maxRetries: number = 2
+  maxRetries: number = 2,
+  context?: ClassifyModeContext
 ): Promise<ModeClassification> {
   // Build context from chat history
   const recentHistory = chatHistory
@@ -68,10 +92,36 @@ export async function classifyMode(
   // Build available columns context
   const allColumns = summary.columns.map(c => c.name).join(', ');
 
+  // Wave B4 · Optional user-intent + domain blocks. Capped tightly because
+  // mode classification is a high-volume MINI-tier call; we want the
+  // prompt under ~3KB even with full context.
+  const userNotes = (context?.permanentContext ?? '').trim();
+  const userNotesBlock = userNotes
+    ? `\n\nUSER NOTES (standing context the user set on this session — apply when relevant to the routing decision):\n${userNotes.slice(0, 600)}`
+    : '';
+  const userIntent = context?.userIntentVerbatim?.trim();
+  const interpretedConstraints = (context?.userIntentConstraints ?? [])
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  const userIntentBlock =
+    userIntent || interpretedConstraints.length
+      ? `\n\nUSER INTENT (interpreted from earlier turns; should bias short follow-ups toward the matching mode):${
+          userIntent ? `\n- stated: ${userIntent.slice(0, 400)}` : ''
+        }${
+          interpretedConstraints.length
+            ? `\n- constraints:\n  - ${interpretedConstraints.slice(0, 8).join('\n  - ').slice(0, 800)}`
+            : ''
+        }`
+      : '';
+  const domain = (context?.domainContext ?? '').trim();
+  const domainBlock = domain
+    ? `\n\nDOMAIN VOCABULARY (FMCG / Marico — background only; if the user's question uses a metric/term from this block, that's not a "dataOps" cue, it's the user reaching for known analytical vocabulary):\n${domain.slice(0, 1500)}`
+    : '';
+
   const prompt = `You are a mode classifier for a data analysis AI assistant. Your job is to determine which top-level mode a user query should route to.
 
 CURRENT QUESTION: ${question}
-${historyContext}
+${historyContext}${userNotesBlock}${userIntentBlock}${domainBlock}
 
 AVAILABLE DATA:
 - Total rows: ${summary.rowCount}

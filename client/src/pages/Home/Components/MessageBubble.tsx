@@ -13,7 +13,10 @@ import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
 import { BuildDashboardCallout } from './BuildDashboardCallout';
 import { FeedbackButtons } from './FeedbackButtons';
+import { computeFeedbackTurnId } from './computeFeedbackTurnId';
 import { AnswerCard } from './AnswerCard';
+import { RecalledFromPriorAnalysisChip } from './RecalledFromPriorAnalysisChip';
+import { BusinessActionsCard } from './BusinessActionsCard';
 import { MessageActionsBar } from './MessageActionsBar';
 import { SourcePillRow } from './SourcePillRow';
 import { StreamingIndicator } from './StreamingIndicator';
@@ -23,7 +26,6 @@ import { Settle } from '@/components/ui/motion';
 import { DataPreview } from './DataPreview';
 import { DataPreviewTable, DataSummaryTable } from './DataPreviewTable';
 import { ThinkingPanel } from './ThinkingPanel';
-import { StepByStepInsightsPanel } from './StepByStepInsightsPanel';
 import { InvestigationSummaryCard } from './InvestigationSummaryCard';
 import { PriorInvestigationsBanner } from './PriorInvestigationsBanner';
 import { Textarea } from '@/components/ui/textarea';
@@ -239,6 +241,18 @@ interface MessageBubbleProps {
   onHierarchiesChange?: (
     next: import('@/shared/schema').DimensionHierarchy[],
   ) => void;
+  /** SU-UX1 — date×time pair annotations (from dataSummary.dateTimeColumnPairs). */
+  dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[];
+  /** SU-UX1 — callback after a successful date×time pair remove. */
+  onDateTimePairsChange?: (
+    next: import('@/shared/schema').DateTimeColumnPair[],
+  ) => void;
+  /** SU-UX1 — indicator-column annotations (from dataSummary.columns[].indicator). */
+  indicators?: import('@/components/IndicatorColumnsBanner').IndicatorEntry[];
+  /** SU-UX1 — callback after a successful indicator remove. */
+  onIndicatorsChange?: (
+    next: import('@/components/IndicatorColumnsBanner').IndicatorEntry[],
+  ) => void;
   /** Show dataset columns/preview only when explicitly requested by the user. */
   allowDatasetPreviewInAnswer?: boolean;
   /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
@@ -285,6 +299,10 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   dimensionHierarchies,
   hierarchyEditSessionId,
   onHierarchiesChange,
+  dateTimeColumnPairs,
+  onDateTimePairsChange,
+  indicators,
+  onIndicatorsChange,
   allowDatasetPreviewInAnswer = false,
   allowPivotAutoShow = false,
   onAppendAssistantChart,
@@ -674,6 +692,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
             sessionId={sessionId ?? undefined}
             variant="above-answer"
+            message={message}
           />
         )}
 
@@ -703,6 +722,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
               temporalFacetColumns={temporalFacetColumns}
               pivotDefaults={message.pivotDefaults}
+              pivotUnavailable={
+                (message as Message & { pivotUnavailable?: boolean }).pivotUnavailable === true
+              }
               onChartAdded={onAppendAssistantChart}
               analysisIntermediateInsight={
                 message.isIntermediate ? message.intermediateInsight : undefined
@@ -752,14 +774,6 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             />
           )}
 
-        {/* W11 · post-pivot "Step-by-step interpretation" panel. Renders only
-            when this message has workbench entries with W10 insight lines.
-            Default-collapsed so the answer card stays the primary focus, but
-            the user can expand to see what each phase actually contributed. */}
-        {!isUser && !message.isIntermediate && (
-          <StepByStepInsightsPanel workbench={message.agentWorkbench} />
-        )}
-
         {isDashboardMode ? (
           <AnalyticalDashboardResponse
             message={message}
@@ -779,6 +793,27 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
             data-testid={`message-content-${message.role}`}
           >
+            {/* Wave A16 · "↻ Automation" badge when this assistant turn was
+                produced by deterministic Automation replay (vs. a live agent
+                turn). */}
+            {(message as Message & { replayedFromAutomationId?: string })
+              .replayedFromAutomationId && (
+              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
+                <span aria-hidden>↻</span> From automation
+              </div>
+            )}
+            {/* AMR5 · "Recalled from prior analysis" provenance chip when
+                this assistant message was served from the cross-session
+                `past_analyses` cache (exact or semantic ≥0.92 match). No-op
+                when the field is absent (fresh agent turns). */}
+            <RecalledFromPriorAnalysisChip
+              recalled={
+                (message as Message & {
+                  recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'];
+                }).recalledFromPriorAnalysis
+              }
+            />
+
             {/*
               W7 · render structured AnswerCard when the narrator emitted an
               `answerEnvelope`; fall back to the legacy markdown-only block
@@ -813,7 +848,31 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 (message as Message & { magnitudes?: MagnitudeItem[] }).magnitudes
               }
             />
-            {assistantMarkdownParts.followUpChips.length > 0 && onSuggestedQuestionClick && (
+            {/*
+              Business action items — concrete decisions the user could take
+              outside the app. Mounted alongside (not inside) AnswerCard so
+              it renders independently of the answer envelope's presence.
+              The card no-ops when `businessActions` is empty / absent.
+            */}
+            <BusinessActionsCard
+              items={message.businessActions ?? []}
+            />
+            {/*
+              Follow-up suggestion chips. AnswerCard already renders these as
+              the "Try next" section when the structured envelope provides
+              `answerEnvelope.nextSteps` — suppress this legacy "You might
+              try:" block in that case to avoid the duplicate the user saw
+              after BAI2 fixed the envelope plumbing. Block still fires for
+              synthesis-fallback / no-envelope turns where AnswerCard isn't
+              rendered, so the markdown trailer's chips don't disappear from
+              older or fallback messages.
+            */}
+            {assistantMarkdownParts.followUpChips.length > 0
+              && onSuggestedQuestionClick
+              && !(
+                (message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> })
+                  .answerEnvelope?.nextSteps?.length
+              ) && (
               <div className="mt-4">
                 <p className="text-sm font-semibold text-foreground mb-2">You might try:</p>
                 <div className="flex flex-wrap gap-2">
@@ -841,6 +900,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
                 sessionId={sessionId ?? undefined}
                 variant="below-answer"
+                message={message}
               />
             ) : (message as Message & { createdDashboardId?: string })
                 .createdDashboardId ? (
@@ -851,6 +911,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   (message as Message & { createdDashboardId?: string })
                     .createdDashboardId
                 }
+                message={message}
               />
             ) : null}
             {/* W7 · message-level actions (Copy now; Regenerate added in W9). */}
@@ -859,14 +920,19 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               precedingUserQuestion={precedingUserQuestion ?? undefined}
             />
             {/* W5.5b · thumbs up/down feeds the cache invalidation + golden corpus.
-                Only rendered when we have the turnId from the agent trace.
-                Feedback `target={{type:"answer",id:"answer"}}` is implicit (omitted)
-                so the legacy answer-level top-level fields stay populated. */}
-            {sessionId &&
-              (message.agentTrace as { turnId?: string } | undefined)?.turnId && (
+                Wave AD1 · prefer the agent-trace turnId when available; fall
+                back to the message timestamp so non-agentic / cache-hit /
+                synthesis-fallback paths still surface feedback buttons. The
+                server now always populates agentTrace.turnId, but this gate
+                is defense-in-depth against future regressions. */}
+            {(() => {
+              if (!sessionId) return null;
+              const turnId = computeFeedbackTurnId(message);
+              if (!turnId) return null;
+              return (
                 <FeedbackButtons
                   sessionId={sessionId}
-                  turnId={(message.agentTrace as { turnId: string }).turnId}
+                  turnId={turnId}
                   initial={
                     (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
                   }
@@ -875,7 +941,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   }
                   target={{ type: "answer", id: "answer" }}
                 />
-              )}
+              );
+            })()}
             {message.suggestedQuestions &&
               message.suggestedQuestions.length > 0 &&
               onSuggestedQuestionClick && (
@@ -946,6 +1013,10 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   dimensionHierarchies={dimensionHierarchies}
                   sessionIdForHierarchyEdit={hierarchyEditSessionId}
                   onHierarchiesChange={onHierarchiesChange}
+                  dateTimeColumnPairs={dateTimeColumnPairs}
+                  onDateTimePairsChange={onDateTimePairsChange}
+                  indicators={indicators}
+                  onIndicatorsChange={onIndicatorsChange}
                 />
                 {uploadPreviewThinking?.active && (
                   <div className="mt-2">
@@ -1222,6 +1293,12 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
       ) &&
     JSON.stringify(prevProps.message.pivotDefaults ?? null) ===
       JSON.stringify(nextProps.message.pivotDefaults ?? null) &&
+    Boolean(
+      (prevProps.message as Message & { pivotUnavailable?: boolean }).pivotUnavailable
+    ) ===
+      Boolean(
+        (nextProps.message as Message & { pivotUnavailable?: boolean }).pivotUnavailable
+      ) &&
     (prevProps.message.thinkingBefore?.steps?.length ?? 0) ===
       (nextProps.message.thinkingBefore?.steps?.length ?? 0) &&
     (prevProps.message.thinkingBefore?.workbench?.length ?? 0) ===

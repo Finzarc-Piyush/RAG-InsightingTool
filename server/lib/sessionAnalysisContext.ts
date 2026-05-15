@@ -12,6 +12,7 @@ import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
 import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
 import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
 import { buildDeterministicScopeFacts } from "./datasetScopeFacts.js";
+import { withSessionWriteLock } from "./sessionWriteLock.js";
 
 export { withImmutableUserIntentFromPrevious };
 
@@ -243,15 +244,7 @@ export async function extractAndPersistUserHierarchies(params: {
   );
   if (prevHashable === nextHashable) return undefined;
 
-  const previousChain = sessionPersistChain.get(params.sessionId);
-  const work = (async () => {
-    if (previousChain) {
-      try {
-        await previousChain;
-      } catch {
-        /* prior call's failure isn't this caller's concern */
-      }
-    }
+  return withSessionWriteLock(params.sessionId, async () => {
     const { getChatBySessionIdForUser, updateChatDocument } = await import(
       "../models/chat.model.js"
     );
@@ -260,15 +253,79 @@ export async function extractAndPersistUserHierarchies(params: {
     doc.sessionAnalysisContext = merged;
     await updateChatDocument(doc);
     return merged;
-  })();
-  sessionPersistChain.set(params.sessionId, work);
-  try {
-    return await work;
-  } finally {
-    if (sessionPersistChain.get(params.sessionId) === work) {
-      sessionPersistChain.delete(params.sessionId);
+  });
+}
+
+/**
+ * SU-UX1 · Replace the schema-annotation arrays (date×time pairs and the
+ * per-column indicator metadata) on a session's `dataSummary`. Used by
+ * the PUT endpoint that powers the SU-UX1 banners' remove buttons.
+ *
+ * Pairs live on `summary.dateTimeColumnPairs`; indicators live on each
+ * `summary.columns[i].indicator`. We accept both in one call so the UI
+ * can patch either independently. Per-session mutex serialises with the
+ * assistant-merge / hierarchy paths so concurrent mutations don't race.
+ *
+ * `indicators` is the *full new list* (just like `hierarchies` in EU1).
+ * Columns whose name appears in `indicators` get their indicator field
+ * set to `source: "user"`; columns whose name does NOT appear get their
+ * indicator field cleared. This makes "remove the X indicator" a single
+ * round-trip without needing a `_deletes` field.
+ */
+export async function updateSessionSchemaAnnotations(params: {
+  sessionId: string;
+  username: string;
+  dateTimeColumnPairs?: import("../shared/schema.js").DateTimeColumnPair[];
+  indicators?: Array<{
+    column: string;
+    kind: "boolean" | "categorical";
+    positiveValues?: string[];
+    negativeValues?: string[];
+    sentinelValues?: string[];
+  }>;
+}): Promise<{
+  dateTimeColumnPairs?: import("../shared/schema.js").DateTimeColumnPair[];
+  indicators: Array<{ column: string; kind: "boolean" | "categorical" }>;
+} | undefined> {
+  return withSessionWriteLock(params.sessionId, async () => {
+    const { getChatBySessionIdForUser, updateChatDocument } = await import(
+      "../models/chat.model.js"
+    );
+    const doc = await getChatBySessionIdForUser(params.sessionId, params.username);
+    if (!doc || !doc.dataSummary) return undefined;
+    if (params.dateTimeColumnPairs !== undefined) {
+      doc.dataSummary.dateTimeColumnPairs = params.dateTimeColumnPairs.map(
+        (p) => ({ ...p, source: "user" as const })
+      );
     }
-  }
+    if (params.indicators !== undefined) {
+      const desired = new Map(params.indicators.map((i) => [i.column, i]));
+      for (const col of doc.dataSummary.columns) {
+        const next = desired.get(col.name);
+        if (next) {
+          col.indicator = {
+            kind: next.kind,
+            ...(next.positiveValues ? { positiveValues: next.positiveValues } : {}),
+            ...(next.negativeValues ? { negativeValues: next.negativeValues } : {}),
+            ...(next.sentinelValues ? { sentinelValues: next.sentinelValues } : {}),
+            source: "user",
+          };
+        } else if (col.indicator) {
+          // Column not in desired → user removed it.
+          col.indicator = undefined;
+          col.answersQuestions = undefined;
+        }
+      }
+    }
+    await updateChatDocument(doc);
+    const indicatorsOut = doc.dataSummary.columns
+      .filter((c) => c.indicator)
+      .map((c) => ({ column: c.name, kind: c.indicator!.kind }));
+    return {
+      dateTimeColumnPairs: doc.dataSummary.dateTimeColumnPairs,
+      indicators: indicatorsOut,
+    };
+  });
 }
 
 /**
@@ -283,15 +340,7 @@ export async function updateSessionDimensionHierarchies(params: {
   username: string;
   hierarchies: SessionAnalysisContext["dataset"]["dimensionHierarchies"];
 }): Promise<SessionAnalysisContext | undefined> {
-  const previousChain = sessionPersistChain.get(params.sessionId);
-  const work = (async () => {
-    if (previousChain) {
-      try {
-        await previousChain;
-      } catch {
-        /* prior call's failure isn't this caller's concern */
-      }
-    }
+  return withSessionWriteLock(params.sessionId, async () => {
     const { getChatBySessionIdForUser, updateChatDocument } = await import(
       "../models/chat.model.js"
     );
@@ -309,15 +358,7 @@ export async function updateSessionDimensionHierarchies(params: {
     doc.sessionAnalysisContext = next;
     await updateChatDocument(doc);
     return next;
-  })();
-  sessionPersistChain.set(params.sessionId, work);
-  try {
-    return await work;
-  } finally {
-    if (sessionPersistChain.get(params.sessionId) === work) {
-      sessionPersistChain.delete(params.sessionId);
-    }
-  }
+  });
 }
 
 /** Programmatic merge after a successful analysis brief (bounded; no extra LLM). */
@@ -439,7 +480,7 @@ export function buildInitialAssistantContentFromContext(
   const highlights = (ctx.dataset.keyHighlights ?? []).filter((b) => b.trim());
   const renderedHighlights = highlights.length > 0 ? highlights : fallback.highlights;
   if (renderedHighlights.length > 0) {
-    lines.push("", "**What's in this data:**");
+    lines.push("", "**What's in this data basis top 5k Rows:**");
     for (const h of renderedHighlights) lines.push(`• ${h}`);
   }
 
@@ -456,21 +497,25 @@ export function buildInitialAssistantContentFromContext(
 
 /** After saving an assistant message: merge reply into rolling JSON and persist. */
 /**
- * W40 · per-session in-process mutex keyed by sessionId. Concurrent
- * `persistMergeAssistantSessionContext` calls for the same session
- * (e.g. duplicated tab firing two turns at once) chain through this
- * promise so the read-modify-write of `sessionAnalysisContext` is
- * serialised within a single Node process. Without this serialisation,
- * the W21 `priorInvestigations` append on turn B silently overwrites
- * turn A's append because the upsert is last-write-wins.
+ * W40 · serialised per session via `withSessionWriteLock` so concurrent
+ * `persistMergeAssistantSessionContext` calls (e.g. duplicated tab firing
+ * two turns at once) chain through one promise. Without this
+ * serialisation, the W21 `priorInvestigations` append on turn B silently
+ * overwrites turn A's append because the Cosmos upsert is last-write-wins.
+ *
+ * Wave A2 · The lock now covers EVERY Cosmos-facing RMW on the chat
+ * document — not just persist-vs-persist. Pre-A2 the per-session map was
+ * declared right here and shared only with `extractAndPersistUserHierarchies`,
+ * `updateSessionDimensionHierarchies`, and `updateSessionSchemaAnnotations`.
+ * `patchAssistantBusinessActions` (BAI) and the active-filter PUT/DELETE
+ * controller held SEPARATE maps and could race against this one. The
+ * unified `withSessionWriteLock` map serialises all of them.
  *
  * Single-instance correctness only — multi-instance horizontal scaling
  * would need Cosmos `ifMatch` ETag or an external lock. Per CLAUDE.md
  * the deploy is single-instance today; the in-process mutex is a
  * sufficient minimal fix.
  */
-const sessionPersistChain = new Map<string, Promise<unknown>>();
-
 export async function persistMergeAssistantSessionContext(params: {
   sessionId: string;
   username: string;
@@ -486,30 +531,7 @@ export async function persistMergeAssistantSessionContext(params: {
   question?: string;
   investigationSummary?: import("../shared/schema.js").InvestigationSummary;
 }): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
-  // W40 · serialise per session. Chain after any in-flight persist for
-  // this sessionId before running the read-modify-write below. We drop
-  // the chain entry on completion so the map doesn't grow unbounded.
-  const previous = sessionPersistChain.get(params.sessionId);
-  const work = (async () => {
-    if (previous) {
-      try {
-        await previous;
-      } catch {
-        // Prior call's failure is its own concern; this call still runs.
-      }
-    }
-    return doPersist(params);
-  })();
-  sessionPersistChain.set(params.sessionId, work);
-  try {
-    return await work;
-  } finally {
-    // Only clear if our chain entry is still the latest — otherwise a
-    // newer caller has already chained off `work` and we'd orphan it.
-    if (sessionPersistChain.get(params.sessionId) === work) {
-      sessionPersistChain.delete(params.sessionId);
-    }
-  }
+  return withSessionWriteLock(params.sessionId, () => doPersist(params));
 }
 
 async function doPersist(params: {
