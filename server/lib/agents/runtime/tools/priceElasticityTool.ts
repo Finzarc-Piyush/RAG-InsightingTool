@@ -25,6 +25,8 @@
 import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { composeFindingDetail } from "../formatFindingEvidence.js";
+import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -336,10 +338,34 @@ export function runPriceElasticity(
         "interpretation",
       ];
 
+  // Wave WV6 · canonical FindingEvidence suffix. Top row by |elasticity| is
+  // the headline result; emit its n + R² so the WW2 extractor catches them
+  // deterministically and WQ1 grades by real evidence. Both summary branches
+  // get the suffix — the no-group branch already had R² + n inline in
+  // legacy prose, but adding the canonical block keeps the format uniform
+  // across tools (extractor returns the first match either way; the
+  // duplication is harmless and the canonical phrasing is the contract).
+  const topRow = tableRows[0];
+  const headlineEvidence: FindingEvidence = {};
+  if (typeof topRow.n === "number" && Number.isFinite(topRow.n) && topRow.n >= 0) {
+    headlineEvidence.n = topRow.n;
+  }
+  if (
+    typeof topRow.r_squared === "number" &&
+    Number.isFinite(topRow.r_squared) &&
+    topRow.r_squared >= 0 &&
+    topRow.r_squared <= 1
+  ) {
+    headlineEvidence.rSquared = topRow.r_squared;
+  }
+  const wv6EvidenceSuffix = composeFindingDetail("", headlineEvidence);
+
   const summary = args.groupColumn
     ? `${tableRows.length} group(s) fit; ${skipped.length} skipped (insufficient observations or degenerate).` +
-      ` Most elastic: ${tableRows[0][args.groupColumn]} (β=${tableRows[0].elasticity}, ${tableRows[0].interpretation})`
-    : `Elasticity β=${tableRows[0].elasticity} (${tableRows[0].interpretation}); R²=${tableRows[0].r_squared}, n=${tableRows[0].n}`;
+      ` Most elastic: ${topRow[args.groupColumn]} (β=${topRow.elasticity}, ${topRow.interpretation})` +
+      wv6EvidenceSuffix
+    : `Elasticity β=${topRow.elasticity} (${topRow.interpretation}); R²=${topRow.r_squared}, n=${topRow.n}` +
+      wv6EvidenceSuffix;
 
   return {
     ok: true,
