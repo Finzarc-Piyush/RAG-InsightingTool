@@ -1,18 +1,18 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave WV1 — verifier confidence overclaim detector).
+> Last sync: 2026-05-16 (Wave WV2 — canonical FindingEvidence detail-prose formatter).
 
 ## HEAD
 
-- **Latest wave:** Wave WV1 · verifier-side confidence overclaim detector (pure helper) (2026-05-16)
+- **Latest wave:** Wave WV2 · canonical FindingEvidence → detail prose formatter (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `4388ab44` — "Wave WV1 · verifier-side confidence overclaim detector (pure helper)" (2026-05-16)
-- **Working tree:** doc updates staged for paired WV1 commit.
+- **Last commit:** `918d1fbb` — "Wave WV2 · canonical FindingEvidence → detail prose formatter" (2026-05-16)
+- **Working tree:** doc updates staged for paired WV2 commit.
 
 ## Live feature streams
 
-- **Wire-up · WW1+WW2+WV1** · planner + narrator + verifier helpers for WT6 + WQ2 + WQ1 ALL SHIPPED today. WW1 wired planner (TOOL_ROUTER_HINT + EXTERNAL_CLAIM_MARKERS + PLANNER_CONFIDENCE_DIRECTIVE). WW2 wired narrator (FINDING_CONFIDENCE block + system-prompt tier-pinning directive). WV1 ships the verifier-side pure helper [`verifierConfidenceCheck.ts`](../server/lib/agents/runtime/verifierConfidenceCheck.ts) — `detectConfidenceOverclaims(narratorOutput, blackboard)` returns three flag kinds (high-exceeds=warning, all-high-with-low=block, over-hedge=info) with `shouldRevise` true iff warning or block fires. Aggregate tier counting (not per-finding fuzzy matching) catches narrator overclaim without depending on string-similarity heuristics. Helper-only this wave; verifier.ts wire-up is a follow-up. Next wire-up candidates: verifier.ts consumes `detectConfidenceOverclaims` to trigger `revise_narrative`; workbench surfacing of tier counts.
+- **Wire-up · WW1+WW2+WV1+WV2** · planner + narrator + verifier helpers + canonical evidence formatter for WT6 + WQ2 + WQ1 ALL SHIPPED today. WW1 wired planner (TOOL_ROUTER_HINT + EXTERNAL_CLAIM_MARKERS + PLANNER_CONFIDENCE_DIRECTIVE). WW2 wired narrator (FINDING_CONFIDENCE block + system-prompt tier-pinning directive). WV1 shipped the verifier-side overclaim detector ([`verifierConfidenceCheck.ts`](../server/lib/agents/runtime/verifierConfidenceCheck.ts)). WV2 shipped the canonical `FindingEvidence → detail` formatter ([`formatFindingEvidence.ts`](../server/lib/agents/runtime/formatFindingEvidence.ts)) so tools can opt into deterministic phrasing the WW2 extractor reliably catches. Helper-only on WV1 + WV2; next wire-up candidates: verifier.ts consumes `detectConfidenceOverclaims` to trigger `revise_narrative`; tool migration to use `composeFindingDetail` when emitting statistical findings; workbench surfacing of tier counts.
 - **Workstream 9 — quality 2.0** · WQ1 + WQ2 helpers SHIPPED + WIRED into planner (WW1) + narrator (WW2). Next: WQ3 — citation hover-cards in narrator prose. Or WQ7 — significance score by default on breakdown_ranking + segment_compare tools.
 - **Workstream 5 — tool library expansion** · WT6 selectTool wired by WW1 — TOOL_ROUTER_HINT block surfaces in the planner user prompt with intent + ranked tools per turn. Workstream now spans 6 of 6 routing/question-shape pieces (WT8 hierarchical-drill, WT2 cohort, WT3 RFM, WT7 elasticity, WT4 market-basket, WT6 router). Remaining tools require Python (WT1 causal / WT5 what-if / WT9 MTA Markov). Next: WT5 — `run_what_if` (Python scipy Monte Carlo).
 - **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history.
@@ -39,10 +39,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **WV2** (2026-05-16) · canonical FindingEvidence → detail prose formatter: `composeFindingDetail(prefix, evidence)` emits `" (n = N; p = X; R² = Y; ±Z% of the estimate)"` — present fields only. Roundtrip property pinned: `extractFindingEvidence(composeFindingDetail(prefix, ev)) === ev` modulo display rounding. Closes the WW2 extractor/formatter loop without forcing a schema migration. 17 tests.
 - **WV1** (2026-05-16) · verifier-side confidence overclaim detector (pure helper): `detectConfidenceOverclaims(narratorOutput, blackboard)` compares aggregate claimed tier counts (narrator magnitudes + implications) against deterministic WQ1 tiers across blackboard findings. Three flag kinds (high-exceeds=warning, all-high-with-low=block, over-hedge=info); `shouldRevise` true iff warning or block. Helper-only; verifier.ts wiring is a follow-up. 11 tests.
 - **WW2** (2026-05-16) · narrator wiring of WQ1: new pure helper `narratorHintsBlock.ts` regex-mines n/p/R²/CI from finding.detail prose, decorates via WQ1 assessConfidence, emits FINDING_CONFIDENCE prompt block. narratorAgent concatenates it between blackboardBlock and bundleSection; system-prompt directive pins magnitudes[].confidence + implications[].confidence to the listed tier. 13 tests.
 - **WW1** (2026-05-16) · planner wiring of WT6 + WQ2 + WQ1: new pure helper `plannerHintsBlock.ts` (intent inference + dataset hints + combined block render). planner.ts builds the block per turn, concatenates BEFORE RAG / memory / hypotheses; static PLANNER_CONFIDENCE_DIRECTIVE in system prompt nudges toward tools that emit n / p / R² / CI width. agentLog `planner_hints_block_emitted` for observability. 19 tests.
 - **WT6** (2026-05-16) · `selectTool` planner router helper: 15-value AnalystIntent enum mapped to ordered ToolRecommendation[] with rationale + confidence. DatasetHints disambiguate. renderToolRouterPromptBlock for system-message paste. Helper-only. 26 tests.
-- **WT4** (2026-05-16) · `run_market_basket` tool: 1-LHS apriori association rules from transaction baskets. Emits both directions a→b and b→a with support / confidence / lift / count. Set semantics on (tx, item) pairs. Pure-Node. 19 tests.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.

@@ -11,6 +11,38 @@
 
 ---
 
+- **2026-05-16** — **Wave WV2 · canonical `FindingEvidence → detail prose` formatter.** Companion to WW2's `extractFindingEvidence` regex extractor. Closes the formatter/extractor loop: tools that produce findings can opt into a canonical phrasing so the WW2 extractor reliably recovers `n` / `p` / `R²` / `CI` from the finding's prose. Without WV2 the deterministic-evidence path depends on each tool's prose author writing something the WW2 regex catalogue happens to match.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/formatFindingEvidence.ts](server/lib/agents/runtime/formatFindingEvidence.ts) (~70 LOC). Public surface:
+      - `formatEvidenceForFindingDetail(evidence) → string` — pure formatter. Format: `" (n = N; p = X; R² = Y; ±Z% of the estimate)"` — present fields only, semicolon-separated, parenthesised, with a leading space so callers can safely concatenate `detailPrefix + suffix`.
+      - `composeFindingDetail(prefix, evidence) → string` — convenience wrapper for `prefix.trim() + formatEvidenceForFindingDetail(evidence)`.
+    - Defensive: out-of-range values drop silently (`n < 0`, `p ∉ [0, 1]`, `R² ∉ [0, 1]`, `ciRelativeWidth ∉ [0, 1]`).
+    - Display normalisation: `n` rounded to integer; `p < 0.001` emitted as `"p < 0.001"`; `R²` to 2 decimal places; CI fraction to integer percent.
+
+  **Why this design.**
+    - **Roundtrip is the contract.** The load-bearing test verifies `extractFindingEvidence(composeFindingDetail(prefix, ev))` recovers `ev` for 6 representative evidence shapes. This is the *invariant* — tools that emit findings via the formatter are guaranteed to feed back into WQ1's tier classifier exactly as intended, with no regex drift risk.
+    - **Format chosen to match the WW2 extractor's accepted shapes.** WW2 already recognises `n = N`, `p = X`, `p < X`, `R² = X`, `±X%` patterns. Rather than expanding WW2's regex catalogue (which would loosen extraction and risk false positives), WV2 emits the *narrowest canonical phrasing* that WW2 already matches. The formatter is the seller; the extractor is the buyer; the canonical format is the contract.
+    - **Semicolon-separated, parenthesised, leading space.** The parenthesised block lets the formatter be appended to any finding-detail string without disturbing its existing prose. The semicolon avoids confusion with the `=` in field values (would conflict if comma-separated and downstream prose has its own commas). The leading space lets the caller write `prefix + suffix` rather than managing whitespace themselves.
+    - **`p < 0.001` as a literal phrase.** Very small p-values are conventionally reported as a bound rather than a scientific-notation number. WW2's regex accepts both phrasings; WV2 picks the bound form for readability. Roundtrip behaviour: the extractor recovers `0.001` as the p-value (the bound), which still classifies as `high` per WQ1's `p ≤ 0.05` threshold.
+    - **Defensive drops over throws.** Out-of-range inputs (e.g., `p = 2.0`) are silently dropped rather than throwing. Tools that mis-populate evidence shouldn't crash the runtime; the worst case is the finding tiers as `medium` (no evidence supplied) instead of being attributed to a richer tier.
+    - **Pure, zero-dep, side-effect free.** Mirrors WW2's design. Composable into any addFinding caller without runtime context.
+    - **No tool migration.** WV2 ships the formatter; existing tools keep their prose unchanged. Adoption is opt-in per tool, can be rolled out incrementally as each tool author wants WQ1's deterministic floor to kick in for their finding shapes.
+
+  **Tests.** [tests/formatFindingEvidenceWV2.test.ts](server/tests/formatFindingEvidenceWV2.test.ts) — 17 cases across 3 suites:
+    - **Output shape** (8): all-fields canonical block; empty input → empty string; `p < 0.001` literal; integer-rounded n; CI fraction → percent integer; R² to 2 decimals; defensive drop of out-of-range; canonical field order (n / p / R² / CI) regardless of input field order.
+    - **composeFindingDetail wrapper** (3): prefix + suffix concat; whitespace-trimmed prefix; empty-evidence returns just prefix.
+    - **Roundtrip with WW2 extractFindingEvidence** (6): all-fields recovered, only-n recovered, only-p recovered, only-R² recovered, small p < 0.001 recovered, CI 30% recovered. Each asserts that the extracted `FindingEvidence` matches the original modulo display rounding.
+    - 17/17 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WV1 baseline — zero new from WV2. Server build (`npm run build`) succeeds. Code commit `918d1fbb`.
+
+  **Out of scope.**
+    - Migrating existing tools to use the formatter. Adoption is opt-in; tool authors can wire `composeFindingDetail` into their `addFinding` calls one tool at a time.
+    - Structured `Finding.evidence` field. WV2 keeps the prose-detail interface; a future schema wave can promote evidence to a first-class field and the formatter becomes the fallback for tools that don't migrate.
+    - Additional evidence fields. `magnitude` is carried through `FindingEvidence` for completeness but WV2 doesn't format it (currency / unit normalisation across FMCG locales is its own problem).
+    - Workbench surfacing. The formatter's output is already in finding.detail strings the chat card / past-analyses doc displays; no new UI is required.
+
 - **2026-05-16** — **Wave WV1 · verifier-side confidence overclaim detector (pure helper).** Closes the loop on the WW1 + WW2 deterministic-floor design: WW1 surfaced WQ1 as a system-prompt directive in the planner; WW2 surfaced per-finding tiers + canonical hedges in the narrator user prompt. But the narrator's tier choice was unaudited — the directive nudged, never enforced. WV1 ships a pure detector that compares the narrator's *claimed* aggregate tier distribution against the *deterministic* WQ1 tiers across blackboard findings, emitting overclaim flags the verifier can use to request `revise_narrative` when the narrative inflates confidence beyond what the evidence supports.
 
   **What landed.**
