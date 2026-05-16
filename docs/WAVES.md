@@ -11,6 +11,36 @@
 
 ---
 
+- **2026-05-16** — **Wave WQ1 · `scaleNarrativeByConfidence` helper.** Closes the first item of Workstream 9 from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *confidence-aware narration*. The narrator today emits the same prose verbosity whether a finding is backed by n=500,000 with p<0.001 OR n=8 with no significance test — both get the same authoritative tone. WQ1 ships the pure pre-narrator helper that grades each finding's evidence and assigns a confidence tier (high / medium / low) plus a canonical hedge phrase, so the future narrator wave can vary verbosity + hedge by tier.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/scaleNarrativeByConfidence.ts](server/lib/agents/runtime/scaleNarrativeByConfidence.ts) (~190 LOC). Zero-dep, side-effect-free, deterministic. Public surface:
+      - `assessConfidence(evidence: FindingEvidence) → ConfidenceAssessment` — the core classifier.
+      - `decorateFindings(findings, evidenceMap) → findings[] + confidence` — bulk decorator. Accepts `Map<string, FindingEvidence>` or `Record<string, FindingEvidence>`.
+      - `summarizeConfidenceTiers(assessments) → { total, high, medium, low, promptLine }` — prompt-block-friendly summary for the narrator system message.
+      - `narratorBudget(tier) → { maxSentences, hedgeRequired }` — per-tier verbosity cap.
+      - `hedgeFor(tier) → string` — canonical hedge phrase per tier.
+    - `FindingEvidence` is `{ n?, pValue?, magnitude?, rSquared?, ciRelativeWidth? }` — all fields optional. Caller composes whichever signals are available from the tool result.
+
+  **Why this design.**
+    - **Pure decorator, no auto-wiring yet.** Following the same scope discipline as WI1 (InsightSpec schema → WI2 dynamic regen), this wave ships ONLY the helper. The narrator integration is a separate wave that will read confidence tiers into the prompt assembly path and add the per-tier directives. Reasoning: god-object-aware scope. The narrator path lives in [agentLoop.service.ts](server/lib/agents/runtime/agentLoop.service.ts) (3,971 LOC) and [narratorAgent.ts](server/lib/agents/runtime/narratorAgent.ts); touching both safely deserves its own atomic wave with its own tests.
+    - **Evidence-less defaults to medium, never silently high.** When `assessConfidence({})` is called with no signals, it returns `medium` with the reason "no statistical evidence supplied". Defaulting to "high" would hide low-confidence findings behind authoritative prose — the worst possible failure mode. The test suite pins this.
+    - **Priority-ordered classification: low-fail signals first.** Any single hard-fail signal (n<10, p>0.15, CI width >0.6, R²<0.2) is enough to drop a finding to "low". This prevents the classifier from upgrading a finding to "high" just because n is large when p-value is poor.
+    - **High tier requires ALL supplied signals to pass.** If the caller supplies n=100, p=0.01, R²=0.3, the finding is medium (R² fails the high-tier threshold). Conservative — and the `reasons[]` list makes it auditable.
+    - **Hedge phrases are canonical strings, not LLM-generated.** Determinism in the hedging language means the narrator's prose is predictable across reruns. The narrator wave can still rephrase them; the tool guarantees the underlying meaning travels through.
+    - **`Map` AND `Record` both accepted for evidence.** Callers can pass either; the helper detects via `instanceof Map`. Saves a `new Map(Object.entries(...))` round-trip at every call site.
+
+  **Tests.** [tests/scaleNarrativeByConfidenceWQ1.test.ts](server/tests/scaleNarrativeByConfidenceWQ1.test.ts) — 23 cases across 6 suites:
+    - **High tier** (4): well-powered/significant/tight-CI → high; evidence-less → medium (not high); R²<0.5 with otherwise high signals → medium; R²>=0.5 keeps high.
+    - **Low tier** (5): n<10, p>0.15, wide CI, R²<0.2, multiple-reasons accumulation.
+    - **Medium tier** (5): n in [10,30), p in (0.05, 0.15], CI in (0.3, 0.6], R² in [0.2, 0.5), canonical hedge phrase.
+    - **decorateFindings** (4): Map evidence, Object evidence, missing-evidence default, preserves original fields.
+    - **summarizeConfidenceTiers** (2): counts + prompt line, empty list.
+    - **narratorBudget + hedgeFor** (3): tier-ordered sentence budgets, hedge-required flags, hedge canonical strings.
+    - 23/23 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WT7 baseline — zero new from WQ1. Commit `471ba965`.
+
 - **2026-05-16** — **Wave WT7 · `run_price_elasticity` tool.** Closes the price-elasticity question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico pricing manager asking "what happens to Parachute 200ml volume if I raise the shelf price by 5%?" previously got either an MMM-pipeline answer (multi-driver, slow) or a hand-rolled correlation (cheap but qualitative). WT7 ships the single-variable log-log elasticity as a first-class tool.
 
   **What landed.**
