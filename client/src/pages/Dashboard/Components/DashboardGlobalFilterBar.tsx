@@ -7,22 +7,23 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { ActiveChartFilters } from "@/lib/chartFilters";
+import type { ActiveChartFilters, ChartFilterDefinition } from "@/lib/chartFilters";
+import { AddFilterPopover } from "./AddFilterPopover";
 
 /**
- * Wave DR4 · global dashboard filter bar.
+ * Wave DR4 · global dashboard filter bar — display + dismiss.
+ * Wave WD1 · adds the `+ Add filter` action via `AddFilterPopover` so
+ * the slicer is now fully bidirectional: users dismiss with X, add new
+ * filters with `+`. Dashboards open at "0 filters · + Add filter"
+ * instead of zero-pixels-empty, putting the slicer one click away.
  *
  * Renders one chip per active condition in `global`. Each chip carries a
- * dismiss button (clears that column from `global`); a "Clear all" link
- * appears when ≥ 2 conditions are set. Below the chips, a small hint
- * line shows how many tiles each condition actually applies to — the
- * peer review's "applies to N of M tiles" requirement.
- *
- * The bar renders nothing when `global` is empty, so it costs zero pixels
- * for dashboards without a captured filter and without user-added
- * filters. Adding filters from the bar is a follow-up wave; the
- * existing per-tile filter UI inside `ChartRenderer` still works and
- * lands in `perTile` overrides through DashboardView.
+ * dismiss button (clears that column); a "Clear all" link appears when
+ * ≥ 2 conditions are set. Hint shows how many tiles each condition
+ * actually applies to ("applies to N of M tiles"). When the dashboard
+ * has no filterable columns at all (no chart tiles / all tiles empty),
+ * the bar renders nothing — preserving the DR4 "zero pixels when
+ * nothing to do" contract.
  */
 
 interface DashboardGlobalFilterBarProps {
@@ -31,6 +32,13 @@ interface DashboardGlobalFilterBarProps {
   appliesToCountByColumn: Record<string, number>;
   totalChartTiles: number;
   onChange: (next: ActiveChartFilters) => void;
+  /**
+   * WD1 · filter definitions for columns NOT yet in `global`. Computed by
+   * the parent ([DashboardView](./DashboardView.tsx)) via
+   * `availableFilterDefinitions`. When empty + `global` is empty, the bar
+   * renders nothing.
+   */
+  availableFilters?: ChartFilterDefinition[];
 }
 
 function chipLabelForSelection(
@@ -63,11 +71,16 @@ export function DashboardGlobalFilterBar({
   appliesToCountByColumn,
   totalChartTiles,
   onChange,
+  availableFilters = [],
 }: DashboardGlobalFilterBarProps) {
   const entries = Object.entries(global).filter(
     (e): e is [string, NonNullable<ActiveChartFilters[string]>] => !!e[1],
   );
-  if (entries.length === 0) return null;
+  // WD1 · render even when empty IFF the dashboard has filterable
+  // columns to offer; only short-circuit when there's nothing to do
+  // either way. Preserves DR4's zero-pixels-when-nothing-to-do contract
+  // for dashboards with no chart tiles or all-empty chart data.
+  if (entries.length === 0 && availableFilters.length === 0) return null;
 
   const handleRemove = (column: string) => {
     const next: ActiveChartFilters = { ...global };
@@ -144,6 +157,11 @@ export function DashboardGlobalFilterBar({
             </Tooltip>
           );
         })}
+        <AddFilterPopover
+          available={availableFilters}
+          current={global}
+          onAddFilter={onChange}
+        />
         {entries.length >= 2 ? (
           <Button
             variant="ghost"

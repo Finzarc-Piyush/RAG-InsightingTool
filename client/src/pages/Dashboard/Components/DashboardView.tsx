@@ -18,6 +18,7 @@ import { DashboardSheetTabs } from './DashboardSheetTabs';
 import { DashboardGlobalFilterBar } from './DashboardGlobalFilterBar';
 import { AddTileMenu } from './AddTileMenu';
 import {
+  availableFilterDefinitions,
   capturedActiveFilterToChartFilters,
   extractTileColumns,
   globalForTile,
@@ -375,6 +376,15 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     return { counts, totalChartTiles };
   }, [sections, globalFilters]);
 
+  // WD1 · feed the global filter bar's `+ Add filter` picker. Aggregates
+  // chart tile data across sheets, derives ChartFilterDefinitions, and
+  // excludes columns already filtered. Memoised against sections +
+  // globalFilters so the popover stays fast even on large dashboards.
+  const availableFilters = useMemo(() => {
+    const allTiles = sections.flatMap((s) => s.tiles);
+    return availableFilterDefinitions(allTiles, globalFilters);
+  }, [sections, globalFilters]);
+
 
   // Handle adding a new sheet
   const handleAddSheet = async () => {
@@ -663,6 +673,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   appliesToCountByColumn={globalFilterCounts.counts}
                   totalChartTiles={globalFilterCounts.totalChartTiles}
                   onChange={setGlobalFilters}
+                  availableFilters={availableFilters}
                 />
 
                 <DashboardTiles

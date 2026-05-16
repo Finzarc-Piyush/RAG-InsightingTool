@@ -18,8 +18,13 @@
 import type { ActiveFilterSpec, ActiveFilterCondition } from "@/shared/schema";
 import type {
   ActiveChartFilters,
+  CategoricalFilterSelection,
+  ChartFilterDefinition,
   ChartFilterSelection,
+  DateFilterSelection,
+  NumericFilterSelection,
 } from "@/lib/chartFilters";
+import { deriveChartFilterDefinitions } from "@/lib/chartFilters";
 import type { DashboardTile } from "./types";
 
 /**
@@ -165,4 +170,114 @@ export function dashboardFilterableColumns(
       totalChartTiles,
     }))
     .sort((a, b) => b.appearsInTiles - a.appearsInTiles || a.column.localeCompare(b.column));
+}
+
+/**
+ * Wave WD1 · merge rows from every chart tile into a single dataset for
+ * filter-definition inference. Capped at `maxRows` per tile to keep
+ * downstream `deriveChartFilterDefinitions` work bounded — categorical
+ * distinct-value detection and date-range/numeric-range stats converge
+ * fast, so 2000 rows per tile is more than enough for the picker.
+ *
+ * Pure — no DOM, no async.
+ */
+export function aggregateTileRowsForFiltering(
+  tiles: DashboardTile[],
+  maxRowsPerTile = 2000,
+): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const tile of tiles) {
+    if (tile.kind !== "chart") continue;
+    const rows = tile.chart.data;
+    if (!rows || rows.length === 0) continue;
+    const slice = rows.slice(0, maxRowsPerTile);
+    for (const r of slice) {
+      if (r && typeof r === "object") {
+        out.push(r as Record<string, unknown>);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Wave WD1 · returns the set of `ChartFilterDefinition`s available to
+ * add via the global filter bar's `+ Add filter` button. Excludes any
+ * column currently active in `currentGlobal` (re-adding an active filter
+ * is handled by the chip's edit affordance, not Add). Sorted by column
+ * frequency across tiles so the most useful filterable dimensions
+ * surface first.
+ *
+ * When all chart tiles are empty / no chart tiles exist, returns [].
+ *
+ * Pure — no DOM, no async.
+ */
+export function availableFilterDefinitions(
+  tiles: DashboardTile[],
+  currentGlobal: ActiveChartFilters,
+): ChartFilterDefinition[] {
+  const aggregated = aggregateTileRowsForFiltering(tiles);
+  if (aggregated.length === 0) return [];
+  const defs = deriveChartFilterDefinitions(aggregated);
+  const taken = new Set(
+    Object.entries(currentGlobal)
+      .filter(([, sel]) => !!sel)
+      .map(([col]) => col),
+  );
+  const filtered = defs.filter((d) => !taken.has(d.key));
+  // Order by frequency across tiles: columns present in more tiles first.
+  const freq = new Map<string, number>(
+    dashboardFilterableColumns(tiles).map((c) => [c.column, c.appearsInTiles]),
+  );
+  return filtered.sort((a, b) => {
+    const fa = freq.get(a.key) ?? 0;
+    const fb = freq.get(b.key) ?? 0;
+    if (fa !== fb) return fb - fa;
+    return a.key.localeCompare(b.key);
+  });
+}
+
+/**
+ * Wave WD1 · pure helpers that produce the next `ActiveChartFilters`
+ * state given a column + the user's selection from the picker. Used by
+ * the `AddFilterPopover` on confirm. Three variants — one per filter
+ * kind — keep call sites type-safe and avoid an `unknown` middle-state.
+ */
+export function addCategoricalFilter(
+  current: ActiveChartFilters,
+  column: string,
+  values: string[],
+): ActiveChartFilters {
+  if (values.length === 0) return current;
+  const sel: CategoricalFilterSelection = {
+    type: "categorical",
+    values: [...values],
+  };
+  return { ...current, [column]: sel };
+}
+
+export function addNumericFilter(
+  current: ActiveChartFilters,
+  column: string,
+  min: number | undefined,
+  max: number | undefined,
+): ActiveChartFilters {
+  if (min === undefined && max === undefined) return current;
+  const sel: NumericFilterSelection = { type: "numeric" };
+  if (min !== undefined) sel.min = min;
+  if (max !== undefined) sel.max = max;
+  return { ...current, [column]: sel };
+}
+
+export function addDateFilter(
+  current: ActiveChartFilters,
+  column: string,
+  start: string | undefined,
+  end: string | undefined,
+): ActiveChartFilters {
+  if (!start && !end) return current;
+  const sel: DateFilterSelection = { type: "date" };
+  if (start) sel.start = start;
+  if (end) sel.end = end;
+  return { ...current, [column]: sel };
 }
