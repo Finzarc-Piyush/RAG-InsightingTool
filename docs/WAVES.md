@@ -11,6 +11,37 @@
 
 ---
 
+- **2026-05-16** — **Wave WQ2 · `externalClaimDetector` helper.** Closes the second item of Workstream 9 from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *fact-check auto-trigger*. When a user asks "did the lockdown hit our category growth?" or "how did Gen Z respond to our competitor's price moves?", the dataset alone cannot answer — the system needs to fetch external context via the existing `web_search` tool. Today the planner only adds web_search when it happens to recognise the gap; WQ2 ships a deterministic detector that names the gap so a future planner wave can react to it without a judgement call.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/utils/externalClaimDetector.ts](server/lib/agents/runtime/utils/externalClaimDetector.ts) (~170 LOC). Zero-dep, side-effect-free, regex-based. Public surface:
+      - `detectExternalClaims(question: string) → ExternalClaimReport` — core detector.
+      - `summarizeExternalClaims(report) → { total, byType, promptLine }` — prompt-block-friendly summary.
+      - `ExternalClaimType = "competitor" | "market_size" | "industry_benchmark" | "external_event" | "demographic_shift"`.
+    - Each detected `ExternalClaim` carries `type`, `excerpt` (≤120-char verbatim window for verifier replay), `confidence` (high/medium), and `matchedTerm` (for telemetry).
+
+  **Why this design.**
+    - **Pure detector, no planner wiring yet.** Same scope discipline as WQ1 (confidence helper) and WI1 (InsightSpec schema). Wiring the detector into the planner's tool-selection prompt deserves its own atomic wave with its own tests — would touch [planner.ts](server/lib/agents/runtime/planner.ts) and the existing web_search rationale block, neither of which is god-object-scale but both are integration points worth their own isolation.
+    - **Brand-agnostic patterns.** The pattern catalogue intentionally does NOT include competitor brand names ("HUL", "ITC", "Dabur", etc.) — those belong in the domain-context pack layer (Wave A7 + W22). Detecting "competitor" / "rivals" / "competing brand" as generic phrases keeps the helper reusable across tenants and avoids the maintenance trap of an ever-growing brand list.
+    - **"Haircare market" → market_size at medium confidence.** Bare "X market" reference is ambiguous (could be "bull market", "stock market"). The pattern allow-lists FMCG-relevant prefixes (haircare, skincare, fmcg, hair_oil, shampoo, cooking_oil, edible_oil, beverage, cosmetics, personal_care, category, industry, consumer, grocery) and tags the match `medium` confidence — so a future verifier wave can decide whether to actually fire web_search.
+    - **Conservative bias.** False positives waste a ~$0.001 + ~3s web search call; false negatives just keep the existing dataset-only behaviour. So patterns require explicit anchor words (e.g., `\bmarket\s+(?:size|growth|grow|grew|growing|value|share)\b`) rather than loose matches.
+    - **Dedup per (type + lowercased term).** A question like "show me each competitor by region — what is our competitor's share?" should emit one competitor claim, not two. Dedup is keyed by `${type}:${matchedTerm.toLowerCase()}` so a single question still emits multiple claims when the underlying terms differ.
+    - **Regex `lastIndex` is reset on every call.** Shared module-level `RegExp` objects with `/g` flag carry mutable state between `.exec()` calls — without explicit `lastIndex = 0` at the start of each loop, repeated calls to `detectExternalClaims` would return inconsistent results. The test suite pins this with an "identical-input, identical-output" assertion.
+
+  **Tests.** [tests/externalClaimDetectorWQ2.test.ts](server/tests/externalClaimDetectorWQ2.test.ts) — 29 cases across 9 suites:
+    - **Competitor markers** (4): "competitor", "rivals", "competing brand", + negative-case dataset-only question.
+    - **Market size markers** (3): "market grow/grew/growth" + "haircare market" bare reference + "TAM".
+    - **Industry benchmark markers** (3): "industry average", "industry benchmark", "peer comparison".
+    - **External event markers** (4): "lockdown", "COVID-19", "monsoon", "festive season".
+    - **Demographic shift markers** (4): "Gen Z", "millennials", "tier 2 cities", "demographic shift".
+    - **Multi-claim + dedupe** (3): cross-type co-occurrence, dedup by type+term, verbatim excerpts capped at 120 chars.
+    - **Empty / dataset-only** (4): empty input, whitespace, internal-only question, non-null suggestedAction when claim fires.
+    - **summarizeExternalClaims** (3): groups by type, no-claim line, total matches sum of byType counts.
+    - **Regex statefulness** (1): repeated calls return identical results.
+    - 29/29 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to W74 baseline — zero new from WQ2. Commit `7b148e27`.
+
 - **2026-05-16** — **Wave W74 · investigation budget exhaustion observability.** Closes Workstream 3 item 2 (W74) from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *hard budget caps with explicit observability when they trigger*. Before W74, when the deep-investigation BFS loop terminated because the LLM-call or wall-time budget was exhausted, it just exited silently. The user got back a partial answer with no signal that the system stopped short. W74 ships a deterministic detector that names the exact cap that fired and emits a `flow_decision` SSE row so the workbench can surface it.
 
   **What landed.**
