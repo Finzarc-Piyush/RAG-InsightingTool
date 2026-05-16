@@ -1,17 +1,18 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave W58 — semantic-layer compiler).
+> Last sync: 2026-05-16 (Wave WI1 — InsightSpec schema).
 
 ## HEAD
 
-- **Latest wave:** Wave W58 · Semantic-layer compiler (2026-05-16)
+- **Latest wave:** Wave WI1 · InsightSpec schema (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `fe84c840` — "Wave W58 · semantic-layer compiler" (2026-05-16)
-- **Working tree:** clean after W58 + doc-update commits.
+- **Last commit:** `7e703493` — "Wave WI1 · InsightSpec schema (richer dynamic-aware insight)" (2026-05-16)
+- **Working tree:** clean after WI1 + doc-update commits.
 
 ## Live feature streams
 
+- **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 7 wave map.
 - **Workstream 1 — semantic & metrics layer** · W56 types + W57 inference + W58 compiler all shipped. The agent can now: (a) auto-populate a SemanticModel at upload (W57), (b) translate a `{metric, breakdownBy, filters}` query into a `QueryPlanBody` (W58). The model is ready for the planner to use; the planner just doesn't know about it yet. Next: W59 — rewrite the planner prompt to surface the metric catalog (`server/lib/agents/runtime/planner.ts` + a new `server/lib/semantic/prompt.ts` for byte-stable manifest rendering). W59–W64 deliver planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Workstream 4 — dashboard 2.0** · WD1 ships: `+ Add filter` popover on the dashboard global filter bar (categorical + numeric + date pickers). [DashboardGlobalFilterBar.tsx](../client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx) renders even when `global` is empty IFF availableFilters is non-empty. Next: WD2 — cross-filter brushing (click a chart segment → add to global filter). WD2–WD10 deliver brushing → drill-through → dynamic insights → fork-from-dashboard → mobile → linked-sheet filters → saved views → tile comments → scheduled refresh per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
 - **Workstream 3 — investigation mode** · W73 wires `runDeepInvestigation` into [`dataAnalyzer.answerQuestion`](../server/lib/dataAnalyzer.ts) behind `DEEP_INVESTIGATION_ENABLED` (invariant #6 preserved). Multi-part questions auto-decompose when the env var is on. Next: W74 — shape-based auto-dispatch (`driver_discovery` / `variance_diagnostic` / `comparison` shapes auto-trigger even without conjunction phrasing). W73–W79 deliver dispatch → workbench UI → hypothesis tree viz → narrator merge → investigation memory → golden fixture.
@@ -35,10 +36,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **WI1** (2026-05-16) · InsightSpec schema: `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight`. Foundation for WI2 (dynamic regen). 14 tests.
 - **W58** (2026-05-16) · Semantic-layer compiler: `compileMetricQuery({model, metric, breakdownBy?, filters?, sortBy?, limit?}) → QueryPlanBody`. Simple + composite arithmetic metrics; rejects expressions that don't fit the executor's allowed-character set. 18 tests.
 - **WD1** (2026-05-16) · Dashboard global filter bar is now additive: `AddFilterPopover` with categorical/numeric/date editors, `availableFilterDefinitions` pure helper, `DashboardGlobalFilterBar` renders when empty if columns are addable. 17 tests.
 - **W73** (2026-05-16) · Investigation mode wired into agent loop entry: `shouldDispatchDeepInvestigation` + `dataAnalyzer.answerQuestion` calls `runDeepInvestigation` for multi-part questions when `DEEP_INVESTIGATION_ENABLED=true`. 13 tests.
 - **W57** (2026-05-16) · Semantic model inference: pure `inferModel({summary, datasetProfile?}) → SemanticModel` wired into the upload understanding-ready checkpoint. Persists `ChatDocument.semanticModel`. 15 tests.
-- **W56** (2026-05-16) · Semantic & metrics layer — type foundation: `semanticMetricSchema` / `semanticDimensionSchema` / `semanticHierarchySchema` / `semanticModelSchema` in [server/shared/schema.ts](../server/shared/schema.ts). 15 tests. Foundation for W57–W64.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.

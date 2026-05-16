@@ -11,6 +11,28 @@
 
 ---
 
+- **2026-05-16** — **Wave WI1 · InsightSpec schema — richer dynamic-aware insight.** Pre-WI1 the per-chart insight was a single static string ([`chart.keyInsight`](server/shared/schema.ts)) baked at chart creation; on filter change the user saw stale prose, and there was no place to attach confidence tier, domain-pack citations, or regen metadata. WI1 adds `chart.insight: InsightSpec` as a structured back-compat sibling. The legacy `keyInsight` stays — renderers prefer `insight.default` when present, fall back to `keyInsight` otherwise. This is the foundation wave for WI2 (dynamic regeneration on filter change), WI3 (citation hover-cards), WI4 (explain-this-slice), WI5 (per-tile "Try this" CTAs), WI6 (insight history).
+
+  **What landed.** New [`insightSpecSchema`](server/shared/schema.ts) with five fields:
+    - `default: string` (≤500 chars, matches the `businessCommentary` cap so renderers can share styling envelopes) — the baked-at-creation insight.
+    - `generator?: { kind: "llm" | "deterministic"; args?: Record<string, unknown> }` — describes how to RE-derive the insight when state changes. Today the field is opaque + back-compat; WI2 will wire the `llm` kind to a MINI-tier LLM call.
+    - `confidenceTier?: "low" | "medium" | "high"` — drives prose length + hedging in the renderer (W9 quality follow-up).
+    - `citations?: string[]` (≤8, each non-empty) — domain pack ids referenced. The existing W22 `checkDomainLensCitations` infra validates these server-side; WI3 surfaces them as click-to-expand hover-cards.
+    - `regeneratedAt?: string` — ISO timestamp of last regen, used by the client cache.
+    - Plus a pure helper `legacyKeyInsightToInsightSpec(keyInsight)` that lifts a legacy string into the new shape (trim + 500-char truncate; returns undefined for empty/whitespace/undefined). Used by future migration paths.
+
+  `chartSpecSchema` extended with optional `insight: insightSpecSchema.optional()` alongside the existing optional `keyInsight: z.string().optional()`. Auto-mirrored to client via the W5 re-export.
+
+  **Why this design.** Considered (a) deprecating `keyInsight` and migrating all consumers in one wave — rejected because `keyInsight` is read in ChartTileBody, TileInsightFooter, ChartRenderer, ChartModal, the v2 PremiumChart, the answer envelope, the past-analyses doc, the dashboard export pipeline, and a dozen other call sites. A coordinated migration is a multi-wave undertaking; back-compat coexistence keeps the schema move tiny. (b) Making `default` a non-trimmed `string()` without a max — rejected because `businessCommentary.max(500)` is the existing nearby ceiling and renderers already style for that envelope; matching it keeps the visual contract stable. (c) Making `citations` strictly typed as `z.array(packIdSchema)` with a custom pack-id regex — over-specified for W56-class work; passthrough strings + W22 validator pattern keeps the schema simple. (d) Putting `generator.args` under a discriminated union per `kind` — over-engineered for today's single `kind`; the passthrough `Record<string, unknown>` lets WI2's LLM args + WI3's deterministic args evolve without schema bumps.
+
+  Passthrough on `generator.args` is intentional: it's a forward-compatibility hook for the multi-shape generators coming in WI2–WI6. Schema validation lives at the generator-call site, not on the spec.
+
+  **Tests.** [tests/insightSpecSchemaWI1.test.ts](server/tests/insightSpecSchemaWI1.test.ts) — 14 cases across 3 suites: schema bounds (8: minimal default-only parse, full round-trip, 500-char cap, generator.kind enum positive + negative, 8-citation cap, empty-citation rejection, passthrough generator.args with nested structures); legacy migration (3: lift plain string, undefined/empty/whitespace return undefined, trim + truncate); chartSpec coexistence (3: keyInsight-only / insight-only / both-populated all parse cleanly). 14/14 passing. 75/75 across all new-wave tests (W56 + W57 + W58 + WI1 + W73). Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to W58 baseline — zero new from WI1. Commit `7e703493`.
+
+  **Out of scope.** Dynamic regeneration on filter change — **WI2** wires the `generator.kind === "llm"` path to a MINI-tier LLM call (~$0.001 per regen), cached by `(tileId, filterHash)`. Citation hover-card UI — **WI3** mounts a `CitationHoverCard` component that renders the cited pack snippet on click. Explain-this-slice context-menu — **WI4**. Per-tile "Try this" CTAs grounded in actionable findings — **WI5**. Insight history dropdown — **WI6**. UI consumers in [ChartTileBody.tsx](client/src/pages/Dashboard/Components/ChartTileBody.tsx) and [TileInsightFooter.tsx](client/src/pages/Dashboard/Components/TileInsightFooter.tsx) continue to read `chart.keyInsight` unchanged; the new `insight` field is wire-ready for WI2's consumer.
+
 - **2026-05-16** — **Wave W58 · Semantic-layer compiler.** The wave that makes Workstream 1 actually usable. W56 shipped types, W57 auto-populated the catalog at upload, but no consumer existed. W58 ships `compileMetricQuery({ model, metric, breakdownBy?, filters?, sortBy?, limit? }) → CompiledQueryPlan` — a pure deterministic translator from a semantic query into a `QueryPlanBody` (the same shape `execute_query_plan` already eats). W59 will rewrite the planner prompt to emit semantic queries by default; W60 registers `execute_metric_query` that dispatches through the compiler.
 
   **What landed.** New [server/lib/semantic/compiler.ts](server/lib/semantic/compiler.ts) (~330 LOC including types + helpers). Two compilation paths based on expression shape:
