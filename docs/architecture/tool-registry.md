@@ -88,6 +88,7 @@ the loop runs them through `ToolRegistry.execute`.
 
 ## Recent changes
 
+- **Wave WT8 (2026-05-16)** — `run_hierarchical_drill` registered (pure-Node, no Python service). Rolls high-cardinality dimensions into top-N + "Other" so matrix breakdown charts with 50+ categories stay readable. `_rank: -1` flags the rolled bucket; `_share` is the 0..1 fraction of grand total. Args: `dimension`, `metricColumn`, `aggregation` (sum/mean/count/min/max, default sum), `topN` (2..50, default 10), `direction` (asc/desc, default desc), `otherLabel`, optional `dimensionFilters[]`. mean-of-the-Other-bucket uses row-level total/count, not mean-of-means. New file [hierarchicalDrillTool.ts](../../server/lib/agents/runtime/tools/hierarchicalDrillTool.ts). 19 tests. See `docs/WAVES.md` for full entry.
 - **Waves W46-W51** — `run_correlation` no longer fails silently. Six tiny
   waves harden the path:
   - **W46**: `analyzeCorrelations` returns `diagnostic?: CorrelationDiagnostic`

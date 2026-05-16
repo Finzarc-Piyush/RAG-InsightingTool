@@ -11,6 +11,35 @@
 
 ---
 
+- **2026-05-16** — **Wave WT8 · `run_hierarchical_drill` tool.** Closes the "high-cardinality breakdown is unreadable" gap explicitly flagged in the agent-runtime audits and the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "Sales by SKU" against a 200-SKU dataset previously got a matrix chart with 200 unreadable tick labels; WT8 rolls everything past the top-N into a single "Other" bucket so the chart speaks instead of yelling.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/tools/hierarchicalDrillTool.ts](server/lib/agents/runtime/tools/hierarchicalDrillTool.ts) (~270 LOC). Pure-Node — no Python service round-trip. Exported helpers:
+      - `runHierarchicalDrill(rows, args)` — pure function. Direct callable for tests + skills.
+      - `registerHierarchicalDrillTool(registry)` — registers the tool as `run_hierarchical_drill` with strict zod-args.
+    - Args: `dimension` (the high-card column to roll up), `metricColumn` (numeric column to aggregate), `aggregation` ∈ {sum, mean, count, min, max} default `sum`, `topN` ∈ [2, 50] default `10`, `direction` ∈ {asc, desc} default `desc`, `otherLabel` default `"Other"`, optional `dimensionFilters[]` (categorical `in` / `not_in` only — row-level numeric filtering belongs to `execute_query_plan`).
+    - Output: `table = { columns: [dimension, metricColumn, _rank, _share], rows: [...top-N..., Other?] }`. `_rank` starts at 1 for kept buckets; the Other row carries `_rank: -1` so renderers can dim / mark it. `_share` is a 0..1 fraction of the grand total — chart labels read it directly without a second pass.
+    - Registered in [registerTools.ts](server/lib/agents/runtime/tools/registerTools.ts) right after `registerForecastTool`. The W-F2 toolRegistry duplicate-name guard test still passes (verified).
+
+  **Why this design.**
+    - **Pure-Node, not Python.** Bucketing + aggregation is trivial in JS; a Python round-trip would add 60-100 ms of HTTP latency for zero accuracy gain. The MMM optimiser (W46-W55) lives in Python because scipy SLSQP requires it; this tool needs only sort + slice + sum.
+    - **mean-of-the-Other-bucket is row-level, not mean-of-means.** When rolled-up buckets have different row counts (e.g., South has 100 rows averaging 30, East has 1 row averaging 100), mean-of-means gives the wrong answer (`(30 + 100) / 2 = 65`) while row-level mean is `(100×30 + 1×100) / 101 = ~30.7`. The test suite pins this with a discriminating fixture — getting this wrong was a real risk because every other aggregation (sum/count/min/max) is order-independent.
+    - **`_rank: -1` for Other, not `null` or `0`.** Negative sentinel survives JSON round-trips, sorts cleanly to the bottom, and is unmistakable downstream. `null` would collide with renderers that already treat null as "missing."
+    - **`_share` is computed across ALL buckets including Other.** Percentages always sum to 100 even when Other is invisible (rollup.length === 0).
+    - **Null + empty dimension cells skipped, not bucketed.** A dataset where 30% of rows have a null Region shouldn't surface a "(null)" bar that dominates the chart. The tool's job is "make this readable" — silently skipping nulls + empties matches user intent.
+
+  **Tests.** [tests/hierarchicalDrillToolWT8.test.ts](server/tests/hierarchicalDrillToolWT8.test.ts) — 19 cases across 5 suites:
+    - **Bucketing + rollup** (3): top-N + Other, no-Other-when-buckets-fit-topN, same-bucket aggregation.
+    - **Aggregation operations** (4): `mean` bucket-level, `mean`-of-Other uses row-level not mean-of-means (the discriminating fixture), `count` counts rows ignoring non-numeric metric cells, `min` returns smallest per bucket.
+    - **Direction + share-of-total** (3): `asc` returns smallest first, _share fractions sum to ≈ 1.0, Other bucket flagged with `_rank: -1`.
+    - **Filters + edge cases** (5): `in` filter, `not_in` filter, null/empty dimension cells skipped, empty input → `ok: false`, all-rows-filtered-out → `ok: false`.
+    - **Args schema** (3): `topN` 2..50 bounds, defaults applied, `.strict()` rejects unknown args.
+    - 19/19 passing; 26/26 across the broader tool-registry test suite (including the duplicate-name guard from Wave F2). Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WI1 baseline — zero new from WT8. Commit `0fdc072c`.
+
+  **Out of scope.** Explicit drill-*down* action (clicking "Other" expands into its own top-N) — the tool today is single-level rollup; drill-down is a follow-up wave that needs the dashboard tile chrome to know how to re-fire the tool with a tighter scope. Auto-trigger from the planner when `groupBy` cardinality > 20 — follow-up planner-prompt rewrite; the agent today must explicitly call `run_hierarchical_drill`. Skill composite that pairs this with a "follow-up: drill into Other" suggestion — follow-up; the agent skill registry (`server/lib/agents/runtime/skills/`) has the right home for it.
+
 - **2026-05-16** — **Wave WI1 · InsightSpec schema — richer dynamic-aware insight.** Pre-WI1 the per-chart insight was a single static string ([`chart.keyInsight`](server/shared/schema.ts)) baked at chart creation; on filter change the user saw stale prose, and there was no place to attach confidence tier, domain-pack citations, or regen metadata. WI1 adds `chart.insight: InsightSpec` as a structured back-compat sibling. The legacy `keyInsight` stays — renderers prefer `insight.default` when present, fall back to `keyInsight` otherwise. This is the foundation wave for WI2 (dynamic regeneration on filter change), WI3 (citation hover-cards), WI4 (explain-this-slice), WI5 (per-tile "Try this" CTAs), WI6 (insight history).
 
   **What landed.** New [`insightSpecSchema`](server/shared/schema.ts) with five fields:
