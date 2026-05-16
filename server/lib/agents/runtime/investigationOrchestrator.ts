@@ -37,6 +37,7 @@ import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import { runAgentTurn } from "./agentLoop.service.js";
 import { loadAgentConfigFromEnv } from "./types.js";
 import type { AgentExecutionContext, AgentLoopResult } from "./types.js";
+import { evaluateBudgetExhaustion } from "./investigationBudget.js";
 
 type OnAgentEvent = NonNullable<Parameters<typeof runAgentTurn>[2]>;
 
@@ -195,6 +196,31 @@ export async function runDeepInvestigation(
         pruneNode(tree, node.id);
       }
     }
+  }
+
+  // Wave W74 · emit a flow_decision SSE row when the BFS loop terminated
+  // on a budget cap (rather than converging or running out of pending
+  // nodes). Pure detector — no behaviour change, just observability.
+  const budgetExhaustion = evaluateBudgetExhaustion(tree, config);
+  if (budgetExhaustion) {
+    try {
+      onAgentEvent?.("flow_decision", {
+        layer: "investigation-budget",
+        chosen: "halt",
+        overriddenBy: "investigationBudget",
+        reason: budgetExhaustion.message.slice(0, 500),
+        candidates: [
+          `${budgetExhaustion.reason}: ${budgetExhaustion.used} / ${budgetExhaustion.cap}`,
+        ],
+      });
+    } catch {
+      /* ignore — SSE is best-effort */
+    }
+    agentLog("investigationOrchestrator.budget_exhausted", {
+      reason: budgetExhaustion.reason,
+      used: budgetExhaustion.used,
+      cap: budgetExhaustion.cap,
+    });
   }
 
   const summary = summarizeTree(tree);
