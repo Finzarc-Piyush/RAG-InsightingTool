@@ -35,6 +35,10 @@ import {
   planAlreadyCoversAggregation,
 } from "./planArgRepairs.js";
 import { coalesceQueryPlanSteps } from "./coalescePlanSteps.js";
+import {
+  PLANNER_CONFIDENCE_DIRECTIVE,
+  buildPlannerHintsBlock,
+} from "./plannerHintsBlock.js";
 
 /** Args whose string values must be real column names from DataSummary. */
 const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
@@ -497,6 +501,8 @@ Rules:
 - parallelGroup EFFICIENCY: when the plan has 3+ independent breakdowns (Region, Category, Salesman, etc.), assign them the same parallelGroup string — they run concurrently and count as ONE step against the step budget. Steps in the same parallelGroup must not have dependsOn pointing to each other. Cap at 5 steps per group when requestsDashboard is true (so an 8-dim dashboard fits in two parallelGroups), otherwise 3.
 - RNK1 — RANKING / LEADERBOARD / ENTITY-MAX intent: for "top N <entities>" (top 300 salespeople, best 50 SKUs), "who has the highest/maximum/most/largest <metric>" (max leaves, highest absenteeism), "who has the lowest/minimum/least/fewest <metric>", and "list <entities>" / "who are the <entities>" questions, emit the leaderboard plan shape — never aggregate the metric without grouping by the entity. Two valid tools: (a) breakdown_ranking with metricColumn=<numeric>, breakdownColumn=<entity column from schema>, topN=<N from question> (use the literal N — do not cap; for "highest/lowest" use topN=1), direction="desc" (default) or "asc" (for lowest/least/fewest/worst/bottom). (b) execute_query_plan with plan.groupBy=[<entity>], plan.aggregations=[{column:<metric>, operation:"sum"|"max"|"min"}], plan.sort=[{column:"<metric>_<op>", direction:"desc"|"asc"}], plan.limit=<N> (1 for extremum, N for "top N"). For entity-listing intent ("list the salespeople") use execute_query_plan with groupBy=[<entity>], NO aggregations, NO limit. A deterministic post-processor will repair these shapes when the planner gets them wrong, but emit the correct shape on the first try when possible.
 - hypothesisId: when INVESTIGATION_HYPOTHESES is present, set this to the id of the hypothesis the step primarily tests; the server marks that hypothesis resolved when the step produces evidence.
+${PLANNER_CONFIDENCE_DIRECTIVE}
+- TOOL_ROUTER_HINT (when present in the user message): a deterministic pre-classifier maps the question to an analyst intent and lists the canonical tools in priority order. Treat the first recommendation as the default unless the question's specifics rule it out; if you deviate, justify in your rationale. EXTERNAL_CLAIM_MARKERS (when present): the question references external claims the dataset alone cannot answer — add a web_search step before synthesis.
 ${formatSkillsManifestForPlanner()}
 Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string, "hypothesisId"?: string}]}`;
 
@@ -555,7 +561,28 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       ? `### STEP_INSIGHTS_SO_FAR (compact insights from prior tool steps in this turn — use as the baseline for the next steps):\n${stepInsightsBlock.trim().slice(0, 5_000)}\n\n`
       : "";
 
-  const user = `User question:\n${ctx.question}\n\n${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  // Wave WW1 · surface WT6 selectTool + WQ2 externalClaimDetector
+  // recommendations directly under the question line so the planner sees
+  // a deterministic intent-→-tool mapping BEFORE the (longer) RAG / memory
+  // / handoff blocks. The block self-suppresses when neither helper has a
+  // recommendation; in practice general_analytical always lists at least
+  // execute_query_plan so the block is rarely empty.
+  const hintsResult = buildPlannerHintsBlock(
+    ctx.question,
+    ctx.summary,
+    ctx.analysisBrief
+  );
+  if (hintsResult.block) {
+    agentLog("planner_hints_block_emitted", {
+      turnId,
+      intent: hintsResult.intent,
+      topTool: hintsResult.topRecommendation?.toolName,
+      topConfidence: hintsResult.topRecommendation?.confidence,
+      hasExternalClaim: hintsResult.hasExternalClaim,
+    });
+  }
+
+  const user = `User question:\n${ctx.question}\n\n${hintsResult.block}${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,
