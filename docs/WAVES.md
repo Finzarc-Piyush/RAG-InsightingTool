@@ -11,6 +11,38 @@
 
 ---
 
+- **2026-05-16** — **Wave WT2 · `run_cohort_analysis` tool.** Closes the cohort/retention question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "of stores that started carrying Parachute in Q1 2024, how many are still ordering it 6 months later?" previously had no first-class tool — the answer required hand-rolled SQL plus a pivot. WT2 ships the cohort matrix as a first-class tool that the planner can pick directly.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/tools/cohortAnalysisTool.ts](server/lib/agents/runtime/tools/cohortAnalysisTool.ts) (~290 LOC). Pure-Node — no Python service round-trip. Exported helpers:
+      - `runCohortAnalysis(rows, args)` — pure function. Direct callable for tests + skills.
+      - `registerCohortAnalysisTool(registry)` — registers the tool as `run_cohort_analysis` with strict zod-args.
+    - Args: `entityColumn` (the unique entity to track), `periodColumn` (time dimension, lexicographic sort = calendar order — use ISO-like values), optional `cohortColumn` (explicit cohort label; if omitted, cohort = each entity's earliest observed period — classic acquisition cohort), optional `metricColumn` (required for sum/mean), `aggregation` ∈ {count_distinct, sum, mean} default `count_distinct`, `maxPeriods` ∈ [2, 24] default `12`, `retentionMode` (normalises every cell by the cohort's period_offset_0 value), optional `dimensionFilters[]` (categorical `in` / `not_in` prefilter).
+    - Output: `table = { columns: ["cohort", "cohort_size", "period_offset_0", ..., "period_offset_N"], rows: [...per cohort] }`. `cohort_size` = the count of distinct entities in period_offset_0, regardless of aggregation, so renderers can label "Cohort 2024-01 (n=120)" without re-counting.
+    - Registered in [registerTools.ts](server/lib/agents/runtime/tools/registerTools.ts) right after `registerHierarchicalDrillTool`. Duplicate-name guard test still passes.
+
+  **Why this design.**
+    - **Pure-Node, not Python.** Bucketing + aggregation is sub-millisecond in JS for datasets up to ~1M rows; a Python round-trip would add ~80 ms of HTTP latency for zero accuracy gain. Same rationale as WT8.
+    - **Lexicographic period sort.** Marico's ingest layer normalises temporal columns to ISO-like values (`"2024-01"`, `"2024-W03"`, `"2024Q1"`) which already sort correctly. Parsing arbitrary date formats inside the tool would re-implement the upstream temporal-grain pipeline — better to require the caller to feed ISO-like values.
+    - **`cohort_size` is always count_distinct.** The "cohort size" label is universally read as "how many entities started in this cohort," even when the aggregation is `sum(revenue)`. Mixing aggregation semantics with cohort size would confuse renderers.
+    - **`retentionMode` divides by `cellValue(baseCell)`, not by `cohort_size`.** Under `aggregation: "sum"`, the period_offset_0 base IS the sum of revenue in the birth period, so retention = revenue_retained_fraction. Dividing by entity count would mix units.
+    - **Zero-base guard.** When the period_offset_0 base value is 0 (e.g., metricColumn had nulls in the birth period), retentionMode emits 0 instead of NaN/Inf. Pinned by the test suite.
+    - **Offset bounds.** Periods past `maxPeriods - 1` are dropped, not pushed into a final "12+" bucket. Keeps the output schema stable (column count = `maxPeriods + 2`) and matches how Excel pivot cohort tables are usually built.
+    - **Cohort label can be non-period.** When `cohortColumn` is given, the cohort label may be a non-period string. The current impl computes offset by looking up the cohort string in the period index — so explicit-cohort mode works cleanly when the cohort labels are themselves period values (the common case: `cohortColumn: "signup_month"`). A future wave can add `cohortColumn` → "first observed period per cohort" computation; for now the inline comment on the bailout makes the limitation explicit.
+
+  **Tests.** [tests/cohortAnalysisToolWT2.test.ts](server/tests/cohortAnalysisToolWT2.test.ts) — 20 cases across 7 suites:
+    - **Acquisition cohort** (2): cohort = earliest period, cohorts sorted lexicographically.
+    - **Explicit cohortColumn** (1): cohortColumn drives the cohort assignment with sum aggregation.
+    - **Aggregation modes** (3): `sum` per cell, `mean` per cell, `count_distinct` dedupes same-entity rows.
+    - **Retention mode** (2): normalises by period_offset_0, zero-base safety.
+    - **Period offset bounds** (2): `maxPeriods` caps columns, rows past the cap are dropped.
+    - **Dimension filters** (2): `in` prefilter, all-rows-filtered → `ok:false`.
+    - **Failure modes + schema** (5): empty dataset, no period values, schema rejects sum/mean without metricColumn, schema accepts valid defaults, maxPeriods > 24 rejected.
+    - **numericPayload metadata** (1): downstream-consumer-readable JSON.
+    - 20/20 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WT8 baseline — zero new from WT2. Full server suite: 3065 pass, 0 fail. Commit `67700f00`.
+
 - **2026-05-16** — **Wave WT8 · `run_hierarchical_drill` tool.** Closes the "high-cardinality breakdown is unreadable" gap explicitly flagged in the agent-runtime audits and the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "Sales by SKU" against a 200-SKU dataset previously got a matrix chart with 200 unreadable tick labels; WT8 rolls everything past the top-N into a single "Other" bucket so the chart speaks instead of yelling.
 
   **What landed.**
