@@ -20,6 +20,10 @@ import {
   type AnalyticalBlackboard,
 } from "./analyticalBlackboard.js";
 import {
+  buildNarratorConfidenceBlock,
+  summarizeNarratorConfidence,
+} from "./narratorHintsBlock.js";
+import {
   buildSynthesisContext,
   formatSynthesisContextBundle,
 } from "./buildSynthesisContext.js";
@@ -249,6 +253,8 @@ Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empt
 - "unexplained": one sentence on what could NOT be determined. Omit if nothing material is missing.
 When the user message says "questionShape: none" you may omit magnitudes and unexplained.
 
+WQ1 — FINDING_CONFIDENCE: when the user message carries a FINDING_CONFIDENCE block (deterministic per-finding tiers derived from sample size / p-value / R² / CI width), pin each magnitude's and implication's \`confidence\` field to the tier listed for the source finding — never invent a different tier. For findings tagged \`medium\` or \`low\`, weave the canonical hedge phrase verbatim into the surrounding prose (body / findings[].evidence / implications[].soWhat) so the reader sees the uncertainty. Respect the \`budget:\` sentence cap per tier: high-confidence findings warrant fuller prose, low-confidence findings should be compressed to ≤2 sentences and clearly marked as directional.
+
 VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
 - Plain English ONLY. Never use these terms anywhere in body, keyInsight, findings,
   implications, or recommendations: HHI, CV, IQR, P25, P50, P75, "long tail",
@@ -340,7 +346,14 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
   const hierarchyBlock = formatDimensionHierarchiesBlock(ctx);
   const hierarchySection = hierarchyBlock ? `\n${hierarchyBlock}` : "";
-  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${bundleSection}${hierarchySection}${repairBlock}`;
+  // Wave WW2 · WQ1 wiring. Extracts statistical evidence (n / p / R² / CI)
+  // from each finding's detail text and emits a FINDING_CONFIDENCE block
+  // pinning per-finding tiers + canonical hedge phrases. The narrator uses
+  // the tier to set magnitudes[].confidence and implications[].confidence,
+  // and weaves the hedge into prose for medium / low findings.
+  const confidenceBlock = buildNarratorConfidenceBlock(blackboard);
+  const confidenceSection = confidenceBlock ? `\n\n${confidenceBlock}` : "";
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${bundleSection}${hierarchySection}${repairBlock}`;
 
   // W38 · use the streaming variant when (1) env flag is on, (2) caller
   // supplied a streaming hook, AND (3) this is the initial call (not a
@@ -375,11 +388,15 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
     return null;
   }
 
+  const confidenceSummary = summarizeNarratorConfidence(blackboard);
   agentLog(repair ? "narratorAgent.repair" : "narratorAgent.done", {
     turnId,
     hypotheses: blackboard.hypotheses.length,
     findings: blackboard.findings.length,
     repair: !!repair,
+    confidence_high: confidenceSummary.high,
+    confidence_medium: confidenceSummary.medium,
+    confidence_low: confidenceSummary.low,
   });
 
   return result.data;
