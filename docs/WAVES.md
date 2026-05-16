@@ -11,6 +11,36 @@
 
 ---
 
+- **2026-05-16** — **Wave WT6 · `selectTool` planner router helper.** Closes the *tool router upgrade* item from Workstream 5 of the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): "Add `selectTool(intent, dataset) → recommendedTool[]` deterministic helper that gives the planner a starting recommendation. Planner is told to prefer the recommendation but is free to deviate with rationale. Removes the `run_analytical_query` vs `execute_query_plan` ambiguity." Before WT6, the planner relied on LLM intuition to pick between specialised tools (`run_cohort_analysis`, `run_market_basket`, `run_price_elasticity`, etc.) and generic fallbacks (`execute_query_plan`); without a deterministic anchor, picks drifted across reruns. WT6 ships the canonical mapping.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/selectTool.ts](server/lib/agents/runtime/selectTool.ts) (~180 LOC). Zero-dep, side-effect-free, deterministic. Public surface:
+      - `selectTool(intent, hints) → ToolRecommendation[]` — the core mapper.
+      - `renderToolRouterPromptBlock(recs) → string` — paste-ready prompt block.
+      - `listSupportedIntents()` — introspection of the supported intent set.
+    - `AnalystIntent` is a 15-value enum: `cohort_retention`, `rfm_segmentation`, `market_basket`, `price_elasticity`, `ranking`, `trend`, `comparison`, `drill_down`, `anomaly`, `forecast`, `fact_check`, `growth`, `seasonality`, `correlation`, `general_analytical`.
+    - `DatasetHints` is a struct of optional booleans: `hasTransactions`, `hasPriceQuantity`, `hasEntities`, `hasTemporal`, `hasHierarchy`, `hasNumericMetric`, `hasExternalClaimMarkers`. Conservative: when a hint is `undefined`, the helper assumes "maybe present" and keeps the candidate.
+    - Each `ToolRecommendation` carries `toolName`, `rationale`, and `confidence` ∈ {high, medium, low}.
+
+  **Why this design.**
+    - **Pure mapper, no planner wiring yet.** Same scope discipline as WQ1 + WQ2 + WT6's sibling helpers in this session. The planner system message is integration-point code in [planner.ts](server/lib/agents/runtime/planner.ts); touching it safely deserves its own atomic isolation. WT6 ships the mapping table + tests so the wiring wave can be small and focused.
+    - **Intent enum defined inside the helper, not imported from upstream.** The existing question-shape classifier (analysisBrief, questionShape) has a richer shape set that evolves wave-by-wave. Forcing the router to track that schema would couple two independent rates of change. The helper's 15-value enum is meant to be the *stable narrow waist* that the upstream classifier maps onto. When new intents emerge, this enum extends; upstream classifier evolution doesn't break the router.
+    - **Empty-result safety.** If every candidate fails the hint filter, the helper falls back to the unfiltered canonical list rather than returning `[]`. The planner always has SOMETHING to lean on; the confidence field tells it how much to trust the pick.
+    - **Confidence ladder: high / medium / low by position.** First rec gets `high` IFF it passes all relevant hints; `medium` otherwise. Second rec is always `medium`. Third+ are `low`. The planner can read these into its `flow_decision` SSE rationale field when it deviates.
+    - **Rationale strings co-located with tool names.** Adding a new tool to the registry doesn't automatically add it here — the helper enforces "you must write a rationale" as a discipline. Without it, a registered-but-unrouted tool falls back to a generic message.
+    - **Tool catalogue mirrors `registerTools.ts` manually, not via reflection.** Reflection over the registry would require holding a `ToolRegistry` instance and would couple the pure helper to runtime state. The manual mirror is checked by tests that exercise every intent → at least one rec; if a renamed tool stops resolving, the test surfaces it.
+
+  **Tests.** [tests/selectToolWT6.test.ts](server/tests/selectToolWT6.test.ts) — 26 cases across 6 suites:
+    - **Canonical intent mappings** (9): every intent maps to the expected first-pick tool with `high` confidence when hints are favourable.
+    - **Hint-based disambiguation** (6): missing transactions / temporal / price-quantity / entities each drop the relevant specialised tool, falling back to `execute_query_plan` or sibling. Unspecified hints don't drop the canonical pick.
+    - **Ordering + confidence** (4): every intent has ≥1 rec, empty-result safety returns canonical fallback list, first-pick `high` when hints pass, subsequent recs `medium` / `low`.
+    - **Rationale + metadata** (2): every rec has a non-empty rationale, top rationale references the tool's purpose.
+    - **renderToolRouterPromptBlock** (3): deterministic block format, empty-recs edge case, includes confidence labels.
+    - **listSupportedIntents** (2): full intent set listed, every intent yields ≥1 rec.
+    - 26/26 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WT4 baseline — zero new from WT6. Commit `103501b5`.
+
 - **2026-05-16** — **Wave WT4 · `run_market_basket` tool.** Closes the market-basket question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico category manager asking "what gets bought together with Parachute 200ml?" previously got either a pivot count of co-occurrences (no statistical context) or a hand-rolled SQL query computing support/confidence/lift by hand. WT4 ships the canonical association-rule output as a first-class tool.
 
   **What landed.**

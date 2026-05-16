@@ -1,19 +1,19 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave WT4 — `run_market_basket` tool).
+> Last sync: 2026-05-16 (Wave WT6 — `selectTool` planner router helper).
 
 ## HEAD
 
-- **Latest wave:** Wave WT4 · `run_market_basket` tool (2026-05-16)
+- **Latest wave:** Wave WT6 · `selectTool` planner router helper (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `d8bc4b68` — "Wave WT4 · run_market_basket tool" (2026-05-16)
-- **Working tree:** doc updates staged for paired WT4 commit.
+- **Last commit:** `103501b5` — "Wave WT6 · selectTool pure planner router helper" (2026-05-16)
+- **Working tree:** doc updates staged for paired WT6 commit.
 
 ## Live feature streams
 
 - **Workstream 9 — quality 2.0** · WQ2 ships: `utils/externalClaimDetector.ts` — pure regex-based detector for external-claim markers (competitor / market_size / industry_benchmark / external_event / demographic_shift) with verbatim excerpts and `suggestedAction: "add web_search step"`. Helper-only this wave; planner integration is a follow-up. Builds on WQ1 (confidence helper). Public API: `detectExternalClaims`, `summarizeExternalClaims`. Next: planner wiring — read both WQ1 + WQ2 reports into the tool-selection prompt + narrator hedge directive. Or WQ3 — citation hover-cards in narrator prose. Or WQ7 — significance score by default on breakdown_ranking + segment_compare tools.
-- **Workstream 5 — tool library expansion** · WT4 ships: `run_market_basket` mines 1-LHS association rules from transaction baskets and returns support/confidence/lift per rule, sorted by lift desc. Pure-Node apriori (no Python). Closes 5 of 6 question-shape gaps from Workstream 5 (WT8 hierarchical-drill, WT2 cohort, WT3 RFM, WT7 elasticity, WT4 market-basket). Next: WT5 — `run_what_if` (Monte Carlo on existing MMM fits; sensitivity bands) — needs Python because scipy random distributions are load-bearing. Or WT6 — tool router `selectTool(intent, dataset)` pure helper for planner recommendation. WT1–WT10 deliver causal / cohort / RFM / market-basket / what-if / MTA / elasticity / hierarchical-drill / tool-router per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md).
+- **Workstream 5 — tool library expansion** · WT6 ships: `selectTool` pure planner router. Maps a 15-value analyst-intent enum onto an ordered list of tool recommendations with rationale + confidence (high/medium/low). `DatasetHints` disambiguate when a tool requires capabilities the dataset lacks. `renderToolRouterPromptBlock` emits paste-ready prompt block. Helper-only; planner system-message wiring is a follow-up. Closes the Workstream 5 *tool router upgrade* item. With WT6, the workstream now spans 6 of 6 routing/question-shape pieces (WT8 hierarchical-drill, WT2 cohort, WT3 RFM, WT7 elasticity, WT4 market-basket, WT6 router). Remaining tools require Python (WT1 causal / WT5 what-if / WT9 MTA Markov). Next: WT5 — `run_what_if` (Python scipy Monte Carlo). Or wire-up wave that surfaces WT6 + WQ1 + WQ2 in the planner system message.
 - **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history.
 - **Workstream 1 — semantic & metrics layer** · W56 types + W57 inference + W58 compiler all shipped. The agent can now: (a) auto-populate a SemanticModel at upload (W57), (b) translate a `{metric, breakdownBy, filters}` query into a `QueryPlanBody` (W58). The model is ready for the planner to use; the planner just doesn't know about it yet. Next: W59 — rewrite the planner prompt to surface the metric catalog (`server/lib/agents/runtime/planner.ts` + a new `server/lib/semantic/prompt.ts` for byte-stable manifest rendering). W59–W64 deliver planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Workstream 4 — dashboard 2.0** · WD1 ships: `+ Add filter` popover on the dashboard global filter bar (categorical + numeric + date pickers). [DashboardGlobalFilterBar.tsx](../client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx) renders even when `global` is empty IFF availableFilters is non-empty. Next: WD2 — cross-filter brushing (click a chart segment → add to global filter). WD2–WD10 deliver brushing → drill-through → dynamic insights → fork-from-dashboard → mobile → linked-sheet filters → saved views → tile comments → scheduled refresh per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
@@ -38,10 +38,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **WT6** (2026-05-16) · `selectTool` planner router helper: 15-value AnalystIntent enum mapped to ordered ToolRecommendation[] with rationale + confidence. DatasetHints disambiguate. renderToolRouterPromptBlock for system-message paste. Helper-only. 26 tests.
 - **WT4** (2026-05-16) · `run_market_basket` tool: 1-LHS apriori association rules from transaction baskets. Emits both directions a→b and b→a with support / confidence / lift / count. Set semantics on (tx, item) pairs. Pure-Node. 19 tests.
 - **WQ2** (2026-05-16) · `externalClaimDetector` helper: pure regex-based scanner for competitor / market_size / industry_benchmark / external_event / demographic_shift markers. Emits verbatim excerpts + suggestedAction: "add web_search step". Helper-only this wave. 29 tests.
 - **W74** (2026-05-16) · Investigation budget exhaustion observability: new pure `evaluateBudgetExhaustion` returns the specific cap that tripped (llm_calls / wall_time / max_nodes). Orchestrator emits `flow_decision` SSE row when the loop halts on budget. 14 tests.
 - **WQ1** (2026-05-16) · `scaleNarrativeByConfidence` helper: pure pre-narrator decorator. Grades findings → tier (high/medium/low) + reasons + canonical hedge from n / p / R² / CI width. Helper-only this wave. 23 tests.
-- **WT7** (2026-05-16) · `run_price_elasticity` tool: log-log OLS fit for price-quantity elasticity. Returns slope, 95% CI, R², t-value, categorical interpretation. Optional per-group fits with min-observations skip. Pure-Node. 24 tests.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.
