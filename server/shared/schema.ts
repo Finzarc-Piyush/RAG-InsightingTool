@@ -16,6 +16,77 @@ export const chartTypeSchema = z.enum([
 ]);
 
 // Chart Specifications
+/**
+ * Wave WI1 · InsightSpec — richer, dynamic-aware sibling of the legacy
+ * `chart.keyInsight: string` field.
+ *
+ * Pre-WI1 the per-chart insight was a single static string baked at chart
+ * creation; on filter change or other interactivity, the user saw stale
+ * prose. WI1 introduces a structured `chart.insight: InsightSpec` field
+ * carrying:
+ *
+ *   - `default` — the baked-at-creation insight (what `keyInsight` was).
+ *     Stays load-bearing for renderers that don't yet consume `generator`.
+ *   - `generator` — describes how to *re-derive* the insight when the
+ *     surrounding state changes (e.g., when the user adds a filter via
+ *     the WD1 popover, or when WI4 fires an "explain this slice" click).
+ *     Future waves (WI2) wire a small LLM call against `generator.args`;
+ *     today the field is optional + opaque, so back-compat is preserved.
+ *   - `confidenceTier` — `low | medium | high` for confidence-aware
+ *     rendering (W9-quality follow-up). Renderers can shrink prose +
+ *     add hedging when `low`.
+ *   - `citations` — array of domain pack ids referenced (e.g.
+ *     `kpi-and-metric-glossary`). Drives the WI3 citation hover-card UI;
+ *     the existing W22 `checkDomainLensCitations` infra validates these
+ *     server-side.
+ *   - `regeneratedAt` — ISO timestamp of the last regen. Lets the client
+ *     show "Updated 2 min ago" / cache-invalidate by interaction event.
+ *
+ * Back-compat: `chart.keyInsight` stays — it's the simple path for chart
+ * specs created before WI1. Renderers prefer `insight.default` when
+ * present, fall back to `keyInsight` otherwise.
+ */
+export const insightSpecSchema = z.object({
+  /** Baked-at-creation insight text. Rendered when the dynamic
+   *  generator hasn't (yet) produced a fresh insight. ≤ 500 chars to
+   *  match the existing `businessCommentary` cap so renderers can share
+   *  styling envelopes. */
+  default: z.string().max(500),
+  /** Optional re-generation hook. WI2 wires the `"llm"` kind to a
+   *  MINI-tier LLM call; today the field is opaque + back-compat. */
+  generator: z
+    .object({
+      kind: z.enum(["llm", "deterministic"]),
+      /** Free-form args for the generator. Shape is generator-specific
+       *  (e.g., for `kind: "llm"` we expect `{ promptKey, contextRefs }`).
+       *  Kept as a passthrough record so future generators can extend
+       *  without a schema bump. */
+      args: z.record(z.unknown()).optional(),
+    })
+    .optional(),
+  /** Confidence tier driving prose length + hedging (W9 quality wave). */
+  confidenceTier: z.enum(["low", "medium", "high"]).optional(),
+  /** Domain pack ids cited in `default`; validated against the supplied
+   *  domain context server-side (W22 infrastructure). */
+  citations: z.array(z.string().min(1).max(80)).max(8).optional(),
+  /** ISO timestamp of the last regeneration (server-set). */
+  regeneratedAt: z.string().max(40).optional(),
+});
+
+export type InsightSpec = z.infer<typeof insightSpecSchema>;
+
+/** Helper: lift a legacy `keyInsight` string into an `InsightSpec`
+ *  preserving the default-text contract. Used by migration paths in
+ *  follow-up waves; pure, deterministic, safe in tests. */
+export function legacyKeyInsightToInsightSpec(
+  keyInsight: string | undefined,
+): InsightSpec | undefined {
+  if (typeof keyInsight !== "string") return undefined;
+  const trimmed = keyInsight.trim();
+  if (!trimmed) return undefined;
+  return { default: trimmed.slice(0, 500) };
+}
+
 export const chartSpecSchema = z.object({
   type: chartTypeSchema,
   title: z.string(),
@@ -39,6 +110,14 @@ export const chartSpecSchema = z.object({
   yDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for Y-axis
   trendLine: z.array(z.record(z.union([z.string(), z.number()]))).optional(), // Two points defining the trend line: [{ [x]: min, [y]: y1 }, { [x]: max, [y]: y2 }]
   keyInsight: z.string().optional(), // Key insight about the chart
+  /**
+   * Wave WI1 · richer, dynamic-aware insight. Coexists with the simpler
+   * `keyInsight` string for back-compat — renderers prefer
+   * `insight.default` when present, fall back to `keyInsight` otherwise.
+   * Future waves (WI2, WI4) populate `generator` so the panel can
+   * regenerate on filter change.
+   */
+  insight: insightSpecSchema.optional(),
   /**
    * W12 · 1–2 sentence framing of the chart against FMCG/Marico domain
    * priors. Populated by `generateChartInsights` only when domain context
