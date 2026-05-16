@@ -69,6 +69,7 @@ import { registerComputeGrowthTool } from "./computeGrowthTool.js";
 import { registerDetectSeasonalityTool } from "./detectSeasonalityTool.js";
 import { registerForecastTool } from "./forecastTool.js";
 import { registerAnomalyDetectionTool } from "./anomalyDetectionTool.js";
+import { registerHierarchicalDrillTool } from "./hierarchicalDrillTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
@@ -1526,6 +1527,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // Wave F1 · time-series forecasting (linear trend + optional seasonal).
   // Gated by FORECAST_ENABLED=true; surfaces a clear off-message otherwise.
   registerForecastTool(registry);
+  // Wave WT8 · hierarchical drill — top-N + "Other" rollup for unreadable
+  // high-cardinality breakdowns (50+ regions, 200+ SKUs). Pure-Node.
+  registerHierarchicalDrillTool(registry);
   // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
   // ANOMALY_DETECTION_ENABLED=true.
   registerAnomalyDetectionTool(registry);
