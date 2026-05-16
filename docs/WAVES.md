@@ -11,6 +11,40 @@
 
 ---
 
+- **2026-05-16** — **Wave WV1 · verifier-side confidence overclaim detector (pure helper).** Closes the loop on the WW1 + WW2 deterministic-floor design: WW1 surfaced WQ1 as a system-prompt directive in the planner; WW2 surfaced per-finding tiers + canonical hedges in the narrator user prompt. But the narrator's tier choice was unaudited — the directive nudged, never enforced. WV1 ships a pure detector that compares the narrator's *claimed* aggregate tier distribution against the *deterministic* WQ1 tiers across blackboard findings, emitting overclaim flags the verifier can use to request `revise_narrative` when the narrative inflates confidence beyond what the evidence supports.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/verifierConfidenceCheck.ts](server/lib/agents/runtime/verifierConfidenceCheck.ts) (~130 LOC). Public surface:
+      - `detectConfidenceOverclaims(narratorOutput, blackboard) → ConfidenceOverclaimReport` — the core detector.
+      - `ConfidenceOverclaimReport` carries `claimed` + `actual` tier counts, an array of `flags`, and a `shouldRevise` boolean true iff at least one `warning` or `block` flag fires.
+    - Three flag kinds, three severities:
+      - `narrator_high_exceeds_blackboard_high` (severity: `warning`) — claimed high count > actual high count. The everyday overclaim — narrator marked 5 magnitudes as high when WQ1 supports only 2.
+      - `narrator_all_high_with_low_in_blackboard` (severity: `block`) — every narrator magnitude/implication is high AND the blackboard has ≥1 low-tier finding. The strongest signal — narrator silently swept the uncertainty.
+      - `narrator_low_exceeds_blackboard_lowish` (severity: `info`) — over-hedging. Info-only, never triggers `shouldRevise`.
+
+  **Why this design.**
+    - **Aggregate counting, not per-finding fuzzy matching.** Narrator `magnitudes[]` carry `{label, value, confidence?}` with no findingId reference. Pairing each magnitude to a specific finding would require fuzzy label matching that drifts as the narrator paraphrases (`"Revenue grew 14%"` vs blackboard's `label: "Q3 revenue growth"`). The aggregate check is robust: it catches the actual failure mode (narrator marked 5/5 magnitudes "high" when blackboard supports 0) without depending on string-similarity heuristics that would themselves need calibration.
+    - **Three-tier severity, only two trigger revise.** The verifier should re-run when overclaim is real (block) or directionally clear (warning); over-hedging is a quality regression but not a correctness one — info-only. A `shouldRevise` flag pinned to warning OR block keeps the verifier's existing `revise_narrative` budget under control (re-running narrator is the most expensive single step in a turn).
+    - **Pure helper this wave, verifier.ts wire-up follow-up.** Same scope discipline as WT6/WQ1/WQ2 (helper before wiring) and WW1/WW2 (wiring after helper lands). The detector is fully testable without spinning the verifier LLM, and the verifier wiring wave can be small and focused.
+    - **Empty-blackboard short-circuit.** When `blackboard.findings` is empty (dataOps turns; quick-answer paths), `actual.total === 0` and all three flag rules suppress themselves — WQ1 can't classify what isn't there, and the narrator's tier choice has no deterministic floor to compare against. The detector returns a zero-flag report rather than firing spurious warnings.
+    - **Tier counting treats `undefined` confidence as `medium`.** Narrator's NarratorOutput schema makes `magnitudes[].confidence` optional. An emitted magnitude with no confidence field is implicitly medium for counting purposes (matches WQ1's default-medium policy on "no evidence supplied" findings). Without this, an honest narrator that omitted the field would look like it claimed nothing, hiding overclaim that's only visible when *some* magnitudes are explicitly high.
+    - **Block severity reserved for the strongest signal.** Only the all-high-with-low rule emits `block`. `warning` is the default for confidence overclaim. The verifier's existing budget allows for a small number of `revise_narrative` cycles per turn; flooding it with blocks would deadlock the loop. The all-high-with-low case is so anomalous that erring on the side of forcing a re-narrate is safer than letting the answer ship.
+    - **Reuses WW2's tierBlackboardFindings.** No duplication of regex extraction / classification logic — WV1 imports from WW2's `narratorHintsBlock.ts`. When a future wave structures `Finding.evidence`, both WW2 and WV1 swap the regex path for the structured one in a single place.
+
+  **Tests.** [tests/verifierConfidenceCheckWV1.test.ts](server/tests/verifierConfidenceCheckWV1.test.ts) — 11 cases across 3 suites:
+    - **Tier counting** (3): claimed tiers count across magnitudes + implications; missing confidence treated as medium; actual tiers count via WQ1 on the blackboard.
+    - **Flag rules** (6): narrator_high_exceeds_blackboard_high fires when claimed high > actual high; narrator_all_high_with_low fires as block when all-high + any low; narrator_low_exceeds_blackboard_lowish fires as info when over-hedged; exact tier match emits zero flags; empty blackboard short-circuits; all-high+low suppressed when at least one magnitude is non-high.
+    - **shouldRevise gate** (2): true when a warning fires; false when only info fires.
+    - 11/11 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WW2 baseline — zero new from WV1. Server build (`npm run build`) succeeds. Code commit `4388ab44`.
+
+  **Out of scope.**
+    - Wiring into [verifier.ts](server/lib/agents/runtime/verifier.ts). The verifier runs an LLM-backed check on the narrative; WV1 produces deterministic flags it can fold into its `revise_narrative` decision. Wiring is a follow-up wave touching ~30 LOC of verifier.ts + a new verdict reason.
+    - Per-finding overclaim attribution. The aggregate check tells you "the narrator claimed too much high"; it doesn't say "magnitude #3 was the overclaim." Fuzzy matching is out of scope; structured `Finding.evidence` would enable it cleanly.
+    - Verifier prompt directive. The LLM-backed verifier already has a checks block — adding WV1's flag descriptions as additional rules belongs to the wiring wave.
+    - Workbench surfacing of the overclaim report. The verifier emits its findings as part of the `verifier_verdict` SSE row; a future wave can pipe the WV1 flags into that payload.
+
 - **2026-05-16** — **Wave WW2 · narrator wiring of WQ1 (`scaleNarrativeByConfidence`).** Closes the WQ1 wiring debt fully. WW1 surfaced WQ1 as a static directive in the planner system prompt (nudging tool choice toward statistical paths); WW2 surfaces the per-finding tier + canonical hedge phrase to the narrator so it can pin `magnitudes[].confidence` / `implications[].confidence` to the tier and weave the hedge verbatim into prose for medium / low findings. Without WW2, the narrator silently picks confidence on its own — the deterministic WQ1 classifier was invisible downstream.
 
   **What landed.**
