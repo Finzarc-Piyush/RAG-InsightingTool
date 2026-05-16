@@ -804,6 +804,144 @@ export const dimensionHierarchySchema = z.object({
 
 export type DimensionHierarchy = z.infer<typeof dimensionHierarchySchema>;
 
+/**
+ * W56 · Semantic & metrics layer — type foundation.
+ *
+ * The semantic layer is the "metrics catalog" the planner speaks against
+ * instead of raw column names. A SemanticModel is per-session, derived once
+ * at upload from DataSummary + datasetProfile + wide-format proposal +
+ * dimensionHierarchies (W57), and editable in the admin UI (W61). The
+ * compiler (W58) turns {metric, breakdownBy, filters, window} into a
+ * QueryPlanBody, replacing ~70% of planner ad-hoc DuckDB calls and lifting
+ * accuracy ~300% / cutting wrong-column errors ~66% per industry
+ * benchmarks (Cube, Looker LookML).
+ *
+ * Distinct from `dimensionHierarchySchema` (above) which represents
+ * "rollup values inside one column" (e.g., 'All India' = parent of
+ * North/South/East/West). `semanticHierarchy` is the orthogonal concept:
+ * an ordered chain of separate dimensions (Country → Region → City) used
+ * for drill-down navigation. The two coexist.
+ */
+
+const SNAKE_CASE = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * A single Metric in the semantic layer — the things users ask about
+ * ("Net Sales", "Volume Share", "Average Selling Price"). Each Metric
+ * compiles to a SQL aggregation expression against the dataset columns.
+ */
+export const semanticMetricSchema = z.object({
+  /** Canonical identifier; stable across model versions; used in metric query API. */
+  name: z.string().min(1).max(80).regex(SNAKE_CASE),
+  /** Human-readable label for UI + planner prompt. */
+  label: z.string().min(1).max(120),
+  /**
+   * SQL aggregation expression — pure aggregation, no SELECT / JOIN /
+   * subqueries. Examples:
+   *   - `SUM(gross_sales) - SUM(returns)`
+   *   - `AVG(price)`
+   *   - `SUM(value_sales) / NULLIF(SUM(volume_sales), 0)`
+   * Compiler (W58) validates referenced columns exist in the dataset.
+   */
+  expression: z.string().min(1).max(2000),
+  /**
+   * Base columns the expression references. Lets the compiler validate
+   * and lets validateModel (W63) lint warn on orphan references.
+   * Empty array is allowed for constant expressions.
+   */
+  references: z.array(z.string().min(1).max(200)).max(20).default([]),
+  /** Display format hint passed to chart/pivot renderers. */
+  format: z
+    .enum(["number", "percent", "currency", "ratio", "duration"])
+    .default("number"),
+  /** ISO 4217 code (e.g., "INR", "USD") — required when `format === "currency"`. */
+  currencyCode: z
+    .string()
+    .regex(/^[A-Z]{3}$/, "ISO 4217 (3 uppercase letters)")
+    .optional(),
+  /** Decimal places to render; 0..6. Renderer default applies if omitted. */
+  decimals: z.number().int().min(0).max(6).optional(),
+  /**
+   * Description shown in the admin UI and woven into the planner prompt.
+   * Cite domain pack ids verbatim when the metric framing comes from a
+   * pack (e.g., `kpi-and-metric-glossary`). 1000 char cap.
+   */
+  description: z.string().max(1000).optional(),
+  /** Whether the planner can use this metric. Disable for draft/internal metrics. */
+  exposed: z.boolean().default(true),
+  /** Origin: "auto" inferred, "user" admin-edited, "domain" from a domain pack. */
+  source: z.enum(["auto", "user", "domain"]).default("auto"),
+});
+
+export type SemanticMetric = z.infer<typeof semanticMetricSchema>;
+
+/**
+ * A Dimension is a column projected as a queryable breakdown axis. Drives
+ * `breakdownBy` in metric queries + the dashboard global filter picker's
+ * type-appropriate UI (categorical / temporal / numeric_binned / geo).
+ */
+export const semanticDimensionSchema = z.object({
+  name: z.string().min(1).max(80).regex(SNAKE_CASE),
+  label: z.string().min(1).max(120),
+  /** Underlying column the dimension projects from. */
+  column: z.string().min(1).max(200),
+  /** Semantic kind — drives filter UI + chart type recommendations. */
+  kind: z.enum(["categorical", "temporal", "numeric_binned", "geo"]),
+  /**
+   * For `kind: "temporal"` — declared grain. Omit when the column supports
+   * all grains (the agent already derives this via `temporalFacetColumns`).
+   */
+  temporalGrain: z
+    .enum(["day", "week", "month", "quarter", "year"])
+    .optional(),
+  description: z.string().max(1000).optional(),
+  exposed: z.boolean().default(true),
+  source: z.enum(["auto", "user", "domain"]).default("auto"),
+});
+
+export type SemanticDimension = z.infer<typeof semanticDimensionSchema>;
+
+/**
+ * A multi-level dimension chain used for drill-down navigation
+ * (e.g., Country → Region → City). Distinct from `dimensionHierarchy`
+ * which represents in-column rollup totals.
+ *
+ * `levels` references dimension names (NOT columns) so the chain is
+ * stable across column renames. Compiler (W58) resolves to columns via
+ * the dimensions catalog.
+ */
+export const semanticHierarchySchema = z.object({
+  name: z.string().min(1).max(80).regex(SNAKE_CASE),
+  label: z.string().min(1).max(120),
+  /** Ordered top→bottom; refer to `semanticDimensionSchema.name` values. */
+  levels: z.array(z.string().min(1).max(80).regex(SNAKE_CASE)).min(2).max(8),
+  description: z.string().max(500).optional(),
+  source: z.enum(["auto", "user", "domain"]).default("auto"),
+});
+
+export type SemanticHierarchy = z.infer<typeof semanticHierarchySchema>;
+
+/**
+ * The semantic model for a session. Stored on `ChatDocument.semanticModel`
+ * (added in W57). The compiler reads this; the planner sees it as a prompt
+ * block (W59); the admin UI edits it (W61).
+ */
+export const semanticModelSchema = z.object({
+  /** Bumped on every edit; used as the cache key for compiled queries (W64). */
+  version: z.number().int().min(1).default(1),
+  /** Free-text name shown in admin UI. */
+  name: z.string().min(1).max(120).default("Default model"),
+  metrics: z.array(semanticMetricSchema).max(200).default([]),
+  dimensions: z.array(semanticDimensionSchema).max(200).default([]),
+  hierarchies: z.array(semanticHierarchySchema).max(50).default([]),
+  /** ISO timestamp of last edit (server-set). */
+  updatedAt: z.string().max(40).optional(),
+  /** Email of last editor (server-set). */
+  updatedBy: z.string().max(200).optional(),
+});
+
+export type SemanticModel = z.infer<typeof semanticModelSchema>;
+
 export const sessionAnalysisFactSchema = z.object({
   statement: z.string().max(1000),
   source: z.enum(["user", "assistant", "data"]),
