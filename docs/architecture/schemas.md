@@ -71,6 +71,7 @@ bug.
 
 ## Recent changes
 
+- Wave W57 (2026-05-16) — `ChatDocument` gains optional `semanticModel?: SemanticModel` field in [server/models/chat.model.ts](../../server/models/chat.model.ts) (ChatDocument is a TS interface, not a zod schema, so no mirror needed). Populated at the upload understanding-ready checkpoint via [`server/lib/semantic/inferModel.ts`](../../server/lib/semantic/inferModel.ts).
 - Wave W56 (2026-05-16) — Semantic & metrics layer type foundation. Adds `semanticMetricSchema`, `semanticDimensionSchema`, `semanticHierarchySchema`, `semanticModelSchema` to [server/shared/schema.ts](../../server/shared/schema.ts). Auto-mirrored to client via the W5 re-export. Foundation for W57–W64 per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md). See `docs/WAVES.md` for full entry.
 - Initial seed of this doc.
 

@@ -59,6 +59,9 @@ independently is when the single-writer helper earns its keep.
 
 ## Recent changes
 
+- **Wave W57 (2026-05-16)** — Understanding-ready checkpoint now also persists [`ChatDocument.semanticModel`](../../server/models/chat.model.ts) via [`server/lib/semantic/inferModel.ts`](../../server/lib/semantic/inferModel.ts). Pure function, fast, runs right next to `datasetProfile` persistence. Best-effort: an inference failure logs a warning but does not block the checkpoint or fail the upload. See `docs/WAVES.md` for full entry.
+
+
 - **Initial-message robustness** —
   `buildInitialAssistantContentFromContext`
   ([`server/lib/sessionAnalysisContext.ts`](../../server/lib/sessionAnalysisContext.ts))

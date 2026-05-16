@@ -1,18 +1,18 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave W56 — semantic-layer type foundation).
+> Last sync: 2026-05-16 (Wave W57 — semantic model inference).
 
 ## HEAD
 
-- **Latest wave:** Wave W56 · Semantic & metrics layer — type foundation (2026-05-16)
+- **Latest wave:** Wave W57 · Semantic model inference (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `549b6610` — "Wave W56 · semantic & metrics layer — type foundation" (2026-05-16)
-- **Working tree:** clean after W56 + doc-update commits.
+- **Last commit:** `ee647eb9` — "Wave W57 · semantic model inference" (2026-05-16)
+- **Working tree:** clean after W57 + doc-update commits.
 
 ## Live feature streams
 
-- **Workstream 1 — semantic & metrics layer** · W56 type foundation shipped (zod schemas for Metric / Dimension / Hierarchy / Model in [server/shared/schema.ts](../server/shared/schema.ts), 15 tests passing). Next: W57 `inferModel` from `DataSummary + datasetProfile + dimensionHierarchies`. Per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md), W56–W64 deliver the metric catalog → compiler → planner prompt rewrite → `execute_metric_query` tool → admin UI → result cache.
+- **Workstream 1 — semantic & metrics layer** · W56 type foundation + W57 inference both shipped. Upload pipeline now persists `semanticModel` on `ChatDocument` (auto-source); see [server/lib/semantic/inferModel.ts](../server/lib/semantic/inferModel.ts). Next: W58 `compiler` — translate `(metric, breakdownBy, filters, window)` into `QueryPlanBody`. Per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md), W58–W64 deliver compiler → planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Phase D — coordinator multi-part detection** · D1+D2 shipped; D3 (actual parallel sub-investigation) deferred behind `DEEP_INVESTIGATION_ENABLED`. Detector lives at [server/lib/agents/runtime/detectMultiPartQuestion.ts](../server/lib/agents/runtime/detectMultiPartQuestion.ts), observability fires in [chatStream.service.ts](../server/services/chat/chatStream.service.ts) after mode classification.
 - **Phase F — predictive / inferential tooling** · F1 forecast, F2 anomaly detection, F3 significance tests all shipped, gated by `FORECAST_ENABLED` / `ANOMALY_DETECTION_ENABLED` / `SIGNIFICANCE_TESTS_ENABLED`. Pure-Node implementations under [server/lib/](../server/lib/).
 - **W-series — query plan expressiveness** · W1 (window aggregations) → W2 (rolling-window detector) → W3 (composite-ranking expressions in `breakdown_ranking`) all shipped. P1 (pivot reads agent result rows) closes the load-bearing UX gap for `computedAggregations`.
@@ -29,14 +29,14 @@
 
 ## Next wave (if planned)
 
-- **W57** — `server/lib/semantic/inferModel.ts`: auto-build initial `SemanticModel` from `DataSummary` + `datasetProfile` + wide-format proposal + `dimensionHierarchies`. Persist on `ChatDocument.semanticModel` at upload completion. See the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 1 wave map.
+- **W58** — `server/lib/semantic/compiler.ts`: pure `compileMetricQuery({ metric, breakdownBy, filters, window }) → QueryPlanBody`. Reuses existing `aggregationEntrySchema` + `dimensionFilterSchema` + `windowAggregationsSchema` + `computedAggregationSchema` so the compiler output is *valid input to existing tools*, not a parallel execution path. Will replace ~70% of planner ad-hoc `execute_query_plan` calls once W59 rewrites the planner prompt. See the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 1 wave map.
 
 ## Last 5 waves (one line each — newest first)
 
+- **W57** (2026-05-16) · Semantic model inference: pure `inferModel({summary, datasetProfile?}) → SemanticModel` wired into the upload understanding-ready checkpoint. Persists `ChatDocument.semanticModel`. 15 tests.
 - **W56** (2026-05-16) · Semantic & metrics layer — type foundation: `semanticMetricSchema` / `semanticDimensionSchema` / `semanticHierarchySchema` / `semanticModelSchema` in [server/shared/schema.ts](../server/shared/schema.ts). 15 tests. Foundation for W57–W64.
 - **Phase D** (2026-05-16) · Multi-part question detector + `flow_decision` observability. D3 actual decomposition deferred.
 - **Phase F** (2026-05-16) · Forecasting + anomaly detection + statistical significance tools (3 env-gated).
 - **W3** (2026-05-16) · Composite-ranking expression support in `run_breakdown_ranking`.
-- **W2** (2026-05-16) · `detectRollingWindowIntent` deterministic detector for rolling / cumulative phrasings.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.
