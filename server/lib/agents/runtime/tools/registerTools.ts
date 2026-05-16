@@ -72,6 +72,7 @@ import { registerAnomalyDetectionTool } from "./anomalyDetectionTool.js";
 import { registerHierarchicalDrillTool } from "./hierarchicalDrillTool.js";
 import { registerCohortAnalysisTool } from "./cohortAnalysisTool.js";
 import { registerRfmSegmentationTool } from "./rfmSegmentationTool.js";
+import { registerPriceElasticityTool } from "./priceElasticityTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
@@ -1538,6 +1539,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // Wave WT3 · RFM segmentation. Pure-Node; scores entities on Recency /
   // Frequency / Monetary and assigns canonical RFM segment labels.
   registerRfmSegmentationTool(registry);
+  // Wave WT7 · price elasticity (log-log OLS). Pure-Node; returns slope,
+  // R², 95% CI, t-value, and a categorical interpretation per group.
+  registerPriceElasticityTool(registry);
   // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
   // ANOMALY_DETECTION_ENABLED=true.
   registerAnomalyDetectionTool(registry);
