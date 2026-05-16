@@ -70,6 +70,7 @@ import { registerDetectSeasonalityTool } from "./detectSeasonalityTool.js";
 import { registerForecastTool } from "./forecastTool.js";
 import { registerAnomalyDetectionTool } from "./anomalyDetectionTool.js";
 import { registerHierarchicalDrillTool } from "./hierarchicalDrillTool.js";
+import { registerCohortAnalysisTool } from "./cohortAnalysisTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
@@ -1530,6 +1531,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // Wave WT8 · hierarchical drill — top-N + "Other" rollup for unreadable
   // high-cardinality breakdowns (50+ regions, 200+ SKUs). Pure-Node.
   registerHierarchicalDrillTool(registry);
+  // Wave WT2 · cohort retention/expansion table. Pure-Node; tracks entities
+  // across period offsets to answer "of cohort X, how many remain in period Y?".
+  registerCohortAnalysisTool(registry);
   // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
   // ANOMALY_DETECTION_ENABLED=true.
   registerAnomalyDetectionTool(registry);
