@@ -1,14 +1,14 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave WQ1 — `scaleNarrativeByConfidence` helper).
+> Last sync: 2026-05-16 (Wave W74 — investigation budget exhaustion observability).
 
 ## HEAD
 
-- **Latest wave:** Wave WQ1 · `scaleNarrativeByConfidence` helper (2026-05-16)
+- **Latest wave:** Wave W74 · investigation budget exhaustion observability (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `471ba965` — "Wave WQ1 · scaleNarrativeByConfidence helper" (2026-05-16)
-- **Working tree:** doc updates staged for paired WQ1 commit.
+- **Last commit:** `8f56944a` — "Wave W74 · investigation budget exhaustion observability" (2026-05-16)
+- **Working tree:** doc updates staged for paired W74 commit.
 
 ## Live feature streams
 
@@ -17,7 +17,7 @@
 - **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history.
 - **Workstream 1 — semantic & metrics layer** · W56 types + W57 inference + W58 compiler all shipped. The agent can now: (a) auto-populate a SemanticModel at upload (W57), (b) translate a `{metric, breakdownBy, filters}` query into a `QueryPlanBody` (W58). The model is ready for the planner to use; the planner just doesn't know about it yet. Next: W59 — rewrite the planner prompt to surface the metric catalog (`server/lib/agents/runtime/planner.ts` + a new `server/lib/semantic/prompt.ts` for byte-stable manifest rendering). W59–W64 deliver planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Workstream 4 — dashboard 2.0** · WD1 ships: `+ Add filter` popover on the dashboard global filter bar (categorical + numeric + date pickers). [DashboardGlobalFilterBar.tsx](../client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx) renders even when `global` is empty IFF availableFilters is non-empty. Next: WD2 — cross-filter brushing (click a chart segment → add to global filter). WD2–WD10 deliver brushing → drill-through → dynamic insights → fork-from-dashboard → mobile → linked-sheet filters → saved views → tile comments → scheduled refresh per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
-- **Workstream 3 — investigation mode** · W73 wires `runDeepInvestigation` into [`dataAnalyzer.answerQuestion`](../server/lib/dataAnalyzer.ts) behind `DEEP_INVESTIGATION_ENABLED` (invariant #6 preserved). Multi-part questions auto-decompose when the env var is on. Next: W74 — shape-based auto-dispatch (`driver_discovery` / `variance_diagnostic` / `comparison` shapes auto-trigger even without conjunction phrasing). W73–W79 deliver dispatch → workbench UI → hypothesis tree viz → narrator merge → investigation memory → golden fixture.
+- **Workstream 3 — investigation mode** · W74 ships: budget exhaustion observability. New pure detector [`investigationBudget.ts`](../server/lib/agents/runtime/investigationBudget.ts) names which cap (llm_calls / wall_time / max_nodes) tripped when the BFS loop terminates short of convergence. [`investigationOrchestrator.ts`](../server/lib/agents/runtime/investigationOrchestrator.ts) emits a `flow_decision` SSE row (`layer: "investigation-budget"`, `chosen: "halt"`) + agentLog `budget_exhausted` when the detector fires. No behaviour change — pure observability. Next: W75 — workbench UI for parallel sub-investigations (per-sub-question lanes in [`ThinkingPanel.tsx`](../client/src/pages/Home/Components/ThinkingPanel.tsx)). Or W76 — Hypothesis Tree visualizer.
 - **Phase D — coordinator multi-part detection** · D1+D2 shipped; D3 (actual parallel sub-investigation) deferred behind `DEEP_INVESTIGATION_ENABLED`. Detector lives at [server/lib/agents/runtime/detectMultiPartQuestion.ts](../server/lib/agents/runtime/detectMultiPartQuestion.ts), observability fires in [chatStream.service.ts](../server/services/chat/chatStream.service.ts) after mode classification.
 - **Phase F — predictive / inferential tooling** · F1 forecast, F2 anomaly detection, F3 significance tests all shipped, gated by `FORECAST_ENABLED` / `ANOMALY_DETECTION_ENABLED` / `SIGNIFICANCE_TESTS_ENABLED`. Pure-Node implementations under [server/lib/](../server/lib/).
 - **W-series — query plan expressiveness** · W1 (window aggregations) → W2 (rolling-window detector) → W3 (composite-ranking expressions in `breakdown_ranking`) all shipped. P1 (pivot reads agent result rows) closes the load-bearing UX gap for `computedAggregations`.
@@ -38,10 +38,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **W74** (2026-05-16) · Investigation budget exhaustion observability: new pure `evaluateBudgetExhaustion` returns the specific cap that tripped (llm_calls / wall_time / max_nodes). Orchestrator emits `flow_decision` SSE row when the loop halts on budget. 14 tests.
 - **WQ1** (2026-05-16) · `scaleNarrativeByConfidence` helper: pure pre-narrator decorator. Grades findings → tier (high/medium/low) + reasons + canonical hedge from n / p / R² / CI width. Helper-only this wave. 23 tests.
 - **WT7** (2026-05-16) · `run_price_elasticity` tool: log-log OLS fit for price-quantity elasticity. Returns slope, 95% CI, R², t-value, categorical interpretation. Optional per-group fits with min-observations skip. Pure-Node. 24 tests.
 - **WT3** (2026-05-16) · `run_rfm_segmentation` tool: quintile R/F/M scoring per entity with canonical segment labels (Champions/Loyal/At Risk/etc). Pure-Node. `segmentBreakdown` in numericPayload covers full population; table capped at maxEntities. 23 tests.
 - **WT2** (2026-05-16) · `run_cohort_analysis` tool: wide-format cohort × period-offset matrix. Acquisition cohort (default) or explicit cohortColumn. Aggregations count_distinct / sum / mean; retentionMode normalises by period_offset_0. Pure-Node. 20 tests.
-- **WT8** (2026-05-16) · `run_hierarchical_drill` tool: rolls high-cardinality dimensions into top-N + "Other" for readable breakdowns. Pure-Node, no Python. _rank=-1 flags the rolled bucket; _share fractions sum to 1. 19 tests.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.

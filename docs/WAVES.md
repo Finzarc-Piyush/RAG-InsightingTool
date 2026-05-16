@@ -11,6 +11,33 @@
 
 ---
 
+- **2026-05-16** — **Wave W74 · investigation budget exhaustion observability.** Closes Workstream 3 item 2 (W74) from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *hard budget caps with explicit observability when they trigger*. Before W74, when the deep-investigation BFS loop terminated because the LLM-call or wall-time budget was exhausted, it just exited silently. The user got back a partial answer with no signal that the system stopped short. W74 ships a deterministic detector that names the exact cap that fired and emits a `flow_decision` SSE row so the workbench can surface it.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/investigationBudget.ts](server/lib/agents/runtime/investigationBudget.ts) (~90 LOC). Zero-dep, side-effect-free. Public surface:
+      - `evaluateBudgetExhaustion(tree, config, nowMs?) → BudgetExhaustionDetails | null` — the core detector.
+      - `formatBudgetExhaustionMessage(reason, used, cap) → string` — canonical message string for SSE / agentLog.
+      - `BudgetExhaustionReason = "llm_calls_exhausted" | "wall_time_exhausted" | "max_nodes_reached"`.
+    - Wired into [investigationOrchestrator.ts](server/lib/agents/runtime/investigationOrchestrator.ts) right after the BFS `while` loop exits: when exhaustion is detected, the orchestrator emits a `flow_decision` SSE row with `layer: "investigation-budget"`, `chosen: "halt"`, and the canonical message + `reason: used/cap` candidate. Also calls `agentLog("investigationOrchestrator.budget_exhausted", ...)`.
+
+  **Why this design.**
+    - **Pure detector, not invasive refactor.** The existing `withinBudget` helper returns a boolean — fine for loop control but doesn't tell you WHICH budget tripped. A second pure helper that returns the reason keeps the original boolean check untouched (no regression risk) and adds an explicit "why" output channel.
+    - **Priority order matches existing `canAddNode` + `withinBudget` checks.** The three branches fire in the same order as the existing soft / hard cap chain: LLM calls → wall time → node count. That way the SSE message agrees with the actual termination cause when multiple caps trip simultaneously. The test suite pins this with an "all three exhausted" fixture.
+    - **`used / cap` numbers carried in the payload.** `chosen: "halt"` alone isn't actionable. The `candidates[]` array carries `"llm_calls_exhausted: 80 / 80"` so dashboards can graph "% of investigations halted on LLM budget" without parsing prose.
+    - **No default-value changes.** The 1000x master plan named `INVESTIGATION_MAX_SUBQUESTIONS=5` and `INVESTIGATION_MAX_LLM_CALLS=80` as suggested defaults. The existing defaults are `maxNodes: 15` and `maxTotalLlmCalls: 120`. Lowering them in the same wave would change runtime behaviour without telemetry to back the choice — a future wave can tighten defaults once W74's observability shows what the real cap utilization looks like in prod. For now the env vars `DEEP_INVESTIGATION_MAX_NODES` / `DEEP_INVESTIGATION_MAX_LLM_CALLS` remain the operator dial.
+    - **SSE emission wrapped in try/catch.** Mirrors the existing pattern in [investigationOrchestrator.ts:115](server/lib/agents/runtime/investigationOrchestrator.ts#L115) — telemetry must never throw and break the user's investigation result.
+
+  **Tests.** [tests/investigationBudgetW74.test.ts](server/tests/investigationBudgetW74.test.ts) — 14 cases across 6 suites:
+    - **Within budget** (2): null return on healthy tree, null at half capacity.
+    - **llm_calls_exhausted** (3): exact-cap (used == cap) detection, above-cap detection, priority over wall_time + max_nodes.
+    - **wall_time_exhausted** (2): elapsed-time detection, defers to llm_calls when both tripped.
+    - **max_nodes_reached** (2): node-count detection, defers to wall_time when both tripped.
+    - **formatBudgetExhaustionMessage** (3): canonical strings for each reason with used/cap interpolation.
+    - **message in details** (2): canonical message attached to details for llm_calls + wall_time.
+    - 14/14 passing. Investigation-related sibling tests (orchestrator + tree, 41 cases) still pass unchanged. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WQ1 baseline — zero new from W74. Commit `8f56944a`.
+
 - **2026-05-16** — **Wave WQ1 · `scaleNarrativeByConfidence` helper.** Closes the first item of Workstream 9 from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *confidence-aware narration*. The narrator today emits the same prose verbosity whether a finding is backed by n=500,000 with p<0.001 OR n=8 with no significance test — both get the same authoritative tone. WQ1 ships the pure pre-narrator helper that grades each finding's evidence and assigns a confidence tier (high / medium / low) plus a canonical hedge phrase, so the future narrator wave can vary verbosity + hedge by tier.
 
   **What landed.**
