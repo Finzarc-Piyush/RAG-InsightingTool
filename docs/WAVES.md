@@ -11,6 +11,40 @@
 
 ---
 
+- **2026-05-16** — **Wave WV5 · `run_significance_test` migrated to `composeFindingDetail` (p-value + effective n).** Second per-tool migration in the WV4 series. Where WV4 covered the strongest correlation's R² + sample size, WV5 covers the p-value + effective sample size for all three significance-test branches (Welch's t, paired t, χ²). Each is a separate question shape — "is the difference between two groups real?", "did the redesign help?", "do product preferences differ across segments?" — and each produces a `pValue` + `n` pair WW2's extractor catches deterministically. WQ1 grades on p ≤ 0.05 (high) / p ≤ 0.15 (medium) / p > 0.15 (low), making significance tests the cleanest fit for the deterministic-floor design.
+
+  **What landed.**
+    - [server/lib/agents/runtime/tools/significanceTestTool.ts](server/lib/agents/runtime/tools/significanceTestTool.ts) edit (~50 LOC):
+      - New imports: `composeFindingDetail` from [`../formatFindingEvidence.js`](server/lib/agents/runtime/formatFindingEvidence.ts), `type FindingEvidence` from [`../scaleNarrativeByConfidence.js`](server/lib/agents/runtime/scaleNarrativeByConfidence.ts).
+      - New module-private helper `buildEvidenceSuffix(pValue, effectiveN)` — DRY wrapper around `composeFindingDetail("", { pValue, n })` with `Number.isFinite` + range guards. Three call sites, one helper.
+      - All three success-path returns now compose `summary: result.interpretation + buildEvidenceSuffix(result.pValue, effectiveN)`. The `effectiveN` is test-specific:
+        - **welch_t** → `result.n.sampleA + (result.n.sampleB ?? 0)` (combined size of independent samples).
+        - **paired_t** → `result.n.sampleA` (pair count — NOT 2 × sampleA, because pairs aren't independent observations).
+        - **chi_square** → `result.n.sampleA` (the grand total of the contingency table, the only sampleA carries here).
+    - No behaviour change to `table.rows` or `memorySlots` — those existing payloads already report the per-test sample sizes (`n_a`, `n_b`, `n_pairs`, `n_total`) and aren't affected.
+
+  **Why this design.**
+    - **One helper for three branches.** All three sub-tests produce `{ pValue, n }` evidence; the formatting is identical; the only variation is how to compute the effective n. The DRY helper keeps the wave footprint small (~50 LOC) and aligns the three success-path returns visually.
+    - **Effective n is test-specific.** A paired t-test on 25 pre/post pairs has 25 independent observations, not 50 — pairing is the whole point of the test. Counting 2 × sampleA would inflate WQ1's tier grade (n ≥ 30 is the medium threshold). The math is cheap (one ternary) and the correct accounting matters for the tier classification. Same for chi-square: the contingency table's grand total is the meaningful sample size, not double-counting the marginal totals.
+    - **Append, don't replace.** The existing `result.interpretation` is a tuned-prose summary (`"Significant association: χ²=53.33, df=1, p=0.0000, V=0.67 — large."`). Appending the canonical suffix gives both an LLM-friendly explanation AND a machine-extractable evidence block. WW2's extractor regex matches the *first* `p` it sees, which is the one inside the interpretation (`p=0.0000`); the canonical suffix's `p < 0.001` is redundant but harmless. The n field, however, only exists in the canonical suffix — the interpretation prose doesn't carry a sample size, so the suffix is the authoritative source for n.
+    - **Defensive guards on `Number.isFinite` + range.** Same policy as the WV2 formatter and WV4. NaN or out-of-range silently drops to empty suffix. Worst case: pre-WV5 baseline (finding tiers as medium / no evidence). No throws, no error paths.
+    - **No schema migration to significanceTests.ts.** The underlying `runSignificanceTest` already returns `pValue` and `n` on every success path; WV5 just plumbs them out through the tool wrapper. The math module is untouched.
+
+  **Tests.** [tests/runSignificanceTestFindingDetailWV5.test.ts](server/tests/runSignificanceTestFindingDetailWV5.test.ts) — 5 cases across 4 suites:
+    - **welch_t end-to-end**: 30 rows in group A vs 30 in group B with mean 10 vs 20; large effect → highly significant; assert success summary ends in ` (n = 60; p < 0.001)`; assert `extractFindingEvidence` recovers n = 60 and pValue (from either the interpretation's `p=0.0000` or the suffix's `p < 0.001`).
+    - **paired_t end-to-end**: 25 paired rows with constant +10 difference; assert summary ends in ` (n = 25; p < 0.001)` (n = pair count, not 2 × 25); assert roundtrip.
+    - **chi_square end-to-end**: 2×2 contingency `[[50, 10], [10, 50]]` (grand total 120); strong association → significant; assert summary ends in ` (n = 120; p < 0.001)`; assert roundtrip.
+    - **Source-inspection wiring** (2): asserts the new imports + the `buildEvidenceSuffix` helper definition + ≥4 occurrences of `buildEvidenceSuffix(` (1 def + 3 call sites). Guards against future refactors that drop the wire-up.
+    - 5/5 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WV4 baseline — zero new from WV5. Regression sweep across `significanceTestsF3`, `formatFindingEvidenceWV2`, `runCorrelationFindingDetailWV4`, `runCorrelationFrameFit`, `verifierConfidenceOverclaimWiringWV3` — 47/47 pass. Code commit `a92f2f09`.
+
+  **Out of scope.**
+    - **`run_price_elasticity`** (R² + p). Next per-tool wave in the series. Tool already exists at [`priceElasticityTool.ts`](server/lib/agents/runtime/tools/priceElasticityTool.ts) (Wave WT7) and produces `r_squared`, `slope_se`, `t_value`, `significant` flag. WV6 candidate.
+    - **`run_segment_driver_analysis`**. Composite tool that calls `analyzeCorrelations` internally (per Wave W47 wiring). WV4's `topCorrelations` is technically already available on that path; promoting it through the composite's summary is a tiny wave but requires touching [`segmentDriverAnalysisTool.ts`](server/lib/segmentDriverAnalysisTool.ts), not registerTools.ts.
+    - **Effect size as a fifth evidence field.** Cohen's d (welch_t, paired_t) and Cramér's V (chi_square) are already in `result.effectSize.value` / `result.effectSize.magnitude`. Adding `effectMagnitude` to `FindingEvidence` would let WQ1 distinguish "statistically significant but practically negligible" from "real and large." Separate wave; touches the `FindingEvidence` interface + the WV2 formatter + WW2 extractor.
+    - **Confidence interval on the effect size.** Like the WV4 out-of-scope note: the WW2 extractor recognises `±X%` patterns; adding CI bounds to the suffix is a follow-up.
+
 - **2026-05-16** — **Wave WV4 · `run_correlation` migrated to `composeFindingDetail` (canonical evidence suffix).** First per-tool migration of the WV2 formatter. With WV3 wired, the WW1 → WW2 → WV1 → WV2 → WV3 chain is structurally complete but *empty of evidence*: no tool yet emits findings with the canonical phrasing the WW2 extractor needs to recover `n` / `p` / `R²` / `CI`. WQ1 was therefore defaulting every correlation finding to `medium / no evidence supplied`. WV4 migrates `run_correlation` — the most-impactful first tool because R² is its primary statistical evidence and the strongest correlation's n is the per-frame sample size, both deterministic and free to compute. End-to-end activation: planner → tool → addFinding → WW2 extractor → WQ1 tier classifier → narrator confidence directive → WV3 verifier-side enforcement.
 
   **What landed.**
