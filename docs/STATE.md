@@ -1,18 +1,18 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave WT3 — `run_rfm_segmentation` tool).
+> Last sync: 2026-05-16 (Wave WT7 — `run_price_elasticity` tool).
 
 ## HEAD
 
-- **Latest wave:** Wave WT3 · `run_rfm_segmentation` tool (2026-05-16)
+- **Latest wave:** Wave WT7 · `run_price_elasticity` tool (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `b42e5a2b` — "Wave WT3 · run_rfm_segmentation tool" (2026-05-16)
-- **Working tree:** doc updates staged for paired WT3 commit.
+- **Last commit:** `45e5c4bf` — "Wave WT7 · run_price_elasticity tool" (2026-05-16)
+- **Working tree:** doc updates staged for paired WT7 commit.
 
 ## Live feature streams
 
-- **Workstream 5 — tool library expansion** · WT3 ships: `run_rfm_segmentation` scores entities on Recency/Frequency/Monetary (quintile by default) with canonical segment labels (Champions / Loyal / At Risk / Cant Lose Them / Hibernating / Lost / etc). Pure-Node; pairs with WT2 (cohort) and WT8 (hierarchical drill) as the planner's segmentation toolkit. `numericPayload.segmentBreakdown` covers the full population while the table caps at `maxEntities` for render-friendliness. Next: WT7 — `run_price_elasticity` (pure-Node log-log regression for price-quantity elasticity outside of MMM). Or WT4 — `run_market_basket` (association rules; pure-Node apriori prefix). WT1–WT10 deliver causal / cohort / RFM / market-basket / what-if / MTA / elasticity / hierarchical-drill / tool-router per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md).
+- **Workstream 5 — tool library expansion** · WT7 ships: `run_price_elasticity` fits log-log OLS regressions to estimate price elasticity (with optional per-group breakdown for per-SKU / per-region fits). Returns slope, 95% CI, R², t-value, and a categorical interpretation. Pure-Node; closes 4 of 6 question-shape gaps from Workstream 5 (WT8 hierarchical drill, WT2 cohort, WT3 RFM, WT7 elasticity). Next: WT4 — `run_market_basket` (pure-Node apriori for association-rule mining; small-N support/confidence/lift). Or WT5 — `run_what_if` (Monte Carlo on existing MMM fits; sensitivity bands). WT1–WT10 deliver causal / cohort / RFM / market-basket / what-if / MTA / elasticity / hierarchical-drill / tool-router per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md).
 - **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history.
 - **Workstream 1 — semantic & metrics layer** · W56 types + W57 inference + W58 compiler all shipped. The agent can now: (a) auto-populate a SemanticModel at upload (W57), (b) translate a `{metric, breakdownBy, filters}` query into a `QueryPlanBody` (W58). The model is ready for the planner to use; the planner just doesn't know about it yet. Next: W59 — rewrite the planner prompt to surface the metric catalog (`server/lib/agents/runtime/planner.ts` + a new `server/lib/semantic/prompt.ts` for byte-stable manifest rendering). W59–W64 deliver planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Workstream 4 — dashboard 2.0** · WD1 ships: `+ Add filter` popover on the dashboard global filter bar (categorical + numeric + date pickers). [DashboardGlobalFilterBar.tsx](../client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx) renders even when `global` is empty IFF availableFilters is non-empty. Next: WD2 — cross-filter brushing (click a chart segment → add to global filter). WD2–WD10 deliver brushing → drill-through → dynamic insights → fork-from-dashboard → mobile → linked-sheet filters → saved views → tile comments → scheduled refresh per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
@@ -37,10 +37,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **WT7** (2026-05-16) · `run_price_elasticity` tool: log-log OLS fit for price-quantity elasticity. Returns slope, 95% CI, R², t-value, categorical interpretation. Optional per-group fits with min-observations skip. Pure-Node. 24 tests.
 - **WT3** (2026-05-16) · `run_rfm_segmentation` tool: quintile R/F/M scoring per entity with canonical segment labels (Champions/Loyal/At Risk/etc). Pure-Node. `segmentBreakdown` in numericPayload covers full population; table capped at maxEntities. 23 tests.
 - **WT2** (2026-05-16) · `run_cohort_analysis` tool: wide-format cohort × period-offset matrix. Acquisition cohort (default) or explicit cohortColumn. Aggregations count_distinct / sum / mean; retentionMode normalises by period_offset_0. Pure-Node. 20 tests.
 - **WT8** (2026-05-16) · `run_hierarchical_drill` tool: rolls high-cardinality dimensions into top-N + "Other" for readable breakdowns. Pure-Node, no Python. _rank=-1 flags the rolled bucket; _share fractions sum to 1. 19 tests.
 - **WI1** (2026-05-16) · InsightSpec schema: `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight`. Foundation for WI2 (dynamic regen). 14 tests.
-- **W58** (2026-05-16) · Semantic-layer compiler: `compileMetricQuery({model, metric, breakdownBy?, filters?, sortBy?, limit?}) → QueryPlanBody`. Simple + composite arithmetic metrics; rejects expressions that don't fit the executor's allowed-character set. 18 tests.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.

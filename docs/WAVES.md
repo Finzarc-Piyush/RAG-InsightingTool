@@ -11,6 +11,38 @@
 
 ---
 
+- **2026-05-16** — **Wave WT7 · `run_price_elasticity` tool.** Closes the price-elasticity question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico pricing manager asking "what happens to Parachute 200ml volume if I raise the shelf price by 5%?" previously got either an MMM-pipeline answer (multi-driver, slow) or a hand-rolled correlation (cheap but qualitative). WT7 ships the single-variable log-log elasticity as a first-class tool.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/tools/priceElasticityTool.ts](server/lib/agents/runtime/tools/priceElasticityTool.ts) (~290 LOC). Pure-Node. Exported helpers:
+      - `fitLogLogElasticity(rows, minObservations)` — pure OLS fit on `{price, quantity}[]`. Returns the full diagnostic set or `{ok: false, reason}`.
+      - `interpretElasticity(b, significant)` — pure labeler. Exposed for taxonomy tests.
+      - `runPriceElasticity(rows, args)` — pure transform with grouping + filtering.
+      - `registerPriceElasticityTool(registry)` — registers `run_price_elasticity`.
+    - Args: `priceColumn`, `quantityColumn`, optional `groupColumn` (per-SKU / per-region elasticity), `minObservations` ∈ [3, 1000] default `6`, optional `dimensionFilters[]`.
+    - Output: `table = { columns: [groupColumn?, "n", "elasticity", "intercept", "r_squared", "slope_se", "ci_low", "ci_high", "t_value", "significant", "interpretation"], rows: [...sorted by |elasticity| desc] }`. Groups below `minObservations` are skipped and listed in `numericPayload.skipped`.
+    - Registered in [registerTools.ts](server/lib/agents/runtime/tools/registerTools.ts) right after `registerRfmSegmentationTool`. Duplicate-name guard test still passes.
+
+  **Why this design.**
+    - **Pure-Node OLS, not Python.** The 1000x plan originally specced this as a 200 LOC Py service. But the log-log fit is just a 2-variable closed-form regression — a few lines of `sum(x), sum(y), sum(xy), sum(x²)` in Node beats a 60-80 ms HTTP round-trip every time. Python is reserved for the multi-driver MMM optimiser (W46-W55) which actually needs scipy SLSQP.
+    - **Skip non-positive (price, quantity) pairs.** `log(0)` and `log(negative)` are undefined. Rather than fail the whole fit, drop the offending rows and re-check `minObservations` against what survived. The test suite pins this.
+    - **Zero-variance log-price guard.** When all rows have the same price, the slope is undefined (`SSxx = 0`) and a naive OLS would emit NaN/Infinity. The tool returns `{ok: false, reason: "all log(price) values are identical"}` with a clean message.
+    - **Normal-approximation CI, not t-table.** 95% CI = `slope ± 1.96 · slope_se`. For N > 30 this matches the t-distribution closely; for small N we accept the slight under-coverage rather than ship a t-table. The `t_value` and `significant` flag use the same |t| > 2 threshold.
+    - **Sort groups by |elasticity| desc.** "Show me the most-responsive segments" is the most common analyst question. The tie-break (group key, then row order) is deterministic so the table is render-stable across reruns.
+    - **`numericPayload.skipped` carries skipped-group diagnostics.** When a per-SKU fit has 12 SKUs with enough data and 8 SKUs with too few rows, the analyst still wants to see which SKUs were skipped and why. The `skipped` array carries `{group, reason, n}` for each.
+    - **Interpretation labels are categorical, not numeric.** "Elastic" and "highly elastic" are how marketing teams describe these results — the labels round off the precision drift inherent in OLS slope estimates. Renderers can ignore the label and show the raw β.
+
+  **Tests.** [tests/priceElasticityToolWT7.test.ts](server/tests/priceElasticityToolWT7.test.ts) — 24 cases across 6 suites:
+    - **Pure OLS fit** (5): noiseless slope recovery (β=-1.5 exact + R²=1), insufficient-observations rejection, skip-non-positive-pairs handling, zero-variance log-price degeneracy, near-zero SE on perfect fits.
+    - **Interpretation labels** (7): every branch (not-significant / highly inelastic / inelastic / unit elastic / elastic / highly elastic / anomalous-positive).
+    - **Overall fit** (2): single-row table when no groupColumn, group column omitted from output columns.
+    - **Per-group fit** (4): one row per group, sorted by |β| desc, sub-threshold groups skipped to numericPayload, groupColumn first in output.
+    - **Filters + failures** (3): dimensionFilter prefilter, empty dataset, all-groups-skipped → `ok:false`.
+    - **Schema** (3): defaults applied, minObservations below 3 rejected, `.strict()` rejects unknown keys.
+    - 24/24 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WT3 baseline — zero new from WT7. Commit `45e5c4bf`.
+
 - **2026-05-16** — **Wave WT3 · `run_rfm_segmentation` tool.** Closes the RFM segmentation question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "which customer segments should we focus on?" previously got an ad-hoc breakdown driven by the planner's intuition — accuracy varied turn-to-turn. WT3 ships a deterministic RFM scorer + canonical segment classifier so the answer is reproducible.
 
   **What landed.**
