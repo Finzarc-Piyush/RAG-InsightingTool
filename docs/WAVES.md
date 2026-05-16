@@ -11,6 +11,38 @@
 
 ---
 
+- **2026-05-16** — **Wave WV6 · `run_price_elasticity` migrated to `composeFindingDetail` (R² + n).** Third per-tool migration in the WV4 series, completing the most-impactful triad of statistical tools (correlation / significance / elasticity). Where WV4 covered the strongest Pearson correlation's R² + sample size and WV5 covered significance-test p-value + effective n, WV6 covers price-elasticity R² + n for both fit shapes — single global fit (no `groupColumn`) and per-segment fits where the headline figures come from the most-elastic group by |β|. With WV4 + WV5 + WV6 shipped, the narrator's confidence directive sees deterministic evidence on three of the four high-volume statistical question shapes; only `run_segment_driver_analysis` (composite over correlation) remains in the immediate migration backlog.
+
+  **What landed.**
+    - [server/lib/agents/runtime/tools/priceElasticityTool.ts](server/lib/agents/runtime/tools/priceElasticityTool.ts) edit (~30 LOC):
+      - New imports: `composeFindingDetail` from [`../formatFindingEvidence.js`](server/lib/agents/runtime/formatFindingEvidence.ts), `type FindingEvidence` from [`../scaleNarrativeByConfidence.js`](server/lib/agents/runtime/scaleNarrativeByConfidence.ts).
+      - After `tableRows.sort` (top by |elasticity|), pick `topRow = tableRows[0]` as the headline fit. Build `headlineEvidence: FindingEvidence` with `n = topRow.n` and `rSquared = topRow.r_squared`, both guarded by `Number.isFinite` + range (0 ≤ R² ≤ 1).
+      - Compute `wv6EvidenceSuffix = composeFindingDetail("", headlineEvidence)` once.
+      - Both summary branches concatenate `wv6EvidenceSuffix` at the end:
+        - **No-group**: `` `Elasticity β=${beta} (${interp}); R²=${r2}, n=${N}` + suffix ``. The legacy `R²=X, n=N` inline phrase is left in place (already extractable by WW2's regex) — adding the canonical block at the end keeps the format uniform across tools.
+        - **With groupColumn**: `` `${K} group(s) fit; ${S} skipped... Most elastic: ${name} (β=${beta}, ${interp})` + suffix ``. Pre-WV6 this branch had no R² / n inline at all — WV6 adds the headline group's evidence so WW2 can extract it.
+
+  **Why this design.**
+    - **Pick the headline group, not all groups.** Per-segment fits can return many rows; appending evidence for each would inflate the summary and the WW2 extractor only reads the first match anyway. The top row (sorted by |elasticity| desc) is the headline result the narrator builds prose around, so its evidence is the load-bearing fact. Future waves with structured `Finding.evidence` per-group would carry per-segment tiers without changing this baseline.
+    - **R² + n, not p.** The tool reports `significant: boolean` (a thresholded `|t| > 2 ≈ α=0.05`), not a continuous p-value. Deriving p from t requires the t-CDF (which the existing math module doesn't carry); shipping that helper is its own wave. R² is the cleanest fit-quality signal we already have, and n + R² together give WQ1 enough to grade (high needs n ≥ 30 AND R² ≥ 0.5; medium needs at least one). The tool's existing `interpretation` prose (`"highly elastic"` / `"inelastic"` / `"not statistically significant"`) is unchanged — narrator still sees the qualitative bucket.
+    - **Uniform format across migrated tools.** Run_correlation's suffix is `(n = N; R² = X)`; run_significance_test's is `(n = N; p = X)`; run_price_elasticity's is `(n = N; R² = X)`. Same parenthesised block, same WV2 ordering (n → p → R² → CI), same WW2 extraction path. The narrator's FINDING_CONFIDENCE prompt block now sees a structurally identical evidence story regardless of which statistical tool produced the finding.
+    - **Append even when legacy prose was already extractable.** The no-group summary `"...R²=${r2}, n=${N}"` (without the WV6 suffix) already matches WW2's `\bR\s*²\s*=\s*X` and `\bn\s*=\s*X` regex shapes. WW2's extractor returns the *first* match, so the canonical suffix is redundant on that branch — but the duplication is harmless and the uniform format makes future waves' static-analysis / golden tests simpler. Treat the canonical block as the contract; legacy inline phrasing is a transitional artefact future tool authors should avoid.
+    - **Defensive guards mirror WV4/WV5.** `Number.isFinite` + range checks on n and R². NaN / out-of-range silently drops to the empty suffix. Worst case: pre-WV6 baseline. No throws.
+
+  **Tests.** [tests/runPriceElasticityFindingDetailWV6.test.ts](server/tests/runPriceElasticityFindingDetailWV6.test.ts) — 4 cases across 3 suites:
+    - **Single-fit branch**: 20 rows with `q = price^(-2)` (clean power law) — log-log model fits exactly, R² ≈ 1, elasticity ≈ -2; assert summary ends in ` (n = 20; R² = X.XX)`; assert `extractFindingEvidence` recovers n = 20 and R² ≥ 0.99.
+    - **Per-group branch**: two SKUs (A: β ≈ -2 highly elastic, B: β ≈ -0.5 inelastic), 15 rows each; assert most-elastic is A and summary ends with A's evidence `(n = 15; R² = X.XX)`; assert roundtrip recovers n + R².
+    - **Source-inspection wiring** (2): asserts the new imports + ≥3 references to `wv6EvidenceSuffix` (1 assignment + 2 branch concatenations). Guards against future refactors that drop the wire-up from either summary branch.
+    - 4/4 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WV5 baseline — zero new from WV6. Regression sweep across `priceElasticityToolWT7`, `runCorrelationFindingDetailWV4`, `runSignificanceTestFindingDetailWV5`, `runPriceElasticityFindingDetailWV6`, `verifierConfidenceOverclaimWiringWV3`, `formatFindingEvidenceWV2` — 62/62 pass. Code commit `ccbe849f`.
+
+  **Out of scope.**
+    - **`run_segment_driver_analysis`** (composite over correlation). The next per-tool migration. It already calls `analyzeCorrelations` internally; WV4 plumbed `topCorrelations` through the analyzer return, so the composite can pick the headline correlation and append the canonical suffix the same way. Tiny scope.
+    - **t-test p-value derivation.** A `tCdf(t, df)` helper would let WV6 emit p alongside R² + n. Out of scope; not needed for WQ1's high-tier threshold (R² ≥ 0.5 already satisfies). When MMM / regression tools land that need p, the helper becomes its own utility wave.
+    - **Per-segment per-finding tiers.** Currently the headline group's evidence is the only one surfaced; the rest of the table's R² / n live in `tableRows` but don't feed the WW2 extractor. Structured `Finding.evidence` (a future schema wave) is the right place to land per-group tiers without inflating the summary string.
+    - **Confidence interval as the fourth field.** The tool already computes `ci_low` and `ci_high` for the slope; converting that to a `ciRelativeWidth` (|ci_high - ci_low| / (2 · |β|)) is a small calculation. Deferred to keep WV6 atomic; WV7+ can promote it once the formatter wave map stabilises.
+
 - **2026-05-16** — **Wave WV5 · `run_significance_test` migrated to `composeFindingDetail` (p-value + effective n).** Second per-tool migration in the WV4 series. Where WV4 covered the strongest correlation's R² + sample size, WV5 covers the p-value + effective sample size for all three significance-test branches (Welch's t, paired t, χ²). Each is a separate question shape — "is the difference between two groups real?", "did the redesign help?", "do product preferences differ across segments?" — and each produces a `pValue` + `n` pair WW2's extractor catches deterministically. WQ1 grades on p ≤ 0.05 (high) / p ≤ 0.15 (medium) / p > 0.15 (low), making significance tests the cleanest fit for the deterministic-floor design.
 
   **What landed.**
