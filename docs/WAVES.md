@@ -11,6 +11,37 @@
 
 ---
 
+- **2026-05-16** — **Wave WT3 · `run_rfm_segmentation` tool.** Closes the RFM segmentation question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "which customer segments should we focus on?" previously got an ad-hoc breakdown driven by the planner's intuition — accuracy varied turn-to-turn. WT3 ships a deterministic RFM scorer + canonical segment classifier so the answer is reproducible.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/tools/rfmSegmentationTool.ts](server/lib/agents/runtime/tools/rfmSegmentationTool.ts) (~310 LOC). Pure-Node. Exported helpers:
+      - `runRfmSegmentation(rows, args)` — pure function. Direct callable for tests + skills.
+      - `classifyRfmSegment(r, f, m, buckets)` — pure segment-rule classifier. Exposed for unit testing the taxonomy independently.
+      - `registerRfmSegmentationTool(registry)` — registers the tool as `run_rfm_segmentation`.
+    - Args: `entityColumn`, `periodColumn` (ISO-like values — same rationale as WT2), `monetaryColumn`, `buckets` ∈ [3,7] default `5`, `frequencyMode` ∈ {`rows`, `distinct_periods`} default `distinct_periods`, `maxEntities` ∈ [10, 2000] default `100`, optional `dimensionFilters[]`.
+    - Output: `table = { columns: [entityColumn, "last_period", "frequency", "monetary", "r_score", "f_score", "m_score", "rfm_score", "segment"], rows: [...capped at maxEntities, sorted by total score desc + monetary desc] }`. `rfm_score` is the concatenated string (e.g. `"555"`).
+    - `numericPayload` carries `segmentBreakdown: Array<{segment, count}>` for the FULL entity population (not just the capped table) so dashboards can show segment-level totals without re-running.
+
+  **Why this design.**
+    - **Quintile rank scoring with tie handling.** Each entity's score is `ceil(rank/N * buckets)` where `rank = count of entities with value ≤ this entity's value`. Two entities with the same monetary spend get the same M score — the test suite pins this with a same-spend-everyone fixture.
+    - **Recency uses period-index, not "days since last".** The tool doesn't parse dates; it sorts lexicographic period values (matching WT2's choice) and uses the index of each entity's last observation as the recency value. Larger index = more recent = higher R score.
+    - **`frequencyMode` default is `distinct_periods`.** A single shopper buying three products on one day shouldn't show as frequency 3 — that overweights basket-size analysts. Counting distinct periods matches the analyst intuition of "how many times did this customer come back."
+    - **Canonical segment taxonomy with priority order.** First-match-wins on the rule chain: Lost → Cant Lose Them → At Risk → Hibernating → New Customers → Champions → Loyal Customers → Potential Loyalist → About to Sleep → Regular. "Cant Lose Them" is intentionally tight (F=top AND M=top with low R) — a (2,4,4) entity is the looser "At Risk", not Cant-Lose-Them. The test suite pins each branch independently.
+    - **`maxEntities` cap but full-population segment counts.** A 50k-customer dataset would produce a 50k-row table — too large for SSE / chart rendering. Cap the table at 100 by default; surface segment counts in `numericPayload` so the analyst still sees "Champions: 142, Loyal: 1820, At Risk: 980, ..." over the whole base.
+    - **Sort by total score desc, then monetary desc.** Tie-break by spend matches the analyst question "show me my best customers" — among RFM=555 customers, the bigger spenders come first.
+
+  **Tests.** [tests/rfmSegmentationToolWT3.test.ts](server/tests/rfmSegmentationToolWT3.test.ts) — 23 cases across 7 suites:
+    - **Quintile scoring** (3): perfect-5-tier fixture (c1→111, c5→555), table sorted by total score desc, ties get identical scores.
+    - **Frequency modes** (2): `distinct_periods` collapses duplicate-period rows; `rows` counts every row.
+    - **Recency derivation** (1): last_period = entity's max period; ranks correctly.
+    - **Segment classifier** (8): Champions / Lost / Cant Lose Them / New Customers / At Risk / Hibernating / Champions-over-Loyal priority / Regular fallback.
+    - **Output shape** (3): expected columns, segmentBreakdown numericPayload, maxEntities cap with full segment counts.
+    - **Filters + failures** (3): dimensionFilter prefilter, empty dataset, all-filtered-out.
+    - **Schema** (3): defaults applied, buckets out-of-range rejected, `.strict()` rejects unknown keys.
+    - 23/23 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WT2 baseline — zero new from WT3. Commit `b42e5a2b`.
+
 - **2026-05-16** — **Wave WT2 · `run_cohort_analysis` tool.** Closes the cohort/retention question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico marketing analyst asking "of stores that started carrying Parachute in Q1 2024, how many are still ordering it 6 months later?" previously had no first-class tool — the answer required hand-rolled SQL plus a pivot. WT2 ships the cohort matrix as a first-class tool that the planner can pick directly.
 
   **What landed.**
