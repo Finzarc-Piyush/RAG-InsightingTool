@@ -1,17 +1,18 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-15 (during the routing-system migration).
+> Last sync: 2026-05-16 (Wave W56 — semantic-layer type foundation).
 
 ## HEAD
 
-- **Latest wave:** Wave D · Coordinator multi-part detection + `flow_decision` observability (2026-05-16)
+- **Latest wave:** Wave W56 · Semantic & metrics layer — type foundation (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `593edf2e` — "Update CLAUDE.md for comprehensive guidance and workflow rules…" (2026-05-15)
-- **Working tree:** has uncommitted modifications across `client/` and `server/` (pre-migration baseline; see `git status`)
+- **Last commit:** `549b6610` — "Wave W56 · semantic & metrics layer — type foundation" (2026-05-16)
+- **Working tree:** clean after W56 + doc-update commits.
 
 ## Live feature streams
 
+- **Workstream 1 — semantic & metrics layer** · W56 type foundation shipped (zod schemas for Metric / Dimension / Hierarchy / Model in [server/shared/schema.ts](../server/shared/schema.ts), 15 tests passing). Next: W57 `inferModel` from `DataSummary + datasetProfile + dimensionHierarchies`. Per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md), W56–W64 deliver the metric catalog → compiler → planner prompt rewrite → `execute_metric_query` tool → admin UI → result cache.
 - **Phase D — coordinator multi-part detection** · D1+D2 shipped; D3 (actual parallel sub-investigation) deferred behind `DEEP_INVESTIGATION_ENABLED`. Detector lives at [server/lib/agents/runtime/detectMultiPartQuestion.ts](../server/lib/agents/runtime/detectMultiPartQuestion.ts), observability fires in [chatStream.service.ts](../server/services/chat/chatStream.service.ts) after mode classification.
 - **Phase F — predictive / inferential tooling** · F1 forecast, F2 anomaly detection, F3 significance tests all shipped, gated by `FORECAST_ENABLED` / `ANOMALY_DETECTION_ENABLED` / `SIGNIFICANCE_TESTS_ENABLED`. Pure-Node implementations under [server/lib/](../server/lib/).
 - **W-series — query plan expressiveness** · W1 (window aggregations) → W2 (rolling-window detector) → W3 (composite-ranking expressions in `breakdown_ranking`) all shipped. P1 (pivot reads agent result rows) closes the load-bearing UX gap for `computedAggregations`.
@@ -23,18 +24,19 @@
 
 ## Known WIP / broken
 
-- (Pre-migration working tree has many modified files in `client/` and `server/` — these belong to the active stream of work and are NOT part of this routing-system migration. Do not stage or revert them.)
+- Wide-format classifier (W1–W4 of the wide-format plan) is mid-flight on this branch; remaining waves W14–W29 add the modal UX + ingest wiring + decision endpoint. Independent of W56's semantic layer but should land before W57 if the semantic compiler is to consume `_metric`/`_period` columns from melted datasets.
+- [docs/architecture/schemas.md](architecture/schemas.md) still describes the pre-W5 dual-mirror schema model — out of date but non-blocking. Refresh in a future doc-hygiene wave.
 
 ## Next wave (if planned)
 
-- Verify the new flow end-to-end on a fresh chat: `/orient` returns < 10 s, `/load <subsystem>` works, `/wave-commit` writes a clean WAVES entry. See `/Users/tida/.claude/plans/this-has-become-a-joyful-bunny.md` for the plan and verification checklist.
+- **W57** — `server/lib/semantic/inferModel.ts`: auto-build initial `SemanticModel` from `DataSummary` + `datasetProfile` + wide-format proposal + `dimensionHierarchies`. Persist on `ChatDocument.semanticModel` at upload completion. See the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 1 wave map.
 
 ## Last 5 waves (one line each — newest first)
 
+- **W56** (2026-05-16) · Semantic & metrics layer — type foundation: `semanticMetricSchema` / `semanticDimensionSchema` / `semanticHierarchySchema` / `semanticModelSchema` in [server/shared/schema.ts](../server/shared/schema.ts). 15 tests. Foundation for W57–W64.
 - **Phase D** (2026-05-16) · Multi-part question detector + `flow_decision` observability. D3 actual decomposition deferred.
 - **Phase F** (2026-05-16) · Forecasting + anomaly detection + statistical significance tools (3 env-gated).
 - **W3** (2026-05-16) · Composite-ranking expression support in `run_breakdown_ranking`.
 - **W2** (2026-05-16) · `detectRollingWindowIntent` deterministic detector for rolling / cumulative phrasings.
-- **W1** (2026-05-16) · `windowAggregations` on `QueryPlanBody` — rolling avg, cumulative sum, rank-within-group, lag/lead.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.

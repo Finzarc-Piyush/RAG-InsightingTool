@@ -71,4 +71,7 @@ bug.
 
 ## Recent changes
 
+- Wave W56 (2026-05-16) — Semantic & metrics layer type foundation. Adds `semanticMetricSchema`, `semanticDimensionSchema`, `semanticHierarchySchema`, `semanticModelSchema` to [server/shared/schema.ts](../../server/shared/schema.ts). Auto-mirrored to client via the W5 re-export. Foundation for W57–W64 per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md). See `docs/WAVES.md` for full entry.
 - Initial seed of this doc.
+
+**Caveat — out-of-date description above.** The "every schema defined twice" line at the top of this doc predates Wave W5, which collapsed the client mirror into a single re-export (`export * from "../../../server/shared/schema"` in [client/src/shared/schema.ts](../../client/src/shared/schema.ts)). The drift gate is no longer load-bearing; manual mirroring is no longer possible. Refresh in a future doc-hygiene wave.
