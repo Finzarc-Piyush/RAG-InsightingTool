@@ -454,6 +454,10 @@ only a config change bumps the hash and triggers a new call. A
 sequence ref drops stale responses when the user changes config
 mid-flight.
 
+### 5.5 Recent changes — dashboard global filter bar
+
+- **Wave WD1 (2026-05-16)** — `AddFilterPopover` ([client/src/pages/Dashboard/Components/AddFilterPopover.tsx](../../client/src/pages/Dashboard/Components/AddFilterPopover.tsx)) gives the DR4 global filter bar a `+ Add filter` trigger. Three inline editors (categorical / numeric / date), pure helpers in [dashboardGlobalFilters.ts](../../client/src/pages/Dashboard/dashboardGlobalFilters.ts) (`aggregateTileRowsForFiltering`, `availableFilterDefinitions`, `addCategoricalFilter`, `addNumericFilter`, `addDateFilter`). The bar renders even when `global` is empty if there are columns available to add — DR4's zero-pixels-when-nothing-to-do contract preserved for dashboards with no chart tiles. See `docs/WAVES.md` for full entry. Future waves (WD2–WD10) layer cross-filter brushing, drill-through, dynamic insights, fork-from-dashboard, mobile, linked sheets, saved views, comments, scheduled refresh.
+
 ### 5.4 Theme bridge (ECharts)
 
 ECharts specialty marks (treemap, sankey, sunburst, parallel,

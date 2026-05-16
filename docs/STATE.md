@@ -1,18 +1,19 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave W73 — investigation mode wired into entry point).
+> Last sync: 2026-05-16 (Wave WD1 — additive global filter bar).
 
 ## HEAD
 
-- **Latest wave:** Wave W73 · Investigation mode wired into agent loop entry (2026-05-16)
+- **Latest wave:** Wave WD1 · Dashboard global filter bar is now additive (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `d1de1647` — "Wave W73 · investigation mode wired into agent loop entry" (2026-05-16)
-- **Working tree:** clean after W73 + doc-update commits.
+- **Last commit:** `d1ea692e` — "Wave WD1 · dashboard global filter bar is now additive" (2026-05-16)
+- **Working tree:** clean after WD1 + doc-update commits.
 
 ## Live feature streams
 
-- **Workstream 3 — investigation mode** · W73 wires `runDeepInvestigation` into [`dataAnalyzer.answerQuestion`](../server/lib/dataAnalyzer.ts) behind `DEEP_INVESTIGATION_ENABLED` (invariant #6 preserved). Multi-part questions auto-decompose when the env var is on. Next: W74 — shape-based auto-dispatch (`driver_discovery` / `variance_diagnostic` / `comparison` shapes auto-trigger even without conjunction phrasing). Per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md), W73–W79 deliver dispatch → workbench UI → hypothesis tree viz → narrator merge → investigation memory → golden fixture.
+- **Workstream 4 — dashboard 2.0** · WD1 ships: `+ Add filter` popover on the dashboard global filter bar (categorical + numeric + date pickers). [DashboardGlobalFilterBar.tsx](../client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx) renders even when `global` is empty IFF availableFilters is non-empty. Next: WD2 — cross-filter brushing (click a chart segment → add to global filter). WD2–WD10 deliver brushing → drill-through → dynamic insights → fork-from-dashboard → mobile → linked-sheet filters → saved views → tile comments → scheduled refresh per the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
+- **Workstream 3 — investigation mode** · W73 wires `runDeepInvestigation` into [`dataAnalyzer.answerQuestion`](../server/lib/dataAnalyzer.ts) behind `DEEP_INVESTIGATION_ENABLED` (invariant #6 preserved). Multi-part questions auto-decompose when the env var is on. Next: W74 — shape-based auto-dispatch (`driver_discovery` / `variance_diagnostic` / `comparison` shapes auto-trigger even without conjunction phrasing). W73–W79 deliver dispatch → workbench UI → hypothesis tree viz → narrator merge → investigation memory → golden fixture.
 - **Workstream 1 — semantic & metrics layer** · W56 type foundation + W57 inference both shipped. Upload pipeline now persists `semanticModel` on `ChatDocument` (auto-source); see [server/lib/semantic/inferModel.ts](../server/lib/semantic/inferModel.ts). Next: W58 `compiler` — translate `(metric, breakdownBy, filters, window)` into `QueryPlanBody`. W58–W64 deliver compiler → planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
 - **Phase D — coordinator multi-part detection** · D1+D2 shipped; D3 (actual parallel sub-investigation) deferred behind `DEEP_INVESTIGATION_ENABLED`. Detector lives at [server/lib/agents/runtime/detectMultiPartQuestion.ts](../server/lib/agents/runtime/detectMultiPartQuestion.ts), observability fires in [chatStream.service.ts](../server/services/chat/chatStream.service.ts) after mode classification.
 - **Phase F — predictive / inferential tooling** · F1 forecast, F2 anomaly detection, F3 significance tests all shipped, gated by `FORECAST_ENABLED` / `ANOMALY_DETECTION_ENABLED` / `SIGNIFICANCE_TESTS_ENABLED`. Pure-Node implementations under [server/lib/](../server/lib/).
@@ -30,14 +31,14 @@
 
 ## Next wave (if planned)
 
-- **WD1** — `client/src/pages/Dashboard/Components/DashboardGlobalFilterBar.tsx`: add an interactive `+ Add filter` button that opens a `FilterPicker` popover listing all columns present in ≥ 1 tile. Selecting a column opens a type-appropriate picker (categorical / numeric / date) reusing existing [`chartFilters.ts`](../client/src/lib/chartFilters.ts) logic. On confirm, mutates `globalFilters` which already broadcasts to applicable tiles. Closes the "global slicer is display-only" gap explicitly named in the user's 1000x requirements. See the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
+- **WD2** — cross-filter brushing. Each chart renderer accepts an `onElementClick` prop (already added in the recent commit `593edf2e` — that's why the 13 visx renderers all changed together). Wire it: clicking a bar/point/segment dispatches a `crossFilter` event with `{column, value}` to `DashboardView`, which adds it to `globalFilters` (already in place from WD1). Visual: filtered tiles dim non-matching marks instead of removing them. New module `client/src/pages/Dashboard/lib/crossFilter.ts`. See the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 4 wave map.
 
 ## Last 5 waves (one line each — newest first)
 
+- **WD1** (2026-05-16) · Dashboard global filter bar is now additive: `AddFilterPopover` with categorical/numeric/date editors, `availableFilterDefinitions` pure helper, `DashboardGlobalFilterBar` renders when empty if columns are addable. 17 tests.
 - **W73** (2026-05-16) · Investigation mode wired into agent loop entry: `shouldDispatchDeepInvestigation` + `dataAnalyzer.answerQuestion` calls `runDeepInvestigation` for multi-part questions when `DEEP_INVESTIGATION_ENABLED=true`. 13 tests.
 - **W57** (2026-05-16) · Semantic model inference: pure `inferModel({summary, datasetProfile?}) → SemanticModel` wired into the upload understanding-ready checkpoint. Persists `ChatDocument.semanticModel`. 15 tests.
 - **W56** (2026-05-16) · Semantic & metrics layer — type foundation: `semanticMetricSchema` / `semanticDimensionSchema` / `semanticHierarchySchema` / `semanticModelSchema` in [server/shared/schema.ts](../server/shared/schema.ts). 15 tests. Foundation for W57–W64.
 - **Phase D** (2026-05-16) · Multi-part question detector + `flow_decision` observability. D3 actual decomposition deferred.
-- **Phase F** (2026-05-16) · Forecasting + anomaly detection + statistical significance tools (3 env-gated).
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.
