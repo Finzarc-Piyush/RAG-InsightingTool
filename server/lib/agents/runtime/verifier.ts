@@ -8,6 +8,8 @@ import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { checkInferredFilterFidelity } from "./verifierHelpers.js";
+import { detectConfidenceOverclaims } from "./verifierConfidenceCheck.js";
+import type { NarratorOutput } from "./narratorAgent.js";
 export { checkInferredFilterFidelity };
 
 function chartPrecheck(
@@ -122,6 +124,16 @@ export async function runVerifier(
       verdict: string;
       rationale: string;
     }>;
+    /**
+     * Wave WV3 · narrator output (or a partial view of it carrying
+     * `magnitudes` + `implications`) so the pre-LLM confidence-overclaim
+     * detector can fire. Only meaningful at the FINAL verifier round —
+     * per-step rounds pass `undefined` since the narrator hasn't synthesised
+     * yet. When present alongside `blackboard`, `detectConfidenceOverclaims`
+     * runs and may short-circuit to `revise_narrative` with the new
+     * `CONFIDENCE_OVERCLAIM` issue code.
+     */
+    narratorOutput?: NarratorOutput;
   },
   onLlmCall: () => void
 ): Promise<VerifierResult> {
@@ -149,6 +161,36 @@ export async function runVerifier(
         verdict: VERIFIER_VERDICT.reviseNarrative,
         issues: missingIssues,
         course_correction: VERIFIER_VERDICT.reviseNarrative,
+      };
+    }
+  }
+
+  // Wave WV3 · confidence-overclaim short-circuit. Compares narrator-claimed
+  // tier counts on magnitudes + implications against WQ1's deterministic
+  // assessment of the blackboard. When the narrator inflated confidence past
+  // what the evidence supports (warning or block severity), demand
+  // `revise_narrative` BEFORE incurring the deep-verifier LLM cost. Pairs
+  // WW1+WW2 (planner + narrator nudges) with an enforcement gate so the
+  // deterministic-floor design actually bites.
+  if (params.blackboard && params.narratorOutput) {
+    const report = detectConfidenceOverclaims(params.narratorOutput, params.blackboard);
+    if (report.shouldRevise) {
+      const blocking = report.flags.filter(
+        (f) => f.severity === "block" || f.severity === "warning",
+      );
+      const hasBlock = blocking.some((f) => f.severity === "block");
+      return {
+        verdict: VERIFIER_VERDICT.reviseNarrative,
+        issues: blocking.map((f) => ({
+          code: "CONFIDENCE_OVERCLAIM",
+          severity: f.severity === "block" ? "high" : "medium",
+          description: f.message,
+          evidenceRefs: [],
+        })),
+        course_correction: VERIFIER_VERDICT.reviseNarrative,
+        user_visible_note: hasBlock
+          ? "Confidence overclaim detected — narrator marked findings high-confidence beyond what the evidence supports."
+          : undefined,
       };
     }
   }

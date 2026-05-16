@@ -3731,6 +3731,18 @@ export async function runAgentTurn(
     }
 
     while (answerSource !== "fallback" && finalRound < config.maxVerifierRoundsFinal) {
+      // Wave WV3 · reconstruct a partial NarratorOutput from already-hoisted
+      // envelope state so the verifier's confidence-overclaim detector can
+      // fire. `body: ""` satisfies the schema; the detector only reads
+      // magnitudes + implications.
+      const wv3NarratorOutput =
+        envelopeMagnitudes?.length || envelopeAnswerEnvelope?.implications?.length
+          ? {
+              body: "",
+              magnitudes: envelopeMagnitudes,
+              implications: envelopeAnswerEnvelope?.implications,
+            }
+          : undefined;
       const fv = await runVerifier(
         ctx,
         {
@@ -3743,6 +3755,8 @@ export async function runAgentTurn(
           charts: mergedCharts,
           // Wave B6 · in-turn verdict history.
           priorVerifierVerdicts: verifierVerdicts,
+          // Wave WV3 · enables the pre-LLM confidence-overclaim detector.
+          narratorOutput: wv3NarratorOutput,
         },
         onLlmCall
       );
