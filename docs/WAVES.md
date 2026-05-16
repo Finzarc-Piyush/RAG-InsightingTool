@@ -11,6 +11,38 @@
 
 ---
 
+- **2026-05-16** — **Wave WT4 · `run_market_basket` tool.** Closes the market-basket question-shape gap from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md) Workstream 5 wave map. A Marico category manager asking "what gets bought together with Parachute 200ml?" previously got either a pivot count of co-occurrences (no statistical context) or a hand-rolled SQL query computing support/confidence/lift by hand. WT4 ships the canonical association-rule output as a first-class tool.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/tools/marketBasketTool.ts](server/lib/agents/runtime/tools/marketBasketTool.ts) (~280 LOC). Pure-Node 1-LHS apriori. Exported helpers:
+      - `runMarketBasket(rows, args)` — pure function. Direct callable for tests + skills.
+      - `registerMarketBasketTool(registry)` — registers `run_market_basket`.
+    - Args: `transactionIdColumn`, `itemColumn`, `minSupport` ∈ (0.0001, 1] default `0.01`, `minConfidence` ∈ [0.01, 1] default `0.3`, `topN` ∈ [1, 500] default `50`, optional `dimensionFilters[]`.
+    - Output: `table = { columns: ["antecedent", "consequent", "support", "confidence", "lift", "count"], rows: [...sorted by lift desc, support desc, count desc] }`.
+    - `numericPayload` carries `{ kind, totalTransactions, frequentItems, candidatePairs, totalRules, cappedTo }` for downstream metrics dashboards.
+    - Registered in [registerTools.ts](server/lib/agents/runtime/tools/registerTools.ts) right after `registerPriceElasticityTool`. Duplicate-name guard test still passes.
+
+  **Why this design.**
+    - **Pure-Node 1-LHS apriori, not Python mlxtend.** The 1000x plan originally specced this as 300 LOC Py + 120 LOC Node. But 1-LHS apriori is two passes over baskets — `O(T × I)` to build sets + count items, `O(F²)` to count frequent pairs where `F` is the frequent-item count (small after pruning). Sub-second on million-row baskets without an HTTP round-trip. Python mlxtend earns its keep only for higher-arity rules (3+ items on LHS).
+    - **Scope: 1-LHS only.** The plan named `maxLhsSize: 1..3` default 2; this wave intentionally ships 1-LHS first. For FMCG basket analysis the dominant analyst question is "what one extra SKU should I recommend given this anchor SKU?" — 1-LHS answers it cleanly. {a, b} → c (2-LHS) and higher arity are a future extension; the args schema doesn't preclude adding `maxLhsSize` later.
+    - **Set semantics on (tx, item) pairs.** A row `{basket_id: "t1", sku: "A"}` repeated three times still counts as a single occurrence of A in t1's basket. Apriori is about the *items in a basket*, not the number of rows representing them — getting this wrong inflates lift dramatically when datasets have duplicate-row artifacts from joins. The test suite pins this with a duplicate-row fixture.
+    - **Emit BOTH directions a→b and b→a as separate rules.** confidence(a→b) ≠ confidence(b→a) in general (only equal when count(a) == count(b)), so they encode different recommendations. "Customers who buy a also buy b" ≠ "customers who buy b also buy a". The test suite asserts both directions appear.
+    - **Lift > 1 is what matters.** Sort by lift desc surfaces *positive* associations first. lift = 1 means independent (uninteresting); lift < 1 means *negative* association (substitutes — also useful but the analyst usually wants complements first). Tie-break by support desc keeps higher-volume rules above flukes.
+    - **minSupport pruning before pair counting.** `frequentSet` (items meeting minSupport) is built first; pair counting only iterates the basket ∩ frequentSet intersection. Without this prune step, a basket of 50 items would generate 1,225 candidate pairs, most worthless.
+    - **`topN` cap returns nothing in numericPayload's `cappedTo` vs `totalRules`.** Analyst dashboards can show "showing top 50 of 1,247 rules". The cap doesn't truncate metadata.
+
+  **Tests.** [tests/marketBasketToolWT4.test.ts](server/tests/marketBasketToolWT4.test.ts) — 19 cases across 7 suites:
+    - **Basic rule extraction** (4): perfect A↔B co-occurrence (confidence 1, lift > 1), both directions emitted, support = fraction of total, lift = confidence / support(consequent).
+    - **Threshold filtering** (3): minSupport prunes infrequent pairs, minConfidence filters directional rules, no-rules-survive → `ok:false`.
+    - **Sort + cap** (2): rules sorted by lift desc, topN caps with full count in numericPayload.
+    - **Set semantics + filters** (2): duplicate (tx, item) rows collapse, dimensionFilters apply before basket construction.
+    - **Output shape + payload** (2): expected columns, numericPayload diagnostic metadata.
+    - **Failure modes** (3): empty dataset, all-filtered, fewer-than-2-frequent-items.
+    - **Schema** (3): defaults applied, minSupport > 1 rejected, `.strict()` rejects unknown keys.
+    - 19/19 passing. Appended to [server/package.json](server/package.json) per invariant #4.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WQ2 baseline — zero new from WT4. Commit `d8bc4b68`.
+
 - **2026-05-16** — **Wave WQ2 · `externalClaimDetector` helper.** Closes the second item of Workstream 9 from the [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *fact-check auto-trigger*. When a user asks "did the lockdown hit our category growth?" or "how did Gen Z respond to our competitor's price moves?", the dataset alone cannot answer — the system needs to fetch external context via the existing `web_search` tool. Today the planner only adds web_search when it happens to recognise the gap; WQ2 ships a deterministic detector that names the gap so a future planner wave can react to it without a judgement call.
 
   **What landed.**
