@@ -13,6 +13,9 @@ import {
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
+import { runDeepInvestigation } from './agents/runtime/investigationOrchestrator.js';
+import { shouldDispatchDeepInvestigation } from './agents/runtime/investigationDispatch.js';
+import type { AgentLoopResult } from './agents/runtime/types.js';
 import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 import { loadEnabledDomainContext } from './domainContext/loadEnabledDomainContext.js';
 
@@ -499,11 +502,47 @@ export async function answerQuestion(
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
         abortSignal: agentOptions?.abortSignal,
       });
-      // Single-flow policy: always single-turn agentic. The deep-investigation
-      // / coordinator-decompose branch is intentionally not wired here; the
-      // underlying capability still lives at runtime/investigationOrchestrator
-      // and runtime/coordinatorAgent for future opt-in re-wiring.
-      const loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
+      // Wave W73 · opt-in deep-investigation re-wiring. Master gate is
+      // `DEEP_INVESTIGATION_ENABLED` (preserves invariant #6 — re-wiring
+      // requires a feature flag; the flag IS the feature flag, default off).
+      // When the gate is on AND the question is multi-part (D1 detector),
+      // dispatch to `runDeepInvestigation` (existing orchestrator). The
+      // single-flow path remains the default and the fall-back on every
+      // failure mode: empty result, thrown error, deep-investigation
+      // helper returning null.
+      let loopResult: AgentLoopResult | null = null;
+      const deepDecision = shouldDispatchDeepInvestigation(question);
+      if (deepDecision.fire) {
+        agentOptions?.onAgentEvent?.("flow_decision", {
+          layer: "investigation-dispatch",
+          chosen: "deep",
+          overriddenBy: "DEEP_INVESTIGATION_ENABLED",
+          reason: deepDecision.reason.slice(0, 500),
+          ...(deepDecision.multiPart?.subQuestions?.length
+            ? {
+                candidates: deepDecision.multiPart.subQuestions.slice(0, 8),
+              }
+            : {}),
+        });
+        try {
+          loopResult = await runDeepInvestigation(execCtx, agentOptions?.onAgentEvent);
+          if (!loopResult?.answer?.trim()) {
+            console.warn("⚠️  Deep investigation returned empty; falling back to single-flow");
+            loopResult = null;
+          } else {
+            console.log("🔬 Deep investigation returned answer");
+          }
+        } catch (deepErr) {
+          console.warn(
+            "⚠️  Deep investigation threw; falling back to single-flow:",
+            deepErr,
+          );
+          loopResult = null;
+        }
+      }
+      if (!loopResult) {
+        loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
+      }
       if (loopResult?.answer?.trim()) {
         console.log('✅ Agentic loop returned answer');
         return {
