@@ -3,7 +3,7 @@
  * Handles async processing of large file uploads to prevent blocking
  */
 
-import type { ChartSpec, Insight, SessionAnalysisContext } from '../shared/schema.js';
+import type { ChartSpec, Insight, SemanticModel, SessionAnalysisContext } from '../shared/schema.js';
 import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
 import { ColumnarStorageService } from '../lib/columnarStorage.js';
 
@@ -832,10 +832,32 @@ class UploadQueue {
         };
         const existingMessages = existingDoc?.messages ?? [];
         const messages = existingMessages.length === 0 ? [initialMessage] : existingMessages;
+
+        // Wave W57 · build the initial SemanticModel from the dataset
+        // summary + LLM profile. Pure function, fast (no I/O); persisted
+        // alongside `datasetProfile` so the compiler (W58) and admin UI
+        // (W61) can pick it up on the next read. Best-effort: failure
+        // here doesn't block the understanding checkpoint.
+        let semanticModel: SemanticModel | undefined;
+        try {
+          const { inferModel } = await import("../lib/semantic/inferModel.js");
+          semanticModel = inferModel({
+            summary,
+            datasetProfile,
+            modelName: `Model for ${job.fileName || "dataset"}`,
+          });
+        } catch (semanticErr) {
+          console.warn(
+            "W57 · semanticModel inference failed (non-fatal):",
+            semanticErr,
+          );
+        }
+
         await updateChatDocument({
           ...existingDoc,
           dataSummary: summary,
           datasetProfile,
+          ...(semanticModel ? { semanticModel } : {}),
           sessionAnalysisContext: ctxForInitial,
           messages,
           enrichmentStatus: "complete" as const,

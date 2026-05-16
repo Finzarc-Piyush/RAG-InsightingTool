@@ -10,6 +10,7 @@ import {
   DatasetProfile,
   SessionAnalysisContext,
   ActiveFilterSpec,
+  SemanticModel,
 } from "../shared/schema.js";
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
@@ -125,6 +126,15 @@ export interface ChatDocument {
   };
   /** LLM dataset profile from initial upload (columns, suggested questions, etc.). */
   datasetProfile?: DatasetProfile;
+  /**
+   * Wave W57 · per-session semantic model. Built once at upload from
+   * `dataSummary + datasetProfile` via `inferModel`, persisted at the
+   * understanding-ready checkpoint. The compiler (W58) reads this; the
+   * admin UI (W61) edits it; the planner prompt (W59) renders it. Auto-
+   * inferred; absent on legacy sessions persisted before W57. See
+   * [server/lib/semantic/inferModel.ts](../lib/semantic/inferModel.ts).
+   */
+  semanticModel?: SemanticModel;
   /** Rolling structured context: LLM seed + merges (user + each assistant turn). */
   sessionAnalysisContext?: SessionAnalysisContext;
   /** Upload pipeline: LLM profile + session context seed. Answers wait until complete (omit = legacy sessions). */
