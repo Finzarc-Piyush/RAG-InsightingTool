@@ -22,6 +22,36 @@ import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { runSignificanceTest } from "../../../significanceTests.js";
 import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
+import { composeFindingDetail } from "../formatFindingEvidence.js";
+import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
+
+/**
+ * Wave WV5 · build a canonical FindingEvidence suffix from a significance
+ * test result. Companion to WV4's `run_correlation` migration. p-value and
+ * effective sample size are the load-bearing evidence; both flow through
+ * the downstream `addFinding` (agentLoop.service.ts) into the blackboard's
+ * finding `detail`, where WW2's extractor catches them and WQ1 grades the
+ * finding by real evidence instead of "no evidence supplied".
+ *
+ * `effectiveN` is test-specific:
+ *   - welch_t   → sampleA + sampleB (independent samples; combined size)
+ *   - paired_t  → pair count        (= sampleA = sampleB; counting twice
+ *                                    overstates independence)
+ *   - chi_square → grand total      (= sampleA, the contingency total)
+ *
+ * Defensive: NaN / out-of-range silently drops to the empty suffix
+ * (worst case: finding tiers as medium, the pre-WV5 baseline).
+ */
+function buildEvidenceSuffix(pValue: number, effectiveN: number): string {
+  const evidence: FindingEvidence = {};
+  if (Number.isFinite(pValue) && pValue >= 0 && pValue <= 1) {
+    evidence.pValue = pValue;
+  }
+  if (Number.isFinite(effectiveN) && effectiveN >= 0) {
+    evidence.n = effectiveN;
+  }
+  return composeFindingDetail("", evidence);
+}
 
 const dimensionFilterSchema = z
   .object({
@@ -124,9 +154,15 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
         if (!result.ok) {
           return { ok: false, summary: `run_significance_test: ${result.error}` };
         }
+        // Wave WV5 · canonical FindingEvidence suffix. welch_t: combined n.
         return {
           ok: true,
-          summary: result.interpretation,
+          summary:
+            result.interpretation +
+            buildEvidenceSuffix(
+              result.pValue,
+              result.n.sampleA + (result.n.sampleB ?? 0),
+            ),
           table: {
             rows: [
               {
@@ -196,9 +232,13 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
         if (!result.ok) {
           return { ok: false, summary: `run_significance_test: ${result.error}` };
         }
+        // Wave WV5 · canonical FindingEvidence suffix. paired_t: pair count
+        // (not 2 × sampleA — pairs aren't independent observations).
         return {
           ok: true,
-          summary: result.interpretation,
+          summary:
+            result.interpretation +
+            buildEvidenceSuffix(result.pValue, result.n.sampleA),
           table: {
             rows: [
               {
@@ -242,9 +282,13 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
       if (!result.ok) {
         return { ok: false, summary: `run_significance_test: ${result.error}` };
       }
+      // Wave WV5 · canonical FindingEvidence suffix. chi_square: grand total
+      // (sampleA = grandTotal of contingency table; sampleB is unset).
       return {
         ok: true,
-        summary: result.interpretation,
+        summary:
+          result.interpretation +
+          buildEvidenceSuffix(result.pValue, result.n.sampleA),
         table: {
           rows: [
             {
