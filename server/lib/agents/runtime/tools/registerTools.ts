@@ -71,6 +71,7 @@ import { registerForecastTool } from "./forecastTool.js";
 import { registerAnomalyDetectionTool } from "./anomalyDetectionTool.js";
 import { registerHierarchicalDrillTool } from "./hierarchicalDrillTool.js";
 import { registerCohortAnalysisTool } from "./cohortAnalysisTool.js";
+import { registerRfmSegmentationTool } from "./rfmSegmentationTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
@@ -1534,6 +1535,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // Wave WT2 · cohort retention/expansion table. Pure-Node; tracks entities
   // across period offsets to answer "of cohort X, how many remain in period Y?".
   registerCohortAnalysisTool(registry);
+  // Wave WT3 · RFM segmentation. Pure-Node; scores entities on Recency /
+  // Frequency / Monetary and assigns canonical RFM segment labels.
+  registerRfmSegmentationTool(registry);
   // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
   // ANOMALY_DETECTION_ENABLED=true.
   registerAnomalyDetectionTool(registry);
