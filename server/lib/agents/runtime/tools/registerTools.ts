@@ -14,6 +14,8 @@ import {
   segmentDriverArgsSchema,
 } from "../../../segmentDriverAnalysisTool.js";
 import { analyzeCorrelations } from "../../../correlationAnalyzer.js";
+import { composeFindingDetail } from "../formatFindingEvidence.js";
+import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 import { processChartData } from "../../../chartGenerator.js";
 import { compileChartSpec } from "../../../chartSpecCompiler.js";
 import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/schema.js";
@@ -1278,7 +1280,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         // surface a `no_numeric_pairs` diagnostic if it produces nothing.
       }
 
-      const { charts, insights, diagnostic } = await analyzeCorrelations(
+      const { charts, insights, diagnostic, topCorrelations } = await analyzeCorrelations(
         frame,
         targetVariable,
         frameNumeric,
@@ -1301,6 +1303,27 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
       );
       const noteSuffix = `${resolutionNote}${filterNote}`;
+
+      // Wave WV4 · canonical FindingEvidence suffix on the summary so the
+      // downstream blackboard `addFinding` (agentLoop.service.ts) gets a
+      // detail string the WW2 extractor catches deterministically and WQ1
+      // grades on real evidence (R², n) instead of defaulting to "medium /
+      // no evidence supplied". Strongest correlation by |r|; R² = r².
+      let wv4EvidenceSuffix = "";
+      if (topCorrelations && topCorrelations.length > 0) {
+        const strongest = topCorrelations[0];
+        const rSquared = strongest.correlation * strongest.correlation;
+        const evidence: FindingEvidence = {};
+        if (Number.isFinite(rSquared) && rSquared >= 0 && rSquared <= 1) {
+          evidence.rSquared = rSquared;
+        }
+        if (typeof strongest.nPairs === "number" && strongest.nPairs >= 0) {
+          evidence.n = strongest.nPairs;
+        }
+        // composeFindingDetail("", ev) returns just the evidence suffix
+        // (leading space + parenthesised block) — safe to concatenate.
+        wv4EvidenceSuffix = composeFindingDetail("", evidence);
+      }
       // W49 · ok:false when the analyzer produced nothing useful. The reflector
       // already retries on ok:false (see dimensionFilters zero-rows path
       // above) — keep correlation consistent so the planner gets a signal to
@@ -1319,7 +1342,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       }
       return {
         ok: true,
-        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).${noteSuffix}`,
+        summary: `Correlation analysis: ${charts.length} chart(s), ${insights.length} insight(s).${noteSuffix}${wv4EvidenceSuffix}`,
         charts,
         insights,
       };

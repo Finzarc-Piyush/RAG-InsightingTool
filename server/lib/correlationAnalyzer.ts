@@ -94,7 +94,22 @@ export async function analyzeCorrelations(
   // produce `businessCommentary` (FMCG/Marico framing). Backwards-compatible:
   // pre-W15 callers still work and produce keyInsight only.
   synthesisContext?: import("./insightSynthesis/types.js").ChartInsightSynthesisContext
-): Promise<{ charts: ChartSpec[]; insights: Insight[]; diagnostic?: CorrelationDiagnostic }> {
+): Promise<{
+  charts: ChartSpec[];
+  insights: Insight[];
+  diagnostic?: CorrelationDiagnostic;
+  /**
+   * Wave WV4 · sorted by |r| descending; first entry is the strongest
+   * correlation. Populated only on the success path (when at least one
+   * correlation cleared filtering); undefined on early-return diagnostic
+   * paths. Consumed by the `run_correlation` tool wrapper to compute R² + n
+   * for a WV2 `composeFindingDetail` evidence suffix on the blackboard
+   * finding's `detail` prose, so WW2's extractor + WQ1's tier classifier
+   * grade correlation findings deterministically instead of as "no evidence
+   * supplied".
+   */
+  topCorrelations?: CorrelationResult[];
+}> {
   console.log('=== CORRELATION ANALYSIS DEBUG ===');
   console.log('Target variable:', targetVariable);
   console.log('Numeric columns to analyze:', numericColumns);
@@ -410,7 +425,12 @@ export async function analyzeCorrelations(
     };
   }
 
-  const result = diagnostic ? { charts, insights, diagnostic } : { charts, insights };
+  // Wave WV4 · expose the sorted topCorrelations on the success path so the
+  // `run_correlation` tool can promote the strongest correlation's R² + n
+  // into the canonical FindingEvidence suffix on its summary string.
+  const result = diagnostic
+    ? { charts, insights, diagnostic, topCorrelations }
+    : { charts, insights, topCorrelations };
 
   // Redis cache removed
 
