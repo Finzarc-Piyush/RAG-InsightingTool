@@ -1,0 +1,217 @@
+/**
+ * Wave WQ1 · `scaleNarrativeByConfidence` — pure pre-narrator helper.
+ *
+ * Decorates blackboard findings with a `confidenceTier` ("high" |
+ * "medium" | "low") computed from per-finding evidence (sample size,
+ * p-value, CI width, R²). The narrator can then vary verbosity + hedge
+ * phrasing by tier. Closes the first item of Workstream 9 from the
+ * [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md):
+ * *confidence-aware narration*.
+ *
+ * This wave ships the **pure decorator**. A follow-up wave wires the
+ * decorator into the narrator prompt assembly path; for now any caller
+ * (skill, manual narrator block, fact-check pre-pass) can use it.
+ *
+ * The classifier is deterministic, side-effect-free, and zero-dep. The
+ * thresholds are tunable but intentionally hard-coded here so that
+ * future drift comparisons are reproducible.
+ */
+
+/** Statistical evidence behind a single finding. All fields optional. */
+export interface FindingEvidence {
+  /** Underlying sample size that produced the finding. */
+  n?: number;
+  /** Two-tailed p-value, if a significance test was run. */
+  pValue?: number;
+  /** Headline effect-size magnitude (post-normalisation; not used directly
+   *  in classification but carried through for completeness). */
+  magnitude?: number;
+  /** R² for regression-backed findings (e.g., elasticity, MMM driver). */
+  rSquared?: number;
+  /** 95% CI width as a fraction of the point estimate. 0 = perfectly
+   *  tight; > 0.5 = noisy. */
+  ciRelativeWidth?: number;
+}
+
+export type ConfidenceTier = "high" | "medium" | "low";
+
+export interface ConfidenceAssessment {
+  tier: ConfidenceTier;
+  /** Human-readable reasons explaining the tier — useful for debugging
+   *  and for surfacing in the verifier prompt. */
+  reasons: string[];
+  /** Hedge phrase the narrator should use when stating this finding.
+   *  Empty string when no hedge is necessary. */
+  hedge: string;
+}
+
+/** Narrator verbosity budget per tier — caps prose without dictating it. */
+export interface NarratorBudget {
+  /** Max sentences the narrator should spend on a finding of this tier. */
+  maxSentences: number;
+  /** Whether the hedge phrase MUST appear in the narrator's prose. */
+  hedgeRequired: boolean;
+}
+
+const HEDGE_BY_TIER: Record<ConfidenceTier, string> = {
+  high: "",
+  medium: "The pattern is suggestive but the sample is moderate.",
+  low: "This is a tentative observation given the limited data; treat as directional.",
+};
+
+const BUDGET_BY_TIER: Record<ConfidenceTier, NarratorBudget> = {
+  high: { maxSentences: 4, hedgeRequired: false },
+  medium: { maxSentences: 3, hedgeRequired: true },
+  low: { maxSentences: 2, hedgeRequired: true },
+};
+
+/** Classifier — deterministic, priority-ordered. */
+export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessment {
+  const reasons: string[] = [];
+
+  // No evidence at all → medium (caller asserted the finding without
+  // statistical support — never silently "high").
+  const hasAnyEvidence =
+    evidence.n !== undefined ||
+    evidence.pValue !== undefined ||
+    evidence.rSquared !== undefined ||
+    evidence.ciRelativeWidth !== undefined;
+  if (!hasAnyEvidence) {
+    return {
+      tier: "medium",
+      reasons: ["no statistical evidence supplied"],
+      hedge: HEDGE_BY_TIER.medium,
+    };
+  }
+
+  // Hard-fail signals → LOW.
+  const lowReasons: string[] = [];
+  if (evidence.n !== undefined && evidence.n < 10) {
+    lowReasons.push(`small sample (n=${evidence.n})`);
+  }
+  if (evidence.pValue !== undefined && evidence.pValue > 0.15) {
+    lowReasons.push(`weak significance (p=${formatP(evidence.pValue)})`);
+  }
+  if (evidence.ciRelativeWidth !== undefined && evidence.ciRelativeWidth > 0.6) {
+    lowReasons.push(`wide CI (±${Math.round(evidence.ciRelativeWidth * 100)}% of estimate)`);
+  }
+  if (evidence.rSquared !== undefined && evidence.rSquared < 0.2) {
+    lowReasons.push(`poor model fit (R²=${evidence.rSquared.toFixed(2)})`);
+  }
+  if (lowReasons.length > 0) {
+    return { tier: "low", reasons: lowReasons, hedge: HEDGE_BY_TIER.low };
+  }
+
+  // High-confidence signals — all conditions must hold.
+  const passesHigh =
+    (evidence.n === undefined || evidence.n >= 30) &&
+    (evidence.pValue === undefined || evidence.pValue <= 0.05) &&
+    (evidence.ciRelativeWidth === undefined || evidence.ciRelativeWidth <= 0.3) &&
+    (evidence.rSquared === undefined || evidence.rSquared >= 0.5);
+  if (passesHigh) {
+    if (evidence.n !== undefined && evidence.n >= 30) reasons.push(`solid sample (n=${evidence.n})`);
+    if (evidence.pValue !== undefined && evidence.pValue <= 0.05) {
+      reasons.push(`statistically significant (p=${formatP(evidence.pValue)})`);
+    }
+    if (evidence.ciRelativeWidth !== undefined && evidence.ciRelativeWidth <= 0.3) {
+      reasons.push(`tight CI (±${Math.round(evidence.ciRelativeWidth * 100)}% of estimate)`);
+    }
+    if (evidence.rSquared !== undefined && evidence.rSquared >= 0.5) {
+      reasons.push(`good model fit (R²=${evidence.rSquared.toFixed(2)})`);
+    }
+    if (reasons.length === 0) reasons.push("no weakening signals detected");
+    return { tier: "high", reasons, hedge: HEDGE_BY_TIER.high };
+  }
+
+  // Otherwise → MEDIUM.
+  const midReasons: string[] = [];
+  if (evidence.n !== undefined && evidence.n < 30) {
+    midReasons.push(`moderate sample (n=${evidence.n})`);
+  }
+  if (evidence.pValue !== undefined && evidence.pValue > 0.05 && evidence.pValue <= 0.15) {
+    midReasons.push(`marginal significance (p=${formatP(evidence.pValue)})`);
+  }
+  if (
+    evidence.ciRelativeWidth !== undefined &&
+    evidence.ciRelativeWidth > 0.3 &&
+    evidence.ciRelativeWidth <= 0.6
+  ) {
+    midReasons.push(`wider CI (±${Math.round(evidence.ciRelativeWidth * 100)}% of estimate)`);
+  }
+  if (
+    evidence.rSquared !== undefined &&
+    evidence.rSquared >= 0.2 &&
+    evidence.rSquared < 0.5
+  ) {
+    midReasons.push(`modest fit (R²=${evidence.rSquared.toFixed(2)})`);
+  }
+  if (midReasons.length === 0) midReasons.push("evidence partially supports this finding");
+  return { tier: "medium", reasons: midReasons, hedge: HEDGE_BY_TIER.medium };
+}
+
+/** Decorate a list of findings with their confidence assessment. The
+ *  evidence map is keyed by finding id (or any other stable key the caller
+ *  uses). Findings without evidence get a "medium" tier with an explicit
+ *  "no evidence supplied" reason — never silently "high". */
+export function decorateFindings<F extends { id: string }>(
+  findings: F[],
+  evidenceById: Map<string, FindingEvidence> | Record<string, FindingEvidence>,
+): Array<F & { confidence: ConfidenceAssessment }> {
+  const getEvidence = (id: string): FindingEvidence | undefined => {
+    if (evidenceById instanceof Map) return evidenceById.get(id);
+    return (evidenceById as Record<string, FindingEvidence>)[id];
+  };
+  return findings.map((f) => {
+    const evidence = getEvidence(f.id);
+    if (!evidence) {
+      return {
+        ...f,
+        confidence: {
+          tier: "medium" as ConfidenceTier,
+          reasons: ["no evidence supplied — defaulted to medium"],
+          hedge: HEDGE_BY_TIER.medium,
+        },
+      };
+    }
+    return { ...f, confidence: assessConfidence(evidence) };
+  });
+}
+
+/** Compact tier summary for the narrator prompt block. */
+export function summarizeConfidenceTiers(
+  assessments: ConfidenceAssessment[],
+): {
+  total: number;
+  high: number;
+  medium: number;
+  low: number;
+  promptLine: string;
+} {
+  const total = assessments.length;
+  let high = 0;
+  let medium = 0;
+  let low = 0;
+  for (const a of assessments) {
+    if (a.tier === "high") high += 1;
+    else if (a.tier === "medium") medium += 1;
+    else low += 1;
+  }
+  const promptLine = `Findings · ${total} total · ${high} high-confidence, ${medium} medium, ${low} low. Hedge low/medium findings explicitly.`;
+  return { total, high, medium, low, promptLine };
+}
+
+/** Get the narrator's per-tier prose budget. */
+export function narratorBudget(tier: ConfidenceTier): NarratorBudget {
+  return BUDGET_BY_TIER[tier];
+}
+
+/** Get the canonical hedge phrase for a tier (or "" for high). */
+export function hedgeFor(tier: ConfidenceTier): string {
+  return HEDGE_BY_TIER[tier];
+}
+
+function formatP(p: number): string {
+  if (p < 0.001) return "<0.001";
+  if (p < 0.01) return p.toFixed(3);
+  return p.toFixed(2);
+}
