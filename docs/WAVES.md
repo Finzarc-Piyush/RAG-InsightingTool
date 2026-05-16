@@ -11,6 +11,40 @@
 
 ---
 
+- **2026-05-16** — **Wave WW2 · narrator wiring of WQ1 (`scaleNarrativeByConfidence`).** Closes the WQ1 wiring debt fully. WW1 surfaced WQ1 as a static directive in the planner system prompt (nudging tool choice toward statistical paths); WW2 surfaces the per-finding tier + canonical hedge phrase to the narrator so it can pin `magnitudes[].confidence` / `implications[].confidence` to the tier and weave the hedge verbatim into prose for medium / low findings. Without WW2, the narrator silently picks confidence on its own — the deterministic WQ1 classifier was invisible downstream.
+
+  **What landed.**
+    - New [server/lib/agents/runtime/narratorHintsBlock.ts](server/lib/agents/runtime/narratorHintsBlock.ts) (~160 LOC). Public surface:
+      - `extractFindingEvidence(detail: string) → FindingEvidence` — regex-mines `n` (from "n = N" / "sample of N" / "across N rows/records/observations"), `pValue` (from "p = X" / "p-value: X" / "p < X"), `rSquared` (from "R² = X" / "r-squared: X" / "R^2 = X"), and `ciRelativeWidth` (from "±N%" anchored on "CI" or "of the estimate"). Returns empty object when nothing matches. Conservative numeric range guards (`n ≥ 0`, `0 ≤ p ≤ 1`, `0 ≤ R² ≤ 1`, `0 ≤ pct ≤ 100`).
+      - `tierBlackboardFindings(blackboard) → ConfidenceTieredFinding[]` — full-pipeline decoration: each finding gets its evidence extracted, then graded via WQ1's `assessConfidence`. Pure; doesn't mutate the blackboard.
+      - `buildNarratorConfidenceBlock(blackboard) → string` — emits the FINDING_CONFIDENCE prompt block (header + per-finding tier + reasons + sentence budget + canonical hedge phrase for medium/low only). Returns empty string when the blackboard has zero findings.
+      - `summarizeNarratorConfidence(blackboard) → { total, high, medium, low }` — tier counts for agentLog telemetry.
+    - [narratorAgent.ts](server/lib/agents/runtime/narratorAgent.ts) edit (~15 LOC): import the helper + the summary; build the block from `blackboard`; concatenate between `blackboardBlock` and `bundleSection` in the user prompt (so the narrator reads tiers before the synthesis context bundle); append a new WQ1 directive to the system prompt instructing the narrator to pin `magnitudes[].confidence` / `implications[].confidence` to the listed tier and weave the hedge into prose for medium/low findings; emit `confidence_high` / `confidence_medium` / `confidence_low` counts on the existing `narratorAgent.done` agentLog row.
+
+  **Why this design.**
+    - **Regex extraction over schema redesign.** The `Finding` interface in [analyticalBlackboard.ts](server/lib/agents/runtime/analyticalBlackboard.ts) carries `{id, sourceRef, label, detail, significance, hypothesisRefs, relatedColumns, confirmedAt}` — no structured statistical fields. Adding `evidence?: FindingEvidence` to the schema would require tool-by-tool changes (each emitting tool would need to populate it), a migration of past-analyses, and verifier schema updates. Regex extraction from `detail` is reversible: when a future wave structures the evidence, the helper becomes the fallback. Net cost: one regex catalogue, zero schema churn.
+    - **Block between blackboard and synthesis bundle.** The user message order is `phase1Line | question | blackboardBlock | confidenceSection | bundleSection | hierarchySection | repairBlock`. Putting the confidence block right after the blackboard means the narrator reads the findings AND their tiers as a coherent unit, before the (longer) RAG / domain / data-understanding bundle. The hedge phrases stay near the findings they apply to.
+    - **Conservative numeric guards.** Each regex's capture is range-checked (`n ≥ 0`, `p ∈ [0, 1]`, `R² ∈ [0, 1]`, `pct ∈ [0, 100]`). Out-of-range matches drop. The narrator never sees a synthetic "p = 2.0" or "R² = 1.5" tier — those would surprise the WQ1 classifier (which expects valid bounded inputs).
+    - **Empty-blackboard short-circuit.** When the blackboard has zero findings (dataOps turns; pure quick-answer paths), `buildNarratorConfidenceBlock` returns `""` and the caller short-circuits the section. Zero added bytes to the prompt for non-investigation turns.
+    - **No magnitude tier inference.** WQ1's `magnitude` field is carried through `FindingEvidence` for completeness but not used in classification. The helper does NOT try to infer magnitude from text (would require currency / unit normalisation across FMCG locales — out of scope).
+    - **System-prompt directive is additive.** The narrator already had `magnitudes[].confidence` and `implications[].confidence` fields with `enum(["low","medium","high"])`. WW2 adds a directive instructing the narrator to *use* those fields with the deterministic tier rather than picking on its own. The schema is unchanged; the policy is tightened.
+    - **No flow-decision SSE row.** The agentLog `narratorAgent.done` row gains tier counts as additional fields — the workbench can surface them by reading the log stream. Adding a `flow_decision` SSE row per turn would double SSE volume for a primarily-observability signal.
+
+  **Tests.** [tests/narratorHintsBlockWW2.test.ts](server/tests/narratorHintsBlockWW2.test.ts) — 13 cases across 4 suites:
+    - **`extractFindingEvidence`** (7): sample-size regex (3 phrasings), p-value regex (3 phrasings), R² regex (3 phrasings), CI relative-width regex (2 phrasings), empty / no-match defaults, multi-field extraction from a single detail string, defensive out-of-range guard on p > 1.
+    - **`tierBlackboardFindings`** (1): full pipeline — three findings with high / low / no-evidence detail strings produce high / low / medium tiers respectively.
+    - **`buildNarratorConfidenceBlock`** (4): block header + per-finding tier lines + sentence budget; hedge line present for medium/low and absent for high; empty string when blackboard is empty; directive mentions both `magnitudes[].confidence` and `implications[].confidence`.
+    - **`summarizeNarratorConfidence`** (1): tier counts roll up correctly.
+    - 13/13 passing. Appended to [server/package.json](server/package.json) per invariant #4. Regression suite (narratorAgent, narratorEnvelope, narratorRepair, streamingNarratorW38, scaleNarrativeByConfidenceWQ1 → 54/54) passes unchanged.
+
+  **Verified.** `npx tsc --noEmit` reports 98 errors, identical to WW1 baseline — zero new from WW2. Server build (`npm run build`) succeeds. Code commit `47e57620`.
+
+  **Out of scope.**
+    - Structured `evidence` field on the `Finding` interface. Regex extraction is a fallback today; a future schema wave can populate `Finding.evidence` directly when tools emit n / p / R² / CI in structured form, and the helper would then prefer the structured field over the regex.
+    - Verifier consumption of the tiers. The verifier ([verifier.ts](server/lib/agents/runtime/verifier.ts)) could read the same block to flag findings the narrator claimed as "high" when WQ1 would have tiered them lower. Out of scope — would add a new verifier finding type.
+    - Magnitude-field inference from prose. WQ1's `magnitude` field stays empty in extracted evidence; currency / unit normalisation across locales is out of scope.
+    - Insight-card surfacing. The chat card / workbench can read `confidence_*` from `agentLog.narratorAgent.done` rows; UI surfacing is a workbench wave.
+
 - **2026-05-16** — **Wave WW1 · planner wiring of `selectTool` + `externalClaimDetector` + WQ1 confidence directive.** Closes the wire-up debt that had accumulated across WT6 / WQ2 / WQ1: three pure helpers shipped over the previous sessions, but the planner read none of them. The user question still flowed to the planner LLM with only the brief + RAG + working memory — the deterministic intent → tool router was invisible. WW1 surfaces all three in the planner system + user prompts in one cohesive integration wave, treating the wiring as a single load-bearing move rather than three separate two-LOC patches.
 
   **What landed.**

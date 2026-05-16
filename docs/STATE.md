@@ -1,19 +1,19 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-16 (Wave WW1 — planner wiring of selectTool + externalClaimDetector + WQ1 directive).
+> Last sync: 2026-05-16 (Wave WW2 — narrator wiring of WQ1).
 
 ## HEAD
 
-- **Latest wave:** Wave WW1 · planner wiring of selectTool + externalClaimDetector + WQ1 directive (2026-05-16)
+- **Latest wave:** Wave WW2 · narrator wiring of WQ1 (scaleNarrativeByConfidence) (2026-05-16)
 - **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `1336f309` — "Wave WW1 · planner wiring of selectTool + externalClaimDetector + WQ1 directive" (2026-05-16)
-- **Working tree:** doc updates staged for paired WW1 commit.
+- **Last commit:** `47e57620` — "Wave WW2 · narrator wiring of WQ1 (scaleNarrativeByConfidence)" (2026-05-16)
+- **Working tree:** doc updates staged for paired WW2 commit.
 
 ## Live feature streams
 
-- **Wire-up · WW1** · planner-side wiring of WT6 + WQ2 + WQ1 SHIPPED today. New pure helper [`plannerHintsBlock.ts`](../server/lib/agents/runtime/plannerHintsBlock.ts) (`inferAnalystIntent`, `buildDatasetHints`, `buildPlannerHintsBlock`, `PLANNER_CONFIDENCE_DIRECTIVE`); [`planner.ts`](../server/lib/agents/runtime/planner.ts) builds the block per turn and concatenates it directly under the user-question line BEFORE the RAG / memory / hypothesis blocks. WT6's TOOL_ROUTER_HINT + WQ2's EXTERNAL_CLAIM_MARKERS now reach the LLM; WQ1's confidence-tier directive sits in the static system prompt. AgentLog `planner_hints_block_emitted` carries intent / topTool / topConfidence / hasExternalClaim. 19 tests. Next wire-up candidate: narrator-side WQ1 (consume the per-finding tier + hedge phrase in [`narratorAgent.ts`](../server/lib/agents/runtime/narratorAgent.ts)).
-- **Workstream 9 — quality 2.0** · WQ1 + WQ2 helpers SHIPPED; WW1 wired them into the planner (WQ2 EXTERNAL_CLAIM_MARKERS block + WQ1 confidence-tier system directive). Next: WQ3 — citation hover-cards in narrator prose. Or WQ7 — significance score by default on breakdown_ranking + segment_compare tools. Or narrator-side WQ1 wiring (consume the per-finding tier + hedge phrase in narratorAgent).
+- **Wire-up · WW1+WW2** · planner + narrator wiring of WT6 + WQ2 + WQ1 SHIPPED today. WW1 added pure helper [`plannerHintsBlock.ts`](../server/lib/agents/runtime/plannerHintsBlock.ts) wired into [`planner.ts`](../server/lib/agents/runtime/planner.ts) — TOOL_ROUTER_HINT + EXTERNAL_CLAIM_MARKERS in the user prompt + PLANNER_CONFIDENCE_DIRECTIVE in the system prompt. WW2 added pure helper [`narratorHintsBlock.ts`](../server/lib/agents/runtime/narratorHintsBlock.ts) (`extractFindingEvidence`, `tierBlackboardFindings`, `buildNarratorConfidenceBlock`, `summarizeNarratorConfidence`) wired into [`narratorAgent.ts`](../server/lib/agents/runtime/narratorAgent.ts) — FINDING_CONFIDENCE block in the user prompt with regex-extracted n/p/R²/CI per finding, plus a system-prompt directive pinning `magnitudes[].confidence` and `implications[].confidence` to the listed tier. AgentLogs `planner_hints_block_emitted` and `narratorAgent.done` carry tier telemetry. WQ1 wiring debt is now CLOSED. Next wire-up candidates: verifier consumption of FINDING_CONFIDENCE (flag overclaim); workbench surfacing of tier counts.
+- **Workstream 9 — quality 2.0** · WQ1 + WQ2 helpers SHIPPED + WIRED into planner (WW1) + narrator (WW2). Next: WQ3 — citation hover-cards in narrator prose. Or WQ7 — significance score by default on breakdown_ranking + segment_compare tools.
 - **Workstream 5 — tool library expansion** · WT6 selectTool wired by WW1 — TOOL_ROUTER_HINT block surfaces in the planner user prompt with intent + ranked tools per turn. Workstream now spans 6 of 6 routing/question-shape pieces (WT8 hierarchical-drill, WT2 cohort, WT3 RFM, WT7 elasticity, WT4 market-basket, WT6 router). Remaining tools require Python (WT1 causal / WT5 what-if / WT9 MTA Markov). Next: WT5 — `run_what_if` (Python scipy Monte Carlo).
 - **Workstream 7 — insight engine 2.0** · WI1 schema foundation shipped — `chart.insight: InsightSpec` with `default + generator + confidenceTier + citations + regeneratedAt`. Coexists with legacy `keyInsight` string. Next: WI2 — wire `generator.kind === "llm"` to a MINI-tier regen call cached by `(tileId, filterHash)` so insights refresh on filter change. WI2–WI6 deliver dynamic regen → citation hover-cards → explain-this-slice → per-tile recommendations → insight history.
 - **Workstream 1 — semantic & metrics layer** · W56 types + W57 inference + W58 compiler all shipped. The agent can now: (a) auto-populate a SemanticModel at upload (W57), (b) translate a `{metric, breakdownBy, filters}` query into a `QueryPlanBody` (W58). The model is ready for the planner to use; the planner just doesn't know about it yet. Next: W59 — rewrite the planner prompt to surface the metric catalog (`server/lib/agents/runtime/planner.ts` + a new `server/lib/semantic/prompt.ts` for byte-stable manifest rendering). W59–W64 deliver planner prompt rewrite → `execute_metric_query` tool → admin UI → drift gate → result cache.
@@ -39,10 +39,10 @@
 
 ## Last 5 waves (one line each — newest first)
 
+- **WW2** (2026-05-16) · narrator wiring of WQ1: new pure helper `narratorHintsBlock.ts` regex-mines n/p/R²/CI from finding.detail prose, decorates via WQ1 assessConfidence, emits FINDING_CONFIDENCE prompt block. narratorAgent concatenates it between blackboardBlock and bundleSection; system-prompt directive pins magnitudes[].confidence + implications[].confidence to the listed tier. 13 tests.
 - **WW1** (2026-05-16) · planner wiring of WT6 + WQ2 + WQ1: new pure helper `plannerHintsBlock.ts` (intent inference + dataset hints + combined block render). planner.ts builds the block per turn, concatenates BEFORE RAG / memory / hypotheses; static PLANNER_CONFIDENCE_DIRECTIVE in system prompt nudges toward tools that emit n / p / R² / CI width. agentLog `planner_hints_block_emitted` for observability. 19 tests.
 - **WT6** (2026-05-16) · `selectTool` planner router helper: 15-value AnalystIntent enum mapped to ordered ToolRecommendation[] with rationale + confidence. DatasetHints disambiguate. renderToolRouterPromptBlock for system-message paste. Helper-only. 26 tests.
 - **WT4** (2026-05-16) · `run_market_basket` tool: 1-LHS apriori association rules from transaction baskets. Emits both directions a→b and b→a with support / confidence / lift / count. Set semantics on (tx, item) pairs. Pure-Node. 19 tests.
 - **WQ2** (2026-05-16) · `externalClaimDetector` helper: pure regex-based scanner for competitor / market_size / industry_benchmark / external_event / demographic_shift markers. Emits verbatim excerpts + suggestedAction: "add web_search step". Helper-only this wave. 29 tests.
-- **W74** (2026-05-16) · Investigation budget exhaustion observability: new pure `evaluateBudgetExhaustion` returns the specific cap that tripped (llm_calls / wall_time / max_nodes). Orchestrator emits `flow_decision` SSE row when the loop halts on budget. 14 tests.
 
 For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.
