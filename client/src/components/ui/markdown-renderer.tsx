@@ -1,5 +1,7 @@
 import React from 'react';
 import { compactizeNumbersInText } from '@/lib/text/compactizeNumbersInText';
+import { extractCitations } from '@/lib/citationTokens';
+import { CitationHoverCard } from '@/components/CitationHoverCard';
 
 /**
  * Simple markdown renderer for chat messages
@@ -10,15 +12,22 @@ export function MarkdownRenderer({ content }: { content: string }) {
   // Compact large numbers (≥1000) to K/M/B/T form before markdown cleanup so
   // chat narrative prose matches the K/M/B convention used everywhere else.
   const cleanedContent = cleanOrphanedAsterisks(compactizeNumbersInText(content));
-  
+
   // Split by lines to handle line breaks
   const lines = cleanedContent.split('\n');
-  
+
+  // Wave WQ3 · pre-walk the full content to assign stable 1-based citation
+  // numbers per unique packId in first-occurrence order. Two citations of
+  // the same pack get the same superscript number (e.g. both render as
+  // `[1]`), so the user can correlate repeated citations visually. Done
+  // once per render so the per-line passes below are O(N) lookups.
+  const citationIndex = buildCitationIndex(cleanedContent);
+
   return (
     <div className="markdown-content">
       {lines.map((line, lineIndex) => {
-        const parts = parseMarkdownLine(line, lineIndex);
-        
+        const parts = parseMarkdownLine(line, lineIndex, citationIndex);
+
         return (
           <React.Fragment key={lineIndex}>
             {parts}
@@ -28,6 +37,22 @@ export function MarkdownRenderer({ content }: { content: string }) {
       })}
     </div>
   );
+}
+
+/**
+ * Wave WQ3 · build a packId → 1-based index map by walking the prose in
+ * first-occurrence order. Used to assign stable superscript numbers to
+ * citation hover-cards across the message. Pure projection over
+ * `extractCitations`.
+ */
+function buildCitationIndex(content: string): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const seg of extractCitations(content)) {
+    if (seg.type === "citation" && !map.has(seg.packId)) {
+      map.set(seg.packId, map.size + 1);
+    }
+  }
+  return map;
 }
 
 /**
@@ -95,18 +120,24 @@ function cleanOrphanedAsterisks(text: string): string {
 /**
  * Parse a line of markdown and return React nodes
  * Handles **bold** and *italic* (but prioritizes **bold** over *italic*)
+ *
+ * Wave WQ3 · `citationIndex` carries packId → superscript-number assignments
+ * built once per render. Threaded through to `parseInlineMarkdown` so
+ * citations inside bold / italic / plain spans all render as hover-cards.
  */
-function parseMarkdownLine(line: string, baseKey: number): React.ReactNode[] {
+function parseMarkdownLine(
+  line: string,
+  baseKey: number,
+  citationIndex: Map<string, number>,
+): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   let keyCounter = baseKey * 1000;
-  let remaining = line;
-  let position = 0;
-  
+
   // First, process bold text (**text**) - this takes priority
   const boldRegex = /\*\*(.*?)\*\*/g;
   const boldMatches: Array<{ start: number; end: number; text: string }> = [];
   let match;
-  
+
   while ((match = boldRegex.exec(line)) !== null) {
     boldMatches.push({
       start: match.index,
@@ -114,99 +145,148 @@ function parseMarkdownLine(line: string, baseKey: number): React.ReactNode[] {
       text: match[1],
     });
   }
-  
+
   // Process the line, handling bold sections and regular text
   let lastIndex = 0;
-  
+
   for (const boldMatch of boldMatches) {
     // Add text before the bold
     if (boldMatch.start > lastIndex) {
       const beforeText = line.substring(lastIndex, boldMatch.start);
       if (beforeText) {
-        parts.push(...parseInlineMarkdown(beforeText, keyCounter++));
+        parts.push(...parseInlineMarkdown(beforeText, keyCounter++, citationIndex));
       }
     }
-    
-    // Add bold text
+
+    // Bold text — process citations inside the bold span too.
     parts.push(
       <strong key={keyCounter++} className="font-semibold">
-        {boldMatch.text}
+        {parseInlineMarkdown(boldMatch.text, keyCounter++, citationIndex)}
       </strong>
     );
-    
+
     lastIndex = boldMatch.end;
   }
-  
+
   // Add remaining text after last bold
   if (lastIndex < line.length) {
     const afterText = line.substring(lastIndex);
     if (afterText) {
-      parts.push(...parseInlineMarkdown(afterText, keyCounter++));
+      parts.push(...parseInlineMarkdown(afterText, keyCounter++, citationIndex));
     }
   }
-  
+
   // If no bold was found, process the whole line for italic
   if (parts.length === 0) {
-    parts.push(...parseInlineMarkdown(line, keyCounter++));
+    parts.push(...parseInlineMarkdown(line, keyCounter++, citationIndex));
   }
-  
+
   return parts;
 }
 
 /**
  * Parse inline markdown (italic) - only processes text that's not already bold
  * Since bold (**text**) is processed first, we can safely look for single asterisks
+ *
+ * Wave WQ3 · after italic processing, each plain-text segment is run through
+ * `renderTextWithCitations` so backtick-wrapped domain-pack IDs become
+ * superscript Radix hover-cards (see [CitationHoverCard.tsx](../CitationHoverCard.tsx)).
  */
-function parseInlineMarkdown(text: string, baseKey: number): React.ReactNode[] {
+function parseInlineMarkdown(
+  text: string,
+  baseKey: number,
+  citationIndex: Map<string, number>,
+): React.ReactNode[] {
   // If text is empty, return empty array
   if (!text) {
     return [];
   }
-  
+
   // If text contains **, it means there might be bold markers we missed - skip italic processing
   // (This shouldn't happen since we process bold first, but just in case)
   if (text.includes('**')) {
-    return [text];
+    return renderTextWithCitations(text, baseKey * 1000, citationIndex);
   }
-  
+
   const parts: React.ReactNode[] = [];
   let keyCounter = baseKey * 1000;
-  
+
   // Process italic text (*text*) - find single asterisks
   // Since we've already processed bold, remaining asterisks should be italic
   const italicRegex = /\*([^*\n]+?)\*/g;
   let lastIndex = 0;
   let match;
-  
+
   while ((match = italicRegex.exec(text)) !== null) {
-    // Add text before the italic
+    // Add text before the italic — process citations on the plain span.
     if (match.index > lastIndex) {
       const beforeText = text.substring(lastIndex, match.index);
       if (beforeText) {
-        parts.push(beforeText);
+        parts.push(...renderTextWithCitations(beforeText, keyCounter++, citationIndex));
       }
     }
-    
-    // Add italic text
+
+    // Italic text — also process citations inside the italic span.
     parts.push(
       <em key={keyCounter++} className="italic">
-        {match[1]}
+        {renderTextWithCitations(match[1], keyCounter++, citationIndex)}
       </em>
     );
-    
+
     lastIndex = italicRegex.lastIndex;
   }
-  
-  // Add remaining text
+
+  // Add remaining text — process citations on the trailing plain span.
   if (lastIndex < text.length) {
-    parts.push(text.substring(lastIndex));
+    parts.push(...renderTextWithCitations(text.substring(lastIndex), keyCounter++, citationIndex));
   }
-  
-  // If no italic was found, return the text as-is
+
+  // If no italic was found, run citation processing on the whole text.
   if (parts.length === 0) {
-    return [text];
+    return renderTextWithCitations(text, baseKey * 1000, citationIndex);
   }
-  
+
   return parts;
+}
+
+/**
+ * Wave WQ3 · split a plain-text fragment into alternating text spans and
+ * CitationHoverCard components based on backtick-wrapped pack ids. Returns
+ * the input as a single-element array when no citations are present so
+ * callers can splice the result into a larger node list without special-
+ * casing the empty / unchanged case.
+ *
+ * Lookups against `citationIndex` are O(1); the index was built once at the
+ * top of `MarkdownRenderer` to ensure repeated citations of the same pack
+ * get the same superscript number.
+ */
+function renderTextWithCitations(
+  text: string,
+  baseKey: number,
+  citationIndex: Map<string, number>,
+): React.ReactNode[] {
+  if (!text) return [];
+  const segments = extractCitations(text);
+  if (segments.length === 0) return [text];
+  // No citations present → segments is a single text segment; return raw.
+  const hasCitation = segments.some((s) => s.type === "citation");
+  if (!hasCitation) return [text];
+  const nodes: React.ReactNode[] = [];
+  let keyCounter = baseKey;
+  for (const seg of segments) {
+    if (seg.type === "text") {
+      if (seg.value) nodes.push(seg.value);
+    } else {
+      const index = citationIndex.get(seg.packId) ?? 0;
+      nodes.push(
+        <CitationHoverCard
+          key={`citation-${keyCounter++}-${seg.packId}`}
+          packId={seg.packId}
+          index={index}
+        />
+      );
+    }
+  }
+  return nodes;
 }
 
