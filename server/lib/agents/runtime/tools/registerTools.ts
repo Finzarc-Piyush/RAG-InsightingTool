@@ -77,6 +77,7 @@ import { registerRfmSegmentationTool } from "./rfmSegmentationTool.js";
 import { registerPriceElasticityTool } from "./priceElasticityTool.js";
 import { registerMarketBasketTool } from "./marketBasketTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
+import { registerExecuteMetricQueryTool } from "./executeMetricQueryTool.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -1575,4 +1576,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // Wave F3 · statistical significance tests (Welch's t, paired t, χ²).
   // Gated by SIGNIFICANCE_TESTS_ENABLED=true.
   registerSignificanceTestTool(registry);
+  // Wave W60 · semantic-layer dispatcher — wraps compileMetricQuery (W58)
+  // and dispatches through execute_query_plan. Closes the W56→W59b chain:
+  // the SEMANTIC_CATALOG block becomes the planner's preferred dispatch
+  // path, not just read-only grounding.
+  registerExecuteMetricQueryTool(registry);
 }
