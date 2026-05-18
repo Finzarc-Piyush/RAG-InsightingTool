@@ -60,6 +60,11 @@ import {
   seriesOpacity,
   type ChartLegendItem,
 } from "@/components/charts/ChartLegend";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface LineRendererProps {
   spec: ChartSpecV2;
@@ -123,6 +128,13 @@ export function LineRenderer({
 
   const isTemporal = xCh.type === "t";
   const yIsRight = y2ChannelsList.length > 0;
+
+  // WD2-wiring-rest-trend · dashboard-tile cross-filter dispatch. The
+  // click vs drag distinction lives in `onBrushUp` — drags ≥ 6 px set
+  // a zoom range; sub-6-px drags are treated as a click and the nearest
+  // x value flows through `dispatchCrossFilter`. Outside a dashboard
+  // tile `dashboardTile` is null and the click is a no-op.
+  const dashboardTile = useDashboardTileContext();
 
   // WC6.1 brush-to-zoom state (declared up-front so memos that derive scales
   // can read zoomRange).
@@ -313,7 +325,32 @@ export function LineRenderer({
     const lo = Math.min(brushStart, brushEnd);
     const hi = Math.max(brushStart, brushEnd);
     if (Math.abs(hi - lo) < 6) {
-      // Tiny drag — treat as click; don't zoom.
+      // Tiny drag — treat as click; don't zoom. WD2 cross-filter
+      // dispatch fires here, before the brush state is reset, so the
+      // recorded click position drives the nearest-x lookup. Outside
+      // a dashboard tile the dispatch is a no-op.
+      if (dashboardTile) {
+        const clickX = lo;
+        let nearest: SeriesPoint | null = null;
+        let minDx = Infinity;
+        for (const s of series) {
+          for (const p of s.points) {
+            const px = xPx(p.x);
+            const dx = Math.abs(px - clickX);
+            if (dx < minDx) {
+              minDx = dx;
+              nearest = p;
+            }
+          }
+        }
+        if (nearest) {
+          dispatchCrossFilter({
+            column: xCh.field,
+            value: toFilterValue(nearest.x),
+            sourceTileId: dashboardTile.tileId,
+          });
+        }
+      }
       setBrushStart(null);
       setBrushEnd(null);
       return;

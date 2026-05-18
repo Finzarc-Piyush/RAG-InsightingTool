@@ -15,6 +15,7 @@ import { scaleLinear, scalePoint, scaleTime } from "@visx/scale";
 import { AxisBottom, AxisLeft } from "@visx/axis";
 import { GridRows } from "@visx/grid";
 import { curveMonotoneX } from "@visx/curve";
+import { localPoint } from "@visx/event";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -37,6 +38,11 @@ import {
   seriesOpacity,
   type ChartLegendItem,
 } from "@/components/charts/ChartLegend";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface AreaRendererProps {
   spec: ChartSpecV2;
@@ -87,6 +93,11 @@ export function AreaRenderer({
   }
 
   const isTemporal = xCh.type === "t";
+  // WD2-wiring-rest-trend · dashboard-tile cross-filter dispatch. A
+  // click anywhere inside the svg is treated as a brush onto the
+  // nearest x value in any (non-stacked) series. Outside a dashboard
+  // tile `dashboardTile` is null and the click is a no-op.
+  const dashboardTile = useDashboardTileContext();
 
   const series: Series[] = useMemo(() => {
     if (!colorCh) {
@@ -245,6 +256,42 @@ export function AreaRenderer({
       height={Math.max(0, height - (showLegend ? 28 : 0))}
       role="img"
       aria-label={accessibleLabel}
+      style={dashboardTile ? { cursor: "pointer" } : undefined}
+      onClick={
+        dashboardTile
+          ? (e: React.MouseEvent<SVGElement>) => {
+              // Source the click position in svg coords, subtract the
+              // left margin so the position maps to the inner-plot
+              // origin used by `xPx`. Reads from the PRE-stack series
+              // (which holds the original per-series points) rather
+              // than `stacked` because the stacked y values would
+              // skew the nearest-x lookup in multi-series mode.
+              const pt = localPoint(e);
+              if (!pt) return;
+              const clickX = pt.x - MARGIN.left;
+              if (clickX < 0 || clickX > innerWidth) return;
+              let nearest: SeriesPoint | null = null;
+              let minDx = Infinity;
+              for (const s of series) {
+                for (const p of s.points) {
+                  const px = xPx(p.x);
+                  const dx = Math.abs(px - clickX);
+                  if (dx < minDx) {
+                    minDx = dx;
+                    nearest = p;
+                  }
+                }
+              }
+              if (nearest) {
+                dispatchCrossFilter({
+                  column: xCh.field,
+                  value: toFilterValue(nearest.x),
+                  sourceTileId: dashboardTile.tileId,
+                });
+              }
+            }
+          : undefined
+      }
     >
       <Group left={MARGIN.left} top={MARGIN.top}>
         <GridRows
