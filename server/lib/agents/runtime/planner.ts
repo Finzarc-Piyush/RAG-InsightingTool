@@ -39,6 +39,7 @@ import {
   PLANNER_CONFIDENCE_DIRECTIVE,
   buildPlannerHintsBlock,
 } from "./plannerHintsBlock.js";
+import { buildSemanticCatalogPromptBlock } from "../../semantic/prompt.js";
 
 /** Args whose string values must be real column names from DataSummary. */
 const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
@@ -582,7 +583,18 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     });
   }
 
-  const user = `User question:\n${ctx.question}\n\n${hintsResult.block}${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  // Wave W59b · semantic-layer catalog inlined right after the hints block.
+  // Empty string when the session has no model (legacy uploads or
+  // inference yielded nothing); otherwise a byte-stable manifest from
+  // `formatMetricCatalog` (W59a) so the planner sees metric labels +
+  // dimension columns + hierarchies as a first-class block. W60 will
+  // register `execute_metric_query`; until then the catalog is read-only
+  // grounding that helps the planner pick the right raw columns.
+  const semanticBlock = buildSemanticCatalogPromptBlock(
+    ctx.chatDocument?.semanticModel
+  );
+
+  const user = `User question:\n${ctx.question}\n\n${hintsResult.block}${semanticBlock}${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,

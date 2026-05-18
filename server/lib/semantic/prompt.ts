@@ -177,3 +177,25 @@ function visibleDimensions(
 function sortedHierarchies(model: SemanticModel): SemanticHierarchy[] {
   return [...model.hierarchies].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Wave W59b · Planner user-prompt wrapper around `formatMetricCatalog`.
+ *
+ * Returns the empty string when the session has no semantic model
+ * (e.g. legacy uploads pre-W57, or sessions where inference yielded
+ * neither metrics nor dimensions). Otherwise returns the byte-stable
+ * manifest followed by a paragraph break (`\n\n`) so the block
+ * concatenates cleanly with the other prompt sections (RAG hits,
+ * hypotheses, prior observations, …).
+ *
+ * Pure. Callers should pass `ctx.chatDocument?.semanticModel` directly;
+ * the null-coalescing happens here so `planner.ts` stays a one-line
+ * inline call site.
+ */
+export function buildSemanticCatalogPromptBlock(
+  model: SemanticModel | null | undefined,
+  opts?: FormatMetricCatalogOptions,
+): string {
+  if (!model) return "";
+  return `${formatMetricCatalog(model, opts)}\n\n`;
+}
