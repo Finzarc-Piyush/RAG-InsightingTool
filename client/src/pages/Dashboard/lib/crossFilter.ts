@@ -47,10 +47,14 @@ export const CROSS_FILTER_EVENT = "marico:cross-filter";
  * in `breakdownRankingTool` and the existing chart filter UI's
  * null-bucket handling). Numbers / booleans get `String(v)`.
  */
-export function toFilterValue(
-  raw: string | number | boolean | null | undefined,
-): string {
+export function toFilterValue(raw: unknown): string {
   if (raw === null || raw === undefined) return "null";
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  // Date / other objects — fall back to ISO / String coercion so chart-mark
+  // values that flow as `unknown` (e.g. Date in temporal axes, BarCell.outerRaw)
+  // produce a stable category label without callers having to narrow first.
+  if (raw instanceof Date) return raw.toISOString();
   return String(raw);
 }
 

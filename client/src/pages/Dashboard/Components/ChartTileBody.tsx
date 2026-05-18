@@ -13,6 +13,7 @@ import { TileInsightFooter } from "./TileInsightFooter";
 import { ChartTilePivotView } from "@/components/charts/ChartTilePivotView";
 import { chartSpecToPivotConfig } from "@/components/charts/chartSpecToPivotConfig";
 import { useChartTileViewMode } from "../hooks/useChartTileViewMode";
+import { DashboardTileProvider } from "../lib/dashboardTileContext";
 
 // Lazy load to mirror DashboardTiles' Suspense pattern.
 const ChartRenderer = lazy(() =>
@@ -155,6 +156,7 @@ export function ChartTileBody({
       />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
         <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
+          <DashboardTileProvider tileId={tile.id}>
           {effectiveMode === "pivot" ? (
             <ChartTilePivotView chart={tile.chart} filters={filters} />
           ) : (
@@ -194,6 +196,7 @@ export function ChartTileBody({
               </Suspense>
             </ErrorBoundary>
           )}
+          </DashboardTileProvider>
         </div>
         {tile.chart.keyInsight ? (
           <TileInsightFooter

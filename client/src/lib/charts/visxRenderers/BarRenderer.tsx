@@ -71,6 +71,11 @@ import {
   type ChartLegendItem,
 } from "@/components/charts/ChartLegend";
 import { useChartGrid } from "@/components/charts/ChartGrid";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 import {
   PATTERN_NAMES,
   patternFromIndex,
@@ -184,6 +189,14 @@ export function BarRenderer({
   const innerWidth = Math.max(0, width - MARGIN.left - MARGIN.right);
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
   const grid = useChartGrid();
+  // WD2-wiring-bar · when this bar chart renders inside a dashboard tile,
+  // clicking a bar mark also dispatches a CROSS_FILTER_EVENT carrying
+  // {column, value, sourceTileId} that DashboardView toggles into
+  // `globalFilters` via `applyCrossFilter`. Outside a dashboard tile
+  // (chat / explorer / share preview) `dashboardTile` is null and the
+  // dispatch path is skipped — the existing ChartGrid in-context filter
+  // is unchanged.
+  const dashboardTile = useDashboardTileContext();
   const showLabels = !!spec.config?.barLabels;
 
   // ───────── series construction ─────────
@@ -685,7 +698,7 @@ export function BarRenderer({
               grid.inGrid &&
               grid.filter?.field === enc.x.field &&
               grid.filter?.value === c.outerRaw;
-            const interactive = grid.inGrid;
+            const interactive = grid.inGrid || !!dashboardTile;
 
             return (
               <Bar
@@ -718,11 +731,21 @@ export function BarRenderer({
                 }}
                 onClick={
                   interactive
-                    ? () =>
-                        grid.toggleFilter({
-                          field: enc.x.field,
-                          value: c.outerRaw,
-                        })
+                    ? () => {
+                        if (grid.inGrid) {
+                          grid.toggleFilter({
+                            field: enc.x.field,
+                            value: c.outerRaw,
+                          });
+                        }
+                        if (dashboardTile) {
+                          dispatchCrossFilter({
+                            column: enc.x.field,
+                            value: toFilterValue(c.outerRaw),
+                            sourceTileId: dashboardTile.tileId,
+                          });
+                        }
+                      }
                     : undefined
                 }
               >

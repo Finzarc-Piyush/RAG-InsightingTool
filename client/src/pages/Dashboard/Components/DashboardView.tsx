@@ -25,6 +25,11 @@ import {
 } from '../dashboardGlobalFilters';
 import { ShareDashboardDialog } from './ShareDashboardDialog';
 import { ActiveChartFilters, hasActiveFilters } from '@/lib/chartFilters';
+import {
+  CROSS_FILTER_EVENT,
+  applyCrossFilter,
+  type CrossFilterEvent,
+} from '../lib/crossFilter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -329,6 +334,26 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     setGlobalFilters(capturedActiveFilterToChartFilters(dashboard.capturedActiveFilter));
     setPerTileFilters({});
   }, [dashboard.id, dashboard.capturedActiveFilter, activeSheetId]);
+
+  // WD2-wiring-bar · subscribe to chart-mark brush events published by
+  // any renderer that's wrapped in a <DashboardTileProvider> (BarRenderer
+  // is the first wired in this wave; the remaining 12 visx renderers +
+  // ECharts adapter follow in WD2-wiring-rest). The toggle / append /
+  // replace semantics live in `applyCrossFilter` so this effect is a
+  // thin dispatch — single source-of-truth for the categorical brush
+  // contract.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<CrossFilterEvent>).detail;
+      if (!detail || typeof detail.column !== 'string') return;
+      setGlobalFilters((prev) => applyCrossFilter(prev, detail));
+    };
+    window.addEventListener(CROSS_FILTER_EVENT, handler as EventListener);
+    return () => {
+      window.removeEventListener(CROSS_FILTER_EVENT, handler as EventListener);
+    };
+  }, []);
 
   const handleTileFiltersChange = useCallback((tileId: string, filters: ActiveChartFilters) => {
     setPerTileFilters((prev) => {
