@@ -42,6 +42,11 @@ import {
   seriesOpacity,
   type ChartLegendItem,
 } from "@/components/charts/ChartLegend";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface PointRendererProps {
   spec: ChartSpecV2;
@@ -74,6 +79,16 @@ export function PointRenderer({
   if (!xCh || !yCh) {
     throw new Error("point mark requires x and y encodings");
   }
+  // WD2-wiring-rest-point · dashboard-tile cross-filter dispatch is
+  // CONDITIONAL on `colorCh` being non-null. Pure quantitative (x, y)
+  // scatters have no categorical field to filter on — the dispatch
+  // would carry a continuous number that can't be matched to an
+  // existing categorical filter selection. When `colorCh` is set,
+  // clicking a point dispatches `{ column: colorCh.field, value:
+  // toFilterValue(<raw color>), sourceTileId }` so a click on any
+  // point in the "North" group toggles a Region=North brush.
+  const dashboardTile = useDashboardTileContext();
+  const crossFilterReady = !!dashboardTile && !!colorCh;
 
   // Color category map
   const colorIndex = useMemo(() => {
@@ -136,7 +151,11 @@ export function PointRenderer({
         const radius = sizeScale && Number.isFinite(sizeVal)
           ? sizeScale(sizeVal)
           : DEFAULT_RADIUS;
-        const colorKey = colorCh ? asString(colorCh.accessor(r)) : "";
+        // Preserve the type-original color value (Date / number / boolean
+        // / string) for cross-filter dispatch; `colorKey` is the
+        // stringified form used for legend / opacity lookups.
+        const rawColor = colorCh ? colorCh.accessor(r) : undefined;
+        const colorKey = colorCh ? asString(rawColor) : "";
         const colorIdx = colorIndex ? colorIndex.get(colorKey) ?? 0 : 0;
         const shapeKey = shapeCh ? asString(shapeCh.accessor(r)) : "";
         const shapeIdx = shapeIndex ? shapeIndex.get(shapeKey) ?? 0 : 0;
@@ -147,6 +166,7 @@ export function PointRenderer({
           radius,
           color: qualitativeColor(colorIdx),
           colorKey,
+          rawColor,
           shapeKey,
           shapeIdx,
           sizeVal,
@@ -154,7 +174,7 @@ export function PointRenderer({
         };
       })
       .filter(<T,>(v: T | null): v is T => v !== null);
-  }, [data, xCh, yCh, sizeCh, sizeScale, colorCh, colorIndex]);
+  }, [data, xCh, yCh, sizeCh, sizeScale, colorCh, colorIndex, shapeCh, shapeIndex]);
 
   const containerRef = useRef<SVGSVGElement | null>(null);
   const {
@@ -248,6 +268,18 @@ export function PointRenderer({
                 tooltipData: { point: p },
               });
             };
+            const onPointClick = crossFilterReady
+              ? () => {
+                  dispatchCrossFilter({
+                    column: colorCh!.field,
+                    value: toFilterValue(p.rawColor),
+                    sourceTileId: dashboardTile!.tileId,
+                  });
+                }
+              : undefined;
+            const cursorStyle = crossFilterReady
+              ? { cursor: "pointer" as const }
+              : undefined;
             // Use a glyph path when shape encoding is set; circle otherwise.
             if (shapeCh) {
               const shape = shapeFromIndex(p.shapeIdx);
@@ -261,8 +293,10 @@ export function PointRenderer({
                   stroke={p.color}
                   strokeOpacity={op}
                   strokeWidth={1}
+                  style={cursorStyle}
                   onMouseMove={onPointMove}
                   onMouseLeave={hideTooltip}
+                  onClick={onPointClick}
                 />
               );
             }
@@ -277,8 +311,10 @@ export function PointRenderer({
                 stroke={p.color}
                 strokeOpacity={op}
                 strokeWidth={1}
+                style={cursorStyle}
                 onMouseMove={onPointMove}
                 onMouseLeave={hideTooltip}
+                onClick={onPointClick}
               />
             );
           })}
