@@ -19,6 +19,11 @@ import {
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { formatChartValue } from "@/lib/charts/format";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface ArcRendererProps {
   spec: ChartSpecV2;
@@ -32,6 +37,13 @@ export interface ArcRendererProps {
 
 interface Slice {
   key: string;
+  /**
+   * Raw, type-preserved category value (not stringified). Used for
+   * cross-filter dispatch so chart-mark clicks on numeric / boolean /
+   * Date categories produce a stable filter value — `toFilterValue`
+   * coerces consistently with the rest of WD2.
+   */
+  rawKey: unknown;
   value: number;
   color: string;
 }
@@ -55,19 +67,28 @@ export function ArcRenderer({
 
   const slices: Slice[] = useMemo(() => {
     // Aggregate by label in case data isn't pre-aggregated.
-    const totals = new Map<string, number>();
+    // Preserve the raw value of the FIRST row seen per key so the
+    // cross-filter dispatch carries a type-preserved category.
+    const totals = new Map<string, { value: number; rawKey: unknown }>();
     for (const r of data) {
-      const k = asString(labelCh.accessor(r));
+      const rawKey = labelCh.accessor(r);
+      const k = asString(rawKey);
       const v = asNumber(valueCh.accessor(r));
       if (!Number.isFinite(v)) continue;
-      totals.set(k, (totals.get(k) ?? 0) + v);
+      const prev = totals.get(k);
+      if (prev) {
+        prev.value += v;
+      } else {
+        totals.set(k, { value: v, rawKey });
+      }
     }
     let i = 0;
     return Array.from(totals.entries())
-      .filter(([, v]) => v > 0)
-      .map(([key, value]) => ({
+      .filter(([, agg]) => agg.value > 0)
+      .map(([key, agg]) => ({
         key,
-        value,
+        rawKey: agg.rawKey,
+        value: agg.value,
         color: qualitativeColor(i++),
       }));
   }, [data, labelCh, valueCh]);
@@ -79,6 +100,13 @@ export function ArcRenderer({
 
   const radius = Math.min(width, height) / 2 - 8;
   const inner = Math.max(0, radius * innerRadiusFraction);
+  // WD2-wiring-rest-cat · when this pie / donut renders inside a dashboard
+  // tile, clicking a slice dispatches a CROSS_FILTER_EVENT carrying
+  // {column: labelCh.field, value: toFilterValue(rawKey), sourceTileId}
+  // that DashboardView toggles into globalFilters via applyCrossFilter.
+  // Outside a dashboard tile (chat / explorer) `dashboardTile` is null
+  // and the click is a no-op — matches BarRenderer's wiring.
+  const dashboardTile = useDashboardTileContext();
 
   const accessibleLabel =
     ariaLabel ??
@@ -112,7 +140,22 @@ export function ArcRenderer({
               const showLabel = pct >= 5;
               return (
                 <g key={`arc-${arc.data.key}`}>
-                  <path d={path} fill={arc.data.color} />
+                  <path
+                    d={path}
+                    fill={arc.data.color}
+                    style={dashboardTile ? { cursor: "pointer" } : undefined}
+                    onClick={
+                      dashboardTile
+                        ? () => {
+                            dispatchCrossFilter({
+                              column: labelCh.field,
+                              value: toFilterValue(arc.data.rawKey),
+                              sourceTileId: dashboardTile.tileId,
+                            });
+                          }
+                        : undefined
+                    }
+                  />
                   {showLabel && (
                     <text
                       x={cx}

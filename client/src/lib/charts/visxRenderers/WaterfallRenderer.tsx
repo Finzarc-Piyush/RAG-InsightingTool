@@ -31,6 +31,11 @@ import {
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface WaterfallRendererProps {
   spec: ChartSpecV2;
@@ -44,6 +49,12 @@ const MARGIN = { top: 20, right: 16, bottom: 36, left: 56 };
 
 interface WaterfallBar {
   category: string;
+  /**
+   * Raw, type-preserved category value (not stringified). Used for
+   * cross-filter dispatch so chart-mark clicks carry the original
+   * type to `toFilterValue`. Mirrors BarRenderer's `outerRaw`.
+   */
+  rawCategory: unknown;
   start: number;
   end: number;
   delta: number;
@@ -61,20 +72,25 @@ export function WaterfallRenderer({
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
 
   const enc = useMemo(() => resolveBarEncoding(spec), [spec]);
+  // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch. Totals
+  // (running cumulative rows) intentionally skip dispatch — they're a
+  // synthetic summary, not a category the user can filter to.
+  const dashboardTile = useDashboardTileContext();
 
   const bars: WaterfallBar[] = useMemo(() => {
     let running = 0;
     return data.map((r) => {
-      const cat = asString(enc.x.accessor(r));
+      const rawCategory = enc.x.accessor(r);
+      const cat = asString(rawCategory);
       const delta = asNumber(enc.y.accessor(r));
       const isTotal = r["total"] === true || r["isTotal"] === true;
       if (isTotal) {
         running = delta;
-        return { category: cat, start: 0, end: delta, delta, isTotal: true };
+        return { category: cat, rawCategory, start: 0, end: delta, delta, isTotal: true };
       }
       const start = running;
       running += delta;
-      return { category: cat, start, end: running, delta, isTotal: false };
+      return { category: cat, rawCategory, start, end: running, delta, isTotal: false };
     });
   }, [data, enc]);
 
@@ -156,6 +172,8 @@ export function WaterfallRenderer({
             : b.delta >= 0
               ? qualitativeColor(5)
               : qualitativeColor(6);
+          // WD2-wiring-rest-cat · only non-total bars dispatch cross-filter.
+          const clickable = dashboardTile && !b.isTotal;
           return (
             <g key={`wf-${i}-${b.category}`}>
               <Bar
@@ -166,6 +184,18 @@ export function WaterfallRenderer({
                 fill={fill}
                 fillOpacity={0.85}
                 rx={2}
+                style={clickable ? { cursor: "pointer" } : undefined}
+                onClick={
+                  clickable
+                    ? () => {
+                        dispatchCrossFilter({
+                          column: enc.x.field,
+                          value: toFilterValue(b.rawCategory),
+                          sourceTileId: dashboardTile!.tileId,
+                        });
+                      }
+                    : undefined
+                }
               />
               {/* Delta label above the bar */}
               <text

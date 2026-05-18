@@ -19,6 +19,11 @@ import {
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { formatChartValue } from "@/lib/charts/format";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface FunnelRendererProps {
   spec: ChartSpecV2;
@@ -40,11 +45,17 @@ export function FunnelRenderer({
   const enc = useMemo(() => resolveBarEncoding(spec), [spec]);
   const innerWidth = Math.max(0, width - MARGIN.left - MARGIN.right);
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
+  // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch. Outside
+  // a dashboard tile `dashboardTile` is null and the click is a no-op.
+  const dashboardTile = useDashboardTileContext();
 
   const stages = useMemo(() => {
     return data
       .map((r) => ({
         label: asString(enc.x.accessor(r)),
+        // Preserve the raw (type-original) stage value for cross-filter
+        // dispatch — numeric / Date stages must not collapse to strings.
+        rawLabel: enc.x.accessor(r),
         value: asNumber(enc.y.accessor(r)),
       }))
       .filter((s) => Number.isFinite(s.value) && s.value >= 0);
@@ -90,6 +101,18 @@ export function FunnelRenderer({
                 fill={fill}
                 fillOpacity={0.85}
                 rx={3}
+                style={dashboardTile ? { cursor: "pointer" } : undefined}
+                onClick={
+                  dashboardTile
+                    ? () => {
+                        dispatchCrossFilter({
+                          column: enc.x.field,
+                          value: toFilterValue(s.rawLabel),
+                          sourceTileId: dashboardTile.tileId,
+                        });
+                      }
+                    : undefined
+                }
               />
               <text
                 x={innerWidth / 2}

@@ -34,6 +34,11 @@ import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface ComboRendererProps {
   spec: ChartSpecV2;
@@ -62,6 +67,10 @@ export function ComboRenderer({
   if (!xCh || !yCh || !y2Ch) {
     throw new Error("combo mark requires x, y, and y2 encodings");
   }
+  // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch. The
+  // bars (not the secondary line) are the categorical click target —
+  // clicking a bar dispatches CROSS_FILTER_EVENT with the bar's x value.
+  const dashboardTile = useDashboardTileContext();
 
   const xValues = useMemo(
     () => distinctOrdered(data, xCh.accessor),
@@ -144,7 +153,10 @@ export function ComboRenderer({
         )}
         {/* Bars */}
         {data.map((row, i) => {
-          const xRaw = asString(xCh.accessor(row));
+          // Preserve the type-original x value for cross-filter dispatch;
+          // `xRaw` is only stringified for the band scale lookup.
+          const rawX = xCh.accessor(row);
+          const xRaw = asString(rawX);
           const yRaw = asNumber(yCh.accessor(row));
           const x = xScale(xRaw);
           if (x === undefined || !Number.isFinite(yRaw)) return null;
@@ -161,6 +173,18 @@ export function ComboRenderer({
               fill={qualitativeColor(0)}
               fillOpacity={0.85}
               rx={2}
+              style={dashboardTile ? { cursor: "pointer" } : undefined}
+              onClick={
+                dashboardTile
+                  ? () => {
+                      dispatchCrossFilter({
+                        column: xCh.field,
+                        value: toFilterValue(rawX),
+                        sourceTileId: dashboardTile.tileId,
+                      });
+                    }
+                  : undefined
+              }
             />
           );
         })}

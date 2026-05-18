@@ -26,6 +26,11 @@ import { aggregate, groupBy } from "@/lib/charts/dataEngine";
 import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface BoxRendererProps {
   spec: ChartSpecV2;
@@ -39,6 +44,12 @@ const MARGIN = { top: 16, right: 16, bottom: 36, left: 56 };
 
 interface BoxStats {
   category: string;
+  /**
+   * Raw, type-preserved category value (first row in the group). Used
+   * for cross-filter dispatch so numeric / Date categories don't get
+   * stringified before reaching `toFilterValue`.
+   */
+  rawCategory: unknown;
   min: number;
   q1: number;
   median: number;
@@ -57,6 +68,8 @@ export function BoxRenderer({
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
 
   const enc = useMemo(() => resolveBarEncoding(spec), [spec]);
+  // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch.
+  const dashboardTile = useDashboardTileContext();
 
   const stats: BoxStats[] = useMemo(() => {
     const groups = groupBy(data, [enc.x.field]);
@@ -64,6 +77,7 @@ export function BoxRenderer({
       const values = rows.map((r) => asNumber(enc.y.accessor(r)));
       return {
         category: cat || asString(rows[0]?.[enc.x.field] ?? ""),
+        rawCategory: rows[0]?.[enc.x.field],
         min: aggregate(values, "min"),
         q1: aggregate(values, "p25"),
         median: aggregate(values, "median"),
@@ -156,6 +170,18 @@ export function BoxRenderer({
                 stroke={fill}
                 strokeOpacity={0.85}
                 rx={2}
+                style={dashboardTile ? { cursor: "pointer" } : undefined}
+                onClick={
+                  dashboardTile
+                    ? () => {
+                        dispatchCrossFilter({
+                          column: enc.x.field,
+                          value: toFilterValue(s.rawCategory),
+                          sourceTileId: dashboardTile.tileId,
+                        });
+                      }
+                    : undefined
+                }
               />
               {/* Median */}
               <line x1={x} x2={x + w} y1={yMed} y2={yMed} stroke={fill} strokeWidth={2} />
