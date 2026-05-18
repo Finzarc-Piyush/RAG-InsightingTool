@@ -37,6 +37,11 @@ import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import {
+  dispatchCrossFilter,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface RectRendererProps {
   spec: ChartSpecV2;
@@ -66,14 +71,40 @@ export function RectRenderer({
     throw new Error("rect mark requires x (row), y (col) and color (value) encodings");
   }
 
-  const rows = useMemo(
-    () => Array.from(new Set(data.map((r) => asString(rowCh.accessor(r))))),
-    [data, rowCh],
-  );
-  const cols = useMemo(
-    () => Array.from(new Set(data.map((r) => asString(colCh.accessor(r))))),
-    [data, colCh],
-  );
+  // WD2-wiring-rest-rect · dashboard-tile cross-filter dispatch. A
+  // heatmap cell sits at the intersection of TWO categorical dims;
+  // clicking a cell dispatches TWO events in sequence — one for the
+  // row dim, one for the column dim. `applyCrossFilter` is pure and
+  // event-driven, so back-to-back dispatches each toggle their own
+  // column independently. The user sees a row+col filter applied;
+  // clicking the same cell again toggles both back off.
+  const dashboardTile = useDashboardTileContext();
+
+  // Build the row / col domains AND a parallel raw-value map so the
+  // cross-filter dispatch carries type-original values (Dates, numerics,
+  // booleans, etc.) instead of stringified ones — mirrors BarRenderer's
+  // outerRaw and the WD2-wiring-rest-cat pattern.
+  const { rows, rowRawByKey, cols, colRawByKey } = useMemo(() => {
+    const rs: string[] = [];
+    const cs: string[] = [];
+    const rRaw = new Map<string, unknown>();
+    const cRaw = new Map<string, unknown>();
+    for (const r of data) {
+      const rowRaw = rowCh.accessor(r);
+      const colRaw = colCh.accessor(r);
+      const rk = asString(rowRaw);
+      const ck = asString(colRaw);
+      if (!rRaw.has(rk)) {
+        rRaw.set(rk, rowRaw);
+        rs.push(rk);
+      }
+      if (!cRaw.has(ck)) {
+        cRaw.set(ck, colRaw);
+        cs.push(ck);
+      }
+    }
+    return { rows: rs, rowRawByKey: rRaw, cols: cs, colRawByKey: cRaw };
+  }, [data, rowCh, colCh]);
   const colTicks = useMemo(
     () => pickEvenlySpacedTicks(cols, MAX_X_AXIS_LABELS),
     [cols],
@@ -179,6 +210,27 @@ export function RectRenderer({
                 stroke="hsl(var(--background))"
                 strokeWidth={0.5}
                 rx={1}
+                style={dashboardTile ? { cursor: "pointer" } : undefined}
+                onClick={
+                  dashboardTile
+                    ? () => {
+                        // Two-dim dispatch: row + col, in row-first order.
+                        // Each event is independently toggled by
+                        // `applyCrossFilter`, so a re-click on the same
+                        // cell removes both filters.
+                        dispatchCrossFilter({
+                          column: rowCh.field,
+                          value: toFilterValue(rowRawByKey.get(row)),
+                          sourceTileId: dashboardTile.tileId,
+                        });
+                        dispatchCrossFilter({
+                          column: colCh.field,
+                          value: toFilterValue(colRawByKey.get(col)),
+                          sourceTileId: dashboardTile.tileId,
+                        });
+                      }
+                    : undefined
+                }
               >
                 <title>
                   {row} · {col}: {formatChartValue(v, valCh.field)}
