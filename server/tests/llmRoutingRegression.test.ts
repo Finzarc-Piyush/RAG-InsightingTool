@@ -76,6 +76,11 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   // is structurally constrained so Mini-tier quality is sufficient; the
   // fast path falls through to the full loop on Zod fail.
   [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
+  // Wave WI2-server · Per-tile dashboard insight regeneration. MINI —
+  // 1–3 sentence prose summary over a deterministic slice summary; the
+  // model just renders the anchors that summarizeFilteredData already
+  // computed, so flagship reasoning is overkill.
+  [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
 };
 
 describe("W3.11 · model-routing regression guard", () => {

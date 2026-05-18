@@ -87,6 +87,14 @@ export const LLM_PURPOSE = {
    * any failure, so this is strictly an opt-in fast path.
    */
   QUICK_LOOKUP_PLANNER: "quick_lookup_planner",
+  /**
+   * Wave WI2-server · Per-tile dashboard insight regeneration. Single
+   * MINI-tier call that takes a chart spec + a deterministic summary of
+   * the post-filter slice and emits 1–3 sentences of plain markdown
+   * prose. Invoked from `POST /api/insight/regen`; the client caches
+   * results via the WI2-cache LRU+TTL helper.
+   */
+  INSIGHT_REGEN: "insight_regen",
 } as const;
 
 export type LlmCallPurpose = (typeof LLM_PURPOSE)[keyof typeof LLM_PURPOSE];
@@ -136,6 +144,7 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.AUTOMATION_REMAP]: "MINI",
   [LLM_PURPOSE.INDICATOR_ENRICH]: "MINI",
   [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
+  [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
 };
 
 /** Build the per-purpose override env-var name: `mode_classify` → `OPENAI_MODEL_FOR_MODE_CLASSIFY`. */

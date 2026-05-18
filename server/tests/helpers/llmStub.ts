@@ -195,6 +195,10 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
     plan: {},
     questionRestated: "stub quick-lookup",
   }),
+  // Wave WI2-server · per-tile insight regen. Plain-text response (1–3
+  // sentences). Tests exercising the regen path override with richer
+  // prose; this default keeps any incidental caller from blowing up.
+  [LLM_PURPOSE.INSIGHT_REGEN]: () => "Stub insight regen — no detail.",
 };
 
 /** Track installed handlers so `clearLlmStub` is a clean teardown. */
