@@ -10,6 +10,8 @@ import {
   diagnosticSliceRowCap,
 } from "./diagnosticPipelineConfig.js";
 import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
+import { composeFindingDetail } from "./agents/runtime/formatFindingEvidence.js";
+import type { FindingEvidence } from "./agents/runtime/scaleNarrativeByConfidence.js";
 
 export const segmentDriverArgsSchema = z
   .object({
@@ -159,7 +161,7 @@ export async function runSegmentDriverAnalysisTool(
         text: "(skipped correlation: outcome not in numeric columns)",
       };
     }
-    const { charts, insights } = await analyzeCorrelations(
+    const { charts, insights, topCorrelations } = await analyzeCorrelations(
       slice as Record<string, any>[],
       outcome,
       numericCols,
@@ -181,9 +183,27 @@ export async function runSegmentDriverAnalysisTool(
         domainContext: exec.domainContext,
       }
     );
+    // Wave WV7 · canonical FindingEvidence suffix on the correlation branch's
+    // text so the downstream blackboard `addFinding` (agentLoop.service.ts)
+    // carries deterministic R² + n the WW2 extractor catches and WQ1 grades
+    // on real numbers — mirrors WV4's run_correlation migration. Strongest
+    // correlation by |r|; R² = r²; n = nPairs from the same pair.
+    let wv7EvidenceSuffix = "";
+    if (topCorrelations && topCorrelations.length > 0) {
+      const strongest = topCorrelations[0];
+      const rSquared = strongest.correlation * strongest.correlation;
+      const evidence: FindingEvidence = {};
+      if (Number.isFinite(rSquared) && rSquared >= 0 && rSquared <= 1) {
+        evidence.rSquared = rSquared;
+      }
+      if (typeof strongest.nPairs === "number" && strongest.nPairs >= 0) {
+        evidence.n = strongest.nPairs;
+      }
+      wv7EvidenceSuffix = composeFindingDetail("", evidence);
+    }
     return {
       kind: "correlation" as const,
-      text: `Correlation scan on filtered slice (n=${slice.length}) for **${outcome}**.`,
+      text: `Correlation scan on filtered slice (n=${slice.length}) for **${outcome}**.${wv7EvidenceSuffix}`,
       charts,
       insights,
     };
