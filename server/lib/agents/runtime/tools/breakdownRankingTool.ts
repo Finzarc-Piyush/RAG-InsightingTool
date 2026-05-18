@@ -4,6 +4,9 @@ import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
 import { diagnosticSliceRowCap } from "../../../diagnosticPipelineConfig.js";
 import { parseComputedAggregationExpression } from "../../../queryPlanExecutor.js";
 import type { DimensionFilter } from "../../../shared/queryTypes.js";
+import { runSignificanceTest } from "../../../significanceTests.js";
+import { composeFindingDetail } from "../formatFindingEvidence.js";
+import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -128,6 +131,58 @@ function numericValue(v: unknown): number | null {
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+/**
+ * Wave WQ7 · split row-level metric values into the headline (top-ranked)
+ * group vs. all other groups, then run Welch's t-test to assess whether
+ * the headline group's row-level metric values differ significantly from
+ * the rest of the universe.
+ *
+ * Two-pass over the frame: the existing `aggregate` reduces sum/count per
+ * group (cheap), and this collects values for exactly two buckets (top +
+ * other). For high-cardinality breakdowns the second pass is the only
+ * extra work — values per group would explode memory.
+ *
+ * Returns the canonical FindingEvidence suffix (` (p = X; n = N)`) or `""`
+ * on skip (count aggregation, composite ranking, insufficient n, or only
+ * one group present). Safe to concatenate onto an existing summary.
+ */
+function buildBreakdownRankingEvidence(
+  frame: ReadonlyArray<Record<string, unknown>>,
+  breakdownColumn: string,
+  metricColumn: string,
+  topGroupLabel: string,
+  aggregation: BreakdownArgs["aggregation"],
+): string {
+  if (aggregation === "count") return "";
+  const topValues: number[] = [];
+  const otherValues: number[] = [];
+  for (const row of frame) {
+    const keyRaw = row[breakdownColumn];
+    const key =
+      keyRaw === null || keyRaw === undefined ? "(null)" : String(keyRaw);
+    const nv = numericValue(row[metricColumn]);
+    if (nv === null) continue;
+    if (key === topGroupLabel) topValues.push(nv);
+    else otherValues.push(nv);
+  }
+  if (topValues.length < 3 || otherValues.length < 3) return "";
+  const result = runSignificanceTest({
+    test: "welch_t",
+    sampleA: topValues,
+    sampleB: otherValues,
+  });
+  if (!result.ok) return "";
+  const evidence: FindingEvidence = {};
+  if (Number.isFinite(result.pValue) && result.pValue >= 0 && result.pValue <= 1) {
+    evidence.pValue = result.pValue;
+  }
+  const effectiveN = result.n.sampleA + (result.n.sampleB ?? 0);
+  if (Number.isFinite(effectiveN) && effectiveN > 0) {
+    evidence.n = effectiveN;
+  }
+  return composeFindingDetail("", evidence);
 }
 
 function aggregate(
@@ -422,9 +477,34 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           ? ` (showing first ${OBSERVATION_TOP_K} of ${trimmed.length} ranked rows in this snippet; full table available downstream)`
           : "";
       const dirNote = sortDirection === "asc" ? " ascending" : "";
+      // Wave WQ7 · canonical FindingEvidence suffix (p + effective n) from
+      // Welch's t-test on row-level metric values: the headline (top-ranked)
+      // group's values vs. all other groups combined. Closes the
+      // deterministic-floor gap on breakdown-ranking findings — WQ1 can now
+      // grade "the top group is the leader" claims by real evidence instead
+      // of the medium/no-evidence default. Empty suffix when
+      // aggregation=count (different test shape) or insufficient n in
+      // either bucket.
+      const wq7TopLabel =
+        trimmed.length > 0
+          ? String(
+              (trimmed[0] as Record<string, unknown>)[breakdownColumn] ??
+                "(null)",
+            )
+          : null;
+      const wq7EvidenceSuffix =
+        wq7TopLabel !== null && metricColumn
+          ? buildBreakdownRankingEvidence(
+              frame as ReadonlyArray<Record<string, unknown>>,
+              breakdownColumn,
+              metricColumn,
+              wq7TopLabel,
+              aggregation,
+            )
+          : "";
       return {
         ok: true,
-        summary: `run_breakdown_ranking: ${aggregation} of ${metricColumn} by ${breakdownColumn}, top ${topN}${dirNote} (n_input=${frame.length}${base.length > cap ? `, capped_from=${base.length}` : ""})${showingNote}.\n${sample.slice(0, 4500)}`,
+        summary: `run_breakdown_ranking: ${aggregation} of ${metricColumn} by ${breakdownColumn}, top ${topN}${dirNote} (n_input=${frame.length}${base.length > cap ? `, capped_from=${base.length}` : ""})${showingNote}.\n${sample.slice(0, 4500)}${wq7EvidenceSuffix}`,
         table: {
           rows: trimmed,
           columns: cols,
