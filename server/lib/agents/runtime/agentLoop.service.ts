@@ -2070,6 +2070,18 @@ export async function runAgentTurn(
                 verdict: verdict.verdict,
                 issue_codes: verdict.issues.map((i) => i.code),
                 course_correction: verdict.course_correction,
+                // Wave WV8 · per-step verifier rounds never see a
+                // NarratorOutput, so `confidenceOverclaim` is always
+                // undefined here — but spread defensively in case a future
+                // wave threads narrator state into the per-step path.
+                ...(verdict.confidenceOverclaim
+                  ? {
+                      confidence_overclaim: {
+                        claimed: verdict.confidenceOverclaim.claimed,
+                        actual: verdict.confidenceOverclaim.actual,
+                      },
+                    }
+                  : {}),
               });
 
               if (verdict.verdict === VERIFIER_VERDICT.pass) {
@@ -3784,6 +3796,21 @@ export async function runAgentTurn(
         verdict: fv.verdict,
         issue_codes: fv.issues.map((i) => i.code),
         course_correction: fv.course_correction,
+        // Wave WV8 · surface narrator-claimed vs. blackboard-actual tier
+        // counts when the WV3 short-circuit fired. agentWorkbench.util.ts
+        // renders these as "Narrator confidence: claimed Xh/Ym/Zl;
+        // blackboard supports Xh/Ym/Zl" so the user sees what the
+        // deterministic floor disagreed with, not just the issue code.
+        // Always omitted when the final verifier passed through the deep
+        // LLM (the report only exists on the short-circuit path).
+        ...(fv.confidenceOverclaim
+          ? {
+              confidence_overclaim: {
+                claimed: fv.confidenceOverclaim.claimed,
+                actual: fv.confidenceOverclaim.actual,
+              },
+            }
+          : {}),
       });
       if (fv.verdict === VERIFIER_VERDICT.pass) {
         break;

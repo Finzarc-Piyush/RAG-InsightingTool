@@ -355,6 +355,16 @@ export interface VerifierResult {
   issues: VerifierIssue[];
   course_correction: VerdictType;
   user_visible_note?: string;
+  /**
+   * Wave WV8 · populated by the WV3 short-circuit when
+   * `detectConfidenceOverclaims` fires. Carries the claimed (narrator) vs.
+   * actual (blackboard via WQ1) tier counts so agentLoop.service.ts can
+   * surface them on the `critic_verdict` SSE payload — the workbench then
+   * renders a "narrator claimed N high; blackboard supports M" line.
+   * Always undefined on per-step verifier rounds (which never see a
+   * NarratorOutput); only the FINAL round can populate this.
+   */
+  confidenceOverclaim?: import("./verifierConfidenceCheck.js").ConfidenceOverclaimReport;
 }
 
 /**

@@ -51,11 +51,29 @@ type PlanSsePayload = {
 
 type ToolCallSse = { id?: string; name?: string; args_summary?: string };
 type ToolResultSse = { id?: string; ok?: boolean; summary?: string };
+type ConfidenceTierCountsSse = {
+  high?: number;
+  medium?: number;
+  low?: number;
+  total?: number;
+};
+
 type CriticSse = {
   stepId?: string;
   verdict?: string;
   issue_codes?: string[];
   course_correction?: string;
+  /**
+   * Wave WV8 · populated when the WV3 short-circuit fired
+   * (`CONFIDENCE_OVERCLAIM` issue code). Rendered as
+   * "Narrator confidence: claimed Xh/Ym/Zl; blackboard supports Xh/Ym/Zl"
+   * in the workbench `parts` list so the user sees the deterministic
+   * floor's verdict, not just the issue code.
+   */
+  confidence_overclaim?: {
+    claimed?: ConfidenceTierCountsSse;
+    actual?: ConfidenceTierCountsSse;
+  };
 };
 
 const INSIGHT_MAX = 400;
@@ -149,6 +167,35 @@ function insightForFlowDecision(f: {
   }
   if (layer && chosen) return clampInsight(`${layer} routed to ${chosen}.`);
   return undefined;
+}
+
+/**
+ * Wave WV8 · format the claimed-vs-actual tier counts surfaced by the WV3
+ * confidence-overclaim short-circuit into a one-line workbench part.
+ * Returns "" when the field is absent or the underlying counts are empty —
+ * `parts.filter(Boolean)` then drops it cleanly.
+ *
+ * Shape: "Narrator confidence: claimed Xh/Ym/Zl; blackboard supports Xh/Ym/Zl".
+ * The `h/m/l` shorthand keeps the line tight; the full word "Narrator
+ * confidence:" anchors what's being compared so the line is self-explanatory
+ * in the workbench without prior context.
+ */
+function formatConfidenceOverclaim(
+  oc: CriticSse["confidence_overclaim"],
+): string {
+  if (!oc) return "";
+  const clamp = (v: number | undefined): number => {
+    if (typeof v !== "number" || !Number.isFinite(v)) return 0;
+    return Math.max(0, Math.floor(v));
+  };
+  const fmt = (t?: ConfidenceTierCountsSse): string => {
+    if (!t) return "0h/0m/0l";
+    return `${clamp(t.high)}h/${clamp(t.medium)}m/${clamp(t.low)}l`;
+  };
+  const claimed = fmt(oc.claimed);
+  const actual = fmt(oc.actual);
+  if (claimed === "0h/0m/0l" && actual === "0h/0m/0l") return "";
+  return `Narrator confidence: claimed ${claimed}; blackboard supports ${actual}`;
 }
 
 /** W10 · "what this step means" for `kind: "critic"`. Course correction wins. */
@@ -317,6 +364,7 @@ export function agentSseEventToWorkbenchEntries(
       `Verdict: ${c.verdict || "?"}`,
       c.stepId ? `Step: ${c.stepId}` : "",
       c.issue_codes?.length ? `Issues: ${c.issue_codes.join(", ")}` : "",
+      formatConfidenceOverclaim(c.confidence_overclaim),
       c.course_correction ? `Course correction:\n${c.course_correction}` : "",
     ].filter(Boolean);
     const insight = insightForCritic(c);

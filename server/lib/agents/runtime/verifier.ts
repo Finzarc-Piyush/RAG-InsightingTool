@@ -191,6 +191,11 @@ export async function runVerifier(
         user_visible_note: hasBlock
           ? "Confidence overclaim detected — narrator marked findings high-confidence beyond what the evidence supports."
           : undefined,
+        // Wave WV8 · attach the report so agentLoop.service.ts can surface
+        // claimed-vs-actual tier counts on the critic_verdict SSE payload.
+        // The workbench renders these so the user sees what the deterministic
+        // floor disagreed with, not just that *something* was overclaimed.
+        confidenceOverclaim: report,
       };
     }
   }
