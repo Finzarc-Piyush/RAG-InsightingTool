@@ -11,6 +11,85 @@
 
 ---
 
+- **2026-05-19** — **Wave WI4-wiring-trend · LineRenderer alt-drag → explain-this-slice.** First per-renderer consumer of the WI4-foundation `explainSlice` helper. LineRenderer already had two click-intents — brush-to-zoom (plain drag, pre-existing) and WD3 drill-through (cmd/ctrl + tiny drag) — and this wave layers the THIRD: a full-distance drag (≥ `BRUSH_MIN_PX = 6`) with the ALT key held dispatches an `ExplainSliceEvent` carrying the brushed sub-domain in data-space (temporal `{ startMs, endMs }` or categorical `{ values }`). Plain drag continues to zoom; cmd/ctrl-click continues to drill; the three intents are mutually exclusive at brush-down time via two independent refs (`brushModifierRef` for cmd/ctrl, `brushExplainRef` for alt). The choice of alt-drag (not shift, not cmd) keeps the modifier conflict-free: cmd/ctrl is owned by the WD3 wiring; shift is reserved for future multi-select intents; alt is widely available across keyboards (option on macOS).
+
+  **What landed.**
+    - [`client/src/lib/charts/visxRenderers/LineRenderer.tsx`](../client/src/lib/charts/visxRenderers/LineRenderer.tsx) imports the five WI4-foundation helpers: `BRUSH_MIN_PX`, `dispatchExplainSlice`, `isBrushDrag`, `makeCategoricalRegion`, `makeTemporalRegion`. The pre-existing WD3 imports (`dispatchDrillThrough`, `isModifierClick`) are preserved alongside.
+    - New `brushExplainRef = useRef<boolean>(false)` declared right after `brushModifierRef`. Ref (not state) because the alt flag doesn't drive a re-render — only the brush rectangle does. The two refs are independent — alt + cmd is a no-op intersection (the explain branch wins because alt is captured in its dedicated ref and checked before the zoom branch; `brushModifierRef` is only consumed in the click path).
+    - `onBrushDown(e)` captures `e.altKey === true` into `brushExplainRef.current` AFTER the brushModifier capture (canonical order: cmd/ctrl first, then alt). Uses `=== true` (NOT `!!e.altKey`) so an undefined / missing altKey reliably yields false rather than coercing through a Boolean cast.
+    - `onBrushUp()`'s click-vs-drag threshold now derives from the foundation: `if (!isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX))` replaces the prior inline `Math.abs(hi - lo) < 6`. Semantically identical; behavioural pin against future drift in either side. The inline literal is REMOVED — a negative pin in the test catches re-introduction.
+    - **New explain-slice branch BEFORE the zoom branch**, gated on `brushExplainRef.current && dashboardTile`. AND-gated on `dashboardTile` because outside a dashboard the panel has no receiver (same gating shape as the WD3 click path's `if (dashboardTile)`). Inside:
+      ```ts
+      if (brushExplainRef.current && dashboardTile) {
+        let region = null;
+        if (isTemporal) {
+          const dom = (xScale as ReturnType<typeof scaleTime<number>>).domain();
+          const domMin = (dom[0] as Date).getTime();
+          const domMax = (dom[1] as Date).getTime();
+          const startMs = domMin + (lo / innerWidth) * (domMax - domMin);
+          const endMs = domMin + (hi / innerWidth) * (domMax - domMin);
+          region = makeTemporalRegion(startMs, endMs);
+        } else {
+          const xs = Array.from(new Set(data.map((r) => asString(xCh.accessor(r)))));
+          const i0 = Math.max(0, Math.floor((lo / innerWidth) * xs.length));
+          const i1 = Math.min(xs.length, Math.ceil((hi / innerWidth) * xs.length));
+          region = makeCategoricalRegion(xs.slice(i0, i1));
+        }
+        if (region) {
+          dispatchExplainSlice({
+            chartId: dashboardTile.tileId,
+            column: xCh.field,
+            region,
+            sourceTileId: dashboardTile.tileId,
+            filters: dashboardFilters,
+          });
+        }
+        brushModifierRef.current = false;
+        brushExplainRef.current = false;
+        setBrushStart(null);
+        setBrushEnd(null);
+        return;
+      }
+      ```
+      The math reuses the existing zoom-temporal arithmetic (the linear interpolation from pixel-coord to data-space) so the brush region and the zoom range are always aligned in data-space — alt-dragging from index 5 to 12 brushes exactly the same range that plain-dragging would zoom to. The `xs.slice(i0, i1)` is end-exclusive (matching the existing zoom branch's `i1` ceiling). The `if (region)` guard catches `null` constructor returns (zero-width brush) so a malformed event never fires.
+    - Click-path (< `BRUSH_MIN_PX`) cleanup ALSO resets `brushExplainRef.current = false` (alongside the pre-existing `brushModifierRef.current = false`) so a subsequent plain brushDown doesn't inherit a stale alt flag from a no-op click. Both resets land before the `setBrushStart(null)` anchor.
+    - The two existing zoom branches (temporal `setZoomRange([newMin, newMax])` + categorical `setZoomRange([i0, i1])`) remain UNTOUCHED. Plain drag = zoom, unchanged. The brushUp logic now branches: tiny drag → click path; alt-held drag → explain path (early return); plain drag → zoom path.
+    - Paired test file [`client/src/pages/Dashboard/lib/wi4WiringTrend.test.ts`](../client/src/pages/Dashboard/lib/wi4WiringTrend.test.ts) (~225 LOC, 23 source-inspection tests across 11 suites). Mirrors [`wd3WiringRestTrend.test.ts`](../client/src/pages/Dashboard/lib/wd3WiringRestTrend.test.ts)'s source-inspection shape:
+      - **explainSlice imports** (2): five-helper import shape; WD3 imports preserved alongside.
+      - **brushExplainRef declaration** (2): `useRef<boolean>(false)` shape; wave marker present in the comment block.
+      - **Alt capture at brushDown** (2): `e.altKey === true` literal compare; canonical ordering (after brushModifier capture).
+      - **Click-vs-drag threshold from foundation** (2): `isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX)` invocation; negative pin against the removed `Math.abs(hi - lo) < 6` literal.
+      - **Explain-slice branch ordering** (3): gate shape (`brushExplainRef.current && dashboardTile`); dispatch position (BEFORE the zoom `isTemporal` anchor); early-return shape (single-intent).
+      - **Temporal region math** (2): `makeTemporalRegion(startMs, endMs)` call; the `domMin + (lo/innerWidth) * (domMax - domMin)` interpolation formula pin (catches future projection-math drift).
+      - **Categorical region math** (2): `makeCategoricalRegion(xs.slice(i0, i1))` call (end-exclusive pin); `i0 / i1` Math.max/floor/min/ceil derivation pin.
+      - **Dispatch payload** (2): 5-field shape (`chartId` / `column` / `region` / `sourceTileId` / `filters`); null-region guard (`if (region)`).
+      - **Ref cleanup** (2): click-path resets brushExplainRef; explain-path resets BOTH refs.
+      - **Pre-existing behaviour preserved** (3): temporal zoom branch intact; categorical zoom branch intact; WD3 drill-through branch intact.
+      - **Wave marker** (1): `WI4-wiring-trend` greppable lineage.
+    - The companion WD3 test (`wd3WiringRestTrend.test.ts`) had ONE over-tight pin (the `brushModifierRef.current = false; setBrushStart(null)` direct-sequence regex) that the new sibling reset broke. Loosened to `[\s\S]{0,200}?setBrushStart` with an explicit WI4-wiring-trend comment documenting why; the reset shape itself is preserved. No other WD3 regression coverage is affected.
+
+  **Why this design.**
+    - **Alt-drag for explain (NOT shift / NOT cmd / NOT a separate keyboard shortcut)**. Three modifier-key options were considered:
+      1. **Shift-drag**. Conflicts with browser-native text-selection-extends semantics on many platforms; shift is also conventionally reserved for additive multi-select in dashboards (a future WI5 wave might want it for "explain multiple slices in parallel").
+      2. **Cmd/ctrl-drag**. Already owned by WD3 drill-through on a single click; layering a brush variant on the same modifier creates a confusing two-distance regime (cmd-tiny-drag = drill, cmd-real-drag = explain) where the user can't predict which fires without precise mouse control. Keeping the modifiers semantically distinct lets the user reason: cmd = drill, alt = explain, plain = zoom.
+      3. **Alt-drag** (chosen). Underused on most platforms; option-drag on macOS doesn't conflict with system gestures; aligns with the de-facto "secondary action modifier" convention in design tools (Figma, Sketch use alt for hold-to-show-distance / hold-to-copy on drag).
+    - **Two independent refs (`brushModifierRef` + `brushExplainRef`) instead of one combined flag**. The two intents are orthogonal: cmd-tiny-drag fires drill (no brush), alt-real-drag fires explain (brush). A combined flag would force a tri-state enum (`none | cmd | alt`) and an ordering question (cmd + alt held simultaneously → which wins?). Independent refs let the brushUp logic check them in priority order (explain first because it's the "wider" intent — a real drag — vs. drill's tiny-drag click path) without an explicit enum.
+    - **Branch BEFORE the zoom path, not AFTER**. Putting the explain branch after the zoom branch would require the zoom branch's `setZoomRange` to short-circuit if `brushExplainRef.current` — extra coupling. Putting it before with an early `return;` keeps the zoom branch's existing structure intact AND makes the new wave a strict additive change (zoom-path code is unchanged byte-for-byte from the WD3-wiring-rest-trend wave).
+    - **Reuse the existing zoom math for region computation**. The temporal interpolation (`domMin + (lo / innerWidth) * (domMax - domMin)`) and the categorical index derivation (`Math.max(0, Math.floor((lo / innerWidth) * xs.length))` / `Math.min(xs.length, Math.ceil((hi / innerWidth) * xs.length))`) are byte-identical to the zoom branch. This is intentional: alt-dragging from index 5 to 12 brushes the SAME range that plain-dragging would zoom to. The user's mental model — "I select what I want, then choose the verb (zoom or explain)" — survives the wave.
+    - **`xs.slice(i0, i1)` end-exclusive (not `i1 + 1`)**. The existing zoom branch uses `i1` as the ceiling index of `xs.slice(Math.max(0, Math.floor(zoomRange[0])), Math.min(xs.length, Math.ceil(zoomRange[1]) + 1))`. The brush region path uses `xs.slice(i0, i1)` — semantically the same SET of values because `i1` is already `Math.ceil(...)` (one past the last index). This pins the brush region and the zoom range to identical value sets.
+
+  **Tests.** WI4-wiring-trend (23 new) + WD3-wiring-rest-trend (16 existing, one regex loosened) + WI4-foundation (28) = 69 cumulative across 29 suites, all green. Client `npx tsc --noEmit` reports 53 errors (identical baseline). Test file appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+
+  **Conventions added.** None — follows the established WD3-wiring-rest-trend ref-capture-at-brushDown / consume-at-brushUp pattern (the two waves use mirror-image refs for orthogonal modifiers).
+
+  **Out of scope.**
+    - **WI4-wiring-area.** AreaRenderer has NO current brush mechanics — wiring it requires ADDING the mouse-down/move/up state from scratch (mirroring LineRenderer's shape) + the cursor-style affordance. Significantly more code than LineRenderer's extension (~80 LOC of new state + ~30 LOC of WI4 dispatch). Its own atomic wave.
+    - **WI4-wiring-bar.** BarRenderer similarly lacks brush; ~100 LOC of new state + ~30 LOC of WI4 dispatch.
+    - **WI4-panel.** The receiver UI that subscribes to `EXPLAIN_SLICE_EVENT` and opens a Radix Dialog/Sheet with the brushed-slice insight. Separate wave.
+    - **WI4-wire.** The `useInsightRegen` integration that passes the brushed `filteredRows` (computed by composing `applyChartFilters` → `filterRowsByBrushRegion`) into the regen hook. Separate wave.
+    - **Brush rectangle visual cue when alt is held.** Currently the brush rect renders the same color whether alt is held or not — a future polish wave could change the stroke color or add a "Release alt to zoom; release plain to explain" tooltip on alt-down.
+    - **Brush handle / extend after release.** Currently the brush is a single drag; releasing commits the action. A future wave could let users adjust the brush bounds after release (visx `<Brush>` primitive's standard UX).
+
 - **2026-05-19** — **Wave WI4-foundation · explain-this-slice pure helper module.** Opens a new feature surface: a THIRD click-intent on chart marks, sibling to WD2's [`crossFilter.ts`](../client/src/pages/Dashboard/lib/crossFilter.ts) and WD3's [`drillThrough.ts`](../client/src/pages/Dashboard/lib/drillThrough.ts). Where WD2 captures a single click on a mark and dispatches a `CrossFilterEvent` (discrete-value filter, dashboard-wide) and WD3 captures a single cmd/ctrl-click and dispatches a `DrillThroughEvent` (rows behind the slice, side sheet), WI4 captures a RECT-DRAG (mouse-down + mouse-up at ≥ 6 px apart) and dispatches an `ExplainSliceEvent` that re-runs the WI2 insight generator on JUST the brushed sub-region. The cmd/ctrl modifier check is irrelevant for this intent — a brush drag is already distinct from a click by virtue of the cursor travel. The brief earmarked WI4 as the most-attractive next candidate after WD3 closed because it opens a feature surface (per-slice explanations) that didn't exist before, distinct from both cross-filter and drill-through in UX intent (panel re-explanation rather than dashboard-wide filter or side-sheet row list). This foundation wave is the WI4 master-plan opener — paired waves WI4-wiring-trend / WI4-wiring-area / WI4-wiring-bar / WI4-panel / WI4-wire follow.
 
   **What landed.**
