@@ -13,7 +13,7 @@
  * a proper map). Until then, it falls back to an info card.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -30,6 +30,8 @@ import {
   MAX_X_AXIS_LABELS,
   echartsLabelInterval,
 } from "@/lib/charts/xAxisLabelCap";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import { dispatchCrossFilter, toFilterValue } from "@/pages/Dashboard/lib/crossFilter";
 
 interface RendererProps {
   spec: ChartSpecV2;
@@ -123,12 +125,37 @@ export function SunburstRenderer({
     [tree, width, height],
   );
 
+  // Wave WD2-wiring-echarts · cross-filter dispatch on leaf clicks.
+  // Sunburst leaves are the categorical x.field values (the inner-ring
+  // segments when `groupCh` is set, or the only ring when it isn't).
+  // Parent-ring clicks (the `groupCh` value, when present) are skipped
+  // because the dispatch column would diverge between inner / outer
+  // rings — wiring two-column dispatch is a follow-on (mirrors the
+  // RectRenderer row+col approach from WD2-wiring-rest-rect).
+  const dashboardTile = useDashboardTileContext();
+  const onSunburstClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as { data?: { name?: unknown; children?: unknown[] } };
+      const name = p?.data?.name;
+      const isLeaf = !Array.isArray(p?.data?.children) || p.data.children.length === 0;
+      if (!isLeaf || name == null) return;
+      dispatchCrossFilter({
+        column: labelCh.field,
+        value: toFilterValue(name),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, labelCh.field],
+  );
+
   return (
     <EChartsBase
       width={width}
       height={height}
       ariaLabel={ariaLabel ?? spec.config?.title?.text ?? "Sunburst"}
       optionsKey={optionsKey}
+      onChartClick={dashboardTile ? onSunburstClick : undefined}
       buildOptions={(_e: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: commonText(theme),
@@ -201,12 +228,36 @@ export function SankeyRenderer({
     [nodes, links, width, height],
   );
 
+  // Wave WD2-wiring-echarts · cross-filter dispatch on node clicks.
+  // Sankey params shape: `{ dataType: "node" | "edge", name, ... }`.
+  // We dispatch only on node clicks (skip edges) — an edge has no single
+  // categorical value to filter on. The node's name covers both source
+  // and target dims, but Sankey's source / target fields are typically
+  // two columns of the same dimension (e.g. `Region` → `Region`), so
+  // dispatching on `sourceCh.field` is the right default. Cross-column
+  // sankeys would need a richer params decode; deferred.
+  const dashboardTile = useDashboardTileContext();
+  const onSankeyClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as { dataType?: string; name?: unknown };
+      if (p?.dataType !== "node" || p?.name == null) return;
+      dispatchCrossFilter({
+        column: sourceCh.field,
+        value: toFilterValue(p.name),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, sourceCh.field],
+  );
+
   return (
     <EChartsBase
       width={width}
       height={height}
       ariaLabel={ariaLabel ?? spec.config?.title?.text ?? "Sankey"}
       optionsKey={optionsKey}
+      onChartClick={dashboardTile ? onSankeyClick : undefined}
       buildOptions={(_e: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: commonText(theme),
@@ -339,12 +390,35 @@ export function CalendarRenderer({
     [series, range, width, height],
   );
 
+  // Wave WD2-wiring-echarts · cross-filter dispatch on calendar-cell
+  // clicks. ECharts calendar params shape: `{ data: [yyyy-mm-dd, value] }`.
+  // We dispatch the ISO date string on `dateCh.field`. The downstream
+  // `applyCrossFilter` already installs categorical filters on date
+  // columns as discrete value selections (same shape as a chart-brush
+  // click on a temporal x-axis bar in BarRenderer).
+  const dashboardTile = useDashboardTileContext();
+  const onCalendarClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as { data?: [unknown, unknown] };
+      const date = Array.isArray(p?.data) ? p.data[0] : undefined;
+      if (date == null) return;
+      dispatchCrossFilter({
+        column: dateCh.field,
+        value: toFilterValue(date),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, dateCh.field],
+  );
+
   return (
     <EChartsBase
       width={width}
       height={height}
       ariaLabel={ariaLabel ?? spec.config?.title?.text ?? "Calendar heatmap"}
       optionsKey={optionsKey}
+      onChartClick={dashboardTile ? onCalendarClick : undefined}
       buildOptions={(_e: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: commonText(theme),
@@ -420,12 +494,36 @@ export function CandlestickRenderer({
     [xs, series, width, height],
   );
 
+  // Wave WD2-wiring-echarts · cross-filter dispatch on candlestick bar
+  // clicks. Candlestick params shape: `{ dataIndex, value: [open, close,
+  // low, high] }`. We dispatch on `xCh.field` using `xs[dataIndex]` —
+  // the row's x-axis label (e.g. an ISO date for a time-series). The
+  // `value` array is the OHLC tuple, not the categorical key we want.
+  const dashboardTile = useDashboardTileContext();
+  const onCandlestickClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as { dataIndex?: number };
+      const idx = p?.dataIndex;
+      if (typeof idx !== "number" || idx < 0 || idx >= xs.length) return;
+      const label = xs[idx];
+      if (label == null) return;
+      dispatchCrossFilter({
+        column: xCh.field,
+        value: toFilterValue(label),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, xCh.field, xs],
+  );
+
   return (
     <EChartsBase
       width={width}
       height={height}
       ariaLabel={ariaLabel ?? spec.config?.title?.text ?? "Candlestick"}
       optionsKey={optionsKey}
+      onChartClick={dashboardTile ? onCandlestickClick : undefined}
       buildOptions={(_e: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: commonText(theme),

@@ -11,7 +11,7 @@
  * flat data, treemap renders a single-level partition by category.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -20,6 +20,8 @@ import {
   type Row,
 } from "@/lib/charts/encodingResolver";
 import { EChartsBase, type ChartTheme, type EChartsType } from "./EChartsBase";
+import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
+import { dispatchCrossFilter, toFilterValue } from "@/pages/Dashboard/lib/crossFilter";
 
 export interface TreemapRendererProps {
   spec: ChartSpecV2;
@@ -50,6 +52,31 @@ export function TreemapRenderer({
   if (!labelCh || !valueCh) {
     throw new Error("treemap mark requires x (label) and y (value) encodings");
   }
+
+  // Wave WD2-wiring-echarts · cross-filter dispatch on leaf clicks.
+  // Treemap params shape: `{ name, value, data: { name, value, children? } }`.
+  // We dispatch only when there are no children (i.e., the user clicked a
+  // leaf, not a parent group); clicking a parent group with `nodeClick: false`
+  // is already a no-op for the built-in zoom, so adding a parent-group
+  // dispatch would surprise the user. Outside a dashboard tile the click
+  // is unbound — `useDashboardTileContext` returns null, the handler is
+  // `undefined`, and `EChartsBase` doesn't wire `inst.on('click', ...)`.
+  const dashboardTile = useDashboardTileContext();
+  const onChartClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as { data?: { name?: unknown; children?: unknown[] } };
+      const name = p?.data?.name;
+      const isLeaf = !Array.isArray(p?.data?.children) || p.data.children.length === 0;
+      if (!isLeaf || name == null) return;
+      dispatchCrossFilter({
+        column: labelCh.field,
+        value: toFilterValue(name),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, labelCh.field],
+  );
 
   // Build hierarchy: if color is set, group by it as parent; else flat.
   const tree = useMemo<TreemapNode[]>(() => {
@@ -101,6 +128,7 @@ export function TreemapRenderer({
         "Treemap"
       }
       optionsKey={optionsKey}
+      onChartClick={dashboardTile ? onChartClick : undefined}
       buildOptions={(_echarts: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: {

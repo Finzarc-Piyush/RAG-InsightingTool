@@ -23,6 +23,16 @@ export interface EChartsBaseProps {
   width: number;
   height: number;
   ariaLabel?: string;
+  /**
+   * Wave WD2-wiring-echarts · optional click handler bound via
+   * `instance.on('click', ...)` once at mount. The latest callback is
+   * tracked in a ref so identity churn on re-renders doesn't require
+   * unbind/rebind; ECharts' native click event fires regardless of
+   * `nodeClick` / `roam` settings on individual series. When omitted
+   * (chat / explorer / share preview surfaces, or marks without a
+   * meaningful categorical click target), no click handler is bound.
+   */
+  onChartClick?: (params: unknown) => void;
 }
 
 export interface ChartTheme {
@@ -72,11 +82,20 @@ export function EChartsBase({
   width,
   height,
   ariaLabel,
+  onChartClick,
 }: EChartsBaseProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<{
     instance: ReturnType<EChartsType["init"]> | null;
   }>({ instance: null });
+
+  // Wave WD2-wiring-echarts · ref-tracked click callback so a single
+  // `inst.on('click', ...)` bind at mount picks up the latest
+  // handler on every render without an unbind/rebind cycle.
+  const onChartClickRef = useRef<EChartsBaseProps["onChartClick"]>(onChartClick);
+  useEffect(() => {
+    onChartClickRef.current = onChartClick;
+  }, [onChartClick]);
 
   // Mount + theme observer.
   useEffect(() => {
@@ -95,6 +114,14 @@ export function EChartsBase({
       });
       chartRef.current.instance = inst;
       inst.setOption(buildOptions(echarts, theme) as never);
+      // Wave WD2-wiring-echarts · bind the click event once. The
+      // closure reads from the ref so callback identity changes don't
+      // require rebinding. ECharts `inst.dispose()` in the cleanup
+      // below removes every bound handler in one shot — no explicit
+      // `inst.off('click', ...)` needed.
+      inst.on("click", (params: unknown) => {
+        onChartClickRef.current?.(params);
+      });
     }
     void init();
 
