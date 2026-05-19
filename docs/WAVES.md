@@ -11,6 +11,55 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-wiring-rest-cat · 5 categorical visx renderers cmd / ctrl-click → drill-through.** Fans out the WD3-wiring-bar pattern to the 5 categorical visx renderers that already share the BarRenderer's dispatch contract: [`ArcRenderer`](../client/src/lib/charts/visxRenderers/ArcRenderer.tsx) (donut / pie segments), [`FunnelRenderer`](../client/src/lib/charts/visxRenderers/FunnelRenderer.tsx) (stages), [`BoxRenderer`](../client/src/lib/charts/visxRenderers/BoxRenderer.tsx) (box-plot rectangles), [`WaterfallRenderer`](../client/src/lib/charts/visxRenderers/WaterfallRenderer.tsx) (delta bars, total-row carve-out preserved), and [`ComboRenderer`](../client/src/lib/charts/visxRenderers/ComboRenderer.tsx) (bars only — secondary-axis line marks deliberately un-wired). Each renderer's existing onClick widens to accept the event and gains a top-of-handler modifier-key branch that short-circuits `dispatchCrossFilter` and routes to `dispatchDrillThrough` instead. The wave closes the categorical-mark drill-through surface for the visx pack at 6 of 10 visx renderers, matching the WD2-wiring-rest-cat scope wave-for-wave.
+
+  **What landed.** Each renderer received the same three localised changes that landed in WD3-wiring-bar:
+    - **Import.** Added a second named-import block right after the existing `crossFilter` block: `import { dispatchDrillThrough, isModifierClick } from "@/pages/Dashboard/lib/drillThrough";`. The two intent surfaces sit side-by-side at the import header so future Claude reads them as a pair. Pre-existing `dispatchCrossFilter` / `isCrossFilterActive` / `toFilterValue` imports untouched (regression-pinned per renderer).
+    - **Arrow widening.** Each renderer's `onClick` arrow widens from `() => {...}` to `(event: React.MouseEvent<SVGElement>) => {...}`. `React.MouseEvent` resolves as a global namespace (every renderer already references it elsewhere — `onMouseMove` handlers, `localPoint(e)` typings, etc. — without importing `React` as a default). Same typing convention as WD3-wiring-bar.
+    - **Modifier branch.** Added at the TOP of the handler body, BEFORE the pre-existing `dispatchCrossFilter` call:
+      ```ts
+      if (isModifierClick(event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: <renderer-specific>,
+          value: <renderer-specific raw>,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      ```
+      The renderer-specific column + raw-value pairs mirror the WD2-wiring-rest-cat dispatch carve-outs exactly:
+
+      | Renderer | column expression | value (raw — NOT toFilterValue-coerced) |
+      |---|---|---|
+      | ArcRenderer | `labelCh.field` | `arc.data.rawKey` |
+      | FunnelRenderer | `enc.x.field` | `s.rawLabel` |
+      | BoxRenderer | `enc.x.field` | `s.rawCategory` |
+      | WaterfallRenderer | `enc.x.field` | `b.rawCategory` (gated by outer `clickable` which AND-skips `b.isTotal`) |
+      | ComboRenderer | `xCh.field` | `rawX` (bars only; secondary-axis `<LinePath>` not wired) |
+
+      Drill-through value coercion is the SERVER's job — the type-original raw (Date / number / categorical string) lets the server's canonicaliser pick the right comparison for each column's inferred type. Coercing client-side via `toFilterValue` would lossy-stringify before the server saw it. Every renderer already lifts `dashboardFilters = dashboardTile?.filters` at the top for the WD2-dim concern, so the WD3 payload reuses the same reference — no extra state.
+
+    The WaterfallRenderer carve-out is the only carve-out worth calling out individually: its existing `onClick` is gated by `clickable` rather than `dashboardTile` (because `clickable = !!dashboardTile && !b.isTotal` — the AND-gate that excludes synthetic summary rows from cross-filter dispatch). The drill wiring keeps `clickable` as the outer guard, so a cmd-click on a total-row bar can't fire a drill event either. This is the right shape: total rows aren't categorical values the user can drill-into in the first place. ComboRenderer's carve-out is structural: only the bar `<Bar>` element gets the drill branch; the secondary-axis `<LinePath>` stays continuous and un-wired (a continuous trend has no per-mark categorical brush target — same rationale as the WD2-wiring-rest-cat dispatch carve-out).
+
+    - [client/src/pages/Dashboard/lib/wd3WiringRestCat.test.ts](../client/src/pages/Dashboard/lib/wd3WiringRestCat.test.ts) (new, ~240 LOC). 44 source-inspection tests across 11 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4. The suite parametrises over a 5-renderer table (name × column × raw-value × outer-gate × tileId-expression) so each new tested contract auto-fans across all five renderers. The test file structure:
+      - **Per-renderer suites (5 × 2 suites = 10)**: imports (2 cases each: drillThrough named imports + WD2 untouched) and onClick branch shape (6 cases each: React.MouseEvent typing + branch order + 5-field payload + `return;` + raw-value negative pin + plain-click regression).
+      - **Cross-cutting suite (1, 4 cases)**: `WD3-wiring-rest-cat` marker per renderer; column-symmetry pin (dim + cross-filter + drill all on the same column); WaterfallRenderer's outer gate is `clickable` (not `dashboardTile`); ComboRenderer dispatches drill EXACTLY ONCE (regex-counted — bars-only carve-out enforcement).
+
+  **Why this design.** The 5 renderers share a common dispatch shape with BarRenderer (lifted `dashboardFilters` + `dashboardTile` + `dispatchCrossFilter` body + raw-value passed via `toFilterValue` on the wire), so the WD3 wiring layered on top is equally uniform — minimum-divergence between the WD2 and WD3 concerns in each renderer makes the per-renderer mental model "what does click do" simply "branch on modifier key, drill or filter". The alternative — extracting a shared `useChartTileClickIntent(event, payload)` hook or a `handleChartMarkClick(event, payload, mode)` helper — was rejected for the same reason WD3-wiring-bar rejected it: the WD2-wiring family established that per-renderer click handlers live inline + close over the cell / arc / segment local, which is the right pattern for the data-binding context. A helper would force every WD3-wiring-* wave to refactor its renderer's call-site shape away from the inline closure pattern that the rest of the family uses.
+
+  The parametric test-table choice (a single `renderers: Array<{ name, src, column, rawValue, tileIdExpr, outerGate }>` driving a `for (const r of renderers)` loop) is the right shape because the 5 renderers vary in exactly 4 axes (column expression, raw-value identifier, outer gate, tile-id expression), and a non-parametric test file would have repeated the same 6 assertions 5 times verbatim. The cross-cutting suite stays separate because it tests properties that DON'T vary per renderer (the WD3-wiring-rest-cat marker, column-symmetry across the three concerns, structural carve-outs that are renderer-specific in their own right). A future WD3-wiring-rest-rect wave that varies in a 5th axis (e.g. "dispatches two columns at once") can extend the table cleanly.
+
+  **Tests.** Server test suite: WD3-wiring-rest-cat (44 new in `wd3WiringRestCat.test.ts`) all pass. WD3-wiring-bar (12) + drillThrough (11) + WD2-wiring-rest-cat (36) + WD2-dim-cat (27) all green — 130 cumulative drill / dim / wiring tests across the categorical visx renderer surface, zero regression. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline). Zero new typecheck errors from this wave.
+
+  **Out of scope.**
+    - **Heatmap drill (WD3-wiring-rest-rect)**. RectRenderer cells sit at the intersection of two columns (rowCh × colCh) so the drill payload needs a two-column shape — the current single-`column: string` event field doesn't accommodate that. Two possible shapes: (1) widen `DrillThroughEvent.column` to `string | { row: string; col: string }`; (2) keep single-column and fire two events with the receiver de-duping. Decision deferred to the WD3-wiring-rest-rect wave proper because the receiving side-sheet (WD3-sheet) also needs to know which shape to consume.
+    - **Trend drill (WD3-wiring-rest-trend)**. Line / Area renderers' WD2-wiring shape is nearest-x lookup via `bisector(...).left` — different shape from the per-mark click. Drill mirrors that lookup but the test fixture is more involved (jsdom-style mock of `localPoint(e)` + `bisector` invariants). Separate wave.
+    - **Scatter drill (WD3-wiring-rest-point)**. PointRenderer dispatches per-point on `p.rawColor` (WD2-wiring-rest-point); drill follows but is gated on `crossFilterReady` + `!!colorCh` like the dispatch.
+    - **ECharts drill (WD3-wiring-echarts)**. The 5 ECharts marks (Treemap / Sunburst / Sankey / Calendar / Candlestick) read clicks via `onChartClick(params)` with a different event-shape contract — `params` carries `componentType`, `dataIndex`, `value`, etc. rather than `MouseEvent`. `isModifierClick` already accepts a sparse `{ metaKey?, ctrlKey? }` event shape and ECharts' params object includes the `event.event` raw DOM event we can read; but the per-renderer wiring decision (which dataIndex maps to which column / rawValue) is the substantive work.
+    - **Hover-time cursor change** (e.g. `cursor: "zoom-in"` on cmd-hover). Skipped here for the same reason as WD3-wiring-bar — needs a keydown / keyup window listener. Polish wave, deferred.
+
 - **2026-05-19** — **Wave WD3-wiring-bar · BarRenderer cmd / ctrl-click → drill-through.** First per-renderer consumer of yesterday's [`drillThrough.ts`](../client/src/pages/Dashboard/lib/drillThrough.ts) foundation. The pre-WD3 [`BarRenderer.tsx`](../client/src/lib/charts/visxRenderers/BarRenderer.tsx) `onClick` had a clean two-branch shape — `if (grid.inGrid) { grid.toggleFilter(...) }` for chat / explorer + `if (dashboardTile) { dispatchCrossFilter(...) }` for the dashboard tile — with both branches firing on a parameterless arrow `() => {...}`. The WD3 modifier-key intent layers ON TOP without disturbing either pre-existing path: a top-of-handler branch gated on `dashboardTile && isModifierClick(event)` short-circuits to `dispatchDrillThrough({...})` and returns; non-modifier clicks fall through to the pre-wave behaviour byte-for-byte.
 
   **What landed.**
