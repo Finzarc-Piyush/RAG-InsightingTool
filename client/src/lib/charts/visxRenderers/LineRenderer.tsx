@@ -63,6 +63,7 @@ import {
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -84,6 +85,16 @@ interface SeriesPoint {
 interface Series {
   key: string;
   color: string;
+  /**
+   * WD2-dim-trend · type-original color value, preserved alongside the
+   * stringified `key` so the dim check can call `isCrossFilterActive`
+   * with the same shape the WD2 cross-filter event recorded (Date /
+   * number / boolean dispatched values must compare against their
+   * raw form, not the `asString`-coerced key, otherwise non-string
+   * dims would never match). Undefined for the single-series (no
+   * colorCh) case — the dim factor only applies when colorCh exists.
+   */
+  rawColor?: unknown;
   points: SeriesPoint[];
 }
 
@@ -135,6 +146,23 @@ export function LineRenderer({
   // x value flows through `dispatchCrossFilter`. Outside a dashboard
   // tile `dashboardTile` is null and the click is a no-op.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-trend · dim non-matching series at 0.4 of their existing
+  // stroke/fill opacities when an active categorical cross-filter on
+  // `colorCh.field` doesn't include the series's rawColor. Per-series
+  // dim (not per-point) because line trends are continuous on a numeric
+  // / temporal x-axis — there's no per-point categorical brush target.
+  // Gated on colorCh — single-series trends have no color field to
+  // filter against; nothing to dim. Mirrors WD2-wiring-rest-point's
+  // colorCh-gating shape.
+  const dashboardFilters = dashboardTile?.filters;
+  const colorFilterSel = colorCh
+    ? dashboardFilters?.[colorCh.field]
+    : undefined;
+  const dashboardDimActive =
+    !!colorCh &&
+    !!colorFilterSel &&
+    colorFilterSel.type === "categorical" &&
+    colorFilterSel.values.length > 0;
 
   // WC6.1 brush-to-zoom state (declared up-front so memos that derive scales
   // can read zoomRange).
@@ -166,22 +194,37 @@ export function LineRenderer({
         },
       ];
     }
-    const groups = new Map<string, SeriesPoint[]>();
+    // WD2-dim-trend · preserve the type-original color value (first
+    // occurrence per group) alongside the stringified key.
+    const groups = new Map<
+      string,
+      { points: SeriesPoint[]; rawColor: unknown }
+    >();
     for (const r of data) {
-      const k = asString(colorCh.accessor(r));
-      const arr = groups.get(k) ?? [];
-      arr.push({
-        x: xCh.accessor(r),
-        y: asNumber(yCh.accessor(r)),
-        raw: r,
-      });
-      groups.set(k, arr);
+      const rawColor = colorCh.accessor(r);
+      const k = asString(rawColor);
+      const existing = groups.get(k);
+      if (existing) {
+        existing.points.push({
+          x: xCh.accessor(r),
+          y: asNumber(yCh.accessor(r)),
+          raw: r,
+        });
+      } else {
+        groups.set(k, {
+          points: [
+            { x: xCh.accessor(r), y: asNumber(yCh.accessor(r)), raw: r },
+          ],
+          rawColor,
+        });
+      }
     }
     let i = 0;
-    return Array.from(groups.entries()).map(([key, points]) => ({
+    return Array.from(groups.entries()).map(([key, agg]) => ({
       key,
       color: qualitativeColor(i++),
-      points,
+      rawColor: agg.rawColor,
+      points: agg.points,
     }));
   }, [data, xCh, yCh, colorCh]);
 
@@ -567,6 +610,17 @@ export function LineRenderer({
           {series.map((s) => {
             const op = seriesOpacity(s.key, legend.state);
             if (op === 0) return null;
+            // WD2-dim-trend · series-level dim factor against colorCh
+            // filter membership; preserves legend's `op` and the series
+            // color, only multiplies the stroke opacity by 0.4 for
+            // series whose rawColor isn't in the active selection.
+            const isDashboardDimmed =
+              dashboardDimActive &&
+              !isCrossFilterActive(
+                dashboardFilters!,
+                colorCh!.field,
+                s.rawColor,
+              );
             return (
               <LinePath
                 key={`s-${s.key}`}
@@ -575,7 +629,7 @@ export function LineRenderer({
                 y={(p) => yScale(p.y) ?? 0}
                 stroke={s.color}
                 strokeWidth={2}
-                strokeOpacity={op}
+                strokeOpacity={op * (isDashboardDimmed ? 0.4 : 1)}
                 curve={curveMonotoneX}
                 fill="none"
               />

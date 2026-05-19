@@ -41,6 +41,7 @@ import {
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -61,6 +62,13 @@ interface SeriesPoint {
 interface Series {
   key: string;
   color: string;
+  /**
+   * WD2-dim-trend · type-original color value, preserved alongside the
+   * stringified `key` so the dim check can call `isCrossFilterActive`
+   * with the same shape the WD2 cross-filter event recorded. Undefined
+   * for the single-series (no colorCh) case.
+   */
+  rawColor?: unknown;
   points: SeriesPoint[];
 }
 
@@ -98,6 +106,20 @@ export function AreaRenderer({
   // nearest x value in any (non-stacked) series. Outside a dashboard
   // tile `dashboardTile` is null and the click is a no-op.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-trend · dim non-matching series at 0.4 of their existing
+  // fill/stroke opacities when an active categorical cross-filter on
+  // `colorCh.field` doesn't include the series's rawColor. Per-series
+  // (not per-point) because area trends are continuous on x. Gated on
+  // colorCh — single-series areas have no color field to filter against.
+  const dashboardFilters = dashboardTile?.filters;
+  const colorFilterSel = colorCh
+    ? dashboardFilters?.[colorCh.field]
+    : undefined;
+  const dashboardDimActive =
+    !!colorCh &&
+    !!colorFilterSel &&
+    colorFilterSel.type === "categorical" &&
+    colorFilterSel.values.length > 0;
 
   const series: Series[] = useMemo(() => {
     if (!colorCh) {
@@ -112,18 +134,36 @@ export function AreaRenderer({
         },
       ];
     }
-    const groups = new Map<string, SeriesPoint[]>();
+    // WD2-dim-trend · preserve the type-original color value (first
+    // occurrence per group) alongside the stringified key.
+    const groups = new Map<
+      string,
+      { points: SeriesPoint[]; rawColor: unknown }
+    >();
     for (const r of data) {
-      const k = asString(colorCh.accessor(r));
-      const arr = groups.get(k) ?? [];
-      arr.push({ x: xCh.accessor(r), y: asNumber(yCh.accessor(r)) });
-      groups.set(k, arr);
+      const rawColor = colorCh.accessor(r);
+      const k = asString(rawColor);
+      const existing = groups.get(k);
+      if (existing) {
+        existing.points.push({
+          x: xCh.accessor(r),
+          y: asNumber(yCh.accessor(r)),
+        });
+      } else {
+        groups.set(k, {
+          points: [
+            { x: xCh.accessor(r), y: asNumber(yCh.accessor(r)) },
+          ],
+          rawColor,
+        });
+      }
     }
     let i = 0;
-    return Array.from(groups.entries()).map(([key, points]) => ({
+    return Array.from(groups.entries()).map(([key, agg]) => ({
       key,
       color: qualitativeColor(i++),
-      points,
+      rawColor: agg.rawColor,
+      points: agg.points,
     }));
   }, [data, xCh, yCh, colorCh]);
 
@@ -316,6 +356,19 @@ export function AreaRenderer({
         {[...stacked].reverse().map((s) => {
           const op = seriesOpacity(s.key, legend.state);
           if (op === 0) return null;
+          // WD2-dim-trend · series-level dim factor against colorCh
+          // filter membership. Applied to BOTH the AreaClosed fill
+          // and the bordering LinePath stroke so a dimmed series is
+          // visually coherent (an area dim without the line dim would
+          // produce a stark border around faded fills).
+          const isDashboardDimmed =
+            dashboardDimActive &&
+            !isCrossFilterActive(
+              dashboardFilters!,
+              colorCh!.field,
+              s.rawColor,
+            );
+          const dimMul = isDashboardDimmed ? 0.4 : 1;
           return (
             <Group key={`a-${s.key}`}>
               <AreaClosed
@@ -324,7 +377,7 @@ export function AreaRenderer({
                 y={(p) => yScale(p.y) ?? 0}
                 yScale={yScale}
                 fill={s.color}
-                fillOpacity={0.55 * op}
+                fillOpacity={0.55 * op * dimMul}
                 curve={curveMonotoneX}
               />
               <LinePath
@@ -333,7 +386,7 @@ export function AreaRenderer({
                 y={(p) => yScale(p.y) ?? 0}
                 stroke={s.color}
                 strokeWidth={1.5}
-                strokeOpacity={op}
+                strokeOpacity={op * dimMul}
                 curve={curveMonotoneX}
                 fill="none"
               />
