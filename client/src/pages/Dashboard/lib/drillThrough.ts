@@ -25,9 +25,26 @@
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
 
 /**
+ * A single (column, value) pin within a drill-through request. Most
+ * renderers fire single-pin events; multi-dim renderers (RectRenderer
+ * heatmap, where a cell intersects row × col) attach additional pins
+ * via `DrillThroughEvent.extraPins`.
+ *
+ * `value` is `unknown` to match `toFilterValue` / `isCrossFilterActive`'s
+ * widening precedent — the server endpoint applies its own
+ * canonicalisation per the inferred column type.
+ */
+export interface DrillThroughPin {
+  /** The data column the clicked mark binds to. */
+  column: string;
+  /** The clicked value. Numbers / Dates / null are coerced server-side. */
+  value: unknown;
+}
+
+/**
  * Event the renderer dispatches when a chart mark is cmd/ctrl-clicked.
  * The receiving DashboardView opens a side-sheet that fetches the rows
- * backing the clicked (column, value) pair within `chartId`.
+ * backing the clicked (column, value) pin(s) within `chartId`.
  *
  * Mirrors the `CrossFilterEvent` shape (same `column` / `value` /
  * `sourceTileId` field naming) plus a `chartId` so the server endpoint
@@ -38,14 +55,35 @@ import type { ActiveChartFilters } from "../../../lib/chartFilters";
  * raw rows). `value` is `unknown` to match `toFilterValue` /
  * `isCrossFilterActive`'s widening precedent — the server endpoint
  * applies its own canonicalisation.
+ *
+ * **Multi-pin drill targets** (RectRenderer heatmap and future N-dim
+ * marks). The primary `(column, value)` pin is the FIRST drill axis;
+ * `extraPins` is an optional ordered list of additional pins to
+ * intersect with the primary. The server endpoint applies the primary
+ * + all extras as WHERE clauses BEFORE returning rows — semantically
+ * an AND-intersection (rows that match every pin). The receiver UI
+ * renders the primary + extras symmetrically (the primary's only
+ * special role is in the sheet's title / description text). Single-
+ * pin renderers (bar / cat-5 / line / area / point / 5 ECharts marks)
+ * omit `extraPins` — the field is fully optional and backwards-compat
+ * for them.
  */
 export interface DrillThroughEvent {
   /** Chart whose backing rows to fetch. */
   chartId: string;
-  /** The data column the clicked mark binds to (encoding.x.field, color.field, …). */
+  /** Primary pin's column (encoding.x.field, color.field, row dim, …). */
   column: string;
-  /** The clicked value. Numbers / Dates / null are coerced server-side. */
+  /** Primary pin's value. */
   value: unknown;
+  /**
+   * Additional pins for multi-dimensional drill targets. RectRenderer
+   * (heatmap) fires one event with the row dim as the primary
+   * `column` / `value` pair and the col dim as `extraPins[0]`. The
+   * server endpoint applies primary + all extras as WHERE clauses
+   * BEFORE returning rows (AND-intersection). Empty / undefined →
+   * single-pin event (the WD3-wiring-bar / cat / trend / point shape).
+   */
+  extraPins?: DrillThroughPin[];
   /** Tile id originating the click — mirrors CrossFilterEvent.sourceTileId. */
   sourceTileId?: string;
   /**

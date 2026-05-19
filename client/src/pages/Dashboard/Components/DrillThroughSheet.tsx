@@ -19,6 +19,7 @@
  * controlled with `open` + `onOpenChange`).
  */
 
+import { Fragment } from "react";
 import {
   Sheet,
   SheetContent,
@@ -106,6 +107,30 @@ export function DrillThroughSheet({
                 </dd>
               </dl>
             </section>
+
+            {event.extraPins && event.extraPins.length > 0 ? (
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Additional pins
+                </h3>
+                <dl className="mt-2 grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5">
+                  {event.extraPins.map((pin) => (
+                    <Fragment key={pin.column}>
+                      <dt className="font-mono text-muted-foreground">
+                        {pin.column}
+                      </dt>
+                      <dd className="font-mono text-foreground">
+                        {toFilterValue(pin.value)}
+                      </dd>
+                    </Fragment>
+                  ))}
+                </dl>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Server intersects the primary pin with these as an
+                  AND-filter before returning rows.
+                </p>
+              </section>
+            ) : null}
 
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

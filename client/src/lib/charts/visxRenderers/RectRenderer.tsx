@@ -43,6 +43,10 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface RectRendererProps {
   spec: ChartSpecV2;
@@ -252,7 +256,38 @@ export function RectRenderer({
                 style={dashboardTile ? { cursor: "pointer" } : undefined}
                 onClick={
                   dashboardTile
-                    ? () => {
+                    ? (event: React.MouseEvent<SVGRectElement>) => {
+                        // WD3-wiring-rest-rect · cmd / ctrl-click fires
+                        // ONE drill-through event carrying BOTH dims
+                        // (the row × col intersection). The foundation
+                        // gained an `extraPins` field for this case:
+                        // primary pin = row dim; extraPins[0] = col
+                        // dim. Server endpoint applies primary + all
+                        // extras as WHERE clauses BEFORE returning
+                        // rows (AND-intersection). The `return;` is
+                        // single-intent-load-bearing — without it a
+                        // cmd-click would fire BOTH drill AND the two
+                        // cross-filter dispatches below. Raw values
+                        // (not toFilterValue-coerced) — server-side
+                        // canonicaliser picks Date / number /
+                        // categorical comparison per inferred column
+                        // type.
+                        if (isModifierClick(event)) {
+                          dispatchDrillThrough({
+                            chartId: dashboardTile.tileId,
+                            column: rowCh.field,
+                            value: rowRawByKey.get(row),
+                            extraPins: [
+                              {
+                                column: colCh.field,
+                                value: colRawByKey.get(col),
+                              },
+                            ],
+                            sourceTileId: dashboardTile.tileId,
+                            filters: dashboardFilters,
+                          });
+                          return;
+                        }
                         // Two-dim dispatch: row + col, in row-first order.
                         // Each event is independently toggled by
                         // `applyCrossFilter`, so a re-click on the same
