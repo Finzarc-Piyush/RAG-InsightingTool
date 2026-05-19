@@ -8,7 +8,7 @@
  * Dual-axis y2 not supported on area (use line + area combo via combo mark).
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { AreaClosed, LinePath } from "@visx/shape";
 import { scaleLinear, scalePoint, scaleTime } from "@visx/scale";
@@ -50,6 +50,23 @@ import {
   dispatchDrillThrough,
   isModifierClick,
 } from "@/pages/Dashboard/lib/drillThrough";
+// Wave WI4-wiring-area · alt-drag on the area surface routes the
+// brushed sub-domain to explain-this-slice. AreaRenderer has no
+// pre-existing brush mechanics, so this wave ADDS the mouse-down /
+// move / up state + a `<rect>` overlay from scratch (mirroring the
+// LineRenderer shape) but DELIBERATELY OMITS the brush-to-zoom
+// branch — Area charts are rarely zoomed and the disambiguation
+// complexity LineRenderer has (plain drag = zoom, alt drag = explain)
+// is not warranted here. Plain drag is a no-op; click paths
+// (cross-filter, drill-through on cmd/ctrl) continue to flow through
+// the existing onClick handler.
+import {
+  BRUSH_MIN_PX,
+  dispatchExplainSlice,
+  isBrushDrag,
+  makeCategoricalRegion,
+  makeTemporalRegion,
+} from "@/pages/Dashboard/lib/explainSlice";
 
 export interface AreaRendererProps {
   spec: ChartSpecV2;
@@ -126,6 +143,29 @@ export function AreaRenderer({
     !!colorFilterSel &&
     colorFilterSel.type === "categorical" &&
     colorFilterSel.values.length > 0;
+
+  // Wave WI4-wiring-area · brush state. AreaRenderer has no brush-to-
+  // zoom (deliberate scope decision — Area charts rarely warrant zoom),
+  // so this state is consumed ONLY by the WI4 alt-drag dispatcher. A
+  // plain drag updates brushEnd as the cursor moves but doesn't fire
+  // any dispatch at mouseUp; an alt-drag does. The `<rect>` overlay
+  // renders during any drag (alt or plain) so the user sees the brush
+  // affordance and can release alt before mouseUp to cancel.
+  const [brushStart, setBrushStart] = useState<number | null>(null);
+  const [brushEnd, setBrushEnd] = useState<number | null>(null);
+  // Wave WI4-wiring-area · captures the alt-key state at brushDown so
+  // the parameterless onBrushUp handler can branch to explain-this-
+  // slice. useRef (not useState) because the flag doesn't drive a
+  // re-render. Mirrors LineRenderer's `brushExplainRef` shape.
+  const brushExplainRef = useRef<boolean>(false);
+
+  // Wave WI4-wiring-area · reset brush state when the underlying data
+  // changes (encoding shelf change, cross-filter applied, etc.). Stale
+  // brush coords on stale data would render a misleading overlay.
+  useEffect(() => {
+    setBrushStart(null);
+    setBrushEnd(null);
+  }, [data]);
 
   const series: Series[] = useMemo(() => {
     if (!colorCh) {
@@ -250,6 +290,89 @@ export function AreaRenderer({
     return v ?? 0;
   };
 
+  // Wave WI4-wiring-area · brush mouse handlers. The shape mirrors
+  // LineRenderer's onBrushDown / onMouseMove / onBrushUp but without
+  // the zoom branch in onBrushUp (Area doesn't need it). The handlers
+  // co-exist with the existing onClick: a clean click (no drag) fires
+  // mouseDown → mouseUp (small distance, reset state, return) → click
+  // (existing cross-filter / drill-through logic); an alt-drag fires
+  // mouseDown → mouseMove* → mouseUp (drag ≥ BRUSH_MIN_PX + alt held
+  // → dispatchExplainSlice, reset state); a plain drag fires
+  // mouseDown → mouseMove* → mouseUp (drag ≥ BRUSH_MIN_PX, no alt →
+  // reset state, no dispatch). The browser does NOT fire `click` after
+  // a drag, so the two handlers don't conflict.
+  const onBrushDown = (e: React.MouseEvent<SVGElement>) => {
+    const pt = localPoint(e);
+    if (!pt) return;
+    const x = pt.x - MARGIN.left;
+    if (x < 0 || x > innerWidth) return;
+    setBrushStart(x);
+    setBrushEnd(x);
+    brushExplainRef.current = e.altKey === true;
+  };
+
+  const onBrushMove = (e: React.MouseEvent<SVGElement>) => {
+    if (brushStart === null) return;
+    if (!(e.buttons & 1)) return;
+    const pt = localPoint(e);
+    if (!pt) return;
+    const x = pt.x - MARGIN.left;
+    setBrushEnd(Math.max(0, Math.min(innerWidth, x)));
+  };
+
+  const onBrushUp = () => {
+    if (brushStart === null || brushEnd === null) return;
+    const lo = Math.min(brushStart, brushEnd);
+    const hi = Math.max(brushStart, brushEnd);
+    // Click-vs-drag threshold from the WI4 foundation. Sub-threshold
+    // drags are treated as a click — reset state and let the existing
+    // svg onClick handler fire (cross-filter / drill-through). The
+    // browser fires `click` after a same-position mouseUp, so this
+    // branch yields control cleanly.
+    if (!isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX)) {
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+      return;
+    }
+    // Alt-drag → dispatch explain-this-slice. Plain drag → no-op
+    // (Area has no brush-to-zoom). Gated on dashboardTile because
+    // outside a dashboard there's no panel receiver.
+    if (brushExplainRef.current && dashboardTile) {
+      let region = null;
+      if (isTemporal) {
+        const dom = (xScale as ReturnType<typeof scaleTime<number>>).domain();
+        const domMin = (dom[0] as Date).getTime();
+        const domMax = (dom[1] as Date).getTime();
+        const startMs = domMin + (lo / innerWidth) * (domMax - domMin);
+        const endMs = domMin + (hi / innerWidth) * (domMax - domMin);
+        region = makeTemporalRegion(startMs, endMs);
+      } else {
+        const xs = Array.from(
+          new Set(data.map((r) => asString(xCh.accessor(r)))),
+        );
+        const i0 = Math.max(0, Math.floor((lo / innerWidth) * xs.length));
+        const i1 = Math.min(
+          xs.length,
+          Math.ceil((hi / innerWidth) * xs.length),
+        );
+        region = makeCategoricalRegion(xs.slice(i0, i1));
+      }
+      if (region) {
+        dispatchExplainSlice({
+          chartId: dashboardTile.tileId,
+          column: xCh.field,
+          region,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+      }
+    }
+    brushExplainRef.current = false;
+    setBrushStart(null);
+    setBrushEnd(null);
+  };
+
   const xTickFormat = useMemo(
     () => makeAxisTickFormatter(xCh.field),
     [xCh.field],
@@ -302,7 +425,37 @@ export function AreaRenderer({
       height={Math.max(0, height - (showLegend ? 28 : 0))}
       role="img"
       aria-label={accessibleLabel}
-      style={dashboardTile ? { cursor: "pointer" } : undefined}
+      // Wave WI4-wiring-area · cursor reflects the active brush. During
+      // a drag, show `ew-resize` (the same affordance LineRenderer uses
+      // for its brush). Outside a drag, fall back to the WD2 pointer if
+      // the area is mounted inside a dashboard tile, else default.
+      style={
+        brushStart !== null
+          ? { cursor: "ew-resize" }
+          : dashboardTile
+            ? { cursor: "pointer" }
+            : undefined
+      }
+      // Wave WI4-wiring-area · brush handlers gated on dashboardTile.
+      // Outside a dashboard the brush has no receiver (no panel to
+      // open), so attaching the handlers would just cause confusing
+      // visual feedback. Inside a dashboard, mouseDown / move / up
+      // power the alt-drag → explain-this-slice intent; the existing
+      // onClick co-exists for cross-filter / drill-through clicks.
+      onMouseDown={dashboardTile ? onBrushDown : undefined}
+      onMouseMove={dashboardTile ? onBrushMove : undefined}
+      onMouseUp={dashboardTile ? onBrushUp : undefined}
+      onMouseLeave={
+        dashboardTile
+          ? () => {
+              if (brushStart !== null) {
+                brushExplainRef.current = false;
+                setBrushStart(null);
+                setBrushEnd(null);
+              }
+            }
+          : undefined
+      }
       onClick={
         dashboardTile
           ? (e: React.MouseEvent<SVGElement>) => {
@@ -362,6 +515,27 @@ export function AreaRenderer({
           strokeDasharray="2,2"
           numTicks={targetYTickCount(innerHeight)}
         />
+        {/* Wave WI4-wiring-area · brush rectangle while dragging. Same
+            styling as LineRenderer's overlay (primary tint at 0.1
+            fill + 0.4 stroke + dashed 3 3) so the brush affordance
+            reads consistently across the two trend renderers.
+            pointerEvents="none" so the overlay never intercepts the
+            mouseUp / click that would otherwise be captured by the
+            svg's handlers. */}
+        {brushStart !== null && brushEnd !== null && (
+          <rect
+            x={Math.min(brushStart, brushEnd)}
+            y={0}
+            width={Math.abs(brushEnd - brushStart)}
+            height={innerHeight}
+            fill="hsl(var(--primary))"
+            fillOpacity={0.1}
+            stroke="hsl(var(--primary))"
+            strokeOpacity={0.4}
+            strokeDasharray="3 3"
+            pointerEvents="none"
+          />
+        )}
         {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
           <line
             x1={0}

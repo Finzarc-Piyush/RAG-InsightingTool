@@ -55,13 +55,16 @@ describe("WD2-wiring-rest-trend · LineRenderer cross-filter wiring", () => {
     assert.match(lineSrc, /const dashboardTile = useDashboardTileContext\(\);/);
   });
 
-  it("dispatch fires inside the existing onBrushUp click-treatment branch (Math.abs(hi - lo) < 6)", () => {
-    // The dispatch must sit AFTER the 6-px guard but BEFORE the
-    // brush-state reset so the recorded click position is still
-    // available for the nearest-x lookup.
+  it("dispatch fires inside the existing onBrushUp click-treatment branch (sub-BRUSH_MIN_PX drag)", () => {
+    // The dispatch must sit AFTER the click-vs-drag guard but BEFORE
+    // the brush-state reset so the recorded click position is still
+    // available for the nearest-x lookup. WI4-wiring-trend replaced
+    // the prior inline `Math.abs(hi - lo) < 6` with the foundation
+    // helper `!isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX)`;
+    // semantics identical, threshold lifted into the foundation.
     assert.match(
       lineSrc,
-      /if \(Math\.abs\(hi - lo\) < 6\) \{[\s\S]*?if \(dashboardTile\) \{[\s\S]*?dispatchCrossFilter\(\{[\s\S]*?\}\);[\s\S]*?\}[\s\S]*?setBrushStart\(null\);/,
+      /if \(!isBrushDrag\(brushStart, brushEnd, BRUSH_MIN_PX\)\) \{[\s\S]*?if \(dashboardTile\) \{[\s\S]*?dispatchCrossFilter\(\{[\s\S]*?\}\);[\s\S]*?\}[\s\S]*?setBrushStart\(null\);/,
     );
   });
 
@@ -110,10 +113,17 @@ describe("WD2-wiring-rest-trend · AreaRenderer cross-filter wiring", () => {
     assert.match(areaSrc, /const dashboardTile = useDashboardTileContext\(\);/);
   });
 
-  it("svg sets cursor:pointer only when the dashboard tile context is present", () => {
+  it("svg sets cursor:pointer when the dashboard tile context is present (idle state)", () => {
+    // WI4-wiring-area widened the cursor expression to ALSO show
+    // `ew-resize` during an active brush. The pre-WI4-wiring-area
+    // shape was `dashboardTile ? { cursor: "pointer" } : undefined`;
+    // now it's `brushStart !== null ? { cursor: "ew-resize" } :
+    // dashboardTile ? { cursor: "pointer" } : undefined`. The
+    // pointer cursor must remain the IDLE-state affordance inside a
+    // dashboard — the regex anchors on that branch.
     assert.match(
       areaSrc,
-      /style=\{dashboardTile\s*\?\s*\{\s*cursor:\s*"pointer"\s*\}\s*:\s*undefined\}/,
+      /:\s*dashboardTile\s*\n?\s*\?\s*\{\s*cursor:\s*"pointer"\s*\}\s*\n?\s*:\s*undefined/,
     );
   });
 
