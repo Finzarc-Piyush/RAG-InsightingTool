@@ -40,7 +40,7 @@ export const BRUSH_MIN_PX = 6;
 
 /**
  * A captured brush region in data-space. Discriminated union covers
- * the three x-axis flavours every WI4-wiring target binds to:
+ * the four flavours every WI4-wiring target binds to:
  *
  *  - `numeric`: continuous quantitative axis (BarRenderer with
  *    numeric x, RegressionRenderer, scatter w/ numeric x). Bounds
@@ -55,13 +55,24 @@ export const BRUSH_MIN_PX = 6;
  *    rendered x-axis labels that fall inside the brush rectangle —
  *    `filterRowsByBrushRegion` matches rows whose `column` value
  *    coerces to one of these labels.
+ *  - `box2d`: 2D rectangular brush (PointRenderer scatter — the only
+ *    chart kind with two independently-continuous axes). Bounds are
+ *    inclusive on both axes — `xMin <= rowX <= xMax && yMin <= rowY
+ *    <= yMax`. The y-axis column name is bound ON the region itself
+ *    (rather than passed as a separate `filterRowsByBrushRegion`
+ *    argument) because, unlike the three 1D variants whose y-axis is
+ *    irrelevant to row matching, a box2d brush needs the second
+ *    column name at filter time. Caller passes the x-column via
+ *    `filterRowsByBrushRegion`'s third arg as usual; the y-column
+ *    rides on the region.
  *
  * Pre-normalised: `start <= end` for the range variants; `values`
  * is non-empty for `categorical` (an empty brush degenerates to
- * "no slice" and the renderer should not dispatch). The constructor
- * helpers (`makeNumericRegion` / `makeTemporalRegion` /
- * `makeCategoricalRegion`) enforce both invariants so callers can't
- * fire a malformed event.
+ * "no slice" and the renderer should not dispatch); `xMin < xMax`
+ * AND `yMin < yMax` for `box2d` (zero-area rejected — no rows to
+ * filter against). The constructor helpers (`makeNumericRegion` /
+ * `makeTemporalRegion` / `makeCategoricalRegion` / `makeBox2dRegion`)
+ * enforce both invariants so callers can't fire a malformed event.
  */
 export type BrushRegion =
   | { readonly kind: "numeric"; readonly start: number; readonly end: number }
@@ -73,6 +84,14 @@ export type BrushRegion =
   | {
       readonly kind: "categorical";
       readonly values: readonly string[];
+    }
+  | {
+      readonly kind: "box2d";
+      readonly xMin: number;
+      readonly xMax: number;
+      readonly yMin: number;
+      readonly yMax: number;
+      readonly yColumn: string;
     };
 
 /**
@@ -184,6 +203,40 @@ export function makeCategoricalRegion(
 }
 
 /**
+ * Wave WI4-foundation-box2d · normalise a 2D rectangular region
+ * (PointRenderer scatter brush) so `xMin <= xMax` and `yMin <= yMax`.
+ * Returns `null` for a zero-area region (either dimension collapses)
+ * or non-finite inputs on any of the four bounds.
+ *
+ * The y-column name is bound onto the region itself because, unlike
+ * the three 1D variants whose y-axis is irrelevant to row matching,
+ * a box2d brush needs both axes' column names at filter time. The
+ * caller passes the x-column via `filterRowsByBrushRegion`'s third
+ * arg as usual; the y-column rides on the region.
+ *
+ * Construction-helper that lets PointRenderer pass raw mouseDown /
+ * mouseUp data-space bounds without pre-sorting — same shape as the
+ * three 1D constructors.
+ */
+export function makeBox2dRegion(
+  ax: number,
+  bx: number,
+  ay: number,
+  by: number,
+  yColumn: string,
+): BrushRegion | null {
+  if (!Number.isFinite(ax) || !Number.isFinite(bx)) return null;
+  if (!Number.isFinite(ay) || !Number.isFinite(by)) return null;
+  const xMin = Math.min(ax, bx);
+  const xMax = Math.max(ax, bx);
+  const yMin = Math.min(ay, by);
+  const yMax = Math.max(ay, by);
+  if (xMin === xMax) return null;
+  if (yMin === yMax) return null;
+  return { kind: "box2d", xMin, xMax, yMin, yMax, yColumn };
+}
+
+/**
  * Coerce a row value to the millis-since-epoch form used for
  * `temporal` region matching. Mirrors the chart util `asTime`'s
  * shape (Date / ISO string / numeric ms). Returns `NaN` for
@@ -258,6 +311,25 @@ export function filterRowsByBrushRegion<T extends Record<string, unknown>>(
       const t = asTimeMs(row[column]);
       if (!Number.isFinite(t)) return false;
       return t >= startMs && t <= endMs;
+    });
+  }
+  if (region.kind === "box2d") {
+    // Wave WI4-foundation-box2d · two-axis bounded filter. `column`
+    // is the x-axis (same convention as numeric/temporal); the y-
+    // axis column rides on the region itself. Both dimensions use
+    // the same null/empty-string drop + Number() coercion as the
+    // numeric branch so string-typed numerics from CSV / JSON match
+    // cleanly without silent dropouts.
+    const { xMin, xMax, yMin, yMax, yColumn } = region;
+    return rows.filter((row) => {
+      const xv = row[column];
+      const yv = row[yColumn];
+      if (xv === null || xv === undefined || xv === "") return false;
+      if (yv === null || yv === undefined || yv === "") return false;
+      const x = typeof xv === "number" ? xv : Number(xv);
+      const y = typeof yv === "number" ? yv : Number(yv);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      return x >= xMin && x <= xMax && y >= yMin && y <= yMax;
     });
   }
   // categorical

@@ -117,10 +117,17 @@ export function hashGlobalFilters(filters: ActiveChartFilters): string {
  * supplied so non-brush regen call sites (the WI2 per-tile footer)
  * keep their existing two-segment keys byte-identical.
  *
- * Three region kinds get three fixed serialisations:
+ * Four region kinds get four fixed serialisations:
  *  - `numeric`     → `n:<start>..<end>`
  *  - `temporal`    → `t:<startMs>..<endMs>`
  *  - `categorical` → `c:<v1>|<v2>|…`
+ *  - `box2d`       → `b2:<xMin>..<xMax>x<yMin>..<yMax>;y:<yColumn>`
+ *    (Wave WI4-foundation-box2d). The `;y:<yColumn>` suffix is
+ *    load-bearing: two scatter brushes with the same pixel-rectangle
+ *    bounds on a chart whose y-encoding changes (e.g. from `sales`
+ *    to `revenue`) describe DIFFERENT sub-regions and must not share
+ *    a cache slot. tileId-level separation isn't sufficient because
+ *    the dashboard tile id is stable across encoding edits.
  *
  * Categorical value order is preserved (not sorted) because the
  * brushed band-scale slot order is itself a signal — a brush over
@@ -141,6 +148,8 @@ export function hashBrushRegion(region: BrushRegion | undefined): string {
       return `t:${region.startMs}..${region.endMs}`;
     case "categorical":
       return `c:${region.values.join("|")}`;
+    case "box2d":
+      return `b2:${region.xMin}..${region.xMax}x${region.yMin}..${region.yMax};y:${region.yColumn}`;
   }
 }
 

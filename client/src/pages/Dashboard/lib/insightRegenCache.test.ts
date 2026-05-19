@@ -298,6 +298,190 @@ describe("WI4-cache-key · hashBrushRegion — byte stability", () => {
   });
 });
 
+describe("WI4-foundation-box2d · hashBrushRegion — box2d kind", () => {
+  it("hashes box2d regions as b2:xMin..xMaxxyMin..yMax;y:yColumn", () => {
+    // Format pin: `b2:` discriminator + `..`-separated bound pairs +
+    // `x` joining the two axes + `;y:<yColumn>` suffix. The yColumn
+    // suffix is load-bearing because two scatters whose y-encoding
+    // changes (sales → revenue) describe DIFFERENT sub-regions even
+    // at identical pixel-rectangle bounds — tileId alone can't
+    // disambiguate them since the tile id is stable across encoding
+    // edits.
+    const r: BrushRegion = {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "price",
+    };
+    assert.equal(hashBrushRegion(r), "b2:0..10x0..100;y:price");
+  });
+
+  it("produces identical hashes for identical box2d regions", () => {
+    const a: BrushRegion = {
+      kind: "box2d",
+      xMin: 1,
+      xMax: 2,
+      yMin: 3,
+      yMax: 4,
+      yColumn: "y",
+    };
+    const b: BrushRegion = {
+      kind: "box2d",
+      xMin: 1,
+      xMax: 2,
+      yMin: 3,
+      yMax: 4,
+      yColumn: "y",
+    };
+    assert.equal(hashBrushRegion(a), hashBrushRegion(b));
+  });
+
+  it("differentiates box2d from numeric at the same x-bounds", () => {
+    // A 1D numeric brush over [0, 10] and a 2D box2d brush whose
+    // x-bounds happen to also be [0, 10] are different regions —
+    // the `b2:` discriminator prevents collision.
+    const n: BrushRegion = { kind: "numeric", start: 0, end: 10 };
+    const b: BrushRegion = {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    };
+    assert.notEqual(hashBrushRegion(n), hashBrushRegion(b));
+  });
+
+  it("differentiates two box2d regions whose ONLY difference is yColumn", () => {
+    // Pin: yColumn IS load-bearing in the hash. Without the `;y:`
+    // suffix, two scatters with identical pixel-rectangle bounds on
+    // different y-encodings would silently share a cache slot.
+    const a: BrushRegion = {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "sales",
+    };
+    const b: BrushRegion = {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "revenue",
+    };
+    assert.notEqual(hashBrushRegion(a), hashBrushRegion(b));
+  });
+
+  it("differentiates box2d bounds on either axis (xMin, xMax, yMin, yMax all material)", () => {
+    const base: Extract<BrushRegion, { kind: "box2d" }> = {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    };
+    const variants: Extract<BrushRegion, { kind: "box2d" }>[] = [
+      { ...base, xMin: 1 },
+      { ...base, xMax: 11 },
+      { ...base, yMin: 1 },
+      { ...base, yMax: 101 },
+    ];
+    const baseHash = hashBrushRegion(base);
+    for (const v of variants) {
+      assert.notEqual(hashBrushRegion(v), baseHash);
+    }
+  });
+});
+
+describe("WI4-foundation-box2d · buildCacheKey collision avoidance — box2d", () => {
+  it("two box2d brushes on the same tile+filters but different rectangles do NOT collide", () => {
+    const cache = createInsightRegenCache();
+    const tile = "tile_chart_scatter";
+    const fh = hashGlobalFilters({});
+    const k1 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({
+        kind: "box2d",
+        xMin: 0,
+        xMax: 50,
+        yMin: 0,
+        yMax: 50,
+        yColumn: "y",
+      }),
+    );
+    const k2 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({
+        kind: "box2d",
+        xMin: 50,
+        xMax: 100,
+        yMin: 50,
+        yMax: 100,
+        yColumn: "y",
+      }),
+    );
+    cache.set(k1, makeEntry("lower-left quadrant insight"));
+    cache.set(k2, makeEntry("upper-right quadrant insight"));
+    assert.notEqual(k1, k2);
+    assert.equal(cache.get(k1)?.text, "lower-left quadrant insight");
+    assert.equal(cache.get(k2)?.text, "upper-right quadrant insight");
+  });
+
+  it("a box2d brush does NOT collide with a numeric brush at the same x-bounds on the same tile+filters", () => {
+    // Pre-WI4-foundation-box2d the 1D numeric variant was the only
+    // shape that carried numeric bounds; after this wave a scatter
+    // can carry a 2D box2d at bounds that happen to match. The kind
+    // discriminator keeps the two slots distinct.
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({});
+    const numericKey = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "numeric", start: 0, end: 10 }),
+    );
+    const boxKey = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({
+        kind: "box2d",
+        xMin: 0,
+        xMax: 10,
+        yMin: 0,
+        yMax: 100,
+        yColumn: "y",
+      }),
+    );
+    assert.notEqual(numericKey, boxKey);
+  });
+
+  it("identical box2d brushes on the same tile+filters share a cache hit", () => {
+    const cache = createInsightRegenCache();
+    const tile = "tile_chart_scatter";
+    const fh = hashGlobalFilters({});
+    const region: BrushRegion = {
+      kind: "box2d",
+      xMin: 10,
+      xMax: 20,
+      yMin: 30,
+      yMax: 40,
+      yColumn: "y",
+    };
+    const k1 = buildCacheKey(tile, fh, hashBrushRegion(region));
+    const k2 = buildCacheKey(tile, fh, hashBrushRegion({ ...region }));
+    cache.set(k1, makeEntry("box insight"));
+    assert.equal(k1, k2);
+    assert.equal(cache.get(k2)?.text, "box insight");
+  });
+});
+
 describe("WI4-cache-key · buildCacheKey with regionHash — backwards compat", () => {
   it("omits the third segment entirely when regionHash is undefined (2-arg call shape)", () => {
     assert.equal(buildCacheKey("tile_a", "f"), "tile_a::f");

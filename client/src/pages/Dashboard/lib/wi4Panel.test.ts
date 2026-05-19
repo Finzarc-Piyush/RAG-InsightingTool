@@ -180,6 +180,28 @@ describe("WI4-panel · formatRegion discriminates on region.kind", () => {
     );
     assert.match(panelSrc, /…\s*\+\$\{more\} more/);
   });
+
+  it("box2d region → `[xMin, xMax] × yColumn [yMin, yMax]` Cartesian-product display (Wave WI4-foundation-box2d)", () => {
+    // The Cartesian-product `×` between the two ranges + the
+    // yColumn label between them tells the reader WHAT the y-bounds
+    // apply to (a box2d region carries the yColumn on the region
+    // itself; the panel surfaces it in the display so the bounds
+    // aren't ambiguous).
+    assert.match(
+      panelSrc,
+      /\[\$\{region\.xMin\},\s*\$\{region\.xMax\}\]\s*×\s*\$\{region\.yColumn\}\s*\[\$\{region\.yMin\},\s*\$\{region\.yMax\}\]/,
+    );
+  });
+
+  it("formatRegion's branches form an exhaustive switch on region.kind (typecheck-load-bearing)", () => {
+    // After the Wave WI4-foundation-box2d widening, formatRegion
+    // must check kind === "categorical" explicitly (rather than
+    // falling through) — otherwise the type narrows to
+    // `categorical | box2d` and `region.values` no longer compiles.
+    // Negative pin: the older "// categorical" fall-through (without
+    // an explicit kind check) is a regression.
+    assert.match(panelSrc, /region\.kind\s*===\s*["']categorical["']/);
+  });
 });
 
 // ── ExplainSlicePanel · null event (closed) branch ─────────────────

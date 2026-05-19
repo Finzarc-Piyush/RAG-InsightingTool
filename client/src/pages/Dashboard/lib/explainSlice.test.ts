@@ -24,6 +24,7 @@ import {
   dispatchExplainSlice,
   filterRowsByBrushRegion,
   isBrushDrag,
+  makeBox2dRegion,
   makeCategoricalRegion,
   makeNumericRegion,
   makeTemporalRegion,
@@ -140,6 +141,173 @@ describe("WI4-foundation · makeCategoricalRegion", () => {
     >;
     src.push("C");
     assert.deepEqual([...r.values], ["A", "B"]);
+  });
+});
+
+describe("WI4-foundation-box2d · makeBox2dRegion", () => {
+  it("normalises so xMin <= xMax AND yMin <= yMax regardless of input order", () => {
+    // A mouseDown-at-(50,80) → mouseUp-at-(10,20) drag yields raw
+    // coords (ax=50, bx=10, ay=80, by=20); the constructor sorts both
+    // axes independently so the resulting bounds describe the same
+    // rectangle regardless of drag direction.
+    const r = makeBox2dRegion(50, 10, 80, 20, "price");
+    assert.deepEqual(r, {
+      kind: "box2d",
+      xMin: 10,
+      xMax: 50,
+      yMin: 20,
+      yMax: 80,
+      yColumn: "price",
+    });
+  });
+
+  it("returns null for a zero-width region (xMin === xMax)", () => {
+    // A vertical-line brush (cursor moved only in y) is treated as a
+    // click on the x-axis — degenerate to no slice. Symmetric with
+    // makeNumericRegion's zero-width guard.
+    assert.equal(makeBox2dRegion(10, 10, 0, 100, "y"), null);
+  });
+
+  it("returns null for a zero-height region (yMin === yMax)", () => {
+    // A horizontal-line brush (cursor moved only in x) is the
+    // symmetric degenerate — also no slice.
+    assert.equal(makeBox2dRegion(0, 100, 50, 50, "y"), null);
+  });
+
+  it("returns null for non-finite inputs on any of the four bounds", () => {
+    // PointRenderer's scale inversion can yield NaN for a brush that
+    // starts outside the inner plot — defensive guard ensures no
+    // malformed event ever dispatches.
+    assert.equal(makeBox2dRegion(Number.NaN, 10, 0, 1, "y"), null);
+    assert.equal(makeBox2dRegion(0, Number.NaN, 0, 1, "y"), null);
+    assert.equal(makeBox2dRegion(0, 1, Number.NaN, 1, "y"), null);
+    assert.equal(makeBox2dRegion(0, 1, 0, Number.NaN, "y"), null);
+    assert.equal(makeBox2dRegion(Number.POSITIVE_INFINITY, 1, 0, 1, "y"), null);
+    assert.equal(makeBox2dRegion(0, 1, 0, Number.NEGATIVE_INFINITY, "y"), null);
+  });
+
+  it("carries the y-column name on the region (NOT on the dispatch event)", () => {
+    // Unlike numeric/temporal/categorical (where filter-time only
+    // needs the x-column, passed via filterRowsByBrushRegion's third
+    // arg), box2d filters on two columns. The y-column rides on the
+    // region itself so the dispatch event's shape doesn't need to
+    // widen — `column` stays the x-column.
+    const r = makeBox2dRegion(0, 10, 0, 100, "revenue") as Extract<
+      BrushRegion,
+      { kind: "box2d" }
+    >;
+    assert.equal(r.yColumn, "revenue");
+  });
+});
+
+describe("WI4-foundation-box2d · filterRowsByBrushRegion — box2d region", () => {
+  it("keeps rows whose x AND y both fall inside [xMin,xMax] × [yMin,yMax]", () => {
+    const rows = [
+      { x: 5, y: 50 }, // x in [0,10] y in [0,100] → keep
+      { x: 5, y: 150 }, // y out → drop
+      { x: 50, y: 50 }, // x out → drop
+      { x: 0, y: 0 }, // boundary → keep (inclusive)
+      { x: 10, y: 100 }, // boundary → keep (inclusive)
+    ];
+    const out = filterRowsByBrushRegion(rows, "x", {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    });
+    assert.deepEqual(out, [
+      { x: 5, y: 50 },
+      { x: 0, y: 0 },
+      { x: 10, y: 100 },
+    ]);
+  });
+
+  it("uses the region's yColumn (NOT the caller's `column` arg) for the y-axis", () => {
+    // Pin the column-routing: the `column` arg is the x-axis only;
+    // the y-axis column rides on the region. A future refactor that
+    // tries to overload `column` for both axes would break this pin.
+    const rows = [
+      { revenue: 5, units: 50 },
+      { revenue: 5, units: 200 },
+      { revenue: 50, units: 50 },
+    ];
+    const out = filterRowsByBrushRegion(rows, "revenue", {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "units",
+    });
+    assert.deepEqual(out, [{ revenue: 5, units: 50 }]);
+  });
+
+  it("coerces string-typed numerics on BOTH axes (CSV/JSON-parsed rows match cleanly)", () => {
+    // Symmetric with the numeric variant's same-shape coercion.
+    // Real-world rows often arrive with stringified numerics from
+    // backend serialisation; the box2d predicate matches them.
+    const rows = [
+      { x: "5", y: "50" },
+      { x: "abc", y: "50" },
+      { x: "5", y: "xyz" },
+      { x: 7, y: 90 },
+    ];
+    const out = filterRowsByBrushRegion(rows, "x", {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    });
+    assert.deepEqual(out, [
+      { x: "5", y: "50" },
+      { x: 7, y: 90 },
+    ]);
+  });
+
+  it("drops rows whose x OR y column is missing / null / empty-string", () => {
+    // The empty-string drop is symmetric with the numeric variant's
+    // pre-coercion check — `Number("") === 0` would silently match a
+    // [0, N] range without it.
+    const rows = [
+      { x: 5, y: 50 },
+      { x: null, y: 50 },
+      { x: 5, y: null },
+      { x: undefined, y: 50 },
+      { x: 5, y: undefined },
+      { x: "", y: 50 },
+      { x: 5, y: "" },
+      { y: 50 }, // missing x entirely
+      { x: 5 }, // missing y entirely
+    ];
+    const out = filterRowsByBrushRegion(rows, "x", {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 100,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    });
+    assert.deepEqual(out, [{ x: 5, y: 50 }]);
+  });
+
+  it("returns an empty array when no row matches both bounds", () => {
+    const rows = [
+      { x: 5, y: 200 },
+      { x: 50, y: 5 },
+    ];
+    const out = filterRowsByBrushRegion(rows, "x", {
+      kind: "box2d",
+      xMin: 0,
+      xMax: 10,
+      yMin: 0,
+      yMax: 100,
+      yColumn: "y",
+    });
+    assert.deepEqual(out, []);
   });
 });
 
@@ -329,14 +497,23 @@ describe("WI4-foundation · dispatchExplainSlice — SSR-safe behaviour", () => 
     assert.equal(ok, false);
   });
 
-  it("accepts all three BrushRegion variants on the event payload", () => {
-    // Discriminated-union pin: any future widening (e.g. a
-    // `box-2d` region for scatter brushes) MUST add a kind, not
-    // overload these three.
+  it("accepts all four BrushRegion variants on the event payload", () => {
+    // Discriminated-union pin: any FURTHER widening (e.g. a 5th kind
+    // for a polygon-lasso brush) MUST add a kind, not overload these
+    // four. `box2d` was added in Wave WI4-foundation-box2d for
+    // PointRenderer scatter brushes.
     const regions: BrushRegion[] = [
       { kind: "numeric", start: 0, end: 10 },
       { kind: "temporal", startMs: 0, endMs: 1_000 },
       { kind: "categorical", values: ["A"] },
+      {
+        kind: "box2d",
+        xMin: 0,
+        xMax: 10,
+        yMin: 0,
+        yMax: 100,
+        yColumn: "y",
+      },
     ];
     for (const region of regions) {
       const ok = dispatchExplainSlice({

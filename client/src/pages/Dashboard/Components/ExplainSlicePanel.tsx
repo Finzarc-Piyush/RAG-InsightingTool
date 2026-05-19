@@ -105,8 +105,8 @@ function summariseFilters(filters: ActiveChartFilters | undefined): string[] {
 }
 
 /**
- * Format a BrushRegion for the "Pinned slice" section. The three
- * region kinds get three different display shapes:
+ * Format a BrushRegion for the "Pinned slice" section. The four
+ * region kinds get four different display shapes:
  *   - `numeric` → `[start, end]`
  *   - `temporal` → `<startISO> → <endISO>` (full ISO strings; the
  *     user can drill into the slice and see what window they're in,
@@ -115,6 +115,11 @@ function summariseFilters(filters: ActiveChartFilters | undefined): string[] {
  *   - `categorical` → comma-joined values, capped at 10 with a
  *     "… +N more" suffix so a 50-category brush doesn't blow the
  *     panel layout
+ *   - `box2d` (Wave WI4-foundation-box2d) → `[xMin, xMax] × yColumn
+ *     [yMin, yMax]` — Cartesian-product notation surfaces both axes
+ *     symmetrically; the y-column name sits between the two ranges
+ *     so the reader can see WHAT the y-bounds apply to without
+ *     leaving the panel
  */
 const MAX_CATEGORY_PREVIEW = 10;
 function formatRegion(region: BrushRegion): string {
@@ -124,14 +129,17 @@ function formatRegion(region: BrushRegion): string {
   if (region.kind === "temporal") {
     return `${new Date(region.startMs).toISOString()} → ${new Date(region.endMs).toISOString()}`;
   }
-  // categorical
-  const values = region.values;
-  if (values.length <= MAX_CATEGORY_PREVIEW) {
-    return values.join(", ");
+  if (region.kind === "categorical") {
+    const values = region.values;
+    if (values.length <= MAX_CATEGORY_PREVIEW) {
+      return values.join(", ");
+    }
+    const preview = values.slice(0, MAX_CATEGORY_PREVIEW).join(", ");
+    const more = values.length - MAX_CATEGORY_PREVIEW;
+    return `${preview}, … +${more} more`;
   }
-  const preview = values.slice(0, MAX_CATEGORY_PREVIEW).join(", ");
-  const more = values.length - MAX_CATEGORY_PREVIEW;
-  return `${preview}, … +${more} more`;
+  // box2d — Wave WI4-foundation-box2d
+  return `[${region.xMin}, ${region.xMax}] × ${region.yColumn} [${region.yMin}, ${region.yMax}]`;
 }
 
 /** Stable fallback identifier so `useInsightRegen` can be called
