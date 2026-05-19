@@ -75,6 +75,19 @@ import {
   dispatchDrillThrough,
   isModifierClick,
 } from "@/pages/Dashboard/lib/drillThrough";
+// Wave WI4-wiring-trend · alt-drag on the line surface routes the
+// brushed sub-domain to explain-this-slice. Plain drag continues to
+// zoom; cmd/ctrl-click continues to drill-through; this wave layers
+// a third intent that is mutually exclusive at brush-down time. The
+// alt flag is captured in a ref at brushDown time and consumed in
+// brushUp (parameterless handler) — same shape as brushModifierRef.
+import {
+  BRUSH_MIN_PX,
+  dispatchExplainSlice,
+  isBrushDrag,
+  makeCategoricalRegion,
+  makeTemporalRegion,
+} from "@/pages/Dashboard/lib/explainSlice";
 
 export interface LineRendererProps {
   spec: ChartSpecV2;
@@ -182,6 +195,15 @@ export function LineRenderer({
   // drill-through vs cross-filter. useRef (not useState) because the
   // flag doesn't drive re-renders — only the brush rectangle does.
   const brushModifierRef = useRef<boolean>(false);
+  // Wave WI4-wiring-trend · captures the alt-key state at brushDown
+  // so the (parameterless) brushUp handler can branch to explain-this-
+  // slice (alt-drag) vs the pre-existing brush-to-zoom (plain drag).
+  // useRef for the same reason as brushModifierRef. The two refs are
+  // independent — alt + cmd is a no-op intersection (the explain
+  // branch wins because alt is captured in this dedicated ref and
+  // checked before the zoom branch; brushModifierRef is only consumed
+  // in the click path).
+  const brushExplainRef = useRef<boolean>(false);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
 
   // Fix-5 · reset brush state when the underlying data changes (encoding
@@ -381,13 +403,25 @@ export function LineRenderer({
     // only fires the dispatcher on a small-distance click (< 6 px);
     // a real zoom-drag falls through to the existing zoom path.
     brushModifierRef.current = isModifierClick(e);
+    // Wave WI4-wiring-trend · stash the alt flag for the companion
+    // brushUp handler. Alt-drag at mouseUp routes to explain-this-
+    // slice; plain drag falls through to the pre-existing zoom path.
+    // A small-distance click (< BRUSH_MIN_PX) with alt held still
+    // routes to the click path — alt-click on a single x point is
+    // ambiguous (no region to brush), so we let the click branch
+    // handle it (drill / cross-filter based on cmd / ctrl).
+    brushExplainRef.current = e.altKey === true;
   };
 
   const onBrushUp = () => {
     if (brushStart === null || brushEnd === null) return;
     const lo = Math.min(brushStart, brushEnd);
     const hi = Math.max(brushStart, brushEnd);
-    if (Math.abs(hi - lo) < 6) {
+    // Wave WI4-wiring-trend · the click-vs-drag threshold now comes
+    // from the foundation (`BRUSH_MIN_PX = 6`). Semantically identical
+    // to the prior inline `< 6` check; behavioural pin against future
+    // drift.
+    if (!isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX)) {
       // Tiny drag — treat as click; don't zoom. WD2 cross-filter
       // dispatch fires here, before the brush state is reset, so the
       // recorded click position drives the nearest-x lookup. Outside
@@ -429,6 +463,47 @@ export function LineRenderer({
         }
       }
       brushModifierRef.current = false;
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+      return;
+    }
+    // Wave WI4-wiring-trend · alt-drag opens the explain-this-slice
+    // panel for the brushed sub-domain. Computed in data-space:
+    // temporal axis → `{ kind: "temporal", startMs, endMs }`;
+    // categorical axis → `{ kind: "categorical", values }` (the list
+    // of x-axis labels falling inside the brush rect). Dispatch is
+    // gated on `dashboardTile` — outside a dashboard the panel has
+    // no receiver. Returns BEFORE the zoom branch so a clean alt-
+    // drag doesn't also zoom the axis.
+    if (brushExplainRef.current && dashboardTile) {
+      let region = null;
+      if (isTemporal) {
+        const dom = (xScale as ReturnType<typeof scaleTime<number>>).domain();
+        const domMin = (dom[0] as Date).getTime();
+        const domMax = (dom[1] as Date).getTime();
+        const startMs = domMin + (lo / innerWidth) * (domMax - domMin);
+        const endMs = domMin + (hi / innerWidth) * (domMax - domMin);
+        region = makeTemporalRegion(startMs, endMs);
+      } else {
+        const xs = Array.from(
+          new Set(data.map((r) => asString(xCh.accessor(r)))),
+        );
+        const i0 = Math.max(0, Math.floor((lo / innerWidth) * xs.length));
+        const i1 = Math.min(xs.length, Math.ceil((hi / innerWidth) * xs.length));
+        region = makeCategoricalRegion(xs.slice(i0, i1));
+      }
+      if (region) {
+        dispatchExplainSlice({
+          chartId: dashboardTile.tileId,
+          column: xCh.field,
+          region,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+      }
+      brushModifierRef.current = false;
+      brushExplainRef.current = false;
       setBrushStart(null);
       setBrushEnd(null);
       return;

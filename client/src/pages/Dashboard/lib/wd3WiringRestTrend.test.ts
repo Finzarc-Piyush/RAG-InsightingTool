@@ -172,9 +172,13 @@ describe("WD3-wiring-rest-trend · LineRenderer branches on brushModifierRef in 
     // wave's tiny-drag click. The reset must happen on EVERY brushUp
     // exit (whether or not the dispatch fired), so a brush-zoom
     // mouseup with cmd held doesn't leave the flag dirty.
+    // NB: Wave WI4-wiring-trend layered a sibling `brushExplainRef`
+    // reset between the modifier reset and the setBrushStart call;
+    // the regex stays loose enough to accept additional ref resets
+    // before the setBrushStart anchor.
     assert.match(
       lineSrc,
-      /brushModifierRef\.current = false;\s*setBrushStart\(null\);\s*setBrushEnd\(null\);\s*return;/,
+      /brushModifierRef\.current = false;[\s\S]{0,200}?setBrushStart\(null\);\s*setBrushEnd\(null\);\s*return;/,
     );
   });
 
