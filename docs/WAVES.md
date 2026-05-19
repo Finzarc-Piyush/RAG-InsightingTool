@@ -11,6 +11,82 @@
 
 ---
 
+- **2026-05-19** — **Wave WI4-foundation · explain-this-slice pure helper module.** Opens a new feature surface: a THIRD click-intent on chart marks, sibling to WD2's [`crossFilter.ts`](../client/src/pages/Dashboard/lib/crossFilter.ts) and WD3's [`drillThrough.ts`](../client/src/pages/Dashboard/lib/drillThrough.ts). Where WD2 captures a single click on a mark and dispatches a `CrossFilterEvent` (discrete-value filter, dashboard-wide) and WD3 captures a single cmd/ctrl-click and dispatches a `DrillThroughEvent` (rows behind the slice, side sheet), WI4 captures a RECT-DRAG (mouse-down + mouse-up at ≥ 6 px apart) and dispatches an `ExplainSliceEvent` that re-runs the WI2 insight generator on JUST the brushed sub-region. The cmd/ctrl modifier check is irrelevant for this intent — a brush drag is already distinct from a click by virtue of the cursor travel. The brief earmarked WI4 as the most-attractive next candidate after WD3 closed because it opens a feature surface (per-slice explanations) that didn't exist before, distinct from both cross-filter and drill-through in UX intent (panel re-explanation rather than dashboard-wide filter or side-sheet row list). This foundation wave is the WI4 master-plan opener — paired waves WI4-wiring-trend / WI4-wiring-area / WI4-wiring-bar / WI4-panel / WI4-wire follow.
+
+  **What landed.**
+    - New pure-fn module [`client/src/pages/Dashboard/lib/explainSlice.ts`](../client/src/pages/Dashboard/lib/explainSlice.ts) (~285 LOC including JSDoc). Module structure mirrors [`drillThrough.ts`](../client/src/pages/Dashboard/lib/drillThrough.ts) byte-for-byte so the three click-intent modules stay parallel in the renderer's mental model:
+      ```ts
+      export const BRUSH_MIN_PX = 6;
+
+      export type BrushRegion =
+        | { readonly kind: "numeric"; readonly start: number; readonly end: number }
+        | { readonly kind: "temporal"; readonly startMs: number; readonly endMs: number }
+        | { readonly kind: "categorical"; readonly values: readonly string[] };
+
+      export interface ExplainSliceEvent {
+        chartId: string;
+        column: string;
+        region: BrushRegion;
+        sourceTileId?: string;
+        filters?: ActiveChartFilters;
+      }
+
+      export const EXPLAIN_SLICE_EVENT = "marico:explain-slice";
+
+      export function isBrushDrag(start, end, minPx = BRUSH_MIN_PX): boolean { … }
+      export function makeNumericRegion(a, b): BrushRegion | null { … }
+      export function makeTemporalRegion(aMs, bMs): BrushRegion | null { … }
+      export function makeCategoricalRegion(values): BrushRegion | null { … }
+      export function filterRowsByBrushRegion<T>(rows, column, region): T[] { … }
+      export function dispatchExplainSlice(event): boolean { … }
+      ```
+    - **`BRUSH_MIN_PX = 6`** — lifts [`LineRenderer.tsx`](../client/src/lib/charts/visxRenderers/LineRenderer.tsx)'s inline `Math.abs(hi - lo) < 6` click-vs-drag threshold (line 390) into a single shared constant. Subsequent WI4-wiring waves replace those inline checks with the helper so a future tweak lands in one place.
+    - **`BrushRegion` discriminated union** — covers the three x-axis flavours every WI4-wiring target binds to: `numeric` (continuous quantitative axis on BarRenderer with numeric x, scatter); `temporal` (Date / ms axis on Line / Area when `isTemporal`, scatter with Date x); `categorical` (discrete axis on Line / Area / Bar with string x). Storing millis-since-epoch (not `Date`) on the `temporal` variant keeps the event JSON-serialisable so the panel can debounce / dedupe brushes via a stable hash key without `JSON.stringify` exploding on Date objects.
+    - **`ExplainSliceEvent`** — field shape mirrors `DrillThroughEvent` (`chartId` / `column` / `sourceTileId` / `filters`) so the three click-intent events stay co-located. The single new field is `region` — the brushed sub-domain in data-space — which is the load-bearing payload. The receiver (DashboardView in WI4-panel) addresses the right tile via `chartId` + `sourceTileId`, applies `filters` to the global filter context, narrows by `region`, and re-runs `useInsightRegen` against the narrowed rows.
+    - **`EXPLAIN_SLICE_EVENT = "marico:explain-slice"`** — the canonical CustomEvent name. The `marico:` prefix namespaces the event apart from anything visx / ECharts might dispatch on window, matching `CROSS_FILTER_EVENT = "marico:cross-filter"` and `DRILL_THROUGH_EVENT = "marico:drill-through"`.
+    - **`isBrushDrag(start, end, minPx = BRUSH_MIN_PX)`** — pure pixel-distance gate. `null`/`undefined` for either bound returns `false` (a renderer mid-state-reset falls through to the click path rather than throwing). `start === end` returns `false` (zero-width is a click, not a brush). Direction-agnostic (mouseUp left of mouseDown is fine). The 3rd parameter is caller-overrideable — a future renderer with denser marks may want a tighter threshold.
+    - **Constructor helpers** `makeNumericRegion` / `makeTemporalRegion` / `makeCategoricalRegion` — enforce `start <= end` (normalisation), reject zero-width regions (`null` return — caller should fall back to click path), reject non-finite numeric inputs (defensive against zero-width axes where the brush math degenerates), and clone-copy the categorical values array (mutation-free contract — caller can push to its array post-construction without leaking into the event). Renderers call these so they CANNOT fire a malformed event.
+    - **`filterRowsByBrushRegion`** — pure post-filter. Composes with `applyChartFilters` per the WI2 panel pipeline (`applyChartFilters(rows, filters)` → `filterRowsByBrushRegion(…, region)`); the two helpers are predicate-AND filters and commutative. Three branches:
+      - `numeric`: rows whose `column` value coerces to a finite number in `[start, end]`. Explicitly drops `null` / `undefined` / `""` BEFORE coercion (otherwise `Number(null) === 0` would silently match a `[0, N]` range).
+      - `temporal`: rows whose `column` value coerces via private `asTimeMs` (Date / ISO string / numeric ms) to a finite ms in `[startMs, endMs]`. Un-parseable dates drop.
+      - `categorical`: rows whose `column` value coerces via private `asCategoryString` (mirrors `crossFilter.toFilterValue`: null → `"null"`; Date → ISO; other → `String(v)`) is `in` the allowed `Set(values)`. The null-bucket symmetry matters: the WI2 panel will narrow rows AND then re-regenerate, so the brush filter and the cross-filter must agree on what `null` looks like.
+    - **`dispatchExplainSlice(event)`** — SSR-safe CustomEvent dispatcher. Short-circuits to `false` when `typeof window === "undefined"` or `typeof CustomEvent === "undefined"` (chart SSR, node:test harness). Mirrors `dispatchCrossFilter` / `dispatchDrillThrough`'s SSR-safe shape so the three dispatchers are interchangeable in tests.
+    - Paired test file [`client/src/pages/Dashboard/lib/explainSlice.test.ts`](../client/src/pages/Dashboard/lib/explainSlice.test.ts) (~350 LOC, 28 tests across 11 suites). Mirrors `drillThrough.test.ts`'s approach — real import + runtime assertions, not source-inspection (the helper has no React dependency, so we can exercise it directly):
+      - **EXPLAIN_SLICE_EVENT canonical name** (1): `"marico:explain-slice"` pin so a rename breaks loudly.
+      - **BRUSH_MIN_PX = 6** (1): parity pin with LineRenderer's inline threshold.
+      - **isBrushDrag** (4): above / at / below threshold; direction-agnostic; custom minPx override; null / undefined bounds.
+      - **makeNumericRegion** (3): normalisation; zero-width null; NaN / Infinity null.
+      - **makeTemporalRegion** (3): normalisation; zero-width null; non-finite null.
+      - **makeCategoricalRegion** (3): order preserved; empty-list null; defensive clone (post-construct caller mutation doesn't leak).
+      - **filterRowsByBrushRegion · numeric** (3): inclusive bounds; string-typed numeric coercion; drops null / undefined / NaN / missing rows.
+      - **filterRowsByBrushRegion · temporal** (2): Date / ISO / ms inputs all match; un-parseable dates drop.
+      - **filterRowsByBrushRegion · categorical** (4): stringified match; number / boolean coercion; null-bucket symmetry with `toFilterValue`; empty-match returns `[]`.
+      - **filterRowsByBrushRegion · mutation-free** (1): input array unchanged; output is a fresh reference.
+      - **dispatchExplainSlice** (3): SSR-safe `false`; full payload surface (sourceTileId + filters); all three BrushRegion variants accepted on the event payload (discriminated-union pin against a future widening).
+    - Test file appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4 (`L-005`).
+
+  **Why this design.**
+    - **Pure-fn module mirroring [`drillThrough.ts`](../client/src/pages/Dashboard/lib/drillThrough.ts)** — the WI4 brief explicitly said "mirror crossFilter.ts / drillThrough.ts shape". The three modules now form a coherent family: each exports an `EVENT` name, an `Event` interface, a `dispatch*` SSR-safe function, and a small set of pure helpers. Renderers and the receiver DashboardView both read all three in parallel, so structural symmetry beats per-feature ergonomic tuning.
+    - **Discriminated union over generic `{ start, end }`** — three alternatives considered:
+      1. **Single `{ start: unknown; end: unknown; values?: string[] }`** — degenerate type information; the consumer has to type-narrow on every read. The brushed region's KIND is load-bearing (numeric vs temporal vs categorical) — different filter predicates apply per kind — so encoding that in the type is the right call.
+      2. **Per-renderer event types** (`NumericBrushEvent` / `TemporalBrushEvent` / `CategoricalBrushEvent`) — too narrow. The receiver dispatches a single panel UI regardless of region kind; three event types would force three listeners.
+      3. **Discriminated union on `kind`** (chosen). One event listener, one `filterRowsByBrushRegion` call, kind-aware predicates inside. Future region kinds (e.g. `box-2d` for scatter brushes) add a `kind` member without breaking existing consumers.
+    - **Millis-since-epoch on `temporal`, not `Date`** — the receiver hashes the region for cache keys and debouncing; `Date` objects break `JSON.stringify` symmetry (`new Date(0)` → `"1970-01-01T00:00:00.000Z"` is fine, but cyclical references / non-serialisable methods around `Date` complicate downstream piping). Millis is a primitive — trivially serialisable, trivially hashable.
+    - **Constructor helpers (not direct unionconstruction)** — `makeNumericRegion` / `makeTemporalRegion` / `makeCategoricalRegion` enforce normalisation AND zero-width rejection in ONE place. Without them, every per-renderer wiring would re-implement `Math.min(a, b)` / `Math.max(a, b)` and the zero-width guard, drifting over time. The helpers are tiny enough that the consolidation doesn't add real overhead.
+    - **`filterRowsByBrushRegion` as part of the foundation, not the panel** — the brief positioned slice-filtering as the panel's job. But the predicate logic is pure data-transformation with no UI dependency, AND symmetry with `crossFilter`'s `isCrossFilterActive` / `applyCrossFilter` argues for co-locating predicates with their event definitions. WI4-panel will compose `applyChartFilters(rows, filters)` → `filterRowsByBrushRegion(…, region)`; the pure helper here keeps that composition trivial.
+    - **Why `Number(null) === 0` matters** — caught by tests. A row with `{ x: null }` looks like a missing observation, but `Number(null)` silently returns `0`, which falls inside any `[0, N]` brush range and corrupts the slice. The fix is a 4-character `v === null` short-circuit before coercion. Pinning the test against this regression locks in the behavior across future refactors.
+
+  **Tests.** Server test suite: WI4-foundation (28 new in `explainSlice.test.ts`) all pass. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline — zero new errors per invariant).
+
+  **Conventions added.** None. The module follows the established `crossFilter.ts` / `drillThrough.ts` pattern verbatim — no new rule, just the third instance of the same pattern.
+
+  **Out of scope.**
+    - **WI4-wiring-trend / WI4-wiring-area / WI4-wiring-bar.** The per-renderer brush UX wirings — adding `<Brush>`-like mouse-down/mouse-up state to LineRenderer (already partly present for brush-to-zoom), AreaRenderer (no current brush), BarRenderer (no current brush) and routing the dispatch through `dispatchExplainSlice` when `isBrushDrag(start, end)` is truthy. Each is its own atomic wave (~100–150 LOC).
+    - **WI4-panel.** The receiver UI — a Radix Dialog or Sheet that subscribes to `EXPLAIN_SLICE_EVENT`, opens on receipt, narrows rows via `applyChartFilters` → `filterRowsByBrushRegion`, and re-runs `useInsightRegen` against the slice. Separate wave.
+    - **WI4-wire.** Wiring `useInsightRegen` to consume the brushed `filteredRows` so the regenerated insight reflects ONLY the slice. The hook already accepts `filteredData` — the panel passes the narrowed rows in.
+    - **Box-2d region** for scatter brushes (a 2D rectangular brush over (x, y) instead of just x). The discriminated union is intentionally open to a 4th `kind` — adding it requires only a new variant + branch in `filterRowsByBrushRegion`, no consumer changes.
+    - **LineRenderer's brush-to-zoom semantics widening.** The existing brush UX zooms the x-axis; WI4-wiring-trend will need to disambiguate "brush to zoom" vs "brush to explain". One option: the modifier-key approach (alt-drag for explain, plain drag for zoom), inverted from WD3's pattern. The renderer-specific UX decision sits in the wiring wave, not the foundation.
+
 - **2026-05-19** — **Wave WD3-sheet-fetch · DrillThroughSheet fetches real rows from the WD3-server endpoint.** Closes the user-visible WD3 round-trip end-to-end. Pre-this-wave the sheet body showed a dashed-border placeholder pinning the WD3-server endpoint name as the future row source. This wave swaps the placeholder for a TanStack-Query-driven row table that POSTs to the WD3-server endpoint on every distinct drill request, replacing the placeholder section with a real "Underlying rows" section. A cmd / ctrl-click on any of the 15 wired chart marks now slides open the sheet, fetches matching rows from the server (filtered by active filters + primary pin + any extra pins for heatmaps), and renders them in a compact table.
 
   **What landed.**
