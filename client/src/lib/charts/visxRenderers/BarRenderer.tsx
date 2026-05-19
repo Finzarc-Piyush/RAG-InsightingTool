@@ -77,6 +77,13 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-bar · cmd / ctrl-click on a bar dispatches drill-
+// through (open underlying-rows side-sheet) instead of cross-filter.
+// Plain click stays on the WD2 cross-filter path below.
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 import {
   PATTERN_NAMES,
   patternFromIndex,
@@ -758,7 +765,24 @@ export function BarRenderer({
                 }}
                 onClick={
                   interactive
-                    ? () => {
+                    ? (event: React.MouseEvent<SVGElement>) => {
+                        // Wave WD3-wiring-bar · cmd / ctrl-click held
+                        // routes to drill-through (open side-sheet of
+                        // underlying rows), short-circuiting the
+                        // cross-filter path. Gated on `dashboardTile`
+                        // — drill-through is a dashboard-only feature
+                        // (chat / explorer's `grid.inGrid` keeps its
+                        // own filter contract on plain click).
+                        if (dashboardTile && isModifierClick(event)) {
+                          dispatchDrillThrough({
+                            chartId: dashboardTile.tileId,
+                            column: enc.x.field,
+                            value: c.outerRaw,
+                            sourceTileId: dashboardTile.tileId,
+                            filters: dashboardFilters,
+                          });
+                          return;
+                        }
                         if (grid.inGrid) {
                           grid.toggleFilter({
                             field: enc.x.field,
