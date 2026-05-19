@@ -35,6 +35,16 @@
  * `node --import tsx --test` with no DOM. Behavioural tests live in
  * the sibling `insightHistory.test.ts` (real import + runtime
  * assertions, mirroring the WI5 `tileRecommendations.test.ts` shape).
+ *
+ * Wave WI6-persist · cross-session persistence via sessionStorage.
+ * History now survives DashboardView remounts (route changes,
+ * navigation away and back) — but not tab close, matching the
+ * "dashboard-session-lifecycle" framing in the original WI6 comment.
+ * The version-suffixed `STORAGE_KEY_PREFIX = "marico-insight-history-v1"`
+ * isolates the persisted payload from a future schema bump on
+ * `InsightRegenEntry`; v2 readers simply don't find v1 keys and start
+ * empty. See `insightHistoryPersistenceWI6Persist.test.ts` for the
+ * full hydrate/write-through/quota-tolerance contract.
  */
 
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
@@ -42,6 +52,24 @@ import { hashGlobalFilters, type InsightRegenEntry } from "./insightRegenCache";
 
 /** Cap on per-tile history slots. Matches the brief's "last 3 insights". */
 export const MAX_HISTORY_PER_TILE = 3;
+
+/**
+ * Wave WI6-persist · prefix of the sessionStorage key.
+ *
+ * The trailing `-v1` is load-bearing. Any future schema bump on
+ * `InsightRegenEntry` (e.g., promoting `confidenceTier` to required,
+ * adding a required `correlationFingerprint`) MUST also bump this to
+ * `-v2` — old payloads will then silently be missed and the store
+ * starts empty, rather than rendering `undefined` everywhere.
+ *
+ * Callers may append a scope (typically `dashboard.id`) so two
+ * dashboards on the same tab don't share storage slots. The composed
+ * key shape is `${STORAGE_KEY_PREFIX}::${storageScope}` when a scope
+ * is provided, else the bare prefix.
+ */
+export const STORAGE_KEY_PREFIX = "marico-insight-history-v1";
+
+const SCHEMA_VERSION = 1;
 
 export interface InsightHistoryEntry {
   /**
@@ -63,11 +91,117 @@ export interface InsightHistoryEntry {
   recordedAt: number;
 }
 
+/**
+ * Wave WI6-persist · injectable storage adapter for cross-session
+ * persistence. Three methods because `localStorage` / `sessionStorage`
+ * expose three (`getItem` / `setItem` / `removeItem`); the adapter
+ * isolates the store from the browser-only `window` reference so node
+ * tests can run a deterministic in-memory fake.
+ *
+ * Implementations MUST be best-effort: throwing from any method is
+ * caught at the call site, but a clean swallow (return `null` from
+ * read, no-op on write/remove) keeps the failure path quieter.
+ */
+export interface InsightHistoryStorage {
+  read(): string | null;
+  write(data: string): void;
+  remove(): void;
+}
+
 export interface InsightHistoryStoreOptions {
   /** Per-tile slot cap. Default `MAX_HISTORY_PER_TILE` (3). */
   maxPerTile?: number;
   /** Override `Date.now`; injected for deterministic tests. */
   now?: () => number;
+  /**
+   * Wave WI6-persist · storage adapter. Default = a sessionStorage
+   * adapter when `window.sessionStorage` is available, else `null` (no
+   * persistence). Pass `null` explicitly to opt out of persistence in
+   * a browser context. Pass an in-memory fake in node tests.
+   */
+  storage?: InsightHistoryStorage | null;
+  /**
+   * Wave WI6-persist · scope suffix appended to `STORAGE_KEY_PREFIX`.
+   * Typically a dashboard id — keeps two dashboards' histories on
+   * separate keys so navigating between them doesn't surface the
+   * wrong tile slots.
+   */
+  storageScope?: string;
+}
+
+interface PersistedPayload {
+  version: number;
+  tiles: Record<string, InsightHistoryEntry[]>;
+}
+
+function defaultSessionStorageAdapter(
+  key: string,
+): InsightHistoryStorage | null {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+  return {
+    read() {
+      try {
+        return window.sessionStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    write(data) {
+      try {
+        window.sessionStorage.setItem(key, data);
+      } catch {
+        /* swallow quota / blocked-storage errors */
+      }
+    },
+    remove() {
+      try {
+        window.sessionStorage.removeItem(key);
+      } catch {
+        /* swallow */
+      }
+    },
+  };
+}
+
+function isValidHistoryEntry(e: unknown): e is InsightHistoryEntry {
+  if (typeof e !== "object" || e === null) return false;
+  const slot = e as Partial<InsightHistoryEntry>;
+  if (typeof slot.filterHash !== "string") return false;
+  if (typeof slot.filters !== "object" || slot.filters === null) return false;
+  if (typeof slot.entry !== "object" || slot.entry === null) return false;
+  if (typeof (slot.entry as InsightRegenEntry).text !== "string") return false;
+  if (typeof slot.recordedAt !== "number") return false;
+  return true;
+}
+
+function hydrateFromStorage(
+  raw: string | null,
+): Map<string, InsightHistoryEntry[]> {
+  if (raw == null) return new Map();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return new Map();
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as PersistedPayload).version !== SCHEMA_VERSION ||
+    typeof (parsed as PersistedPayload).tiles !== "object" ||
+    (parsed as PersistedPayload).tiles === null
+  ) {
+    return new Map();
+  }
+  const out = new Map<string, InsightHistoryEntry[]>();
+  for (const [tileId, list] of Object.entries(
+    (parsed as PersistedPayload).tiles,
+  )) {
+    if (!Array.isArray(list)) continue;
+    const validated = list.filter(isValidHistoryEntry);
+    if (validated.length > 0) out.set(tileId, validated);
+  }
+  return out;
 }
 
 export interface InsightHistoryStore {
@@ -106,7 +240,50 @@ export function createInsightHistoryStore(
 ): InsightHistoryStore {
   const maxPerTile = opts.maxPerTile ?? MAX_HISTORY_PER_TILE;
   const now = opts.now ?? (() => Date.now());
-  const store = new Map<string, InsightHistoryEntry[]>();
+  const storageKey = opts.storageScope
+    ? `${STORAGE_KEY_PREFIX}::${opts.storageScope}`
+    : STORAGE_KEY_PREFIX;
+  // `opts.storage !== undefined` distinguishes "caller passed null to
+  // opt out" from "caller omitted, so default to sessionStorage". A
+  // simple `??` would conflate the two.
+  const storage =
+    opts.storage !== undefined
+      ? opts.storage
+      : defaultSessionStorageAdapter(storageKey);
+
+  // Wrap the read in try/catch so a custom adapter that throws (rare,
+  // but the default sessionStorage adapter could also throw if the
+  // browser is in a quota-exhausted / private-mode state) yields an
+  // empty store rather than crashing the DashboardView mount.
+  let initialRaw: string | null = null;
+  if (storage) {
+    try {
+      initialRaw = storage.read();
+    } catch {
+      initialRaw = null;
+    }
+  }
+  const store = hydrateFromStorage(initialRaw);
+
+  function persist(): void {
+    if (!storage) return;
+    const payload: PersistedPayload = {
+      version: SCHEMA_VERSION,
+      tiles: Object.fromEntries(store),
+    };
+    let serialised: string;
+    try {
+      serialised = JSON.stringify(payload);
+    } catch {
+      return; // unserialisable payload — best-effort persistence skips
+    }
+    try {
+      storage.write(serialised);
+    } catch {
+      // Quota / locked-storage; swallowed so the in-memory record
+      // semantics still hold even when persistence isn't available.
+    }
+  }
 
   return {
     record(tileId, filters, entry) {
@@ -129,6 +306,7 @@ export function createInsightHistoryStore(
         next = next.slice(0, maxPerTile);
       }
       store.set(tileId, next);
+      persist();
     },
     get(tileId) {
       const list = store.get(tileId);
@@ -138,8 +316,16 @@ export function createInsightHistoryStore(
     clear(tileId) {
       if (tileId === undefined) {
         store.clear();
+        if (storage) {
+          try {
+            storage.remove();
+          } catch {
+            /* swallow — in-memory clear still holds */
+          }
+        }
       } else {
         store.delete(tileId);
+        persist();
       }
     },
   };

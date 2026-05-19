@@ -128,7 +128,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   // dropdown in TileInsightFooter. Same mount-scoped lifecycle as the
   // regen cache. Each ChartTileBody records on a fresh regen and reads
   // the per-tile slice for its dropdown.
-  const insightHistoryStore = useMemo(() => createInsightHistoryStore(), []);
+  // Wave WI6-persist · `storageScope: dashboard.id` scopes the
+  // sessionStorage key so two dashboards on the same tab don't share
+  // history slots. Captured at mount time (empty deps array) to match
+  // the `insightRegenCache` lifetime above; navigation between
+  // dashboards typically remounts DashboardView, so the new mount
+  // hydrates from its own scoped key.
+  const insightHistoryStore = useMemo(
+    () => createInsightHistoryStore({ storageScope: dashboard.id }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // Determine permission: if not provided, check if user owns the dashboard or has edit permission on shared dashboard
   const canEdit = useMemo(() => {
