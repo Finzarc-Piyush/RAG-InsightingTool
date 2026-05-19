@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Edit2, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { CitationHoverCard } from "@/components/CitationHoverCard";
 import { cn } from "@/lib/utils";
 import type { InsightRegenEntry } from "../lib/insightRegenCache";
 
@@ -164,6 +165,13 @@ export function TileInsightFooter({
            * static keyInsight once it lands. Until then the static
            * prose renders so the footer isn't empty during the first
            * regen attempt.
+           *
+           * Wave WI3 · inline backtick-wrapped pack ids inside the
+           * regen text render as `[N]` superscript hover-cards via
+           * `MarkdownRenderer`'s WQ3 integration — no extra wiring
+           * needed here. The `Sources:` row below surfaces the
+           * `InsightRegenEntry.citations` array as a discoverable list
+           * for users who want to see every cited pack at a glance.
            */}
           <MarkdownRenderer content={regen?.entry?.text || insight} />
           {regen?.entry?.regeneratedAt ? (
@@ -172,6 +180,14 @@ export function TileInsightFooter({
               {regen.entry.confidenceTier
                 ? ` · ${regen.entry.confidenceTier} confidence`
                 : ""}
+            </div>
+          ) : null}
+          {regen?.entry?.citations && regen.entry.citations.length > 0 ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+              <span>Sources:</span>
+              {regen.entry.citations.map((packId, i) => (
+                <CitationHoverCard key={packId} packId={packId} index={i + 1} />
+              ))}
             </div>
           ) : null}
           {regen ? (
