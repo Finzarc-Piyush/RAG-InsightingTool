@@ -85,6 +85,16 @@ export function extractFindingEvidence(detail: string): FindingEvidence {
     }
   }
 
+  // Wave WQ8 · categorical effect size: "effect = large", "effect: small",
+  // "effect-size: medium", "effect_magnitude: negligible". Matches the WV2
+  // formatter output AND the sig-test tool's `effect_magnitude` table column
+  // when it lands in narrator prose.
+  const effMatch =
+    /\beffect(?:[-_\s]?(?:size|magnitude))?\s*[=:]\s*(negligible|small|medium|large)\b/i.exec(text);
+  if (effMatch) {
+    evidence.effectMagnitude = effMatch[1].toLowerCase() as FindingEvidence["effectMagnitude"];
+  }
+
   return evidence;
 }
 

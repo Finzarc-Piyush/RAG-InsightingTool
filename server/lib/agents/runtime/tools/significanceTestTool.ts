@@ -42,13 +42,28 @@ import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
  * Defensive: NaN / out-of-range silently drops to the empty suffix
  * (worst case: finding tiers as medium, the pre-WV5 baseline).
  */
-function buildEvidenceSuffix(pValue: number, effectiveN: number): string {
+function buildEvidenceSuffix(
+  pValue: number,
+  effectiveN: number,
+  effectMagnitude?: FindingEvidence["effectMagnitude"],
+): string {
   const evidence: FindingEvidence = {};
   if (Number.isFinite(pValue) && pValue >= 0 && pValue <= 1) {
     evidence.pValue = pValue;
   }
   if (Number.isFinite(effectiveN) && effectiveN >= 0) {
     evidence.n = effectiveN;
+  }
+  // Wave WQ8 · carry the categorical effect-size bucket through into the
+  // finding detail so the WW2 extractor recovers it and WQ1 grades the
+  // finding as LOW when the test was "significant but negligible".
+  if (
+    effectMagnitude === "negligible" ||
+    effectMagnitude === "small" ||
+    effectMagnitude === "medium" ||
+    effectMagnitude === "large"
+  ) {
+    evidence.effectMagnitude = effectMagnitude;
   }
   return composeFindingDetail("", evidence);
 }
@@ -155,6 +170,8 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
           return { ok: false, summary: `run_significance_test: ${result.error}` };
         }
         // Wave WV5 · canonical FindingEvidence suffix. welch_t: combined n.
+        // Wave WQ8 · also carries `result.effectSize.magnitude` so WQ1 can
+        // grade a "significant but negligible" welch_t as LOW.
         return {
           ok: true,
           summary:
@@ -162,6 +179,7 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
             buildEvidenceSuffix(
               result.pValue,
               result.n.sampleA + (result.n.sampleB ?? 0),
+              result.effectSize.magnitude,
             ),
           table: {
             rows: [
@@ -234,11 +252,16 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
         }
         // Wave WV5 · canonical FindingEvidence suffix. paired_t: pair count
         // (not 2 × sampleA — pairs aren't independent observations).
+        // Wave WQ8 · also carries `result.effectSize.magnitude`.
         return {
           ok: true,
           summary:
             result.interpretation +
-            buildEvidenceSuffix(result.pValue, result.n.sampleA),
+            buildEvidenceSuffix(
+              result.pValue,
+              result.n.sampleA,
+              result.effectSize.magnitude,
+            ),
           table: {
             rows: [
               {
@@ -284,11 +307,16 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
       }
       // Wave WV5 · canonical FindingEvidence suffix. chi_square: grand total
       // (sampleA = grandTotal of contingency table; sampleB is unset).
+      // Wave WQ8 · also carries `result.effectSize.magnitude`.
       return {
         ok: true,
         summary:
           result.interpretation +
-          buildEvidenceSuffix(result.pValue, result.n.sampleA),
+          buildEvidenceSuffix(
+            result.pValue,
+            result.n.sampleA,
+            result.effectSize.magnitude,
+          ),
         table: {
           rows: [
             {

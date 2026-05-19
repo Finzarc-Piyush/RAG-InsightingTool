@@ -31,6 +31,15 @@ export interface FindingEvidence {
   /** 95% CI width as a fraction of the point estimate. 0 = perfectly
    *  tight; > 0.5 = noisy. */
   ciRelativeWidth?: number;
+  /** Wave WQ8 · categorical effect-size bucket from significance tests
+   *  (Cohen's d on welch_t / paired_t; Cramér's V on chi_square). Lets the
+   *  classifier distinguish "statistically significant but practically
+   *  negligible" (p ≤ 0.05 with `effectMagnitude = "negligible"`) from "real
+   *  and large" (p ≤ 0.05 with `effectMagnitude = "large"`). p-value answers
+   *  "is it noise?"; effect-magnitude answers "does it matter?". A finding
+   *  that clears the significance bar with a negligible effect is LOW-tier
+   *  regardless of n / p / CI. */
+  effectMagnitude?: "negligible" | "small" | "medium" | "large";
 }
 
 export type ConfidenceTier = "high" | "medium" | "low";
@@ -75,7 +84,8 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
     evidence.n !== undefined ||
     evidence.pValue !== undefined ||
     evidence.rSquared !== undefined ||
-    evidence.ciRelativeWidth !== undefined;
+    evidence.ciRelativeWidth !== undefined ||
+    evidence.effectMagnitude !== undefined;
   if (!hasAnyEvidence) {
     return {
       tier: "medium",
@@ -98,6 +108,13 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
   if (evidence.rSquared !== undefined && evidence.rSquared < 0.2) {
     lowReasons.push(`poor model fit (R²=${evidence.rSquared.toFixed(2)})`);
   }
+  // Wave WQ8 · a "negligible" effect-size bucket is itself a hard-fail
+  // signal: even if p ≤ 0.05 and n is large, the finding is practically
+  // immaterial. This is the load-bearing wedge that lets the narrator
+  // hedge "significant but trivial" results instead of overclaiming.
+  if (evidence.effectMagnitude === "negligible") {
+    lowReasons.push("negligible effect size");
+  }
   if (lowReasons.length > 0) {
     return { tier: "low", reasons: lowReasons, hedge: HEDGE_BY_TIER.low };
   }
@@ -107,7 +124,10 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
     (evidence.n === undefined || evidence.n >= 30) &&
     (evidence.pValue === undefined || evidence.pValue <= 0.05) &&
     (evidence.ciRelativeWidth === undefined || evidence.ciRelativeWidth <= 0.3) &&
-    (evidence.rSquared === undefined || evidence.rSquared >= 0.5);
+    (evidence.rSquared === undefined || evidence.rSquared >= 0.5) &&
+    (evidence.effectMagnitude === undefined ||
+      evidence.effectMagnitude === "medium" ||
+      evidence.effectMagnitude === "large");
   if (passesHigh) {
     if (evidence.n !== undefined && evidence.n >= 30) reasons.push(`solid sample (n=${evidence.n})`);
     if (evidence.pValue !== undefined && evidence.pValue <= 0.05) {
@@ -118,6 +138,11 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
     }
     if (evidence.rSquared !== undefined && evidence.rSquared >= 0.5) {
       reasons.push(`good model fit (R²=${evidence.rSquared.toFixed(2)})`);
+    }
+    if (evidence.effectMagnitude === "large") {
+      reasons.push("large effect size");
+    } else if (evidence.effectMagnitude === "medium") {
+      reasons.push("medium effect size");
     }
     if (reasons.length === 0) reasons.push("no weakening signals detected");
     return { tier: "high", reasons, hedge: HEDGE_BY_TIER.high };
@@ -144,6 +169,11 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
     evidence.rSquared < 0.5
   ) {
     midReasons.push(`modest fit (R²=${evidence.rSquared.toFixed(2)})`);
+  }
+  if (evidence.effectMagnitude === "small") {
+    midReasons.push("small effect size");
+  } else if (evidence.effectMagnitude === "medium") {
+    midReasons.push("medium effect size");
   }
   if (midReasons.length === 0) midReasons.push("evidence partially supports this finding");
   return { tier: "medium", reasons: midReasons, hedge: HEDGE_BY_TIER.medium };

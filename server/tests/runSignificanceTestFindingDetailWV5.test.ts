@@ -99,8 +99,14 @@ describe("Wave WV5 · run_significance_test emits canonical FindingEvidence suff
       ctx as never,
     );
     assert.equal(result.ok, true);
-    // Suffix ends the summary; n = 60 (30 + 30); p is very small (highly significant).
-    assert.match(result.summary, / \(n = 60; (?:p = [0-9.]+|p < 0\.001)\)$/);
+    // Suffix ends the summary; n = 60 (30 + 30); p is very small (highly
+    // significant). Wave WQ8 appends "; effect = <bucket>" inside the same
+    // parenthesised block — the trailing-effect token is optional in the
+    // regex so the test stays robust if future tunings shift the bucket.
+    assert.match(
+      result.summary,
+      / \(n = 60; (?:p = [0-9.]+|p < 0\.001)(?:; effect = (?:negligible|small|medium|large))?\)$/,
+    );
     const recovered = extractFindingEvidence(result.summary);
     assert.equal(recovered.n, 60, "n recovered from suffix");
     assert.ok(recovered.pValue !== undefined, "p recovered from interpretation or suffix");
@@ -127,7 +133,11 @@ describe("Wave WV5 · run_significance_test emits canonical FindingEvidence suff
       ctx as never,
     );
     assert.equal(result.ok, true);
-    assert.match(result.summary, / \(n = 25; (?:p = [0-9.]+|p < 0\.001)\)$/);
+    // Wave WQ8 · optional trailing effect-magnitude token; see welch_t note.
+    assert.match(
+      result.summary,
+      / \(n = 25; (?:p = [0-9.]+|p < 0\.001)(?:; effect = (?:negligible|small|medium|large))?\)$/,
+    );
     const recovered = extractFindingEvidence(result.summary);
     assert.equal(recovered.n, 25);
     assert.ok(recovered.pValue !== undefined);
@@ -155,9 +165,12 @@ describe("Wave WV5 · run_significance_test emits canonical FindingEvidence suff
       ctx as never,
     );
     assert.equal(result.ok, true);
+    // Wave WQ8 · optional trailing effect-magnitude token; see welch_t note.
     assert.match(
       result.summary,
-      new RegExp(` \\(n = ${grandTotal}; (?:p = [0-9.]+|p < 0\\.001)\\)$`),
+      new RegExp(
+        ` \\(n = ${grandTotal}; (?:p = [0-9.]+|p < 0\\.001)(?:; effect = (?:negligible|small|medium|large))?\\)$`,
+      ),
     );
     const recovered = extractFindingEvidence(result.summary);
     assert.equal(recovered.n, grandTotal);

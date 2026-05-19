@@ -69,6 +69,16 @@ export function formatEvidenceForFindingDetail(evidence: FindingEvidence): strin
     const pct = Math.round(evidence.ciRelativeWidth * 100);
     parts.push(`±${pct}% of the estimate`);
   }
+  // Wave WQ8 · canonical categorical effect-size token. Trails the
+  // numeric fields so prose reads "n=…; p=…; effect = large".
+  if (
+    evidence.effectMagnitude === "negligible" ||
+    evidence.effectMagnitude === "small" ||
+    evidence.effectMagnitude === "medium" ||
+    evidence.effectMagnitude === "large"
+  ) {
+    parts.push(`effect = ${evidence.effectMagnitude}`);
+  }
   if (parts.length === 0) return "";
   return ` (${parts.join("; ")})`;
 }
