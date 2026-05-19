@@ -25,6 +25,11 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-cat · cmd / ctrl-click → drill-through.
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface ArcRendererProps {
   spec: ChartSpecV2;
@@ -165,7 +170,20 @@ export function ArcRenderer({
                     style={dashboardTile ? { cursor: "pointer" } : undefined}
                     onClick={
                       dashboardTile
-                        ? () => {
+                        ? (event: React.MouseEvent<SVGElement>) => {
+                            // Wave WD3-wiring-rest-cat · cmd/ctrl-click
+                            // → drill-through (open underlying-rows
+                            // side-sheet) instead of cross-filter.
+                            if (isModifierClick(event)) {
+                              dispatchDrillThrough({
+                                chartId: dashboardTile.tileId,
+                                column: labelCh.field,
+                                value: arc.data.rawKey,
+                                sourceTileId: dashboardTile.tileId,
+                                filters: dashboardFilters,
+                              });
+                              return;
+                            }
                             dispatchCrossFilter({
                               column: labelCh.field,
                               value: toFilterValue(arc.data.rawKey),

@@ -40,6 +40,14 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-cat · cmd / ctrl-click on the categorical bars
+// → drill-through. Secondary-axis line marks stay un-wired (mirrors
+// the WD2-wiring-rest-cat carve-out — a continuous trend has no
+// per-mark categorical brush target).
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface ComboRendererProps {
   spec: ChartSpecV2;
@@ -192,7 +200,20 @@ export function ComboRenderer({
               style={dashboardTile ? { cursor: "pointer" } : undefined}
               onClick={
                 dashboardTile
-                  ? () => {
+                  ? (event: React.MouseEvent<SVGElement>) => {
+                      // Wave WD3-wiring-rest-cat · cmd/ctrl-click
+                      // → drill-through (open underlying-rows
+                      // side-sheet) instead of cross-filter.
+                      if (isModifierClick(event)) {
+                        dispatchDrillThrough({
+                          chartId: dashboardTile.tileId,
+                          column: xCh.field,
+                          value: rawX,
+                          sourceTileId: dashboardTile.tileId,
+                          filters: dashboardFilters,
+                        });
+                        return;
+                      }
                       dispatchCrossFilter({
                         column: xCh.field,
                         value: toFilterValue(rawX),

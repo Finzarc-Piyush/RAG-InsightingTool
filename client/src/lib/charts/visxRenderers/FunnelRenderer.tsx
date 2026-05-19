@@ -25,6 +25,11 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-cat · cmd / ctrl-click → drill-through.
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface FunnelRendererProps {
   spec: ChartSpecV2;
@@ -118,7 +123,20 @@ export function FunnelRenderer({
                 style={dashboardTile ? { cursor: "pointer" } : undefined}
                 onClick={
                   dashboardTile
-                    ? () => {
+                    ? (event: React.MouseEvent<SVGElement>) => {
+                        // Wave WD3-wiring-rest-cat · cmd/ctrl-click
+                        // → drill-through (open underlying-rows
+                        // side-sheet) instead of cross-filter.
+                        if (isModifierClick(event)) {
+                          dispatchDrillThrough({
+                            chartId: dashboardTile.tileId,
+                            column: enc.x.field,
+                            value: s.rawLabel,
+                            sourceTileId: dashboardTile.tileId,
+                            filters: dashboardFilters,
+                          });
+                          return;
+                        }
                         dispatchCrossFilter({
                           column: enc.x.field,
                           value: toFilterValue(s.rawLabel),

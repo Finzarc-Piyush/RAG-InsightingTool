@@ -37,6 +37,14 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-cat · cmd / ctrl-click → drill-through. The
+// `clickable` gate (which AND-skips running-total bars via `b.isTotal`)
+// is preserved as the outer guard so synthetic summary rows aren't
+// drillable categories — same carve-out as the cross-filter dispatch.
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface WaterfallRendererProps {
   spec: ChartSpecV2;
@@ -206,7 +214,23 @@ export function WaterfallRenderer({
                 style={clickable ? { cursor: "pointer" } : undefined}
                 onClick={
                   clickable
-                    ? () => {
+                    ? (event: React.MouseEvent<SVGElement>) => {
+                        // Wave WD3-wiring-rest-cat · cmd/ctrl-click
+                        // → drill-through (open underlying-rows
+                        // side-sheet) instead of cross-filter. The
+                        // outer `clickable` already AND-skips
+                        // running-total bars via `b.isTotal`, so a
+                        // drill on a synthetic summary row can't fire.
+                        if (isModifierClick(event)) {
+                          dispatchDrillThrough({
+                            chartId: dashboardTile!.tileId,
+                            column: enc.x.field,
+                            value: b.rawCategory,
+                            sourceTileId: dashboardTile!.tileId,
+                            filters: dashboardFilters,
+                          });
+                          return;
+                        }
                         dispatchCrossFilter({
                           column: enc.x.field,
                           value: toFilterValue(b.rawCategory),
