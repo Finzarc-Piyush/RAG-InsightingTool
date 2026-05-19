@@ -11,6 +11,61 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-wiring-echarts · 5 ECharts marks cmd / ctrl-click → drill-through.** Closes the WD3 wiring family at 15 of 15 chart kinds: Treemap + Sunburst + Sankey + Calendar + Candlestick now drill via the existing `onChartClick(params)` flow. The brief promised "no foundation changes needed for ECharts" — this wave validates that claim. ECharts wraps the native MouseEvent at `params.event.event` (the ZRender event object wrapping the DOM event), and `isModifierClick`'s sparse-event-shape contract from [WD3-foundation](../client/src/pages/Dashboard/lib/drillThrough.ts) accepts `{ metaKey?: boolean; ctrlKey?: boolean }` directly — no helper modifications, no wrapper extraction, no normalisation layer.
+
+  **What landed.**
+    - [client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx](../client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx) (~+25 LOC). Named imports of `dispatchDrillThrough` + `isModifierClick`; `dashboardFilters` lifted above the click handler (pre-wave it was declared after the handler for the dim concern only); modifier branch inside `onChartClick`:
+      ```ts
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: labelCh.field,
+          value: name,  // leaf name, raw — NOT toFilterValue-coerced
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      // Pre-existing dispatchCrossFilter call preserved.
+      ```
+      Params cast widens to include `event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } }` so the optional-chaining `p?.event?.event` narrows correctly. Same leaf-only carve-out as the WD2 dispatch — parents (the `groupCh` value, when present) stay un-drillable because they're structural hierarchy. useCallback deps gain `dashboardFilters`.
+
+    - [client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx](../client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx) (~+100 LOC across 4 renderers). One shared `drillThrough` named import block at the top of the file. Per-renderer wiring follows the WD2 dispatch shape (column-symmetry):
+      - **SunburstRenderer** · `labelCh.field` × leaf name. `dashboardFilters` was already lifted above the handler pre-wave — no reordering needed. Leaf-only carve-out matches Treemap.
+      - **SankeyRenderer** · `sourceCh.field` × `p.name`. `dashboardFilters` lifted above the handler. Node-only carve-out (edges have no single categorical value to filter on, same as the WD2 dispatch).
+      - **CalendarRenderer** · `dateCh.field` × the `[date]` tuple element (raw ISO string, NOT toFilterValue-coerced — server canonicaliser handles date parsing). `dashboardFilters` lifted.
+      - **CandlestickRenderer** · `xCh.field` × `xs[idx]` (the categorical x-axis label, NOT the OHLC tuple values — the OHLC values are quantitative; the categorical key is `xs[i]`). `dashboardFilters` lifted.
+      Each renderer's useCallback deps array gains `dashboardFilters`.
+
+    - **`dashboardFilters` lift across 4 of 5 renderers.** Pre-wave the `dashboardFilters = dashboardTile?.filters` declaration sat BELOW the click handler in 4 renderers because the dim concern was added after the WD2 wiring. WD3 needs the handler's useCallback closure to capture `dashboardFilters` for the drill `filters` snapshot, so the declaration moves above the handler. Sunburst was already correctly ordered (the dim concern was added before the click handler in WD2-dim-echarts-treemap). The dim concern's behavior is unchanged — only the source-order changed. The dim memos still consume `dashboardFilters` and `dashboardDimActive` byte-identically.
+
+    - [client/src/pages/Dashboard/lib/wd3WiringEcharts.test.ts](../client/src/pages/Dashboard/lib/wd3WiringEcharts.test.ts) (new, ~340 LOC). 41 source-inspection tests across 9 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4. Suite split:
+      - **Imports** (3): Treemap drillThrough imports; SpecialtyRenderers shared drillThrough imports; both files keep WD2 crossFilter imports.
+      - **Per-renderer modifier branch shape** (5, one per renderer): handler body contains `isModifierClick → dispatchDrillThrough → return;` BEFORE `dispatchCrossFilter`, anchored on the per-renderer handler name (`onChartClick` / `onSunburstClick` / `onSankeyClick` / `onCalendarClick` / `onCandlestickClick`).
+      - **Per-renderer 5-field payload** (5): `chartId` / `column` (renderer-specific) / `value` RAW (renderer-specific expression) / `sourceTileId` / `filters`.
+      - **Per-renderer raw-value pin** (5): drill block does NOT contain `toFilterValue(`.
+      - **Per-renderer params.event.event typing** (5): the typed cast widens to `event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } }` so optional-chaining narrows correctly.
+      - **Per-renderer useCallback deps** (5): deps array contains `dashboardFilters` (without it, a stale closure would dispatch with an outdated filter snapshot).
+      - **Per-renderer WD2 cross-filter regression** (5): plain-click still dispatches cross-filter on the right column with `toFilterValue(...)`.
+      - **dashboardFilters lift ordering** (4): declaration precedes handler in source order for Treemap / Sankey / Calendar / Candlestick.
+      - **Cross-cutting contracts** (4): both files carry the `WD3-wiring-echarts` marker; per-renderer drill column = WD2 cross-filter column (column-symmetry); total drill dispatch count = 5 across both files (Treemap = 1, SpecialtyRenderers = 4); Parallel renderer negative pin (no drill).
+
+  **Why this design.** Three alternatives were considered for the modifier flag capture:
+  1. **Extract the native event into a helper at the EChartsBase level** (e.g. wrap `inst.on('click', (params) => onChartClick(params, nativeEvent))`). Rejected because it would change the `onChartClick` signature across every consumer, and the native-event path is ECharts-version-dependent — keeping the extraction per-handler localises the version dependency. If ECharts moves the native event from `params.event.event` to `params.nativeEvent` in a future major, only the modifier check needs updating, not the callback signature.
+  2. **Inline metaKey/ctrlKey checks at each call site** (replicate the `isModifierClick` logic in each renderer). Rejected as duplication: 5 renderers × the same 2-line check = 10 lines of identical code. The helper precedent set by WD3-foundation (modifier check lives in a single helper rather than duplicated per-renderer) extends naturally to the ECharts side.
+  3. **`isModifierClick(p?.event?.event)` chain via the foundation's sparse-event-shape contract** (chosen). The foundation already accepts `{ metaKey?: boolean; ctrlKey?: boolean } | undefined | null` — built specifically for cross-event-shape compatibility. The optional-chaining `p?.event?.event` returns `undefined` cleanly when ECharts doesn't supply the wrapped event (e.g. programmatic dispatch, or older ECharts versions), which `isModifierClick` falls back to `false` for. Zero foundation changes; zero per-renderer modifier-check duplication; zero coupling between EChartsBase and the drill-through concern.
+
+  Lifting `dashboardFilters` above the click handler in 4 of 5 renderers is the source-order rearrangement the wave demanded. The alternative (capture `dashboardTile?.filters` inline inside the useCallback body via a direct read) would work for the read but would NOT make `dashboardFilters` available as a single named reference — the dim concern below still needs the named local. Lift-once-use-twice keeps the closure capture and the dim consumption in sync.
+
+  **Tests.** Server test suite: WD3-wiring-echarts (41 new in `wd3WiringEcharts.test.ts`) all pass. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline). The `dashboardFilters` lift is purely a source-order move — no runtime behavior change, no new typecheck errors.
+
+  **Out of scope.**
+    - **Server-side row fetch (WD3-server).** With the wiring family closed at 15 of 15 chart kinds, the only remaining work to make drill-through production-ready is the `/api/dashboards/:id/drill` endpoint that returns underlying rows. The sheet's placeholder body explicitly notes WD3-server is the future row source — a single grep-friendly anchor.
+    - **Sankey two-column drill (source AND target).** Currently the wiring only dispatches on `sourceCh.field`. A future wave could use `extraPins` (introduced in WD3-wiring-rest-rect) to fire `{ column: sourceCh.field, value: source } + extraPins: [{ column: targetCh.field, value: target }]` for cross-column sankeys. Skipped here because the typical sankey usage has source / target as different snapshots of the same dimension (e.g. `Region` → `Region`).
+    - **Treemap / Sunburst parent-ring drill.** Parents stay un-drillable because they're structural hierarchy — the dispatch column would diverge between inner / outer rings. With the `extraPins` shape, a future wave could fire `{ column: labelCh.field, value: leaf, extraPins: [{ column: groupCh.field, value: parent }] }` for hierarchical drill. Carries over from the WD2-wiring-echarts carve-out.
+    - **Calendar week / month aggregation drill.** Currently the dispatch is on the per-cell ISO date. A future wave might let cmd-click on a week / month header drill into all dates in that range — but that needs a richer params decode (ECharts calendar's component-click vs. cell-click distinction).
+    - **Candlestick OHLC drill.** Currently the dispatch is on the x-axis label (the categorical handle). A future wave might let cmd-click on the open / close / high / low markers drill into the specific time point's full row — but the OHLC tuple isn't a category, it's a value vector. Deferred indefinitely.
+
 - **2026-05-19** — **Wave WD3-wiring-rest-rect · RectRenderer heatmap cell cmd / ctrl-click → drill-through (foundation widened with optional `extraPins`).** RectRenderer cells sit at the intersection of TWO categorical dimensions (`rowCh × colCh`) — every other WD3 renderer fires a single-pin drill event, but a heatmap cell is fundamentally two-dimensional. The pre-wave `DrillThroughEvent` shape carried a flat `column: string` + `value: unknown` pair that couldn't natively represent a row × col intersection. This wave closes the 10th visx chart kind by widening the foundation in a minimal, additive way, then ships the RectRenderer wiring + the sheet's render extension all in one wave.
 
   **What landed.**
