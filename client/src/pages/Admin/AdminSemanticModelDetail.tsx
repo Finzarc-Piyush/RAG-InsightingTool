@@ -19,15 +19,18 @@ import { useEffect, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import {
   fetchSemanticModelDetail,
+  patchSemanticModel,
   type AdminSemanticModelDetail,
 } from "@/lib/api/admin";
 import type {
   SemanticDimension,
   SemanticHierarchy,
   SemanticMetric,
+  SemanticModel,
 } from "@/shared/schema";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { AdminNav } from "../Superadmin/AdminNav";
 
 function formatRelative(ms: number): string {
@@ -50,7 +53,38 @@ function formatHint(m: SemanticMetric): string {
   return parts.join(", ");
 }
 
-function MetricRow({ m }: { m: SemanticMetric }) {
+interface ExposedToggleProps {
+  exposed: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+  ariaLabel: string;
+}
+
+function ExposedToggle({
+  exposed,
+  disabled,
+  onChange,
+  ariaLabel,
+}: ExposedToggleProps) {
+  return (
+    <Switch
+      checked={exposed}
+      disabled={disabled}
+      onCheckedChange={onChange}
+      aria-label={ariaLabel}
+    />
+  );
+}
+
+function MetricRow({
+  m,
+  saving,
+  onToggleExposed,
+}: {
+  m: SemanticMetric;
+  saving: boolean;
+  onToggleExposed: (next: boolean) => void;
+}) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4">
@@ -73,22 +107,27 @@ function MetricRow({ m }: { m: SemanticMetric }) {
       <td className="py-3 px-4 text-xs text-muted-foreground">
         {m.references.length === 0 ? "—" : m.references.join(", ")}
       </td>
-      <td className="py-3 px-4 text-xs">
-        <span
-          className={
-            m.exposed
-              ? "px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium"
-              : "px-2 py-0.5 rounded-full bg-muted text-muted-foreground"
-          }
-        >
-          {m.exposed ? "exposed" : "hidden"}
-        </span>
+      <td className="py-3 px-4">
+        <ExposedToggle
+          exposed={m.exposed}
+          disabled={saving}
+          onChange={onToggleExposed}
+          ariaLabel={`Toggle ${m.label} exposed`}
+        />
       </td>
     </tr>
   );
 }
 
-function DimensionRow({ d }: { d: SemanticDimension }) {
+function DimensionRow({
+  d,
+  saving,
+  onToggleExposed,
+}: {
+  d: SemanticDimension;
+  saving: boolean;
+  onToggleExposed: (next: boolean) => void;
+}) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4">
@@ -109,16 +148,13 @@ function DimensionRow({ d }: { d: SemanticDimension }) {
           ? ` (${d.temporalGrain})`
           : ""}
       </td>
-      <td className="py-3 px-4 text-xs">
-        <span
-          className={
-            d.exposed
-              ? "px-2 py-0.5 rounded-full bg-primary/15 text-primary font-medium"
-              : "px-2 py-0.5 rounded-full bg-muted text-muted-foreground"
-          }
-        >
-          {d.exposed ? "exposed" : "hidden"}
-        </span>
+      <td className="py-3 px-4">
+        <ExposedToggle
+          exposed={d.exposed}
+          disabled={saving}
+          onChange={onToggleExposed}
+          ariaLabel={`Toggle ${d.label} exposed`}
+        />
       </td>
     </tr>
   );
@@ -152,6 +188,13 @@ export default function AdminSemanticModelDetail() {
   const [data, setData] = useState<AdminSemanticModelDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Wave W61-save · saving status surfaces a banner + disables every
+  // toggle while a PATCH is in flight. A single shared flag is cheaper
+  // than per-row state and matches "auto-save on toggle" UX (the user
+  // shouldn't fire two PATCHes at once anyway since the second would
+  // race the first's response into the cache).
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -174,6 +217,56 @@ export default function AdminSemanticModelDetail() {
       cancelled = true;
     };
   }, [sessionId]);
+
+  async function persistModel(nextModel: SemanticModel): Promise<void> {
+    if (!data) return;
+    // Optimistic update so the toggle responds instantly.
+    const prior = data;
+    setData({ ...prior, model: nextModel });
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await patchSemanticModel(sessionId, nextModel);
+      // Reconcile with the server's authoritative view (version bump,
+      // updatedAt / updatedBy stamping that the server controls).
+      setData({
+        ...prior,
+        lastUpdatedAt: res.lastUpdatedAt,
+        model: res.model,
+      });
+    } catch (err) {
+      // Roll back the optimistic toggle.
+      setData(prior);
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleToggleMetricExposed(metricName: string, next: boolean): void {
+    if (!data) return;
+    const nextModel: SemanticModel = {
+      ...data.model,
+      metrics: data.model.metrics.map((m) =>
+        m.name === metricName ? { ...m, exposed: next } : m,
+      ),
+    };
+    void persistModel(nextModel);
+  }
+
+  function handleToggleDimensionExposed(
+    dimensionName: string,
+    next: boolean,
+  ): void {
+    if (!data) return;
+    const nextModel: SemanticModel = {
+      ...data.model,
+      dimensions: data.model.dimensions.map((d) =>
+        d.name === dimensionName ? { ...d, exposed: next } : d,
+      ),
+    };
+    void persistModel(nextModel);
+  }
 
   if (loading && !data) {
     return (
@@ -271,6 +364,17 @@ export default function AdminSemanticModelDetail() {
           </div>
         </header>
 
+        {saving ? (
+          <Card className="p-3 border-primary/30 bg-primary/5 text-sm text-foreground">
+            Saving…
+          </Card>
+        ) : null}
+        {saveError ? (
+          <Card className="p-3 border-destructive/30 bg-destructive/5 text-sm text-destructive">
+            Save failed: {saveError}. Change rolled back; try again.
+          </Card>
+        ) : null}
+
         {totalDeclarations === 0 ? (
           <Card className="p-6 border-border/50">
             <p className="text-sm text-muted-foreground">
@@ -313,7 +417,14 @@ export default function AdminSemanticModelDetail() {
                   {[...model.metrics]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((m) => (
-                      <MetricRow key={m.name} m={m} />
+                      <MetricRow
+                        key={m.name}
+                        m={m}
+                        saving={saving}
+                        onToggleExposed={(next) =>
+                          handleToggleMetricExposed(m.name, next)
+                        }
+                      />
                     ))}
                 </tbody>
               </table>
@@ -349,7 +460,14 @@ export default function AdminSemanticModelDetail() {
                   {[...model.dimensions]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((d) => (
-                      <DimensionRow key={d.name} d={d} />
+                      <DimensionRow
+                        key={d.name}
+                        d={d}
+                        saving={saving}
+                        onToggleExposed={(next) =>
+                          handleToggleDimensionExposed(d.name, next)
+                        }
+                      />
                     ))}
                 </tbody>
               </table>

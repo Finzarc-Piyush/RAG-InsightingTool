@@ -182,3 +182,38 @@ export async function fetchSemanticModelDetail(
   }
   return (await res.json()) as AdminSemanticModelDetail;
 }
+
+// W61-save · replace a session's semantic model. The server bumps
+// version + stamps updatedAt/updatedBy server-side; the response
+// echoes the server's authoritative view so the client can sync.
+
+export interface PatchSemanticModelResponse {
+  sessionId: string;
+  lastUpdatedAt: number;
+  model: import("@/shared/schema").SemanticModel;
+}
+
+export async function patchSemanticModel(
+  sessionId: string,
+  model: import("@/shared/schema").SemanticModel,
+): Promise<PatchSemanticModelResponse> {
+  const headers = {
+    ...(await adminHeaders()),
+    "Content-Type": "application/json",
+  };
+  const res = await fetch(
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(model),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId} PATCH ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as PatchSemanticModelResponse;
+}

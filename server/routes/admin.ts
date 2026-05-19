@@ -7,6 +7,7 @@ import {
 import {
   listSemanticModels,
   getSemanticModel,
+  patchSemanticModel,
 } from "../controllers/adminSemanticModelController.js";
 
 const router = Router();
@@ -23,5 +24,8 @@ router.get("/admin/semantic-models", listSemanticModels);
 
 // W61-detail · per-session semantic-model payload for the read-only viewer.
 router.get("/admin/semantic-models/:sessionId", getSemanticModel);
+
+// W61-save · replace the session's semantic model. Bumps version + stamps updatedAt/updatedBy.
+router.patch("/admin/semantic-models/:sessionId", patchSemanticModel);
 
 export default router;
