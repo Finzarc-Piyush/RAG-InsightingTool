@@ -45,6 +45,11 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
     label: "Context packs",
     isActive: (loc) => loc.startsWith("/admin/context-packs"),
   },
+  {
+    href: "/admin/semantic-models",
+    label: "Semantic models",
+    isActive: (loc) => loc.startsWith("/admin/semantic-models"),
+  },
 ];
 
 export function AdminNav() {

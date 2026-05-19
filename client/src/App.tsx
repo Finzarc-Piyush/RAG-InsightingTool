@@ -31,6 +31,7 @@ const AnalysisMemory = lazy(
 );
 const AdminCosts = lazy(() => import("@/pages/Admin/AdminCosts"));
 const AdminContextPacks = lazy(() => import("@/pages/Admin/AdminContextPacks"));
+const AdminSemanticModels = lazy(() => import("@/pages/Admin/AdminSemanticModels"));
 const NotFound = lazy(() => import("@/pages/NotFound/not-found"));
 const Explore = lazy(() => import("@/pages/Explore/Explore"));
 const SuperadminLanding = lazy(
@@ -276,6 +277,9 @@ function Router() {
             </Route>
             <Route path="/admin/context-packs">
               <AdminContextPacks />
+            </Route>
+            <Route path="/admin/semantic-models">
+              <AdminSemanticModels />
             </Route>
             <Route path="/explore">
               <Explore />

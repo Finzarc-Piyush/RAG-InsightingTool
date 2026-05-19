@@ -1574,6 +1574,139 @@ export const getAllSessionsPaginated = async (
 };
 
 /**
+ * Wave W61-list · light projection row for the admin semantic-model index
+ * page. The full `semanticModel` payload is NOT loaded — only the counts
+ * + metadata needed to render the list view. The detail page (W61-detail)
+ * fetches the full payload per-session.
+ *
+ * `version` / `modelName` / `modelUpdatedAt` / `modelUpdatedBy` mirror the
+ * `semanticModelSchema` fields; the *Count fields are server-computed via
+ * Cosmos's `ARRAY_LENGTH` so the wire payload stays small even for sessions
+ * with 100s of metrics + dimensions.
+ */
+export interface AdminSemanticModelListEntry {
+  id: string;
+  username: string;
+  fileName: string;
+  sessionId: string;
+  lastUpdatedAt: number;
+  version: number;
+  modelName: string;
+  /** ISO timestamp; absent for sessions where the inferred model has never been edited. */
+  modelUpdatedAt?: string;
+  /** Email of last editor; absent on freshly-inferred models. */
+  modelUpdatedBy?: string;
+  metricsCount: number;
+  dimensionsCount: number;
+  hierarchiesCount: number;
+}
+
+/**
+ * Wave W61-list · the Cosmos SQL projection for the admin index page.
+ *
+ * Mirrors `SESSION_LIST_SELECT`'s shape: cherry-picks fields off the root
+ * document + the nested `semanticModel` object, computes per-collection
+ * counts via `IIF(IS_DEFINED ... AND IS_ARRAY, ARRAY_LENGTH, 0)` so a
+ * legacy `semanticModel` with a missing array doesn't blow up the row.
+ * `WHERE IS_DEFINED(c.semanticModel)` filters out the pre-W57 sessions
+ * whose docs lack the field entirely.
+ *
+ * Returned as a single string (not a query object) so the caller can
+ * compose it with parameters at the call site. Exported for the
+ * source-inspection wing of the test.
+ */
+export const ADMIN_SEMANTIC_MODEL_LIST_SELECT = [
+  "SELECT",
+  "  c.id, c.username, c.fileName, c.sessionId, c.lastUpdatedAt,",
+  "  c.semanticModel.version AS version,",
+  "  c.semanticModel.name AS modelName,",
+  "  c.semanticModel.updatedAt AS modelUpdatedAt,",
+  "  c.semanticModel.updatedBy AS modelUpdatedBy,",
+  "  IIF(IS_DEFINED(c.semanticModel.metrics) AND IS_ARRAY(c.semanticModel.metrics), ARRAY_LENGTH(c.semanticModel.metrics), 0) AS metricsCount,",
+  "  IIF(IS_DEFINED(c.semanticModel.dimensions) AND IS_ARRAY(c.semanticModel.dimensions), ARRAY_LENGTH(c.semanticModel.dimensions), 0) AS dimensionsCount,",
+  "  IIF(IS_DEFINED(c.semanticModel.hierarchies) AND IS_ARRAY(c.semanticModel.hierarchies), ARRAY_LENGTH(c.semanticModel.hierarchies), 0) AS hierarchiesCount",
+  "FROM c",
+  "WHERE IS_DEFINED(c.semanticModel)",
+  "ORDER BY c.lastUpdatedAt DESC",
+].join("\n");
+
+/**
+ * Wave W61-list · defensive finaliser for the admin projection row.
+ *
+ * Pure function — converts a raw Cosmos response (which can have any
+ * `unknown` field shape if a document was corrupted or partially
+ * written) into the typed `AdminSemanticModelListEntry`. Numbers coerce
+ * via `Number(... ?? 0)`; optional strings only land if their type matches.
+ * The defaults match the `semanticModelSchema` defaults so a row missing
+ * `version` reads as `1` and a missing `modelName` reads as `"Default model"`.
+ */
+export const finalizeAdminSemanticModelEntry = (
+  raw: Record<string, unknown>,
+): AdminSemanticModelListEntry => ({
+  id: String(raw.id ?? ""),
+  username: String(raw.username ?? ""),
+  fileName: String(raw.fileName ?? ""),
+  sessionId: String(raw.sessionId ?? ""),
+  lastUpdatedAt: Number(raw.lastUpdatedAt ?? 0),
+  version: Number(raw.version ?? 1),
+  modelName: String(raw.modelName ?? "Default model"),
+  modelUpdatedAt:
+    typeof raw.modelUpdatedAt === "string" ? raw.modelUpdatedAt : undefined,
+  modelUpdatedBy:
+    typeof raw.modelUpdatedBy === "string" ? raw.modelUpdatedBy : undefined,
+  metricsCount: Number(raw.metricsCount ?? 0),
+  dimensionsCount: Number(raw.dimensionsCount ?? 0),
+  hierarchiesCount: Number(raw.hierarchiesCount ?? 0),
+});
+
+/**
+ * Wave W61-list · returns every ChatDocument whose `semanticModel` field
+ * is defined, projected to the lightweight index-row shape. The W61-list
+ * admin page renders this; W61-detail fetches the full doc per-session.
+ *
+ * No caching here — the admin index page is a low-traffic surface and
+ * staleness would surprise an admin who just edited a model. The
+ * existing `sessionListCache` is owner-scoped (per-user); cache here
+ * would be global and needs invalidation on every session edit, which
+ * is not worth the complexity.
+ */
+export const getAllSessionsWithSemanticModel = async (): Promise<
+  AdminSemanticModelListEntry[]
+> => {
+  return retryOnConnectionError(
+    async () => {
+      try {
+        const containerInstance = await waitForContainer();
+        // `enableCrossPartitionQuery` was dropped in Cosmos SDK v4 — cross-
+        // partition is the default. Including it here would introduce a
+        // new TS overload error (the existing pre-W61 query sites that
+        // still pass it constitute the typecheck baseline).
+        const { resources } = await containerInstance.items
+          .query(
+            { query: ADMIN_SEMANTIC_MODEL_LIST_SELECT },
+            { maxItemCount: 1000 },
+          )
+          .fetchAll();
+        console.log(
+          `✅ Retrieved ${resources.length} semantic-model sessions from CosmosDB`,
+        );
+        return resources.map((doc) =>
+          finalizeAdminSemanticModelEntry(doc as Record<string, unknown>),
+        );
+      } catch (error) {
+        console.error(
+          "❌ Failed to get sessions with semantic model:",
+          error,
+        );
+        throw error;
+      }
+    },
+    3,
+    "getAllSessionsWithSemanticModel",
+  );
+};
+
+/**
  * Get sessions with filtering options
  */
 export const getSessionsWithFilters = async (options: {

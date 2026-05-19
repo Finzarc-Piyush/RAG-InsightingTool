@@ -119,3 +119,40 @@ export async function setDomainContextPackEnabled(
     totalEnabledTokens: number;
   };
 }
+
+// W61-list · admin semantic-model index. Lists every session whose
+// ChatDocument.semanticModel is defined; the AdminSemanticModels page
+// renders this as a table of clickable rows.
+
+export interface AdminSemanticModelListEntry {
+  id: string;
+  username: string;
+  fileName: string;
+  sessionId: string;
+  lastUpdatedAt: number;
+  version: number;
+  modelName: string;
+  modelUpdatedAt?: string;
+  modelUpdatedBy?: string;
+  metricsCount: number;
+  dimensionsCount: number;
+  hierarchiesCount: number;
+}
+
+export interface AdminSemanticModelListSnapshot {
+  generatedAt: number;
+  sessions: AdminSemanticModelListEntry[];
+}
+
+export async function fetchSemanticModels(): Promise<AdminSemanticModelListSnapshot> {
+  const res = await fetch(`${API_BASE_URL}/api/admin/semantic-models`, {
+    headers: await adminHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as AdminSemanticModelListSnapshot;
+}
