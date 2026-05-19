@@ -48,6 +48,10 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface PointRendererProps {
   spec: ChartSpecV2;
@@ -303,8 +307,32 @@ export function PointRenderer({
                 tooltipData: { point: p },
               });
             };
+            // WD3-wiring-rest-point · cmd / ctrl-click branches to
+            // drill-through INSTEAD of cross-filter — same single-event-
+            // handler shape as the WD3-wiring-rest-cat family because
+            // PointRenderer's onClick already lives at the per-mark
+            // level (per-point dispatch was the WD2 design). Drill is
+            // gated on the SAME `crossFilterReady` AND-gate as cross-
+            // filter (pure quant scatters with no colorCh have no
+            // categorical drill target either — the two opt-in domains
+            // are identical). Value passed RAW (NOT toFilterValue-
+            // coerced) — server-side canonicalisation picks Date /
+            // number / categorical comparison per the inferred column
+            // type. The `return;` after the drill dispatch is single-
+            // intent-load-bearing: without it a cmd-click would
+            // dispatch BOTH events.
             const onPointClick = crossFilterReady
-              ? () => {
+              ? (e: React.MouseEvent<SVGElement>) => {
+                  if (isModifierClick(e)) {
+                    dispatchDrillThrough({
+                      chartId: dashboardTile!.tileId,
+                      column: colorCh!.field,
+                      value: p.rawColor,
+                      sourceTileId: dashboardTile!.tileId,
+                      filters: dashboardFilters,
+                    });
+                    return;
+                  }
                   dispatchCrossFilter({
                     column: colorCh!.field,
                     value: toFilterValue(p.rawColor),
