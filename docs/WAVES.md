@@ -11,6 +11,57 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-wiring-rest-trend · LineRenderer + AreaRenderer cmd / ctrl-click → drill-through.** Extends the WD3 family to the two trend renderers. Trend renderers have continuous-x marks (lines / stacked areas) and dispatch via NEAREST-X lookup rather than per-mark click — a click anywhere on the chart surface maps to the nearest data point on the inner-plot's x-axis via `localPoint(e).x` + an `xPx` binary search. The WD2-wiring family established this lookup; WD3 layers the modifier-key intent on top so cmd / ctrl-click routes the SAME `nearest.x` value to drill-through instead of cross-filter. Wave brings WD3 to 8 of 15 chart kinds wired (bar + cat-5 + line + area).
+
+  **What landed.**
+    - [client/src/lib/charts/visxRenderers/AreaRenderer.tsx](../client/src/lib/charts/visxRenderers/AreaRenderer.tsx) (~20 LOC delta). Same single-event-handler shape as the WD3-wiring-rest-cat family: the existing top-level `onClick={(e: React.MouseEvent<SVGElement>) => {...}}` already receives the MouseEvent, so the WD3 wiring is an inline branch inside the `if (nearest)` block — right before the existing `dispatchCrossFilter` call:
+      ```ts
+      if (nearest) {
+        if (isModifierClick(e)) {
+          dispatchDrillThrough({
+            chartId: dashboardTile.tileId,
+            column: xCh.field,
+            value: nearest.x,
+            sourceTileId: dashboardTile.tileId,
+            filters: dashboardFilters,
+          });
+          return;
+        }
+        dispatchCrossFilter({
+          column: xCh.field,
+          value: toFilterValue(nearest.x),
+          sourceTileId: dashboardTile.tileId,
+        });
+      }
+      ```
+      5-field payload mirrors WD3-wiring-bar shape: `chartId` = `dashboardTile.tileId`; `column` = `xCh.field`; `value` = `nearest.x` RAW (NOT `toFilterValue(nearest.x)` — the server's canonicaliser picks the right Date / number / categorical comparison based on the column's inferred type); `sourceTileId` = the tile id; `filters` = the already-lifted `dashboardFilters` snapshot.
+
+    - [client/src/lib/charts/visxRenderers/LineRenderer.tsx](../client/src/lib/charts/visxRenderers/LineRenderer.tsx) (~45 LOC delta). Different shape because `dispatchCrossFilter` fires inside the PARAMETERLESS `onBrushUp` handler — the brush-zoom plumbing piggybacks the click semantic (a tiny `< 6 px` brush is treated as a click, with the recorded brush position driving the nearest-x lookup). `onBrushUp` has no access to the original MouseEvent. The design choice: stash the modifier flag in a `brushModifierRef = useRef<boolean>(false)` at `onBrushDown` time, consume it in `onBrushUp`. **`useRef` (not `useState`)** because the flag doesn't drive a re-render — only the brush rectangle `<rect>` does. A `useState` would force a re-render on every cmd-down without any visual change. Three call-sites:
+      - **`onBrushDown`** assigns `brushModifierRef.current = isModifierClick(e);` right after the existing `setBrushStart(x)` / `setBrushEnd(x)` calls. The brushDown handler already accepts `(e: React.MouseEvent<SVGElement>)` — no signature change.
+      - **`onBrushUp`** (tiny-drag click path, inside the existing `if (Math.abs(hi - lo) < 6)` branch + `if (dashboardTile)` gate + `if (nearest)` body): branches `if (brushModifierRef.current) { dispatchDrillThrough(...) } else { dispatchCrossFilter(...) }` — drill XOR cross-filter, never both. The drill branch is FIRST in the if/else (cmd → drill; default → filter).
+      - **Reset** to `false` happens UNCONDITIONALLY before the `setBrushStart(null)` / `setBrushEnd(null)` calls, so a brush-zoom mouseup with cmd held (the path where `Math.abs(hi - lo) >= 6`) doesn't leave the flag dirty for the next click. Pinned in the test suite.
+
+    - [client/src/pages/Dashboard/lib/wd3WiringRestTrend.test.ts](../client/src/pages/Dashboard/lib/wd3WiringRestTrend.test.ts) (new, ~230 LOC). 18 source-inspection tests across 7 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4. Suite split:
+      - **AreaRenderer imports** (2): drillThrough named imports + WD2 untouched.
+      - **AreaRenderer onClick inline branch** (4): branch inside `if (nearest)` block before `dispatchCrossFilter`; 5-field payload shape; raw-value negative pin; WD2 cross-filter regression.
+      - **LineRenderer imports** (2): drillThrough named imports + WD2 untouched.
+      - **LineRenderer brushModifierRef declaration** (1): `useRef<boolean>(false)` (NOT useState).
+      - **LineRenderer capture on brushDown** (1): `brushModifierRef.current = isModifierClick(e);` inside the brushDown body.
+      - **LineRenderer consume on brushUp** (5): if/else branch order (drill FIRST, then cross-filter); 5-field payload; raw-value negative pin; reset-before-state-clear pin (the reset must fire on EVERY brushUp exit, not just the dispatch path); WD2 else-branch regression with `toFilterValue(nearest.x)`.
+      - **Cross-cutting contracts** (3): `WD3-wiring-rest-trend` marker per renderer; column-symmetry (drill + cross-filter both on `xCh.field`); drill-count = 1 per renderer (single-shot enforcement — pin against a future refactor that adds a second drill surface like a legend cmd-click).
+
+  **Why this design.** Three alternative shapes were considered for LineRenderer's modifier capture. (1) **Store the full MouseEvent in the ref.** Rejected as a memory / lifecycle concern — React MouseEvents are pooled in synthetic-event implementations (less of a concern in React 17+ but still a leaky abstraction). Capture just the boolean flag, not the event. (2) **Restructure `onBrushUp` to receive the MouseEvent** (refactor brush-zoom internals so the click-fallthrough path knows its origin event). Rejected because the existing onBrushUp is called from both `onMouseUp` and `onMouseLeave` handlers — two different event surfaces; threading the event through both would complicate the brush-zoom contract for marginal benefit. The ref capture is a precise patch that doesn't touch the brush-zoom signature. (3) **`useRef<boolean>(false)` capture at brushDown** (chosen). Minimal-diff, no signature changes to existing handlers, single load-bearing line at each touch-point (`brushModifierRef.current = isModifierClick(e)` / `if (brushModifierRef.current) ...` / `brushModifierRef.current = false`).
+
+  AreaRenderer didn't need the ref dance because its dispatch fires inside the top-level `onClick` arrow which already accepts the MouseEvent. The two renderers' divergent shapes reflect a pre-existing divergence in how they handle clicks: Area dispatches inside `onClick`, Line dispatches inside `onBrushUp` (because Line additionally supports brush-zoom). The WD3 wiring respects that divergence rather than forcing one renderer to adopt the other's shape.
+
+  **Tests.** Server test suite: WD3-wiring-rest-trend (18 new in `wd3WiringRestTrend.test.ts`) all pass. 143 cumulative WD3 + adjacent WD2-trend tests green (foundation 11 + wiring-bar 12 + wiring-rest-cat 44 + sheet 21 + wiring-rest-trend 18 + wd2DimTrend 19 + wd2WiringRestTrend 18), zero regression. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline).
+
+  **Out of scope.**
+    - **Scatter drill (WD3-wiring-rest-point)**. PointRenderer's WD2-wiring dispatch is per-point on `p.rawColor`, gated on `crossFilterReady && !!colorCh`. The WD3 wiring follows but the wave is small enough to ship as a standalone follow-on. ~60 LOC.
+    - **Heatmap drill (WD3-wiring-rest-rect)**. Two-column drill payload design decision deferred. RectRenderer cells sit at the intersection of rowCh × colCh; the current single-`column: string` event field doesn't accommodate. Either widen the foundation's `DrillThroughEvent.column` type OR fire two events with the receiver de-duping.
+    - **ECharts drill (WD3-wiring-echarts)**. 5 ECharts marks via the existing `onChartClick(params)` flow. `params.event.event` carries `metaKey`/`ctrlKey`, so `isModifierClick(params.event.event)` works with no foundation changes — the substantive work is the per-renderer dataIndex → (column, rawValue) mapping.
+    - **Brush-zoom + cmd-held interaction nuance**. Currently a cmd-down + drag-zoom mouseup falls into the brush-zoom path (not the click path), so cmd-zoom is structurally equivalent to plain zoom. A future design might want a "cmd-zoom = drill into the zoomed range" intent, but that requires a richer DrillThroughEvent payload (range vs. single value) and a different receiver.
+
 - **2026-05-19** — **Wave WD3-sheet · DrillThroughSheet receiver closes the user-visible loop.** Pre-this-wave, WD3-foundation + WD3-wiring-bar + WD3-wiring-rest-cat shipped a `DRILL_THROUGH_EVENT` dispatcher and wired 6 of 15 chart kinds to fire it on cmd / ctrl-click — but no listener subscribed and no UI showed up. The user got zero feedback on a modifier-click; the wave's value was structurally complete but practically invisible. This wave wires the receiving end so the cmd / ctrl-click → side-sheet round-trip works end-to-end on Bar / Arc / Funnel / Box / Waterfall / Combo. The remaining 9 chart kinds (rect / trend / point / 5 ECharts marks) still don't dispatch, but for the 6 wired ones the user experience is now: cmd-click → right-side Radix Sheet slides in showing the drill request (chart id, column, value, active-filter snapshot) plus a placeholder pinning the WD3-server endpoint as the future row source.
 
   **What landed.**
