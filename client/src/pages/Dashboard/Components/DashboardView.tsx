@@ -30,6 +30,7 @@ import {
   applyCrossFilter,
   type CrossFilterEvent,
 } from '../lib/crossFilter';
+import { createInsightRegenCache } from '../lib/insightRegenCache';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -86,6 +87,12 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     refetch: refetchDashboards,
     patchSheetContent,
   } = useDashboardContext();
+
+  // Wave WI2-wire-bind · shared per-DashboardView insight regen cache.
+  // Held at the mount level so the user's "explore A, explore B, go
+  // back to A" pattern hits the cache instead of re-firing the LLM.
+  // Empty dep array keeps a single instance for the dashboard session.
+  const insightRegenCache = useMemo(() => createInsightRegenCache(), []);
 
   // Determine permission: if not provided, check if user owns the dashboard or has edit permission on shared dashboard
   const canEdit = useMemo(() => {
@@ -725,6 +732,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   sheetId={currentSheetId || undefined}
                   onUpdate={onRefresh}
                   canEdit={canEdit}
+                  insightRegenCache={insightRegenCache}
                 />
               </section>
             ) : (

@@ -1,7 +1,7 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useCallback, useMemo } from "react";
 import { AlertTriangle, BarChart3, Table2, Trash2 } from "lucide-react";
 import type { ChartSpec } from "@/shared/schema";
-import type { ActiveChartFilters } from "@/lib/chartFilters";
+import { applyChartFilters, type ActiveChartFilters } from "@/lib/chartFilters";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +14,12 @@ import { ChartTilePivotView } from "@/components/charts/ChartTilePivotView";
 import { chartSpecToPivotConfig } from "@/components/charts/chartSpecToPivotConfig";
 import { useChartTileViewMode } from "../hooks/useChartTileViewMode";
 import { DashboardTileProvider } from "../lib/dashboardTileContext";
+import {
+  useInsightRegen,
+  type InsightChartSpecLite,
+  type InsightRegenRow,
+} from "../hooks/useInsightRegen";
+import type { InsightRegenCache } from "../lib/insightRegenCache";
 
 // Lazy load to mirror DashboardTiles' Suspense pattern.
 const ChartRenderer = lazy(() =>
@@ -59,6 +65,13 @@ interface ChartTileBodyProps {
   onFiltersChange: (next: ActiveChartFilters) => void;
   onDeleteClick: () => void;
   onEditInsight: () => void;
+  /**
+   * Wave WI2-wire-bind · shared LRU+TTL insight regen cache passed
+   * down from `DashboardView`. When omitted the `useInsightRegen`
+   * hook falls back to a per-tile cache, which is fine but loses
+   * the "re-explore filter combo A after B" warm-cache hit.
+   */
+  insightRegenCache?: InsightRegenCache;
 }
 
 export function ChartTileBody({
@@ -71,12 +84,63 @@ export function ChartTileBody({
   onFiltersChange,
   onDeleteClick,
   onEditInsight,
+  insightRegenCache,
 }: ChartTileBodyProps) {
   const { mode, toggle } = useChartTileViewMode(dashboardId, tile.id);
   const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
   // Force chart view when this chart can't be pivoted, even if a
   // stale `pivot` value is in sessionStorage from a prior chart shape.
   const effectiveMode = canPivot ? mode : "chart";
+
+  // Wave WI2-wire-bind · derive the lite spec from the tile's
+  // ChartSpec. The field set on `InsightChartSpecLite` is a strict
+  // subset of `ChartSpec`, so the mapping is field-for-field.
+  const specLite: InsightChartSpecLite = useMemo(
+    () => ({
+      type: tile.chart.type,
+      title: tile.chart.title,
+      x: tile.chart.x,
+      y: tile.chart.y,
+      ...(tile.chart.seriesColumn ? { seriesColumn: tile.chart.seriesColumn } : {}),
+      ...(tile.chart.aggregate ? { aggregate: tile.chart.aggregate } : {}),
+    }),
+    [
+      tile.chart.type,
+      tile.chart.title,
+      tile.chart.x,
+      tile.chart.y,
+      tile.chart.seriesColumn,
+      tile.chart.aggregate,
+    ],
+  );
+
+  // Apply the tile's active filters to the embedded rows. ChartSpec.data
+  // cells are `string | number | null` — a structural subset of
+  // `InsightRegenRow` (`string | number | boolean | null`), so the cast
+  // is safe. Returns `[]` when the chart has no embedded data (agent-
+  // generated charts whose rows aren't shipped on the spec).
+  const filteredRows = useMemo<InsightRegenRow[]>(
+    () =>
+      applyChartFilters(
+        (tile.chart.data ?? []) as Array<Record<string, string | number | null>>,
+        filters ?? {},
+      ) as InsightRegenRow[],
+    [tile.chart.data, filters],
+  );
+
+  const regen = useInsightRegen({
+    tileId: tile.id,
+    filters: filters ?? {},
+    cache: insightRegenCache,
+  });
+
+  // Bind a no-arg callback for the footer button — the dynamic context
+  // (spec + filtered rows) flows in at click time, side-stepping the
+  // over-fire-on-every-render trap the hook's design call-time entry
+  // was meant to avoid.
+  const handleRegenerate = useCallback(() => {
+    void regen.regenerate(specLite, filteredRows);
+  }, [regen, specLite, filteredRows]);
 
   const titleNode = tile.title || `Chart ${tile.index + 1}`;
 
@@ -206,6 +270,12 @@ export function ChartTileBody({
             canEdit={canEdit}
             isEditing={isEditing}
             onEdit={onEditInsight}
+            regen={{
+              entry: regen.entry,
+              loading: regen.loading,
+              error: regen.error,
+              onRegenerate: handleRegenerate,
+            }}
           />
         ) : null}
       </CardContent>

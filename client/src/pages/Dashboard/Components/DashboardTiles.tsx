@@ -35,6 +35,7 @@ import {
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
+import type { InsightRegenCache } from '../lib/insightRegenCache';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 // DR18G · resolveLayoutsDropBySwap is no longer called. The helper
 // + its tests stay in the codebase (deprecated) for revival if a
@@ -79,6 +80,14 @@ interface DashboardTilesProps {
   /** Immediate PATCH (no debounce) — used to seed Cosmos from localStorage once. */
   onSeedLayoutFromLocalStorage?: (layouts: Layouts) => Promise<void>;
   onNarrativeSave?: (blockId: string, title: string, body: string) => Promise<void>;
+  /**
+   * Wave WI2-wire-bind · shared insight-regen cache instance scoped
+   * to the parent `DashboardView` mount. Forwarded into every chart
+   * tile so `useInsightRegen` reads/writes a single LRU+TTL store,
+   * not a per-tile fallback. Optional so existing call sites stay
+   * compatible.
+   */
+  insightRegenCache?: InsightRegenCache;
 }
 
 const COLS = { lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 } as const;
@@ -269,6 +278,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   onPersistServerGrid,
   onSeedLayoutFromLocalStorage,
   onNarrativeSave,
+  insightRegenCache,
 }) => {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenTiles(dashboardId));
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -819,6 +829,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                 text: tile.chart.keyInsight ?? '',
               })
             }
+            insightRegenCache={insightRegenCache}
           />,
           chartContextItems,
         );
