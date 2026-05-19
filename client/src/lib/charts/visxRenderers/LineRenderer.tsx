@@ -66,6 +66,15 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-trend · cmd / ctrl-click on the line surface
+// routes the nearest-x lookup to drill-through. Modifier flag
+// captured in a ref at brushDown time and consumed in brushUp because
+// the brush handler is parameterless (state lives in brushStart /
+// brushEnd between mouseDown and mouseUp).
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface LineRendererProps {
   spec: ChartSpecV2;
@@ -168,6 +177,11 @@ export function LineRenderer({
   // can read zoomRange).
   const [brushStart, setBrushStart] = useState<number | null>(null);
   const [brushEnd, setBrushEnd] = useState<number | null>(null);
+  // Wave WD3-wiring-rest-trend · captures the modifier-key state at
+  // mouseDown so the (parameterless) brushUp handler can branch to
+  // drill-through vs cross-filter. useRef (not useState) because the
+  // flag doesn't drive re-renders — only the brush rectangle does.
+  const brushModifierRef = useRef<boolean>(false);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
 
   // Fix-5 · reset brush state when the underlying data changes (encoding
@@ -361,6 +375,12 @@ export function LineRenderer({
     if (x < 0 || x > innerWidth) return;
     setBrushStart(x);
     setBrushEnd(x);
+    // Wave WD3-wiring-rest-trend · stash the modifier flag for the
+    // companion brushUp handler. A brush-zoom drag with cmd held
+    // becomes a no-op on drill-through because the brushUp logic
+    // only fires the dispatcher on a small-distance click (< 6 px);
+    // a real zoom-drag falls through to the existing zoom path.
+    brushModifierRef.current = isModifierClick(e);
   };
 
   const onBrushUp = () => {
@@ -387,13 +407,28 @@ export function LineRenderer({
           }
         }
         if (nearest) {
-          dispatchCrossFilter({
-            column: xCh.field,
-            value: toFilterValue(nearest.x),
-            sourceTileId: dashboardTile.tileId,
-          });
+          // Wave WD3-wiring-rest-trend · branch on the modifier
+          // flag captured at brushDown. The captured value resets to
+          // false after dispatch so a subsequent plain brushDown
+          // doesn't inherit stale state.
+          if (brushModifierRef.current) {
+            dispatchDrillThrough({
+              chartId: dashboardTile.tileId,
+              column: xCh.field,
+              value: nearest.x,
+              sourceTileId: dashboardTile.tileId,
+              filters: dashboardFilters,
+            });
+          } else {
+            dispatchCrossFilter({
+              column: xCh.field,
+              value: toFilterValue(nearest.x),
+              sourceTileId: dashboardTile.tileId,
+            });
+          }
         }
       }
+      brushModifierRef.current = false;
       setBrushStart(null);
       setBrushEnd(null);
       return;

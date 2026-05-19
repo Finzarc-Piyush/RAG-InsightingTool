@@ -44,6 +44,12 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+// Wave WD3-wiring-rest-trend · cmd / ctrl-click on the area surface
+// routes the nearest-x lookup to drill-through instead of cross-filter.
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface AreaRendererProps {
   spec: ChartSpecV2;
@@ -323,6 +329,20 @@ export function AreaRenderer({
                 }
               }
               if (nearest) {
+                // Wave WD3-wiring-rest-trend · cmd/ctrl-click routes
+                // the nearest-x value to drill-through instead of
+                // cross-filter. The lookup is identical — only the
+                // dispatcher diverges.
+                if (isModifierClick(e)) {
+                  dispatchDrillThrough({
+                    chartId: dashboardTile.tileId,
+                    column: xCh.field,
+                    value: nearest.x,
+                    sourceTileId: dashboardTile.tileId,
+                    filters: dashboardFilters,
+                  });
+                  return;
+                }
                 dispatchCrossFilter({
                   column: xCh.field,
                   value: toFilterValue(nearest.x),
