@@ -11,6 +11,67 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-server · `POST /api/dashboards/:id/drill` endpoint closes the WD3 round-trip.** The 5 wiring waves (foundation + bar + cat + sheet + trend + point + rect + echarts) established the client dispatch (cmd / ctrl-click on any of 15 chart marks → `DRILL_THROUGH_EVENT`), and the sheet receiver opens the side-sheet with the captured pin + filter snapshot. This wave ships the server endpoint that returns the underlying rows so the sheet's placeholder body can be replaced with a real row list. The consumer-side swap (TanStack Query fetch + row table render) is a follow-on WD3-sheet-fetch wave — this wave is server-only to keep the atomic boundary clean.
+
+  **What landed.**
+    - [server/services/dashboardDrillThrough.service.ts](../server/services/dashboardDrillThrough.service.ts) (~210 LOC). Pure-fn service module with the resolver + supporting helpers. Key exports:
+      - **Types** — `DrillThroughPin`, `DrillThroughRequest`, `DrillThroughResponse`, `ChartFilterSelection` (categorical / date / numeric, mirrors the client shape), `ActiveChartFilters`. Server-side type definitions intentionally duplicate the client shape rather than importing across tiers — the cross-tier import would force the build into a shared-types package, which the project hasn't adopted (charting and other client-side concerns ship their own server-side mirrors). A future contract sync is a one-file diff.
+      - **`DRILL_ROW_CAP = 1000`** — default row-count cap. A drill on a large categorical bucket could return 10K+ rows; capping at 1000 keeps the response payload small enough to render without virtualisation. The response carries `totalMatched` + `capApplied` so the sheet can show "Showing 1000 of 5234" affordance.
+      - **`findChartByTileId(dashboard, tileId)`** — parses `chart-${idx}` and walks all sheets to find the first match. Same convention as the client's `DashboardView.tsx` tile-id derivation (`baseTiles: activeSheet.charts.map((chart, index) => ({ id: 'chart-${index}', ... }))`). Returns null for malformed ids (`table-0`, `chart-abc`, empty string) or out-of-range indices. Multi-sheet dashboards: returns the first match across sheets (most dashboards have a single sheet; multi-sheet disambiguation is a future wave).
+      - **`filterChartRowsForDrill(rows, request)`** — the load-bearing pure fn. Applies active filters FIRST (categorical / numeric / date — ported semantics from the client's `applyChartFilters`), then the primary pin, then each `extraPin` (AND-intersection). Returns `{ rows, totalMatched, capApplied }`. The filter-first-then-pin ordering is the brief's stated semantic: the server pre-filters the dataset to the dashboard's currently-active filter context BEFORE narrowing to the clicked slice.
+      - **`resolveDrillThrough(dashboard, chartId, request)`** — top-level resolver. Looks up the chart via `findChartByTileId`, applies `filterChartRowsForDrill`, returns the full response with chart metadata (`title`, `tileId`) for the sheet display. Throws `chart_not_found:<id>` (Error.message format) so the controller can string-match for the 404 path.
+      - **`stringifyForComparison(v)`** — internal helper mirroring the client's `toFilterValue` from `crossFilter.ts` so server-side comparison agrees with client wire-storage semantics: null / undefined → `"null"`; numbers / booleans / Dates → `String(v)`; strings pass through. Critical for the drill correctness: a drill on `value: 100` (numeric raw from the chart click) must match a row whose `units: 100` field is also numeric; the client passes the value RAW so the server side does the canonicalisation.
+
+    - [server/controllers/dashboardDrillThroughController.ts](../server/controllers/dashboardDrillThroughController.ts) (~75 LOC). Express handler:
+      ```ts
+      export async function drillDashboardController(req, res) {
+        // 1. Auth gate — getAuthenticatedEmail (401 missing).
+        // 2. Param parsing — dashboardId from URL, chartId + column +
+        //    value from query, filters + extraPins from body.
+        // 3. Dashboard lookup — getDashboardById (404 missing).
+        // 4. resolveDrillThrough — 404 on chart_not_found, 500 on
+        //    unexpected.
+        // 5. 200 with DrillThroughResponse JSON.
+      }
+      ```
+      POST (not GET) because the body can carry a non-trivial `ActiveChartFilters` object — query-string encoding would force JSON-in-URL escapes. `value` is intentionally lenient — null / undefined are valid drill targets ("drill into rows where Region is null"). Auth is gated by `getAuthenticatedEmail` — only the dashboard owner can drill (same pattern as the export endpoints).
+
+    - [server/routes/dashboards.ts](../server/routes/dashboards.ts) — single new line registers the route:
+      ```ts
+      router.post('/dashboards/:id/drill', drillDashboardController);
+      ```
+
+    - [server/tests/dashboardDrillThroughWD3Server.test.ts](../server/tests/dashboardDrillThroughWD3Server.test.ts) (new, ~280 LOC). 30 tests across 10 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+      - **filterChartRowsForDrill primary pin** (3): pin-only filter; stringified comparison for numeric values; null-as-`"null"` semantic.
+      - **filterChartRowsForDrill + categorical filter** (2): filter-before-pin ordering; empty-categorical-values no-op.
+      - **filterChartRowsForDrill + numeric filter** (2): min+max range; non-numeric values excluded.
+      - **filterChartRowsForDrill + date filter** (1): ISO prefix comparison.
+      - **filterChartRowsForDrill + extraPins** (3): AND-intersection; composition with active filters; empty extraPins no-op.
+      - **filterChartRowsForDrill row cap** (2): 5000 rows → DRILL_ROW_CAP + capApplied=true; small dataset → capApplied=false.
+      - **findChartByTileId** (5): single-sheet match; multi-sheet first-match; malformed tileIds; out-of-range index.
+      - **resolveDrillThrough** (3): success path with chart metadata; chart_not_found throw; zero-match empty-rows.
+      - **Controller source contract** (6): auth gate, chartId/column requirement, POST body shape, chart_not_found → 404, dashboard-not-found → 404, full request delegation.
+      - **Route registration** (3): POST verb, import path, WD3-server marker comment.
+
+  **Why this design.** Three alternatives were considered.
+  1. **Reuse the client's `applyChartFilters` via a shared package.** Rejected because the project hasn't adopted a shared-types package — charting / chart-spec / domain-context concerns all ship server-side mirrors of their client shapes. Introducing one for the drill endpoint alone would be over-scoped. The mirror is intentional and a future drift-detection wave can pin the two definitions in sync via a build-time check.
+  2. **Stream the rows back as NDJSON** (or chunked transfer) instead of buffering in memory. Rejected for the v1 because the row cap (1000) makes the response payload bounded — buffering is fine. A future wave could swap to streaming when the cap moves to "stream-as-you-scroll" via TanStack Query infinite query (the brief's dormancy-debt note).
+  3. **Run the filter in DuckDB instead of in-memory.** Rejected because the chart's `.data` field is the source of truth — it's already in memory (and already on the wire to the client when the dashboard renders). DuckDB would require re-execution of the chart's underlying query plan, which (a) re-pays the query cost and (b) requires the upstream session context. The in-memory filter pays the row-count × filter-count cost; for 5000 rows × 5 filter columns = 25K comparisons, well under 1 ms.
+
+  `stringifyForComparison` is intentionally NOT a re-export of the client's `toFilterValue` — duplicating ~10 lines avoids a cross-tier import. A future wave that consolidates server-side filter primitives (the existing `applyActiveFilter` in `server/lib/activeFilter/` has its own ChartFilterSpec shape distinct from this WD3 shape) might fold them together, but for now duplication beats abstraction.
+
+  Multi-sheet dashboards return the first chart match across all sheets. This is the load-bearing limitation of the wave: in a dashboard with sheets A and B both containing a "chart-0", a drill click on sheet B's chart-0 would resolve to sheet A's chart-0 (the first match). The fix (passing sheet id alongside chart id) requires foundation widening — deferred to a future WD3-multi-sheet wave when the multi-sheet drill UX actually becomes an active complaint. The brief notes most production dashboards have a single sheet, so the limitation is acceptable for the MVP.
+
+  **Tests.** Server test suite: WD3-server (30 new in `dashboardDrillThroughWD3Server.test.ts`) all pass. Server `npx tsc --noEmit` reports 98 errors (identical baseline). The new files are server-only — no client typecheck impact.
+
+  **Out of scope.**
+    - **Sheet fetch wiring (WD3-sheet-fetch).** The sheet's placeholder body still shows the request shape, not real rows. The follow-on wave wires a `useQuery(['drill', dashboardId, chartId, ...], () => fetch(...))` hook + a `<DrillThroughRowTable>` component that renders the response's `rows` array. ~120 LOC + tests.
+    - **Multi-sheet chartId disambiguation.** Currently the chartId is `chart-${idx}` PER sheet, so two sheets each have `chart-0`. The server's first-match-across-sheets fallback is correct for single-sheet dashboards but ambiguous for multi-sheet. A future wave widens `DrillThroughEvent` with `sheetId?: string` (or makes chartId globally unique like `sheet-${sheetIdx}-chart-${chartIdx}`).
+    - **Streaming row response (NDJSON).** The current implementation buffers all matching rows in memory and returns a JSON payload. For drills with > 10K matching rows, a future wave could swap to NDJSON streaming + TanStack Query's `useInfiniteQuery`.
+    - **Server-side aggregation (e.g. drill into a parent treemap level).** Currently the drill returns the literal underlying rows. A future wave could let the drill response carry aggregated rollups when the underlying row count is too high to render usefully.
+    - **Row-fetch caching.** A second cmd-click on the same chart cell repeats the network round-trip. TanStack Query's stale-while-revalidate covers most of this in the consumer wave (WD3-sheet-fetch), but server-side caching could reduce the dashboard-lookup cost.
+    - **Drill telemetry.** "User clicked drill-through" + per-chart drill-frequency metrics for product analytics. Pure observability concern, separate wave.
+
 - **2026-05-19** — **Wave WD3-wiring-echarts · 5 ECharts marks cmd / ctrl-click → drill-through.** Closes the WD3 wiring family at 15 of 15 chart kinds: Treemap + Sunburst + Sankey + Calendar + Candlestick now drill via the existing `onChartClick(params)` flow. The brief promised "no foundation changes needed for ECharts" — this wave validates that claim. ECharts wraps the native MouseEvent at `params.event.event` (the ZRender event object wrapping the DOM event), and `isModifierClick`'s sparse-event-shape contract from [WD3-foundation](../client/src/pages/Dashboard/lib/drillThrough.ts) accepts `{ metaKey?: boolean; ctrlKey?: boolean }` directly — no helper modifications, no wrapper extraction, no normalisation layer.
 
   **What landed.**
