@@ -31,7 +31,11 @@ import {
   echartsLabelInterval,
 } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
-import { dispatchCrossFilter, toFilterValue } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchCrossFilter,
+  isCrossFilterActive,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 interface RendererProps {
   spec: ChartSpecV2;
@@ -70,6 +74,11 @@ interface SunburstNode {
   name: string;
   value?: number;
   children?: SunburstNode[];
+  // WD2-dim-echarts-treemap · per-dataItem dim opacity on leaves
+  // whose `name` isn't in the active categorical cross-filter on
+  // `labelCh.field`. Parents stay un-dimmed (structural rings, not
+  // the filterable mark — matches the dispatch carve-out).
+  itemStyle?: { opacity?: number };
 }
 
 export function SunburstRenderer({
@@ -86,7 +95,34 @@ export function SunburstRenderer({
     throw new Error("sunburst mark requires x (label) and y (value) encodings");
   }
 
+  // Wave WD2-wiring-echarts · cross-filter dispatch on leaf clicks.
+  // Sunburst leaves are the categorical x.field values (the inner-ring
+  // segments when `groupCh` is set, or the only ring when it isn't).
+  // Parent-ring clicks (the `groupCh` value, when present) are skipped
+  // because the dispatch column would diverge between inner / outer
+  // rings — wiring two-column dispatch is a follow-on (mirrors the
+  // RectRenderer row+col approach from WD2-wiring-rest-rect).
+  const dashboardTile = useDashboardTileContext();
+  // WD2-dim-echarts-treemap · per-dataItem dim factor on leaves
+  // whose `name` isn't in the active categorical cross-filter on
+  // `labelCh.field`. Mirrors the leaf-only dispatch carve-out.
+  // Lifted BEFORE the tree memo so the memo can consume them; the
+  // memo's deps include `dashboardFilters` + `dashboardDimActive` so
+  // dim-state changes rebuild the tree (and via `optionsKey`,
+  // re-render the ECharts canvas).
+  const dashboardFilters = dashboardTile?.filters;
+  const labelFilterSel = dashboardFilters?.[labelCh.field];
+  const dashboardDimActive =
+    !!labelFilterSel &&
+    labelFilterSel.type === "categorical" &&
+    labelFilterSel.values.length > 0;
+
   const tree = useMemo<SunburstNode[]>(() => {
+    const dimLeaf = (name: string): SunburstNode["itemStyle"] | undefined =>
+      dashboardDimActive &&
+      !isCrossFilterActive(dashboardFilters!, labelCh.field, name)
+        ? { opacity: 0.4 }
+        : undefined;
     if (!groupCh) {
       const totals = new Map<string, number>();
       for (const r of data) {
@@ -96,10 +132,10 @@ export function SunburstRenderer({
           totals.set(k, (totals.get(k) ?? 0) + v);
         }
       }
-      return Array.from(totals.entries()).map(([name, value]) => ({
-        name,
-        value,
-      }));
+      return Array.from(totals.entries()).map(([name, value]) => {
+        const itemStyle = dimLeaf(name);
+        return itemStyle ? { name, value, itemStyle } : { name, value };
+      });
     }
     const groups = new Map<string, Map<string, number>>();
     for (const r of data) {
@@ -113,26 +149,18 @@ export function SunburstRenderer({
     }
     return Array.from(groups.entries()).map(([gName, inner]) => ({
       name: gName,
-      children: Array.from(inner.entries()).map(([name, value]) => ({
-        name,
-        value,
-      })),
+      children: Array.from(inner.entries()).map(([name, value]) => {
+        const itemStyle = dimLeaf(name);
+        return itemStyle ? { name, value, itemStyle } : { name, value };
+      }),
     }));
-  }, [data, labelCh, valueCh, groupCh]);
+  }, [data, labelCh, valueCh, groupCh, dashboardDimActive, dashboardFilters]);
 
   const optionsKey = useMemo(
     () => JSON.stringify({ tree, w: width, h: height }),
     [tree, width, height],
   );
 
-  // Wave WD2-wiring-echarts · cross-filter dispatch on leaf clicks.
-  // Sunburst leaves are the categorical x.field values (the inner-ring
-  // segments when `groupCh` is set, or the only ring when it isn't).
-  // Parent-ring clicks (the `groupCh` value, when present) are skipped
-  // because the dispatch column would diverge between inner / outer
-  // rings — wiring two-column dispatch is a follow-on (mirrors the
-  // RectRenderer row+col approach from WD2-wiring-rest-rect).
-  const dashboardTile = useDashboardTileContext();
   const onSunburstClick = useCallback(
     (params: unknown) => {
       if (!dashboardTile) return;

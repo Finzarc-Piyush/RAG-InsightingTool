@@ -21,7 +21,11 @@ import {
 } from "@/lib/charts/encodingResolver";
 import { EChartsBase, type ChartTheme, type EChartsType } from "./EChartsBase";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
-import { dispatchCrossFilter, toFilterValue } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchCrossFilter,
+  isCrossFilterActive,
+  toFilterValue,
+} from "@/pages/Dashboard/lib/crossFilter";
 
 export interface TreemapRendererProps {
   spec: ChartSpecV2;
@@ -35,7 +39,11 @@ interface TreemapNode {
   name: string;
   value?: number;
   children?: TreemapNode[];
-  itemStyle?: { color?: string };
+  // WD2-dim-echarts-treemap · `opacity` widens the per-dataItem
+  // itemStyle so non-matching leaves can carry their dim factor
+  // (0.4) inline. ECharts respects per-dataItem `itemStyle.opacity`
+  // as an override on top of the series-level itemStyle.
+  itemStyle?: { color?: string; opacity?: number };
 }
 
 export function TreemapRenderer({
@@ -77,9 +85,29 @@ export function TreemapRenderer({
     },
     [dashboardTile, labelCh.field],
   );
+  // WD2-dim-echarts-treemap · per-dataItem dim factor on leaves whose
+  // `name` isn't in the active categorical cross-filter on
+  // `labelCh.field`. Mirrors the WD2-wiring-echarts dispatch
+  // carve-out: parents (the `groupCh` value, when present) stay
+  // un-dimmed because they're structural hierarchy, not the
+  // filterable mark — same reason the dispatch only fires on
+  // leaves. ECharts canvases re-render whenever `optionsKey` changes,
+  // and `optionsKey = JSON.stringify({ tree, w, h })` already covers
+  // the per-item opacity through `tree`'s nested itemStyle objects.
+  const dashboardFilters = dashboardTile?.filters;
+  const labelFilterSel = dashboardFilters?.[labelCh.field];
+  const dashboardDimActive =
+    !!labelFilterSel &&
+    labelFilterSel.type === "categorical" &&
+    labelFilterSel.values.length > 0;
 
   // Build hierarchy: if color is set, group by it as parent; else flat.
   const tree = useMemo<TreemapNode[]>(() => {
+    const dimLeaf = (name: string): TreemapNode["itemStyle"] | undefined =>
+      dashboardDimActive &&
+      !isCrossFilterActive(dashboardFilters!, labelCh.field, name)
+        ? { opacity: 0.4 }
+        : undefined;
     if (!groupCh) {
       const totals = new Map<string, number>();
       for (const r of data) {
@@ -88,10 +116,10 @@ export function TreemapRenderer({
         if (!Number.isFinite(v) || v <= 0) continue;
         totals.set(k, (totals.get(k) ?? 0) + v);
       }
-      return Array.from(totals.entries()).map(([name, value]) => ({
-        name,
-        value,
-      }));
+      return Array.from(totals.entries()).map(([name, value]) => {
+        const itemStyle = dimLeaf(name);
+        return itemStyle ? { name, value, itemStyle } : { name, value };
+      });
     }
     const groups = new Map<string, Map<string, number>>();
     for (const r of data) {
@@ -105,12 +133,12 @@ export function TreemapRenderer({
     }
     return Array.from(groups.entries()).map(([gName, inner]) => ({
       name: gName,
-      children: Array.from(inner.entries()).map(([name, value]) => ({
-        name,
-        value,
-      })),
+      children: Array.from(inner.entries()).map(([name, value]) => {
+        const itemStyle = dimLeaf(name);
+        return itemStyle ? { name, value, itemStyle } : { name, value };
+      }),
     }));
-  }, [data, labelCh, valueCh, groupCh]);
+  }, [data, labelCh, valueCh, groupCh, dashboardDimActive, dashboardFilters]);
 
   const optionsKey = useMemo(
     () => JSON.stringify({ tree, w: width, h: height }),
