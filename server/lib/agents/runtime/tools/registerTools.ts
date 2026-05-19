@@ -14,6 +14,7 @@ import {
   segmentDriverArgsSchema,
 } from "../../../segmentDriverAnalysisTool.js";
 import { analyzeCorrelations } from "../../../correlationAnalyzer.js";
+import { bucketCorrelationR } from "../../../correlationMath.js";
 import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 import { processChartData } from "../../../chartGenerator.js";
@@ -1310,6 +1311,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
       // detail string the WW2 extractor catches deterministically and WQ1
       // grades on real evidence (R², n) instead of defaulting to "medium /
       // no evidence supplied". Strongest correlation by |r|; R² = r².
+      // Wave WV4-bucket · also emit the categorical effect-size via Cohen's
+      // |r| conventions so WQ1 can distinguish "r = 0.05 on n = 10000" (real
+      // and trivial) from "r = 0.7 on n = 80" (real and large).
       let wv4EvidenceSuffix = "";
       if (topCorrelations && topCorrelations.length > 0) {
         const strongest = topCorrelations[0];
@@ -1320,6 +1324,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
         if (typeof strongest.nPairs === "number" && strongest.nPairs >= 0) {
           evidence.n = strongest.nPairs;
+        }
+        const bucket = bucketCorrelationR(strongest.correlation);
+        if (bucket) {
+          evidence.effectMagnitude = bucket;
         }
         // composeFindingDetail("", ev) returns just the evidence suffix
         // (leading space + parenthesised block) — safe to concatenate.

@@ -113,3 +113,32 @@ export function calculateCategoricalCorrelations(
   }
   return results;
 }
+
+/**
+ * Wave WV4-bucket · Cohen (1988) effect-size buckets for Pearson |r|.
+ * Mirrors `bucketCohensD` / `bucketCramersV` in `significanceTests.ts` so
+ * `run_correlation` can carry a categorical `effectMagnitude` through the
+ * WV2 evidence suffix into WQ1's classifier — distinguishing "r = 0.05 on
+ * n = 10,000" (statistically real, practically negligible) from "r = 0.7
+ * on n = 80" (real and large).
+ *
+ * Standard Cohen thresholds on |r|:
+ *   < 0.1 → negligible
+ *   < 0.3 → small
+ *   < 0.5 → medium
+ *   ≥ 0.5 → large
+ *
+ * Non-finite or out-of-range r (|r| > 1) returns `null` — caller decides
+ * whether to skip emitting the bucket. r = 0 buckets to `negligible`.
+ */
+export function bucketCorrelationR(
+  r: number,
+): "negligible" | "small" | "medium" | "large" | null {
+  if (!Number.isFinite(r)) return null;
+  const a = Math.abs(r);
+  if (a > 1) return null;
+  if (a < 0.1) return "negligible";
+  if (a < 0.3) return "small";
+  if (a < 0.5) return "medium";
+  return "large";
+}
