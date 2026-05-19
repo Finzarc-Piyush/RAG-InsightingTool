@@ -1083,13 +1083,25 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           DashboardTile-wrapped renderer. Closes via overlay /
           Escape / Close button, which clears the event back to
           null so a re-brush on the same payload re-fires the
-          slide-in. The regenerated-insight body is a placeholder
-          until WI4-wire lands. */}
+          slide-in.
+          Wave WI4-wire · resolves the matching chart from
+          `event.chartId` (`chart-${idx}` convention parallels
+          DashboardView's tile id derivation at line 196) and threads
+          it + the shared insightRegenCache into the panel so the
+          regen hook can fire against the brushed slice. */}
       <ExplainSlicePanel
         event={explainSliceEvent}
         onOpenChange={(open) => {
           if (!open) setExplainSliceEvent(null);
         }}
+        chart={(() => {
+          if (!explainSliceEvent || !activeSheet) return null;
+          const m = /^chart-(\d+)$/.exec(explainSliceEvent.chartId);
+          if (!m) return null;
+          const idx = Number.parseInt(m[1], 10);
+          return activeSheet.charts[idx] ?? null;
+        })()}
+        insightRegenCache={insightRegenCache}
       />
     </div>
     </DashboardEditModeProvider>

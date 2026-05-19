@@ -22,6 +22,7 @@
  *   - WI4 → ExplainSlicePanel  (right slide-in with regenerated insight)
  */
 
+import { useEffect, useMemo } from "react";
 import {
   Sheet,
   SheetContent,
@@ -29,10 +30,18 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { ActiveChartFilters } from "@/lib/chartFilters";
-import type {
-  BrushRegion,
-  ExplainSliceEvent,
+import { applyChartFilters, type ActiveChartFilters } from "@/lib/chartFilters";
+import type { ChartSpec } from "@/shared/schema";
+import {
+  useInsightRegen,
+  type InsightChartSpecLite,
+  type InsightRegenRow,
+} from "../hooks/useInsightRegen";
+import type { InsightRegenCache } from "../lib/insightRegenCache";
+import {
+  filterRowsByBrushRegion,
+  type BrushRegion,
+  type ExplainSliceEvent,
 } from "../lib/explainSlice";
 
 interface ExplainSlicePanelProps {
@@ -49,6 +58,22 @@ interface ExplainSlicePanelProps {
    * payload re-fires the slide-in animation.
    */
   onOpenChange: (open: boolean) => void;
+  /**
+   * Wave WI4-wire · the chart spec of the brushed tile (resolved by
+   * the parent via `event.chartId` → `activeSheet.charts[idx]`).
+   * When `null`, the panel falls back to the WI4-panel placeholder
+   * — either no event is active or the parent couldn't resolve the
+   * tile.
+   */
+  chart?: ChartSpec | null;
+  /**
+   * Wave WI4-wire · the shared regen LRU+TTL cache lifted at
+   * `DashboardView` mount. Threaded in so cached entries survive
+   * panel open/close cycles within the same dashboard session.
+   * Optional — when omitted the underlying hook falls back to a
+   * per-mount cache (lost on close).
+   */
+  insightRegenCache?: InsightRegenCache;
 }
 
 /**
@@ -106,9 +131,83 @@ function formatRegion(region: BrushRegion): string {
   return `${preview}, … +${more} more`;
 }
 
-export function ExplainSlicePanel({ event, onOpenChange }: ExplainSlicePanelProps) {
+/** Stable fallback identifier so `useInsightRegen` can be called
+ * unconditionally (React rules of hooks). When no event is active
+ * the hook spins up against this idle slot and never fires
+ * `regenerate`, so the cache slot stays empty.
+ */
+const IDLE_TILE_ID = "__wi4_idle__";
+
+export function ExplainSlicePanel({
+  event,
+  onOpenChange,
+  chart,
+  insightRegenCache,
+}: ExplainSlicePanelProps) {
   const open = event !== null;
   const filterLines = summariseFilters(event?.filters);
+
+  // Wave WI4-wire · derive the lite spec from the resolved chart.
+  // Field-for-field subset of ChartSpec (same mapping as the WI2-
+  // wire-bind specLite in ChartTileBody). `null` when no chart is
+  // resolved — the regen effect short-circuits on null.
+  const specLite: InsightChartSpecLite | null = useMemo(() => {
+    if (!chart) return null;
+    return {
+      type: chart.type,
+      title: chart.title,
+      x: chart.x,
+      y: chart.y,
+      ...(chart.seriesColumn ? { seriesColumn: chart.seriesColumn } : {}),
+      ...(chart.aggregate ? { aggregate: chart.aggregate } : {}),
+    };
+  }, [chart]);
+
+  // Wave WI4-wire · compose the chart's backing rows through the
+  // global filter context AND the brush region. The two filters are
+  // predicate-AND commutative, so `applyChartFilters` first and
+  // `filterRowsByBrushRegion` second produces the same set as the
+  // reverse order; chosen order matches the WI2-wire-bind pipeline
+  // for ChartTileBody so future readers see a consistent shape.
+  const narrowedRows = useMemo<InsightRegenRow[]>(() => {
+    if (!chart || !event) return [];
+    const filteredByGlobal = applyChartFilters(
+      (chart.data ?? []) as Array<Record<string, string | number | null>>,
+      event.filters ?? {},
+    );
+    const filteredByBrush = filterRowsByBrushRegion(
+      filteredByGlobal,
+      event.column,
+      event.region,
+    );
+    return filteredByBrush as InsightRegenRow[];
+  }, [chart, event]);
+
+  // Always call the hook (React rules of hooks). Use a stable idle
+  // tileId when no event is active so the hook's cache key is
+  // deterministic. Effect below short-circuits regenerate on null
+  // event / chart.
+  const regen = useInsightRegen({
+    tileId: event?.chartId ?? IDLE_TILE_ID,
+    filters: event?.filters ?? {},
+    cache: insightRegenCache,
+  });
+
+  // Fire regenerate when a fresh event arrives. The hook's internal
+  // `seqRef` guards against stale resolves clobbering newer state if
+  // the user brushes a second slice while the first is still
+  // resolving. Effect deps include the resolved spec + rows so a
+  // late-arriving chart prop also triggers a re-run.
+  useEffect(() => {
+    if (!event || !specLite) return;
+    void regen.regenerate(specLite, narrowedRows);
+    // The hook captures `regenerate` once via useRef internally, so
+    // it's stable across renders within an instance. We intentionally
+    // omit it from the deps to avoid a re-render loop; the
+    // `event` / `specLite` / `narrowedRows` triplet drives every
+    // legitimate re-fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, specLite, narrowedRows]);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="overflow-y-auto sm:max-w-md">
@@ -168,23 +267,39 @@ export function ExplainSlicePanel({ event, onOpenChange }: ExplainSlicePanelProp
                 Regenerated insight
               </h3>
               {/*
-                WI4-panel placeholder — the WI4-wire follow-on wave
-                will replace this with a `useInsightRegen` call against
-                rows narrowed by `applyChartFilters(rows, filters)` →
-                `filterRowsByBrushRegion(…, region)`. The placeholder
-                pins the pipeline shape so future-Claude can wire the
-                hook with a single swap. The same pattern as
-                WD3-sheet's placeholder → WD3-sheet-fetch's swap.
+                Wave WI4-wire · the regenerated insight prose. The
+                narrowed rows (global filters → brush region) flow
+                through `useInsightRegen` which POSTs to
+                `/api/insight/regen` and caches by (tileId, filterHash).
+                Render branches on the hook state: loading / error /
+                entry.
               */}
-              <p className="mt-2 rounded border border-dashed border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                The regenerated insight for this brushed slice will
-                appear here once the WI4-wire wave lands. The
-                regenerator narrows rows via{" "}
-                <code className="font-mono">applyChartFilters</code> →{" "}
-                <code className="font-mono">filterRowsByBrushRegion</code>{" "}
-                and pipes them into{" "}
-                <code className="font-mono">useInsightRegen</code>.
-              </p>
+              <div className="mt-2 text-xs">
+                {!chart ? (
+                  <p className="rounded border border-dashed border-border bg-muted/30 p-3 text-muted-foreground">
+                    Could not resolve the chart for{" "}
+                    <code className="font-mono">{event.chartId}</code>{" "}
+                    — the brushed tile may have been removed.
+                  </p>
+                ) : regen.loading ? (
+                  <p className="text-muted-foreground">
+                    Regenerating insight for {narrowedRows.length} brushed
+                    row{narrowedRows.length === 1 ? "" : "s"}…
+                  </p>
+                ) : regen.error ? (
+                  <p role="alert" className="text-destructive">
+                    Failed to regenerate: {regen.error}
+                  </p>
+                ) : regen.entry?.text ? (
+                  <p className="whitespace-pre-wrap text-foreground">
+                    {regen.entry.text}
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    Waiting for the first regeneration…
+                  </p>
+                )}
+              </div>
             </section>
           </div>
         ) : null}
