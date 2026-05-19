@@ -5,6 +5,7 @@ import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CitationHoverCard } from "@/components/CitationHoverCard";
 import { cn } from "@/lib/utils";
 import type { InsightRegenEntry } from "../lib/insightRegenCache";
+import type { TileRecommendation } from "../lib/tileRecommendations";
 
 /**
  * Wave DR18B · collapsible keyInsight footer for chart tiles.
@@ -100,6 +101,14 @@ interface TileInsightFooterProps {
   onEdit?: () => void;
   /** WI2-wire · optional regen surface. When omitted, no button renders. */
   regen?: TileInsightFooterRegenProps;
+  /**
+   * WI5 · optional per-tile "Try this" recommendation chips. When the
+   * array is empty / omitted, no row renders. Each chip's onClick fires
+   * `onRecommendationClick(rec)` so the parent (ChartTileBody) can route
+   * each kind to the right state mutation (apply filter / clear filters).
+   */
+  recommendations?: TileRecommendation[];
+  onRecommendationClick?: (rec: TileRecommendation) => void;
 }
 
 export function TileInsightFooter({
@@ -110,6 +119,8 @@ export function TileInsightFooter({
   isEditing,
   onEdit,
   regen,
+  recommendations,
+  onRecommendationClick,
 }: TileInsightFooterProps) {
   const [open, setOpen] = useState<boolean>(() =>
     readPersistedOpen(dashboardId, tileId),
@@ -187,6 +198,35 @@ export function TileInsightFooter({
               <span>Sources:</span>
               {regen.entry.citations.map((packId, i) => (
                 <CitationHoverCard key={packId} packId={packId} index={i + 1} />
+              ))}
+            </div>
+          ) : null}
+          {/*
+           * WI5 · per-tile "Try this" recommendation chips. Each chip
+           * applies a single-click state mutation (categorical filter
+           * pin / clear filters) via `onRecommendationClick`. Slotted
+           * after the Sources row and before the action row so the
+           * row order goes: prose → metadata → sources → try-this →
+           * actions (Re-explain + Edit).
+           */}
+          {recommendations && recommendations.length > 0 ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+              <span>Try this:</span>
+              {recommendations.map((rec) => (
+                <Button
+                  key={rec.id}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  aria-label={rec.label}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRecommendationClick?.(rec);
+                  }}
+                >
+                  {rec.label}
+                </Button>
               ))}
             </div>
           ) : null}

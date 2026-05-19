@@ -20,6 +20,10 @@ import {
   type InsightRegenRow,
 } from "../hooks/useInsightRegen";
 import type { InsightRegenCache } from "../lib/insightRegenCache";
+import {
+  deriveTileRecommendations,
+  type TileRecommendation,
+} from "../lib/tileRecommendations";
 
 // Lazy load to mirror DashboardTiles' Suspense pattern.
 const ChartRenderer = lazy(() =>
@@ -141,6 +145,34 @@ export function ChartTileBody({
   const handleRegenerate = useCallback(() => {
     void regen.regenerate(specLite, filteredRows);
   }, [regen, specLite, filteredRows]);
+
+  // Wave WI5 · derive per-tile "Try this" recommendations from the
+  // current spec + filtered rows + active filters. Pure-function output
+  // memoised over the same inputs the chart itself reads, so chip
+  // changes are pinned to genuine state shifts (no re-derive on parent
+  // re-renders unrelated to data / filters).
+  const recommendations = useMemo<TileRecommendation[]>(
+    () => deriveTileRecommendations(specLite, filteredRows, filters ?? {}),
+    [specLite, filteredRows, filters],
+  );
+
+  const handleRecommendationClick = useCallback(
+    (rec: TileRecommendation) => {
+      if (rec.kind === "filter-bottom" || rec.kind === "filter-top") {
+        // Pin the single categorical value — clobber any prior
+        // categorical filter on the same column (the rec only fires
+        // when the value isn't already pinned per the helper's
+        // `isValueAlreadyFiltered` guard).
+        onFiltersChange({
+          ...(filters ?? {}),
+          [rec.column]: { type: "categorical", values: [rec.value] },
+        });
+      } else if (rec.kind === "clear-filters") {
+        onFiltersChange({});
+      }
+    },
+    [filters, onFiltersChange],
+  );
 
   const titleNode = tile.title || `Chart ${tile.index + 1}`;
 
@@ -276,6 +308,8 @@ export function ChartTileBody({
               error: regen.error,
               onRegenerate: handleRegenerate,
             }}
+            recommendations={recommendations}
+            onRecommendationClick={handleRecommendationClick}
           />
         ) : null}
       </CardContent>
