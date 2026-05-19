@@ -200,13 +200,23 @@ describe("WI4-wire · narrowedRows composes applyChartFilters → filterRowsByBr
 // ── useInsightRegen hook call ──────────────────────────────────────
 
 describe("WI4-wire · useInsightRegen hook call (unconditional)", () => {
-  it("calls useInsightRegen with event-derived tileId + filters + injected cache", () => {
+  it("calls useInsightRegen with event-derived tileId + filters + brushRegion + injected cache", () => {
     // Always called (React rules of hooks); fields fall back to
-    // safe defaults when event is null.
+    // safe defaults when event is null. Wave WI4-cache-key threaded
+    // `brushRegion: event?.region` through so two brushes on the
+    // same (chartId, filters) but different sub-regions never share
+    // a cache slot.
     assert.match(
       panelSrc,
-      /const\s+regen\s*=\s*useInsightRegen\(\s*\{\s*tileId:\s*event\?\.\bchartId\s*\?\?\s*IDLE_TILE_ID,\s*filters:\s*event\?\.\bfilters\s*\?\?\s*\{\},\s*cache:\s*insightRegenCache,?\s*\}\s*\)/,
+      /const\s+regen\s*=\s*useInsightRegen\(\s*\{\s*tileId:\s*event\?\.\bchartId\s*\?\?\s*IDLE_TILE_ID,\s*filters:\s*event\?\.\bfilters\s*\?\?\s*\{\},\s*brushRegion:\s*event\?\.\bregion,\s*cache:\s*insightRegenCache,?\s*\}\s*\)/,
     );
+  });
+
+  it("threads `brushRegion: event?.region` into the hook call (Wave WI4-cache-key)", () => {
+    // Explicit pin so a future refactor can't accidentally drop the
+    // brushRegion thread and reintroduce the silent cache collision
+    // between two brushes on the same tile + filters.
+    assert.match(panelSrc, /brushRegion:\s*event\?\.\bregion,/);
   });
 
   it("declares an IDLE_TILE_ID stable fallback constant", () => {

@@ -29,9 +29,11 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
+import type { BrushRegion } from "../lib/explainSlice";
 import {
   buildCacheKey,
   createInsightRegenCache,
+  hashBrushRegion,
   hashGlobalFilters,
   type InsightRegenCache,
   type InsightRegenEntry,
@@ -53,6 +55,15 @@ export type InsightRegenRow = Record<string, string | number | boolean | null>;
 export interface InsightRegenArgs {
   tileId: string;
   filters: ActiveChartFilters;
+  /**
+   * Wave WI4-cache-key · optional brush region from a WI4 explain-
+   * this-slice event. When present, the cache key includes a stable
+   * hash of the region so two brushes on the same tile + filters but
+   * different sub-regions never collide. Non-brush call sites (the
+   * WI2 per-tile footer) omit this and keep their existing two-
+   * segment keys byte-identical.
+   */
+  brushRegion?: BrushRegion;
   /**
    * Optional shared cache. When omitted the hook builds a per-instance
    * cache via `useMemo` — fine for one tile / one DashboardView, but
@@ -90,7 +101,7 @@ export interface InsightRegenState {
 }
 
 export function useInsightRegen(args: InsightRegenArgs): InsightRegenState {
-  const { tileId, filters } = args;
+  const { tileId, filters, brushRegion } = args;
   // Per-hook-instance cache when no shared cache is injected. The
   // `useMemo([])` guarantees one cache per mount; remounts (which
   // shouldn't happen during normal use) get a fresh cache.
@@ -98,10 +109,17 @@ export function useInsightRegen(args: InsightRegenArgs): InsightRegenState {
   const cache = args.cache ?? fallbackCache;
 
   // Filter hash recomputes on filter identity change; the cache key
-  // composes it with tileId.
+  // composes it with tileId and (Wave WI4-cache-key) an optional
+  // brush-region hash so two brushes on the same tile + filters but
+  // different sub-regions never collide on the cache slot.
   const cacheKey = useMemo(
-    () => buildCacheKey(tileId, hashGlobalFilters(filters)),
-    [tileId, filters],
+    () =>
+      buildCacheKey(
+        tileId,
+        hashGlobalFilters(filters),
+        hashBrushRegion(brushRegion),
+      ),
+    [tileId, filters, brushRegion],
   );
 
   // Reading the entry synchronously on every render is intentional —

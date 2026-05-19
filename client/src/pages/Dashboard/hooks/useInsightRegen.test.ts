@@ -37,14 +37,34 @@ describe("WI2-wire · useInsightRegen hook shape", () => {
   it("imports the WI2-cache helpers + type from the canonical module", () => {
     assert.match(
       hookSrc,
-      /import \{[\s\S]*?buildCacheKey,[\s\S]*?createInsightRegenCache,[\s\S]*?hashGlobalFilters,[\s\S]*?\} from "\.\.\/lib\/insightRegenCache"/,
+      /import \{[\s\S]*?buildCacheKey,[\s\S]*?createInsightRegenCache,[\s\S]*?hashBrushRegion,[\s\S]*?hashGlobalFilters,[\s\S]*?\} from "\.\.\/lib\/insightRegenCache"/,
     );
   });
 
-  it("derives `cacheKey = buildCacheKey(tileId, hashGlobalFilters(filters))` via useMemo", () => {
+  it("imports the BrushRegion type from the WI4 explainSlice module (Wave WI4-cache-key)", () => {
     assert.match(
       hookSrc,
-      /const cacheKey = useMemo\(\s*\(\) => buildCacheKey\(tileId, hashGlobalFilters\(filters\)\),\s*\[tileId, filters\],\s*\);/,
+      /import\s+type\s+\{\s*BrushRegion\s*\}\s+from\s+"\.\.\/lib\/explainSlice"/,
+    );
+  });
+
+  it("derives `cacheKey = buildCacheKey(tileId, hashGlobalFilters(filters), hashBrushRegion(brushRegion))` via useMemo (Wave WI4-cache-key)", () => {
+    // Wave WI4-cache-key widens the cache key to three segments so
+    // two brushes on the same (tile, filters) but different
+    // sub-regions never silently collide on the same slot. The
+    // previous two-arg shape is still backwards-compatible via
+    // buildCacheKey's optional third arg + hashBrushRegion(undefined)
+    // returning the empty string.
+    assert.match(
+      hookSrc,
+      /const cacheKey = useMemo\(\s*\(\) =>\s*buildCacheKey\(\s*tileId,\s*hashGlobalFilters\(filters\),\s*hashBrushRegion\(brushRegion\),?\s*\),\s*\[tileId, filters, brushRegion\],\s*\);/,
+    );
+  });
+
+  it("destructures `brushRegion` alongside `tileId` + `filters` from args (Wave WI4-cache-key)", () => {
+    assert.match(
+      hookSrc,
+      /const \{ tileId, filters, brushRegion \} = args;/,
     );
   });
 

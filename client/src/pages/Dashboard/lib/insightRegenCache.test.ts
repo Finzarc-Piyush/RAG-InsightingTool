@@ -1,9 +1,11 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
+import type { BrushRegion } from "./explainSlice.js";
 import {
   buildCacheKey,
   createInsightRegenCache,
+  hashBrushRegion,
   hashGlobalFilters,
   type InsightRegenEntry,
 } from "./insightRegenCache.js";
@@ -223,5 +225,203 @@ describe("WI2-cache · integration — tile + filter scenario", () => {
     cache.set(k1, makeEntry("North insight"));
     assert.notEqual(k1, k2);
     assert.equal(cache.has(k2), false);
+  });
+});
+
+describe("WI4-cache-key · hashBrushRegion — byte stability", () => {
+  it("returns the empty string when no region is supplied", () => {
+    assert.equal(hashBrushRegion(undefined), "");
+  });
+
+  it("hashes numeric regions as n:start..end", () => {
+    const r: BrushRegion = { kind: "numeric", start: 10, end: 50 };
+    assert.equal(hashBrushRegion(r), "n:10..50");
+  });
+
+  it("hashes temporal regions as t:startMs..endMs", () => {
+    const r: BrushRegion = {
+      kind: "temporal",
+      startMs: 1_700_000_000_000,
+      endMs: 1_700_086_400_000,
+    };
+    assert.equal(
+      hashBrushRegion(r),
+      "t:1700000000000..1700086400000",
+    );
+  });
+
+  it("hashes categorical regions as c:v1|v2|...", () => {
+    const r: BrushRegion = {
+      kind: "categorical",
+      values: ["Mar", "Apr", "May"],
+    };
+    assert.equal(hashBrushRegion(r), "c:Mar|Apr|May");
+  });
+
+  it("preserves categorical value order — order is meaningful", () => {
+    // Categorical regions come from the renderer's `xs.slice(i0, i1)`
+    // band-scale slice, which is itself ordered. We deliberately do
+    // NOT sort here — different orders represent different brush
+    // dispatches in principle, though in practice the upstream
+    // band-scale order is fixed so identical brushes yield identical
+    // value arrays. The negative pin catches a future drift to
+    // accidental sorting.
+    const a: BrushRegion = { kind: "categorical", values: ["Mar", "Apr"] };
+    const b: BrushRegion = { kind: "categorical", values: ["Apr", "Mar"] };
+    assert.notEqual(hashBrushRegion(a), hashBrushRegion(b));
+  });
+
+  it("produces identical hashes for identical regions of each kind", () => {
+    const n1: BrushRegion = { kind: "numeric", start: 0, end: 100 };
+    const n2: BrushRegion = { kind: "numeric", start: 0, end: 100 };
+    assert.equal(hashBrushRegion(n1), hashBrushRegion(n2));
+
+    const t1: BrushRegion = { kind: "temporal", startMs: 1, endMs: 2 };
+    const t2: BrushRegion = { kind: "temporal", startMs: 1, endMs: 2 };
+    assert.equal(hashBrushRegion(t1), hashBrushRegion(t2));
+
+    const c1: BrushRegion = { kind: "categorical", values: ["A", "B"] };
+    const c2: BrushRegion = { kind: "categorical", values: ["A", "B"] };
+    assert.equal(hashBrushRegion(c1), hashBrushRegion(c2));
+  });
+
+  it("differentiates the three kinds even at the same numeric bounds", () => {
+    const n: BrushRegion = { kind: "numeric", start: 0, end: 1 };
+    const t: BrushRegion = { kind: "temporal", startMs: 0, endMs: 1 };
+    assert.notEqual(hashBrushRegion(n), hashBrushRegion(t));
+  });
+
+  it("differentiates numeric bounds — distinct ranges, distinct hashes", () => {
+    const a: BrushRegion = { kind: "numeric", start: 0, end: 100 };
+    const b: BrushRegion = { kind: "numeric", start: 0, end: 101 };
+    assert.notEqual(hashBrushRegion(a), hashBrushRegion(b));
+  });
+});
+
+describe("WI4-cache-key · buildCacheKey with regionHash — backwards compat", () => {
+  it("omits the third segment entirely when regionHash is undefined (2-arg call shape)", () => {
+    assert.equal(buildCacheKey("tile_a", "f"), "tile_a::f");
+  });
+
+  it("omits the third segment when regionHash is the empty string", () => {
+    assert.equal(buildCacheKey("tile_a", "f", ""), "tile_a::f");
+  });
+
+  it("2-arg and 3-arg-empty calls produce byte-identical keys (WI2 footer compat)", () => {
+    // The WI2 per-tile footer never passes a region — its cached
+    // entries must remain reachable byte-for-byte after this widening.
+    const filters: ActiveChartFilters = {
+      region: { type: "categorical", values: ["North"] },
+    };
+    const fh = hashGlobalFilters(filters);
+    assert.equal(
+      buildCacheKey("tile_1", fh),
+      buildCacheKey("tile_1", fh, ""),
+    );
+    assert.equal(
+      buildCacheKey("tile_1", fh),
+      buildCacheKey("tile_1", fh, hashBrushRegion(undefined)),
+    );
+  });
+
+  it("appends the third segment when regionHash is non-empty", () => {
+    assert.equal(
+      buildCacheKey("tile_a", "f", "n:0..1"),
+      "tile_a::f::n:0..1",
+    );
+  });
+});
+
+describe("WI4-cache-key · buildCacheKey collision avoidance — same tile, same filters, different regions", () => {
+  it("two numeric brushes on the same tile+filters do NOT collide", () => {
+    const cache = createInsightRegenCache();
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({});
+    const k1 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "numeric", start: 0, end: 50 }),
+    );
+    const k2 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "numeric", start: 50, end: 100 }),
+    );
+    cache.set(k1, makeEntry("first-half insight"));
+    cache.set(k2, makeEntry("second-half insight"));
+    assert.notEqual(k1, k2);
+    assert.equal(cache.get(k1)?.text, "first-half insight");
+    assert.equal(cache.get(k2)?.text, "second-half insight");
+  });
+
+  it("two temporal brushes on the same tile+filters do NOT collide", () => {
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({});
+    const k1 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({
+        kind: "temporal",
+        startMs: 1_700_000_000_000,
+        endMs: 1_700_086_400_000,
+      }),
+    );
+    const k2 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({
+        kind: "temporal",
+        startMs: 1_700_086_400_000,
+        endMs: 1_700_172_800_000,
+      }),
+    );
+    assert.notEqual(k1, k2);
+  });
+
+  it("two categorical brushes on the same tile+filters do NOT collide", () => {
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({});
+    const k1 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "categorical", values: ["Q1", "Q2"] }),
+    );
+    const k2 = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "categorical", values: ["Q3", "Q4"] }),
+    );
+    assert.notEqual(k1, k2);
+  });
+
+  it("a region-bearing brush does NOT collide with the no-region (footer) entry on the same tile+filters", () => {
+    // Pre-WI4-cache-key this would collide: the footer's
+    // `buildCacheKey(tile, fh)` and the panel's `buildCacheKey(tile, fh,
+    // <regionHash>)` would have shared the same slot and the panel
+    // would have served the footer's prose for every brush. After the
+    // widening they live in distinct slots.
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({
+      region: { type: "categorical", values: ["North"] },
+    });
+    const footerKey = buildCacheKey(tile, fh);
+    const panelKey = buildCacheKey(
+      tile,
+      fh,
+      hashBrushRegion({ kind: "numeric", start: 10, end: 20 }),
+    );
+    assert.notEqual(footerKey, panelKey);
+  });
+
+  it("identical brushes on the same tile+filters share a cache hit", () => {
+    const cache = createInsightRegenCache();
+    const tile = "tile_chart_42";
+    const fh = hashGlobalFilters({});
+    const region: BrushRegion = { kind: "numeric", start: 0, end: 50 };
+    const k1 = buildCacheKey(tile, fh, hashBrushRegion(region));
+    const k2 = buildCacheKey(tile, fh, hashBrushRegion({ ...region }));
+    cache.set(k1, makeEntry("first-half insight"));
+    assert.equal(k1, k2);
+    assert.equal(cache.get(k2)?.text, "first-half insight");
   });
 });

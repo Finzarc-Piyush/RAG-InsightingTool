@@ -18,9 +18,15 @@
  *      bounds + date strings all sorted; the result is a short
  *      deterministic string suitable as a cache key segment.
  *
- *   2. `buildCacheKey(tileId, filterHash)` — composes the segment
- *      into a final cache key. Stable across re-renders for the
- *      same (tile, filter state).
+ *   2. `buildCacheKey(tileId, filterHash, regionHash?)` — composes
+ *      the segments into a final cache key. Stable across re-renders
+ *      for the same (tile, filter state, brush region). The third
+ *      segment is omitted for non-brush call sites so WI2 footer keys
+ *      stay byte-identical (Wave WI4-cache-key).
+ *
+ *   2b. `hashBrushRegion(region)` — byte-stable hash of a WI4
+ *      `BrushRegion`, mirroring the contract of `hashGlobalFilters`.
+ *      Returns `""` when no region is supplied.
  *
  *   3. `createInsightRegenCache(opts?)` — LRU + TTL cache factory.
  *      `get` returns `undefined` for stale entries; `set` evicts
@@ -34,6 +40,7 @@
  */
 
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
+import type { BrushRegion } from "./explainSlice";
 
 const DEFAULT_MAX_ENTRIES = 64;
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 min — matches Anthropic's prompt-cache TTL
@@ -105,12 +112,57 @@ export function hashGlobalFilters(filters: ActiveChartFilters): string {
 }
 
 /**
- * Compose `(tileId, filterHash)` into the final cache key. The
- * delimiter `::` is unambiguous because `hashGlobalFilters` uses
- * `=` and `;` as its internal separators.
+ * Wave WI4-cache-key · byte-stable hash of a `BrushRegion` for use
+ * as the third cache-key segment. Returns `""` when no region is
+ * supplied so non-brush regen call sites (the WI2 per-tile footer)
+ * keep their existing two-segment keys byte-identical.
+ *
+ * Three region kinds get three fixed serialisations:
+ *  - `numeric`     → `n:<start>..<end>`
+ *  - `temporal`    → `t:<startMs>..<endMs>`
+ *  - `categorical` → `c:<v1>|<v2>|…`
+ *
+ * Categorical value order is preserved (not sorted) because the
+ * brushed band-scale slot order is itself a signal — a brush over
+ * `[Mar, Apr]` and one over `[Apr, Mar]` would imply different
+ * sub-domain orderings, and the canonical x-axis order is fixed
+ * upstream by `distinctOrdered(data, enc.x.accessor)` so identical
+ * brushes always yield identical value arrays.
+ *
+ * Pure. Identical regions yield identical hashes (regression-pinned
+ * in tests). Mirrors the byte-stability contract of `hashGlobalFilters`.
  */
-export function buildCacheKey(tileId: string, filterHash: string): string {
-  return `${tileId}::${filterHash}`;
+export function hashBrushRegion(region: BrushRegion | undefined): string {
+  if (!region) return "";
+  switch (region.kind) {
+    case "numeric":
+      return `n:${region.start}..${region.end}`;
+    case "temporal":
+      return `t:${region.startMs}..${region.endMs}`;
+    case "categorical":
+      return `c:${region.values.join("|")}`;
+  }
+}
+
+/**
+ * Compose `(tileId, filterHash, regionHash?)` into the final cache
+ * key. The delimiter `::` is unambiguous because the hash helpers
+ * (`hashGlobalFilters`, `hashBrushRegion`) use `=` / `;` / `:` /
+ * `..` / `|` as their internal separators.
+ *
+ * Backwards-compat: when `regionHash` is undefined or empty, the
+ * third segment is omitted entirely so non-brush call sites keep
+ * their existing two-segment keys byte-identical (the WI2 footer
+ * built a long history of cached entries against the two-arg shape
+ * and we don't want to invalidate them on this widening).
+ */
+export function buildCacheKey(
+  tileId: string,
+  filterHash: string,
+  regionHash?: string,
+): string {
+  if (!regionHash) return `${tileId}::${filterHash}`;
+  return `${tileId}::${filterHash}::${regionHash}`;
 }
 
 /**

@@ -187,9 +187,16 @@ export function ExplainSlicePanel({
   // tileId when no event is active so the hook's cache key is
   // deterministic. Effect below short-circuits regenerate on null
   // event / chart.
+  //
+  // Wave WI4-cache-key · pass `event?.region` as the third cache-key
+  // segment so two brushes on the same (chartId, filters) but
+  // different sub-regions never share a cache slot. Without this the
+  // hook would silently serve the first brush's prose for every
+  // subsequent brush on the same tile.
   const regen = useInsightRegen({
     tileId: event?.chartId ?? IDLE_TILE_ID,
     filters: event?.filters ?? {},
+    brushRegion: event?.region,
     cache: insightRegenCache,
   });
 
