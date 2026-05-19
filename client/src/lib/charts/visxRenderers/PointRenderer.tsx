@@ -45,6 +45,7 @@ import {
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -89,6 +90,24 @@ export function PointRenderer({
   // point in the "North" group toggles a Region=North brush.
   const dashboardTile = useDashboardTileContext();
   const crossFilterReady = !!dashboardTile && !!colorCh;
+  // WD2-dim-point · per-point dim factor for marks whose `rawColor`
+  // isn't in the active categorical cross-filter on `colorCh.field`.
+  // Diverges from WD2-dim-trend's per-series shape: scatter marks are
+  // individually filter-targetable (each point's dispatch carries its
+  // own `rawColor`), so the dim is also per-point. Gated on colorCh —
+  // pure quantitative scatters (no color encoding) have no categorical
+  // field to filter against; nothing to dim. Mirrors the
+  // `crossFilterReady` gate above so the two opt-in conditions stay
+  // aligned (dispatch + dim share the same applicability domain).
+  const dashboardFilters = dashboardTile?.filters;
+  const colorFilterSel = colorCh
+    ? dashboardFilters?.[colorCh.field]
+    : undefined;
+  const dashboardDimActive =
+    !!colorCh &&
+    !!colorFilterSel &&
+    colorFilterSel.type === "categorical" &&
+    colorFilterSel.values.length > 0;
 
   // Color category map
   const colorIndex = useMemo(() => {
@@ -260,6 +279,22 @@ export function PointRenderer({
             if (op === 0) return null;
             const cx = xScale(p.x) ?? 0;
             const cy = yScale(p.y) ?? 0;
+            // WD2-dim-point · per-point dim against the active
+            // categorical cross-filter on colorCh.field. `colorCh!` is
+            // safe inside the non-null assertion because
+            // `dashboardDimActive` AND-gates on `!!colorCh`. Single
+            // `dimMul` lifted once per point so the fill (0.7 * op)
+            // and the stroke (op) both consume the same factor —
+            // keeps a dimmed point visually coherent (fill and ring
+            // fade together).
+            const isDashboardDimmed =
+              dashboardDimActive &&
+              !isCrossFilterActive(
+                dashboardFilters!,
+                colorCh!.field,
+                p.rawColor,
+              );
+            const dimMul = isDashboardDimmed ? 0.4 : 1;
             const onPointMove = (e: React.MouseEvent<SVGElement>) => {
               const local = localPoint(e);
               showTooltip({
@@ -289,9 +324,9 @@ export function PointRenderer({
                   d={glyphPath(shape, p.radius)}
                   transform={`translate(${cx},${cy})`}
                   fill={p.color}
-                  fillOpacity={0.7 * op}
+                  fillOpacity={0.7 * op * dimMul}
                   stroke={p.color}
-                  strokeOpacity={op}
+                  strokeOpacity={op * dimMul}
                   strokeWidth={1}
                   style={cursorStyle}
                   onMouseMove={onPointMove}
@@ -307,9 +342,9 @@ export function PointRenderer({
                 cy={cy}
                 r={p.radius}
                 fill={p.color}
-                fillOpacity={0.7 * op}
+                fillOpacity={0.7 * op * dimMul}
                 stroke={p.color}
-                strokeOpacity={op}
+                strokeOpacity={op * dimMul}
                 strokeWidth={1}
                 style={cursorStyle}
                 onMouseMove={onPointMove}
