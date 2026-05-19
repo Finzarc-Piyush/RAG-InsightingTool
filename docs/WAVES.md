@@ -11,6 +11,68 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-wiring-rest-rect · RectRenderer heatmap cell cmd / ctrl-click → drill-through (foundation widened with optional `extraPins`).** RectRenderer cells sit at the intersection of TWO categorical dimensions (`rowCh × colCh`) — every other WD3 renderer fires a single-pin drill event, but a heatmap cell is fundamentally two-dimensional. The pre-wave `DrillThroughEvent` shape carried a flat `column: string` + `value: unknown` pair that couldn't natively represent a row × col intersection. This wave closes the 10th visx chart kind by widening the foundation in a minimal, additive way, then ships the RectRenderer wiring + the sheet's render extension all in one wave.
+
+  **What landed.**
+    - [client/src/pages/Dashboard/lib/drillThrough.ts](../client/src/pages/Dashboard/lib/drillThrough.ts) (~+25 LOC). Foundation gains an optional secondary-pin lane:
+      ```ts
+      export interface DrillThroughPin {
+        column: string;
+        value: unknown;
+      }
+      export interface DrillThroughEvent {
+        chartId: string;
+        column: string;          // primary pin column
+        value: unknown;          // primary pin value
+        extraPins?: DrillThroughPin[];  // NEW — additive optional field
+        sourceTileId?: string;
+        filters?: ActiveChartFilters;
+      }
+      ```
+      `extraPins` is positioned after `value` and before `sourceTileId` so the three flat primary-pin fields stay grouped at the top of the interface. Server endpoint applies primary + all extras as AND-intersection WHERE clauses BEFORE returning rows (the semantic is "rows that match EVERY pin"). Empty / undefined `extraPins` → single-pin event (the WD3-wiring-bar / cat / trend / point shape) — fully backwards-compat.
+
+    - [client/src/lib/charts/visxRenderers/RectRenderer.tsx](../client/src/lib/charts/visxRenderers/RectRenderer.tsx) (~+35 LOC). The cell `onClick` widens from parameterless `() => {...}` to `(event: React.MouseEvent<SVGRectElement>) => {...}` so the modifier check can read `metaKey` / `ctrlKey`. New top-of-handler branch fires BEFORE the pre-existing two-event cross-filter dispatch:
+      ```ts
+      if (isModifierClick(event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: rowCh.field,
+          value: rowRawByKey.get(row),
+          extraPins: [
+            { column: colCh.field, value: colRawByKey.get(col) },
+          ],
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      // Existing two-event WD2 cross-filter dispatch (row first, then col).
+      ```
+      The row dim is the primary pin and the col dim goes in `extraPins[0]` — row-first mirrors the pre-existing WD2 cross-filter dispatch order (the `dispatchCrossFilter({ column: rowCh.field, ... })` call already preceded the `dispatchCrossFilter({ column: colCh.field, ... })` call before this wave). Keeping the same row-vs-col ordering across both concerns means a future-Claude reading either path inherits the same mental model. Both row and col values pass RAW (NOT `toFilterValue`-coerced) — the server-side canonicaliser picks Date / number / categorical comparison per the inferred column type. The `return;` after dispatch is single-intent-load-bearing: without it, a cmd-click would fire drill PLUS the two cross-filter dispatches — a triple-intent disaster.
+
+    - [client/src/pages/Dashboard/Components/DrillThroughSheet.tsx](../client/src/pages/Dashboard/Components/DrillThroughSheet.tsx) (~+25 LOC). New "Additional pins" section between the existing "Pinned slice" section and the "Filter context at click time" section. Gated on `event.extraPins && event.extraPins.length > 0` (both truthy AND non-empty — a future caller passing `extraPins: []` empty doesn't render an empty section). Iterates `event.extraPins.map((pin) => ...)` inside a parallel `<dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5">`; each pin renders as a `<Fragment key={pin.column}>` containing `<dt className="font-mono text-muted-foreground">{pin.column}</dt>` + `<dd className="font-mono text-foreground">{toFilterValue(pin.value)}</dd>`. Fragment (not `<>`) because the shortcut form doesn't accept a key. Below the grid, a one-line explanation surfaces the AND-intersection semantic: "Server intersects the primary pin with these as an AND-filter before returning rows." — keeps the meaning unambiguous for users who haven't seen the foundation type. The primary "Pinned slice" section (chartId / column / value rows) is byte-identical to pre-wave, so single-pin events from BarRenderer / ArcRenderer / FunnelRenderer / BoxRenderer / WaterfallRenderer / ComboRenderer / LineRenderer / AreaRenderer / PointRenderer continue to render exactly as before (the WD3-sheet test suite stays fully green).
+
+    - [client/src/pages/Dashboard/lib/wd3WiringRestRect.test.ts](../client/src/pages/Dashboard/lib/wd3WiringRestRect.test.ts) (new, ~280 LOC). 22 source-inspection tests across 8 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4. Suite split:
+      - **Foundation widening** (3): DrillThroughPin shape; extraPins optional field position; primary `column` + `value` preserved (no breaking widening).
+      - **RectRenderer imports + handler signature** (4): drillThrough named imports; WD2 imports untouched; widened MouseEvent typing; conditional `dashboardTile ? handler : undefined` shape preserved.
+      - **Modifier branch + payload** (4): branch fires BEFORE the two cross-filter dispatches; 6-field payload with extraPins[0]; both row + col raw-value pin (no toFilterValue inside the drill block); `return;` after dispatch.
+      - **WD2 two-event cross-filter regression** (2): row dispatch with `toFilterValue(rowRawByKey.get(row))`; col dispatch with `toFilterValue(colRawByKey.get(col))` in row-first order (via `String#search` index comparison).
+      - **Sheet Additional-pins section** (5): Fragment import; section gate (truthy AND length > 0); `.map((pin) => ...)` shape with `key={pin.column}`; `<dt>{pin.column}</dt>` + `<dd>{toFilterValue(pin.value)}</dd>` pair; AND-filter explanation copy present.
+      - **Single-pin backwards-compat** (2): the primary Pinned slice section's static Column/Value rows untouched; the Additional pins conditional `: null` else-branch present.
+      - **Cross-cutting contracts** (5): WD3-wiring-rest-rect marker; drill primary column = WD2 row cross-filter column = `rowCh.field` (column-symmetry); drill extraPin column = WD2 col cross-filter column = `colCh.field`; drill dispatch count = 1 (one cell click → one drill event, not two); cross-filter dispatch count = 2 (WD2 row + col preserved exactly).
+
+  **Why this design.** Three options were on the table; the wave chose a third path the brief didn't list. (1) **Widen `DrillThroughEvent.column` to `string | { row, col }`** — cleaner type but every existing single-pin consumer (~6 renderers + the sheet + the future server) needs a narrowing check. (2) **Fire two events with the receiver de-duping by event-time-proximity** (e.g. a 50 ms debounce) — simpler foundation, more complex receiver; the timing-based coalescence is fragile to clock drift / async dispatch / event-loop scheduling. The AND vs. OR semantics also get muddled (two events arriving together could mean either intersection or union, depending on the receiver's interpretation). (3) **Additive optional `extraPins?: DrillThroughPin[]`** (chosen). Smallest blast radius: foundation gains one optional field; existing renderers need NO changes; existing tests stay green; the AND-intersection semantic is explicit in the foundation's docstring and surfaced to the user via the sheet's explanation copy. Future N-dim drill targets (e.g. a treemap that wants both leaf + parent dims, or a sankey with both source + target nodes) can use the same shape with N pins — no further foundation changes needed.
+
+  Row-vs-col ordering: row is the primary pin because (a) the encoding contract reads "x = row dim, y = col dim" so x is conventionally primary; (b) the pre-existing WD2 cross-filter dispatch order was row first, then col — keeping the same order across the WD2 dispatch + the WD3 drill primary means a future-Claude reading either path inherits the same mental model; (c) the WD2-dim-rect concern's OR-of-row-OR-col check happens to also keep row as the first dimension considered. Three-way symmetry across all three concerns.
+
+  **Tests.** Server test suite: WD3-wiring-rest-rect (22 new in `wd3WiringRestRect.test.ts`) all pass. 69 cumulative tests green across rect + sheet + foundation + bar regression coverage. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline). The foundation widening is type-additive (optional field), so no existing renderer's typecheck or test surface drifts.
+
+  **Out of scope.**
+    - **ECharts drill (WD3-wiring-echarts).** 5 ECharts marks via the existing `onChartClick(params)` flow. `params.event.event` carries `metaKey` / `ctrlKey` so `isModifierClick(params.event.event)` works with no foundation changes. The substantive work is the per-renderer `dataIndex → (column, rawValue)` mapping. Sankey would naturally use `extraPins` if a future wave wants both source + target node drill (currently single-pin on `sourceCh.field`).
+    - **Server-side row fetch (WD3-server).** The sheet's placeholder body explicitly notes WD3-server is the future row source. Endpoint `/api/dashboards/:id/drill?chartId=&column=&value=` mirrors the existing XLSX export endpoint's chart-row lookup path. The endpoint should accept the extraPins array in the POST body and apply primary + extras as AND-intersection WHERE clauses BEFORE returning rows.
+    - **N>2 dim drill targets.** The `extraPins: DrillThroughPin[]` shape is N-pin-capable but no current renderer needs more than 2 (rect). A future polish wave could surface a "filter by N dims at once" multi-select in the sheet itself, but that's a separate UX surface.
+    - **Pin reordering / swap-primary affordance.** The sheet currently shows primary FIRST and extras BELOW (visually emphasising the primary as the "main" pin). A future affordance could let users click an extra pin to promote it to primary — but for rect the row-vs-col ordering is semantically symmetric, so there's no current need.
+
 - **2026-05-19** — **Wave WD3-wiring-rest-point · PointRenderer scatter / bubble cmd / ctrl-click → drill-through.** Extends the WD3 family to PointRenderer (scatter / bubble) at the per-mark level. PointRenderer is unique among the WD2-wiring-rest renderers because its dispatch was CONDITIONAL on `colorCh` being non-null — pure quantitative (x, y) scatters have no categorical field to filter on. The WD3 wave preserves this gate byte-for-byte: drill-through inherits the SAME opt-in domain as cross-filter, so a pure-quant scatter doesn't accidentally fire drill on cmd-click either. Closes the visx-with-categorical-color-target side of the WD3 wiring family at 9 of 10 visx renderers wired (bar + cat-5 + line + area + point) — every visx renderer with a per-mark categorical filter target now drills.
 
   **What landed.**
