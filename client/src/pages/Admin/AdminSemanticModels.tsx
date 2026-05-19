@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useLocation } from "wouter";
 import {
   fetchSemanticModels,
   type AdminSemanticModelListEntry,
@@ -39,6 +40,7 @@ function totalDeclarations(e: AdminSemanticModelListEntry): number {
 }
 
 export default function AdminSemanticModels() {
+  const [, setLocation] = useLocation();
   const [data, setData] = useState<AdminSemanticModelListSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -187,8 +189,15 @@ export default function AdminSemanticModels() {
                   {data.sessions.map((s) => (
                     <tr
                       key={s.id}
-                      className="border-t border-border align-top hover:bg-muted/20 transition-colors"
+                      className="border-t border-border align-top hover:bg-muted/20 transition-colors cursor-pointer"
                       data-testid={`admin-semantic-model-row-${s.sessionId}`}
+                      onClick={() =>
+                        setLocation(
+                          `/admin/semantic-models/${encodeURIComponent(
+                            s.sessionId,
+                          )}`,
+                        )
+                      }
                     >
                       <td className="py-3 px-4">
                         <div className="font-medium text-foreground">

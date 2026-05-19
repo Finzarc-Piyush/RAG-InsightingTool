@@ -156,3 +156,29 @@ export async function fetchSemanticModels(): Promise<AdminSemanticModelListSnaps
   }
   return (await res.json()) as AdminSemanticModelListSnapshot;
 }
+
+// W61-detail · per-session semantic-model payload for the read-only viewer.
+
+export interface AdminSemanticModelDetail {
+  sessionId: string;
+  fileName: string;
+  username: string;
+  lastUpdatedAt: number;
+  model: import("@/shared/schema").SemanticModel;
+}
+
+export async function fetchSemanticModelDetail(
+  sessionId: string,
+): Promise<AdminSemanticModelDetail> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}`,
+    { headers: await adminHeaders() },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId} ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as AdminSemanticModelDetail;
+}
