@@ -72,6 +72,12 @@ import {
 router.get('/dashboards/:id/export/xlsx', exportDashboardXlsxController);
 router.get('/dashboards/:id/export/pptx', exportDashboardPptxController);
 
+// Wave WD3-server · drill-through endpoint. POST body carries the
+// filter snapshot + optional extraPins (heatmap row × col). Query
+// params carry chartId / column / value (the primary pin).
+import { drillDashboardController } from "../controllers/dashboardDrillThroughController.js";
+router.post('/dashboards/:id/drill', drillDashboardController);
+
 export default router;
 
 
