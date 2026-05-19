@@ -1029,6 +1029,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           button, which clears the event back to null so a re-open
           on the same payload re-fires the slide-in. */}
       <DrillThroughSheet
+        dashboardId={dashboard.id}
         event={drillThroughEvent}
         onOpenChange={(open) => {
           if (!open) setDrillThroughEvent(null);

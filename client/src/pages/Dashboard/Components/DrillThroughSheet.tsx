@@ -30,8 +30,16 @@ import {
 import type { DrillThroughEvent } from "../lib/drillThrough";
 import type { ActiveChartFilters } from "@/lib/chartFilters";
 import { toFilterValue } from "../lib/crossFilter";
+import { useDrillThroughRows } from "../hooks/useDrillThroughRows";
+import { DrillThroughRowTable } from "./DrillThroughRowTable";
 
 interface DrillThroughSheetProps {
+  /**
+   * Dashboard id — threaded so the WD3-sheet-fetch hook can POST to
+   * `/api/dashboards/:id/drill`. Required because the sheet is
+   * dashboard-scoped (a drill is meaningless outside a dashboard).
+   */
+  dashboardId: string;
   /**
    * The captured drill-through event, or `null` when the sheet is
    * closed. The parent flips this to `null` to close (via
@@ -71,11 +79,17 @@ function summariseFilters(filters: ActiveChartFilters | undefined): string[] {
 }
 
 export function DrillThroughSheet({
+  dashboardId,
   event,
   onOpenChange,
 }: DrillThroughSheetProps) {
   const open = event !== null;
   const filterLines = summariseFilters(event?.filters);
+  // WD3-sheet-fetch · fetch underlying rows from the WD3-server
+  // endpoint. `enabled: !!event` keeps the query idle while the sheet
+  // is closed; TanStack Query's stale-while-revalidate handles re-
+  // opens on the same pin.
+  const rowsQuery = useDrillThroughRows({ dashboardId, event });
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="overflow-y-auto sm:max-w-md">
@@ -150,10 +164,26 @@ export function DrillThroughSheet({
               )}
             </section>
 
-            <section className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-              Row fetch lands with the WD3-server endpoint
-              (<span className="font-mono">/api/dashboards/:id/drill</span>).
-              Until then this panel summarises the drill request shape.
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Underlying rows
+              </h3>
+              <div className="mt-2">
+                {rowsQuery.isLoading ? (
+                  <p className="text-xs text-muted-foreground">
+                    Loading rows…
+                  </p>
+                ) : rowsQuery.isError ? (
+                  <p
+                    role="alert"
+                    className="text-xs text-destructive"
+                  >
+                    Failed to load rows: {rowsQuery.error?.message ?? "unknown error"}
+                  </p>
+                ) : rowsQuery.data ? (
+                  <DrillThroughRowTable response={rowsQuery.data} />
+                ) : null}
+              </div>
             </section>
           </div>
         ) : null}

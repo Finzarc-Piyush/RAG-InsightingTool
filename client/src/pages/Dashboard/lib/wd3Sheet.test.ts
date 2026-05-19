@@ -219,10 +219,12 @@ describe("WD3-sheet · DrillThroughSheet render contract", () => {
     assert.match(sheetSrc, /toFilterValue\(event\.value\)/);
   });
 
-  it("renders a placeholder noting WD3-server is the future row source", () => {
-    // Pin the placeholder copy so a future-Claude wiring the server
-    // fetch can grep for the marker and swap the placeholder for
-    // the real row list.
+  it("references the WD3-server endpoint somewhere (now consumed via the fetch hook; markers preserved in comments for future-Claude grep)", () => {
+    // Originally pinned the dashed-border placeholder body that
+    // showed the endpoint name. WD3-sheet-fetch replaced the
+    // placeholder with the real fetched row list, but the
+    // `WD3-server` + endpoint markers survive in the file's comments
+    // so a grep for either still finds the sheet.
     assert.match(sheetSrc, /WD3-server/);
     assert.match(sheetSrc, /\/api\/dashboards\/:id\/drill/);
   });
