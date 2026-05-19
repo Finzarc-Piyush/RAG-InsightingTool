@@ -11,6 +11,60 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-wiring-rest-point · PointRenderer scatter / bubble cmd / ctrl-click → drill-through.** Extends the WD3 family to PointRenderer (scatter / bubble) at the per-mark level. PointRenderer is unique among the WD2-wiring-rest renderers because its dispatch was CONDITIONAL on `colorCh` being non-null — pure quantitative (x, y) scatters have no categorical field to filter on. The WD3 wave preserves this gate byte-for-byte: drill-through inherits the SAME opt-in domain as cross-filter, so a pure-quant scatter doesn't accidentally fire drill on cmd-click either. Closes the visx-with-categorical-color-target side of the WD3 wiring family at 9 of 10 visx renderers wired (bar + cat-5 + line + area + point) — every visx renderer with a per-mark categorical filter target now drills.
+
+  **What landed.**
+    - [client/src/lib/charts/visxRenderers/PointRenderer.tsx](../client/src/lib/charts/visxRenderers/PointRenderer.tsx) (~30 LOC delta). Two surgical changes:
+      - **Named-import block.** New import block right after the existing `crossFilter` block: `import { dispatchDrillThrough, isModifierClick } from "@/pages/Dashboard/lib/drillThrough";`. Same locality precedent as the WD3-wiring-bar / WD3-wiring-rest-cat / WD3-wiring-rest-trend renderers — drill imports sit immediately next to cross-filter imports so future Claude reads them as a pair.
+      - **Handler widening + modifier branch.** The existing `onPointClick` arrow widens its signature from parameterless `() => {...}` to `(e: React.MouseEvent<SVGElement>) => {...}` and gains a top-of-handler branch:
+        ```ts
+        const onPointClick = crossFilterReady
+          ? (e: React.MouseEvent<SVGElement>) => {
+              if (isModifierClick(e)) {
+                dispatchDrillThrough({
+                  chartId: dashboardTile!.tileId,
+                  column: colorCh!.field,
+                  value: p.rawColor,
+                  sourceTileId: dashboardTile!.tileId,
+                  filters: dashboardFilters,
+                });
+                return;
+              }
+              dispatchCrossFilter({
+                column: colorCh!.field,
+                value: toFilterValue(p.rawColor),
+                sourceTileId: dashboardTile!.tileId,
+              });
+            }
+          : undefined;
+        ```
+        Single-event-handler shape — same as the WD3-wiring-rest-cat family, because PointRenderer's onClick already lives at the per-mark level (per-point dispatch was the WD2 design). The `crossFilterReady ? ... : undefined` conditional shape is preserved (the WD2 gate). The `return;` after the drill dispatch is single-intent-load-bearing — without it a cmd-click would dispatch BOTH events.
+      - **5-field payload** mirrors prior WD3 waves: `chartId` = `dashboardTile!.tileId`; `column` = `colorCh!.field` (the per-mark filter target — PointRenderer is unique in keying on `colorCh` not `xCh` because its filter target is the color group, not the quantitative x axis); `value` = `p.rawColor` RAW (NOT `toFilterValue`-coerced — server-side canonicaliser picks the right Date / number / categorical comparison per the inferred column type); `sourceTileId` = `dashboardTile!.tileId`; `filters` = `dashboardFilters` snapshot (reused from the WD2-dim concern's already-lifted reference, so no extra state).
+      - **Both render paths** (`<Circle>` for default, `<path>` for glyph-shape encoding) bind the same widened `onClick={onPointClick}` — additive change preserves both branches uniformly. The WD2-dim per-point factor (`isDashboardDimmed` / `dimMul`) composes unchanged.
+    - [client/src/pages/Dashboard/lib/wd3WiringRestPoint.test.ts](../client/src/pages/Dashboard/lib/wd3WiringRestPoint.test.ts) (new, ~190 LOC). 16 source-inspection tests across 7 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4. Suite split:
+      - **Imports** (2): drillThrough named imports + WD2 crossFilter imports preserved.
+      - **Handler widening** (2): handler now accepts `React.MouseEvent<SVGElement>`; conditional `crossFilterReady ? ... : undefined` shape preserved.
+      - **Inline modifier branch** (5): branch fires BEFORE `dispatchCrossFilter`; 5-field payload shape; raw-value negative pin (no `toFilterValue` in drill block); `return;` after dispatch (single-intent); WD2 cross-filter regression with `toFilterValue(p.rawColor)`.
+      - **cursorStyle gate** (1): cursor:pointer still gated on `crossFilterReady` — drill-through doesn't widen the cursor domain (a cmd-down cursor change is a separate polish wave per dormancy-debt).
+      - **WD2-dim + WD2-wiring contracts preserved** (2): per-point dim factor still applied; both `<Circle>` and glyph `<path>` paths bind `onClick={onPointClick}`.
+      - **Cross-cutting contracts** (4): WD3-wiring-rest-point marker; drill column matches WD2 cross-filter dispatch column (`colorCh!.field`); WD2-dim concern keys on the SAME `colorCh!.field` (drill + dispatch + dim symmetry); drill dispatch count = 1 (per-renderer single-shot enforcement).
+
+  **Why this design.** The conditional handler shape — `crossFilterReady ? (e) => ... : undefined` — was chosen over an unconditional always-defined handler with internal gating. Three considered shapes:
+  1. **Always-defined handler with `if (!crossFilterReady) return;` at the top.** Rejected because the `undefined` onClick prop is load-bearing: when there's no `colorCh`, the affordance (cursor:pointer) should also be off. Tying the gate to a single ternary keeps both affordances aligned and removes a runtime check on every mouse click.
+  2. **Two separate handlers — one for drill, one for cross-filter — both gated on `crossFilterReady`.** Rejected as duplication: the modifier check is a single source of truth and the two dispatches share a closure over the same `p`, `dashboardTile`, `colorCh`, `dashboardFilters`. Splitting would require either calling both handlers in React's event chain (impossible — onClick is single-fire) or a wrapper component.
+  3. **Conditional `crossFilterReady ? ... : undefined` arrow with internal modifier branch** (chosen). Minimal-diff, single load-bearing branch, both renderer paths bind the same handler — three-way symmetry across the renderer body, the dispatch contract, and the WD2-dim concern.
+
+  PointRenderer's column choice (`colorCh!.field`, not `xCh!.field`) diverges from the trend / bar / cat renderers and is intentional. Bar / Arc / Funnel / Box / Waterfall / Combo / Line / Area all dispatch on `xCh.field` because their per-mark filter target IS the x-axis category (or, for trend, the x-axis value the nearest-x lookup resolves to). PointRenderer's per-mark filter target is the COLOR group — clicking a "North" point should filter the dashboard to Region=North. The cross-filter dispatch already followed this convention (the WD2-wiring-rest-point wave); WD3 inherits it for symmetry.
+
+  **Tests.** Server test suite: WD3-wiring-rest-point (16 new in `wd3WiringRestPoint.test.ts`) all pass. 159 cumulative WD3 + adjacent WD2-trend / WD2-point tests green (foundation 11 + wiring-bar 12 + wiring-rest-cat 44 + sheet 21 + wiring-rest-trend 18 + wiring-rest-point 16 + wd2DimPoint + wd2WiringRestPoint), zero regression. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline).
+
+  **Out of scope.**
+    - **Heatmap drill (WD3-wiring-rest-rect).** Two-column drill payload design decision still deferred. RectRenderer cells sit at the intersection of `rowCh × colCh`; the current single-`column: string` event field doesn't accommodate. Either widen the foundation's `DrillThroughEvent.column` type to `string | { row: string; col: string }` (cleaner type, more changes in foundation + every existing consumer) OR fire two drill events with the receiver de-duping by event-time-proximity (simpler foundation, more complex receiver). WD3-sheet's render contract has to know which shape it consumes — the decision affects both files.
+    - **ECharts drill (WD3-wiring-echarts).** 5 ECharts marks via the existing `onChartClick(params)` flow. `params.event.event` carries `metaKey` / `ctrlKey` so `isModifierClick(params.event.event)` works with no foundation changes. The substantive work is the per-renderer `dataIndex → (column, rawValue)` mapping.
+    - **Server-side row fetch (WD3-server).** The sheet's placeholder body explicitly notes WD3-server is the future row source. Endpoint `/api/dashboards/:id/drill?chartId=&column=&value=` mirrors the existing XLSX export endpoint's chart-row lookup path.
+    - **Hover-time cursor change (cursor: "zoom-in" on cmd-hover).** Carried over from prior WD3 waves. Needs a keydown/keyup window listener and applies to every renderer uniformly — separate polish wave with its own contract.
+    - **Pure-quantitative scatter drill (no colorCh).** Pinned in the wave's test suite: when `crossFilterReady` is false (no colorCh), onPointClick is `undefined` — no cursor:pointer, no dispatch. A drill on a continuous x or y axis would need a different shape (range-select via brush, like LineRenderer's hypothetical cmd-zoom) and a different receiver — orthogonal to this wave.
+
 - **2026-05-19** — **Wave WD3-wiring-rest-trend · LineRenderer + AreaRenderer cmd / ctrl-click → drill-through.** Extends the WD3 family to the two trend renderers. Trend renderers have continuous-x marks (lines / stacked areas) and dispatch via NEAREST-X lookup rather than per-mark click — a click anywhere on the chart surface maps to the nearest data point on the inner-plot's x-axis via `localPoint(e).x` + an `xPx` binary search. The WD2-wiring family established this lookup; WD3 layers the modifier-key intent on top so cmd / ctrl-click routes the SAME `nearest.x` value to drill-through instead of cross-filter. Wave brings WD3 to 8 of 15 chart kinds wired (bar + cat-5 + line + area).
 
   **What landed.**
