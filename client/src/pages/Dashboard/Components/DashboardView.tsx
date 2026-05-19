@@ -38,6 +38,14 @@ import {
   type DrillThroughEvent,
 } from '../lib/drillThrough';
 import { DrillThroughSheet } from './DrillThroughSheet';
+// Wave WI4-panel · subscribe to the WI4 explain-slice event family
+// and render a side-panel showing the brushed sub-region's pin +
+// (in a follow-on WI4-wire wave) the regenerated insight prose.
+import {
+  EXPLAIN_SLICE_EVENT,
+  type ExplainSliceEvent,
+} from '../lib/explainSlice';
+import { ExplainSlicePanel } from './ExplainSlicePanel';
 import { createInsightRegenCache } from '../lib/insightRegenCache';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -89,6 +97,14 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   // `onOpenChange(false)` clears it back to `null` so a re-open with
   // the same payload re-fires the slide-in animation.
   const [drillThroughEvent, setDrillThroughEvent] = useState<DrillThroughEvent | null>(null);
+  // Wave WI4-panel · captured ExplainSliceEvent at the dashboard
+  // level. `null` means the explain-slice panel is closed. The
+  // `EXPLAIN_SLICE_EVENT` listener below sets this; the panel's
+  // `onOpenChange(false)` clears it back to `null`. Mirror of the
+  // drillThroughEvent shape — the two captured events live as
+  // siblings so a future wave can hold both panels open at once
+  // (explain + drill on the same chart) if the UX warrants.
+  const [explainSliceEvent, setExplainSliceEvent] = useState<ExplainSliceEvent | null>(null);
   const { toast } = useToast();
   const {
     addChartToDashboard,
@@ -398,6 +414,33 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     window.addEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     return () => {
       window.removeEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
+    };
+  }, []);
+
+  // Wave WI4-panel · subscribe to EXPLAIN_SLICE_EVENT and open the
+  // ExplainSlicePanel on receipt. Mirrors the DRILL_THROUGH_EVENT
+  // listener above for code-locality — the two click-intents share
+  // a shape, so dispatch + receive sit as a pair. The detail
+  // validation requires `chartId` + `column` + `region` (the three
+  // load-bearing fields); a missing region would mean a zero-width
+  // brush that the dispatcher already short-circuited.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ExplainSliceEvent>).detail;
+      if (
+        !detail ||
+        typeof detail.chartId !== 'string' ||
+        typeof detail.column !== 'string' ||
+        !detail.region
+      ) {
+        return;
+      }
+      setExplainSliceEvent(detail);
+    };
+    window.addEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
+    return () => {
+      window.removeEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
     };
   }, []);
 
@@ -1033,6 +1076,19 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         event={drillThroughEvent}
         onOpenChange={(open) => {
           if (!open) setDrillThroughEvent(null);
+        }}
+      />
+      {/* Wave WI4-panel · explain-slice receiver. Opens on alt-drag
+          (≥ BRUSH_MIN_PX = 6) of any WI4-wired chart mark inside a
+          DashboardTile-wrapped renderer. Closes via overlay /
+          Escape / Close button, which clears the event back to
+          null so a re-brush on the same payload re-fires the
+          slide-in. The regenerated-insight body is a placeholder
+          until WI4-wire lands. */}
+      <ExplainSlicePanel
+        event={explainSliceEvent}
+        onOpenChange={(open) => {
+          if (!open) setExplainSliceEvent(null);
         }}
       />
     </div>
