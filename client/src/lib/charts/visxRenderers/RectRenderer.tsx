@@ -40,6 +40,7 @@ import {
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -79,6 +80,26 @@ export function RectRenderer({
   // column independently. The user sees a row+col filter applied;
   // clicking the same cell again toggles both back off.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-rect · heatmap cells dim if EITHER the row dimension OR the
+  // col dimension has an active categorical cross-filter that doesn't
+  // include this cell's row / col. Symmetric with the WD2-wiring-rest-rect
+  // two-dim DISPATCH (which fires both dims on click); the dim contract
+  // is OR-of-row-OR-col so a cell stays full opacity only when both
+  // dims pass (no active row filter excludes it AND no active col
+  // filter excludes it). Two independent dashboardDimActive flags so
+  // a row-only filter dims only by row, a col-only filter dims only
+  // by col, and a row+col filter intersects (full dim if either fails).
+  const dashboardFilters = dashboardTile?.filters;
+  const rowFilterSel = dashboardFilters?.[rowCh.field];
+  const colFilterSel = dashboardFilters?.[colCh.field];
+  const dashboardRowDimActive =
+    !!rowFilterSel &&
+    rowFilterSel.type === "categorical" &&
+    rowFilterSel.values.length > 0;
+  const dashboardColDimActive =
+    !!colFilterSel &&
+    colFilterSel.type === "categorical" &&
+    colFilterSel.values.length > 0;
 
   // Build the row / col domains AND a parallel raw-value map so the
   // cross-filter dispatch carries type-original values (Dates, numerics,
@@ -199,6 +220,23 @@ export function RectRenderer({
             const x = xScale(col);
             const y = yScale(row);
             if (x === undefined || y === undefined) return null;
+            // WD2-dim-rect · OR-of-row-OR-col: cell is dimmed if either
+            // dimension's active filter excludes its raw value.
+            const isRowDimmed =
+              dashboardRowDimActive &&
+              !isCrossFilterActive(
+                dashboardFilters!,
+                rowCh.field,
+                rowRawByKey.get(row),
+              );
+            const isColDimmed =
+              dashboardColDimActive &&
+              !isCrossFilterActive(
+                dashboardFilters!,
+                colCh.field,
+                colRawByKey.get(col),
+              );
+            const isDashboardDimmed = isRowDimmed || isColDimmed;
             return (
               <rect
                 key={`${row}-${col}`}
@@ -207,6 +245,7 @@ export function RectRenderer({
                 width={cellWidth}
                 height={cellHeight}
                 fill={fill}
+                fillOpacity={isDashboardDimmed ? 0.4 : 1}
                 stroke="hsl(var(--background))"
                 strokeWidth={0.5}
                 rx={1}
