@@ -7,7 +7,7 @@
  *   - Hover tooltip with [x, y, color, size] context.
  */
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { Circle } from "@visx/shape";
 import { scaleLinear } from "@visx/scale";
@@ -52,6 +52,12 @@ import {
   dispatchDrillThrough,
   isModifierClick,
 } from "@/pages/Dashboard/lib/drillThrough";
+import {
+  BRUSH_MIN_PX,
+  dispatchExplainSlice,
+  isBrushDrag,
+  makeBox2dRegion,
+} from "@/pages/Dashboard/lib/explainSlice";
 
 export interface PointRendererProps {
   spec: ChartSpecV2;
@@ -112,6 +118,28 @@ export function PointRenderer({
     !!colorFilterSel &&
     colorFilterSel.type === "categorical" &&
     colorFilterSel.values.length > 0;
+
+  // Wave WI4-wiring-point · 2D brush state for the explain-this-slice
+  // intent. Scatter is the only chart kind with TWO independently-
+  // continuous axes, so the brush captures a rectangle in pixel space
+  // (both x and y dimensions) — distinct from the 1D brush in Line /
+  // Area / Bar where only the x-axis is brushed. brushStart and
+  // brushEnd carry {x, y} pixel coords inside the inner-plot space
+  // (svg coord minus MARGIN.left / MARGIN.top); null when no brush is
+  // active. brushExplainRef captures `e.altKey === true` at brushDown
+  // — ref (not state) because the alt flag doesn't drive a re-render.
+  const [brushStart, setBrushStart] = useState<
+    { x: number; y: number } | null
+  >(null);
+  const [brushEnd, setBrushEnd] = useState<
+    { x: number; y: number } | null
+  >(null);
+  const brushExplainRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    setBrushStart(null);
+    setBrushEnd(null);
+  }, [data]);
 
   // Color category map
   const colorIndex = useMemo(() => {
@@ -235,6 +263,95 @@ export function PointRenderer({
   const legend = useChartLegendState(legendItems);
   const showLegend = legendItems.length > 1;
 
+  // Wave WI4-wiring-point · 2D brush handlers gated on `dashboardTile`
+  // (outside a dashboard the explain panel has no receiver). The
+  // three handlers (`onBrushDown` / `onBrushMove` / `onBrushUp`)
+  // mirror the WI4-wiring-area shape but track both x AND y pixel
+  // coords because the box2d brush spans two dimensions.
+  const onBrushDown = (e: React.MouseEvent<SVGElement>) => {
+    const pt = localPoint(e);
+    if (!pt) return;
+    const x = pt.x - MARGIN.left;
+    const y = pt.y - MARGIN.top;
+    if (x < 0 || x > innerWidth) return;
+    if (y < 0 || y > innerHeight) return;
+    brushExplainRef.current = e.altKey === true;
+    setBrushStart({ x, y });
+    setBrushEnd({ x, y });
+  };
+
+  const onBrushMove = (e: React.MouseEvent<SVGElement>) => {
+    if (brushStart === null) return;
+    if (!(e.buttons & 1)) return;
+    const pt = localPoint(e);
+    if (!pt) return;
+    const x = Math.max(0, Math.min(innerWidth, pt.x - MARGIN.left));
+    const y = Math.max(0, Math.min(innerHeight, pt.y - MARGIN.top));
+    setBrushEnd({ x, y });
+  };
+
+  const onBrushUp = () => {
+    if (brushStart === null || brushEnd === null) {
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+      return;
+    }
+    // Both axes must cross BRUSH_MIN_PX for a 2D rectangle to count as
+    // a drag — a 100×3 sliver is still a click in either axis alone.
+    // The constructor's zero-area rejection is a separate downstream
+    // guard; this gate is the click-vs-drag split that matches the
+    // 1D brushes' isBrushDrag check on the load-bearing dimension.
+    const isDrag =
+      isBrushDrag(brushStart.x, brushEnd.x, BRUSH_MIN_PX) &&
+      isBrushDrag(brushStart.y, brushEnd.y, BRUSH_MIN_PX);
+    if (!isDrag) {
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+      return;
+    }
+    if (brushExplainRef.current && dashboardTile) {
+      // Invert pixel coords back to data space. yScale's range is
+      // [innerHeight, 0] (inverted) so its invert maps low-pixel-y
+      // to high-data-y — the constructor normalises so the data-space
+      // yMin / yMax come out correctly regardless of pixel drag
+      // direction.
+      const x1Data = xScale.invert(brushStart.x);
+      const x2Data = xScale.invert(brushEnd.x);
+      const y1Data = yScale.invert(brushStart.y);
+      const y2Data = yScale.invert(brushEnd.y);
+      const region = makeBox2dRegion(
+        x1Data,
+        x2Data,
+        y1Data,
+        y2Data,
+        yCh.field,
+      );
+      if (region) {
+        dispatchExplainSlice({
+          chartId: dashboardTile.tileId,
+          column: xCh.field,
+          region,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+      }
+    }
+    brushExplainRef.current = false;
+    setBrushStart(null);
+    setBrushEnd(null);
+  };
+
+  const onSvgMouseLeave = () => {
+    hideTooltip();
+    if (brushStart !== null) {
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+    }
+  };
+
   if (innerWidth <= 0 || innerHeight <= 0) return null;
 
   return (
@@ -255,7 +372,15 @@ export function PointRenderer({
         height={Math.max(0, height - (showLegend ? 28 : 0))}
         role="img"
         aria-label={accessibleLabel}
-        onMouseLeave={hideTooltip}
+        onMouseLeave={onSvgMouseLeave}
+        onMouseDown={dashboardTile ? onBrushDown : undefined}
+        onMouseMove={dashboardTile ? onBrushMove : undefined}
+        onMouseUp={dashboardTile ? onBrushUp : undefined}
+        style={
+          brushStart !== null
+            ? { cursor: "crosshair" }
+            : undefined
+        }
       >
         <Group left={MARGIN.left} top={MARGIN.top}>
           <GridRows
@@ -274,6 +399,20 @@ export function PointRenderer({
               y2={yScale(0)}
               stroke="hsl(var(--border))"
               strokeOpacity={0.7}
+            />
+          )}
+          {brushStart !== null && brushEnd !== null && (
+            <rect
+              x={Math.min(brushStart.x, brushEnd.x)}
+              y={Math.min(brushStart.y, brushEnd.y)}
+              width={Math.abs(brushEnd.x - brushStart.x)}
+              height={Math.abs(brushEnd.y - brushStart.y)}
+              fill="hsl(var(--primary))"
+              fillOpacity={0.1}
+              stroke="hsl(var(--primary))"
+              strokeOpacity={0.4}
+              strokeDasharray="3 3"
+              pointerEvents="none"
             />
           )}
           {points.map((p) => {
@@ -300,6 +439,11 @@ export function PointRenderer({
               );
             const dimMul = isDashboardDimmed ? 0.4 : 1;
             const onPointMove = (e: React.MouseEvent<SVGElement>) => {
+              // Wave WI4-wiring-point · suppress tooltip during an
+              // active brush so it doesn't flicker between points the
+              // brush drag passes over. Same guard shape BarRenderer
+              // uses for its onMouseMove.
+              if (brushStart !== null) return;
               const local = localPoint(e);
               showTooltip({
                 tooltipLeft: local?.x ?? 0,
