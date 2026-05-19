@@ -25,6 +25,7 @@
 import { useEffect, useMemo } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CitationHoverCard } from "@/components/CitationHoverCard";
 import {
   Sheet,
   SheetContent,
@@ -309,6 +310,27 @@ export function ExplainSlicePanel({
                   </p>
                 )}
               </div>
+              {/*
+                Wave WI4-citations · discoverable Sources row mirroring
+                the WI3 footer pattern. Inline backtick-wrapped pack
+                ids inside the regen prose already render as `[N]`
+                superscript hover-cards via the MarkdownRenderer's
+                WQ3 integration — that path is unchanged. This row
+                surfaces the full `InsightRegenEntry.citations` array
+                at a glance so the user can scan every cited pack
+                without scrubbing the prose. Sits between the prose
+                and the Re-explain button so all three regen
+                affordances stack in source order: read → sources →
+                refresh.
+              */}
+              {regen.entry?.citations && regen.entry.citations.length > 0 ? (
+                <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                  <span>Sources:</span>
+                  {regen.entry.citations.map((packId, i) => (
+                    <CitationHoverCard key={packId} packId={packId} index={i + 1} />
+                  ))}
+                </div>
+              ) : null}
               {/*
                 Wave WI4-rexplain · explicit bypass-cache button so the
                 user can force a fresh regeneration of the same slice
