@@ -74,6 +74,7 @@ import { useChartGrid } from "@/components/charts/ChartGrid";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 import {
@@ -197,6 +198,17 @@ export function BarRenderer({
   // dispatch path is skipped — the existing ChartGrid in-context filter
   // is unchanged.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-bar · "is there an active categorical cross-filter on this
+  // chart's x-axis right now?" computed once per render. When true,
+  // bars whose `outerRaw` isn't in the active selection render at 0.4
+  // opacity; matching bars render at full opacity. Mutually exclusive
+  // with the chat/explorer `grid.filter` dim case (different context).
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[enc.x.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
   const showLabels = !!spec.config?.barLabels;
 
   // ───────── series construction ─────────
@@ -698,6 +710,19 @@ export function BarRenderer({
               grid.inGrid &&
               grid.filter?.field === enc.x.field &&
               grid.filter?.value === c.outerRaw;
+            // WD2-dim-bar · dashboard-side dim: this bar is dimmed when
+            // a categorical x-filter is active AND this bar's outerRaw
+            // isn't a member of the selection. `isCrossFilterActive`
+            // already returns false for non-categorical / unset
+            // selections, so guarding by `dashboardDimActive` first
+            // keeps the chat/explorer (`grid.inGrid`) path untouched.
+            const isDashboardDimmed =
+              dashboardDimActive &&
+              !isCrossFilterActive(
+                dashboardFilters!,
+                enc.x.field,
+                c.outerRaw,
+              );
             const interactive = grid.inGrid || !!dashboardTile;
 
             return (
@@ -715,7 +740,9 @@ export function BarRenderer({
                     ? 1
                     : grid.inGrid && grid.filter
                       ? 0.4
-                      : 1)
+                      : isDashboardDimmed
+                        ? 0.4
+                        : 1)
                 }
                 stroke={isFiltered ? "hsl(var(--foreground))" : undefined}
                 strokeWidth={isFiltered ? 1.5 : 0}

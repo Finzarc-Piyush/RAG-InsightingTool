@@ -63,11 +63,18 @@ export function toFilterValue(raw: unknown): string {
  * Always returns false for non-categorical selections on that
  * column — a date or numeric range cannot encode a discrete value
  * match.
+ *
+ * `value` accepts `unknown` to match the precedent set by
+ * `toFilterValue` (the helper internally normalises via
+ * `toFilterValue` which already handles Date / object / unknown
+ * inputs) — widening the signature lets renderers pass `BarCell.outerRaw`
+ * (typed `unknown`) without a narrowing cast. Consistent with the
+ * WD2-wiring-bar widening of `toFilterValue`.
  */
 export function isCrossFilterActive(
   global: ActiveChartFilters,
   column: string,
-  value: string | number | boolean | null | undefined,
+  value: unknown,
 ): boolean {
   const sel = global[column];
   if (!sel || sel.type !== "categorical") return false;
