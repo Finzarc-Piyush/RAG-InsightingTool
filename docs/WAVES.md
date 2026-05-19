@@ -11,6 +11,65 @@
 
 ---
 
+- **2026-05-19** — **Wave WI4-panel · ExplainSlicePanel receiver UI in DashboardView.** Closes the user-visible explain-this-slice loop end-to-end on LineRenderer: alt-drag on a line chart now slides open a right-side Radix Sheet showing the brushed-slice pin metadata. The regenerated-insight body is a placeholder pinning the WI4-wire pipeline shape (`applyChartFilters` → `filterRowsByBrushRegion` → `useInsightRegen`); the follow-on WI4-wire wave swaps it for a real hook call. Same separation-of-concerns precedent as WD3-sheet → WD3-sheet-fetch (the sheet shipped first with a placeholder body, then the row-fetch hook landed in a follow-on wave).
+
+  **What landed.**
+    - New component [`client/src/pages/Dashboard/Components/ExplainSlicePanel.tsx`](../client/src/pages/Dashboard/Components/ExplainSlicePanel.tsx) (~150 LOC). Pure render component, owns no state — the parent (DashboardView) holds the captured event. Mirrors [`DrillThroughSheet`](../client/src/pages/Dashboard/Components/DrillThroughSheet.tsx)'s shape so the three click-intent receivers stay structurally parallel: WD2 has no panel (cross-filter applies in-place to dashboard state), WD3 → `DrillThroughSheet` (row table), WI4 → `ExplainSlicePanel` (regenerated insight). The receiver triplet now spans the full click-intent surface.
+    - 2-prop interface: `event: ExplainSliceEvent | null` + `onOpenChange: (open: boolean) => void`. Open state derives from `event !== null` — single source of truth, no two-prop drift bug class.
+    - Three body sections (in order):
+      1. **"Pinned slice"** — `chartId` / `column` / `region` rendered in a `<dl>` grid. `region` is rendered with two parts: an uppercase chip showing `region.kind` (numeric / temporal / categorical) followed by the formatted bounds via `formatRegion(region)`.
+      2. **"Filter context at brush time"** — `summariseFilters(filters)` lines, byte-identical shape to the WD3 sheet's filter-context section (local copy rather than a shared util because the two receivers may diverge on filter display in future waves — e.g. clickable filter chips on WI4-panel to refine the slice).
+      3. **"Regenerated insight"** — WI4-wire placeholder. The body pins the pipeline shape via inline `<code>` references to `applyChartFilters`, `filterRowsByBrushRegion`, and `useInsightRegen` so future-Claude reads the dependency chain at a glance.
+    - `formatRegion(region)` discriminates on `region.kind`:
+      ```ts
+      const MAX_CATEGORY_PREVIEW = 10;
+      function formatRegion(region: BrushRegion): string {
+        if (region.kind === "numeric") return `[${region.start}, ${region.end}]`;
+        if (region.kind === "temporal") {
+          return `${new Date(region.startMs).toISOString()} → ${new Date(region.endMs).toISOString()}`;
+        }
+        const values = region.values;
+        if (values.length <= MAX_CATEGORY_PREVIEW) return values.join(", ");
+        const preview = values.slice(0, MAX_CATEGORY_PREVIEW).join(", ");
+        const more = values.length - MAX_CATEGORY_PREVIEW;
+        return `${preview}, … +${more} more`;
+      }
+      ```
+      Temporal uses full ISO (NOT a localised short date) — the canonical form survives copy-paste into logs / debug tooling. The categorical cap (10) prevents a 50-category brush from blowing the panel layout; the "… +N more" suffix communicates the remainder. `MAX_CATEGORY_PREVIEW` is a module-level constant — easy to tune in one place if the panel later widens.
+    - [`DashboardView.tsx`](../client/src/pages/Dashboard/Components/DashboardView.tsx) gains three additive changes:
+      - Import: `{ EXPLAIN_SLICE_EVENT, type ExplainSliceEvent }` from the foundation + `{ ExplainSlicePanel }` from the Components dir.
+      - State: `const [explainSliceEvent, setExplainSliceEvent] = useState<ExplainSliceEvent | null>(null)` — sibling of `drillThroughEvent`. The two captured events live independently so a future wave can hold both panels open at once if the UX warrants (e.g. brushing a slice in one chart AND drilling into a mark on another).
+      - `useEffect` with the `EXPLAIN_SLICE_EVENT` window listener. Mirrors the `DRILL_THROUGH_EVENT` listener byte-for-byte except for the validation: requires `chartId` + `column` + `region` as load-bearing fields. The `region` check is STRICTER than the cross-filter listener's 2-field validation — a missing region would mean a malformed dispatch (the foundation's `makeXRegion` helpers already short-circuit on zero-width / non-finite, so a missing region indicates a non-foundation dispatcher).
+      - Mount: `<ExplainSlicePanel event={explainSliceEvent} onOpenChange={(open) => { if (!open) setExplainSliceEvent(null); }} />` at the bottom of the JSX tree alongside `<DrillThroughSheet>`. The `onOpenChange` clears state back to `null` on close so a re-brush on the same payload re-fires the slide-in animation.
+    - Paired test file [`client/src/pages/Dashboard/lib/wi4Panel.test.ts`](../client/src/pages/Dashboard/lib/wi4Panel.test.ts) (~230 LOC, 23 source-inspection tests across 10 suites): panel imports (Radix Sheet primitives + foundation types); props shape + open-derived-from-event; three-section structure ("Pinned slice" / "Filter context at brush time" / "Regenerated insight" with the WI4-wire placeholder); pinned-slice chartId / column / region render; `region.kind` chip; `formatRegion(event.region)` invocation; `formatRegion`'s three branches (numeric `[start, end]` literal; temporal `new Date(startMs).toISOString()` pin; categorical `MAX_CATEGORY_PREVIEW = 10` + `xs.slice(0, MAX_CATEGORY_PREVIEW).join(", ")` + `… +${more} more` cap with the ellipsis character `U+2026`); closed-state `event ? (...) : null` gate; DashboardView imports + state declaration + listener structure (SSR-safe guard + addEventListener + cleanup) + 3-field validation pin + setExplainSliceEvent(detail) call; panel mount with the 2-prop shape (event + onOpenChange) and the close-clears-state contract; WI4-panel wave marker greppable in both files.
+
+  **Why this design.**
+    - **Right-side Radix Sheet (NOT a Dialog / NOT inline-expansion-in-tile).** Three alternatives considered:
+      1. **Dialog (centred modal).** Blocks the dashboard underneath — bad UX for a "tell me about this slice" intent where the user wants to keep their eye on the chart while reading the insight. Rejected.
+      2. **Inline expansion in the tile.** Would push the dashboard layout around — also bad UX (the surrounding tiles would re-flow). Rejected.
+      3. **Right-side Sheet** (chosen). Preserves the dashboard underneath, slides in/out with a consistent affordance, AND matches the WD3 sheet's slide-in side so the two receivers behave identically (predictable for users who learn one and encounter the other). The `sm:max-w-md` width (28rem) is the same width as the WD3 sheet — visual consistency.
+    - **Placeholder body, not "Loading…"**. The WI4-wire wave will replace the placeholder with a real `useInsightRegen` call; until then, showing "Loading…" would be misleading (no fetch is actually pending). The placeholder communicates intent ("this will be the regenerated insight") and pins the upcoming pipeline shape via inline `<code>` references so future-Claude can implement the swap with a single Edit. Same precedent as WD3-sheet's dashed-border placeholder → WD3-sheet-fetch's `<DrillThroughRowTable>` swap.
+    - **Sibling state for explainSliceEvent + drillThroughEvent (NOT a discriminated union).** A single `panelEvent: { kind: "drill", payload } | { kind: "explain", payload }` state would force the parent to render one panel at a time. The sibling state lets both panels co-exist independently — which is a near-zero-cost optionality for a future wave to use without restructuring.
+    - **3-field validation on the listener (vs 2-field on cross-filter).** The cross-filter listener validates `column` + `value` because that's the minimum for an apply call. The drill-through listener validates `chartId` + `column` because the server URL needs both. The explain-slice listener validates `chartId` + `column` + `region` because all three are load-bearing for the panel's pinned-slice render AND the future WI4-wire's filter narrowing. Adding the `region` check catches a malformed dispatch (e.g. a renderer that passes a `region: null` through instead of letting the foundation's makeXRegion helpers short-circuit) before it reaches state. Defense in depth.
+    - **`formatRegion` local to the panel (NOT in the foundation).** The foundation's `filterRowsByBrushRegion` is data-plumbing (applies a predicate); `formatRegion` is display logic (produces a human-readable string). The two concerns drift independently — a future panel might want a localised date format while the predicate stays canonical-ISO. Co-locating display with the consumer keeps the foundation's surface minimal.
+
+  **Tests.** WI4-panel (23 new) + WI4-wiring-trend (23 existing) + WI4-foundation (28) + WD3-sheet (21) + WD3-wiring-rest-trend (16, one regex loosened in the prior wave) = 113 cumulative across 46 suites, all green. Client `npx tsc --noEmit` reports 53 errors (identical baseline — zero new errors per invariant). Test file appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+
+  **Conventions added.** None — follows the established WD3-sheet receiver shape (right-side Sheet + 2-prop interface + event-null-means-closed).
+
+  **Out of scope.**
+    - **WI4-wire.** The actual `useInsightRegen` integration. The panel's placeholder body will be replaced with a `<RegeneratedInsightSection>` (or inline) that:
+      1. Reads the chart's backing rows from `tile.chart.data` (same source as WD3-server / WI2-wire-bind).
+      2. Computes the brushed slice via `applyChartFilters(rows, event.filters ?? {})` → `filterRowsByBrushRegion(rows, event.column, event.region)`.
+      3. Builds an `InsightChartSpecLite` from the chart spec (same pattern as ChartTileBody's WI2-wire-bind).
+      4. Calls `useInsightRegen({ tileId, filters: ..., cache: ... }).regenerate(specLite, narrowedRows)` on panel open.
+      5. Renders the regen entry text + a "Re-explain" button that bypasses cache.
+      Likely needs to thread the `dashboardId` (for tile lookup) and the `insightRegenCache` (for cross-panel sharing) into the panel via props — small interface expansion.
+    - **WI4-wiring-area / WI4-wiring-bar.** AreaRenderer + BarRenderer brush mechanics. Both renderers currently lack brush — separate waves.
+    - **Clickable region chip to refine the slice.** The region's `kind` chip is currently display-only. A future polish wave could let the user click "categorical" to drop the brush filter (preserving global filters), or click a category in the comma-joined list to remove it.
+    - **Brush state persistence across renders.** Currently the brush is captured at brush-up and then forgotten (the brush rectangle disappears). A future wave could keep the brush visible on the chart while the panel is open, with a visual cue tying the panel content to the chart region.
+    - **Side-by-side comparison panel.** Two brushes on the same chart could open two slice panels side-by-side for A/B comparison. Out of scope for the WI4 master plan; would need new event design.
+
 - **2026-05-19** — **Wave WI4-wiring-trend · LineRenderer alt-drag → explain-this-slice.** First per-renderer consumer of the WI4-foundation `explainSlice` helper. LineRenderer already had two click-intents — brush-to-zoom (plain drag, pre-existing) and WD3 drill-through (cmd/ctrl + tiny drag) — and this wave layers the THIRD: a full-distance drag (≥ `BRUSH_MIN_PX = 6`) with the ALT key held dispatches an `ExplainSliceEvent` carrying the brushed sub-domain in data-space (temporal `{ startMs, endMs }` or categorical `{ values }`). Plain drag continues to zoom; cmd/ctrl-click continues to drill; the three intents are mutually exclusive at brush-down time via two independent refs (`brushModifierRef` for cmd/ctrl, `brushExplainRef` for alt). The choice of alt-drag (not shift, not cmd) keeps the modifier conflict-free: cmd/ctrl is owned by the WD3 wiring; shift is reserved for future multi-select intents; alt is widely available across keyboards (option on macOS).
 
   **What landed.**
