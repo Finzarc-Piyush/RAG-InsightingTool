@@ -11,6 +11,92 @@
 
 ---
 
+- **2026-05-19** — **Wave WI4-wire · useInsightRegen integration in ExplainSlicePanel.** Closes the WI4 master-plan loop end-to-end on LineRenderer: alt-drag → side panel → real regenerated insight prose. Swaps the WI4-panel "Regenerated insight" placeholder for a `useInsightRegen` call that narrows the brushed rows through the WI2 pipeline (`applyChartFilters(rows, event.filters)` → `filterRowsByBrushRegion(rows, event.column, event.region)`) and POSTs to the existing `/api/insight/regen` endpoint. The full round-trip now works on LineRenderer with zero new backend code — the wave reuses the WI2 server endpoint + the shared `InsightRegenCache` threaded down from DashboardView. Same placeholder-to-real-fetch pattern as WD3-sheet → WD3-sheet-fetch.
+
+  **What landed.**
+    - [`client/src/pages/Dashboard/Components/ExplainSlicePanel.tsx`](../client/src/pages/Dashboard/Components/ExplainSlicePanel.tsx) imports the WI2 pipeline's load-bearing helpers in a single block: `{ applyChartFilters, type ActiveChartFilters }` (chart-filter narrowing); `type { ChartSpec }` from `@/shared/schema` (the typed prop); `{ useInsightRegen, type InsightChartSpecLite, type InsightRegenRow }` (the regen hook + its strict types); `type { InsightRegenCache }` (the shared cache type); `{ filterRowsByBrushRegion, type BrushRegion, type ExplainSliceEvent }` (the foundation's brush-region helper alongside the existing types).
+    - Panel interface gains two optional props:
+      ```ts
+      interface ExplainSlicePanelProps {
+        event: ExplainSliceEvent | null;
+        onOpenChange: (open: boolean) => void;
+        // Wave WI4-wire additions
+        chart?: ChartSpec | null;
+        insightRegenCache?: InsightRegenCache;
+      }
+      ```
+      Both optional so existing callers (and tests) can mount the panel without them; missing values fall back to the "could not resolve" render branch + the hook's per-mount cache fallback respectively.
+    - New `IDLE_TILE_ID = "__wi4_idle__"` module-level constant — stable fallback identifier so `useInsightRegen` can be called unconditionally (React rules of hooks) without colliding with a real tile id. The fallback is intentionally suffixed `__` so a typo'd tile id can't accidentally collide.
+    - `specLite` `useMemo` mirrors the [`ChartTileBody`](../client/src/pages/Dashboard/Components/ChartTileBody.tsx)'s WI2-wire-bind shape field-for-field: `type` / `title` / `x` / `y` unconditional; `seriesColumn` / `aggregate` spread-conditional so `undefined` optionals don't ship to the strict server zod schema. Returns `null` when `chart` is `null` (the regen effect short-circuits).
+    - `narrowedRows` `useMemo` composes the two-stage WI2 narrowing pipeline:
+      ```ts
+      const narrowedRows = useMemo<InsightRegenRow[]>(() => {
+        if (!chart || !event) return [];
+        const filteredByGlobal = applyChartFilters(
+          (chart.data ?? []) as Array<Record<string, string | number | null>>,
+          event.filters ?? {},
+        );
+        const filteredByBrush = filterRowsByBrushRegion(
+          filteredByGlobal,
+          event.column,
+          event.region,
+        );
+        return filteredByBrush as InsightRegenRow[];
+      }, [chart, event]);
+      ```
+      The two stages are predicate-AND commutative so the order doesn't affect output, but the chosen order matches `ChartTileBody`'s WI2-wire-bind pipeline (global filters first, then narrower) for consistency. The `as` casts are safe because `ChartSpec.data` cells (`string | number | null`) are a structural subset of `InsightRegenRow` cells (`string | number | boolean | null`).
+    - `useInsightRegen` called unconditionally with event-derived inputs:
+      ```ts
+      const regen = useInsightRegen({
+        tileId: event?.chartId ?? IDLE_TILE_ID,
+        filters: event?.filters ?? {},
+        cache: insightRegenCache,
+      });
+      ```
+      When `event` is null, the hook spins up against `IDLE_TILE_ID` and never fires `regenerate`, so the cache slot stays empty.
+    - `useEffect` fires `regen.regenerate(specLite, narrowedRows)` when `event` / `specLite` / `narrowedRows` change. The hook's internal `seqRef` guards against stale resolves clobbering newer state if the user brushes a second slice while the first is still resolving. `regen` deliberately omitted from the deps array with an `eslint-disable-next-line react-hooks/exhaustive-deps` comment — the hook captures `regenerate` via `useRef` internally so the function reference is stable; including it in deps would create a render loop. The comment documents the deliberate omission so future-Claude doesn't "fix" it.
+    - "Regenerated insight" section's render replaces the WI4-panel placeholder with four state-aware branches:
+      - `!chart` → `"Could not resolve the chart for {event.chartId} — the brushed tile may have been removed."` (defensive surface — surfaces the failure rather than rendering an empty panel).
+      - `regen.loading` → `"Regenerating insight for {narrowedRows.length} brushed row(s)…"` with singular / plural matching the row count.
+      - `regen.error` → `<p role="alert" className="text-destructive">Failed to regenerate: {regen.error}</p>`. The hook types `error` as `string | null` (NOT `Error`), so we render the string directly — `role="alert"` ensures screen readers announce immediately.
+      - `regen.entry?.text` → `<p className="whitespace-pre-wrap text-foreground">{regen.entry.text}</p>`. `whitespace-pre-wrap` preserves multi-line content from the model output (lists, structured callouts).
+      - Default → `"Waiting for the first regeneration…"` covers the brief window between effect-fire and resolve.
+    - [`DashboardView`](../client/src/pages/Dashboard/Components/DashboardView.tsx) resolves the chart inline at the panel mount via an IIFE so the resolution is co-located with the prop pass-through:
+      ```tsx
+      chart={(() => {
+        if (!explainSliceEvent || !activeSheet) return null;
+        const m = /^chart-(\d+)$/.exec(explainSliceEvent.chartId);
+        if (!m) return null;
+        const idx = Number.parseInt(m[1], 10);
+        return activeSheet.charts[idx] ?? null;
+      })()}
+      ```
+      The `chart-${idx}` pattern parallels DashboardView's tile id derivation at line 196 (the `baseTiles.map((chart, index) => ({ id: `chart-${index}`, … }))` shape). The `activeSheet.charts[idx] ?? null` defensively returns `null` if the tile was removed between brush-up and panel mount (e.g. the user clicks a different sheet tab).
+    - `insightRegenCache={insightRegenCache}` threaded into the panel — same instance threaded into every per-tile `ChartTileBody` for WI2 regen, so a brushed slice can hit a cache slot populated by the per-tile "Re-explain" button if the `(tileId, filterHash)` match. Cross-surface cache sharing is the intentional consequence.
+    - Paired test file [`client/src/pages/Dashboard/lib/wi4Wire.test.ts`](../client/src/pages/Dashboard/lib/wi4Wire.test.ts) (~310 LOC, 29 source-inspection tests across 9 suites): five-import shape pin (chartFilters / ChartSpec / hooks-trio / cache type / foundation-trio); two new optional props on the interface + the destructure-signature pin; `specLite` `useMemo` declaration + field-for-field shape + spread-conditional; `narrowedRows` `useMemo` with `applyChartFilters` FIRST + `filterRowsByBrushRegion` SECOND + empty-array fallback when `!chart || !event`; `useInsightRegen` unconditional call shape + `IDLE_TILE_ID` constant declaration; `useEffect` with the `if (!event || !specLite) return; void regen.regenerate(...)` shape + the three-element `[event, specLite, narrowedRows]` deps + the `eslint-disable` comment; four render branches + the default fallback + a negative pin against the WI4-panel placeholder text (`/will appear here once the WI4-wire wave lands/`); DashboardView regex chart resolution (`/\^chart-\(\\d\+\)\$\/\.exec\(explainSliceEvent\.chartId\)`) + `activeSheet.charts[idx] ?? null` + `insightRegenCache={insightRegenCache}` + WI4-wire wave marker in the DashboardView comment.
+
+  **Why this design.**
+    - **Reuse the WI2 `/api/insight/regen` endpoint, NOT a new endpoint.** The WI4 panel's regen call is structurally identical to the WI2 per-tile regen call (same spec, same row narrowing, same MINI-tier LLM, same response shape). Two alternatives considered:
+      1. **New endpoint `/api/insight/regen-slice`** — would duplicate everything WI2 ships (auth, schema, telemetry, prompt building, post-processing) for no payload-shape difference. The brush is just an additional `applyChartFilters`-style filter applied client-side before the request fires.
+      2. **Reuse `/api/insight/regen`** (chosen) — zero server changes; the client narrows rows BEFORE sending so the server sees the same input shape it sees from per-tile regen.
+    - **`useEffect`-driven auto-fire (NOT user-clicked button).** The user just brushed a slice — making them click a second "Explain" button to fire the regen would feel like an unnecessary step. The brush IS the intent. The hook's `seqRef` already guards against stale-resolve races, so a second brush while the first is resolving is safe.
+    - **`IDLE_TILE_ID = "__wi4_idle__"` (NOT a runtime-conditional hook call).** React hook rules forbid conditional hook calls; the only way to keep the panel functional in both `event !== null` and `event === null` states is to always call `useInsightRegen`. The idle tileId never matches a real tile id (the `__` suffix is reserved), so the cache slot never collides.
+    - **`regen` omitted from `useEffect` deps, with `eslint-disable` comment.** The hook captures `regenerate` via `useRef` internally — the function reference is stable across renders within an instance. Including it in deps would create a render loop (the effect fires → setState in the hook → re-render → effect re-fires → …). The eslint-disable comment is intentional + documented; without the comment the lint rule would auto-suggest a "fix" that breaks the design.
+    - **Inline IIFE for chart resolution (NOT a `useMemo` at the DashboardView level).** The resolution math is 5 lines and runs ONLY when the panel re-renders. Lifting it into a memo would force a new render dependency on `explainSliceEvent` + `activeSheet` AND a separate `let explainChart = …` line elsewhere — more code for no perf win. Co-locating the IIFE at the prop pass-through keeps the resolution + the consumer next to each other.
+    - **Two-stage narrowing (NOT a single combined filter).** Splitting `applyChartFilters` (handles categorical / numeric / date filters from the global filter map) and `filterRowsByBrushRegion` (handles the brushed sub-domain) lets each helper stay focused on its concern. A future widening that adds e.g. a per-tile filter to the WI4 pipeline drops in as a third filter call without restructuring. Same separation-of-concerns precedent as `applyChartFilters` itself (which is already split per filter type in `chartFilters.ts`).
+    - **Cache sharing with WI2 per-tile regen.** Same `insightRegenCache` instance, same `(tileId, filterHash)` key shape. A user who clicks "Re-explain" on a tile, then brushes the same tile with no global filter changes, hits the cache (the brushed tileId === the per-tile tileId). The brushed slice doesn't usually match the per-tile shape (different row count), but the cache key uses tile + filters, not rows — so a hit is possible. This is a free cross-surface win and not a contract risk (the cached entry's prose IS describing the right rows because filters are part of the key).
+
+  **Tests.** WI4-wire (29 new) + WI4-panel (23) + WI4-wiring-trend (23) + WI4-foundation (28) = 103 cumulative across 41 suites, all green. Client `npx tsc --noEmit` reports 53 errors (identical baseline — zero new errors per invariant). Test file appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+
+  **Conventions added.** None — follows the established WI2-wire-bind pipeline shape (`specLite` field-for-field + `narrowedRows` useMemo + unconditional `useInsightRegen` + `useEffect`-driven fire with `seqRef` guarding stale resolves).
+
+  **Out of scope.**
+    - **WI4-wiring-area / WI4-wiring-bar.** AreaRenderer + BarRenderer brush mechanics. Both renderers currently lack brush — separate waves.
+    - **"Re-explain" button.** The panel auto-fires on event change but has no explicit "Re-explain" button (the WI2 per-tile footer has one for the bypass-cache path). A future polish wave could add one, gated on `regen.entry !== null`, that calls `regen.regenerate(specLite, narrowedRows, { bypassCache: true })`.
+    - **Citation chips in the panel.** WI3 surfaced citation chips in the per-tile footer. The same pattern (`regen.entry.citations` mapped to `<CitationHoverCard>`) could land in the WI4 panel. Carried forward.
+    - **Streaming the regen response.** The server endpoint is buffered (whole response in one POST). A future wave could swap to streaming for very-large slices. Same backlog item as the WI2 stream the regen response.
+    - **Brush-region-as-cache-key-component.** Currently the cache key is `(tileId, filterHash)` — two brushes on the same tile with the same global filters but DIFFERENT regions would collide (the second brush would silently read the first's cached entry). A future wave should add `regionHash` to the cache key so per-slice entries are distinct. Acknowledged limitation; not blocking the user-visible loop.
+
 - **2026-05-19** — **Wave WI4-panel · ExplainSlicePanel receiver UI in DashboardView.** Closes the user-visible explain-this-slice loop end-to-end on LineRenderer: alt-drag on a line chart now slides open a right-side Radix Sheet showing the brushed-slice pin metadata. The regenerated-insight body is a placeholder pinning the WI4-wire pipeline shape (`applyChartFilters` → `filterRowsByBrushRegion` → `useInsightRegen`); the follow-on WI4-wire wave swaps it for a real hook call. Same separation-of-concerns precedent as WD3-sheet → WD3-sheet-fetch (the sheet shipped first with a placeholder body, then the row-fetch hook landed in a follow-on wave).
 
   **What landed.**
