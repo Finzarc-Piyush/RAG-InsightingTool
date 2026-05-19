@@ -26,6 +26,10 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 export interface TreemapRendererProps {
   spec: ChartSpecV2;
@@ -70,36 +74,56 @@ export function TreemapRenderer({
   // is unbound — `useDashboardTileContext` returns null, the handler is
   // `undefined`, and `EChartsBase` doesn't wire `inst.on('click', ...)`.
   const dashboardTile = useDashboardTileContext();
-  const onChartClick = useCallback(
-    (params: unknown) => {
-      if (!dashboardTile) return;
-      const p = params as { data?: { name?: unknown; children?: unknown[] } };
-      const name = p?.data?.name;
-      const isLeaf = !Array.isArray(p?.data?.children) || p.data.children.length === 0;
-      if (!isLeaf || name == null) return;
-      dispatchCrossFilter({
-        column: labelCh.field,
-        value: toFilterValue(name),
-        sourceTileId: dashboardTile.tileId,
-      });
-    },
-    [dashboardTile, labelCh.field],
-  );
   // WD2-dim-echarts-treemap · per-dataItem dim factor on leaves whose
   // `name` isn't in the active categorical cross-filter on
-  // `labelCh.field`. Mirrors the WD2-wiring-echarts dispatch
-  // carve-out: parents (the `groupCh` value, when present) stay
-  // un-dimmed because they're structural hierarchy, not the
-  // filterable mark — same reason the dispatch only fires on
-  // leaves. ECharts canvases re-render whenever `optionsKey` changes,
-  // and `optionsKey = JSON.stringify({ tree, w, h })` already covers
-  // the per-item opacity through `tree`'s nested itemStyle objects.
+  // `labelCh.field`. Lifted ABOVE the click handler (was below pre-
+  // WD3-wiring-echarts) so the click handler can capture
+  // `dashboardFilters` in its closure for the drill-through filters
+  // snapshot. ECharts canvases re-render whenever `optionsKey`
+  // changes, and `optionsKey = JSON.stringify({ tree, w, h })` already
+  // covers the per-item opacity through `tree`'s nested itemStyle
+  // objects.
   const dashboardFilters = dashboardTile?.filters;
   const labelFilterSel = dashboardFilters?.[labelCh.field];
   const dashboardDimActive =
     !!labelFilterSel &&
     labelFilterSel.type === "categorical" &&
     labelFilterSel.values.length > 0;
+  // WD3-wiring-echarts · cmd / ctrl-click branches to drill-through
+  // instead of cross-filter. ECharts wraps the native MouseEvent at
+  // `params.event.event` (the ZRender event wrapping the DOM event);
+  // `isModifierClick` accepts the sparse `{ metaKey?, ctrlKey? }`
+  // shape so the chain works with no foundation changes. Same leaf-
+  // only carve-out as the WD2 dispatch: parents (the `groupCh` value,
+  // when present) stay un-wired because they're structural hierarchy.
+  const onChartClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as {
+        data?: { name?: unknown; children?: unknown[] };
+        event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
+      };
+      const name = p?.data?.name;
+      const isLeaf = !Array.isArray(p?.data?.children) || p.data.children.length === 0;
+      if (!isLeaf || name == null) return;
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: labelCh.field,
+          value: name,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      dispatchCrossFilter({
+        column: labelCh.field,
+        value: toFilterValue(name),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, labelCh.field, dashboardFilters],
+  );
 
   // Build hierarchy: if color is set, group by it as parent; else flat.
   const tree = useMemo<TreemapNode[]>(() => {

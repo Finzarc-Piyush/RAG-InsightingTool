@@ -36,6 +36,10 @@ import {
   isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
+import {
+  dispatchDrillThrough,
+  isModifierClick,
+} from "@/pages/Dashboard/lib/drillThrough";
 
 interface RendererProps {
   spec: ChartSpecV2;
@@ -161,20 +165,37 @@ export function SunburstRenderer({
     [tree, width, height],
   );
 
+  // WD3-wiring-echarts · cmd / ctrl-click branches to drill-through.
+  // ECharts wraps the native MouseEvent at `params.event.event` (the
+  // ZRender event wrapping the DOM event). Same leaf-only carve-out
+  // as the WD2 dispatch: parents stay un-wired (structural rings).
   const onSunburstClick = useCallback(
     (params: unknown) => {
       if (!dashboardTile) return;
-      const p = params as { data?: { name?: unknown; children?: unknown[] } };
+      const p = params as {
+        data?: { name?: unknown; children?: unknown[] };
+        event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
+      };
       const name = p?.data?.name;
       const isLeaf = !Array.isArray(p?.data?.children) || p.data.children.length === 0;
       if (!isLeaf || name == null) return;
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: labelCh.field,
+          value: name,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
       dispatchCrossFilter({
         column: labelCh.field,
         value: toFilterValue(name),
         sourceTileId: dashboardTile.tileId,
       });
     },
-    [dashboardTile, labelCh.field],
+    [dashboardTile, labelCh.field, dashboardFilters],
   );
 
   return (
@@ -251,42 +272,51 @@ export function SankeyRenderer({
     };
   }, [data, sourceCh, targetCh, valueCh]);
 
-  // Wave WD2-wiring-echarts · cross-filter dispatch on node clicks.
-  // Sankey params shape: `{ dataType: "node" | "edge", name, ... }`.
-  // We dispatch only on node clicks (skip edges) — an edge has no single
-  // categorical value to filter on. The node's name covers both source
-  // and target dims, but Sankey's source / target fields are typically
-  // two columns of the same dimension (e.g. `Region` → `Region`), so
-  // dispatching on `sourceCh.field` is the right default. Cross-column
-  // sankeys would need a richer params decode; deferred.
   const dashboardTile = useDashboardTileContext();
-  const onSankeyClick = useCallback(
-    (params: unknown) => {
-      if (!dashboardTile) return;
-      const p = params as { dataType?: string; name?: unknown };
-      if (p?.dataType !== "node" || p?.name == null) return;
-      dispatchCrossFilter({
-        column: sourceCh.field,
-        value: toFilterValue(p.name),
-        sourceTileId: dashboardTile.tileId,
-      });
-    },
-    [dashboardTile, sourceCh.field],
-  );
   // WD2-dim-echarts-rest · per-node dim opacity on nodes whose `name`
   // isn't in the active categorical cross-filter on `sourceCh.field`.
-  // Edges (links) stay un-dimmed — same carve-out as the dispatch
-  // path (an edge has no single categorical value to filter on).
-  // Separate memo (not inline in the `{ nodes, links }` memo above)
-  // so the pre-wave `nodes` array stays byte-identical for any
-  // future consumer; the dimmed projection is only what ECharts
-  // sees.
+  // Lifted ABOVE the click handler so the WD3-wiring-echarts modifier
+  // branch can capture `dashboardFilters` in its closure. Edges
+  // (links) stay un-dimmed — same carve-out as the dispatch path
+  // (an edge has no single categorical value to filter on).
   const dashboardFilters = dashboardTile?.filters;
   const sourceFilterSel = dashboardFilters?.[sourceCh.field];
   const dashboardDimActive =
     !!sourceFilterSel &&
     sourceFilterSel.type === "categorical" &&
     sourceFilterSel.values.length > 0;
+  // WD3-wiring-echarts · cmd / ctrl-click branches to drill-through.
+  // Sankey params shape: `{ dataType: "node" | "edge", name, event:
+  // { event: native MouseEvent } }`. Same node-only carve-out as the
+  // WD2 dispatch — edges have no single categorical value to filter
+  // on so they stay un-drillable too.
+  const onSankeyClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as {
+        dataType?: string;
+        name?: unknown;
+        event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
+      };
+      if (p?.dataType !== "node" || p?.name == null) return;
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: sourceCh.field,
+          value: p.name,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      dispatchCrossFilter({
+        column: sourceCh.field,
+        value: toFilterValue(p.name),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, sourceCh.field, dashboardFilters],
+  );
   const dimmedNodes = useMemo<
     Array<{ name: string; itemStyle?: { opacity?: number } }>
   >(() => {
@@ -440,46 +470,52 @@ export function CalendarRenderer({
     return [Math.min(...ys), Math.max(...ys)];
   }, [series]);
 
-  // Wave WD2-wiring-echarts · cross-filter dispatch on calendar-cell
-  // clicks. ECharts calendar params shape: `{ data: [yyyy-mm-dd, value] }`.
-  // We dispatch the ISO date string on `dateCh.field`. The downstream
-  // `applyCrossFilter` already installs categorical filters on date
-  // columns as discrete value selections (same shape as a chart-brush
-  // click on a temporal x-axis bar in BarRenderer).
   const dashboardTile = useDashboardTileContext();
-  const onCalendarClick = useCallback(
-    (params: unknown) => {
-      if (!dashboardTile) return;
-      const p = params as { data?: [unknown, unknown] };
-      const date = Array.isArray(p?.data) ? p.data[0] : undefined;
-      if (date == null) return;
-      dispatchCrossFilter({
-        column: dateCh.field,
-        value: toFilterValue(date),
-        sourceTileId: dashboardTile.tileId,
-      });
-    },
-    [dashboardTile, dateCh.field],
-  );
-  // WD2-dim-echarts-rest · per-cell dim opacity on calendar cells
-  // whose date ISO string isn't in the active categorical
-  // cross-filter on `dateCh.field`. Calendar's pre-wave data array
-  // is a flat tuple form (`[date, value]`) which ECharts heatmap
-  // also accepts in the rich-object form (`{ value: [date, value],
-  // itemStyle: { opacity } }`). When dim is OFF, dimmedSeries is
-  // identity (=== series) so the tuple form ships unchanged —
-  // byte-identical to the pre-wave optionsKey JSON. When dim is ON,
-  // non-matching cells get promoted to the rich-object form and
-  // matching cells stay as tuples (mixed-shape array). The range +
-  // visualMap min/max computations downstream consume the original
-  // `series` (pre-promotion) so their tuple destructuring stays
-  // safe.
+  // WD2-dim-echarts-rest · per-cell dim opacity on calendar cells.
+  // Lifted ABOVE the click handler so the WD3-wiring-echarts modifier
+  // branch can capture `dashboardFilters` in its closure. Calendar's
+  // pre-wave data array is a flat tuple form (`[date, value]`); the
+  // dimmedSeries memo promotes non-matching cells to the rich-object
+  // form (`{ value: [date, value], itemStyle: { opacity } }`) so
+  // ECharts can per-cell dim.
   const dashboardFilters = dashboardTile?.filters;
   const dateFilterSel = dashboardFilters?.[dateCh.field];
   const dashboardDimActive =
     !!dateFilterSel &&
     dateFilterSel.type === "categorical" &&
     dateFilterSel.values.length > 0;
+  // WD3-wiring-echarts · cmd / ctrl-click branches to drill-through.
+  // Calendar params shape: `{ data: [yyyy-mm-dd, value], event: {
+  // event: native MouseEvent } }`. Drill value is the raw ISO date
+  // string (pre-toFilterValue) — server canonicaliser parses dates
+  // per the inferred column type.
+  const onCalendarClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as {
+        data?: [unknown, unknown];
+        event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
+      };
+      const date = Array.isArray(p?.data) ? p.data[0] : undefined;
+      if (date == null) return;
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: dateCh.field,
+          value: date,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      dispatchCrossFilter({
+        column: dateCh.field,
+        value: toFilterValue(date),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, dateCh.field, dashboardFilters],
+  );
   const dimmedSeries = useMemo<
     Array<
       | [string, number]
@@ -578,42 +614,53 @@ export function CandlestickRenderer({
     [data, xCh],
   );
 
-  // Wave WD2-wiring-echarts · cross-filter dispatch on candlestick bar
-  // clicks. Candlestick params shape: `{ dataIndex, value: [open, close,
-  // low, high] }`. We dispatch on `xCh.field` using `xs[dataIndex]` —
-  // the row's x-axis label (e.g. an ISO date for a time-series). The
-  // `value` array is the OHLC tuple, not the categorical key we want.
   const dashboardTile = useDashboardTileContext();
-  const onCandlestickClick = useCallback(
-    (params: unknown) => {
-      if (!dashboardTile) return;
-      const p = params as { dataIndex?: number };
-      const idx = p?.dataIndex;
-      if (typeof idx !== "number" || idx < 0 || idx >= xs.length) return;
-      const label = xs[idx];
-      if (label == null) return;
-      dispatchCrossFilter({
-        column: xCh.field,
-        value: toFilterValue(label),
-        sourceTileId: dashboardTile.tileId,
-      });
-    },
-    [dashboardTile, xCh.field, xs],
-  );
-  // WD2-dim-echarts-rest · per-bar dim opacity on candlestick bars
-  // whose `xs[i]` label isn't in the active categorical cross-filter
-  // on `xCh.field`. Candlestick pre-wave data is an OHLC tuple
-  // (`[open, close, low, high]`) which ECharts accepts in the
-  // rich-object form (`{ value: [o, c, low, high], itemStyle:
-  // { opacity } }`). Pairs the dim factor to the x-axis index via
-  // `xs[i]` rather than the tuple values themselves (the OHLC
-  // values are quantitative; the categorical key is `xs[i]`).
+  // WD2-dim-echarts-rest · per-bar dim opacity on candlestick bars.
+  // Lifted ABOVE the click handler so the WD3-wiring-echarts modifier
+  // branch can capture `dashboardFilters` in its closure. Pairs the
+  // dim factor to the x-axis index via `xs[i]` rather than the tuple
+  // values themselves (the OHLC values are quantitative; the
+  // categorical key is `xs[i]`).
   const dashboardFilters = dashboardTile?.filters;
   const xFilterSel = dashboardFilters?.[xCh.field];
   const dashboardDimActive =
     !!xFilterSel &&
     xFilterSel.type === "categorical" &&
     xFilterSel.values.length > 0;
+  // WD3-wiring-echarts · cmd / ctrl-click branches to drill-through.
+  // Candlestick params shape: `{ dataIndex, value: [o, c, low, high],
+  // event: { event: native MouseEvent } }`. Drill value is `xs[idx]`
+  // (the categorical x-axis label — same handle as the WD2 dispatch
+  // pre-toFilterValue).
+  const onCandlestickClick = useCallback(
+    (params: unknown) => {
+      if (!dashboardTile) return;
+      const p = params as {
+        dataIndex?: number;
+        event?: { event?: { metaKey?: boolean; ctrlKey?: boolean } };
+      };
+      const idx = p?.dataIndex;
+      if (typeof idx !== "number" || idx < 0 || idx >= xs.length) return;
+      const label = xs[idx];
+      if (label == null) return;
+      if (isModifierClick(p?.event?.event)) {
+        dispatchDrillThrough({
+          chartId: dashboardTile.tileId,
+          column: xCh.field,
+          value: label,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+        return;
+      }
+      dispatchCrossFilter({
+        column: xCh.field,
+        value: toFilterValue(label),
+        sourceTileId: dashboardTile.tileId,
+      });
+    },
+    [dashboardTile, xCh.field, xs, dashboardFilters],
+  );
   const dimmedSeries = useMemo<
     Array<number[] | { value: number[]; itemStyle: { opacity: number } }>
   >(() => {
