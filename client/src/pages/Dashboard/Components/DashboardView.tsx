@@ -30,6 +30,14 @@ import {
   applyCrossFilter,
   type CrossFilterEvent,
 } from '../lib/crossFilter';
+// Wave WD3-sheet · subscribe to the WD3 drill-through event family
+// and render a side-sheet showing the underlying-rows request for
+// the clicked (chart, column, value) pin.
+import {
+  DRILL_THROUGH_EVENT,
+  type DrillThroughEvent,
+} from '../lib/drillThrough';
+import { DrillThroughSheet } from './DrillThroughSheet';
 import { createInsightRegenCache } from '../lib/insightRegenCache';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -75,6 +83,12 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [summaryDrawerOpen, setSummaryDrawerOpen] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  // Wave WD3-sheet · captured DrillThroughEvent at the dashboard
+  // level. `null` means the drill sheet is closed. The
+  // `DRILL_THROUGH_EVENT` listener below sets this; the sheet's
+  // `onOpenChange(false)` clears it back to `null` so a re-open with
+  // the same payload re-fires the slide-in animation.
+  const [drillThroughEvent, setDrillThroughEvent] = useState<DrillThroughEvent | null>(null);
   const { toast } = useToast();
   const {
     addChartToDashboard,
@@ -359,6 +373,31 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     window.addEventListener(CROSS_FILTER_EVENT, handler as EventListener);
     return () => {
       window.removeEventListener(CROSS_FILTER_EVENT, handler as EventListener);
+    };
+  }, []);
+
+  // Wave WD3-sheet · subscribe to drill-through events fired by any
+  // renderer wrapped in a <DashboardTileProvider>. Mirrors the
+  // CROSS_FILTER_EVENT subscription above for code-locality —
+  // dispatch and receive sit as a pair. The detail validation is
+  // tighter than the cross-filter equivalent because the drill
+  // payload must include `chartId` for the (future) server fetch.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<DrillThroughEvent>).detail;
+      if (
+        !detail ||
+        typeof detail.chartId !== 'string' ||
+        typeof detail.column !== 'string'
+      ) {
+        return;
+      }
+      setDrillThroughEvent(detail);
+    };
+    window.addEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
+    return () => {
+      window.removeEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     };
   }, []);
 
@@ -983,6 +1022,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         onOpenChange={setShareDialogOpen}
         dashboardId={dashboard.id}
         dashboardName={dashboard.name}
+      />
+      {/* Wave WD3-sheet · drill-through receiver. Opens on
+          cmd / ctrl-click of a chart mark inside any DashboardTile-
+          wrapped renderer. Closes via overlay / Escape / Close
+          button, which clears the event back to null so a re-open
+          on the same payload re-fires the slide-in. */}
+      <DrillThroughSheet
+        event={drillThroughEvent}
+        onOpenChange={(open) => {
+          if (!open) setDrillThroughEvent(null);
+        }}
       />
     </div>
     </DashboardEditModeProvider>
