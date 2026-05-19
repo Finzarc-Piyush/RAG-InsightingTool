@@ -23,6 +23,8 @@
  */
 
 import { useEffect, useMemo } from "react";
+import { Loader2, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -307,6 +309,42 @@ export function ExplainSlicePanel({
                   </p>
                 )}
               </div>
+              {/*
+                Wave WI4-rexplain · explicit bypass-cache button so the
+                user can force a fresh regeneration of the same slice
+                (the panel auto-fires once per event, then serves from
+                cache for re-opens of the identical region). Gated on
+                `regen.entry?.text` so the button only appears once a
+                regeneration has actually landed — mirrors the WI2
+                footer's "✦ Re-explain this view" shape (Sparkles idle
+                / Loader2 spin; disabled while loading; aria-label;
+                stopPropagation so the sheet doesn't close).
+              */}
+              {regen.entry?.text && chart && specLite ? (
+                <div className="mt-2 flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    aria-label="Re-explain this slice"
+                    disabled={regen.loading}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void regen.regenerate(specLite, narrowedRows, {
+                        bypassCache: true,
+                      });
+                    }}
+                  >
+                    {regen.loading ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="mr-1 h-3 w-3" aria-hidden="true" />
+                    )}
+                    {regen.loading ? "Re-explaining…" : "Re-explain this slice"}
+                  </Button>
+                </div>
+              ) : null}
             </section>
           </div>
         ) : null}
