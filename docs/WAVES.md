@@ -11,6 +11,70 @@
 
 ---
 
+- **2026-05-19** — **Wave WD3-sheet-fetch · DrillThroughSheet fetches real rows from the WD3-server endpoint.** Closes the user-visible WD3 round-trip end-to-end. Pre-this-wave the sheet body showed a dashed-border placeholder pinning the WD3-server endpoint name as the future row source. This wave swaps the placeholder for a TanStack-Query-driven row table that POSTs to the WD3-server endpoint on every distinct drill request, replacing the placeholder section with a real "Underlying rows" section. A cmd / ctrl-click on any of the 15 wired chart marks now slides open the sheet, fetches matching rows from the server (filtered by active filters + primary pin + any extra pins for heatmaps), and renders them in a compact table.
+
+  **What landed.**
+    - [client/src/pages/Dashboard/hooks/useDrillThroughRows.ts](../client/src/pages/Dashboard/hooks/useDrillThroughRows.ts) (~95 LOC). React Query hook:
+      ```ts
+      export function useDrillThroughRows({ dashboardId, event }) {
+        return useQuery<DrillThroughResponse, Error>({
+          queryKey: ["drill", dashboardId, event?.chartId ?? "", event?.column ?? "",
+                    stringifyForKey(event?.value),
+                    JSON.stringify(event?.extraPins ?? []),
+                    JSON.stringify(event?.filters ?? {})],
+          queryFn: async () => { /* POST to /api/dashboards/:id/drill */ },
+          enabled: !!event && !!dashboardId,
+          staleTime: 30_000,
+        });
+      }
+      ```
+      queryKey serialises the entire event payload (6 pieces — dashboardId / chartId / column / stringified value / extraPins / filters) so two distinct drill requests (e.g. different cell clicks on a heatmap) get distinct cache slots. `enabled: !!event && !!dashboardId` keeps the query idle when no drill is active — the sheet renders nothing in that case anyway, so wasted network calls would have no UI consequence beyond billing. 30s staleTime covers back-and-forth re-opens on the same pin. `stringifyForKey(v)` is an internal helper that mirrors the server's `stringifyForComparison` (null / undefined → `"null"`; Date → ISO; other → `String(v)`) so the queryKey + URL `value` param match wire-storage semantics. Exports a `DrillThroughResponse` interface that mirrors the server's response shape byte-for-byte so the consumer reads `data` directly without transformation.
+
+    - [client/src/pages/Dashboard/Components/DrillThroughRowTable.tsx](../client/src/pages/Dashboard/Components/DrillThroughRowTable.tsx) (~85 LOC). Pure render component for the row list:
+      - Empty-state: `<p>No rows match the drill request (the active filters may have excluded every row at the pin).</p>` — avoids rendering an empty `<table>` body which would be visually confusing.
+      - Cap-applied affordance: `Showing X of Y matching rows` when `capApplied`; `N matching row(s)` otherwise (singular / plural handling for N=1). The 1000-row cap is otherwise invisible — without this affordance users would think the drill returned exactly 1000 rows.
+      - Table: derives columns from the first row's keys; iterates `rows.map((row, rowIdx) => <tr key={rowIdx}>...</tr>)`. Each cell formatted via `formatCell(value)` (null / undefined → `—` em-dash, lighter than the literal `"null"` used in the comparison path so users see the absence; Date → ISO; other → `String(v)`).
+      - `overflow-x-auto` wrapper: the Radix Sheet is `sm:max-w-md` (28rem) — many real-world responses have wider rows than that, so horizontal scroll is the right affordance.
+      - Alternating row backgrounds (`bg-background` / `bg-muted/20`) + a bordered container for readable density.
+
+    - [client/src/pages/Dashboard/Components/DrillThroughSheet.tsx](../client/src/pages/Dashboard/Components/DrillThroughSheet.tsx) — three additive changes:
+      - **New REQUIRED `dashboardId: string` prop** (the hook needs it for the URL). Sheet is dashboard-scoped (a drill is meaningless outside a dashboard), so making it required is the right semantic.
+      - **Hook invocation** `const rowsQuery = useDrillThroughRows({ dashboardId, event });` immediately after the `filterLines` derivation. The hook handles the `enabled` gating; no manual SSR-safe guard needed.
+      - **Section swap**: the prior dashed-border placeholder section is replaced with an `<section>` headed "Underlying rows". Body renders one of three branches based on `rowsQuery.{isLoading,isError,data}`:
+        - `isLoading` → `<p>Loading rows…</p>` (terse, matches sheet typography)
+        - `isError` → `<p role="alert">Failed to load rows: ${rowsQuery.error?.message}</p>` — `role=alert` ensures screen readers announce the failure immediately rather than at the next polite-region scan. The error-message format `drill_failed:<status>:<body>` (thrown by the hook on non-2xx) makes server-side issues debuggable from the user-visible surface.
+        - `data` → `<DrillThroughRowTable response={rowsQuery.data} />`
+
+    - [client/src/pages/Dashboard/Components/DashboardView.tsx](../client/src/pages/Dashboard/Components/DashboardView.tsx) — one-line addition: `<DrillThroughSheet dashboardId={dashboard.id} event={...} onOpenChange={...} />`. The 2-prop mount from WD3-sheet is preserved; the new `dashboardId` prop sits at the top of the props block.
+
+    - [client/src/pages/Dashboard/lib/wd3SheetFetch.test.ts](../client/src/pages/Dashboard/lib/wd3SheetFetch.test.ts) (new, ~330 LOC). 30 source-inspection tests across 8 suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+      - **Hook imports + shape** (3): `useQuery` import; DrillThroughEvent + DrillThroughPin imports; `DrillThroughResponse` interface shape (mirrors server).
+      - **Hook queryKey covers full event payload** (2): all 6 pieces present in the key array; `enabled: !!event && !!dashboardId` gate.
+      - **Hook queryFn shape** (4): POST to `/api/dashboards/:id/drill` with `credentials: "include"`; URL search params for chartId / column / value; body carries `{ filters, extraPins }` JSON; throws `drill_failed:<status>:<body>` on non-2xx.
+      - **stringifyForKey four-branch coverage** (1): null / string / Date / other.
+      - **Table component** (7): import shape; empty-state render; cap-applied affordance copy; singular / plural matching-row count; column derivation + .map render; `overflow-x-auto` wrapper; `formatCell` three-branch coverage.
+      - **Sheet integration** (8): hook + table imports; `dashboardId: string` in props interface; destructure shape; hook call shape; loading / error / data branches; placeholder negative pin (the dashed-border section is GONE); "Underlying rows" section header.
+      - **DashboardView prop threading** (2): `dashboardId={dashboard.id}` in the mount; existing 2-prop pattern (event + onOpenChange) preserved.
+      - **Cross-cutting** (2): WD3-sheet-fetch marker present in hook + table + sheet; the response type lives in the hook only (table imports from there — single source of truth).
+
+  The existing WD3-sheet test (21 cases in `wd3Sheet.test.ts`) stays green — the wave's changes are additive in the sheet's structural shape (new section added; existing Pinned slice + Additional pins + Filter context sections unchanged). The previously-pinned `WD3-server` + endpoint markers survive in the file's top-of-file comment block so the relevant test description got updated to note that ("markers preserved in comments for future-Claude grep") but the assertions still pass.
+
+  **Why this design.** Three alternatives were considered for the fetch trigger:
+  1. **Direct fetch + useState (matching the existing useInsightRegen hook)** — that hook intentionally avoids `useEffect`-driven fetches to dodge the over-fire-on-every-render trap. The drill case is different: the trigger is the event prop changing (not a render), so a `useQuery` (which keys off the queryKey array, not render count) is structurally safer. Plus TanStack Query gives us stale-while-revalidate + automatic deduplication for free.
+  2. **useEffect-driven fetch + manual state** — would work but duplicates the TanStack Query infrastructure already in the codebase (Dashboard.tsx, useDashboardState.ts). Reinventing the wheel.
+  3. **useQuery** (chosen). Idiomatic TanStack Query usage. The queryKey array serialises the event payload so cache slots are per-drill-request, not per-tile-or-per-chart. The `enabled` gate keeps the hook idle when no drill is active.
+
+  Sheet section structure: the new "Underlying rows" section sits AFTER the existing "Pinned slice" + "Additional pins" + "Filter context at click time" sections. This ordering surfaces the pin metadata first (so the user knows WHAT was clicked) THEN the row data (the answer to the implicit "what does this slice contain"). A future polish wave could collapse the metadata sections into a smaller header strip if the row list becomes the primary content.
+
+  **Tests.** Server test suite: WD3-sheet-fetch (30 new in `wd3SheetFetch.test.ts`) all pass. Full WD3 family regression suite (foundation + 5 wiring waves + sheet + sheet-fetch + server): **248 tests across 73 suites all green**. Server `npx tsc --noEmit` reports 98 errors (identical baseline). Client `npx tsc --noEmit` reports 53 errors (identical baseline).
+
+  **Out of scope.**
+    - **Multi-sheet chartId disambiguation.** Same as carried over from WD3-server. The endpoint resolves `chart-${idx}` to the first match across sheets — multi-sheet dashboards with overlapping chart ids hit the first-match fallback. The fix requires foundation widening (sheet id alongside chart id).
+    - **Streaming row payload (NDJSON + useInfiniteQuery).** Currently the response is JSON-buffered server-side (capped at 1000 rows). A future wave for very-large drill targets could swap to NDJSON streaming + `useInfiniteQuery` for the table.
+    - **Per-chart-kind sheet body customisation.** Currently the same row table renders for every drill source. A candlestick drill might benefit from showing OHLC + volume as a separate panel; a treemap drill might show parent hierarchy. Carried over from prior WD3 waves.
+    - **Cell-click drill on a row (drill into a drill).** The current table is read-only — a future polish wave could let users click a cell to refine the drill further.
+    - **Telemetry.** "User clicked drill-through" + "User scrolled drill table" for product analytics. Pure observability concern, separate wave.
+
 - **2026-05-19** — **Wave WD3-server · `POST /api/dashboards/:id/drill` endpoint closes the WD3 round-trip.** The 5 wiring waves (foundation + bar + cat + sheet + trend + point + rect + echarts) established the client dispatch (cmd / ctrl-click on any of 15 chart marks → `DRILL_THROUGH_EVENT`), and the sheet receiver opens the side-sheet with the captured pin + filter snapshot. This wave ships the server endpoint that returns the underlying rows so the sheet's placeholder body can be replaced with a real row list. The consumer-side swap (TanStack Query fetch + row table render) is a follow-on WD3-sheet-fetch wave — this wave is server-only to keep the atomic boundary clean.
 
   **What landed.**
