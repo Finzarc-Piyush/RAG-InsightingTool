@@ -11,6 +11,53 @@
 
 ---
 
+- **2026-05-19** — **Wave WD2-dim-rect · RectRenderer heatmap dims via OR-of-row-OR-col.** Closes the heatmap on the WD2-dim-* family. Heatmap cells sit at the intersection of two categorical dimensions (`rowCh` × `colCh`), so the dim contract diverges in shape from every other renderer the dim family has touched so far: WD2-dim-bar / -cat all check a single x-field's filter; WD2-dim-rect checks both `rowCh.field` and `colCh.field` and the cell is dimmed if EITHER filter excludes its raw value. This is intentionally NOT symmetric with WD2-wiring-rest-rect's two-dim dispatch shape (which fires BOTH row + col CROSS_FILTER_EVENT events on click, AND-style) — the dispatch and dim sides of a heatmap interaction model two different mental shifts. On click, the user explicitly chose a (row, col) intersection, so they want both filters applied. On dim, the user is reading "which cells survive the filter intersection?", so the natural answer is to keep only cells passing BOTH the row and col filters, which means dimming if either fails. The AND-of-passing-filters is equivalent to OR-of-failing-filters via De Morgan, but expressing it as `isRowDimmed || isColDimmed` reads more directly off the per-cell context (the cell knows it has a row + col; each can independently fail).
+
+  **What landed.**
+    - [client/src/lib/charts/visxRenderers/RectRenderer.tsx](../client/src/lib/charts/visxRenderers/RectRenderer.tsx). `isCrossFilterActive` added to the crossFilter named-import alongside `dispatchCrossFilter` + `toFilterValue`. Two independent lifted triplets right after `useDashboardTileContext()`:
+      ```ts
+      const dashboardFilters = dashboardTile?.filters;
+      const rowFilterSel = dashboardFilters?.[rowCh.field];
+      const colFilterSel = dashboardFilters?.[colCh.field];
+      const dashboardRowDimActive =
+        !!rowFilterSel &&
+        rowFilterSel.type === "categorical" &&
+        rowFilterSel.values.length > 0;
+      const dashboardColDimActive =
+        !!colFilterSel &&
+        colFilterSel.type === "categorical" &&
+        colFilterSel.values.length > 0;
+      ```
+      Two independent flags (not a combined `dashboardDimActive`) so the OR-of-row-OR-col contract behaves correctly across the three filter cases: row-only filter dims along rows only (col flag is false → `isColDimmed` always false → only `isRowDimmed` decides); col-only filter dims along cols only; row+col filter intersects via OR (a cell fails if either filter excludes it). Inside the per-cell `.map(...)` body:
+      ```ts
+      const isRowDimmed =
+        dashboardRowDimActive &&
+        !isCrossFilterActive(dashboardFilters!, rowCh.field, rowRawByKey.get(row));
+      const isColDimmed =
+        dashboardColDimActive &&
+        !isCrossFilterActive(dashboardFilters!, colCh.field, colRawByKey.get(col));
+      const isDashboardDimmed = isRowDimmed || isColDimmed;
+      ```
+      Both `isRowDimmed` / `isColDimmed` use `rowRawByKey.get(row)` / `colRawByKey.get(col)` — the raw-value maps WD2-wiring-rest-rect already built so the dispatch could carry type-original Date / number / boolean values. Comparing stringified row / col keys against the cross-filter's raw values would always miss for non-string dims (a Date row + a Date filter would never match because Date stringification rounds-trips differently across the click → toggle → dim path). The cell `<rect>` gains `fillOpacity={isDashboardDimmed ? 0.4 : 1}` — no prior baseline (heatmap cells were full opacity for visibility against the sequential color scale), so the matched-cell default of 1 preserves the pre-WD2-dim render. The 0.5-px background stroke + the title tooltip stay untouched: they're structural grid geometry + the cell's quantitative tooltip readout, not the filterable mark itself.
+    - [client/src/pages/Dashboard/lib/wd2DimRect.test.ts](../client/src/pages/Dashboard/lib/wd2DimRect.test.ts) (new, ~160 LOC). 13 tests across 6 source-inspection suites; appended to [`server/package.json`](../server/package.json)'s explicit `test` list per invariant #4.
+      - **Import shape** (1): `isCrossFilterActive` named-imported.
+      - **Two-dim lifted locals** (3): `dashboardFilters` lifted once; `rowFilterSel` + `colFilterSel` read separately on `rowCh.field` / `colCh.field`; `dashboardRowDimActive` + `dashboardColDimActive` both carry the full triple-guard (categorical + non-empty).
+      - **Per-cell OR logic** (4): `isRowDimmed` shape; `isColDimmed` shape; the OR composition `isDashboardDimmed = isRowDimmed || isColDimmed`; pin against stringified row/col regression (a doesNotMatch on `isCrossFilterActive(..., rowCh.field, row,` proves the test uses the raw lookup, not the bare key).
+      - **fillOpacity binding** (2): `<rect>` renders `fillOpacity={isDashboardDimmed ? 0.4 : 1}`; stroke / strokeWidth are NOT predicated on `isDashboardDimmed` (heatmap grid lines stay structural).
+      - **Lifted-locals placement** (1): both `dashboardRowDimActive` + `dashboardColDimActive` appear BEFORE the per-cell `<rect>` rendering.
+      - **Documentation comment** (2): the lifted-locals comment names `OR-of-row-OR-col` and the symmetric pairing with the WD2-wiring-rest-rect `two-dim DISPATCH` so future Claude sees the AND-dispatch / OR-dim asymmetry called out explicitly rather than reading it as a divergence.
+
+  **Why this design.** The shape choice (`OR-of-row-OR-col`) was the load-bearing decision. Three alternatives were considered. (1) **AND-of-row-AND-col**: a cell is dimmed only if BOTH row + col filters exclude it. Rejected because a cell with a passing row + failing col would render at full opacity, suggesting it survives a filter it doesn't — visually misleading. (2) **Row-priority**: dim by row only when a row filter is active; ignore col filters for dim. Rejected because it makes col filters dim-invisible on heatmaps (they'd still dispatch + dim other tiles, just not this one). (3) **Per-row "any col passes" / per-col "any row passes"**: dim a row of cells if no col in the row passes the col filter. Rejected because it requires precomputing per-row + per-col survival maps (O(R × C) ops per render) and produces a structurally different visual than the cell-level OR — the entire row dims as a block rather than per-cell. The OR-of-row-OR-col gives the cleanest mental model: a cell passes the filter intersection iff it passes BOTH dims; a cell that fails either dim should fade. The two-flag pattern (not a combined `dashboardDimActive`) was preferred over a single OR-ed flag because the three filter cases (row-only, col-only, row+col) each want different per-cell logic, and inlining the AND into a single `dashboardDimActive` would re-create the work per cell rather than amortising it. Alternative considered: precompute a per-row + per-col bool array indicating "does this row/col pass its filter?" and look those up in the cell map. Rejected for simplicity — the per-cell `isCrossFilterActive` call is O(values.length) which in practice is ≤ 10 categorical values, so the cumulative cost on a 20×20 heatmap is ≤ 4 K ops, well under any rendering cost. Worth revisiting if a heatmap with 1000-cell renderings starts paging.
+
+  **Tests.** Server test suite: WD2-dim-rect (13 new in `wd2DimRect.test.ts`) + the rest of the WD2-dim-* family (16 + 13 + 27 = 56 pre-existing across foundation, bar, cat) + crossFilter (29 pre-existing) + dashboardTileContext (16 pre-existing) + WD2-wiring-rest-rect (11 pre-existing — two-dim dispatch wiring untouched) all green. Server `npx tsc --noEmit` reports 98 errors (identical to pre-WD2-dim-foundation baseline); client reports 53 errors (identical baseline). Zero new errors from this wave.
+
+  **Out of scope.**
+    - **Combined dispatch + dim tile-source attribution.** If the brushed source tile happens to be a heatmap (rare but possible — the brushed tile's own (row, col) pair survives the filter intersection so its single brushed cell stays full opacity, every other cell dims), the user sees a clean self-isolation. No additional source-tile guard is needed because the OR contract already handles this correctly.
+    - **Heatmap stroke dim.** The 0.5-px background stroke could dim too for a more uniform fade, but it's structural grid signaling rather than data — keeping it visible across dimmed cells preserves the heatmap's readability as a grid. Pinned by test that strokeWidth + stroke aren't predicated on `isDashboardDimmed`.
+    - **WD2-dim-trend** (Line + Area). Continuous-x trends. Dim shape diverges further — per-series dim when an active `colorCh.field` filter doesn't include the series (no per-point dim because the x-axis is continuous, not categorical). Ships as its own atomic.
+    - **WD2-dim-point** (PointRenderer scatter). Conditional on `colorCh`. Same per-series-by-color pattern as the trend wave.
+    - **WD2-dim-echarts** (5 ECharts marks). `itemStyle.opacity` per dataItem at the `buildOptions` level. Different mechanism from the visx fillOpacity post-render mutation.
+
 - **2026-05-19** — **Wave WD2-dim-cat · 5 categorical visx renderers dim non-matching marks (Arc / Funnel / Box / Waterfall / Combo).** Fans WD2-dim-bar to the categorical-by-construction renderer pack the WD2-wiring-rest-cat wave wired earlier. Each renderer has a categorical primary x-field (the dispatch column from WD2-wiring-rest-cat) and a mark that maps 1-to-1 to one categorical value — slices for Arc, stage rects for Funnel, box rects for Box, contribution bars for Waterfall, primary-axis bars for Combo. The WD2-dim-bar template (lift the categorical-selection lookup once per render; compute per-mark `isDashboardDimmed = dashboardDimActive && !isCrossFilterActive(...)`; multiply the mark's existing `fillOpacity` baseline by 0.4 when dimmed) applies uniformly, with two per-renderer carve-outs that mirror the WD2-wiring-rest-cat dispatch carve-outs: Waterfall's running-total bars never dim (synthetic summary rows, not categorical marks the user can filter to), and Combo's secondary-axis line never dims (continuous trend; categorical dim would render as a gappy interleave that breaks the line's visual coherence).
 
   **What landed.**
