@@ -251,11 +251,6 @@ export function SankeyRenderer({
     };
   }, [data, sourceCh, targetCh, valueCh]);
 
-  const optionsKey = useMemo(
-    () => JSON.stringify({ nodes, links, w: width, h: height }),
-    [nodes, links, width, height],
-  );
-
   // Wave WD2-wiring-echarts · cross-filter dispatch on node clicks.
   // Sankey params shape: `{ dataType: "node" | "edge", name, ... }`.
   // We dispatch only on node clicks (skip edges) — an edge has no single
@@ -278,6 +273,38 @@ export function SankeyRenderer({
     },
     [dashboardTile, sourceCh.field],
   );
+  // WD2-dim-echarts-rest · per-node dim opacity on nodes whose `name`
+  // isn't in the active categorical cross-filter on `sourceCh.field`.
+  // Edges (links) stay un-dimmed — same carve-out as the dispatch
+  // path (an edge has no single categorical value to filter on).
+  // Separate memo (not inline in the `{ nodes, links }` memo above)
+  // so the pre-wave `nodes` array stays byte-identical for any
+  // future consumer; the dimmed projection is only what ECharts
+  // sees.
+  const dashboardFilters = dashboardTile?.filters;
+  const sourceFilterSel = dashboardFilters?.[sourceCh.field];
+  const dashboardDimActive =
+    !!sourceFilterSel &&
+    sourceFilterSel.type === "categorical" &&
+    sourceFilterSel.values.length > 0;
+  const dimmedNodes = useMemo<
+    Array<{ name: string; itemStyle?: { opacity?: number } }>
+  >(() => {
+    if (!dashboardDimActive) return nodes;
+    return nodes.map((n) =>
+      isCrossFilterActive(dashboardFilters!, sourceCh.field, n.name)
+        ? n
+        : { ...n, itemStyle: { opacity: 0.4 } },
+    );
+  }, [nodes, dashboardDimActive, dashboardFilters, sourceCh.field]);
+  // Field name kept as `nodes` so dim-off renders produce a JSON byte
+  // sequence identical to the pre-wave optionsKey (dimmedNodes === nodes
+  // by identity when dashboardDimActive is false). Prevents an
+  // unnecessary canvas re-render on initial mount.
+  const optionsKey = useMemo(
+    () => JSON.stringify({ nodes: dimmedNodes, links, w: width, h: height }),
+    [dimmedNodes, links, width, height],
+  );
 
   return (
     <EChartsBase
@@ -294,7 +321,7 @@ export function SankeyRenderer({
         series: [
           {
             type: "sankey",
-            data: nodes,
+            data: dimmedNodes,
             links,
             emphasis: { focus: "adjacency" },
             lineStyle: { color: "gradient", curveness: 0.5 },
@@ -413,11 +440,6 @@ export function CalendarRenderer({
     return [Math.min(...ys), Math.max(...ys)];
   }, [series]);
 
-  const optionsKey = useMemo(
-    () => JSON.stringify({ series, range, w: width, h: height }),
-    [series, range, width, height],
-  );
-
   // Wave WD2-wiring-echarts · cross-filter dispatch on calendar-cell
   // clicks. ECharts calendar params shape: `{ data: [yyyy-mm-dd, value] }`.
   // We dispatch the ISO date string on `dateCh.field`. The downstream
@@ -438,6 +460,45 @@ export function CalendarRenderer({
       });
     },
     [dashboardTile, dateCh.field],
+  );
+  // WD2-dim-echarts-rest · per-cell dim opacity on calendar cells
+  // whose date ISO string isn't in the active categorical
+  // cross-filter on `dateCh.field`. Calendar's pre-wave data array
+  // is a flat tuple form (`[date, value]`) which ECharts heatmap
+  // also accepts in the rich-object form (`{ value: [date, value],
+  // itemStyle: { opacity } }`). When dim is OFF, dimmedSeries is
+  // identity (=== series) so the tuple form ships unchanged —
+  // byte-identical to the pre-wave optionsKey JSON. When dim is ON,
+  // non-matching cells get promoted to the rich-object form and
+  // matching cells stay as tuples (mixed-shape array). The range +
+  // visualMap min/max computations downstream consume the original
+  // `series` (pre-promotion) so their tuple destructuring stays
+  // safe.
+  const dashboardFilters = dashboardTile?.filters;
+  const dateFilterSel = dashboardFilters?.[dateCh.field];
+  const dashboardDimActive =
+    !!dateFilterSel &&
+    dateFilterSel.type === "categorical" &&
+    dateFilterSel.values.length > 0;
+  const dimmedSeries = useMemo<
+    Array<
+      | [string, number]
+      | { value: [string, number]; itemStyle: { opacity: number } }
+    >
+  >(() => {
+    if (!dashboardDimActive) return series;
+    return series.map(([date, value]) =>
+      isCrossFilterActive(dashboardFilters!, dateCh.field, date)
+        ? ([date, value] as [string, number])
+        : { value: [date, value] as [string, number], itemStyle: { opacity: 0.4 } },
+    );
+  }, [series, dashboardDimActive, dashboardFilters, dateCh.field]);
+  // Field name kept as `series` so dim-off renders produce a JSON byte
+  // sequence identical to the pre-wave optionsKey (dimmedSeries === series
+  // by identity when dashboardDimActive is false).
+  const optionsKey = useMemo(
+    () => JSON.stringify({ series: dimmedSeries, range, w: width, h: height }),
+    [dimmedSeries, range, width, height],
   );
 
   return (
@@ -473,7 +534,7 @@ export function CalendarRenderer({
           {
             type: "heatmap",
             coordinateSystem: "calendar",
-            data: series,
+            data: dimmedSeries,
           },
         ],
       })}
@@ -517,11 +578,6 @@ export function CandlestickRenderer({
     [data, xCh],
   );
 
-  const optionsKey = useMemo(
-    () => JSON.stringify({ xs, series, w: width, h: height }),
-    [xs, series, width, height],
-  );
-
   // Wave WD2-wiring-echarts · cross-filter dispatch on candlestick bar
   // clicks. Candlestick params shape: `{ dataIndex, value: [open, close,
   // low, high] }`. We dispatch on `xCh.field` using `xs[dataIndex]` —
@@ -543,6 +599,39 @@ export function CandlestickRenderer({
       });
     },
     [dashboardTile, xCh.field, xs],
+  );
+  // WD2-dim-echarts-rest · per-bar dim opacity on candlestick bars
+  // whose `xs[i]` label isn't in the active categorical cross-filter
+  // on `xCh.field`. Candlestick pre-wave data is an OHLC tuple
+  // (`[open, close, low, high]`) which ECharts accepts in the
+  // rich-object form (`{ value: [o, c, low, high], itemStyle:
+  // { opacity } }`). Pairs the dim factor to the x-axis index via
+  // `xs[i]` rather than the tuple values themselves (the OHLC
+  // values are quantitative; the categorical key is `xs[i]`).
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[xCh.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
+  const dimmedSeries = useMemo<
+    Array<number[] | { value: number[]; itemStyle: { opacity: number } }>
+  >(() => {
+    if (!dashboardDimActive) return series;
+    return series.map((tuple, i) => {
+      const x = xs[i];
+      if (x == null) return tuple;
+      return isCrossFilterActive(dashboardFilters!, xCh.field, x)
+        ? tuple
+        : { value: tuple, itemStyle: { opacity: 0.4 } };
+    });
+  }, [series, xs, dashboardDimActive, dashboardFilters, xCh.field]);
+  // Field name kept as `series` so dim-off renders produce a JSON byte
+  // sequence identical to the pre-wave optionsKey (dimmedSeries === series
+  // by identity when dashboardDimActive is false).
+  const optionsKey = useMemo(
+    () => JSON.stringify({ xs, series: dimmedSeries, w: width, h: height }),
+    [xs, dimmedSeries, width, height],
   );
 
   return (
@@ -575,7 +664,7 @@ export function CandlestickRenderer({
         series: [
           {
             type: "candlestick",
-            data: series,
+            data: dimmedSeries,
             itemStyle: {
               color: theme.qualitative[5] ?? "green",
               color0: theme.qualitative[6] ?? "red",
