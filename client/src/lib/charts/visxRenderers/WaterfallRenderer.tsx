@@ -34,6 +34,7 @@ import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -76,6 +77,18 @@ export function WaterfallRenderer({
   // (running cumulative rows) intentionally skip dispatch — they're a
   // synthetic summary, not a category the user can filter to.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-cat · dim non-matching contribution bars at 0.4 of baseline
+  // fillOpacity when an active categorical cross-filter on `enc.x.field`
+  // doesn't include the bar's rawCategory. Running-total bars (`isTotal`)
+  // are NEVER dimmed — they're synthetic summary rows, not categorical
+  // marks the user can filter to (same exclusion as the dispatch path
+  // from WD2-wiring-rest-cat).
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[enc.x.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
 
   const bars: WaterfallBar[] = useMemo(() => {
     let running = 0;
@@ -174,6 +187,12 @@ export function WaterfallRenderer({
               : qualitativeColor(6);
           // WD2-wiring-rest-cat · only non-total bars dispatch cross-filter.
           const clickable = dashboardTile && !b.isTotal;
+          // WD2-dim-cat · dim non-matching contribution bars; total bars
+          // are excluded so summary rows always render at full opacity.
+          const isDashboardDimmed =
+            dashboardDimActive &&
+            !b.isTotal &&
+            !isCrossFilterActive(dashboardFilters!, enc.x.field, b.rawCategory);
           return (
             <g key={`wf-${i}-${b.category}`}>
               <Bar
@@ -182,7 +201,7 @@ export function WaterfallRenderer({
                 width={xScale.bandwidth()}
                 height={h}
                 fill={fill}
-                fillOpacity={0.85}
+                fillOpacity={0.85 * (isDashboardDimmed ? 0.4 : 1)}
                 rx={2}
                 style={clickable ? { cursor: "pointer" } : undefined}
                 onClick={

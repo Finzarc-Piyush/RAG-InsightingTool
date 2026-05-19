@@ -37,6 +37,7 @@ import {
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -71,6 +72,18 @@ export function ComboRenderer({
   // bars (not the secondary line) are the categorical click target —
   // clicking a bar dispatches CROSS_FILTER_EVENT with the bar's x value.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-cat · dim non-matching bars at 0.4 of their baseline 0.85
+  // fillOpacity when an active categorical cross-filter on `xCh.field`
+  // doesn't include the bar's rawX. The secondary-axis line is left
+  // untouched — it's click-inert per the WD2-wiring-rest-cat contract
+  // and dimming a continuous line based on a categorical filter would
+  // break the visual coherence of the trend.
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[xCh.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
 
   const xValues = useMemo(
     () => distinctOrdered(data, xCh.accessor),
@@ -163,6 +176,9 @@ export function ComboRenderer({
           const yPos = yScale(yRaw);
           const barHeight = innerHeight - yPos;
           if (barHeight <= 0) return null;
+          const isDashboardDimmed =
+            dashboardDimActive &&
+            !isCrossFilterActive(dashboardFilters!, xCh.field, rawX);
           return (
             <Bar
               key={`bar-${i}-${xRaw}`}
@@ -171,7 +187,7 @@ export function ComboRenderer({
               width={xScale.bandwidth()}
               height={barHeight}
               fill={qualitativeColor(0)}
-              fillOpacity={0.85}
+              fillOpacity={0.85 * (isDashboardDimmed ? 0.4 : 1)}
               rx={2}
               style={dashboardTile ? { cursor: "pointer" } : undefined}
               onClick={

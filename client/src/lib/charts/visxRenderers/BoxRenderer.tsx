@@ -29,6 +29,7 @@ import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -70,6 +71,16 @@ export function BoxRenderer({
   const enc = useMemo(() => resolveBarEncoding(spec), [spec]);
   // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-cat · dim non-matching box rects at 0.4 of their existing
+  // fillOpacity when an active categorical cross-filter on `enc.x.field`
+  // doesn't include the box's rawCategory. Whiskers + median stroke are
+  // left untouched — they're structural geometry, not the filterable mark.
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[enc.x.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
 
   const stats: BoxStats[] = useMemo(() => {
     const groups = groupBy(data, [enc.x.field]);
@@ -153,6 +164,9 @@ export function BoxRenderer({
           const boxTop = Math.min(yQ1, yQ3);
           const boxH = Math.max(1, Math.abs(yQ1 - yQ3));
           const fill = qualitativeColor(i);
+          const isDashboardDimmed =
+            dashboardDimActive &&
+            !isCrossFilterActive(dashboardFilters!, enc.x.field, s.rawCategory);
           return (
             <g key={`box-${i}-${s.category}`}>
               {/* Whiskers */}
@@ -166,7 +180,7 @@ export function BoxRenderer({
                 width={w}
                 height={boxH}
                 fill={fill}
-                fillOpacity={0.4}
+                fillOpacity={0.4 * (isDashboardDimmed ? 0.4 : 1)}
                 stroke={fill}
                 strokeOpacity={0.85}
                 rx={2}

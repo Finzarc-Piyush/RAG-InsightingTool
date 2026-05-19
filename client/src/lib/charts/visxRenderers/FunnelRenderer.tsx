@@ -22,6 +22,7 @@ import { formatChartValue } from "@/lib/charts/format";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -48,6 +49,16 @@ export function FunnelRenderer({
   // WD2-wiring-rest-cat · dashboard-tile cross-filter dispatch. Outside
   // a dashboard tile `dashboardTile` is null and the click is a no-op.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-cat · dim non-matching funnel stages at 0.4 fillOpacity
+  // when an active categorical cross-filter on `enc.x.field` doesn't
+  // include the stage's rawLabel. The existing baseline 0.85 fillOpacity
+  // is preserved for matching stages; non-matching stages multiply by 0.4.
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[enc.x.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
 
   const stages = useMemo(() => {
     return data
@@ -91,6 +102,9 @@ export function FunnelRenderer({
             prev && prev.value > 0
               ? ((prev.value - s.value) / prev.value) * 100
               : null;
+          const isDashboardDimmed =
+            dashboardDimActive &&
+            !isCrossFilterActive(dashboardFilters!, enc.x.field, s.rawLabel);
           return (
             <g key={`funnel-${i}-${s.label}`}>
               <rect
@@ -99,7 +113,7 @@ export function FunnelRenderer({
                 width={w}
                 height={drawableStageH}
                 fill={fill}
-                fillOpacity={0.85}
+                fillOpacity={0.85 * (isDashboardDimmed ? 0.4 : 1)}
                 rx={3}
                 style={dashboardTile ? { cursor: "pointer" } : undefined}
                 onClick={

@@ -22,6 +22,7 @@ import { formatChartValue } from "@/lib/charts/format";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
+  isCrossFilterActive,
   toFilterValue,
 } from "@/pages/Dashboard/lib/crossFilter";
 
@@ -107,6 +108,16 @@ export function ArcRenderer({
   // Outside a dashboard tile (chat / explorer) `dashboardTile` is null
   // and the click is a no-op — matches BarRenderer's wiring.
   const dashboardTile = useDashboardTileContext();
+  // WD2-dim-cat · dim non-matching slices at 0.4 opacity when the
+  // dashboard has an active categorical cross-filter on `labelCh.field`.
+  // Mirrors BarRenderer's WD2-dim-bar treatment; mutually exclusive
+  // with the chat/explorer `grid.filter` path (no grid context here).
+  const dashboardFilters = dashboardTile?.filters;
+  const xFilterSel = dashboardFilters?.[labelCh.field];
+  const dashboardDimActive =
+    !!xFilterSel &&
+    xFilterSel.type === "categorical" &&
+    xFilterSel.values.length > 0;
 
   const accessibleLabel =
     ariaLabel ??
@@ -138,11 +149,19 @@ export function ArcRenderer({
               const [cx, cy] = pie.path.centroid(arc);
               const pct = (arc.data.value / total) * 100;
               const showLabel = pct >= 5;
+              const isDashboardDimmed =
+                dashboardDimActive &&
+                !isCrossFilterActive(
+                  dashboardFilters!,
+                  labelCh.field,
+                  arc.data.rawKey,
+                );
               return (
                 <g key={`arc-${arc.data.key}`}>
                   <path
                     d={path}
                     fill={arc.data.color}
+                    fillOpacity={isDashboardDimmed ? 0.4 : 1}
                     style={dashboardTile ? { cursor: "pointer" } : undefined}
                     onClick={
                       dashboardTile
