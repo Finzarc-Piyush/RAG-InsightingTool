@@ -84,6 +84,23 @@ import {
   dispatchDrillThrough,
   isModifierClick,
 } from "@/pages/Dashboard/lib/drillThrough";
+// Wave WI4-wiring-bar · alt-drag on the chart surface routes the
+// brushed sub-range of the categorical axis to explain-this-slice.
+// BarRenderer had no pre-existing brush mechanics, so this wave adds
+// mouse-down / move / up state + a `<rect>` overlay from scratch
+// (mirroring the WI4-wiring-area shape). Categorical-only — bars
+// use a band scale on `enc.x.field`, no temporal branch needed. Plain
+// drag is a deliberate no-op (Bar charts have no zoom; the brush is
+// exclusively for explain-slice). Orientation-aware: vertical bars
+// brush horizontally along the x-axis (innerWidth, `ew-resize`),
+// horizontal bars brush vertically along the y-axis (innerHeight,
+// `ns-resize`).
+import {
+  BRUSH_MIN_PX,
+  dispatchExplainSlice,
+  isBrushDrag,
+  makeCategoricalRegion,
+} from "@/pages/Dashboard/lib/explainSlice";
 import {
   PATTERN_NAMES,
   patternFromIndex,
@@ -216,6 +233,30 @@ export function BarRenderer({
     !!xFilterSel &&
     xFilterSel.type === "categorical" &&
     xFilterSel.values.length > 0;
+
+  // Wave WI4-wiring-bar · brush state. BarRenderer has no zoom (Bar
+  // charts have no quantitative axis to zoom into — the categorical
+  // axis would just rearrange labels). The brush is exclusively for
+  // explain-slice: an alt-drag captures the categorical labels under
+  // the rect and dispatches an `ExplainSliceEvent`. A plain drag is
+  // a no-op. The `<rect>` overlay renders during any drag so the user
+  // sees the brush affordance.
+  const [brushStart, setBrushStart] = useState<number | null>(null);
+  const [brushEnd, setBrushEnd] = useState<number | null>(null);
+  // Wave WI4-wiring-bar · captures the alt-key state at brushDown so
+  // the parameterless onBrushUp handler can branch to explain-this-
+  // slice. useRef (not useState) because the flag doesn't drive a
+  // re-render. Mirrors LineRenderer + AreaRenderer's `brushExplainRef`.
+  const brushExplainRef = useRef<boolean>(false);
+
+  // Wave WI4-wiring-bar · reset brush state when the underlying data
+  // changes (encoding shelf change, cross-filter applied, etc.). Stale
+  // brush coords on stale data would render a misleading overlay.
+  useEffect(() => {
+    setBrushStart(null);
+    setBrushEnd(null);
+  }, [data]);
+
   const showLabels = !!spec.config?.barLabels;
 
   // ───────── series construction ─────────
@@ -436,6 +477,78 @@ export function BarRenderer({
     return scaleLinear<number>({ domain: padded, range, nice: true });
   }, [allY2, data, orientation, innerHeight, innerWidth]);
 
+  // ───────── WI4-wiring-bar brush handlers ─────────
+  // Orientation-aware: the categorical axis is x in vertical mode and
+  // y in horizontal mode. `brushAxisSize` + `brushAxisOffset` collapse
+  // the two orientations into a single 1D brush along the categorical
+  // axis; handlers below stay orientation-agnostic.
+  const isVertical = orientation === "vertical";
+  const brushAxisSize = isVertical ? innerWidth : innerHeight;
+  const brushAxisOffset = isVertical ? MARGIN.left : MARGIN.top;
+
+  const onBrushDown = (e: React.MouseEvent<SVGElement>) => {
+    const pt = localPoint(e);
+    if (!pt) return;
+    const coord = (isVertical ? pt.x : pt.y) - brushAxisOffset;
+    if (coord < 0 || coord > brushAxisSize) return;
+    setBrushStart(coord);
+    setBrushEnd(coord);
+    brushExplainRef.current = e.altKey === true;
+  };
+
+  const onBrushMove = (e: React.MouseEvent<SVGElement>) => {
+    if (brushStart === null) return;
+    if (!(e.buttons & 1)) return;
+    const pt = localPoint(e);
+    if (!pt) return;
+    const coord = (isVertical ? pt.x : pt.y) - brushAxisOffset;
+    setBrushEnd(Math.max(0, Math.min(brushAxisSize, coord)));
+  };
+
+  const onBrushUp = () => {
+    if (brushStart === null || brushEnd === null) return;
+    const lo = Math.min(brushStart, brushEnd);
+    const hi = Math.max(brushStart, brushEnd);
+    // Click-vs-drag threshold from the WI4 foundation. Sub-threshold
+    // drags are treated as a click — reset state and let the per-bar
+    // onClick handler fire (cross-filter / drill-through). The browser
+    // fires `click` after a same-position mouseUp, so this branch
+    // yields control cleanly.
+    if (!isBrushDrag(brushStart, brushEnd, BRUSH_MIN_PX)) {
+      brushExplainRef.current = false;
+      setBrushStart(null);
+      setBrushEnd(null);
+      return;
+    }
+    // Alt-drag → dispatch explain-this-slice with the categorical
+    // labels under the brush. Plain drag → no-op (no zoom on Bar).
+    // Gated on dashboardTile because outside a dashboard the panel
+    // has no receiver.
+    if (brushExplainRef.current && dashboardTile) {
+      const i0 = Math.max(
+        0,
+        Math.floor((lo / brushAxisSize) * xValues.length),
+      );
+      const i1 = Math.min(
+        xValues.length,
+        Math.ceil((hi / brushAxisSize) * xValues.length),
+      );
+      const region = makeCategoricalRegion(xValues.slice(i0, i1));
+      if (region) {
+        dispatchExplainSlice({
+          chartId: dashboardTile.tileId,
+          column: enc.x.field,
+          region,
+          sourceTileId: dashboardTile.tileId,
+          filters: dashboardFilters,
+        });
+      }
+    }
+    brushExplainRef.current = false;
+    setBrushStart(null);
+    setBrushEnd(null);
+  };
+
   // ───────── pattern <defs> registration ─────────
   // Build pattern fill resolution for each (color, pattern) combo so
   // every cell resolves to a stable url(#id) without re-defining.
@@ -619,7 +732,31 @@ export function BarRenderer({
         height={Math.max(0, height - (showLegend ? 28 : 0))}
         role="img"
         aria-label={accessibleLabel}
-        onMouseLeave={hideTooltip}
+        // Wave WI4-wiring-bar · cursor reflects the active brush. Each
+        // bar already sets `cursor: pointer` inline on interactive
+        // mounts, so the svg-level cursor only shows through on the
+        // gridlines / axis area — but during a drag the user is
+        // visually anchored on the rect overlay anyway.
+        style={
+          brushStart !== null
+            ? { cursor: isVertical ? "ew-resize" : "ns-resize" }
+            : undefined
+        }
+        // Wave WI4-wiring-bar · brush handlers gated on dashboardTile.
+        // Outside a dashboard the brush has no receiver. The per-bar
+        // onClick keeps the WD2 / WD3 click intents intact; the brush
+        // adds the WI4 alt-drag intent without touching them.
+        onMouseDown={dashboardTile ? onBrushDown : undefined}
+        onMouseMove={dashboardTile ? onBrushMove : undefined}
+        onMouseUp={dashboardTile ? onBrushUp : undefined}
+        onMouseLeave={() => {
+          hideTooltip();
+          if (brushStart !== null) {
+            brushExplainRef.current = false;
+            setBrushStart(null);
+            setBrushEnd(null);
+          }
+        }}
       >
         {/* Pattern <defs> for the pattern encoding. */}
         {patternDefs.size > 0 && (
@@ -655,6 +792,33 @@ export function BarRenderer({
               strokeOpacity={0.25}
               strokeDasharray="2,2"
               numTicks={targetYTickCount(innerWidth)}
+            />
+          )}
+          {/* Wave WI4-wiring-bar · brush rectangle while dragging.
+              Orientation-aware: vertical bars get a full-height
+              column whose horizontal span is the brushed x-range;
+              horizontal bars get a full-width band whose vertical
+              span is the brushed y-range. Same primary tint /
+              dashed stroke styling as LineRenderer + AreaRenderer
+              so the brush affordance reads consistently across the
+              three trend / categorical renderers. pointerEvents="none"
+              so the overlay never intercepts the mouseUp / click
+              that would otherwise be captured by the svg + per-bar
+              handlers. */}
+          {brushStart !== null && brushEnd !== null && (
+            <rect
+              x={isVertical ? Math.min(brushStart, brushEnd) : 0}
+              y={isVertical ? 0 : Math.min(brushStart, brushEnd)}
+              width={isVertical ? Math.abs(brushEnd - brushStart) : innerWidth}
+              height={
+                isVertical ? innerHeight : Math.abs(brushEnd - brushStart)
+              }
+              fill="hsl(var(--primary))"
+              fillOpacity={0.1}
+              stroke="hsl(var(--primary))"
+              strokeOpacity={0.4}
+              strokeDasharray="3 3"
+              pointerEvents="none"
             />
           )}
           {/* Zero-line emphasis. */}
@@ -756,6 +920,11 @@ export function BarRenderer({
                 rx={2}
                 style={interactive ? { cursor: "pointer" } : undefined}
                 onMouseMove={(e: React.MouseEvent<SVGElement>) => {
+                  // Wave WI4-wiring-bar · suppress per-bar tooltip
+                  // during an active brush so the tooltip doesn't
+                  // flicker between bars as the cursor drags across
+                  // the chart. The brush rect is sufficient feedback.
+                  if (brushStart !== null) return;
                   const local = localPoint(e);
                   showTooltip({
                     tooltipLeft: local?.x ?? 0,
