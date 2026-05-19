@@ -220,7 +220,7 @@ export function ChartTileBody({
       />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
         <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
-          <DashboardTileProvider tileId={tile.id}>
+          <DashboardTileProvider tileId={tile.id} filters={filters}>
           {effectiveMode === "pivot" ? (
             <ChartTilePivotView chart={tile.chart} filters={filters} />
           ) : (

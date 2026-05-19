@@ -37,10 +37,18 @@ describe("WD2-wiring-bar · dashboardTileContext module shape", () => {
     );
   });
 
-  it("DashboardTileProvider memoises the {tileId} value", () => {
+  it("DashboardTileProvider memoises the value across tileId + filters (WD2-dim-foundation extends deps)", () => {
+    // WD2-dim-foundation extended the memo to include filters in the
+    // spread (so renderers can read the active cross-filter for dim).
+    // Pin both: useMemo is the right hook, tileId + filters are both
+    // in the dep array, and the body spreads filters conditionally.
     assert.match(
       tileContextSrc,
-      /useMemo<DashboardTileContextValue>\([\s\S]*?\(\) => \(\{ tileId \}\),[\s\S]*?\[tileId\]/,
+      /useMemo<DashboardTileContextValue>\([\s\S]*?\[tileId,\s*filters\]/,
+    );
+    assert.match(
+      tileContextSrc,
+      /\(\) => \(\{ tileId,\s*\.\.\.\(filters !== undefined \? \{ filters \} : \{\}\) \}\)/,
     );
   });
 
@@ -106,10 +114,10 @@ describe("WD2-wiring-bar · ChartTileBody wraps its chart in DashboardTileProvid
     );
   });
 
-  it("wraps the pivot / chart body in <DashboardTileProvider tileId={tile.id}>", () => {
+  it("wraps the pivot / chart body in <DashboardTileProvider tileId={tile.id} filters={filters}> (WD2-dim-foundation extends prop set)", () => {
     assert.match(
       chartTileBodySrc,
-      /<DashboardTileProvider tileId=\{tile\.id\}>/,
+      /<DashboardTileProvider tileId=\{tile\.id\} filters=\{filters\}>/,
     );
     assert.match(chartTileBodySrc, /<\/DashboardTileProvider>/);
   });
