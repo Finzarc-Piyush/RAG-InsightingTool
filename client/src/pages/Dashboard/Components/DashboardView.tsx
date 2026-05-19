@@ -47,6 +47,7 @@ import {
 } from '../lib/explainSlice';
 import { ExplainSlicePanel } from './ExplainSlicePanel';
 import { createInsightRegenCache } from '../lib/insightRegenCache';
+import { createInsightHistoryStore } from '../lib/insightHistory';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -123,6 +124,11 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   // back to A" pattern hits the cache instead of re-firing the LLM.
   // Empty dep array keeps a single instance for the dashboard session.
   const insightRegenCache = useMemo(() => createInsightRegenCache(), []);
+  // Wave WI6 · per-tile MRU history store for the "Recent insights"
+  // dropdown in TileInsightFooter. Same mount-scoped lifecycle as the
+  // regen cache. Each ChartTileBody records on a fresh regen and reads
+  // the per-tile slice for its dropdown.
+  const insightHistoryStore = useMemo(() => createInsightHistoryStore(), []);
 
   // Determine permission: if not provided, check if user owns the dashboard or has edit permission on shared dashboard
   const canEdit = useMemo(() => {
@@ -815,6 +821,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   onUpdate={onRefresh}
                   canEdit={canEdit}
                   insightRegenCache={insightRegenCache}
+                  insightHistoryStore={insightHistoryStore}
                 />
               </section>
             ) : (

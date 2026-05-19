@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useMemo } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, Table2, Trash2 } from "lucide-react";
 import type { ChartSpec } from "@/shared/schema";
 import { applyChartFilters, type ActiveChartFilters } from "@/lib/chartFilters";
@@ -20,6 +20,10 @@ import {
   type InsightRegenRow,
 } from "../hooks/useInsightRegen";
 import type { InsightRegenCache } from "../lib/insightRegenCache";
+import type {
+  InsightHistoryEntry,
+  InsightHistoryStore,
+} from "../lib/insightHistory";
 import {
   deriveTileRecommendations,
   type TileRecommendation,
@@ -76,6 +80,13 @@ interface ChartTileBodyProps {
    * the "re-explore filter combo A after B" warm-cache hit.
    */
   insightRegenCache?: InsightRegenCache;
+  /**
+   * Wave WI6 · shared per-tile MRU history store passed down from
+   * `DashboardView`. Each fresh regen entry is recorded; the per-tile
+   * slice is read on every render so the footer dropdown shows up-to-
+   * date navigation entries. Omitted → footer dropdown stays hidden.
+   */
+  insightHistoryStore?: InsightHistoryStore;
 }
 
 export function ChartTileBody({
@@ -89,6 +100,7 @@ export function ChartTileBody({
   onDeleteClick,
   onEditInsight,
   insightRegenCache,
+  insightHistoryStore,
 }: ChartTileBodyProps) {
   const { mode, toggle } = useChartTileViewMode(dashboardId, tile.id);
   const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
@@ -172,6 +184,50 @@ export function ChartTileBody({
       }
     },
     [filters, onFiltersChange],
+  );
+
+  // Wave WI6 · record a per-tile history slot whenever a fresh regen
+  // entry lands. `regen.entry` identity changes either when the user
+  // navigates to a new (tileId, filterHash) cache slot (cache.get
+  // returns a different value) OR when a fresh regen replaces the slot.
+  // Either way, the slot's regeneratedAt is the load-bearing signal —
+  // it's a fresh ISO string per fetch, so deps on it skip pure re-
+  // renders that return the same entry. The store's `record` owns
+  // MRU + de-dup semantics, so we don't need a "last recorded hash"
+  // ref here.
+  //
+  // `historyVersion` is bumped on every record so the `historyEntries`
+  // memo below re-reads from the store after a fresh slot lands. The
+  // store's internal Map mutates in place, so without a version bump
+  // React wouldn't know to re-render the dropdown.
+  const [historyVersion, setHistoryVersion] = useState(0);
+  useEffect(() => {
+    if (!insightHistoryStore) return;
+    if (!regen.entry || !regen.entry.regeneratedAt) return;
+    insightHistoryStore.record(tile.id, filters ?? {}, regen.entry);
+    setHistoryVersion((v) => v + 1);
+  }, [insightHistoryStore, tile.id, regen.entry, filters]);
+
+  const historyEntries = useMemo<InsightHistoryEntry[]>(
+    () => (insightHistoryStore ? insightHistoryStore.get(tile.id) : []),
+    // `historyVersion` is the load-bearing dep — the store is a stable
+    // reference (factory return value held in a parent `useMemo`), so
+    // we re-read whenever a fresh record bumps the version.
+    [insightHistoryStore, tile.id, historyVersion],
+  );
+
+  const handleHistorySelect = useCallback(
+    (entry: InsightHistoryEntry) => {
+      // Restore the dashboard's filters to the recorded combo. The
+      // tile's `useInsightRegen` hook then keys off the new filters,
+      // `cache.get(newKey)` returns the cached entry instantly when
+      // it's still within the 5-min TTL, and prose paints. When the
+      // cache entry has expired, the existing manual-Re-explain path
+      // is the user's next move — we deliberately don't auto-fire a
+      // regen on history-select to keep the navigator cheap.
+      onFiltersChange(entry.filters);
+    },
+    [onFiltersChange],
   );
 
   const titleNode = tile.title || `Chart ${tile.index + 1}`;
@@ -310,6 +366,8 @@ export function ChartTileBody({
             }}
             recommendations={recommendations}
             onRecommendationClick={handleRecommendationClick}
+            history={historyEntries}
+            onHistorySelect={handleHistorySelect}
           />
         ) : null}
       </CardContent>

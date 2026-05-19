@@ -36,6 +36,7 @@ const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import type { InsightRegenCache } from '../lib/insightRegenCache';
+import type { InsightHistoryStore } from '../lib/insightHistory';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 // DR18G · resolveLayoutsDropBySwap is no longer called. The helper
 // + its tests stay in the codebase (deprecated) for revival if a
@@ -88,6 +89,13 @@ interface DashboardTilesProps {
    * compatible.
    */
   insightRegenCache?: InsightRegenCache;
+  /**
+   * Wave WI6 · shared per-tile insight history store scoped to the
+   * parent `DashboardView` mount. Forwarded into every chart tile so
+   * the footer's "Recent insights" dropdown reads a single per-mount
+   * navigator. Optional so existing call sites stay compatible.
+   */
+  insightHistoryStore?: InsightHistoryStore;
 }
 
 const COLS = { lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 } as const;
@@ -279,6 +287,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   onSeedLayoutFromLocalStorage,
   onNarrativeSave,
   insightRegenCache,
+  insightHistoryStore,
 }) => {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => loadHiddenTiles(dashboardId));
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -830,6 +839,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
               })
             }
             insightRegenCache={insightRegenCache}
+            insightHistoryStore={insightHistoryStore}
           />,
           chartContextItems,
         );

@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Edit2, Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Edit2, History, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CitationHoverCard } from "@/components/CitationHoverCard";
 import { cn } from "@/lib/utils";
+import type { ActiveChartFilters } from "@/lib/chartFilters";
 import type { InsightRegenEntry } from "../lib/insightRegenCache";
+import type { InsightHistoryEntry } from "../lib/insightHistory";
 import type { TileRecommendation } from "../lib/tileRecommendations";
 
 /**
@@ -41,6 +51,36 @@ function formatRelativeShort(iso: string): string {
   if (hours < 24) return `${hours} h ago`;
   const days = Math.floor(hours / 24);
   return `${days} d ago`;
+}
+
+/**
+ * Wave WI6 · short label for a filter combo recorded in the history
+ * dropdown. Branches:
+ *   - empty filter map → "Baseline" (the no-filter slot)
+ *   - exactly one categorical filter → "<column>: <value(s)>" truncated
+ *     to 30 chars so the menu doesn't blow up on a 10-value categorical
+ *   - exactly one numeric / date filter → "<column>: <range>" abbreviated
+ *   - 2+ filters → "<N> filters" (the user can identify the combo by
+ *     timestamp + the prose itself once selected)
+ */
+function formatHistoryLabel(filters: ActiveChartFilters): string {
+  const entries = Object.entries(filters).filter(([, s]) => s !== undefined);
+  if (entries.length === 0) return "Baseline";
+  if (entries.length === 1) {
+    const [column, sel] = entries[0];
+    if (!sel) return "Baseline";
+    let value: string;
+    if (sel.type === "categorical") {
+      value = sel.values.join(", ");
+    } else if (sel.type === "date") {
+      value = `${sel.start ?? "…"} → ${sel.end ?? "…"}`;
+    } else {
+      value = `${sel.min ?? "…"} – ${sel.max ?? "…"}`;
+    }
+    const raw = `${column}: ${value}`;
+    return raw.length > 30 ? `${raw.slice(0, 29)}…` : raw;
+  }
+  return `${entries.length} filters`;
 }
 
 function readPersistedOpen(dashboardId: string, tileId: string): boolean {
@@ -109,6 +149,15 @@ interface TileInsightFooterProps {
    */
   recommendations?: TileRecommendation[];
   onRecommendationClick?: (rec: TileRecommendation) => void;
+  /**
+   * Wave WI6 · optional per-tile insight history list (newest first).
+   * When non-empty AND `onHistorySelect` is provided, a "Recent insights"
+   * dropdown renders in the action row. Clicking an entry calls
+   * `onHistorySelect(entry)` so the parent (ChartTileBody) can restore
+   * the recorded filter combo via the dashboard's `onFiltersChange`.
+   */
+  history?: InsightHistoryEntry[];
+  onHistorySelect?: (entry: InsightHistoryEntry) => void;
 }
 
 export function TileInsightFooter({
@@ -121,6 +170,8 @@ export function TileInsightFooter({
   regen,
   recommendations,
   onRecommendationClick,
+  history,
+  onHistorySelect,
 }: TileInsightFooterProps) {
   const [open, setOpen] = useState<boolean>(() =>
     readPersistedOpen(dashboardId, tileId),
@@ -251,6 +302,58 @@ export function TileInsightFooter({
                 )}
                 {regen.loading ? "Re-explaining…" : "Re-explain this view"}
               </Button>
+              {/*
+               * Wave WI6 · "Recent insights" dropdown. Surfaces the per-
+               * tile MRU history slots (up to MAX_HISTORY_PER_TILE = 3).
+               * Gated on history being a non-empty array AND a select
+               * handler being wired — both conditions are satisfied
+               * iff `ChartTileBody` has the `insightHistoryStore` prop
+               * threaded from `DashboardView`. Clicking an item calls
+               * `onHistorySelect(entry)`, which restores the recorded
+               * filter combo via the dashboard's `onFiltersChange`.
+               */}
+              {history && history.length > 0 && onHistorySelect ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      aria-label="Recent insights"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <History className="mr-1 h-3 w-3" aria-hidden="true" />
+                      Recent insights ({history.length})
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">
+                      Insights for:
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {history.map((entry) => (
+                      <DropdownMenuItem
+                        key={entry.filterHash}
+                        onSelect={() => onHistorySelect(entry)}
+                        className="text-[12px]"
+                      >
+                        <div className="flex flex-col">
+                          <span>{formatHistoryLabel(entry.filters)}</span>
+                          {entry.entry.regeneratedAt ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              {formatRelativeShort(entry.entry.regeneratedAt)}
+                            </span>
+                          ) : null}
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
               {regen.error ? (
                 <span
                   role="alert"
