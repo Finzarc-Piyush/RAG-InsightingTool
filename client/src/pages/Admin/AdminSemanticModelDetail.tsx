@@ -56,6 +56,14 @@ import {
   getSourceBadgeVariant,
   type SemanticEntrySource,
 } from "./lib/semanticModelSourceBadge";
+import {
+  SOURCE_FILTER_ALL,
+  SOURCE_FILTER_ORDER,
+  countEntriesBySource,
+  filterEntriesBySource,
+  getFilterLabel,
+  type SemanticEntryFilter,
+} from "./lib/semanticModelSourceFilter";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -167,6 +175,69 @@ function SourceBadge({ source }: { source: SemanticEntrySource }) {
     >
       {getSourceBadgeLabel(source)}
     </Badge>
+  );
+}
+
+/**
+ * W61-source-filter · "Show only X" chip row above each section's table.
+ *
+ * One global filter on the page (rather than per-table) because the
+ * common workflow is "show me what I edited" applied across metrics +
+ * dimensions + hierarchies uniformly — a per-table filter would force
+ * the admin to click three filters to achieve the same effect. The
+ * trade-off: clicking "User" on the metrics card also filters the
+ * dimensions + hierarchies cards below; this is intentional and the
+ * per-card count label disambiguates ("User (3)" on metrics, "User (12)"
+ * on dimensions).
+ *
+ * Visual treatment: the *active* chip carries the source's badge
+ * variant (matches the row badges so the active filter visually
+ * "ties" to the entries it leaves visible); inactive chips render
+ * as an outline so the row reads as "pick a filter". The "All"
+ * sentinel uses the outline variant even when active so it doesn't
+ * compete with the source variants — the absence of source-tinting
+ * itself signals "no filter applied".
+ */
+function SourceFilterChips({
+  active,
+  counts,
+  onChange,
+}: {
+  active: SemanticEntryFilter;
+  counts: Readonly<Record<SemanticEntryFilter, number>>;
+  onChange: (next: SemanticEntryFilter) => void;
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      role="group"
+      aria-label="Filter entries by source"
+    >
+      {SOURCE_FILTER_ORDER.map((f) => {
+        const isActive = f === active;
+        const variant =
+          isActive && f !== "all" ? getSourceBadgeVariant(f) : "outline";
+        return (
+          <button
+            key={f}
+            type="button"
+            onClick={() => onChange(f)}
+            aria-pressed={isActive}
+            className={cn(
+              "transition-opacity",
+              isActive ? "" : "opacity-70 hover:opacity-100",
+            )}
+          >
+            <Badge
+              variant={variant}
+              className="px-2 py-0 h-5 text-[11px] font-medium cursor-pointer"
+            >
+              {getFilterLabel(f)} ({counts[f]})
+            </Badge>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -541,6 +612,12 @@ export default function AdminSemanticModelDetail() {
   // race the first's response into the cache).
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Wave W61-source-filter · one global filter across metrics +
+  // dimensions + hierarchies. Most-common workflow is "show me what
+  // I edited" applied uniformly across all three sections; a per-card
+  // filter would force three clicks for the same effect.
+  const [sourceFilter, setSourceFilter] =
+    useState<SemanticEntryFilter>(SOURCE_FILTER_ALL);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -829,13 +906,15 @@ export default function AdminSemanticModelDetail() {
         ) : null}
 
         <Card className="p-0 overflow-hidden">
-          <header className="px-4 py-3 border-b border-border flex items-baseline justify-between">
+          <header className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-base font-semibold text-foreground">
               Metrics
             </h2>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {model.metrics.length}
-            </span>
+            <SourceFilterChips
+              active={sourceFilter}
+              counts={countEntriesBySource(model.metrics)}
+              onChange={setSourceFilter}
+            />
           </header>
           {model.metrics.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -854,7 +933,7 @@ export default function AdminSemanticModelDetail() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...model.metrics]
+                  {[...filterEntriesBySource(model.metrics, sourceFilter)]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((m) => (
                       <MetricRow
@@ -892,13 +971,15 @@ export default function AdminSemanticModelDetail() {
         </Card>
 
         <Card className="p-0 overflow-hidden">
-          <header className="px-4 py-3 border-b border-border flex items-baseline justify-between">
+          <header className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-base font-semibold text-foreground">
               Dimensions
             </h2>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {model.dimensions.length}
-            </span>
+            <SourceFilterChips
+              active={sourceFilter}
+              counts={countEntriesBySource(model.dimensions)}
+              onChange={setSourceFilter}
+            />
           </header>
           {model.dimensions.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -916,7 +997,7 @@ export default function AdminSemanticModelDetail() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...model.dimensions]
+                  {[...filterEntriesBySource(model.dimensions, sourceFilter)]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((d) => (
                       <DimensionRow
@@ -949,13 +1030,15 @@ export default function AdminSemanticModelDetail() {
         </Card>
 
         <Card className="p-0 overflow-hidden">
-          <header className="px-4 py-3 border-b border-border flex items-baseline justify-between">
+          <header className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-base font-semibold text-foreground">
               Hierarchies
             </h2>
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {model.hierarchies.length}
-            </span>
+            <SourceFilterChips
+              active={sourceFilter}
+              counts={countEntriesBySource(model.hierarchies)}
+              onChange={setSourceFilter}
+            />
           </header>
           {model.hierarchies.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -971,7 +1054,7 @@ export default function AdminSemanticModelDetail() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...model.hierarchies]
+                  {[...filterEntriesBySource(model.hierarchies, sourceFilter)]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((h) => (
                       <HierarchyRow key={h.name} h={h} />
