@@ -36,6 +36,7 @@ import {
   bumpHierarchiesSource,
   bumpMetricsSource,
 } from "../lib/semantic/semanticModelSourceBump.js";
+import { appendSemanticModelAuditEntry } from "../lib/semantic/semanticModelAuditLog.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -245,8 +246,22 @@ export async function patchSemanticModel(
           updatedAt: new Date().toISOString(),
           updatedBy,
         };
+        // W61-audit-log · snap the prior model into the doc's audit
+        // ring buffer BEFORE the overwrite. The entry timestamp uses
+        // the same `Date.now()` as `lastUpdatedAt` so a future history
+        // UI can correlate the two without clock-skew confusion.
+        const savedAt = Date.now();
+        doc.semanticModelAuditLog = appendSemanticModelAuditEntry(
+          doc.semanticModelAuditLog,
+          {
+            savedAt,
+            savedBy: updatedBy,
+            priorVersion: doc.semanticModel.version ?? 0,
+            priorModel: doc.semanticModel,
+          },
+        );
         doc.semanticModel = nextModel;
-        doc.lastUpdatedAt = Date.now();
+        doc.lastUpdatedAt = savedAt;
         const saved = await _updater(doc);
         return {
           kind: "ok",

@@ -12,6 +12,7 @@ import {
   ActiveFilterSpec,
   SemanticModel,
 } from "../shared/schema.js";
+import type { SemanticModelAuditEntry } from "../lib/semantic/semanticModelAuditLog.js";
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
 
@@ -135,6 +136,16 @@ export interface ChatDocument {
    * [server/lib/semantic/inferModel.ts](../lib/semantic/inferModel.ts).
    */
   semanticModel?: SemanticModel;
+  /**
+   * Wave W61-audit-log · prior-model snapshots written on every admin
+   * PATCH, newest-first, capped at
+   * `SEMANTIC_MODEL_AUDIT_LOG_MAX_ENTRIES` (10). Each entry preserves
+   * what was about to be overwritten so a future W61-audit-revert wave
+   * can re-PATCH a chosen prior version. Absent on sessions that have
+   * never been edited via the admin viewer. See
+   * [server/lib/semantic/semanticModelAuditLog.ts](../lib/semantic/semanticModelAuditLog.ts).
+   */
+  semanticModelAuditLog?: SemanticModelAuditEntry[];
   /** Rolling structured context: LLM seed + merges (user + each assistant turn). */
   sessionAnalysisContext?: SessionAnalysisContext;
   /** Upload pipeline: LLM profile + session context seed. Answers wait until complete (omit = legacy sessions). */
