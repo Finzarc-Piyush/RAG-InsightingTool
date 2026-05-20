@@ -28,6 +28,7 @@ import type {
   SemanticMetric,
   SemanticModel,
 } from "@/shared/schema";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,12 @@ import {
   validateExpression,
   validateLabel,
 } from "./lib/semanticModelEditValidation";
+import {
+  getSourceBadgeLabel,
+  getSourceBadgeTooltip,
+  getSourceBadgeVariant,
+  type SemanticEntrySource,
+} from "./lib/semanticModelSourceBadge";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -136,6 +143,30 @@ function ExposedToggle({
       onCheckedChange={onChange}
       aria-label={ariaLabel}
     />
+  );
+}
+
+/**
+ * W61-source-badge · Chip surfacing each entry's provenance — auto
+ * (muted), user (primary), domain (gold accent). Renders sibling to
+ * the entry name so the admin can scan a column of `<name>  <chip>`
+ * pairs and spot which entries they've already corrected.
+ *
+ * Sizing tuned smaller than the canonical Badge so the chip reads as
+ * metadata next to the snake-case identifier rather than competing
+ * with it (`px-1.5 py-0` + `text-[10px]` + `h-4`). Native `title=`
+ * tooltip — Tooltip primitive would add a wrapping provider mount
+ * without any UX win at this density.
+ */
+function SourceBadge({ source }: { source: SemanticEntrySource }) {
+  return (
+    <Badge
+      variant={getSourceBadgeVariant(source)}
+      title={getSourceBadgeTooltip(source)}
+      className="px-1.5 py-0 h-4 text-[10px] font-medium"
+    >
+      {getSourceBadgeLabel(source)}
+    </Badge>
   );
 }
 
@@ -327,7 +358,10 @@ function MetricRow({
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4 space-y-2 min-w-[220px]">
-        <div className="font-mono text-sm text-foreground">{m.name}</div>
+        <div className="flex items-center gap-2">
+          <div className="font-mono text-sm text-foreground">{m.name}</div>
+          <SourceBadge source={m.source} />
+        </div>
         <EditableText
           value={m.label}
           onSave={onEditLabel}
@@ -415,7 +449,10 @@ function DimensionRow({
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4 space-y-2 min-w-[220px]">
-        <div className="font-mono text-sm text-foreground">{d.name}</div>
+        <div className="flex items-center gap-2">
+          <div className="font-mono text-sm text-foreground">{d.name}</div>
+          <SourceBadge source={d.source} />
+        </div>
         <EditableText
           value={d.label}
           onSave={onEditLabel}
@@ -470,7 +507,10 @@ function HierarchyRow({ h }: { h: SemanticHierarchy }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4">
-        <div className="font-mono text-sm text-foreground">{h.name}</div>
+        <div className="flex items-center gap-2">
+          <div className="font-mono text-sm text-foreground">{h.name}</div>
+          <SourceBadge source={h.source} />
+        </div>
         <div className="text-xs text-muted-foreground">{h.label}</div>
         {h.description ? (
           <div className="text-xs text-muted-foreground mt-1 italic">
