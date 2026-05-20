@@ -8,6 +8,7 @@ import {
   listSemanticModels,
   getSemanticModel,
   getSemanticModelAuditLog,
+  getSemanticModelReferences,
   patchSemanticModel,
   revertSemanticModel,
 } from "../controllers/adminSemanticModelController.js";
@@ -35,6 +36,17 @@ router.get("/admin/semantic-models/:sessionId", getSemanticModel);
 router.get(
   "/admin/semantic-models/:sessionId/audit-log",
   getSemanticModelAuditLog,
+);
+
+// W61-references-endpoint · count how many persisted charts on the
+// session reference a given semantic-model entry name. Read-only;
+// foundation for the W61-delete-entry confirmation prompt's
+// "removing this metric will break N charts" copy. Walks
+// `doc.charts[]` only (blob-stored charts via `chartReferences[]`
+// are NOT fetched — a future enhancement can add that mode).
+router.get(
+  "/admin/semantic-models/:sessionId/references",
+  getSemanticModelReferences,
 );
 
 // W61-save · replace the session's semantic model. Bumps version + stamps updatedAt/updatedBy.

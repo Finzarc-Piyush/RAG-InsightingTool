@@ -41,6 +41,7 @@ import {
   appendSemanticModelAuditEntry,
   type SemanticModelAuditEntry,
 } from "../lib/semantic/semanticModelAuditLog.js";
+import { countSemanticModelReferences } from "../lib/semantic/semanticModelReferences.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -66,6 +67,23 @@ export interface AdminSemanticModelDetailResponse {
 export interface AdminSemanticModelAuditLogResponse {
   sessionId: string;
   entries: SemanticModelAuditEntry[];
+}
+
+/**
+ * Wave W61-references-endpoint · response envelope for the downstream
+ * chart-reference scan. Returns the entry name verbatim alongside the
+ * `{ chartCount, totalOccurrences }` counts so the client doesn't need
+ * to track which entry it queried against (matters when the UI fires
+ * multiple counts in parallel for a "is anything safe to delete?"
+ * audit view). `entry` is the trimmed value the server saw, not the
+ * raw query-string — protects the client from `?entry=%20foo`
+ * disagreements.
+ */
+export interface AdminSemanticModelReferencesResponse {
+  sessionId: string;
+  entry: string;
+  chartCount: number;
+  totalOccurrences: number;
 }
 
 type SemanticModelLister = () => Promise<AdminSemanticModelListEntry[]>;
@@ -524,5 +542,92 @@ export async function revertSemanticModel(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`adminSemanticModel revert failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_revert_failed" });
+  }
+}
+
+/**
+ * Wave W61-references-endpoint · count how many persisted charts on a
+ * session reference a given semantic-model entry name (metric /
+ * dimension / hierarchy). Foundation for the upcoming W61-delete-entry
+ * confirmation prompt that warns admins before destructively removing
+ * an entry that downstream charts depend on.
+ *
+ *   GET /admin/semantic-models/:sessionId/references?entry=<name>
+ *
+ * Returns 404 on a missing session OR a session that has no
+ * semanticModel — same shape as `getSemanticModel` so the UI handles
+ * one not-found branch, not two. Returns 400 on a missing `entry`
+ * query param (empty / whitespace / non-string).
+ *
+ * Why a GET endpoint, not POST: this is an idempotent read. A GET
+ * lets the UI cache the count via standard HTTP semantics + lets the
+ * admin paste the URL to share a "this metric is used N places"
+ * link without crafting a body.
+ *
+ * Why we walk `doc.charts ?? []` (not `doc.messages[].charts[]`):
+ * `doc.charts[]` is the dedup-merged authoritative list per the
+ * chat-model save path (see [chat.model.ts:55](../models/chat.model.ts)).
+ * Per-message `charts[]` arrays are merged into the top-level list
+ * by the same save path; walking both would double-count. Blob-stored
+ * charts via `doc.chartReferences[]` are NOT scanned (the blob fetch
+ * would turn a free count into a multi-second request) — a future
+ * enhancement could load blob charts on-demand for sessions that
+ * exceeded the in-doc threshold.
+ *
+ * Why we re-use `_detailFetcher` rather than a new injectable: same
+ * Cosmos call as `getSemanticModel` / `getSemanticModelAuditLog`;
+ * sharing the injectable halves the test-fake surface.
+ *
+ * Why we return `entry` (the server-trimmed value) in the envelope:
+ * `?entry=%20foo` would arrive as `" foo"` and trim to `"foo"`; the
+ * client can compare the response's `entry` against its own state
+ * without re-implementing the trim rule.
+ */
+export async function getSemanticModelReferences(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "admin_required" });
+    return;
+  }
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "missing_session_id" });
+    return;
+  }
+  const entryRaw = req.query.entry;
+  const entry = typeof entryRaw === "string" ? entryRaw.trim() : "";
+  if (!entry) {
+    res.status(400).json({ error: "missing_entry" });
+    return;
+  }
+  try {
+    const doc = await _detailFetcher(sessionId);
+    if (!doc) {
+      res.status(404).json({ error: "session_not_found", sessionId });
+      return;
+    }
+    if (!doc.semanticModel) {
+      res.status(404).json({
+        error: "semantic_model_not_inferred",
+        sessionId,
+      });
+      return;
+    }
+    const counts = countSemanticModelReferences(entry, doc.charts ?? []);
+    const body: AdminSemanticModelReferencesResponse = {
+      sessionId: doc.sessionId,
+      entry,
+      chartCount: counts.chartCount,
+      totalOccurrences: counts.totalOccurrences,
+    };
+    res.json(body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`adminSemanticModel references failed: ${msg}`);
+    res
+      .status(500)
+      .json({ error: "admin_semantic_model_references_failed" });
   }
 }
