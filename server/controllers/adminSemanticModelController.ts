@@ -31,6 +31,11 @@ import { semanticModelSchema, type SemanticModel } from "../shared/schema.js";
 import { isAdminRequest } from "../utils/admin.helper.js";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { withSessionWriteLock } from "../lib/sessionWriteLock.js";
+import {
+  bumpDimensionsSource,
+  bumpHierarchiesSource,
+  bumpMetricsSource,
+} from "../lib/semantic/semanticModelSourceBump.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -214,8 +219,28 @@ export async function patchSemanticModel(
           return { kind: "semantic_model_not_inferred" };
         }
         const nextVersion = (doc.semanticModel.version ?? 0) + 1;
+        // W61-source-bump · per-entry content-hash diff against the
+        // prior model. Unchanged entries preserve their prior source
+        // ("auto" stays "auto", "domain" stays "domain"); changed and
+        // new entries get `source: "user"` so the planner's prompt
+        // block can weight manually-corrected entries higher.
+        const nextMetrics = bumpMetricsSource(
+          parsed.data.metrics,
+          doc.semanticModel.metrics,
+        );
+        const nextDimensions = bumpDimensionsSource(
+          parsed.data.dimensions,
+          doc.semanticModel.dimensions,
+        );
+        const nextHierarchies = bumpHierarchiesSource(
+          parsed.data.hierarchies,
+          doc.semanticModel.hierarchies,
+        );
         const nextModel: SemanticModel = {
           ...parsed.data,
+          metrics: nextMetrics,
+          dimensions: nextDimensions,
+          hierarchies: nextHierarchies,
           version: nextVersion,
           updatedAt: new Date().toISOString(),
           updatedBy,
