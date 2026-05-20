@@ -36,7 +36,10 @@ import {
   bumpHierarchiesSource,
   bumpMetricsSource,
 } from "../lib/semantic/semanticModelSourceBump.js";
-import { appendSemanticModelAuditEntry } from "../lib/semantic/semanticModelAuditLog.js";
+import {
+  appendSemanticModelAuditEntry,
+  type SemanticModelAuditEntry,
+} from "../lib/semantic/semanticModelAuditLog.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -49,6 +52,19 @@ export interface AdminSemanticModelDetailResponse {
   username: string;
   lastUpdatedAt: number;
   model: SemanticModel;
+}
+
+/**
+ * Wave W61-audit-history-api · response envelope for the dedicated
+ * audit-log GET endpoint. Shipped as a sibling endpoint rather than a
+ * field on `AdminSemanticModelDetailResponse` because each entry carries
+ * a full `SemanticModel` snapshot (~5–50 KB × 10 entries = up to ~500 KB)
+ * and bloating every detail-fetch with audit history would 50× the
+ * common-case payload for a feature admins only consult occasionally.
+ */
+export interface AdminSemanticModelAuditLogResponse {
+  sessionId: string;
+  entries: SemanticModelAuditEntry[];
 }
 
 type SemanticModelLister = () => Promise<AdminSemanticModelListEntry[]>;
@@ -289,5 +305,67 @@ export async function patchSemanticModel(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`adminSemanticModel patch failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_patch_failed" });
+  }
+}
+
+/**
+ * Wave W61-audit-history-api · expose the W61-audit-log ring buffer over
+ * a dedicated read-only endpoint. Returns the buffer newest-first (the
+ * append helper's invariant) so a future history-tab UI renders entry
+ * `[0]` as "most recent" without inverting.
+ *
+ * Why a separate endpoint rather than widening
+ * `AdminSemanticModelDetailResponse` — see
+ * {@link AdminSemanticModelAuditLogResponse} doc.
+ *
+ * Why we still 404 when the session has no `semanticModel`: a session
+ * that never had a model inferred cannot have an audit log either
+ * (W61-audit-log only writes entries on PATCH, and PATCH 404s on
+ * missing model). Returning a different error code for the audit-log
+ * endpoint would force the UI to handle two "pre-W57" branches; the
+ * 404 here mirrors `getSemanticModel`'s 404 for the same condition.
+ *
+ * Why we re-use `_detailFetcher` rather than a new injectable — the
+ * read path is the same Cosmos call (fetch the full doc by sessionId);
+ * a separate fetcher would just be the same function under a different
+ * name and would double the surface for test fakes.
+ */
+export async function getSemanticModelAuditLog(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "admin_required" });
+    return;
+  }
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "missing_session_id" });
+    return;
+  }
+  try {
+    const doc = await _detailFetcher(sessionId);
+    if (!doc) {
+      res.status(404).json({ error: "session_not_found", sessionId });
+      return;
+    }
+    if (!doc.semanticModel) {
+      res.status(404).json({
+        error: "semantic_model_not_inferred",
+        sessionId,
+      });
+      return;
+    }
+    const body: AdminSemanticModelAuditLogResponse = {
+      sessionId: doc.sessionId,
+      entries: doc.semanticModelAuditLog ?? [],
+    };
+    res.json(body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`adminSemanticModel audit-log fetch failed: ${msg}`);
+    res
+      .status(500)
+      .json({ error: "admin_semantic_model_audit_log_failed" });
   }
 }

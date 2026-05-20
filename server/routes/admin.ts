@@ -7,6 +7,7 @@ import {
 import {
   listSemanticModels,
   getSemanticModel,
+  getSemanticModelAuditLog,
   patchSemanticModel,
 } from "../controllers/adminSemanticModelController.js";
 
@@ -24,6 +25,16 @@ router.get("/admin/semantic-models", listSemanticModels);
 
 // W61-detail · per-session semantic-model payload for the read-only viewer.
 router.get("/admin/semantic-models/:sessionId", getSemanticModel);
+
+// W61-audit-history-api · per-session prior-model audit ring buffer
+// (newest-first; capped at SEMANTIC_MODEL_AUDIT_LOG_MAX_ENTRIES via the
+// W61-audit-log append helper). Separate from the detail endpoint to
+// avoid bloating its payload with ~500 KB of priorModel snapshots when
+// the history is only consulted occasionally.
+router.get(
+  "/admin/semantic-models/:sessionId/audit-log",
+  getSemanticModelAuditLog,
+);
 
 // W61-save · replace the session's semantic model. Bumps version + stamps updatedAt/updatedBy.
 router.patch("/admin/semantic-models/:sessionId", patchSemanticModel);
