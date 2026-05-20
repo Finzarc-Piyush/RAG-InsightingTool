@@ -17,7 +17,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { ChevronDown } from "lucide-react";
 import {
   fetchSemanticModelAuditLog,
   fetchSemanticModelDetail,
@@ -37,11 +36,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -67,20 +61,17 @@ import {
   type SemanticEntrySource,
 } from "./lib/semanticModelSourceBadge";
 import {
-  SOURCE_FILTER_ORDER,
   countEntriesBySource,
   filterEntriesBySource,
-  getFilterLabel,
   type SemanticEntryFilter,
 } from "./lib/semanticModelSourceFilter";
 import {
   readFilterFromSearch,
   writeFilterToSearch,
 } from "./lib/semanticModelFilterUrlSync";
-import {
-  buildAuditEntrySummary,
-  buildRevertConfirmation,
-} from "./lib/semanticModelAuditHistory";
+import { buildRevertConfirmation } from "./lib/semanticModelAuditHistory";
+import { SourceFilterChips } from "./components/SourceFilterChips";
+import { AuditHistoryCard } from "./components/AuditHistoryCard";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -192,69 +183,6 @@ function SourceBadge({ source }: { source: SemanticEntrySource }) {
     >
       {getSourceBadgeLabel(source)}
     </Badge>
-  );
-}
-
-/**
- * W61-source-filter · "Show only X" chip row above each section's table.
- *
- * One global filter on the page (rather than per-table) because the
- * common workflow is "show me what I edited" applied across metrics +
- * dimensions + hierarchies uniformly — a per-table filter would force
- * the admin to click three filters to achieve the same effect. The
- * trade-off: clicking "User" on the metrics card also filters the
- * dimensions + hierarchies cards below; this is intentional and the
- * per-card count label disambiguates ("User (3)" on metrics, "User (12)"
- * on dimensions).
- *
- * Visual treatment: the *active* chip carries the source's badge
- * variant (matches the row badges so the active filter visually
- * "ties" to the entries it leaves visible); inactive chips render
- * as an outline so the row reads as "pick a filter". The "All"
- * sentinel uses the outline variant even when active so it doesn't
- * compete with the source variants — the absence of source-tinting
- * itself signals "no filter applied".
- */
-function SourceFilterChips({
-  active,
-  counts,
-  onChange,
-}: {
-  active: SemanticEntryFilter;
-  counts: Readonly<Record<SemanticEntryFilter, number>>;
-  onChange: (next: SemanticEntryFilter) => void;
-}) {
-  return (
-    <div
-      className="flex flex-wrap items-center gap-1.5"
-      role="group"
-      aria-label="Filter entries by source"
-    >
-      {SOURCE_FILTER_ORDER.map((f) => {
-        const isActive = f === active;
-        const variant =
-          isActive && f !== "all" ? getSourceBadgeVariant(f) : "outline";
-        return (
-          <button
-            key={f}
-            type="button"
-            onClick={() => onChange(f)}
-            aria-pressed={isActive}
-            className={cn(
-              "transition-opacity",
-              isActive ? "" : "opacity-70 hover:opacity-100",
-            )}
-          >
-            <Badge
-              variant={variant}
-              className="px-2 py-0 h-5 text-[11px] font-medium cursor-pointer"
-            >
-              {getFilterLabel(f)} ({counts[f]})
-            </Badge>
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -1184,111 +1112,19 @@ export default function AdminSemanticModelDetail() {
           )}
         </Card>
 
-        {/* W61-audit-history-tab · prior-model ring buffer (newest-first,
-            cap-at-10). Closed by default so the Cosmos round-trip is
-            opt-in; opens on click and refreshes whenever the parent
-            doc's lastUpdatedAt bumps (save / revert). */}
-        <Card className="p-0 overflow-hidden">
-          <Collapsible open={historyOpen} onOpenChange={setHistoryOpen}>
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="w-full px-4 py-3 border-b border-border flex items-center justify-between gap-3 text-left hover:bg-muted/30 transition-colors"
-                data-testid="admin-semantic-model-audit-history-trigger"
-              >
-                <div className="flex flex-col">
-                  <h2 className="text-base font-semibold text-foreground">
-                    Audit history
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Prior model versions (newest first, last 10 saves).
-                    Revert to restore a snapshot — the current model
-                    will be appended to this log first.
-                  </p>
-                </div>
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                    historyOpen ? "rotate-180" : "rotate-0",
-                  )}
-                />
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              {revertError ? (
-                <div
-                  className="mx-4 mt-4 rounded border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-                  data-testid="admin-semantic-model-audit-history-revert-error"
-                >
-                  Revert failed: {revertError}. The current model is
-                  unchanged; try again.
-                </div>
-              ) : null}
-              {historyLoading && !historyLog ? (
-                <div
-                  className="p-4 text-sm text-muted-foreground"
-                  data-testid="admin-semantic-model-audit-history-loading"
-                >
-                  Loading audit history…
-                </div>
-              ) : historyError ? (
-                <div
-                  className="p-4 text-sm text-destructive"
-                  data-testid="admin-semantic-model-audit-history-error"
-                >
-                  Failed to load audit history: {historyError}
-                </div>
-              ) : historyLog && historyLog.entries.length === 0 ? (
-                <div
-                  className="p-4 text-sm text-muted-foreground"
-                  data-testid="admin-semantic-model-audit-history-empty"
-                >
-                  No prior versions yet. The audit log captures the
-                  pre-save snapshot every time an admin edits the
-                  model; once you make an edit, the snapshot will
-                  appear here.
-                </div>
-              ) : historyLog ? (
-                <ul
-                  className="divide-y divide-border"
-                  data-testid="admin-semantic-model-audit-history-list"
-                >
-                  {historyLog.entries.map((entry, idx) => {
-                    const total = historyLog.entries.length;
-                    const summary = buildAuditEntrySummary(entry, idx, total);
-                    const rowReverting = reverting === idx;
-                    return (
-                      <li
-                        key={`${entry.savedAt}-${entry.priorVersion}`}
-                        className="p-4 flex items-start justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-foreground">
-                            {summary.headline}
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-1 tabular-nums">
-                            {summary.subhead}
-                          </div>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={
-                            saving || reverting !== null || historyLoading
-                          }
-                          onClick={() => void handleRevert(entry, idx, total)}
-                          data-testid={`admin-semantic-model-audit-history-revert-${idx}`}
-                        >
-                          {rowReverting ? "Reverting…" : "Revert"}
-                        </Button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </CollapsibleContent>
-          </Collapsible>
-        </Card>
+        <AuditHistoryCard
+          historyOpen={historyOpen}
+          onOpenChange={setHistoryOpen}
+          historyLog={historyLog}
+          historyLoading={historyLoading}
+          historyError={historyError}
+          revertError={revertError}
+          reverting={reverting}
+          saving={saving}
+          onRevert={(entry, idx, total) =>
+            void handleRevert(entry, idx, total)
+          }
+        />
       </div>
     </>
   );
