@@ -57,13 +57,16 @@ import {
   type SemanticEntrySource,
 } from "./lib/semanticModelSourceBadge";
 import {
-  SOURCE_FILTER_ALL,
   SOURCE_FILTER_ORDER,
   countEntriesBySource,
   filterEntriesBySource,
   getFilterLabel,
   type SemanticEntryFilter,
 } from "./lib/semanticModelSourceFilter";
+import {
+  readFilterFromSearch,
+  writeFilterToSearch,
+} from "./lib/semanticModelFilterUrlSync";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -616,8 +619,33 @@ export default function AdminSemanticModelDetail() {
   // dimensions + hierarchies. Most-common workflow is "show me what
   // I edited" applied uniformly across all three sections; a per-card
   // filter would force three clicks for the same effect.
-  const [sourceFilter, setSourceFilter] =
-    useState<SemanticEntryFilter>(SOURCE_FILTER_ALL);
+  //
+  // Wave W61-filter-persist · the initial state reads from
+  // `?filter=X` so a share-link or accidental-reload preserves the
+  // active chip. The `useState` lazy initializer runs once on mount;
+  // a downstream `useEffect` keeps the URL in sync on every change.
+  const [sourceFilter, setSourceFilter] = useState<SemanticEntryFilter>(() =>
+    typeof window === "undefined"
+      ? "all"
+      : readFilterFromSearch(window.location.search),
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const nextSearch = writeFilterToSearch(
+      window.location.search,
+      sourceFilter,
+    );
+    const nextUrl =
+      window.location.pathname +
+      (nextSearch ? "?" + nextSearch : "") +
+      window.location.hash;
+    // `replaceState` rather than `pushState` so each chip click
+    // doesn't accumulate a browser history entry — back-button
+    // behaviour stays predictable (one entry per page visit, not
+    // one per filter toggle).
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [sourceFilter]);
 
   useEffect(() => {
     if (!sessionId) return;
