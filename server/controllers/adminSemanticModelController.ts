@@ -631,3 +631,210 @@ export async function getSemanticModelReferences(
       .json({ error: "admin_semantic_model_references_failed" });
   }
 }
+
+/**
+ * Wave W61-delete-server · path-param literal-union schema for the
+ * delete endpoint's `:kind` segment. Rejects anything that isn't
+ * `metric` / `dimension` / `hierarchy` at the schema boundary so the
+ * handler doesn't need a separate validation branch and the 400 error
+ * surface includes the zod issue with the path-param name.
+ */
+const deleteEntryKindSchema = z.enum(["metric", "dimension", "hierarchy"]);
+export type AdminSemanticModelEntryKind = z.infer<typeof deleteEntryKindSchema>;
+
+/**
+ * Wave W61-delete-server · sentinel for the delete lock result that
+ * the outer handler maps to an HTTP status code. Distinguishes the
+ * four inside-the-lock outcomes (success / session-not-found /
+ * model-not-inferred / entry-not-found) without throwing — throwing
+ * from inside the lock would mark prior callers' chained work as
+ * failed and surface as 500 to them.
+ */
+type DeleteResult =
+  | { kind: "ok"; model: SemanticModel; lastUpdatedAt: number }
+  | { kind: "session_not_found" }
+  | { kind: "semantic_model_not_inferred" }
+  | { kind: "entry_not_found" };
+
+/**
+ * Wave W61-delete-server · remove a single metric / dimension /
+ * hierarchy from a session's semantic model. Mirrors the
+ * W61-audit-revert shape: writes the prior model to the audit log
+ * inside the existing `withSessionWriteLock` before the destructive
+ * op, bumps `version` monotonically, returns the same `{ sessionId,
+ * lastUpdatedAt, model }` envelope as W61-save / W61-audit-revert
+ * so the client mutation reuses the existing success handler.
+ *
+ *   DELETE /admin/semantic-models/:sessionId/entries/:kind/:name
+ *
+ * Where `:kind ∈ { "metric" | "dimension" | "hierarchy" }` and
+ * `:name` is the entry's `name` field (URL-decoded by Express).
+ *
+ * Why a three-segment path with explicit `:kind`: a metric named
+ * `"revenue"` and a dimension named `"revenue"` are different
+ * resources, and the semantic model doesn't forbid name collisions
+ * across kinds. Requiring `:kind` in the URL makes the operation
+ * unambiguous and prevents accidental cross-kind deletes (a fuzzy
+ * "find this name in any collection and delete it" would silently
+ * delete the wrong thing when a collision exists).
+ *
+ * Why audit-write before delete (not after): the buffer's role is
+ * to remember what was just lost. If the audit-write happened after
+ * the delete, a crash between the two would lose forensics. Inside
+ * `withSessionWriteLock` the pair is atomic at the per-session
+ * level (per invariant #9).
+ *
+ * Why we bump `version` even though we removed something: the
+ * version is W64's compiled-query cache key. Removing a metric
+ * invalidates any cached compilation that referenced it; bumping
+ * makes the cache miss explicit.
+ *
+ * Why we do NOT run `bumpMetricsSource` / `bumpDimensionsSource` /
+ * `bumpHierarchiesSource` on the survivors: the surviving entries
+ * are unchanged by this operation (their `name` / `label` /
+ * `expression` / etc. are byte-identical to their prior selves).
+ * Running the bumper would be a no-op for unchanged entries (the
+ * bumper's content-hash diff would match), so skipping is
+ * semantically equivalent. Mirrors the W61-audit-revert "skip
+ * source-bump because the entries aren't being edited" precedent.
+ *
+ * Why the audit-log write happens unconditionally on success: a
+ * delete IS a state change; preserving the just-deleted entry in
+ * the buffer is required for "undo this delete via revert" to work.
+ * If the buffer is at cap (10 entries), the prepend grows to 11
+ * then trims to 10 — same cap behaviour as W61-audit-log.
+ */
+export async function deleteSemanticModelEntry(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "admin_required" });
+    return;
+  }
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "missing_session_id" });
+    return;
+  }
+  const parsedKind = deleteEntryKindSchema.safeParse(req.params.kind);
+  if (!parsedKind.success) {
+    res.status(400).json({
+      error: "invalid_kind",
+      kind: req.params.kind,
+      allowed: deleteEntryKindSchema.options,
+    });
+    return;
+  }
+  const entryName = String(req.params.name ?? "").trim();
+  if (!entryName) {
+    res.status(400).json({ error: "missing_entry_name" });
+    return;
+  }
+  const updatedBy = getAuthenticatedEmail(req) ?? "unknown";
+  try {
+    const result = await withSessionWriteLock<DeleteResult>(
+      sessionId,
+      async () => {
+        const doc = await _detailFetcher(sessionId);
+        if (!doc) return { kind: "session_not_found" };
+        if (!doc.semanticModel) {
+          return { kind: "semantic_model_not_inferred" };
+        }
+        const model = doc.semanticModel;
+        let nextMetrics = model.metrics;
+        let nextDimensions = model.dimensions;
+        let nextHierarchies = model.hierarchies;
+        let removed = false;
+        if (parsedKind.data === "metric") {
+          const filtered = model.metrics.filter((m) => m.name !== entryName);
+          if (filtered.length === model.metrics.length) {
+            return { kind: "entry_not_found" };
+          }
+          nextMetrics = filtered;
+          removed = true;
+        } else if (parsedKind.data === "dimension") {
+          const filtered = model.dimensions.filter(
+            (d) => d.name !== entryName,
+          );
+          if (filtered.length === model.dimensions.length) {
+            return { kind: "entry_not_found" };
+          }
+          nextDimensions = filtered;
+          removed = true;
+        } else {
+          const filtered = model.hierarchies.filter(
+            (h) => h.name !== entryName,
+          );
+          if (filtered.length === model.hierarchies.length) {
+            return { kind: "entry_not_found" };
+          }
+          nextHierarchies = filtered;
+          removed = true;
+        }
+        // Safety pin: the early returns above guarantee `removed` is
+        // true on every success path. Asserting it here would be
+        // dead code; the variable lives so a future refactor that
+        // adds a fourth kind reads as "set `removed` in the new branch
+        // too".
+        void removed;
+        const nextVersion = (model.version ?? 0) + 1;
+        const nextModel: SemanticModel = {
+          ...model,
+          metrics: nextMetrics,
+          dimensions: nextDimensions,
+          hierarchies: nextHierarchies,
+          version: nextVersion,
+          updatedAt: new Date().toISOString(),
+          updatedBy,
+        };
+        const savedAt = Date.now();
+        doc.semanticModelAuditLog = appendSemanticModelAuditEntry(
+          doc.semanticModelAuditLog,
+          {
+            savedAt,
+            savedBy: updatedBy,
+            priorVersion: model.version ?? 0,
+            priorModel: model,
+          },
+        );
+        doc.semanticModel = nextModel;
+        doc.lastUpdatedAt = savedAt;
+        const saved = await _updater(doc);
+        return {
+          kind: "ok",
+          model: saved.semanticModel ?? nextModel,
+          lastUpdatedAt: saved.lastUpdatedAt ?? doc.lastUpdatedAt,
+        };
+      },
+    );
+    if (result.kind === "session_not_found") {
+      res.status(404).json({ error: "session_not_found", sessionId });
+      return;
+    }
+    if (result.kind === "semantic_model_not_inferred") {
+      res
+        .status(404)
+        .json({ error: "semantic_model_not_inferred", sessionId });
+      return;
+    }
+    if (result.kind === "entry_not_found") {
+      res.status(404).json({
+        error: "entry_not_found",
+        sessionId,
+        kind: parsedKind.data,
+        name: entryName,
+      });
+      return;
+    }
+    res.json({
+      sessionId,
+      lastUpdatedAt: result.lastUpdatedAt,
+      model: result.model,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`adminSemanticModel delete failed: ${msg}`);
+    res.status(500).json({ error: "admin_semantic_model_delete_failed" });
+  }
+}

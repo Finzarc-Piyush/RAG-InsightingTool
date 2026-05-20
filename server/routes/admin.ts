@@ -11,6 +11,7 @@ import {
   getSemanticModelReferences,
   patchSemanticModel,
   revertSemanticModel,
+  deleteSemanticModelEntry,
 } from "../controllers/adminSemanticModelController.js";
 
 const router = Router();
@@ -59,6 +60,20 @@ router.patch("/admin/semantic-models/:sessionId", patchSemanticModel);
 router.post(
   "/admin/semantic-models/:sessionId/revert",
   revertSemanticModel,
+);
+
+// W61-delete-server · remove a single metric / dimension / hierarchy
+// from a session's semantic model. Path-param `:kind` is
+// `metric` | `dimension` | `hierarchy`; `:name` is the entry's `name`
+// field (URL-decoded by Express). Mirrors W61-audit-revert: writes
+// the prior model to the audit log inside `withSessionWriteLock`
+// before the destructive op so "undo this delete via revert" works,
+// bumps version monotonically (W64 cache key invalidation), returns
+// the same { sessionId, lastUpdatedAt, model } envelope as W61-save
+// so the client mutation reuses the existing success handler.
+router.delete(
+  "/admin/semantic-models/:sessionId/entries/:kind/:name",
+  deleteSemanticModelEntry,
 );
 
 export default router;
