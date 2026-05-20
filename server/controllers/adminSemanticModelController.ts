@@ -20,6 +20,7 @@
  */
 
 import type { Request, Response } from "express";
+import { z } from "zod";
 import {
   getAllSessionsWithSemanticModel,
   getChatBySessionIdEfficient,
@@ -367,5 +368,161 @@ export async function getSemanticModelAuditLog(
     res
       .status(500)
       .json({ error: "admin_semantic_model_audit_log_failed" });
+  }
+}
+
+/**
+ * Wave W61-audit-revert · body schema for the revert endpoint.
+ *
+ * `auditEntryIndex` is 0-indexed against the newest-first
+ * `doc.semanticModelAuditLog` buffer (so `0` = revert to the most
+ * recent prior, i.e. "undo my last save"). `nonnegative` + `int`
+ * rejects floats and negatives at the schema boundary so the handler
+ * doesn't need a separate range check; the upper-bound check against
+ * the actual buffer length happens inside the lock so it sees the
+ * authoritative server-side state, not a stale client view.
+ */
+const revertBodySchema = z.object({
+  auditEntryIndex: z.number().int().nonnegative(),
+});
+
+/**
+ * Wave W61-audit-revert · server-side one-call revert that consumes
+ * the W61-audit-log ring buffer and the W61-audit-history-api read
+ * surface. Saves the future history-tab UI from doing a separate
+ * fetch-then-PATCH dance.
+ *
+ * The chosen entry's `priorModel` becomes the new live model with
+ * `version` bumped (monotonic — reverting to "the state of version 3"
+ * makes the live model `current+1` with the contents of v3; the
+ * version field stays monotonic because W64's compiled-query cache
+ * keys on it). `updatedAt` / `updatedBy` are stamped fresh so the
+ * model itself records the reverting admin's identity. The
+ * about-to-be-overwritten model is appended to the audit log as the
+ * new newest entry so "undo this revert" works without losing the
+ * intermediate state.
+ *
+ * **Why we skip W61-source-bump's per-entry diff on revert.** The
+ * bumper's semantic is "admin edited this entry → bump to user". A
+ * revert's semantic is "restore as-was" — every entry should keep its
+ * snapshot-time `source` field. Running the bumper would stamp every
+ * entry that differs between the snapshot and the current as `"user"`
+ * (wrong: those entries should restore to their snapshot source,
+ * which may have been `"auto"` or `"domain"`). The model-level
+ * `updatedBy` still records the reverting admin (preserves
+ * attribution at the model level) but the per-entry source comes
+ * verbatim from the snapshot.
+ *
+ * **Why bound-check inside the lock.** A multi-admin race could have
+ * one admin add a save (growing the buffer) while another is mid-
+ * revert; reading the buffer before the lock would let the revert
+ * target a now-stale index. Inside the lock the buffer length is
+ * authoritative.
+ *
+ * **Why the audit-log write happens unconditionally.** Reverting IS
+ * a state change; preserving the just-overwritten model in the
+ * buffer is required for "undo this revert" to work. If the buffer
+ * is at cap (10 entries), the prepend grows it to 11 then trims to
+ * 10 — the entry we just consumed (the user's chosen `auditEntryIndex`)
+ * might be the one dropped if it was at index 9, but that's fine
+ * because we already used it. Subsequent reverts target indices in
+ * the new buffer, which always includes the just-overwritten state.
+ */
+type RevertResult =
+  | { kind: "ok"; model: SemanticModel; lastUpdatedAt: number }
+  | { kind: "session_not_found" }
+  | { kind: "semantic_model_not_inferred" }
+  | { kind: "audit_entry_not_found" };
+
+export async function revertSemanticModel(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "admin_required" });
+    return;
+  }
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "missing_session_id" });
+    return;
+  }
+  const parsed = revertBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "invalid_audit_entry_index",
+      issues: parsed.error.issues.slice(0, 10).map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    });
+    return;
+  }
+  const updatedBy = getAuthenticatedEmail(req) ?? "unknown";
+  try {
+    const result = await withSessionWriteLock<RevertResult>(
+      sessionId,
+      async () => {
+        const doc = await _detailFetcher(sessionId);
+        if (!doc) return { kind: "session_not_found" };
+        if (!doc.semanticModel) {
+          return { kind: "semantic_model_not_inferred" };
+        }
+        const log = doc.semanticModelAuditLog ?? [];
+        if (parsed.data.auditEntryIndex >= log.length) {
+          return { kind: "audit_entry_not_found" };
+        }
+        const entry = log[parsed.data.auditEntryIndex];
+        const nextVersion = (doc.semanticModel.version ?? 0) + 1;
+        const nextModel: SemanticModel = {
+          ...entry.priorModel,
+          version: nextVersion,
+          updatedAt: new Date().toISOString(),
+          updatedBy,
+        };
+        const savedAt = Date.now();
+        doc.semanticModelAuditLog = appendSemanticModelAuditEntry(log, {
+          savedAt,
+          savedBy: updatedBy,
+          priorVersion: doc.semanticModel.version ?? 0,
+          priorModel: doc.semanticModel,
+        });
+        doc.semanticModel = nextModel;
+        doc.lastUpdatedAt = savedAt;
+        const saved = await _updater(doc);
+        return {
+          kind: "ok",
+          model: saved.semanticModel ?? nextModel,
+          lastUpdatedAt: saved.lastUpdatedAt ?? doc.lastUpdatedAt,
+        };
+      },
+    );
+    if (result.kind === "session_not_found") {
+      res.status(404).json({ error: "session_not_found", sessionId });
+      return;
+    }
+    if (result.kind === "semantic_model_not_inferred") {
+      res
+        .status(404)
+        .json({ error: "semantic_model_not_inferred", sessionId });
+      return;
+    }
+    if (result.kind === "audit_entry_not_found") {
+      res.status(404).json({
+        error: "audit_entry_not_found",
+        sessionId,
+        auditEntryIndex: parsed.data.auditEntryIndex,
+      });
+      return;
+    }
+    res.json({
+      sessionId,
+      lastUpdatedAt: result.lastUpdatedAt,
+      model: result.model,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`adminSemanticModel revert failed: ${msg}`);
+    res.status(500).json({ error: "admin_semantic_model_revert_failed" });
   }
 }

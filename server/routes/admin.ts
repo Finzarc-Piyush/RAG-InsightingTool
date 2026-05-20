@@ -9,6 +9,7 @@ import {
   getSemanticModel,
   getSemanticModelAuditLog,
   patchSemanticModel,
+  revertSemanticModel,
 } from "../controllers/adminSemanticModelController.js";
 
 const router = Router();
@@ -38,5 +39,14 @@ router.get(
 
 // W61-save · replace the session's semantic model. Bumps version + stamps updatedAt/updatedBy.
 router.patch("/admin/semantic-models/:sessionId", patchSemanticModel);
+
+// W61-audit-revert · one-call restore of a prior model from the audit
+// ring buffer. Body: { auditEntryIndex }. The about-to-be-replaced
+// model is appended to the audit log as the new newest entry so
+// "undo this revert" works without losing the intermediate state.
+router.post(
+  "/admin/semantic-models/:sessionId/revert",
+  revertSemanticModel,
+);
 
 export default router;
