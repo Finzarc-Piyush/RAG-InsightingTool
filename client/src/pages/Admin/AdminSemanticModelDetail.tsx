@@ -15,7 +15,7 @@
  * 4 line shapes per entry) and well-contained.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import {
   fetchSemanticModelDetail,
@@ -30,8 +30,17 @@ import type {
 } from "@/shared/schema";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { AdminNav } from "../Superadmin/AdminNav";
+import {
+  isMeaningfulChange,
+  validateDescription,
+  validateExpression,
+  validateLabel,
+} from "./lib/semanticModelEditValidation";
 
 function formatRelative(ms: number): string {
   if (!ms) return "—";
@@ -76,30 +85,168 @@ function ExposedToggle({
   );
 }
 
+/**
+ * W61-edit-text · Inline-editable text cell.
+ *
+ * Always-editable (no click-to-edit dance): the input is the cell.
+ * Save-on-blur: when the field loses focus, if validation passes and
+ * the trimmed value differs from prop value, fires `onSave` which
+ * triggers an optimistic update + PATCH in the parent. Enter blurs
+ * (single-line only); Escape discards the draft.
+ *
+ * The prop `value` is the source of truth — when the server's
+ * authoritative reply lands, a `useEffect` re-syncs `draft` so a
+ * server-side normalisation (e.g. trimmed whitespace) is reflected.
+ * If validation fails on blur, the draft resets to the last-known
+ * server value rather than persisting an invalid local state.
+ */
+interface EditableTextProps {
+  value: string;
+  onSave: (next: string) => void;
+  validate: (s: string) => string | null;
+  disabled: boolean;
+  ariaLabel: string;
+  multiline?: boolean;
+  monospace?: boolean;
+  placeholder?: string;
+}
+
+function EditableText({
+  value,
+  onSave,
+  validate,
+  disabled,
+  ariaLabel,
+  multiline,
+  monospace,
+  placeholder,
+}: EditableTextProps) {
+  const [draft, setDraft] = useState<string>(value);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setDraft(value);
+    setError(null);
+  }, [value]);
+
+  function handleChange(next: string): void {
+    setDraft(next);
+    setError(validate(next));
+  }
+
+  function handleBlur(): void {
+    if (error) {
+      setDraft(value);
+      setError(null);
+      return;
+    }
+    if (!isMeaningfulChange(value, draft)) {
+      setDraft(value);
+      return;
+    }
+    onSave(draft.trim());
+  }
+
+  function handleKeyDown(
+    e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ): void {
+    if (e.key === "Enter" && !multiline) {
+      e.preventDefault();
+      inputRef.current?.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setDraft(value);
+      setError(null);
+      inputRef.current?.blur();
+    }
+  }
+
+  const sharedProps = {
+    value: draft,
+    disabled,
+    "aria-label": ariaLabel,
+    "aria-invalid": error ? true : undefined,
+    placeholder,
+    onChange: (e: { target: { value: string } }) => handleChange(e.target.value),
+    onBlur: handleBlur,
+    onKeyDown: handleKeyDown,
+  } as const;
+
+  const errorClass = error
+    ? "border-destructive/60 focus-visible:ring-destructive/40 focus-visible:border-destructive/80"
+    : "";
+  const monoClass = monospace ? "font-mono text-xs" : "text-sm";
+
+  return (
+    <div className="space-y-1">
+      {multiline ? (
+        <Textarea
+          ref={inputRef as React.Ref<HTMLTextAreaElement>}
+          className={cn("min-h-[60px]", monoClass, errorClass)}
+          {...sharedProps}
+        />
+      ) : (
+        <Input
+          ref={inputRef as React.Ref<HTMLInputElement>}
+          className={cn("h-8", monoClass, errorClass)}
+          {...sharedProps}
+        />
+      )}
+      {error ? (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function MetricRow({
   m,
   saving,
   onToggleExposed,
+  onEditLabel,
+  onEditDescription,
+  onEditExpression,
 }: {
   m: SemanticMetric;
   saving: boolean;
   onToggleExposed: (next: boolean) => void;
+  onEditLabel: (next: string) => void;
+  onEditDescription: (next: string) => void;
+  onEditExpression: (next: string) => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
-      <td className="py-3 px-4">
+      <td className="py-3 px-4 space-y-2 min-w-[220px]">
         <div className="font-mono text-sm text-foreground">{m.name}</div>
-        <div className="text-xs text-muted-foreground">{m.label}</div>
-        {m.description ? (
-          <div className="text-xs text-muted-foreground mt-1 italic">
-            {m.description}
-          </div>
-        ) : null}
+        <EditableText
+          value={m.label}
+          onSave={onEditLabel}
+          validate={validateLabel}
+          disabled={saving}
+          ariaLabel={`Edit label for metric ${m.name}`}
+        />
+        <EditableText
+          value={m.description ?? ""}
+          onSave={onEditDescription}
+          validate={validateDescription}
+          disabled={saving}
+          ariaLabel={`Edit description for metric ${m.name}`}
+          multiline
+          placeholder="Description (shown to the planner)…"
+        />
       </td>
-      <td className="py-3 px-4">
-        <code className="text-xs bg-muted/40 px-1.5 py-0.5 rounded">
-          {m.expression}
-        </code>
+      <td className="py-3 px-4 min-w-[220px]">
+        <EditableText
+          value={m.expression}
+          onSave={onEditExpression}
+          validate={validateExpression}
+          disabled={saving}
+          ariaLabel={`Edit expression for metric ${m.name}`}
+          monospace
+        />
       </td>
       <td className="py-3 px-4 text-xs text-muted-foreground">
         {formatHint(m)}
@@ -123,21 +270,35 @@ function DimensionRow({
   d,
   saving,
   onToggleExposed,
+  onEditLabel,
+  onEditDescription,
 }: {
   d: SemanticDimension;
   saving: boolean;
   onToggleExposed: (next: boolean) => void;
+  onEditLabel: (next: string) => void;
+  onEditDescription: (next: string) => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
-      <td className="py-3 px-4">
+      <td className="py-3 px-4 space-y-2 min-w-[220px]">
         <div className="font-mono text-sm text-foreground">{d.name}</div>
-        <div className="text-xs text-muted-foreground">{d.label}</div>
-        {d.description ? (
-          <div className="text-xs text-muted-foreground mt-1 italic">
-            {d.description}
-          </div>
-        ) : null}
+        <EditableText
+          value={d.label}
+          onSave={onEditLabel}
+          validate={validateLabel}
+          disabled={saving}
+          ariaLabel={`Edit label for dimension ${d.name}`}
+        />
+        <EditableText
+          value={d.description ?? ""}
+          onSave={onEditDescription}
+          validate={validateDescription}
+          disabled={saving}
+          ariaLabel={`Edit description for dimension ${d.name}`}
+          multiline
+          placeholder="Description (shown to the planner)…"
+        />
       </td>
       <td className="py-3 px-4 font-mono text-xs text-muted-foreground">
         {d.column}
@@ -266,6 +427,47 @@ export default function AdminSemanticModelDetail() {
       ),
     };
     void persistModel(nextModel);
+  }
+
+  /**
+   * W61-edit-text · One handler per (entity, text-field) — keeps the
+   * patch shape narrow so the optimistic update touches only the
+   * edited cell. Description sets to `undefined` rather than the
+   * empty string so the round-trip matches the zod schema's
+   * `.optional()` (empty strings would re-emit on the server and
+   * subtly drift the doc shape).
+   */
+  function patchMetric(
+    metricName: string,
+    patch: Partial<SemanticMetric>,
+  ): void {
+    if (!data) return;
+    const nextModel: SemanticModel = {
+      ...data.model,
+      metrics: data.model.metrics.map((m) =>
+        m.name === metricName ? { ...m, ...patch } : m,
+      ),
+    };
+    void persistModel(nextModel);
+  }
+
+  function patchDimension(
+    dimensionName: string,
+    patch: Partial<SemanticDimension>,
+  ): void {
+    if (!data) return;
+    const nextModel: SemanticModel = {
+      ...data.model,
+      dimensions: data.model.dimensions.map((d) =>
+        d.name === dimensionName ? { ...d, ...patch } : d,
+      ),
+    };
+    void persistModel(nextModel);
+  }
+
+  function emptyToUndef(s: string): string | undefined {
+    const trimmed = s.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
   }
 
   if (loading && !data) {
@@ -424,6 +626,17 @@ export default function AdminSemanticModelDetail() {
                         onToggleExposed={(next) =>
                           handleToggleMetricExposed(m.name, next)
                         }
+                        onEditLabel={(next) =>
+                          patchMetric(m.name, { label: next })
+                        }
+                        onEditDescription={(next) =>
+                          patchMetric(m.name, {
+                            description: emptyToUndef(next),
+                          })
+                        }
+                        onEditExpression={(next) =>
+                          patchMetric(m.name, { expression: next })
+                        }
                       />
                     ))}
                 </tbody>
@@ -466,6 +679,14 @@ export default function AdminSemanticModelDetail() {
                         saving={saving}
                         onToggleExposed={(next) =>
                           handleToggleDimensionExposed(d.name, next)
+                        }
+                        onEditLabel={(next) =>
+                          patchDimension(d.name, { label: next })
+                        }
+                        onEditDescription={(next) =>
+                          patchDimension(d.name, {
+                            description: emptyToUndef(next),
+                          })
                         }
                       />
                     ))}
