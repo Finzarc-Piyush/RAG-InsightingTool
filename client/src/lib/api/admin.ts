@@ -217,3 +217,69 @@ export async function patchSemanticModel(
   }
   return (await res.json()) as PatchSemanticModelResponse;
 }
+
+// W61-audit-history-client · client mirror of the server's
+// SemanticModelAuditEntry. Lives client-side because the server module
+// (`server/lib/semantic/semanticModelAuditLog.ts`) is across the
+// runtime boundary; a runtime drift between this mirror and the server
+// surfaces as field-undefined access at the TanStack Query call site.
+// Mirrors the W61-detail / W61-save inline-import pattern for
+// SemanticModel.
+export interface AdminSemanticModelAuditEntry {
+  savedAt: number;
+  savedBy: string;
+  priorVersion: number;
+  priorModel: import("@/shared/schema").SemanticModel;
+}
+
+export interface AdminSemanticModelAuditLog {
+  sessionId: string;
+  entries: AdminSemanticModelAuditEntry[];
+}
+
+// W61-audit-history-client · GET /api/admin/semantic-models/:sessionId/audit-log
+export async function fetchSemanticModelAuditLog(
+  sessionId: string,
+): Promise<AdminSemanticModelAuditLog> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}/audit-log`,
+    { headers: await adminHeaders() },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId}/audit-log ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as AdminSemanticModelAuditLog;
+}
+
+// W61-audit-history-client · POST /api/admin/semantic-models/:sessionId/revert
+// Re-uses PatchSemanticModelResponse because the server envelope
+// (`{ sessionId, lastUpdatedAt, model }`) is byte-identical to the
+// W61-save response — the future history-tab UI's revert mutation can
+// reuse the same success handler shape as the existing edit mutation.
+export async function revertSemanticModel(
+  sessionId: string,
+  auditEntryIndex: number,
+): Promise<PatchSemanticModelResponse> {
+  const headers = {
+    ...(await adminHeaders()),
+    "Content-Type": "application/json",
+  };
+  const res = await fetch(
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}/revert`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ auditEntryIndex }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId}/revert ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as PatchSemanticModelResponse;
+}
