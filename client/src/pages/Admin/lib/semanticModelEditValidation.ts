@@ -94,3 +94,25 @@ export function validateExpression(value: string): string | null {
 export function isMeaningfulChange(prior: string, next: string): boolean {
   return prior.trim() !== next.trim();
 }
+
+/**
+ * W61-edit-enums · ISO 4217 currency code — three uppercase letters
+ * (USD, INR, EUR…). Required by `semanticMetricSchema` when
+ * `format === "currency"`; declared `.optional()` so the empty
+ * string is a legitimate "not set yet" value while the admin is
+ * mid-edit. The server's `safeParse` is authoritative on the
+ * cross-field constraint (`format === "currency"` paired with an
+ * empty currencyCode rejects at PATCH time).
+ *
+ * This validator does NOT enforce the format-coupling — `EditableText`
+ * validates fields in isolation; the UI gates the field's
+ * visibility on `format === "currency"`.
+ */
+export function validateCurrencyCode(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (!/^[A-Z]{3}$/.test(trimmed)) {
+    return "ISO 4217 (3 uppercase letters, e.g. INR)";
+  }
+  return null;
+}

@@ -31,16 +31,70 @@ import type {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { AdminNav } from "../Superadmin/AdminNav";
 import {
   isMeaningfulChange,
+  validateCurrencyCode,
   validateDescription,
   validateExpression,
   validateLabel,
 } from "./lib/semanticModelEditValidation";
+
+/**
+ * W61-edit-enums · enum option pickers for the admin viewer. Values
+ * must stay byte-exact to the zod enums in
+ * [`semanticMetricSchema`](../../../server/shared/schema.ts) /
+ * [`semanticDimensionSchema`](../../../server/shared/schema.ts);
+ * the server's `safeParse` is the authoritative source and a typo
+ * here would round-trip to a 400 with the invalid-enum issue
+ * surfacing in the existing "Save failed" banner.
+ */
+const METRIC_FORMAT_OPTIONS = [
+  { value: "number", label: "Number" },
+  { value: "percent", label: "Percent" },
+  { value: "currency", label: "Currency" },
+  { value: "ratio", label: "Ratio" },
+  { value: "duration", label: "Duration" },
+] as const satisfies ReadonlyArray<{
+  value: SemanticMetric["format"];
+  label: string;
+}>;
+
+const DIMENSION_KIND_OPTIONS = [
+  { value: "categorical", label: "Categorical" },
+  { value: "temporal", label: "Temporal" },
+  { value: "numeric_binned", label: "Numeric (binned)" },
+  { value: "geo", label: "Geo" },
+] as const satisfies ReadonlyArray<{
+  value: SemanticDimension["kind"];
+  label: string;
+}>;
+
+/**
+ * `temporalGrain` is `.optional()` on the schema; Radix Select can't
+ * carry an empty-string value, so a `__auto__` sentinel maps to
+ * `undefined` at the save boundary (lets the agent's
+ * `temporalFacetColumns` derivation still pick the grain from data).
+ */
+const TEMPORAL_GRAIN_AUTO = "__auto__" as const;
+const TEMPORAL_GRAIN_OPTIONS = [
+  { value: TEMPORAL_GRAIN_AUTO, label: "Auto (let agent derive)" },
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+  { value: "quarter", label: "Quarter" },
+  { value: "year", label: "Year" },
+] as const;
 
 function formatRelative(ms: number): string {
   if (!ms) return "—";
@@ -202,6 +256,55 @@ function EditableText({
   );
 }
 
+/**
+ * W61-edit-enums · Save-on-select wrapper around Radix `<Select>`.
+ *
+ * Unlike `EditableText` there's no draft / validation step — every
+ * option is by-construction valid (the option list is byte-locked to
+ * the zod enum). `onValueChange` fires `onSave` directly and the
+ * parent's optimistic-update-and-PATCH flow handles the rest.
+ *
+ * The `value` prop is `string | undefined`; Radix `<Select>` accepts
+ * `value={undefined}` which renders the placeholder. Used by the
+ * temporal-grain cell where the "Auto" sentinel is passed through.
+ */
+interface EditableSelectProps<T extends string> {
+  value: T | undefined;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onSave: (next: T) => void;
+  disabled: boolean;
+  ariaLabel: string;
+  placeholder?: string;
+}
+
+function EditableSelect<T extends string>({
+  value,
+  options,
+  onSave,
+  disabled,
+  ariaLabel,
+  placeholder,
+}: EditableSelectProps<T>) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(v) => onSave(v as T)}
+      disabled={disabled}
+    >
+      <SelectTrigger className="h-8 text-sm" aria-label={ariaLabel}>
+        <SelectValue placeholder={placeholder ?? "Select…"} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function MetricRow({
   m,
   saving,
@@ -209,6 +312,8 @@ function MetricRow({
   onEditLabel,
   onEditDescription,
   onEditExpression,
+  onEditFormat,
+  onEditCurrencyCode,
 }: {
   m: SemanticMetric;
   saving: boolean;
@@ -216,6 +321,8 @@ function MetricRow({
   onEditLabel: (next: string) => void;
   onEditDescription: (next: string) => void;
   onEditExpression: (next: string) => void;
+  onEditFormat: (next: SemanticMetric["format"]) => void;
+  onEditCurrencyCode: (next: string) => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
@@ -248,8 +355,30 @@ function MetricRow({
           monospace
         />
       </td>
-      <td className="py-3 px-4 text-xs text-muted-foreground">
-        {formatHint(m)}
+      <td className="py-3 px-4 min-w-[160px] space-y-2">
+        <EditableSelect
+          value={m.format}
+          options={METRIC_FORMAT_OPTIONS}
+          onSave={onEditFormat}
+          disabled={saving}
+          ariaLabel={`Edit format for metric ${m.name}`}
+        />
+        {m.format === "currency" ? (
+          <EditableText
+            value={m.currencyCode ?? ""}
+            onSave={onEditCurrencyCode}
+            validate={validateCurrencyCode}
+            disabled={saving}
+            ariaLabel={`Edit currency code for metric ${m.name}`}
+            monospace
+            placeholder="USD / INR / EUR"
+          />
+        ) : null}
+        {m.decimals !== undefined ? (
+          <div className="text-xs text-muted-foreground">
+            {m.decimals} dp
+          </div>
+        ) : null}
       </td>
       <td className="py-3 px-4 text-xs text-muted-foreground">
         {m.references.length === 0 ? "—" : m.references.join(", ")}
@@ -272,12 +401,16 @@ function DimensionRow({
   onToggleExposed,
   onEditLabel,
   onEditDescription,
+  onEditKind,
+  onEditTemporalGrain,
 }: {
   d: SemanticDimension;
   saving: boolean;
   onToggleExposed: (next: boolean) => void;
   onEditLabel: (next: string) => void;
   onEditDescription: (next: string) => void;
+  onEditKind: (next: SemanticDimension["kind"]) => void;
+  onEditTemporalGrain: (next: string) => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
@@ -303,11 +436,23 @@ function DimensionRow({
       <td className="py-3 px-4 font-mono text-xs text-muted-foreground">
         {d.column}
       </td>
-      <td className="py-3 px-4 text-xs text-muted-foreground">
-        {d.kind}
-        {d.kind === "temporal" && d.temporalGrain
-          ? ` (${d.temporalGrain})`
-          : ""}
+      <td className="py-3 px-4 min-w-[180px] space-y-2">
+        <EditableSelect
+          value={d.kind}
+          options={DIMENSION_KIND_OPTIONS}
+          onSave={onEditKind}
+          disabled={saving}
+          ariaLabel={`Edit kind for dimension ${d.name}`}
+        />
+        {d.kind === "temporal" ? (
+          <EditableSelect
+            value={d.temporalGrain ?? TEMPORAL_GRAIN_AUTO}
+            options={TEMPORAL_GRAIN_OPTIONS}
+            onSave={onEditTemporalGrain}
+            disabled={saving}
+            ariaLabel={`Edit temporal grain for dimension ${d.name}`}
+          />
+        ) : null}
       </td>
       <td className="py-3 px-4">
         <ExposedToggle
@@ -468,6 +613,59 @@ export default function AdminSemanticModelDetail() {
   function emptyToUndef(s: string): string | undefined {
     const trimmed = s.trim();
     return trimmed.length === 0 ? undefined : trimmed;
+  }
+
+  /**
+   * W61-edit-enums · clears `currencyCode` when the admin switches
+   * away from `format: "currency"` — the field is meaningless without
+   * the currency format, and leaving the stale code would surface in
+   * the planner manifest as a misleading "(USD)" hint on a percent or
+   * ratio metric. Server's `safeParse` doesn't strip it on its own.
+   */
+  function handleMetricFormatChange(
+    metricName: string,
+    nextFormat: SemanticMetric["format"],
+  ): void {
+    const patch: Partial<SemanticMetric> = { format: nextFormat };
+    if (nextFormat !== "currency") {
+      patch.currencyCode = undefined;
+    }
+    patchMetric(metricName, patch);
+  }
+
+  /**
+   * W61-edit-enums · clears `temporalGrain` when the admin switches
+   * away from `kind: "temporal"` — the grain only makes sense paired
+   * with a temporal dimension, and a stale grain on a `categorical`
+   * dimension would confuse the planner. The agent's
+   * `temporalFacetColumns` derivation is the fallback when grain is
+   * undefined and the kind IS temporal.
+   */
+  function handleDimensionKindChange(
+    dimensionName: string,
+    nextKind: SemanticDimension["kind"],
+  ): void {
+    const patch: Partial<SemanticDimension> = { kind: nextKind };
+    if (nextKind !== "temporal") {
+      patch.temporalGrain = undefined;
+    }
+    patchDimension(dimensionName, patch);
+  }
+
+  /**
+   * W61-edit-enums · the `__auto__` sentinel from `TEMPORAL_GRAIN_OPTIONS`
+   * maps to `undefined` at the save boundary; any concrete grain
+   * (day / week / month / quarter / year) flows through as-is.
+   */
+  function handleTemporalGrainChange(
+    dimensionName: string,
+    nextGrain: string,
+  ): void {
+    const grain =
+      nextGrain === TEMPORAL_GRAIN_AUTO
+        ? undefined
+        : (nextGrain as SemanticDimension["temporalGrain"]);
+    patchDimension(dimensionName, { temporalGrain: grain });
   }
 
   if (loading && !data) {
@@ -637,6 +835,14 @@ export default function AdminSemanticModelDetail() {
                         onEditExpression={(next) =>
                           patchMetric(m.name, { expression: next })
                         }
+                        onEditFormat={(next) =>
+                          handleMetricFormatChange(m.name, next)
+                        }
+                        onEditCurrencyCode={(next) =>
+                          patchMetric(m.name, {
+                            currencyCode: emptyToUndef(next),
+                          })
+                        }
                       />
                     ))}
                 </tbody>
@@ -687,6 +893,12 @@ export default function AdminSemanticModelDetail() {
                           patchDimension(d.name, {
                             description: emptyToUndef(next),
                           })
+                        }
+                        onEditKind={(next) =>
+                          handleDimensionKindChange(d.name, next)
+                        }
+                        onEditTemporalGrain={(next) =>
+                          handleTemporalGrainChange(d.name, next)
                         }
                       />
                     ))}
