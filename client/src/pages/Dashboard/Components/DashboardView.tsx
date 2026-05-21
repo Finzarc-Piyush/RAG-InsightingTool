@@ -41,7 +41,12 @@ import { DrillThroughSheet } from './DrillThroughSheet';
 // Wave WD3-telemetry · fire-and-forget POST to /api/telemetry/drill-through
 // when the listener accepts a validated DrillThroughEvent (quantify which
 // chart kinds + columns get drilled into in Cosmos via recordUsageEvent).
-import { recordDashboardDrillThroughTelemetry } from '../../../lib/telemetry';
+// Wave WI4-telemetry · sibling helper for the WI4 explain-slice listener,
+// emitting the BrushRegion discriminant as `regionKind`.
+import {
+  recordDashboardDrillThroughTelemetry,
+  recordDashboardExplainSliceTelemetry,
+} from '../../../lib/telemetry';
 // Wave WI4-panel · subscribe to the WI4 explain-slice event family
 // and render a side-panel showing the brushed sub-region's pin +
 // (in a follow-on WI4-wire wave) the regenerated insight prose.
@@ -466,13 +471,24 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       ) {
         return;
       }
+      // Wave WI4-telemetry · fire-and-forget observability call between
+      // validation and panel-open. `detail.region.kind` carries the
+      // BrushRegion discriminant ("numeric" | "temporal" | "categorical"
+      // | "box2d") — the shape of the brushed sub-domain without
+      // leaking the raw bounds/values themselves.
+      void recordDashboardExplainSliceTelemetry({
+        chartId: detail.chartId,
+        column: detail.column,
+        regionKind: detail.region.kind,
+        dashboardId: dashboard.id,
+      });
       setExplainSliceEvent(detail);
     };
     window.addEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
     return () => {
       window.removeEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
     };
-  }, []);
+  }, [dashboard.id]);
 
   const handleTileFiltersChange = useCallback((tileId: string, filters: ActiveChartFilters) => {
     setPerTileFilters((prev) => {

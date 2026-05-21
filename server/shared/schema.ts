@@ -3244,6 +3244,7 @@ export const usageEventTypeSchema = z.enum([
   "dashboard.opened",
   "dashboard.shared",
   "dashboard.drill-through",
+  "dashboard.explain-slice",
   "analysis.shared",
   "pivot.generated",
   "message.regenerated",
