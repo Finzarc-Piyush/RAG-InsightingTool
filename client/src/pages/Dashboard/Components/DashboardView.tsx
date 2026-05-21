@@ -38,6 +38,10 @@ import {
   type DrillThroughEvent,
 } from '../lib/drillThrough';
 import { DrillThroughSheet } from './DrillThroughSheet';
+// Wave WD3-telemetry · fire-and-forget POST to /api/telemetry/drill-through
+// when the listener accepts a validated DrillThroughEvent (quantify which
+// chart kinds + columns get drilled into in Cosmos via recordUsageEvent).
+import { recordDashboardDrillThroughTelemetry } from '../../../lib/telemetry';
 // Wave WI4-panel · subscribe to the WI4 explain-slice event family
 // and render a side-panel showing the brushed sub-region's pin +
 // (in a follow-on WI4-wire wave) the regenerated insight prose.
@@ -425,13 +429,23 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       ) {
         return;
       }
+      // Wave WD3-telemetry · fire-and-forget observability call between
+      // validation and sheet-open. `typeof detail.value` carries the
+      // shape of the clicked mark's value without leaking PII (the raw
+      // value itself never goes on the wire).
+      void recordDashboardDrillThroughTelemetry({
+        chartId: detail.chartId,
+        column: detail.column,
+        valueType: typeof detail.value,
+        dashboardId: dashboard.id,
+      });
       setDrillThroughEvent(detail);
     };
     window.addEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     return () => {
       window.removeEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     };
-  }, []);
+  }, [dashboard.id]);
 
   // Wave WI4-panel · subscribe to EXPLAIN_SLICE_EVENT and open the
   // ExplainSlicePanel on receipt. Mirrors the DRILL_THROUGH_EVENT

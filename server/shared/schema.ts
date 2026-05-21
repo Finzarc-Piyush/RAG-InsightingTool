@@ -3243,6 +3243,7 @@ export const usageEventTypeSchema = z.enum([
   "dashboard.exported",
   "dashboard.opened",
   "dashboard.shared",
+  "dashboard.drill-through",
   "analysis.shared",
   "pivot.generated",
   "message.regenerated",

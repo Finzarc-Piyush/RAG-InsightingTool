@@ -18,6 +18,7 @@ import superadminRoutes from "./superadmin.js";
 import automationRoutes from "./automations.js";
 import pastAnalysesRoutes from "./pastAnalyses.js";
 import insightRegenRoutes from "./insightRegen.js";
+import telemetryRoutes from "./telemetry.js";
 
 export function registerRoutes(app: Express): Server | void {
   // Register route modules
@@ -39,6 +40,7 @@ export function registerRoutes(app: Express): Server | void {
   app.use('/api', automationRoutes);
   app.use('/api', pastAnalysesRoutes);
   app.use('/api', insightRegenRoutes);
+  app.use('/api', telemetryRoutes);
 
   // For Vercel, we don't need to create HTTP server
   if (process.env.VERCEL) {
