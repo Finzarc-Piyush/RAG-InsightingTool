@@ -159,12 +159,41 @@ export async function fetchSemanticModels(): Promise<AdminSemanticModelListSnaps
 
 // W61-detail · per-session semantic-model payload for the read-only viewer.
 
+/**
+ * Wave W61-detail-schema · projected dataset column shape (matches the
+ * server's `AdminSemanticModelDatasetColumn`). Declared client-side
+ * rather than imported across the runtime boundary per the W61
+ * cross-runtime-boundary local-interface-mirror convention; runtime
+ * drift surfaces as field-undefined at the call site rather than
+ * compile errors.
+ */
+export interface AdminSemanticModelDatasetColumn {
+  name: string;
+  type: string;
+}
+
+/**
+ * Wave W61-detail-schema · the dataset's column inventory at admin
+ * read time (mirrors server's `AdminSemanticModelDatasetSchema`).
+ */
+export interface AdminSemanticModelDatasetSchema {
+  columns: AdminSemanticModelDatasetColumn[];
+}
+
 export interface AdminSemanticModelDetail {
   sessionId: string;
   fileName: string;
   username: string;
   lastUpdatedAt: number;
   model: import("@/shared/schema").SemanticModel;
+  /**
+   * Wave W61-detail-schema · the session's live dataset columns,
+   * populated from `doc.dataSummary?.columns` server-side. `null`
+   * when the doc has no `dataSummary` OR when its `columns` array is
+   * empty — consumers (column-picker, references tag-input) should
+   * fall back to free-text edit when null.
+   */
+  datasetSchema: AdminSemanticModelDatasetSchema | null;
 }
 
 export async function fetchSemanticModelDetail(

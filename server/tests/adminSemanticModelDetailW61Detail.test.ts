@@ -215,6 +215,10 @@ test("W61-detail · getSemanticModel: 200 envelope for admin with valid session"
     assert.equal(body.model.dimensions.length, 1);
     assert.equal(body.model.dimensions[0].name, "region");
     assert.equal(body.model.hierarchies.length, 0);
+    // W61-detail-schema · datasetSchema is null on this fixture
+    // because FIXTURE_DOC has no dataSummary; the dedicated
+    // W61-detail-schema test file covers the populated branch.
+    assert.equal(body.datasetSchema, null);
   } finally {
     __resetSuperadminEmailsForTesting();
     __setSemanticModelDetailFetcherForTesting(null);

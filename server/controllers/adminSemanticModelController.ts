@@ -60,12 +60,69 @@ export interface AdminSemanticModelListResponse {
   sessions: AdminSemanticModelListEntry[];
 }
 
+/**
+ * Wave W61-detail-schema · projected column shape sent to the admin
+ * detail viewer. A deliberate subset of [`DataSummary.columns[]`](../shared/schema.ts)
+ * — only `name` + `type` so the wire payload stays small (a 60-column
+ * dataset's full `DataSummary.column` shape with `sampleValues` /
+ * `topValues` / `dateRange` / etc. is ~50 KB; the projection is ~2 KB).
+ * The future W61-edit-column column-picker and W61-edit-references
+ * tag-input only need the (name, type) tuple to populate the dropdown
+ * and (optionally) filter the candidate list by type.
+ */
+export interface AdminSemanticModelDatasetColumn {
+  name: string;
+  type: string;
+}
+
+/**
+ * Wave W61-detail-schema · the dataset's column inventory at admin
+ * read time. Wrapper object rather than a bare array so future
+ * dataset-wide signals (e.g., wide-format-transform flags) can land
+ * here without re-widening the envelope.
+ */
+export interface AdminSemanticModelDatasetSchema {
+  columns: AdminSemanticModelDatasetColumn[];
+}
+
 export interface AdminSemanticModelDetailResponse {
   sessionId: string;
   fileName: string;
   username: string;
   lastUpdatedAt: number;
   model: SemanticModel;
+  /**
+   * Wave W61-detail-schema · the session's live dataset column list,
+   * projected from `doc.dataSummary?.columns`. `null` when the doc has
+   * no `dataSummary` (pre-W57 docs were guarded out at the model
+   * not-inferred branch, but legacy docs without a populated dataSummary
+   * still exist) OR when `dataSummary.columns` is empty. The client's
+   * upcoming column-picker / references tag-input UIs should fall back
+   * to free-text edit when this is null so legacy sessions remain
+   * editable.
+   */
+  datasetSchema: AdminSemanticModelDatasetSchema | null;
+}
+
+/**
+ * Wave W61-detail-schema · pure projection of a ChatDocument's
+ * `dataSummary.columns` into the wire-projection shape. Exported so
+ * tests can drive it directly and so future endpoints (a hypothetical
+ * `/admin/sessions/:id/columns` lightweight surface) can reuse it
+ * without duplicating the field selection.
+ *
+ * Returns `null` when the doc has no `dataSummary` field OR when its
+ * `columns` array is empty, so the consumer has a single null check
+ * rather than two (`?.columns?.length > 0` is the only positive case).
+ */
+export function projectDatasetSchema(
+  doc: Pick<ChatDocument, "dataSummary">,
+): AdminSemanticModelDatasetSchema | null {
+  const cols = doc.dataSummary?.columns;
+  if (!cols || cols.length === 0) return null;
+  return {
+    columns: cols.map((c) => ({ name: c.name, type: c.type })),
+  };
 }
 
 /**
@@ -259,6 +316,11 @@ export async function getSemanticModel(
       username: doc.username ?? "",
       lastUpdatedAt: doc.lastUpdatedAt ?? 0,
       model: doc.semanticModel,
+      // W61-detail-schema · project the dataset's column inventory
+      // into the envelope so the upcoming W61-edit-column +
+      // W61-edit-references UIs can populate a column-picker /
+      // tag-input from authoritative server state rather than guessing.
+      datasetSchema: projectDatasetSchema(doc),
     };
     res.json(body);
   } catch (err) {
