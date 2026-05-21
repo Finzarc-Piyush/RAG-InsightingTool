@@ -147,3 +147,49 @@ export function validateName(value: string): string | null {
   }
   return null;
 }
+
+/**
+ * W61-edit-column / W61-edit-references · single column-name validator.
+ * Length bounds mirror `semanticDimensionSchema.column` (min(1).max(200))
+ * and per-item bounds of `semanticMetricSchema.references` (each entry
+ * min(1).max(200)). No format check — dataset columns can include spaces
+ * and mixed case (e.g., "Order Date", "Net Sales").
+ *
+ * Does NOT verify the column exists in the dataset. That's enforced by
+ * the EditableColumnPicker / EditableColumnTagList dropdowns when the
+ * detail envelope's `datasetSchema` is non-null (the picker only offers
+ * existing columns). When `datasetSchema` is null the field falls back to
+ * free-text input — the W58 compiler then catches the orphan binding at
+ * query-plan time (per the orphan-column-lint contract).
+ */
+const COLUMN_MIN = 1;
+const COLUMN_MAX = 200;
+export function validateColumn(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length < COLUMN_MIN) return "Column is required";
+  if (trimmed.length > COLUMN_MAX) {
+    return `Column name must be ${COLUMN_MAX} characters or fewer`;
+  }
+  return null;
+}
+
+/**
+ * W61-edit-references · array-level validator for `SemanticMetric.references`.
+ * Cardinality bound mirrors `semanticMetricSchema.references.max(20)`.
+ * Per-item content is validated by `validateColumn` at add time; the tag-
+ * list UI dedupes before calling `onSave`, so this validator does not
+ * re-check for duplicates.
+ *
+ * `REFERENCES_MAX` is exported so the tag-list UI can disable the "+ Add"
+ * affordance at the cap (rather than letting the admin add a 21st tag
+ * and surfacing the rejection only after blur). One source of truth.
+ */
+export const REFERENCES_MAX = 20;
+export function validateReferences(
+  refs: ReadonlyArray<string>,
+): string | null {
+  if (refs.length > REFERENCES_MAX) {
+    return `References must be ${REFERENCES_MAX} columns or fewer`;
+  }
+  return null;
+}

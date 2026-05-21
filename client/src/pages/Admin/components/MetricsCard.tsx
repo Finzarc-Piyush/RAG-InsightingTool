@@ -17,13 +17,30 @@
  * enough that exporting it would multiply the test surface for zero
  * upside. Pattern mirrors `AuditHistoryCard.tsx` (single card + its
  * internal row layout).
+ *
+ * Wave W61-edit-references · the read-only "References" cell now hosts
+ * an `EditableColumnTagList` — admins add columns from a dropdown of
+ * dataset columns (when `datasetSchema` is non-null) or via a free-text
+ * input (fallback). Each tag is removable. Drives the W58 compiler's
+ * orphan-column lint via `validateModel` (W63).
  */
 
-import { Plus } from "lucide-react";
+import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import type { SemanticMetric } from "@/shared/schema";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  REFERENCES_MAX,
+  validateColumn,
   validateCurrencyCode,
   validateDescription,
   validateExpression,
@@ -62,27 +79,207 @@ const METRIC_FORMAT_OPTIONS = [
   label: string;
 }>;
 
+/**
+ * W61-edit-references · Schema-aware tag-list for the metric's
+ * `references` column array. Renders existing entries as removable
+ * chips; admins add new entries via a dropdown of remaining dataset
+ * columns (when `datasetColumns` is non-null) or a free-text input
+ * (fallback when the schema is null).
+ *
+ * UI rules:
+ *   - Existing tags shown alphabetically (matches the picker ordering)
+ *   - "+ Add column…" affordance hidden when at the `REFERENCES_MAX`
+ *     cap (20) — instead, a "Max N references" footer message is shown
+ *   - Dropdown options exclude already-referenced columns so the same
+ *     column can't be added twice
+ *   - Free-text add path validates via `validateColumn` and dedupes
+ *   - Whole-array replacement via `onSave([...current, newCol])` or
+ *     `onSave(current.filter(c => c !== removedCol))` — the host's
+ *     `patchMetric` re-runs the optimistic-update + PATCH flow for
+ *     each tag mutation (one save per add/remove). Batching multiple
+ *     tag changes into a single save would need a draft buffer, which
+ *     would mismatch the inline-edit semantics of the other cells.
+ *
+ * The W58 compiler does the authoritative column-binding check; this
+ * UI only narrows the set of values the admin can choose from to keep
+ * the round-trip path obviously-valid.
+ */
+interface EditableColumnTagListProps {
+  values: ReadonlyArray<string>;
+  datasetColumns: ReadonlyArray<string> | null;
+  onSave: (next: string[]) => void;
+  disabled: boolean;
+  ariaLabel: string;
+}
+
+function EditableColumnTagList({
+  values,
+  datasetColumns,
+  onSave,
+  disabled,
+  ariaLabel,
+}: EditableColumnTagListProps) {
+  const [pendingAdd, setPendingAdd] = useState<string>("");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const atMax = values.length >= REFERENCES_MAX;
+
+  function handleRemove(col: string): void {
+    onSave(values.filter((v) => v !== col));
+  }
+
+  function handleAddFromSelect(col: string): void {
+    if (values.includes(col)) return;
+    if (atMax) return;
+    onSave([...values, col]);
+  }
+
+  function handleAddFromInput(): void {
+    const trimmed = pendingAdd.trim();
+    const err = validateColumn(trimmed);
+    if (err) {
+      setAddError(err);
+      return;
+    }
+    if (values.includes(trimmed)) {
+      setAddError("Already in references");
+      return;
+    }
+    onSave([...values, trimmed]);
+    setPendingAdd("");
+    setAddError(null);
+  }
+
+  const remainingCols = datasetColumns
+    ? datasetColumns
+        .filter((c) => !values.includes(c))
+        .sort((a, b) => a.localeCompare(b))
+    : [];
+  const sortedValues = [...values].sort((a, b) => a.localeCompare(b));
+
+  return (
+    <div className="space-y-2" aria-label={ariaLabel}>
+      {sortedValues.length === 0 ? (
+        <span className="text-xs text-muted-foreground">—</span>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {sortedValues.map((c) => (
+            <span
+              key={c}
+              className="inline-flex items-center gap-1 rounded bg-muted/40 px-1.5 py-0.5 text-[11px] font-mono"
+            >
+              {c}
+              {!disabled ? (
+                <button
+                  type="button"
+                  onClick={() => handleRemove(c)}
+                  aria-label={`Remove ${c} from references`}
+                  className="text-muted-foreground hover:text-destructive focus:outline-none focus-visible:ring-1 focus-visible:ring-destructive/40 rounded"
+                >
+                  <X className="h-3 w-3" aria-hidden="true" />
+                </button>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!atMax && datasetColumns !== null && remainingCols.length > 0 ? (
+        <Select
+          value=""
+          onValueChange={handleAddFromSelect}
+          disabled={disabled}
+        >
+          <SelectTrigger
+            className="h-7 text-xs"
+            aria-label={`Add column reference for ${ariaLabel}`}
+          >
+            <SelectValue placeholder="+ Add column…" />
+          </SelectTrigger>
+          <SelectContent>
+            {remainingCols.map((c) => (
+              <SelectItem key={c} value={c} className="font-mono text-xs">
+                {c}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+
+      {!atMax && datasetColumns === null ? (
+        <div className="space-y-1">
+          <div className="flex gap-1">
+            <Input
+              value={pendingAdd}
+              onChange={(e) => {
+                setPendingAdd(e.target.value);
+                setAddError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAddFromInput();
+                }
+              }}
+              disabled={disabled}
+              placeholder="Column name…"
+              className="h-7 font-mono text-xs"
+              aria-label={`New column reference for ${ariaLabel}`}
+              aria-invalid={addError ? true : undefined}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleAddFromInput}
+              disabled={disabled || pendingAdd.trim().length === 0}
+              className="h-7 px-2 text-xs"
+            >
+              Add
+            </Button>
+          </div>
+          {addError ? (
+            <p className="text-xs text-destructive" role="alert">
+              {addError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {atMax ? (
+        <p className="text-[11px] text-muted-foreground">
+          Max {REFERENCES_MAX} references.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function MetricRow({
   m,
   saving,
   deletePending,
+  datasetColumns,
   onToggleExposed,
   onEditLabel,
   onEditDescription,
   onEditExpression,
   onEditFormat,
   onEditCurrencyCode,
+  onEditReferences,
   onDelete,
 }: {
   m: SemanticMetric;
   saving: boolean;
   deletePending: boolean;
+  datasetColumns: ReadonlyArray<string> | null;
   onToggleExposed: (next: boolean) => void;
   onEditLabel: (next: string) => void;
   onEditDescription: (next: string) => void;
   onEditExpression: (next: string) => void;
   onEditFormat: (next: SemanticMetric["format"]) => void;
   onEditCurrencyCode: (next: string) => void;
+  onEditReferences: (next: string[]) => void;
   onDelete: () => void;
 }) {
   return (
@@ -144,8 +341,14 @@ function MetricRow({
           </div>
         ) : null}
       </td>
-      <td className="py-3 px-4 text-xs text-muted-foreground">
-        {m.references.length === 0 ? "—" : m.references.join(", ")}
+      <td className="py-3 px-4 min-w-[180px]">
+        <EditableColumnTagList
+          values={m.references}
+          datasetColumns={datasetColumns}
+          onSave={onEditReferences}
+          disabled={saving}
+          ariaLabel={`metric ${m.name}`}
+        />
       </td>
       <td className="py-3 px-4">
         <ExposedToggle
@@ -168,6 +371,14 @@ function MetricRow({
 
 export interface MetricsCardProps {
   metrics: SemanticMetric[];
+  /**
+   * W61-edit-references · the session's live dataset column names
+   * projected from `data.datasetSchema?.columns.map(c => c.name) ?? null`
+   * in the host. `null` when the detail envelope's `datasetSchema` is
+   * null — the tag list falls back to a free-text input in that case so
+   * the field is still editable.
+   */
+  datasetColumns: ReadonlyArray<string> | null;
   sourceFilter: SemanticEntryFilter;
   onSourceFilterChange: (next: SemanticEntryFilter) => void;
   saving: boolean;
@@ -180,11 +391,13 @@ export interface MetricsCardProps {
   onEditExpression: (metricName: string, next: string) => void;
   onEditFormat: (metricName: string, next: SemanticMetric["format"]) => void;
   onEditCurrencyCode: (metricName: string, next: string) => void;
+  onEditReferences: (metricName: string, next: string[]) => void;
   onRequestDelete: (metricName: string) => void;
 }
 
 export function MetricsCard({
   metrics,
+  datasetColumns,
   sourceFilter,
   onSourceFilterChange,
   saving,
@@ -197,6 +410,7 @@ export function MetricsCard({
   onEditExpression,
   onEditFormat,
   onEditCurrencyCode,
+  onEditReferences,
   onRequestDelete,
 }: MetricsCardProps) {
   return (
@@ -251,6 +465,7 @@ export function MetricsCard({
                     m={m}
                     saving={saving}
                     deletePending={deletePending}
+                    datasetColumns={datasetColumns}
                     onToggleExposed={(next) => onToggleExposed(m.name, next)}
                     onEditLabel={(next) => onEditLabel(m.name, next)}
                     onEditDescription={(next) =>
@@ -262,6 +477,9 @@ export function MetricsCard({
                     onEditFormat={(next) => onEditFormat(m.name, next)}
                     onEditCurrencyCode={(next) =>
                       onEditCurrencyCode(m.name, next)
+                    }
+                    onEditReferences={(next) =>
+                      onEditReferences(m.name, next)
                     }
                     onDelete={() => onRequestDelete(m.name)}
                   />

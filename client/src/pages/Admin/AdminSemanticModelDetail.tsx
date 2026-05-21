@@ -596,6 +596,15 @@ export default function AdminSemanticModelDetail() {
     addSubmitting !== null ||
     deletingEntry !== null ||
     reverting !== null;
+  // Wave W61-edit-column / W61-edit-references · derive the live dataset
+  // column-name list once per render and thread the readonly array down
+  // to MetricsCard (references tag-list) + DimensionsCard (column
+  // picker). `null` propagates the "no dataSummary" signal so each
+  // card's editable cell can fall back to free-text input rather than
+  // an empty dropdown.
+  const datasetColumns: ReadonlyArray<string> | null = data.datasetSchema
+    ? data.datasetSchema.columns.map((c) => c.name)
+    : null;
 
   return (
     <>
@@ -665,6 +674,7 @@ export default function AdminSemanticModelDetail() {
 
         <MetricsCard
           metrics={model.metrics}
+          datasetColumns={datasetColumns}
           sourceFilter={sourceFilter}
           onSourceFilterChange={setSourceFilter}
           saving={saving}
@@ -683,6 +693,9 @@ export default function AdminSemanticModelDetail() {
           onEditCurrencyCode={(name, next) =>
             patchMetric(name, { currencyCode: emptyToUndef(next) })
           }
+          onEditReferences={(name, next) =>
+            patchMetric(name, { references: next })
+          }
           onRequestDelete={(name) =>
             setPendingDelete({ kind: "metric", name })
           }
@@ -690,6 +703,7 @@ export default function AdminSemanticModelDetail() {
 
         <DimensionsCard
           dimensions={model.dimensions}
+          datasetColumns={datasetColumns}
           sourceFilter={sourceFilter}
           onSourceFilterChange={setSourceFilter}
           saving={saving}
@@ -702,6 +716,9 @@ export default function AdminSemanticModelDetail() {
           }
           onEditDescription={(name, next) =>
             patchDimension(name, { description: emptyToUndef(next) })
+          }
+          onEditColumn={(name, next) =>
+            patchDimension(name, { column: next })
           }
           onEditKind={handleDimensionKindChange}
           onEditTemporalGrain={handleTemporalGrainChange}
