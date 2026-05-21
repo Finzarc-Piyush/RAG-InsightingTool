@@ -450,7 +450,23 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         dashboardId: dashboard.id,
         sheetId: activeSheetId ?? undefined,
       });
-      setDrillThroughEvent(detail);
+      // Wave WD3-server-sheetId-resolution · inject activeSheetId onto
+      // the event detail before storing it in state. Capturing at
+      // click time (NOT at sheet-render time) means the server-side
+      // chartId lookup resolves against the correct sheet even if the
+      // user navigates to a different sheet while the side-sheet is
+      // open. The conditional spread (...{ ..., ...(activeSheetId ?
+      // { sheetId: activeSheetId } : {}) }) preserves the byte-
+      // identical event shape for single-sheet dashboards, where
+      // activeSheetId is non-null but the disambiguation is unneeded
+      // — actually we DO inject it whenever non-null, since the
+      // server's scoped lookup is strictly more precise than the
+      // legacy walk, and single-sheet resolution is a degenerate case
+      // of the multi-sheet path. The omit branch only fires when
+      // activeSheetId is null (very early mount, no sheets yet).
+      setDrillThroughEvent(
+        activeSheetId ? { ...detail, sheetId: activeSheetId } : detail,
+      );
     };
     window.addEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     return () => {

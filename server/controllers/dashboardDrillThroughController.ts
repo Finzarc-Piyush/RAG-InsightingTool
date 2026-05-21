@@ -8,7 +8,10 @@
  *
  * Request:
  *   - URL params: `id` = dashboard id
- *   - Query params: `chartId`, `column` (URL-encoded), `value` (URL-encoded)
+ *   - Query params: `chartId`, `column` (URL-encoded), `value` (URL-encoded),
+ *     optional `sheetId` (Wave WD3-server-sheetId-resolution — disambiguates
+ *     the per-sheet `chart-N` on multi-sheet dashboards; absent → legacy
+ *     walk-across-sheets behaviour preserved for shareable URLs)
  *   - Body (application/json):
  *     ```ts
  *     { filters?: ActiveChartFilters, extraPins?: DrillThroughPin[] }
@@ -60,6 +63,13 @@ export async function drillDashboardController(
   // `value` is intentionally lenient — null / undefined / "" are valid
   // drill targets (e.g. "drill into rows where Region is null").
   const value = typeof req.query.value === "string" ? req.query.value : null;
+  // Wave WD3-server-sheetId-resolution · optional sheetId scopes the
+  // chartId lookup to a specific sheet on multi-sheet dashboards. Read
+  // as a string-only query param (typeof guard matches the chartId /
+  // column / value pattern above); leave undefined when absent so the
+  // service's legacy walk-across-sheets behaviour stays the fallback.
+  const sheetId =
+    typeof req.query.sheetId === "string" ? req.query.sheetId : undefined;
   const body = (req.body ?? {}) as {
     filters?: DrillThroughRequest["filters"];
     extraPins?: DrillThroughRequest["extraPins"];
@@ -75,6 +85,7 @@ export async function drillDashboardController(
       value,
       extraPins: body.extraPins,
       filters: body.filters,
+      sheetId,
     });
     res.status(200).json(response);
   } catch (err) {

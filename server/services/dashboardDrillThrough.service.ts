@@ -16,10 +16,15 @@
  * The chart-by-id lookup mirrors the existing XLSX export endpoint's
  * approach: charts inside a dashboard are identified by tileId
  * (`chart-${index}` per sheet — same convention as the client's
- * `DashboardView.tsx` derivation). For multi-sheet dashboards the
- * endpoint returns the first match across all sheets (most real
- * dashboards have a single sheet; multi-sheet disambiguation can be
- * a future wave).
+ * `DashboardView.tsx` derivation).
+ *
+ * Wave WD3-server-sheetId-resolution · `findChartByTileId` accepts an
+ * optional `sheetId` to disambiguate the per-sheet chartId on multi-
+ * sheet dashboards. With `sheetId` the lookup is scoped to that sheet
+ * (returns null if the sheetId doesn't match any sheet OR that sheet
+ * has no chart at the index); without `sheetId` the legacy walk-across-
+ * sheets behaviour returns the first match (backwards-compat for
+ * shareable URLs that pre-date the disambiguation wave).
  */
 
 import type { Dashboard, ChartSpec } from "../shared/schema.js";
@@ -61,6 +66,15 @@ export interface DrillThroughRequest {
   extraPins?: DrillThroughPin[];
   /** Active filters at click time. Applied BEFORE pinning. */
   filters?: ActiveChartFilters;
+  /**
+   * Wave WD3-server-sheetId-resolution · optional sheet id that scopes
+   * the chartId lookup to a specific sheet on multi-sheet dashboards.
+   * When omitted, the legacy walk-across-sheets behaviour is preserved
+   * (backwards-compat for shareable URLs that pre-date this wave).
+   * Captured at click time on the client so the resolution context
+   * survives subsequent sheet navigation while the side-sheet is open.
+   */
+  sheetId?: string;
 }
 
 export interface DrillThroughResponse {
@@ -147,19 +161,37 @@ function rowMatchesFilter(
 
 /**
  * Find a chart by its tileId (e.g. `chart-3`) within a dashboard.
- * Returns the first match across all sheets. Same `chart-${index}`
- * convention as the client's `DashboardView.tsx` tile derivation.
+ *
+ * Wave WD3-server-sheetId-resolution · when `sheetId` is provided, the
+ * lookup is scoped to that specific sheet — returns null if no sheet
+ * matches the id OR if the target sheet has no chart at the index.
+ * Without `sheetId` the legacy walk returns the first match across all
+ * sheets (preserves resolution for shareable URLs that carry chartId
+ * but no sheetId). Same `chart-${index}` convention as the client's
+ * `DashboardView.tsx` tile derivation.
  */
 export function findChartByTileId(
   dashboard: Dashboard,
   tileId: string,
+  sheetId?: string,
 ): ChartSpec | null {
   // Parse `chart-${idx}`. Anything else → null (invalid tileId).
   const match = /^chart-(\d+)$/.exec(tileId);
   if (!match) return null;
   const idx = Number(match[1]);
   if (!Number.isFinite(idx) || idx < 0) return null;
-  for (const sheet of dashboard.sheets || []) {
+  const sheets = dashboard.sheets || [];
+  if (sheetId !== undefined) {
+    // Scoped lookup: find the named sheet, then look up chart-${idx}
+    // in it. A stale sheetId (sheet deleted since the click was made)
+    // resolves to null rather than silently falling back to a
+    // different sheet's chart — predictable failure beats silent
+    // mis-resolution.
+    const targetSheet = sheets.find((sheet) => sheet.id === sheetId);
+    if (!targetSheet) return null;
+    return (targetSheet.charts || [])[idx] ?? null;
+  }
+  for (const sheet of sheets) {
     const chart = (sheet.charts || [])[idx];
     if (chart) return chart;
   }
@@ -220,7 +252,11 @@ export function resolveDrillThrough(
   chartId: string,
   request: DrillThroughRequest,
 ): DrillThroughResponse {
-  const chart = findChartByTileId(dashboard, chartId);
+  // Wave WD3-server-sheetId-resolution · thread the optional sheetId
+  // through to the chart lookup so multi-sheet dashboards resolve
+  // chart-N against the correct sheet (the chartId is per-sheet, so
+  // chart-0 in Sheet 1 and chart-0 in Sheet 2 are distinct charts).
+  const chart = findChartByTileId(dashboard, chartId, request.sheetId);
   if (!chart) {
     throw new Error(`chart_not_found:${chartId}`);
   }

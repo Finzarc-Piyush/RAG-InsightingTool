@@ -374,9 +374,14 @@ describe("WD3-server · controller source contract", () => {
   });
 
   it("delegates to resolveDrillThrough with the full request shape", () => {
+    // Wave WD3-server-sheetId-resolution · the request now also
+    // carries the optional `sheetId` field (scopes chartId lookup to
+    // a specific sheet on multi-sheet dashboards). Pin its presence in
+    // the resolveDrillThrough call so a future edit can't accidentally
+    // drop it.
     assert.match(
       controllerSrc,
-      /resolveDrillThrough\(dashboard, chartId, \{\s*column,\s*value,\s*extraPins: body\.extraPins,\s*filters: body\.filters,?\s*\}\);/,
+      /resolveDrillThrough\(dashboard, chartId, \{\s*column,\s*value,\s*extraPins: body\.extraPins,\s*filters: body\.filters,\s*sheetId,?\s*\}\);/,
     );
   });
 });

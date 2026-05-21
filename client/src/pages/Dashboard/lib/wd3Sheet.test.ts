@@ -105,9 +105,18 @@ describe("WD3-sheet · DashboardView subscribes to DRILL_THROUGH_EVENT with clea
     // The state setter receives the full event, not a derived
     // shape — so the sheet has access to chartId / column / value /
     // sourceTileId / filters all at once.
+    //
+    // Wave WD3-server-sheetId-resolution · the setter now wraps
+    // `detail` in a conditional spread that injects `sheetId:
+    // activeSheetId` when a sheet is active at click time, so the
+    // server-side chartId resolution can scope to the correct sheet
+    // on multi-sheet dashboards. The injection is at click time (not
+    // panel-open time) so the resolution context is stable across
+    // subsequent sheet navigation. When no sheet is active the bare
+    // `detail` is set unchanged (pre-wave shape preserved).
     assert.match(
       dashboardViewSrc,
-      /setDrillThroughEvent\(detail\);/,
+      /setDrillThroughEvent\(\s*activeSheetId \? \{ \.\.\.detail, sheetId: activeSheetId \} : detail,?\s*\);/,
     );
   });
 

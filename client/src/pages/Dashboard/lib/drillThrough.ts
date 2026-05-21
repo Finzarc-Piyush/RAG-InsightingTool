@@ -94,6 +94,20 @@ export interface DrillThroughEvent {
    * active".
    */
   filters?: ActiveChartFilters;
+  /**
+   * Wave WD3-server-sheetId-resolution · the active sheet's id at
+   * click time, injected by the DashboardView listener (NOT by the
+   * dispatching renderer — renderers don't know the sheet they live
+   * in). When present, the server-side drill resolver scopes the
+   * `chartId` (`"chart-N"`) lookup to that sheet, disambiguating
+   * multi-sheet dashboards where `chart-0` exists in every sheet.
+   * Captured at click time (not panel-open time) so the resolution
+   * context is stable across subsequent sheet navigation. Undefined
+   * for single-sheet dashboards (and for shareable URLs that pre-
+   * date this wave); the server preserves the legacy walk-across-
+   * sheets behaviour in that case.
+   */
+  sheetId?: string;
 }
 
 /** CustomEvent name dispatched by chart renderers. DashboardView subscribes once. */

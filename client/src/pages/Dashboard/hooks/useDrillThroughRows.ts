@@ -60,6 +60,14 @@ export function useDrillThroughRows({
       stringifyForKey(event?.value),
       JSON.stringify(event?.extraPins ?? []),
       JSON.stringify(event?.filters ?? {}),
+      // Wave WD3-server-sheetId-resolution · sheetId disambiguates
+      // the per-sheet chartId on multi-sheet dashboards. Without it
+      // in the key, a click on Sheet 1's chart-0 followed by a click
+      // on Sheet 2's chart-0 (same chartId, different sheet) would
+      // share a cache slot and silently return Sheet 1's rows for
+      // Sheet 2's click. Empty string when omitted to match the
+      // chartId / column "missing → empty" convention above.
+      event?.sheetId ?? "",
     ],
     queryFn: async () => {
       if (!event) throw new Error("no_active_drill_event");
@@ -74,6 +82,16 @@ export function useDrillThroughRows({
       // primary pin: null / undefined → "null"; Date → ISO; other →
       // String(v).
       url.searchParams.set("value", stringifyForKey(event.value));
+      // Wave WD3-server-sheetId-resolution · conditional set — only
+      // attach sheetId when the listener injected one (multi-sheet
+      // dashboard with an active sheet at click time). Omitting the
+      // param entirely (rather than passing an empty string) keeps
+      // the wire shape byte-identical to the pre-wave URL for legacy
+      // share-links, which the server's `typeof === "string"` guard
+      // treats as "no scoping; walk across sheets".
+      if (event.sheetId) {
+        url.searchParams.set("sheetId", event.sheetId);
+      }
       const response = await fetch(url.toString(), {
         method: "POST",
         credentials: "include",
