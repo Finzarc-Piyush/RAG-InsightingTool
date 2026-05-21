@@ -87,7 +87,17 @@ function HierarchyRow({
 export interface HierarchiesCardProps {
   hierarchies: SemanticHierarchy[];
   sourceFilter: SemanticEntryFilter;
-  onSourceFilterChange: (next: SemanticEntryFilter) => void;
+  /**
+   * W61-per-section-filter · true when the Hierarchies card currently
+   * has a per-section override.
+   */
+  isSectionOverridden?: boolean;
+  /**
+   * W61-per-section-filter · `modifier=true` is shift-click (per-
+   * section override path); `modifier=false` is plain-click (global
+   * re-sync path).
+   */
+  onSourceFilterChange: (next: SemanticEntryFilter, modifier: boolean) => void;
   saving: boolean;
   deletePending: boolean;
   editLevelsPending: boolean;
@@ -100,6 +110,7 @@ export interface HierarchiesCardProps {
 export function HierarchiesCard({
   hierarchies,
   sourceFilter,
+  isSectionOverridden,
   onSourceFilterChange,
   saving,
   deletePending,
@@ -120,6 +131,7 @@ export function HierarchiesCard({
             active={sourceFilter}
             counts={countEntriesBySource(hierarchies)}
             onChange={onSourceFilterChange}
+            isOverridden={isSectionOverridden}
           />
           <Button
             variant="outline"

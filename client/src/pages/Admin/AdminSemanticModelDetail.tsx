@@ -50,6 +50,14 @@ import {
 } from "./lib/semanticModelFilterUrlSync";
 import { buildRevertConfirmation } from "./lib/semanticModelAuditHistory";
 import type { SemanticEntryFilter } from "./lib/semanticModelSourceFilter";
+import {
+  applyChipClick,
+  getEffectiveFilter,
+  isSectionOverridden,
+  makeSectionFilters,
+  type SemanticModelSection,
+  type SemanticModelSectionFilters,
+} from "./lib/semanticModelSectionFilters";
 import { AuditHistoryCard } from "./components/AuditHistoryCard";
 import { DeleteEntryConfirmation } from "./components/DeleteEntryConfirmation";
 import { AddEntryForm } from "./components/AddEntryForm";
@@ -91,14 +99,25 @@ export default function AdminSemanticModelDetail() {
   // I edited" applied uniformly across all three sections; a per-card
   // filter would force three clicks for the same effect.
   //
-  // Wave W61-filter-persist · the initial state reads from
+  // Wave W61-filter-persist · the initial GLOBAL state reads from
   // `?filter=X` so a share-link or accidental-reload preserves the
   // active chip. The `useState` lazy initializer runs once on mount;
-  // a downstream `useEffect` keeps the URL in sync on every change.
-  const [sourceFilter, setSourceFilter] = useState<SemanticEntryFilter>(() =>
+  // a downstream `useEffect` keeps the URL in sync on every change to
+  // the global slot. Per-section overrides intentionally do NOT
+  // persist — they're advanced opt-in state that the share-link
+  // recipient probably wouldn't want anyway.
+  //
+  // Wave W61-per-section-filter · the single `sourceFilter` slot
+  // widens to a `{ global, overrides }` shape so the chip row can
+  // surface a shift-click → per-section override path. The host
+  // routes chip clicks through the pure `applyChipClick` reducer
+  // and feeds each card its effective filter via `getEffectiveFilter`.
+  const [sectionFilters, setSectionFilters] = useState<
+    SemanticModelSectionFilters
+  >(() =>
     typeof window === "undefined"
-      ? "all"
-      : readFilterFromSearch(window.location.search),
+      ? makeSectionFilters("all")
+      : makeSectionFilters(readFilterFromSearch(window.location.search)),
   );
 
   // Wave W61-audit-history-tab · collapsible "Audit history" section
@@ -169,9 +188,12 @@ export default function AdminSemanticModelDetail() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // W61-per-section-filter · URL sync keys only on the global slot;
+    // per-section overrides aren't persisted (session-local opt-in
+    // advanced state — see the state-shape comment above).
     const nextSearch = writeFilterToSearch(
       window.location.search,
-      sourceFilter,
+      sectionFilters.global,
     );
     const nextUrl =
       window.location.pathname +
@@ -182,7 +204,7 @@ export default function AdminSemanticModelDetail() {
     // behaviour stays predictable (one entry per page visit, not
     // one per filter toggle).
     window.history.replaceState(window.history.state, "", nextUrl);
-  }, [sourceFilter]);
+  }, [sectionFilters.global]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -606,6 +628,18 @@ export default function AdminSemanticModelDetail() {
     ? data.datasetSchema.columns.map((c) => c.name)
     : null;
 
+  // Wave W61-per-section-filter · single chip-click handler factory.
+  // Each card calls `handleSectionFilterChange("<section>")` to get a
+  // bound callback that routes the chip click through the pure
+  // reducer. The factory lives at the render level (rather than three
+  // separately-memoised callbacks) because the reducer is cheap and
+  // the cards' onChange identity is recreated every render anyway.
+  function handleSectionFilterChange(section: SemanticModelSection) {
+    return (next: SemanticEntryFilter, modifier: boolean): void => {
+      setSectionFilters((prev) => applyChipClick(prev, section, next, modifier));
+    };
+  }
+
   return (
     <>
       <AdminNav />
@@ -675,8 +709,9 @@ export default function AdminSemanticModelDetail() {
         <MetricsCard
           metrics={model.metrics}
           datasetColumns={datasetColumns}
-          sourceFilter={sourceFilter}
-          onSourceFilterChange={setSourceFilter}
+          sourceFilter={getEffectiveFilter(sectionFilters, "metrics")}
+          isSectionOverridden={isSectionOverridden(sectionFilters, "metrics")}
+          onSourceFilterChange={handleSectionFilterChange("metrics")}
           saving={saving}
           deletePending={deletingEntry !== null}
           addDisabled={addDisabled}
@@ -704,8 +739,9 @@ export default function AdminSemanticModelDetail() {
         <DimensionsCard
           dimensions={model.dimensions}
           datasetColumns={datasetColumns}
-          sourceFilter={sourceFilter}
-          onSourceFilterChange={setSourceFilter}
+          sourceFilter={getEffectiveFilter(sectionFilters, "dimensions")}
+          isSectionOverridden={isSectionOverridden(sectionFilters, "dimensions")}
+          onSourceFilterChange={handleSectionFilterChange("dimensions")}
           saving={saving}
           deletePending={deletingEntry !== null}
           addDisabled={addDisabled}
@@ -729,8 +765,9 @@ export default function AdminSemanticModelDetail() {
 
         <HierarchiesCard
           hierarchies={model.hierarchies}
-          sourceFilter={sourceFilter}
-          onSourceFilterChange={setSourceFilter}
+          sourceFilter={getEffectiveFilter(sectionFilters, "hierarchies")}
+          isSectionOverridden={isSectionOverridden(sectionFilters, "hierarchies")}
+          onSourceFilterChange={handleSectionFilterChange("hierarchies")}
           saving={saving}
           deletePending={deletingEntry !== null}
           editLevelsPending={editLevelsSubmitting !== null}

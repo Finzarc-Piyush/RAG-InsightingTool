@@ -261,7 +261,17 @@ export interface DimensionsCardProps {
    */
   datasetColumns: ReadonlyArray<string> | null;
   sourceFilter: SemanticEntryFilter;
-  onSourceFilterChange: (next: SemanticEntryFilter) => void;
+  /**
+   * W61-per-section-filter · true when the Dimensions card currently has
+   * a per-section override.
+   */
+  isSectionOverridden?: boolean;
+  /**
+   * W61-per-section-filter · `modifier=true` is shift-click (per-
+   * section override path); `modifier=false` is plain-click (global
+   * re-sync path).
+   */
+  onSourceFilterChange: (next: SemanticEntryFilter, modifier: boolean) => void;
   saving: boolean;
   deletePending: boolean;
   addDisabled: boolean;
@@ -282,6 +292,7 @@ export function DimensionsCard({
   dimensions,
   datasetColumns,
   sourceFilter,
+  isSectionOverridden,
   onSourceFilterChange,
   saving,
   deletePending,
@@ -306,6 +317,7 @@ export function DimensionsCard({
             active={sourceFilter}
             counts={countEntriesBySource(dimensions)}
             onChange={onSourceFilterChange}
+            isOverridden={isSectionOverridden}
           />
           <Button
             variant="outline"

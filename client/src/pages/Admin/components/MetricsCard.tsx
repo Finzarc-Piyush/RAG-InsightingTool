@@ -380,7 +380,19 @@ export interface MetricsCardProps {
    */
   datasetColumns: ReadonlyArray<string> | null;
   sourceFilter: SemanticEntryFilter;
-  onSourceFilterChange: (next: SemanticEntryFilter) => void;
+  /**
+   * W61-per-section-filter · true when the Metrics card currently has
+   * a per-section override (i.e. its effective filter is not inherited
+   * from the host's global filter). Surfaces an "(overridden)" hint
+   * next to the chip row so the override state is discoverable.
+   */
+  isSectionOverridden?: boolean;
+  /**
+   * W61-per-section-filter · `modifier=true` is shift-click (per-
+   * section override path); `modifier=false` is plain-click (global
+   * re-sync path). Host routes via `applyChipClick`.
+   */
+  onSourceFilterChange: (next: SemanticEntryFilter, modifier: boolean) => void;
   saving: boolean;
   deletePending: boolean;
   addDisabled: boolean;
@@ -399,6 +411,7 @@ export function MetricsCard({
   metrics,
   datasetColumns,
   sourceFilter,
+  isSectionOverridden,
   onSourceFilterChange,
   saving,
   deletePending,
@@ -424,6 +437,7 @@ export function MetricsCard({
             active={sourceFilter}
             counts={countEntriesBySource(metrics)}
             onChange={onSourceFilterChange}
+            isOverridden={isSectionOverridden}
           />
           <Button
             variant="outline"
