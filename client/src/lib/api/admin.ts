@@ -354,3 +354,87 @@ export async function deleteSemanticModelEntry(
   }
   return (await res.json()) as PatchSemanticModelResponse;
 }
+
+// W61-add-client · typed error for the W61-add-server 409 response.
+// The server returns `{ error: "name_already_exists", sessionId, kind,
+// name }` when the request collides with an existing entry; the host
+// uses `err instanceof NameAlreadyExistsError` to render a typed inline
+// error rather than scraping `err.message`.
+//
+// Generic non-2xx responses still bubble as plain `Error` per the
+// existing helper convention.
+export class NameAlreadyExistsError extends Error {
+  readonly kind: AdminSemanticModelEntryKind;
+  readonly entryName: string;
+  constructor(kind: AdminSemanticModelEntryKind, entryName: string) {
+    super(`A ${kind} named "${entryName}" already exists in this session.`);
+    this.name = "NameAlreadyExistsError";
+    this.kind = kind;
+    this.entryName = entryName;
+  }
+}
+
+// W61-add-client · POST /api/admin/semantic-models/:sessionId/entries/:kind.
+// Body: a single new entry validated server-side by the kind-appropriate
+// zod schema (semanticMetricSchema / semanticDimensionSchema /
+// semanticHierarchySchema). Returns the W61-save envelope on 200 so the
+// host's success handler can reuse the existing `setData` shape.
+//
+// **409 handling**: the server returns `{ error: "name_already_exists",
+// sessionId, kind, name }` when the new entry's name collides with an
+// existing entry of the same kind. This helper parses that body and
+// throws `NameAlreadyExistsError` so the host can `instanceof`-test and
+// render an inline collision message under the name field.
+//
+// Cross-kind collisions are allowed server-side (a metric "x" and a
+// dimension "x" coexist) — the 409 only fires for same-kind collisions.
+//
+// The entry parameter is typed as the union of the three semantic-model
+// entry types; the server validates the actual shape per :kind.
+export async function addSemanticModelEntry(
+  sessionId: string,
+  kind: AdminSemanticModelEntryKind,
+  entry:
+    | import("@/shared/schema").SemanticMetric
+    | import("@/shared/schema").SemanticDimension
+    | import("@/shared/schema").SemanticHierarchy,
+): Promise<PatchSemanticModelResponse> {
+  const url =
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}` +
+    `/entries/${encodeURIComponent(kind)}`;
+  const headers = {
+    ...(await adminHeaders()),
+    "Content-Type": "application/json",
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(entry),
+  });
+  if (res.status === 409) {
+    // Parse the typed 409 envelope so the host can branch on the
+    // collision shape. If the body isn't the expected shape (server
+    // version mismatch, proxy injecting HTML, etc.) fall through to
+    // the generic-Error branch so the host still surfaces the failure.
+    const body = (await res.json().catch(() => null)) as
+      | { error?: string; kind?: AdminSemanticModelEntryKind; name?: string }
+      | null;
+    if (
+      body &&
+      body.error === "name_already_exists" &&
+      typeof body.name === "string" &&
+      (body.kind === "metric" ||
+        body.kind === "dimension" ||
+        body.kind === "hierarchy")
+    ) {
+      throw new NameAlreadyExistsError(body.kind, body.name);
+    }
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId}/entries/${kind} POST ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as PatchSemanticModelResponse;
+}

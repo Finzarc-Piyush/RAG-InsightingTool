@@ -17,11 +17,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import {
+  addSemanticModelEntry,
   deleteSemanticModelEntry,
   fetchSemanticModelAuditLog,
   fetchSemanticModelDetail,
+  NameAlreadyExistsError,
   patchSemanticModel,
   revertSemanticModel,
   type AdminSemanticModelAuditEntry,
@@ -76,6 +78,7 @@ import { buildRevertConfirmation } from "./lib/semanticModelAuditHistory";
 import { SourceFilterChips } from "./components/SourceFilterChips";
 import { AuditHistoryCard } from "./components/AuditHistoryCard";
 import { DeleteEntryConfirmation } from "./components/DeleteEntryConfirmation";
+import { AddEntryForm } from "./components/AddEntryForm";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -680,6 +683,25 @@ export default function AdminSemanticModelDetail() {
   } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Wave W61-add-client · per-card add-entry state. `addOpen` is the
+  // modal's open-or-closed signal — a non-null value renders the
+  // AddEntryForm dialog for the matching kind. `addSubmitting` is the
+  // in-flight mutation state (set while the POST round-trip is
+  // pending). `addError` / `addNameCollision` scope failure surfaces
+  // to the modal body — collision is the typed 409 case (rendered
+  // inline under the name field by the form), generic submit error is
+  // any other non-2xx.
+  const [addOpen, setAddOpen] = useState<AdminSemanticModelEntryKind | null>(
+    null,
+  );
+  const [addSubmitting, setAddSubmitting] =
+    useState<AdminSemanticModelEntryKind | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addNameCollision, setAddNameCollision] = useState<{
+    kind: AdminSemanticModelEntryKind;
+    name: string;
+  } | null>(null);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const nextSearch = writeFilterToSearch(
@@ -965,6 +987,49 @@ export default function AdminSemanticModelDetail() {
     }
   }
 
+  /**
+   * W61-add-client · additive op that appends a single new entry to
+   * the model. Mirrors the W61-delete-client handler shape: a single
+   * global in-flight flag (`addSubmitting`) prevents overlap; the
+   * server returns the W61-save envelope so the success branch reuses
+   * the same `setData` shape as PATCH / revert / delete.
+   *
+   * On 409 (name collision per kind) the typed
+   * `NameAlreadyExistsError` is caught via `instanceof` and surfaces
+   * inline under the modal's name field via `setAddNameCollision`.
+   * Generic non-2xx surfaces via `setAddError` at the bottom of the
+   * modal body. On success the modal is closed via `setAddOpen(null)`
+   * and the `data.lastUpdatedAt` bump triggers the audit-history-tab's
+   * re-fetch effect (the server snapshotted the pre-add model so
+   * "undo this add via revert" works).
+   */
+  async function handleAdd(
+    kind: AdminSemanticModelEntryKind,
+    entry: SemanticMetric | SemanticDimension | SemanticHierarchy,
+  ): Promise<void> {
+    if (!data || addSubmitting !== null) return;
+    setAddSubmitting(kind);
+    setAddError(null);
+    setAddNameCollision(null);
+    try {
+      const res = await addSemanticModelEntry(sessionId, kind, entry);
+      setData({
+        ...data,
+        lastUpdatedAt: res.lastUpdatedAt,
+        model: res.model,
+      });
+      setAddOpen(null);
+    } catch (err) {
+      if (err instanceof NameAlreadyExistsError) {
+        setAddNameCollision({ kind: err.kind, name: err.entryName });
+      } else {
+        setAddError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setAddSubmitting(null);
+    }
+  }
+
   if (loading && !data) {
     return (
       <>
@@ -1090,11 +1155,28 @@ export default function AdminSemanticModelDetail() {
             <h2 className="text-base font-semibold text-foreground">
               Metrics
             </h2>
-            <SourceFilterChips
-              active={sourceFilter}
-              counts={countEntriesBySource(model.metrics)}
-              onChange={setSourceFilter}
-            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <SourceFilterChips
+                active={sourceFilter}
+                counts={countEntriesBySource(model.metrics)}
+                onChange={setSourceFilter}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  saving ||
+                  addSubmitting !== null ||
+                  deletingEntry !== null ||
+                  reverting !== null
+                }
+                onClick={() => setAddOpen("metric")}
+                data-testid="admin-semantic-model-add-metric-button"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" aria-hidden="true" />
+                Add metric
+              </Button>
+            </div>
           </header>
           {model.metrics.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -1162,11 +1244,28 @@ export default function AdminSemanticModelDetail() {
             <h2 className="text-base font-semibold text-foreground">
               Dimensions
             </h2>
-            <SourceFilterChips
-              active={sourceFilter}
-              counts={countEntriesBySource(model.dimensions)}
-              onChange={setSourceFilter}
-            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <SourceFilterChips
+                active={sourceFilter}
+                counts={countEntriesBySource(model.dimensions)}
+                onChange={setSourceFilter}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  saving ||
+                  addSubmitting !== null ||
+                  deletingEntry !== null ||
+                  reverting !== null
+                }
+                onClick={() => setAddOpen("dimension")}
+                data-testid="admin-semantic-model-add-dimension-button"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" aria-hidden="true" />
+                Add dimension
+              </Button>
+            </div>
           </header>
           {model.dimensions.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -1228,11 +1327,28 @@ export default function AdminSemanticModelDetail() {
             <h2 className="text-base font-semibold text-foreground">
               Hierarchies
             </h2>
-            <SourceFilterChips
-              active={sourceFilter}
-              counts={countEntriesBySource(model.hierarchies)}
-              onChange={setSourceFilter}
-            />
+            <div className="flex items-center gap-3 flex-wrap">
+              <SourceFilterChips
+                active={sourceFilter}
+                counts={countEntriesBySource(model.hierarchies)}
+                onChange={setSourceFilter}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  saving ||
+                  addSubmitting !== null ||
+                  deletingEntry !== null ||
+                  reverting !== null
+                }
+                onClick={() => setAddOpen("hierarchy")}
+                data-testid="admin-semantic-model-add-hierarchy-button"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" aria-hidden="true" />
+                Add hierarchy
+              </Button>
+            </div>
           </header>
           {model.hierarchies.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -1305,6 +1421,26 @@ export default function AdminSemanticModelDetail() {
         onConfirm={() => {
           if (!pendingDelete) return;
           void handleDelete(pendingDelete.kind, pendingDelete.name);
+        }}
+      />
+      <AddEntryForm
+        open={addOpen}
+        submitting={addSubmitting !== null}
+        submitError={addError}
+        nameCollision={addNameCollision}
+        onOpenChange={(next) => {
+          // While an add is in flight, swallow dismiss attempts so the
+          // admin sees the success / failure result inline (same
+          // shape as DeleteEntryConfirmation).
+          if (!next && addSubmitting !== null) return;
+          if (!next) {
+            setAddOpen(null);
+            setAddError(null);
+            setAddNameCollision(null);
+          }
+        }}
+        onConfirm={(kind, entry) => {
+          void handleAdd(kind, entry);
         }}
       />
     </>

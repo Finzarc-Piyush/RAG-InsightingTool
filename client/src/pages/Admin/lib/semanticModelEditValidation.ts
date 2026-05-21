@@ -116,3 +116,34 @@ export function validateCurrencyCode(value: string): string | null {
   }
   return null;
 }
+
+/**
+ * W61-add-client · snake_case identifier for new metric / dimension /
+ * hierarchy `name`. Mirrors the server's `SNAKE_CASE` regex in
+ * [`semanticMetricSchema`](../../../../../server/shared/schema.ts) —
+ * lowercase letter first, then lowercase letters / digits / underscores.
+ *
+ * Length bounds match `semanticMetricSchema.name.min(1).max(80)` (the
+ * three semantic-* schemas share the same bound on `name`). The server
+ * is authoritative — drift here just means an invalid name round-trips
+ * to a 400 instead of being caught client-side, which is a correctness-
+ * preserving inconvenience.
+ *
+ * Returns `null` on valid or a short error string suitable for inline
+ * display under the input. The error message tells the admin what
+ * snake_case looks like rather than just naming the rule.
+ */
+const NAME_MIN = 1;
+const NAME_MAX = 80;
+const SNAKE_CASE_RE = /^[a-z][a-z0-9_]*$/;
+export function validateName(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length < NAME_MIN) return "Name is required";
+  if (trimmed.length > NAME_MAX) {
+    return `Name must be ${NAME_MAX} characters or fewer`;
+  }
+  if (!SNAKE_CASE_RE.test(trimmed)) {
+    return "snake_case only — lowercase letters, digits, underscores (start with a letter)";
+  }
+  return null;
+}
