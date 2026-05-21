@@ -347,3 +347,110 @@ test("WI4 · does not leak raw region bounds — only chartId / column / regionK
   const keys = Object.keys(body).sort();
   assert.deepEqual(keys, ["chartId", "column", "dashboardId", "regionKind"]);
 });
+
+// ---------------------------------------------------------------------------
+// WD3-WI4-sheetId-telemetry · optional sheetId on both helpers
+// ---------------------------------------------------------------------------
+
+test("WD3-WI4-sheetId · drill-through body carries sheetId when caller supplies it", async () => {
+  let capturedBody: string | null = null;
+  await withMockedFetch(
+    (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(null, { status: 204 });
+    }) as unknown as FetchSig,
+    async () => {
+      await recordDashboardDrillThroughTelemetry({
+        chartId: "chart-0",
+        column: "region",
+        valueType: "string",
+        dashboardId: "dashboard-abc",
+        sheetId: "sheet-overview",
+      });
+    },
+  );
+
+  const body = JSON.parse(capturedBody!);
+  assert.deepEqual(body, {
+    chartId: "chart-0",
+    column: "region",
+    valueType: "string",
+    dashboardId: "dashboard-abc",
+    sheetId: "sheet-overview",
+  });
+});
+
+test("WD3-WI4-sheetId · drill-through body OMITS sheetId when caller omits it (key absent, not undefined)", async () => {
+  let capturedBody: string | null = null;
+  await withMockedFetch(
+    (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(null, { status: 204 });
+    }) as unknown as FetchSig,
+    async () => {
+      await recordDashboardDrillThroughTelemetry({
+        chartId: "chart-0",
+        column: "region",
+        valueType: "string",
+        dashboardId: "dashboard-abc",
+      });
+    },
+  );
+
+  const body = JSON.parse(capturedBody!);
+  // .strict() on the server requires the key to be absent, not
+  // present-with-undefined — JSON.stringify already drops undefined,
+  // but pin the contract so a future refactor (e.g. spread of a
+  // partial payload) can't silently start sending `sheetId: null` or
+  // similar non-undefined values.
+  assert.equal("sheetId" in body, false);
+});
+
+test("WD3-WI4-sheetId · explain-slice body carries sheetId when caller supplies it", async () => {
+  let capturedBody: string | null = null;
+  await withMockedFetch(
+    (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(null, { status: 204 });
+    }) as unknown as FetchSig,
+    async () => {
+      await recordDashboardExplainSliceTelemetry({
+        chartId: "chart-0",
+        column: "month",
+        regionKind: "temporal",
+        dashboardId: "dashboard-abc",
+        sheetId: "sheet-details",
+      });
+    },
+  );
+
+  const body = JSON.parse(capturedBody!);
+  assert.deepEqual(body, {
+    chartId: "chart-0",
+    column: "month",
+    regionKind: "temporal",
+    dashboardId: "dashboard-abc",
+    sheetId: "sheet-details",
+  });
+});
+
+test("WD3-WI4-sheetId · explain-slice body OMITS sheetId when caller omits it (key absent, not undefined)", async () => {
+  let capturedBody: string | null = null;
+  await withMockedFetch(
+    (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(null, { status: 204 });
+    }) as unknown as FetchSig,
+    async () => {
+      await recordDashboardExplainSliceTelemetry({
+        chartId: "chart-0",
+        column: "month",
+        regionKind: "box2d",
+        dashboardId: "dashboard-abc",
+      });
+    },
+  );
+
+  const body = JSON.parse(capturedBody!);
+  assert.equal("sheetId" in body, false);
+});

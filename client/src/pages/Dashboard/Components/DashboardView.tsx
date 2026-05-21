@@ -438,11 +438,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       // validation and sheet-open. `typeof detail.value` carries the
       // shape of the clicked mark's value without leaking PII (the raw
       // value itself never goes on the wire).
+      // Wave WD3-WI4-sheetId-telemetry · also pass `activeSheetId` so
+      // Cosmos can disambiguate "chart-N" rows across sheets — chartId
+      // is locally unique per-sheet but globally collides on multi-sheet
+      // dashboards. `?? undefined` keeps the field omitted (not null)
+      // when no sheet is active, matching the helper's optional contract.
       void recordDashboardDrillThroughTelemetry({
         chartId: detail.chartId,
         column: detail.column,
         valueType: typeof detail.value,
         dashboardId: dashboard.id,
+        sheetId: activeSheetId ?? undefined,
       });
       setDrillThroughEvent(detail);
     };
@@ -450,7 +456,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     return () => {
       window.removeEventListener(DRILL_THROUGH_EVENT, handler as EventListener);
     };
-  }, [dashboard.id]);
+  }, [dashboard.id, activeSheetId]);
 
   // Wave WI4-panel · subscribe to EXPLAIN_SLICE_EVENT and open the
   // ExplainSlicePanel on receipt. Mirrors the DRILL_THROUGH_EVENT
@@ -476,11 +482,15 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       // BrushRegion discriminant ("numeric" | "temporal" | "categorical"
       // | "box2d") — the shape of the brushed sub-domain without
       // leaking the raw bounds/values themselves.
+      // Wave WD3-WI4-sheetId-telemetry · see the WD3 listener above for
+      // the sheetId rationale — both observability paths join on the
+      // same (dashboardId, sheetId, chartId) tuple.
       void recordDashboardExplainSliceTelemetry({
         chartId: detail.chartId,
         column: detail.column,
         regionKind: detail.region.kind,
         dashboardId: dashboard.id,
+        sheetId: activeSheetId ?? undefined,
       });
       setExplainSliceEvent(detail);
     };
@@ -488,7 +498,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     return () => {
       window.removeEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
     };
-  }, [dashboard.id]);
+  }, [dashboard.id, activeSheetId]);
 
   const handleTileFiltersChange = useCallback((tileId: string, filters: ActiveChartFilters) => {
     setPerTileFilters((prev) => {

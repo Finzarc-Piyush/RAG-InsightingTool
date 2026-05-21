@@ -26,6 +26,12 @@ export interface DrillThroughTelemetryPayload {
   column: string;
   valueType: string;
   dashboardId?: string;
+  // WD3-WI4-sheetId-telemetry · sheet identity for multi-sheet
+  // dashboards. `chartId` is "chart-N" per the DashboardView tile
+  // generator, which resets to N=0 per-sheet — so without sheetId,
+  // Cosmos aggregations silently collide rows from different sheets.
+  // Optional because legacy callers may not have a sheet in context.
+  sheetId?: string;
 }
 
 export async function recordDashboardDrillThroughTelemetry(
@@ -49,6 +55,8 @@ export interface ExplainSliceTelemetryPayload {
   column: string;
   regionKind: "numeric" | "temporal" | "categorical" | "box2d";
   dashboardId?: string;
+  // See DrillThroughTelemetryPayload for the sheetId rationale.
+  sheetId?: string;
 }
 
 export async function recordDashboardExplainSliceTelemetry(

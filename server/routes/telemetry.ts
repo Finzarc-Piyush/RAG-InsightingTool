@@ -12,9 +12,15 @@
  * chart kinds + columns get interacted with via which click-intent.
  *
  * Body shapes:
- *   - drill-through: { chartId, column, valueType,  dashboardId? }
- *   - explain-slice: { chartId, column, regionKind, dashboardId? }
+ *   - drill-through: { chartId, column, valueType,  dashboardId?, sheetId? }
+ *   - explain-slice: { chartId, column, regionKind, dashboardId?, sheetId? }
  * Response: 204 No Content (fire-and-forget on the client side too)
+ *
+ * `sheetId` (WD3-WI4-sheetId-telemetry) disambiguates the per-sheet
+ * `chartId` ("chart-N") for multi-sheet dashboards — without it,
+ * Cosmos `GROUP BY chartId` aggregations silently combine clicks
+ * across sheets. When omitted (legacy callers, single-sheet
+ * dashboards) the metadata field is also omitted, never `undefined`.
  *
  * Auth via `getAuthenticatedEmail` matches every other write route on this
  * server. Failure modes (cosmos down, malformed doc) are absorbed by
@@ -63,6 +69,14 @@ export const drillThroughTelemetryRequestSchema = z
     column: z.string().min(1),
     valueType: z.string().min(1),
     dashboardId: z.string().min(1).optional(),
+    // WD3-WI4-sheetId-telemetry · sheet identity for multi-sheet
+    // dashboards. `chartId` is locally unique within a sheet
+    // (`"chart-N"` by index), so without `sheetId` Cosmos aggregation
+    // `GROUP BY chartId` silently combines clicks across sheets.
+    // Optional because legacy callers (and single-sheet dashboards)
+    // can still omit it; consumers join (dashboardId, sheetId, chartId)
+    // for full disambiguation.
+    sheetId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -87,13 +101,18 @@ export async function drillThroughTelemetryController(
     });
   }
 
-  const { chartId, column, valueType, dashboardId } = parsed.data;
+  const { chartId, column, valueType, dashboardId, sheetId } = parsed.data;
 
   void recorder({
     eventType: "dashboard.drill-through",
     userEmail,
     ...(dashboardId ? { dashboardId } : {}),
-    metadata: { chartId, column, valueType },
+    metadata: {
+      chartId,
+      column,
+      valueType,
+      ...(sheetId ? { sheetId } : {}),
+    },
   });
 
   return res.status(204).send();
@@ -107,6 +126,8 @@ export const explainSliceTelemetryRequestSchema = z
     column: z.string().min(1),
     regionKind: z.enum(["numeric", "temporal", "categorical", "box2d"]),
     dashboardId: z.string().min(1).optional(),
+    // See drillThroughTelemetryRequestSchema for the sheetId rationale.
+    sheetId: z.string().min(1).optional(),
   })
   .strict();
 
@@ -131,13 +152,18 @@ export async function explainSliceTelemetryController(
     });
   }
 
-  const { chartId, column, regionKind, dashboardId } = parsed.data;
+  const { chartId, column, regionKind, dashboardId, sheetId } = parsed.data;
 
   void recorder({
     eventType: "dashboard.explain-slice",
     userEmail,
     ...(dashboardId ? { dashboardId } : {}),
-    metadata: { chartId, column, regionKind },
+    metadata: {
+      chartId,
+      column,
+      regionKind,
+      ...(sheetId ? { sheetId } : {}),
+    },
   });
 
   return res.status(204).send();
