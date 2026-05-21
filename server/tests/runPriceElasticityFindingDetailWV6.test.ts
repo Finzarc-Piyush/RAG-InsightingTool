@@ -43,7 +43,10 @@ describe("Wave WV6 · run_price_elasticity emits canonical FindingEvidence suffi
     });
     assert.equal(result.ok, true);
     // Canonical suffix appears at the end. R² should be ~1.0 for clean data.
-    assert.match(result.summary, / \(n = 20; R² = [01]\.\d{2}\)$/);
+    // `[^)]*` accepts any trailing canonical fields (e.g. WV6-bucket's
+    // `; effect = X`) without re-anchoring the pin every time a new
+    // evidence field lands on the suffix.
+    assert.match(result.summary, / \(n = 20; R² = [01]\.\d{2}[^)]*\)$/);
     const recovered = extractFindingEvidence(result.summary);
     assert.equal(recovered.n, 20);
     assert.ok(recovered.rSquared !== undefined, "R² recovered from summary");
@@ -76,7 +79,9 @@ describe("Wave WV6 · run_price_elasticity emits canonical FindingEvidence suffi
     });
     assert.equal(result.ok, true);
     // Most elastic is A (|β| = 2 vs 0.5). Suffix uses A's n + R².
-    assert.match(result.summary, / \(n = 15; R² = [01]\.\d{2}\)$/);
+    // Trailing `[^)]*` accepts WV6-bucket's `; effect = X` token (or any
+    // future canonical evidence field) without re-anchoring this pin.
+    assert.match(result.summary, / \(n = 15; R² = [01]\.\d{2}[^)]*\)$/);
     const recovered = extractFindingEvidence(result.summary);
     assert.equal(recovered.n, 15);
     assert.ok(recovered.rSquared !== undefined);

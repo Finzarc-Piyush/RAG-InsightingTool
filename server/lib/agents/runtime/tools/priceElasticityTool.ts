@@ -110,6 +110,54 @@ export function interpretElasticity(elasticity: number, significant: boolean): s
   return "highly elastic";
 }
 
+/**
+ * Wave WV6-bucket · Maps a fitted price elasticity (β) to the canonical
+ * four-bucket `effectMagnitude` taxonomy on `FindingEvidence` so the
+ * downstream WQ1 confidence classifier can distinguish "highly inelastic
+ * with tight n" (real but tiny practical effect → LOW confidence in
+ * acting on it) from "highly elastic with tight n" (real and large →
+ * HIGH). Mirrors `bucketCorrelationR` in [`correlationMath.ts`](../../../correlationMath.ts)
+ * and `bucketCohensD` / `bucketCramersV` in [`significanceTests.ts`](../../../significanceTests.ts).
+ *
+ * Bucket boundaries align to the existing five-step `interpretElasticity`
+ * ladder, collapsed onto the four-step `effectMagnitude` taxonomy:
+ *
+ *   not significant            → "negligible"  (no measurable response)
+ *   |β| < 0.5  (highly inel.)  → "small"
+ *   |β| < 1.5  (inel. + unit + most of elastic) → "medium"
+ *   |β| ≥ 1.5  (highly elastic)→ "large"
+ *
+ * The 0.5 / 1.5 boundaries match the "highly inelastic" / "elastic"
+ * thresholds in `interpretElasticity`; the |β| = 1 unit-elastic point
+ * sits in "medium" (a 1% price change yields 1% quantity change — by
+ * convention a balanced response, not a "large" one).
+ *
+ * Returns `null` on:
+ *   - non-finite β (degenerate fit)
+ *   - β > 0 (anomalous positive coefficient — Giffen-good shape; the
+ *     `interpretElasticity` function flags it too. Caller decides
+ *     whether to skip emitting the bucket or downgrade narrative.)
+ *
+ * Industry-specific cutoffs intentionally NOT layered on. FMCG own-price
+ * elasticity of -2.0 is conventionally "huge" and -0.5 is "moderate";
+ * the universal ladder maps both onto "large" / "small" respectively,
+ * which is approximately right for FMCG but more conservative than the
+ * domain conventions. If a per-vertical override surfaces as a use
+ * case, the bucket function can take an optional context arg then.
+ */
+export function bucketPriceElasticity(
+  elasticity: number,
+  significant: boolean,
+): "negligible" | "small" | "medium" | "large" | null {
+  if (!Number.isFinite(elasticity)) return null;
+  if (!significant) return "negligible";
+  if (elasticity > 0) return null;
+  const mag = Math.abs(elasticity);
+  if (mag < 0.5) return "small";
+  if (mag < 1.5) return "medium";
+  return "large";
+}
+
 /** Pure log-log OLS fit. Exported for direct tests. */
 export function fitLogLogElasticity(
   rows: Array<{ price: number; quantity: number }>,
@@ -345,6 +393,16 @@ export function runPriceElasticity(
   // legacy prose, but adding the canonical block keeps the format uniform
   // across tools (extractor returns the first match either way; the
   // duplication is harmless and the canonical phrasing is the contract).
+  //
+  // Wave WV6-bucket · the headline row's β + significance flag get
+  // mapped to the canonical four-bucket `effectMagnitude` token via
+  // `bucketPriceElasticity` so WQ1 can downgrade "highly inelastic
+  // with tight n" from HIGH to LOW confidence (real but practically
+  // negligible response — same shape as WV4-bucket's Cohen-on-|r| for
+  // correlation). The bucket only emits when finite β + non-anomalous
+  // sign; positive β (Giffen-good shape) returns null and the suffix
+  // omits the magnitude field rather than ship a misleading "large"
+  // for a sign-anomalous fit.
   const topRow = tableRows[0];
   const headlineEvidence: FindingEvidence = {};
   if (typeof topRow.n === "number" && Number.isFinite(topRow.n) && topRow.n >= 0) {
@@ -357,6 +415,15 @@ export function runPriceElasticity(
     topRow.r_squared <= 1
   ) {
     headlineEvidence.rSquared = topRow.r_squared;
+  }
+  if (
+    typeof topRow.elasticity === "number" &&
+    typeof topRow.significant === "boolean"
+  ) {
+    const bucket = bucketPriceElasticity(topRow.elasticity, topRow.significant);
+    if (bucket !== null) {
+      headlineEvidence.effectMagnitude = bucket;
+    }
   }
   const wv6EvidenceSuffix = composeFindingDetail("", headlineEvidence);
 
