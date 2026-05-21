@@ -283,3 +283,74 @@ export async function revertSemanticModel(
   }
   return (await res.json()) as PatchSemanticModelResponse;
 }
+
+// W61-delete-client · the three entry kinds the admin can delete. Local
+// mirror of the server's `AdminSemanticModelEntryKind` exported from
+// `server/controllers/adminSemanticModelController.ts`; we don't import
+// across the runtime boundary (per the W61 cross-runtime-boundary
+// convention — runtime drift surfaces as field-undefined access at the
+// call site rather than compile errors, and the literal-union shape is
+// small / stable).
+export type AdminSemanticModelEntryKind = "metric" | "dimension" | "hierarchy";
+
+// W61-delete-client · response envelope from
+// GET /api/admin/semantic-models/:sessionId/references?entry=<name>.
+// Mirrors the server's `AdminSemanticModelReferencesResponse`.
+//
+// `entry` is the server-trimmed value (e.g. `?entry=%20foo%20` arrives
+// as `" foo "` and is echoed as `"foo"`) — the modal compares this
+// against its local entry state to detect a stale fetch (admin clicked
+// Cancel + re-opened on a different entry while the first round-trip
+// was still in flight).
+export interface AdminSemanticModelReferencesResponse {
+  sessionId: string;
+  entry: string;
+  chartCount: number;
+  totalOccurrences: number;
+}
+
+export async function fetchSemanticModelReferences(
+  sessionId: string,
+  entry: string,
+): Promise<AdminSemanticModelReferencesResponse> {
+  const url =
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}/references` +
+    `?entry=${encodeURIComponent(entry)}`;
+  const res = await fetch(url, { headers: await adminHeaders() });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId}/references ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as AdminSemanticModelReferencesResponse;
+}
+
+// W61-delete-client · DELETE /api/admin/semantic-models/:sessionId/entries/:kind/:name.
+// Re-uses `PatchSemanticModelResponse` because the server delete
+// endpoint returns the W61-save envelope (`{ sessionId, lastUpdatedAt,
+// model }`) byte-identical to PATCH / revert (per the W61 envelope-
+// reuse convention) — the host component can pipe the response into
+// the same `setData` shape it uses for PATCH success and revert
+// success, so the audit-history Card's `lastUpdatedAt` re-fetch effect
+// fires automatically.
+export async function deleteSemanticModelEntry(
+  sessionId: string,
+  kind: AdminSemanticModelEntryKind,
+  name: string,
+): Promise<PatchSemanticModelResponse> {
+  const url =
+    `${API_BASE_URL}/api/admin/semantic-models/${encodeURIComponent(sessionId)}` +
+    `/entries/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: await adminHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `admin/semantic-models/${sessionId}/entries/${kind}/${name} DELETE ${res.status}: ${body || res.statusText}`,
+    );
+  }
+  return (await res.json()) as PatchSemanticModelResponse;
+}

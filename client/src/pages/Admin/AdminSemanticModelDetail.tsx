@@ -17,7 +17,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
+import { Trash2 } from "lucide-react";
 import {
+  deleteSemanticModelEntry,
   fetchSemanticModelAuditLog,
   fetchSemanticModelDetail,
   patchSemanticModel,
@@ -25,6 +27,7 @@ import {
   type AdminSemanticModelAuditEntry,
   type AdminSemanticModelAuditLog,
   type AdminSemanticModelDetail,
+  type AdminSemanticModelEntryKind,
 } from "@/lib/api/admin";
 import type {
   SemanticDimension,
@@ -72,6 +75,7 @@ import {
 import { buildRevertConfirmation } from "./lib/semanticModelAuditHistory";
 import { SourceFilterChips } from "./components/SourceFilterChips";
 import { AuditHistoryCard } from "./components/AuditHistoryCard";
+import { DeleteEntryConfirmation } from "./components/DeleteEntryConfirmation";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -352,24 +356,60 @@ function EditableSelect<T extends string>({
   );
 }
 
+/**
+ * W61-delete-client · per-row Delete button consumed by every entry
+ * row (`MetricRow` / `DimensionRow` / `HierarchyRow`). The host owns
+ * the destructive-op state; this is a presentational wrapper around
+ * the ghost-variant `<Button>` so the three rows render the
+ * destructive affordance identically (icon, label, disabled gate
+ * semantics).
+ */
+function RowDeleteButton({
+  onDelete,
+  disabled,
+  ariaLabel,
+}: {
+  onDelete: () => void;
+  disabled: boolean;
+  ariaLabel: string;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-8 px-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+      disabled={disabled}
+      onClick={onDelete}
+      aria-label={ariaLabel}
+      data-testid={ariaLabel}
+    >
+      <Trash2 className="h-4 w-4" aria-hidden="true" />
+    </Button>
+  );
+}
+
 function MetricRow({
   m,
   saving,
+  deletePending,
   onToggleExposed,
   onEditLabel,
   onEditDescription,
   onEditExpression,
   onEditFormat,
   onEditCurrencyCode,
+  onDelete,
 }: {
   m: SemanticMetric;
   saving: boolean;
+  deletePending: boolean;
   onToggleExposed: (next: boolean) => void;
   onEditLabel: (next: string) => void;
   onEditDescription: (next: string) => void;
   onEditExpression: (next: string) => void;
   onEditFormat: (next: SemanticMetric["format"]) => void;
   onEditCurrencyCode: (next: string) => void;
+  onDelete: () => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
@@ -441,6 +481,13 @@ function MetricRow({
           ariaLabel={`Toggle ${m.label} exposed`}
         />
       </td>
+      <td className="py-3 px-4">
+        <RowDeleteButton
+          onDelete={onDelete}
+          disabled={saving || deletePending}
+          ariaLabel={`Delete metric ${m.name}`}
+        />
+      </td>
     </tr>
   );
 }
@@ -448,19 +495,23 @@ function MetricRow({
 function DimensionRow({
   d,
   saving,
+  deletePending,
   onToggleExposed,
   onEditLabel,
   onEditDescription,
   onEditKind,
   onEditTemporalGrain,
+  onDelete,
 }: {
   d: SemanticDimension;
   saving: boolean;
+  deletePending: boolean;
   onToggleExposed: (next: boolean) => void;
   onEditLabel: (next: string) => void;
   onEditDescription: (next: string) => void;
   onEditKind: (next: SemanticDimension["kind"]) => void;
   onEditTemporalGrain: (next: string) => void;
+  onDelete: () => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
@@ -515,11 +566,28 @@ function DimensionRow({
           ariaLabel={`Toggle ${d.label} exposed`}
         />
       </td>
+      <td className="py-3 px-4">
+        <RowDeleteButton
+          onDelete={onDelete}
+          disabled={saving || deletePending}
+          ariaLabel={`Delete dimension ${d.name}`}
+        />
+      </td>
     </tr>
   );
 }
 
-function HierarchyRow({ h }: { h: SemanticHierarchy }) {
+function HierarchyRow({
+  h,
+  saving,
+  deletePending,
+  onDelete,
+}: {
+  h: SemanticHierarchy;
+  saving: boolean;
+  deletePending: boolean;
+  onDelete: () => void;
+}) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
       <td className="py-3 px-4">
@@ -536,6 +604,13 @@ function HierarchyRow({ h }: { h: SemanticHierarchy }) {
       </td>
       <td className="py-3 px-4 text-xs text-muted-foreground">
         {h.levels.join(" → ")}
+      </td>
+      <td className="py-3 px-4">
+        <RowDeleteButton
+          onDelete={onDelete}
+          disabled={saving || deletePending}
+          ariaLabel={`Delete hierarchy ${h.name}`}
+        />
       </td>
     </tr>
   );
@@ -585,6 +660,25 @@ export default function AdminSemanticModelDetail() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [reverting, setReverting] = useState<number | null>(null);
   const [revertError, setRevertError] = useState<string | null>(null);
+
+  // Wave W61-delete-client · per-row delete state. `pendingDelete` is
+  // the modal's open-or-closed signal — a non-null value renders the
+  // confirmation modal, which in turn fetches the W61-references
+  // count. `deletingEntry` is the in-flight mutation state (set while
+  // the DELETE round-trip is pending) — disables every Delete button
+  // to prevent the admin queueing up overlapping destructive ops.
+  // A single `deleteError` slot scopes the failure to the modal body
+  // rather than a page-level banner, matching the
+  // `AlertDialogDescription` rendering shape.
+  const [pendingDelete, setPendingDelete] = useState<{
+    kind: AdminSemanticModelEntryKind;
+    name: string;
+  } | null>(null);
+  const [deletingEntry, setDeletingEntry] = useState<{
+    kind: AdminSemanticModelEntryKind;
+    name: string;
+  } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -832,6 +926,45 @@ export default function AdminSemanticModelDetail() {
     }
   }
 
+  /**
+   * W61-delete-client · destructive op that removes a single entry
+   * from the model. Mirrors the W61-audit-revert handler shape: a
+   * single global in-flight flag (`deletingEntry`) prevents overlap;
+   * the server returns the W61-save envelope so the success branch
+   * reuses the same `setData` shape as PATCH / revert.
+   *
+   * The `data.lastUpdatedAt` bump triggers the audit-history-tab's
+   * re-fetch effect — which is load-bearing, because the server
+   * snapshotted the pre-delete model into the audit log so "undo
+   * this delete via revert" works (per the W61 destructive-op +
+   * audit-write-before-mutation convention).
+   *
+   * On success the modal is closed via `setPendingDelete(null)`;
+   * on failure it stays open with `deleteError` populated so the
+   * admin can read the error and either retry or cancel.
+   */
+  async function handleDelete(
+    kind: AdminSemanticModelEntryKind,
+    name: string,
+  ): Promise<void> {
+    if (!data || deletingEntry !== null) return;
+    setDeletingEntry({ kind, name });
+    setDeleteError(null);
+    try {
+      const res = await deleteSemanticModelEntry(sessionId, kind, name);
+      setData({
+        ...data,
+        lastUpdatedAt: res.lastUpdatedAt,
+        model: res.model,
+      });
+      setPendingDelete(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingEntry(null);
+    }
+  }
+
   if (loading && !data) {
     return (
       <>
@@ -977,6 +1110,9 @@ export default function AdminSemanticModelDetail() {
                     <th className="py-3 px-4">Format</th>
                     <th className="py-3 px-4">References</th>
                     <th className="py-3 px-4">Exposed</th>
+                    <th className="py-3 px-4">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -987,6 +1123,7 @@ export default function AdminSemanticModelDetail() {
                         key={m.name}
                         m={m}
                         saving={saving}
+                        deletePending={deletingEntry !== null}
                         onToggleExposed={(next) =>
                           handleToggleMetricExposed(m.name, next)
                         }
@@ -1008,6 +1145,9 @@ export default function AdminSemanticModelDetail() {
                           patchMetric(m.name, {
                             currencyCode: emptyToUndef(next),
                           })
+                        }
+                        onDelete={() =>
+                          setPendingDelete({ kind: "metric", name: m.name })
                         }
                       />
                     ))}
@@ -1041,6 +1181,9 @@ export default function AdminSemanticModelDetail() {
                     <th className="py-3 px-4">Column</th>
                     <th className="py-3 px-4">Kind</th>
                     <th className="py-3 px-4">Exposed</th>
+                    <th className="py-3 px-4">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1051,6 +1194,7 @@ export default function AdminSemanticModelDetail() {
                         key={d.name}
                         d={d}
                         saving={saving}
+                        deletePending={deletingEntry !== null}
                         onToggleExposed={(next) =>
                           handleToggleDimensionExposed(d.name, next)
                         }
@@ -1067,6 +1211,9 @@ export default function AdminSemanticModelDetail() {
                         }
                         onEditTemporalGrain={(next) =>
                           handleTemporalGrainChange(d.name, next)
+                        }
+                        onDelete={() =>
+                          setPendingDelete({ kind: "dimension", name: d.name })
                         }
                       />
                     ))}
@@ -1098,13 +1245,27 @@ export default function AdminSemanticModelDetail() {
                   <tr className="text-left text-muted-foreground">
                     <th className="py-3 px-4">Name</th>
                     <th className="py-3 px-4">Levels (top → bottom)</th>
+                    <th className="py-3 px-4">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...filterEntriesBySource(model.hierarchies, sourceFilter)]
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map((h) => (
-                      <HierarchyRow key={h.name} h={h} />
+                      <HierarchyRow
+                        key={h.name}
+                        h={h}
+                        saving={saving}
+                        deletePending={deletingEntry !== null}
+                        onDelete={() =>
+                          setPendingDelete({
+                            kind: "hierarchy",
+                            name: h.name,
+                          })
+                        }
+                      />
                     ))}
                 </tbody>
               </table>
@@ -1126,6 +1287,26 @@ export default function AdminSemanticModelDetail() {
           }
         />
       </div>
+      <DeleteEntryConfirmation
+        pending={pendingDelete}
+        sessionId={sessionId}
+        deleting={deletingEntry !== null}
+        deleteError={deleteError}
+        onOpenChange={(next) => {
+          // While a delete is in flight, swallow dismiss attempts —
+          // the destructive op should resolve before the modal goes
+          // away so the admin can see the success / failure result.
+          if (!next && deletingEntry !== null) return;
+          if (!next) {
+            setPendingDelete(null);
+            setDeleteError(null);
+          }
+        }}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          void handleDelete(pendingDelete.kind, pendingDelete.name);
+        }}
+      />
     </>
   );
 }
