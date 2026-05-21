@@ -53,6 +53,7 @@ import {
 } from "../lib/semantic/semanticModelAuditLog.js";
 import { countSemanticModelReferences } from "../lib/semantic/semanticModelReferences.js";
 import { countDashboardReferences } from "../lib/semantic/semanticModelDashboardReferences.js";
+import { onSemanticModelVersionBumped } from "../lib/semantic/semanticModelInvalidate.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -360,6 +361,17 @@ export async function patchSemanticModel(
         doc.semanticModel = nextModel;
         doc.lastUpdatedAt = savedAt;
         const saved = await _updater(doc);
+        // W61-cache-invalidate · fire the version-bump observability
+        // hook AFTER the persist completes but still inside the write
+        // lock — future invalidators (cache.clear()) are serialized
+        // with the write they invalidate against. Listeners that
+        // throw are caught upstream so a buggy invalidator can't
+        // break this path.
+        onSemanticModelVersionBumped({
+          sessionId,
+          priorVersion: nextVersion - 1,
+          nextVersion,
+        });
         return {
           kind: "ok",
           model: saved.semanticModel ?? nextModel,
@@ -570,6 +582,16 @@ export async function revertSemanticModel(
         doc.semanticModel = nextModel;
         doc.lastUpdatedAt = savedAt;
         const saved = await _updater(doc);
+        // W61-cache-invalidate · fire the version-bump hook (see
+        // patchSemanticModel for the contract). Revert is a real
+        // mutation — version bumps monotonically even when the
+        // "restored" model is byte-identical to the prior — so the
+        // hook fires.
+        onSemanticModelVersionBumped({
+          sessionId,
+          priorVersion: nextVersion - 1,
+          nextVersion,
+        });
         return {
           kind: "ok",
           model: saved.semanticModel ?? nextModel,
@@ -878,6 +900,16 @@ export async function deleteSemanticModelEntry(
         doc.semanticModel = nextModel;
         doc.lastUpdatedAt = savedAt;
         const saved = await _updater(doc);
+        // W61-cache-invalidate · fire the version-bump hook (see
+        // patchSemanticModel for the contract). Delete is a real
+        // mutation — survivors are byte-identical but the model's
+        // entry-set narrowed, so the planner's catalog block changes
+        // and downstream caches keyed on version must invalidate.
+        onSemanticModelVersionBumped({
+          sessionId,
+          priorVersion: nextVersion - 1,
+          nextVersion,
+        });
         return {
           kind: "ok",
           model: saved.semanticModel ?? nextModel,
@@ -1078,6 +1110,16 @@ export async function addSemanticModelEntry(
         doc.semanticModel = nextModel;
         doc.lastUpdatedAt = savedAt;
         const saved = await _updater(doc);
+        // W61-cache-invalidate · fire the version-bump hook (see
+        // patchSemanticModel for the contract). Add appends one
+        // entry; survivors are byte-identical but the model's
+        // entry-set widened, so the planner's catalog block changes
+        // and downstream caches keyed on version must invalidate.
+        onSemanticModelVersionBumped({
+          sessionId,
+          priorVersion: nextVersion - 1,
+          nextVersion,
+        });
         return {
           kind: "ok",
           model: saved.semanticModel ?? nextModel,
