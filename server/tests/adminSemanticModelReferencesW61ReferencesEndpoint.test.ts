@@ -25,6 +25,7 @@ import type { Request, Response } from "express";
 import {
   getSemanticModelReferences,
   __setSemanticModelDetailFetcherForTesting,
+  __setDashboardListerForUserForTesting,
   type AdminSemanticModelReferencesResponse,
 } from "../controllers/adminSemanticModelController.js";
 import type { ChatDocument } from "../models/chat.model.js";
@@ -285,6 +286,7 @@ test("W61-references-endpoint · getSemanticModelReferences: 200 with zero count
   __setSemanticModelDetailFetcherForTesting(async () =>
     makeDoc({ semanticModel: makeModel(1), charts: [] }),
   );
+  __setDashboardListerForUserForTesting(async () => []);
   try {
     const res = fakeRes();
     await getSemanticModelReferences(
@@ -302,10 +304,13 @@ test("W61-references-endpoint · getSemanticModelReferences: 200 with zero count
       entry: "net_sales_value",
       chartCount: 0,
       totalOccurrences: 0,
+      dashboardCount: 0,
+      dashboardTileCount: 0,
     });
   } finally {
     __resetSuperadminEmailsForTesting();
     __setSemanticModelDetailFetcherForTesting(null);
+    __setDashboardListerForUserForTesting(null);
     delete process.env.DISABLE_AUTH;
   }
 });
@@ -324,6 +329,7 @@ test("W61-references-endpoint · getSemanticModelReferences: 200 with correct co
   __setSemanticModelDetailFetcherForTesting(async () =>
     makeDoc({ semanticModel: makeModel(1), charts }),
   );
+  __setDashboardListerForUserForTesting(async () => []);
   try {
     const res = fakeRes();
     await getSemanticModelReferences(
@@ -341,10 +347,13 @@ test("W61-references-endpoint · getSemanticModelReferences: 200 with correct co
       entry: "net_sales_value",
       chartCount: 2,
       totalOccurrences: 3,
+      dashboardCount: 0,
+      dashboardTileCount: 0,
     });
   } finally {
     __resetSuperadminEmailsForTesting();
     __setSemanticModelDetailFetcherForTesting(null);
+    __setDashboardListerForUserForTesting(null);
     delete process.env.DISABLE_AUTH;
   }
 });
@@ -362,6 +371,7 @@ test("W61-references-endpoint · getSemanticModelReferences: returns the server-
       charts: [makeChart({ y: "net_sales_value" })],
     }),
   );
+  __setDashboardListerForUserForTesting(async () => []);
   try {
     const res = fakeRes();
     await getSemanticModelReferences(
@@ -379,6 +389,7 @@ test("W61-references-endpoint · getSemanticModelReferences: returns the server-
   } finally {
     __resetSuperadminEmailsForTesting();
     __setSemanticModelDetailFetcherForTesting(null);
+    __setDashboardListerForUserForTesting(null);
     delete process.env.DISABLE_AUTH;
   }
 });
@@ -395,6 +406,7 @@ test("W61-references-endpoint · getSemanticModelReferences: undefined doc.chart
     delete (doc as { charts?: unknown }).charts;
     return doc;
   });
+  __setDashboardListerForUserForTesting(async () => []);
   try {
     const res = fakeRes();
     await getSemanticModelReferences(
@@ -412,6 +424,7 @@ test("W61-references-endpoint · getSemanticModelReferences: undefined doc.chart
   } finally {
     __resetSuperadminEmailsForTesting();
     __setSemanticModelDetailFetcherForTesting(null);
+    __setDashboardListerForUserForTesting(null);
     delete process.env.DISABLE_AUTH;
   }
 });

@@ -28,6 +28,7 @@ import {
   type AdminSemanticModelListEntry,
   type ChatDocument,
 } from "../models/chat.model.js";
+import { getUserDashboards } from "../models/dashboard.model.js";
 import {
   semanticDimensionSchema,
   semanticHierarchySchema,
@@ -51,6 +52,7 @@ import {
   type SemanticModelAuditEntry,
 } from "../lib/semantic/semanticModelAuditLog.js";
 import { countSemanticModelReferences } from "../lib/semantic/semanticModelReferences.js";
+import { countDashboardReferences } from "../lib/semantic/semanticModelDashboardReferences.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -79,20 +81,31 @@ export interface AdminSemanticModelAuditLogResponse {
 }
 
 /**
- * Wave W61-references-endpoint · response envelope for the downstream
- * chart-reference scan. Returns the entry name verbatim alongside the
- * `{ chartCount, totalOccurrences }` counts so the client doesn't need
- * to track which entry it queried against (matters when the UI fires
- * multiple counts in parallel for a "is anything safe to delete?"
- * audit view). `entry` is the trimmed value the server saw, not the
- * raw query-string — protects the client from `?entry=%20foo`
- * disagreements.
+ * Wave W61-references-endpoint (W61-references-dashboards) · response
+ * envelope for the downstream chart-reference scan. Returns the entry
+ * name verbatim alongside the in-chat `{ chartCount, totalOccurrences }`
+ * counts and the cross-dashboard `{ dashboardCount, dashboardTileCount }`
+ * counts so the client doesn't need to track which entry it queried
+ * against (matters when the UI fires multiple counts in parallel for an
+ * "is anything safe to delete?" audit view). `entry` is the trimmed
+ * value the server saw, not the raw query-string — protects the client
+ * from `?entry=%20foo` disagreements.
+ *
+ * The W61-references-dashboards wave widened the envelope with the two
+ * dashboard counters so the W61-delete-client modal can surface both the
+ * in-chat chart impact and the dashboard-tile impact in a single round-
+ * trip. Dashboards live in a separate Cosmos container partitioned by
+ * username; the handler fetches them via the `_dashboardListerForUser`
+ * injectable. A session with no `username` (defensive shape) yields zero
+ * dashboard counts without a Cosmos call.
  */
 export interface AdminSemanticModelReferencesResponse {
   sessionId: string;
   entry: string;
   chartCount: number;
   totalOccurrences: number;
+  dashboardCount: number;
+  dashboardTileCount: number;
 }
 
 type SemanticModelLister = () => Promise<AdminSemanticModelListEntry[]>;
@@ -100,10 +113,37 @@ type SemanticModelDetailFetcher = (
   sessionId: string,
 ) => Promise<ChatDocument | null>;
 type SemanticModelUpdater = (doc: ChatDocument) => Promise<ChatDocument>;
+/**
+ * Wave W61-references-dashboards · per-username dashboard lister. Distinct
+ * injectable from `_detailFetcher` because dashboards live in a different
+ * Cosmos container (the "dashboards" container partitioned by username,
+ * not the chat document container partitioned by sessionId). The "one
+ * injectable per Cosmos container" precedent established here is what
+ * any future W61 wave touching dashboards / shared dashboards / past
+ * analyses should follow.
+ *
+ * Returns `ReadonlyArray<unknown>` (not `Dashboard[]`) so the scanner's
+ * defensive guards apply uniformly — a malformed Cosmos row that fails
+ * to match the runtime shape is silently skipped by the scanner rather
+ * than parsed eagerly here. The production `getUserDashboards` already
+ * returns `[]` on Cosmos errors so an outage doesn't propagate as a
+ * references-endpoint 500.
+ */
+type DashboardListerForUser = (
+  username: string,
+) => Promise<ReadonlyArray<unknown>>;
 
 let _lister: SemanticModelLister = getAllSessionsWithSemanticModel;
 let _detailFetcher: SemanticModelDetailFetcher = getChatBySessionIdEfficient;
 let _updater: SemanticModelUpdater = updateChatDocument;
+const _defaultDashboardListerForUser: DashboardListerForUser = async (
+  username,
+) => {
+  if (!username) return [];
+  return getUserDashboards(username);
+};
+let _dashboardListerForUser: DashboardListerForUser =
+  _defaultDashboardListerForUser;
 
 /**
  * Test-only · swap the model lister for a deterministic fixture.
@@ -133,6 +173,19 @@ export function __setSemanticModelUpdaterForTesting(
   fn: SemanticModelUpdater | null,
 ): void {
   _updater = fn ?? updateChatDocument;
+}
+
+/**
+ * Wave W61-references-dashboards · test-only · swap the per-username
+ * dashboard lister for a deterministic fixture. Pass `null` to restore
+ * the production Cosmos-backed helper. Same shape as the existing
+ * `__set*ForTesting` shims so harnesses pin every external dependency
+ * before driving the handler.
+ */
+export function __setDashboardListerForUserForTesting(
+  fn: DashboardListerForUser | null,
+): void {
+  _dashboardListerForUser = fn ?? _defaultDashboardListerForUser;
 }
 
 export async function listSemanticModels(
@@ -625,11 +678,26 @@ export async function getSemanticModelReferences(
       return;
     }
     const counts = countSemanticModelReferences(entry, doc.charts ?? []);
+    // W61-references-dashboards · widen to count tiles across the
+    // session-owner's dashboards. Dashboards live in a separate Cosmos
+    // container partitioned by username (not sessionId), so we cannot
+    // re-use `_detailFetcher`; the dedicated `_dashboardListerForUser`
+    // injectable matches the "one injectable per Cosmos container"
+    // precedent. An empty / missing `doc.username` short-circuits the
+    // fetch to an empty array (the chat doc was created without a user,
+    // which has happened historically for system-test sessions).
+    const username = doc.username ?? "";
+    const dashboards = username
+      ? await _dashboardListerForUser(username)
+      : [];
+    const dashboardCounts = countDashboardReferences(entry, dashboards);
     const body: AdminSemanticModelReferencesResponse = {
       sessionId: doc.sessionId,
       entry,
       chartCount: counts.chartCount,
       totalOccurrences: counts.totalOccurrences,
+      dashboardCount: dashboardCounts.dashboardCount,
+      dashboardTileCount: dashboardCounts.dashboardTileCount,
     };
     res.json(body);
   } catch (err) {

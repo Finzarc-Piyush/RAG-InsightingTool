@@ -100,8 +100,11 @@ export function buildDeleteGenericConfirmation(
 export interface DeleteReferencesWarning {
   /**
    * Headline string, e.g. `"Removing this metric will break 3 charts
-   * that reference it."`. Singular / plural correctness encoded
-   * inline; the noun follows the entry kind.
+   * that reference it."` or the combined-impact form `"Removing this
+   * metric will break 3 charts and 5 tiles across 2 dashboards that
+   * reference it."` when dashboards also contain matching tiles.
+   * Singular / plural correctness encoded inline; the noun follows
+   * the entry kind.
    */
   headline: string;
   /**
@@ -114,37 +117,79 @@ export interface DeleteReferencesWarning {
 }
 
 /**
- * Build the "removing this <kind> will break N <chart(s)>" warning
- * when the references scan returned a positive count. Returns `null`
- * when the count is zero — the modal should show the generic
- * confirmation in that branch (see {@link buildDeleteGenericConfirmation}).
+ * Build the "removing this <kind> will break ..." warning when the
+ * references scan returned a positive count across either the in-chat
+ * charts OR the user's dashboards. Returns `null` only when BOTH counts
+ * are zero — the modal shows the generic confirmation in that branch
+ * (see {@link buildDeleteGenericConfirmation}).
+ *
+ * The W61-references-dashboards wave widened this helper to also accept
+ * `dashboardCount` + `dashboardTileCount`. Three impact shapes:
+ *
+ *   1. Charts only (dashboards zero): `"... will break N charts that
+ *      reference it."` — the original W61-delete-client form.
+ *   2. Dashboards only (charts zero): `"... will break M tiles across K
+ *      dashboards that reference it."` — surfaces dashboard impact even
+ *      when no in-chat chart references the entry (real-world: a domain
+ *      pack metric used by promoted dashboard tiles but never plotted
+ *      in-chat).
+ *   3. Both: `"... will break N charts and M tiles across K dashboards
+ *      that reference it."` — both impacts surfaced in one sentence so
+ *      the admin can size the blast radius at a glance.
  *
  * Singular / plural rules:
- *   - `1 chart` (singular) vs `2+ charts` (plural).
- *   - `1 reference total` (singular) vs `2+ references total` (plural).
+ *   - `1 chart` / `1 tile` / `1 dashboard` (singular) vs N+ (plural).
+ *   - `1 reference total` / `2+ references total` for the subhead.
  *
  * The "<N> references total" subhead is suppressed when it equals the
  * chart count (every reference is in a distinct chart — no extra
- * information). It surfaces when one chart uses the entry multiple
- * times (e.g. the entry is bound to both `x` and `tooltip`), so the
- * admin sees the heavier-usage signal.
+ * information). The subhead intentionally describes only the in-chat
+ * chart-side occurrences, not the dashboard-tile count — tile count is
+ * already in the headline as the actionable unit.
+ *
+ * The trailing `that reference{s} it` clause's verb agreement follows
+ * the closest noun in the headline (the last enumerated count) so the
+ * sentence reads naturally regardless of which counts are positive.
  */
 export function buildDeleteReferencesWarning(
   kind: AdminSemanticModelEntryKind,
   chartCount: number,
   totalOccurrences: number,
+  dashboardCount: number,
+  dashboardTileCount: number,
 ): DeleteReferencesWarning | null {
-  if (chartCount <= 0) return null;
-  const chartNoun = chartCount === 1 ? "chart" : "charts";
-  const refVerb = chartCount === 1 ? "references" : "reference";
+  if (chartCount <= 0 && dashboardTileCount <= 0) return null;
+  const parts: string[] = [];
+  if (chartCount > 0) {
+    const chartNoun = chartCount === 1 ? "chart" : "charts";
+    parts.push(`${chartCount} ${chartNoun}`);
+  }
+  if (dashboardTileCount > 0) {
+    const tileNoun = dashboardTileCount === 1 ? "tile" : "tiles";
+    const dashNoun = dashboardCount === 1 ? "dashboard" : "dashboards";
+    parts.push(
+      `${dashboardTileCount} ${tileNoun} across ${dashboardCount} ${dashNoun}`,
+    );
+  }
+  // The verb agrees with the LAST enumerated count for natural reading
+  // (e.g. "1 chart and 2 tiles ... reference it" reads better than
+  // "1 chart and 2 tiles ... references it"). When dashboards are
+  // present the tile count drives agreement; otherwise the chart count.
+  const lastCount = dashboardTileCount > 0 ? dashboardTileCount : chartCount;
+  const refVerb = lastCount === 1 ? "references" : "reference";
   const headline =
-    `Removing this ${kindNoun(kind)} will break ${chartCount} ${chartNoun} ` +
+    `Removing this ${kindNoun(kind)} will break ${parts.join(" and ")} ` +
     `that ${refVerb} it.`;
+  // Subhead surfaces only when in-chat occurrences exceed chart count.
+  // Dashboards intentionally don't get an analogous subhead — tile count
+  // is the meaningful unit for an admin reviewing dashboard impact, not
+  // field-position count within tiles.
+  const chartNounForSub = chartCount === 1 ? "chart" : "charts";
   const subhead =
-    totalOccurrences > chartCount
+    chartCount > 0 && totalOccurrences > chartCount
       ? `${totalOccurrences} ${
           totalOccurrences === 1 ? "reference" : "references"
-        } total across the affected ${chartNoun}.`
+        } total across the affected ${chartNounForSub}.`
       : undefined;
   return { headline, subhead };
 }

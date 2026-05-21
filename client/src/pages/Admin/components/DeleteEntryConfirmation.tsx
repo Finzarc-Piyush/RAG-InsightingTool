@@ -180,6 +180,8 @@ export function DeleteEntryConfirmation({
           kind,
           references.chartCount,
           references.totalOccurrences,
+          references.dashboardCount,
+          references.dashboardTileCount,
         )
       : null;
 

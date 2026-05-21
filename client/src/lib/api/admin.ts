@@ -293,8 +293,8 @@ export async function revertSemanticModel(
 // small / stable).
 export type AdminSemanticModelEntryKind = "metric" | "dimension" | "hierarchy";
 
-// W61-delete-client · response envelope from
-// GET /api/admin/semantic-models/:sessionId/references?entry=<name>.
+// W61-delete-client (widened by W61-references-dashboards) · response
+// envelope from GET /api/admin/semantic-models/:sessionId/references?entry=<name>.
 // Mirrors the server's `AdminSemanticModelReferencesResponse`.
 //
 // `entry` is the server-trimmed value (e.g. `?entry=%20foo%20` arrives
@@ -302,11 +302,19 @@ export type AdminSemanticModelEntryKind = "metric" | "dimension" | "hierarchy";
 // against its local entry state to detect a stale fetch (admin clicked
 // Cancel + re-opened on a different entry while the first round-trip
 // was still in flight).
+//
+// `dashboardCount` + `dashboardTileCount` were added by the
+// W61-references-dashboards wave so the delete-confirmation copy can
+// surface the cross-dashboard impact ("and M tiles across K dashboards")
+// alongside the in-chat chart impact. Both are zero on sessions whose
+// owner has authored no dashboards that reference the entry.
 export interface AdminSemanticModelReferencesResponse {
   sessionId: string;
   entry: string;
   chartCount: number;
   totalOccurrences: number;
+  dashboardCount: number;
+  dashboardTileCount: number;
 }
 
 export async function fetchSemanticModelReferences(

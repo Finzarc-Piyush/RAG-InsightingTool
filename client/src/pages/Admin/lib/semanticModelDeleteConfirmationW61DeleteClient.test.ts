@@ -99,20 +99,20 @@ test("W61-delete-client · buildDeleteGenericConfirmation: hierarchy noun reads 
 
 // ─── buildDeleteReferencesWarning ────────────────────────────────────
 
-test("W61-delete-client · buildDeleteReferencesWarning: 0 charts · returns null", () => {
-  assert.equal(buildDeleteReferencesWarning("metric", 0, 0), null);
+test("W61-delete-client · buildDeleteReferencesWarning: 0 charts + 0 dashboards · returns null", () => {
+  assert.equal(buildDeleteReferencesWarning("metric", 0, 0, 0, 0), null);
 });
 
-test("W61-delete-client · buildDeleteReferencesWarning: negative chartCount · returns null (defense)", () => {
+test("W61-delete-client · buildDeleteReferencesWarning: negative chartCount + zero dashboards · returns null (defense)", () => {
   // Defensive pin against a future bug where a malformed server
   // response sends a negative count — the modal should render the
   // generic confirmation rather than a nonsense "Removing this
   // metric will break -2 charts" sentence.
-  assert.equal(buildDeleteReferencesWarning("metric", -1, 0), null);
+  assert.equal(buildDeleteReferencesWarning("metric", -1, 0, 0, 0), null);
 });
 
 test("W61-delete-client · buildDeleteReferencesWarning: 1 chart · singular phrasing", () => {
-  const warning = buildDeleteReferencesWarning("metric", 1, 1);
+  const warning = buildDeleteReferencesWarning("metric", 1, 1, 0, 0);
   assert.ok(warning, "expected a non-null warning");
   // "1 chart that references it" — singular noun + the third-person
   // singular verb form.
@@ -125,7 +125,7 @@ test("W61-delete-client · buildDeleteReferencesWarning: 1 chart · singular phr
 });
 
 test("W61-delete-client · buildDeleteReferencesWarning: 3 charts equal occurrences · plural, no subhead", () => {
-  const warning = buildDeleteReferencesWarning("metric", 3, 3);
+  const warning = buildDeleteReferencesWarning("metric", 3, 3, 0, 0);
   assert.ok(warning, "expected a non-null warning");
   // "3 charts that reference it" — plural noun + bare-form verb.
   assert.ok(
@@ -136,7 +136,7 @@ test("W61-delete-client · buildDeleteReferencesWarning: 3 charts equal occurren
 });
 
 test("W61-delete-client · buildDeleteReferencesWarning: 3 charts · 4 occurrences · plural with subhead", () => {
-  const warning = buildDeleteReferencesWarning("dimension", 3, 4);
+  const warning = buildDeleteReferencesWarning("dimension", 3, 4, 0, 0);
   assert.ok(warning, "expected a non-null warning");
   assert.ok(
     warning.headline.includes("3 charts that reference it"),
@@ -153,7 +153,7 @@ test("W61-delete-client · buildDeleteReferencesWarning: 1 chart · 2 occurrence
   // The "heavy usage in one chart" branch: 1 chart with multiple
   // field positions inside it. Chart noun is singular; references
   // noun is plural.
-  const warning = buildDeleteReferencesWarning("metric", 1, 2);
+  const warning = buildDeleteReferencesWarning("metric", 1, 2, 0, 0);
   assert.ok(warning, "expected a non-null warning");
   assert.ok(
     warning.headline.includes("1 chart that references it"),
@@ -167,7 +167,7 @@ test("W61-delete-client · buildDeleteReferencesWarning: 1 chart · 2 occurrence
 });
 
 test("W61-delete-client · buildDeleteReferencesWarning: hierarchy noun reads correctly", () => {
-  const warning = buildDeleteReferencesWarning("hierarchy", 2, 2);
+  const warning = buildDeleteReferencesWarning("hierarchy", 2, 2, 0, 0);
   assert.ok(warning, "expected a non-null warning");
   assert.ok(
     warning.headline.includes("Removing this hierarchy"),
@@ -176,25 +176,136 @@ test("W61-delete-client · buildDeleteReferencesWarning: hierarchy noun reads co
 });
 
 test("W61-delete-client · buildDeleteReferencesWarning: non-null warnings never include the literal `0`", () => {
-  // Sanity pin: the function returns `null` for chartCount === 0, so
-  // any other branch should never produce a "break 0 charts" sentence.
-  // A future refactor that accidentally broadcasts the zero path into
-  // the warning string would surface here.
-  const cases: ReadonlyArray<readonly [number, number]> = [
-    [1, 1],
-    [1, 2],
-    [3, 3],
-    [3, 4],
-    [10, 25],
+  // Sanity pin: the function returns `null` only when BOTH the chart
+  // count and the dashboard-tile count are zero, so any other branch
+  // should never produce a "break 0 charts" or "0 tiles across 0
+  // dashboards" sentence. A future refactor that accidentally
+  // broadcasts the zero path into the warning string would surface here.
+  const cases: ReadonlyArray<readonly [number, number, number, number]> = [
+    [1, 1, 0, 0],
+    [1, 2, 0, 0],
+    [3, 3, 0, 0],
+    [3, 4, 0, 0],
+    [10, 25, 0, 0],
+    [0, 0, 1, 1],
+    [0, 0, 3, 5],
+    [2, 2, 1, 1],
   ];
-  for (const [charts, occ] of cases) {
-    const warning = buildDeleteReferencesWarning("metric", charts, occ);
+  for (const [charts, occ, dashs, tiles] of cases) {
+    const warning = buildDeleteReferencesWarning(
+      "metric",
+      charts,
+      occ,
+      dashs,
+      tiles,
+    );
     assert.ok(warning, "expected a non-null warning");
     assert.ok(
       !/\b0\s+charts?\b/.test(warning.headline),
       `expected no "0 chart(s)" phrasing: ${warning.headline}`,
     );
+    assert.ok(
+      !/\b0\s+tiles?\b/.test(warning.headline),
+      `expected no "0 tile(s)" phrasing: ${warning.headline}`,
+    );
+    assert.ok(
+      !/\b0\s+dashboards?\b/.test(warning.headline),
+      `expected no "0 dashboard(s)" phrasing: ${warning.headline}`,
+    );
   }
+});
+
+// ─── W61-references-dashboards · combined + dashboard-only impact ────
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: dashboard-only matches · headline omits the chart clause", () => {
+  // Real-world: a domain-pack metric that no in-chat chart plots but
+  // some promoted dashboard tiles reference. The warning must surface
+  // the dashboard impact even though chartCount=0.
+  const warning = buildDeleteReferencesWarning("metric", 0, 0, 2, 5);
+  assert.ok(warning, "expected a non-null warning");
+  assert.ok(
+    warning.headline.includes("5 tiles across 2 dashboards"),
+    `expected the dashboard clause: ${warning.headline}`,
+  );
+  assert.ok(
+    !warning.headline.includes("charts"),
+    `expected no chart clause when chartCount=0: ${warning.headline}`,
+  );
+  // Verb agreement follows the plural tile count.
+  assert.ok(
+    warning.headline.includes("reference it"),
+    `expected plural verb form: ${warning.headline}`,
+  );
+});
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: 1 tile across 1 dashboard · singular phrasing on both", () => {
+  const warning = buildDeleteReferencesWarning("metric", 0, 0, 1, 1);
+  assert.ok(warning, "expected a non-null warning");
+  assert.ok(
+    warning.headline.includes("1 tile across 1 dashboard"),
+    `expected singular phrasing on both: ${warning.headline}`,
+  );
+  // Verb agreement follows the singular tile count.
+  assert.ok(
+    warning.headline.includes("references it"),
+    `expected singular verb form: ${warning.headline}`,
+  );
+});
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: both charts AND dashboards · joined with `and`", () => {
+  const warning = buildDeleteReferencesWarning("metric", 3, 3, 2, 4);
+  assert.ok(warning, "expected a non-null warning");
+  assert.ok(
+    warning.headline.includes("3 charts and 4 tiles across 2 dashboards"),
+    `expected combined clauses joined with "and": ${warning.headline}`,
+  );
+  // Verb agreement follows the LAST count (tile count = 4 = plural).
+  assert.ok(
+    warning.headline.includes("reference it"),
+    `expected plural verb form: ${warning.headline}`,
+  );
+});
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: combined impact · chart subhead still fires when totalOccurrences > chartCount", () => {
+  // Pins the subhead behaviour: it's purely about in-chat
+  // chart-occurrence density, not affected by dashboard counts.
+  const warning = buildDeleteReferencesWarning("metric", 2, 5, 1, 3);
+  assert.ok(warning, "expected a non-null warning");
+  assert.ok(warning.subhead !== undefined, "expected a subhead");
+  assert.ok(
+    warning.subhead.includes("5 references total"),
+    `expected total-occurrences subhead: ${warning.subhead}`,
+  );
+  assert.ok(
+    warning.subhead.includes("affected charts"),
+    `subhead should still describe charts, not dashboards: ${warning.subhead}`,
+  );
+});
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: dashboard-only · no chart subhead even with large dashboard tile count", () => {
+  // The subhead is suppressed entirely when chartCount is zero — we
+  // intentionally don't show a "dashboard-references total" subhead
+  // for the dashboard branch (tile count is the actionable unit at
+  // the admin's level; field-position count within tiles is detail
+  // they'd drill into the dashboard for).
+  const warning = buildDeleteReferencesWarning("metric", 0, 0, 3, 10);
+  assert.ok(warning, "expected a non-null warning");
+  assert.equal(warning.subhead, undefined);
+});
+
+test("W61-references-dashboards · buildDeleteReferencesWarning: 1 chart + 1 tile + 1 dashboard · all singulars", () => {
+  // Minimum positive case across all three. Verb agreement follows
+  // the tile count (last enumerated).
+  const warning = buildDeleteReferencesWarning("dimension", 1, 1, 1, 1);
+  assert.ok(warning, "expected a non-null warning");
+  assert.ok(
+    warning.headline.includes("1 chart and 1 tile across 1 dashboard"),
+    `expected singular phrasing on every count: ${warning.headline}`,
+  );
+  assert.ok(
+    warning.headline.includes("references it"),
+    `expected singular verb form following 1 tile: ${warning.headline}`,
+  );
 });
 
 test("W61-delete-client · DELETE_AUDIT_LOG_REASSURANCE: stable copy with the `audit log` + `revert` anchors", () => {
