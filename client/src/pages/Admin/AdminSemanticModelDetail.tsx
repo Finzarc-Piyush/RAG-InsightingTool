@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { Plus, Trash2 } from "lucide-react";
+import { Edit2, Plus, Trash2 } from "lucide-react";
 import {
   addSemanticModelEntry,
   deleteSemanticModelEntry,
@@ -79,6 +79,7 @@ import { SourceFilterChips } from "./components/SourceFilterChips";
 import { AuditHistoryCard } from "./components/AuditHistoryCard";
 import { DeleteEntryConfirmation } from "./components/DeleteEntryConfirmation";
 import { AddEntryForm } from "./components/AddEntryForm";
+import { HierarchyEditor } from "./components/HierarchyEditor";
 
 /**
  * W61-edit-enums · enum option pickers for the admin viewer. Values
@@ -584,12 +585,16 @@ function HierarchyRow({
   h,
   saving,
   deletePending,
+  editLevelsPending,
   onDelete,
+  onEditLevels,
 }: {
   h: SemanticHierarchy;
   saving: boolean;
   deletePending: boolean;
+  editLevelsPending: boolean;
   onDelete: () => void;
+  onEditLevels: () => void;
 }) {
   return (
     <tr className="border-t border-border align-top hover:bg-muted/10 transition-colors">
@@ -609,11 +614,27 @@ function HierarchyRow({
         {h.levels.join(" → ")}
       </td>
       <td className="py-3 px-4">
-        <RowDeleteButton
-          onDelete={onDelete}
-          disabled={saving || deletePending}
-          ariaLabel={`Delete hierarchy ${h.name}`}
-        />
+        <div className="flex items-center gap-1">
+          {/* W61-hierarchy-edit · per-row edit button opens the
+              HierarchyEditor modal. Placed before the delete button
+              so the non-destructive action reads first. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2"
+            disabled={saving || deletePending || editLevelsPending}
+            onClick={onEditLevels}
+            aria-label={`Edit levels for ${h.name}`}
+            data-testid={`Edit levels for ${h.name}`}
+          >
+            <Edit2 className="h-4 w-4" aria-hidden="true" />
+          </Button>
+          <RowDeleteButton
+            onDelete={onDelete}
+            disabled={saving || deletePending || editLevelsPending}
+            ariaLabel={`Delete hierarchy ${h.name}`}
+          />
+        </div>
       </td>
     </tr>
   );
@@ -701,6 +722,20 @@ export default function AdminSemanticModelDetail() {
     kind: AdminSemanticModelEntryKind;
     name: string;
   } | null>(null);
+
+  // Wave W61-hierarchy-edit · per-hierarchy levels-edit state.
+  // `editingHierarchy` is the modal's open-signal — a non-null value
+  // renders the HierarchyEditor modal with that hierarchy's levels
+  // seeded into the draft. `editLevelsSubmitting` is the in-flight
+  // flag (the hierarchy's `name` while the PATCH round-trip is
+  // pending — same shape as `deletingEntry` so the row's per-mutation
+  // gate doesn't conflict with other write mutations); `editLevelsError`
+  // scopes the failure surface to the modal body.
+  const [editingHierarchy, setEditingHierarchy] =
+    useState<SemanticHierarchy | null>(null);
+  const [editLevelsSubmitting, setEditLevelsSubmitting] =
+    useState<string | null>(null);
+  const [editLevelsError, setEditLevelsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1027,6 +1062,49 @@ export default function AdminSemanticModelDetail() {
       }
     } finally {
       setAddSubmitting(null);
+    }
+  }
+
+  /**
+   * Wave W61-hierarchy-edit · save the edited levels for the selected
+   * hierarchy. Reuses the existing W61-save PATCH path
+   * (`patchSemanticModel`) because hierarchies don't have a dedicated
+   * endpoint — the modal hands back the new ordered levels array, we
+   * build a `nextModel` with `hierarchies` re-mapped to swap in the
+   * new levels for the matching name, and route through the wholesale
+   * replace path. The server's W61-save handler runs the normal version
+   * bump + audit-log + invalidation hook (W61-cache-invalidate) flow.
+   *
+   * Mirrors the W61-add-client `handleAdd` shape: own submitting flag,
+   * own error slot, success path updates parent `data` (which causes
+   * the audit-history-tab's `lastUpdatedAt`-keyed effect to re-fetch
+   * the buffer so the pre-edit snapshot appears for revert-as-undo).
+   */
+  async function handleEditHierarchyLevels(
+    hierarchyName: string,
+    nextLevels: string[],
+  ): Promise<void> {
+    if (!data || editLevelsSubmitting !== null) return;
+    setEditLevelsSubmitting(hierarchyName);
+    setEditLevelsError(null);
+    try {
+      const nextModel: SemanticModel = {
+        ...data.model,
+        hierarchies: data.model.hierarchies.map((h) =>
+          h.name === hierarchyName ? { ...h, levels: nextLevels } : h,
+        ),
+      };
+      const res = await patchSemanticModel(sessionId, nextModel);
+      setData({
+        ...data,
+        lastUpdatedAt: res.lastUpdatedAt,
+        model: res.model,
+      });
+      setEditingHierarchy(null);
+    } catch (err) {
+      setEditLevelsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditLevelsSubmitting(null);
     }
   }
 
@@ -1375,12 +1453,14 @@ export default function AdminSemanticModelDetail() {
                         h={h}
                         saving={saving}
                         deletePending={deletingEntry !== null}
+                        editLevelsPending={editLevelsSubmitting !== null}
                         onDelete={() =>
                           setPendingDelete({
                             kind: "hierarchy",
                             name: h.name,
                           })
                         }
+                        onEditLevels={() => setEditingHierarchy(h)}
                       />
                     ))}
                 </tbody>
@@ -1441,6 +1521,24 @@ export default function AdminSemanticModelDetail() {
         }}
         onConfirm={(kind, entry) => {
           void handleAdd(kind, entry);
+        }}
+      />
+      <HierarchyEditor
+        hierarchy={editingHierarchy}
+        submitting={editLevelsSubmitting !== null}
+        submitError={editLevelsError}
+        onOpenChange={(next) => {
+          // While an edit is in flight, swallow dismiss attempts so
+          // the admin sees the success / failure result inline (same
+          // pattern as AddEntryForm + DeleteEntryConfirmation).
+          if (!next && editLevelsSubmitting !== null) return;
+          if (!next) {
+            setEditingHierarchy(null);
+            setEditLevelsError(null);
+          }
+        }}
+        onConfirm={(name, nextLevels) => {
+          void handleEditHierarchyLevels(name, nextLevels);
         }}
       />
     </>
