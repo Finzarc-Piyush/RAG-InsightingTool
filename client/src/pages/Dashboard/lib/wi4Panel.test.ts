@@ -271,10 +271,22 @@ describe("WI4-panel · DashboardView state + listener", () => {
     );
   });
 
-  it("calls setExplainSliceEvent(detail) after the validation passes", () => {
+  it("calls setExplainSliceEvent with the captured detail after the validation passes", () => {
     // The captured detail (not a clone / not a partial) flows into
     // state — the panel renders directly from it.
-    assert.match(dashSrc, /setExplainSliceEvent\(detail\)/);
+    //
+    // Wave WI4-client-sheetId-resolution · the setter now wraps
+    // `detail` in a conditional spread that injects `sheetId:
+    // activeSheetId` when a sheet is active at brush time, so the
+    // panel's chart resolution can scope to the correct sheet on
+    // multi-sheet dashboards. The injection is at brush time (not
+    // panel-open time) so the resolution context is stable across
+    // subsequent sheet navigation. When no sheet is active the bare
+    // `detail` is set unchanged (pre-wave shape preserved).
+    assert.match(
+      dashSrc,
+      /setExplainSliceEvent\(\s*activeSheetId \? \{ \.\.\.detail, sheetId: activeSheetId \} : detail,?\s*\);/,
+    );
   });
 });
 

@@ -508,7 +508,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         dashboardId: dashboard.id,
         sheetId: activeSheetId ?? undefined,
       });
-      setExplainSliceEvent(detail);
+      // Wave WI4-client-sheetId-resolution · inject activeSheetId onto
+      // the event detail before storing it in state. Direct mirror of
+      // the WD3 listener above; captures the user's sheet intent at
+      // brush time (NOT at panel-render time) so the panel's chart
+      // resolution remains stable even if the user navigates to a
+      // different sheet while the panel is open. The omit branch only
+      // fires when activeSheetId is null (very early mount, no sheets
+      // yet) — the pre-wave event shape is preserved verbatim there.
+      setExplainSliceEvent(
+        activeSheetId ? { ...detail, sheetId: activeSheetId } : detail,
+      );
     };
     window.addEventListener(EXPLAIN_SLICE_EVENT, handler as EventListener);
     return () => {
@@ -1168,10 +1178,33 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           if (!open) setExplainSliceEvent(null);
         }}
         chart={(() => {
-          if (!explainSliceEvent || !activeSheet) return null;
+          if (!explainSliceEvent) return null;
           const m = /^chart-(\d+)$/.exec(explainSliceEvent.chartId);
           if (!m) return null;
           const idx = Number.parseInt(m[1], 10);
+          // Wave WI4-client-sheetId-resolution · when the brush
+          // listener captured an activeSheetId onto the event detail,
+          // resolve the chart against the NAMED sheet rather than
+          // whatever sheet is currently active. Captured-at-brush-time
+          // semantics: the panel renders the chart the user actually
+          // brushed, even if they've navigated to a different sheet
+          // since. Predictable-failure on stale sheetId (sheet deleted
+          // between brush and panel render): return null instead of
+          // silently falling back to activeSheet — the no-chart branch
+          // of ExplainSlicePanel then surfaces "Could not resolve the
+          // chart for..." rather than re-resolving to a different
+          // sheet's chart-N. Mirrors the server-side WD3 resolver's
+          // stale-sheetId → chart_not_found contract.
+          if (explainSliceEvent.sheetId) {
+            const targetSheet = sheets.find(
+              (s) => s.id === explainSliceEvent.sheetId,
+            );
+            return targetSheet?.charts[idx] ?? null;
+          }
+          // Legacy branch preserved verbatim for events with no
+          // sheetId (degenerate no-sheets-yet mount, or any panel
+          // mount that pre-dates this wave).
+          if (!activeSheet) return null;
           return activeSheet.charts[idx] ?? null;
         })()}
         insightRegenCache={insightRegenCache}

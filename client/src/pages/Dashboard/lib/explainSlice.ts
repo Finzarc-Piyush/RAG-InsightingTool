@@ -124,6 +124,24 @@ export interface ExplainSliceEvent {
    * undefined means "no other filters active".
    */
   filters?: ActiveChartFilters;
+  /**
+   * Wave WI4-client-sheetId-resolution · the active sheet's id at
+   * brush time, injected by the DashboardView listener (NOT by the
+   * dispatching renderer — renderers don't know the sheet they live
+   * in). When present, the ExplainSlicePanel's chartId
+   * (`"chart-N"`) lookup is scoped to the named sheet, disambiguating
+   * multi-sheet dashboards where `chart-0` exists in every sheet.
+   * Captured at brush time (not panel-render time) so the resolution
+   * context is stable across subsequent sheet navigation while the
+   * panel is open. Undefined for single-sheet dashboards (and for
+   * any panel mount that pre-dates this wave); the panel preserves
+   * the legacy `activeSheet.charts[idx]` lookup in that case.
+   * Predictable-failure on stale sheetId (sheet deleted between
+   * brush and panel render): resolver returns null, panel renders
+   * "Could not resolve the chart for..." — mirrors the server-side
+   * WD3 resolver's `chart_not_found` contract.
+   */
+  sheetId?: string;
 }
 
 /** CustomEvent name dispatched by chart renderers. DashboardView subscribes once. */
