@@ -28,7 +28,16 @@ import {
   type AdminSemanticModelListEntry,
   type ChatDocument,
 } from "../models/chat.model.js";
-import { semanticModelSchema, type SemanticModel } from "../shared/schema.js";
+import {
+  semanticDimensionSchema,
+  semanticHierarchySchema,
+  semanticMetricSchema,
+  semanticModelSchema,
+  type SemanticDimension,
+  type SemanticHierarchy,
+  type SemanticMetric,
+  type SemanticModel,
+} from "../shared/schema.js";
 import { isAdminRequest } from "../utils/admin.helper.js";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { withSessionWriteLock } from "../lib/sessionWriteLock.js";
@@ -836,5 +845,209 @@ export async function deleteSemanticModelEntry(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`adminSemanticModel delete failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_delete_failed" });
+  }
+}
+
+/**
+ * Wave W61-add-server · sentinel for the add lock result that the outer
+ * handler maps to an HTTP status code. Distinguishes the four
+ * inside-the-lock outcomes (success / session-not-found /
+ * model-not-inferred / name-already-exists) without throwing — mirrors
+ * the PatchResult / RevertResult / DeleteResult precedent.
+ */
+type AddResult =
+  | { kind: "ok"; model: SemanticModel; lastUpdatedAt: number }
+  | { kind: "session_not_found" }
+  | { kind: "semantic_model_not_inferred" }
+  | { kind: "name_already_exists" };
+
+/**
+ * Wave W61-add-server · append a single metric / dimension / hierarchy
+ * to a session's semantic model. Mirrors W61-delete-server's shape:
+ * writes the prior model to the audit log inside the existing
+ * `withSessionWriteLock` BEFORE the additive op, bumps `version`
+ * monotonically, returns the same `{ sessionId, lastUpdatedAt, model }`
+ * envelope as W61-save / W61-audit-revert / W61-delete-server so the
+ * client mutation reuses the existing success handler.
+ *
+ *   POST /admin/semantic-models/:sessionId/entries/:kind
+ *   Body: a single entry matching the kind-appropriate zod schema
+ *         (semanticMetricSchema / semanticDimensionSchema /
+ *          semanticHierarchySchema)
+ *
+ * Where `:kind ∈ { "metric" | "dimension" | "hierarchy" }`.
+ *
+ * Why a dedicated POST rather than re-using W61-save's PATCH: the
+ * PATCH path replaces the wholesale model, which forces the client to
+ * (a) round-trip the entire model and (b) re-implement name-uniqueness
+ * validation locally. A typed POST takes just the new entry, validates
+ * uniqueness server-side, and returns the same envelope.
+ *
+ * Why we reject same-kind name collisions with 409 rather than
+ * silently overwriting: admins use PATCH for "edit an existing entry";
+ * POST is unambiguously "add new". Overwrite semantics on POST would
+ * confuse the audit log (the "prior" snapshot would not include the
+ * entry being replaced) and would defeat the safety net of the
+ * cross-kind name check.
+ *
+ * Why cross-kind name collisions are allowed: a metric named "revenue"
+ * and a dimension named "revenue" are different resources — the
+ * planner addresses them via {kind, name} not {name} alone. The
+ * uniqueness check is scoped to the kind's own collection.
+ *
+ * Why we skip the source-bumper: same reasoning as W61-delete-server.
+ * Survivors are byte-identical (we're appending, not editing), and
+ * the new entry has no prior version to content-diff against. The
+ * schema's `.default("user")` populates the new entry's source if
+ * the client doesn't send one; if the client sends `"domain"` (e.g.,
+ * importing from a pack) it's preserved verbatim.
+ *
+ * Why audit-write before append: same precedent as W61-save / revert /
+ * delete. The buffer's role is to remember what was just changed; the
+ * pair is atomic inside `withSessionWriteLock` per invariant #9.
+ *
+ * Why bump `version` on add: same as delete. W64's compiled-query
+ * cache keys on version; adding a new metric can affect compilation
+ * of queries that reference it (lint warnings, etc.); bumping makes
+ * the cache miss explicit.
+ */
+export async function addSemanticModelEntry(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "admin_required" });
+    return;
+  }
+  const sessionId = String(req.params.sessionId ?? "").trim();
+  if (!sessionId) {
+    res.status(400).json({ error: "missing_session_id" });
+    return;
+  }
+  const parsedKind = deleteEntryKindSchema.safeParse(req.params.kind);
+  if (!parsedKind.success) {
+    res.status(400).json({
+      error: "invalid_kind",
+      kind: req.params.kind,
+      allowed: deleteEntryKindSchema.options,
+    });
+    return;
+  }
+  // Pick the kind-appropriate body schema. Each returns a fully-defaulted
+  // entry on success (source defaults to "user", exposed to true, etc.),
+  // so the handler doesn't need to fill in any fields post-parse.
+  const bodySchema =
+    parsedKind.data === "metric"
+      ? semanticMetricSchema
+      : parsedKind.data === "dimension"
+        ? semanticDimensionSchema
+        : semanticHierarchySchema;
+  const parsedBody = bodySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    res.status(400).json({
+      error: "invalid_entry",
+      kind: parsedKind.data,
+      issues: parsedBody.error.issues.slice(0, 10).map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    });
+    return;
+  }
+  const updatedBy = getAuthenticatedEmail(req) ?? "unknown";
+  try {
+    const result = await withSessionWriteLock<AddResult>(
+      sessionId,
+      async () => {
+        const doc = await _detailFetcher(sessionId);
+        if (!doc) return { kind: "session_not_found" };
+        if (!doc.semanticModel) {
+          return { kind: "semantic_model_not_inferred" };
+        }
+        const model = doc.semanticModel;
+        let nextMetrics = model.metrics;
+        let nextDimensions = model.dimensions;
+        let nextHierarchies = model.hierarchies;
+        if (parsedKind.data === "metric") {
+          const entry = parsedBody.data as SemanticMetric;
+          if (model.metrics.some((m) => m.name === entry.name)) {
+            return { kind: "name_already_exists" };
+          }
+          nextMetrics = [...model.metrics, entry];
+        } else if (parsedKind.data === "dimension") {
+          const entry = parsedBody.data as SemanticDimension;
+          if (model.dimensions.some((d) => d.name === entry.name)) {
+            return { kind: "name_already_exists" };
+          }
+          nextDimensions = [...model.dimensions, entry];
+        } else {
+          const entry = parsedBody.data as SemanticHierarchy;
+          if (model.hierarchies.some((h) => h.name === entry.name)) {
+            return { kind: "name_already_exists" };
+          }
+          nextHierarchies = [...model.hierarchies, entry];
+        }
+        const nextVersion = (model.version ?? 0) + 1;
+        const nextModel: SemanticModel = {
+          ...model,
+          metrics: nextMetrics,
+          dimensions: nextDimensions,
+          hierarchies: nextHierarchies,
+          version: nextVersion,
+          updatedAt: new Date().toISOString(),
+          updatedBy,
+        };
+        const savedAt = Date.now();
+        doc.semanticModelAuditLog = appendSemanticModelAuditEntry(
+          doc.semanticModelAuditLog,
+          {
+            savedAt,
+            savedBy: updatedBy,
+            priorVersion: model.version ?? 0,
+            priorModel: model,
+          },
+        );
+        doc.semanticModel = nextModel;
+        doc.lastUpdatedAt = savedAt;
+        const saved = await _updater(doc);
+        return {
+          kind: "ok",
+          model: saved.semanticModel ?? nextModel,
+          lastUpdatedAt: saved.lastUpdatedAt ?? doc.lastUpdatedAt,
+        };
+      },
+    );
+    if (result.kind === "session_not_found") {
+      res.status(404).json({ error: "session_not_found", sessionId });
+      return;
+    }
+    if (result.kind === "semantic_model_not_inferred") {
+      res
+        .status(404)
+        .json({ error: "semantic_model_not_inferred", sessionId });
+      return;
+    }
+    if (result.kind === "name_already_exists") {
+      // 409 Conflict per HTTP semantics — the request conflicts with the
+      // current state of the resource (an entry of this kind+name
+      // already exists). Distinct from 404 (resource missing) which the
+      // W61-revert / W61-delete endpoints use for *_not_found outcomes.
+      res.status(409).json({
+        error: "name_already_exists",
+        sessionId,
+        kind: parsedKind.data,
+        name: parsedBody.data.name,
+      });
+      return;
+    }
+    res.json({
+      sessionId,
+      lastUpdatedAt: result.lastUpdatedAt,
+      model: result.model,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`adminSemanticModel add failed: ${msg}`);
+    res.status(500).json({ error: "admin_semantic_model_add_failed" });
   }
 }

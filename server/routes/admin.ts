@@ -12,6 +12,7 @@ import {
   patchSemanticModel,
   revertSemanticModel,
   deleteSemanticModelEntry,
+  addSemanticModelEntry,
 } from "../controllers/adminSemanticModelController.js";
 
 const router = Router();
@@ -74,6 +75,20 @@ router.post(
 router.delete(
   "/admin/semantic-models/:sessionId/entries/:kind/:name",
   deleteSemanticModelEntry,
+);
+
+// W61-add-server · append a single metric / dimension / hierarchy
+// to a session's semantic model. Body is a single entry validated by
+// the kind-appropriate zod schema (semanticMetricSchema /
+// semanticDimensionSchema / semanticHierarchySchema). Rejects
+// same-kind name collisions with 409 Conflict (cross-kind name
+// collisions allowed — metric "x" + dimension "x" is fine). Mirrors
+// W61-delete-server's audit-write-before-mutation shape; returns the
+// same envelope as save/revert/delete so the client success handler
+// is identical across all four edit operations.
+router.post(
+  "/admin/semantic-models/:sessionId/entries/:kind",
+  addSemanticModelEntry,
 );
 
 export default router;
