@@ -24,6 +24,7 @@ import { extractColumnsFromMessage } from "../../lib/columnExtractor.js";
 import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
 import { bindSchemaColumnsForAgentic } from "../../lib/schemaColumnBinding.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
+import { kickOffPreClassifyWork } from "./chatStreamPreClassifyKickoff.js";
 import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 import {
@@ -890,17 +891,42 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     const availableColumns = chatDocument.dataSummary.columns.map((c) => c.name);
 
+    // Wave WS2-pre-classify-parallel · the three pre-classify operations
+    // with no data dependency on each other (schemaBind, parseUserQuery,
+    // domainContext) fire concurrently here, then each is awaited at its
+    // existing consumption point below. SSE thinking-step emissions stay
+    // at their original line positions so on-wire ordering is byte-identical
+    // to the pre-wave sequential code; the floor savings come from
+    // parseUserQuery + domainContext overlapping with the
+    // schemaBind → analyzeChatWithColumns serial chain.
+    const kickoff = kickOffPreClassifyWork({
+      bindSchemaColumns: () =>
+        bindSchemaColumnsForAgentic(
+          message,
+          chatDocument.dataSummary,
+          processingChatHistory
+        ),
+      parseUserQuery: () =>
+        parseUserQuery(
+          message,
+          chatDocument.dataSummary,
+          processingChatHistory
+        ),
+      loadDomainContext: async () => {
+        const { loadEnabledDomainContext } = await import(
+          "../../lib/domainContext/loadEnabledDomainContext.js"
+        );
+        return loadEnabledDomainContext();
+      },
+    });
+
     onThinkingStep({
       step: "Mapping columns from schema",
       status: "active",
       timestamp: Date.now(),
     });
 
-    const schemaBinding = await bindSchemaColumnsForAgentic(
-      message,
-      chatDocument.dataSummary,
-      processingChatHistory
-    );
+    const schemaBinding = await kickoff.schemaBinding;
     console.log(`📌 Schema binding canonical columns:`, schemaBinding.canonicalColumns);
 
     onThinkingStep({
@@ -978,21 +1004,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       `   Final relevant: ${chatAnalysis.relevantColumns.join(", ") || "(none)"}`
     );
 
-    try {
-      // W32 · `parseUserQuery` returns `QueryParserResult` (extends
-      // `ParsedQuery` + `confidence: number`); the local var is widened
-      // to `Record<string, unknown> | null` because four downstream sites
-      // also use the generic-record shape. Cast at the assignment matches
-      // the W27 `agentTrace` pattern — the runtime payload IS a
-      // serialisable record, just statically tracked under a richer type.
-      parsedQueryForLoad = (await parseUserQuery(
-        message,
-        chatDocument.dataSummary,
-        processingChatHistory
-      )) as unknown as Record<string, unknown>;
-    } catch {
-      parsedQueryForLoad = null;
-    }
+    // W32 · `parseUserQuery` returns `QueryParserResult` (extends
+    // `ParsedQuery` + `confidence: number`); the local var is widened
+    // to `Record<string, unknown> | null` because four downstream sites
+    // also use the generic-record shape. The cast matches the W27
+    // `agentTrace` pattern — the runtime payload IS a serialisable
+    // record, just statically tracked under a richer type.
+    // WS2-pre-classify-parallel · kickoff catches throws → null so the
+    // local try/catch is collapsed; on-wire semantics unchanged.
+    parsedQueryForLoad = (await kickoff.parsedQuery) as
+      | Record<string, unknown>
+      | null;
 
     const historyColumns = extractColumnsFromHistory(
       processingChatHistory,
@@ -1073,17 +1095,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       // ("yes do it", "use MAT for this") missed user notes / domain vocab
       // and could mis-route between analysis/dataOps/modeling. We resolve
       // `domainContext` here (process-memoised; near-free) once per turn.
-      let modeDomainContext: string | undefined;
-      try {
-        const { loadEnabledDomainContext } = await import(
-          "../../lib/domainContext/loadEnabledDomainContext.js"
-        );
-        const dc = await loadEnabledDomainContext();
-        modeDomainContext = dc.text || undefined;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`B4 · domain context load for mode classifier failed: ${msg}`);
-      }
+      // WS2-pre-classify-parallel · kicked off at the top of the pre-classify
+      // block so the load overlaps with schemaBind + analyzeChatWithColumns;
+      // kickoff catches throws → null, so the prior try/catch is collapsed.
+      const domainContextResult = await kickoff.domainContext;
+      const modeDomainContext: string | undefined =
+        domainContextResult?.text || undefined;
       const modeClassification = await classifyMode(
         message,
         modeDetectionChatHistory,
