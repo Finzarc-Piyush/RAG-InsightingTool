@@ -696,6 +696,38 @@ export function LineRenderer({
               pointerEvents="none"
             />
           )}
+          {/* Wave WHov-line-crosshair · vertical cross-hair at the
+              snapped nearest-x during hover. Mirrors the financial-
+              chart temporal-indicator pattern: one vertical line at
+              the x-pixel of tooltipData.xRaw (the SNAPPED bucket,
+              NOT the raw cursor x — the tooltip already snaps to the
+              nearest data point in onMouseMove, and the cross-hair
+              MUST follow the same snap so the indicator visually
+              aligns with the tooltip's row values). Gated on
+              brushStart === null so an active brush rectangle isn't
+              crossed by a stray indicator line during the drag.
+              pointerEvents="none" so the line can't capture mouse
+              events meant for the hover/brush surface. Placed under
+              the data lines (rendered earlier in the Group) so the
+              series strokes visually pass OVER the indicator, which
+              is the standard layering for this pattern. */}
+          {tooltipOpen && tooltipData && brushStart === null && (() => {
+            const cx = xPx(tooltipData.xRaw);
+            if (!Number.isFinite(cx)) return null;
+            return (
+              <line
+                x1={cx}
+                x2={cx}
+                y1={0}
+                y2={innerHeight}
+                stroke="hsl(var(--muted-foreground))"
+                strokeOpacity={0.45}
+                strokeDasharray="3 3"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+            );
+          })()}
           {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
             <line
               x1={0}
