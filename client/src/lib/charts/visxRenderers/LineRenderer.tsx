@@ -655,7 +655,22 @@ export function LineRenderer({
             setBrushEnd(null);
           }
         }}
-        style={{ cursor: brushStart !== null ? "ew-resize" : "default" }}
+        // Wave WD2-line-cursor-parity · cursor reflects the active
+        // brush first, then falls back to the WD2 pointer affordance
+        // when the line is mounted inside a dashboard tile (the whole
+        // svg's onClick is gated on dashboardTile and dispatches
+        // cross-filter / drill-through — the cursor MUST signal that
+        // click affordance to match the rest of the WD2-wired
+        // renderers). Outside a dashboard tile, undefined (browser
+        // default). Direct mirror of AreaRenderer's WI4-wiring-area
+        // shape — see AreaRenderer.tsx ~line 432 for the source pattern.
+        style={
+          brushStart !== null
+            ? { cursor: "ew-resize" }
+            : dashboardTile
+              ? { cursor: "pointer" }
+              : undefined
+        }
       >
         <Group left={MARGIN.left} top={MARGIN.top}>
           <GridRows
