@@ -165,16 +165,25 @@ describe("WD2-dim-echarts-treemap · TreemapRenderer dim triplet", () => {
     assertLiftedTripletBeforeTreeMemo(treemapSrc, "TreemapRenderer");
   });
 
-  it("dim triplet sits AFTER the onChartClick useCallback (dispatch then dim, mirroring code-locality of WD2-wiring + WD2-dim pair)", () => {
-    // Co-locality with the WD2-wiring-echarts onChartClick keeps
-    // dispatch + dim discoverable as a pair (same pattern as
-    // WD2-dim-point's adjacency to crossFilterReady).
+  it("dim triplet sits BEFORE the onChartClick useCallback (dim then dispatch, so the click handler captures dashboardFilters in its closure for the drill-through filters snapshot)", () => {
+    // WD2-echarts-test-realign · the original assertion required dim
+    // AFTER onChartClick (the pre-WD3-wiring-echarts ordering), but
+    // the WD3-wiring-echarts wave deliberately LIFTED the dim triplet
+    // above the click handler so the click handler's useCallback could
+    // capture `dashboardFilters` in its closure for the WD3 drill-
+    // through filters snapshot (see the TreemapRenderer.tsx inline
+    // comment at lines ~78-86 explaining the lift). The test's
+    // ordering assumption was stale; the current code's ordering is
+    // the correct one — flip the assertion to pin THE CURRENT correct
+    // shape rather than the obsolete one. The intent of pinning a
+    // structural ordering property between dim + dispatch is preserved,
+    // just with the right direction.
     const dispatchIdx = treemapSrc.indexOf("const onChartClick = useCallback");
     const dimIdx = treemapSrc.indexOf("const dashboardFilters = dashboardTile?.filters;");
     assert.ok(dispatchIdx >= 0 && dimIdx >= 0);
     assert.ok(
-      dispatchIdx < dimIdx,
-      "dim triplet must follow onChartClick (dispatch defined first)",
+      dimIdx < dispatchIdx,
+      "dim triplet must precede onChartClick (so the click handler closure captures dashboardFilters for the drill-through filters snapshot)",
     );
   });
 });

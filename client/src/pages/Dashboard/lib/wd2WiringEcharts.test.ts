@@ -79,13 +79,22 @@ describe("WD2-wiring-echarts · EChartsBase onChartClick prop", () => {
 
 describe("WD2-wiring-echarts · TreemapRenderer leaf-click dispatch", () => {
   it("imports useDashboardTileContext + dispatchCrossFilter + toFilterValue", () => {
+    // WD2-echarts-test-realign · the import regex was originally a
+    // narrow inline-form pin `/import { dispatchCrossFilter,
+    // toFilterValue } from "...crossFilter"/`. Subsequent waves
+    // (WD2-dim-echarts-treemap) legitimately added `isCrossFilterActive`
+    // to the same import list for the dim functionality and reformatted
+    // to multi-line, breaking the literal-line pin. Widen to a
+    // whitespace-tolerant + symbol-set membership shape that pins the
+    // load-bearing contract ("these two symbols ARE imported from this
+    // module") without forbidding additional sibling imports.
     assert.match(
       treemapSrc,
       /import \{ useDashboardTileContext \} from "@\/pages\/Dashboard\/lib\/dashboardTileContext"/,
     );
     assert.match(
       treemapSrc,
-      /import \{ dispatchCrossFilter, toFilterValue \} from "@\/pages\/Dashboard\/lib\/crossFilter"/,
+      /import \{[\s\S]*?\bdispatchCrossFilter\b[\s\S]*?\btoFilterValue\b[\s\S]*?\} from "@\/pages\/Dashboard\/lib\/crossFilter"/,
     );
   });
 
@@ -121,20 +130,35 @@ describe("WD2-wiring-echarts · TreemapRenderer leaf-click dispatch", () => {
 
 describe("WD2-wiring-echarts · SunburstRenderer leaf-click dispatch", () => {
   it("imports the cross-filter helpers + dashboard-tile context", () => {
+    // WD2-echarts-test-realign · same widening as the Treemap import
+    // test — symbol-set membership rather than literal-line. The
+    // `isCrossFilterActive` symbol was added to this module's import
+    // list by WD2-dim-echarts-rest for the Sunburst dim functionality.
     assert.match(
       specialtySrc,
       /import \{ useDashboardTileContext \} from "@\/pages\/Dashboard\/lib\/dashboardTileContext"/,
     );
     assert.match(
       specialtySrc,
-      /import \{ dispatchCrossFilter, toFilterValue \} from "@\/pages\/Dashboard\/lib\/crossFilter"/,
+      /import \{[\s\S]*?\bdispatchCrossFilter\b[\s\S]*?\btoFilterValue\b[\s\S]*?\} from "@\/pages\/Dashboard\/lib\/crossFilter"/,
     );
   });
 
   it("dispatches on leaf clicks via labelCh.field with the same leaf-guard pattern as Treemap", () => {
+    // WD2-echarts-test-realign · the original regex pinned the
+    // onSunburstClick useCallback's deps array to literal
+    // `[dashboardTile, labelCh.field]`. The WD3-wiring-echarts wave
+    // (and the WD2-dim-echarts-rest dim pass) widened the deps to
+    // `[dashboardTile, labelCh.field, dashboardFilters]` so the
+    // useCallback closure could capture dashboardFilters for the
+    // drill-through filters snapshot. Widen the deps suffix pattern
+    // to `,\s*[^\]]+,\s*\)` so the test accepts the new deps shape
+    // without forbidding future legitimate additions. The load-bearing
+    // contract is "deps START with `dashboardTile, labelCh.field`",
+    // not "deps are EXACTLY those two symbols".
     assert.match(
       specialtySrc,
-      /const onSunburstClick = useCallback\(\s*\(params: unknown\) => \{[\s\S]*?const isLeaf = !Array\.isArray\(p\?\.data\?\.children\) \|\| p\.data\.children\.length === 0;[\s\S]*?dispatchCrossFilter\(\{\s*column: labelCh\.field,\s*value: toFilterValue\(name\),\s*sourceTileId: dashboardTile\.tileId,\s*\}\);[\s\S]*?\},\s*\[dashboardTile, labelCh\.field\],\s*\);/,
+      /const onSunburstClick = useCallback\(\s*\(params: unknown\) => \{[\s\S]*?const isLeaf = !Array\.isArray\(p\?\.data\?\.children\) \|\| p\.data\.children\.length === 0;[\s\S]*?dispatchCrossFilter\(\{\s*column: labelCh\.field,\s*value: toFilterValue\(name\),\s*sourceTileId: dashboardTile\.tileId,\s*\}\);[\s\S]*?\},\s*\[dashboardTile, labelCh\.field(?:,[^\]]*)?\],\s*\);/,
     );
   });
 
