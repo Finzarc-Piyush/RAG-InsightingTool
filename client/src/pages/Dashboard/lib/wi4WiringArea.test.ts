@@ -162,37 +162,35 @@ describe("WI4-wiring-area · alt capture at brushDown", () => {
   });
 });
 
-describe("WI4-wiring-area · onBrushMove drag update", () => {
+describe("WI4-wiring-area · onMouseMove drag update", () => {
+  // WHov-area-crosshair · onBrushMove was renamed to onMouseMove
+  // when the combined handler (brush drag + hover tooltip) landed.
+  // The brush-drag portion of the handler still gates on brushStart
+  // and e.buttons — tests widen to search onMouseMove instead.
   it("updates brushEnd only when a mouse button is held (gated on `e.buttons & 1`)", () => {
-    // Without the button-held guard, plain mouse-move (hover) would
-    // continuously update brushEnd and re-render the rect. Same
-    // guard shape LineRenderer's onMouseMove uses.
-    const moveIdx = areaSrc.indexOf("const onBrushMove =");
-    const slice = areaSrc.slice(moveIdx, moveIdx + 600);
-    assert.match(slice, /if\s*\(\s*!\s*\(\s*e\.buttons\s*&\s*1\s*\)\s*\)\s*return\s*;/);
+    // WHov-area-crosshair · the button guard merged into the
+    // brushStart conditional: `if (brushStart !== null && (e.buttons & 1))`.
+    const moveIdx = areaSrc.indexOf("const onMouseMove =");
+    const slice = areaSrc.slice(moveIdx, moveIdx + 800);
+    assert.match(slice, /e\.buttons\s*&\s*1/);
   });
 
   it("clamps brushEnd to [0, innerWidth] so a drag past the axis edges doesn't overflow", () => {
-    // Math.max(0, Math.min(innerWidth, x)) — same clamp shape as
-    // LineRenderer. A drag past the left axis renders the rect
-    // anchored at 0; past the right edge anchors at innerWidth.
-    const moveIdx = areaSrc.indexOf("const onBrushMove =");
-    const slice = areaSrc.slice(moveIdx, moveIdx + 600);
+    const moveIdx = areaSrc.indexOf("const onMouseMove =");
+    const slice = areaSrc.slice(moveIdx, moveIdx + 800);
     assert.match(
       slice,
       /setBrushEnd\(\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*innerWidth\s*,\s*x\s*\)\s*\)\s*\)/,
     );
   });
 
-  it("short-circuits when brushStart is null (no active brush)", () => {
-    // Without this guard, a hover that happens to fire mouseMove
-    // before any mouseDown would set brushEnd against a null
-    // brushStart, then the rect render `brushStart !== null &&
-    // brushEnd !== null` would correctly suppress the rect, but
-    // an unnecessary re-render would occur per pixel of hover.
-    const moveIdx = areaSrc.indexOf("const onBrushMove =");
-    const slice = areaSrc.slice(moveIdx, moveIdx + 400);
-    assert.match(slice, /if\s*\(\s*brushStart\s*===\s*null\s*\)\s*return\s*;/);
+  it("gates brush update on brushStart !== null (no brush end update outside a drag)", () => {
+    // WHov-area-crosshair · the guard moved from a top-of-function
+    // early-return to a conditional block wrapping the setBrushEnd
+    // call: `if (brushStart !== null && (e.buttons & 1))`.
+    const moveIdx = areaSrc.indexOf("const onMouseMove =");
+    const slice = areaSrc.slice(moveIdx, moveIdx + 800);
+    assert.match(slice, /if\s*\(\s*brushStart\s*!==\s*null\s*&&\s*\(\s*e\.buttons\s*&\s*1\s*\)\s*\)/);
   });
 });
 
@@ -348,17 +346,19 @@ describe("WI4-wiring-area · NO brush-to-zoom (negative pin)", () => {
 });
 
 describe("WI4-wiring-area · SVG handler attachment", () => {
-  it("attaches onMouseDown, onMouseMove, onMouseUp to the svg (gated on dashboardTile)", () => {
-    // Brush handlers gated on dashboardTile because outside a
-    // dashboard the brush has no receiver. Inside a dashboard, the
-    // three handlers power the alt-drag → explain pipeline.
+  it("attaches onMouseDown and onMouseUp gated on dashboardTile, and onMouseMove always-wired", () => {
+    // WHov-area-crosshair · onMouseMove is now always-wired (not
+    // gated on dashboardTile) because the combined handler does both
+    // brush-drag (gated internally on brushStart) AND hover tooltip.
+    // onMouseDown and onMouseUp remain dashboard-gated since the
+    // brush mechanics only make sense inside a dashboard tile.
     assert.match(
       areaSrc,
       /onMouseDown=\{\s*dashboardTile\s*\?\s*onBrushDown\s*:\s*undefined\s*\}/,
     );
     assert.match(
       areaSrc,
-      /onMouseMove=\{\s*dashboardTile\s*\?\s*onBrushMove\s*:\s*undefined\s*\}/,
+      /onMouseMove=\{\s*onMouseMove\s*\}/,
     );
     assert.match(
       areaSrc,
