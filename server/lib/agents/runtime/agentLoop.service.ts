@@ -2292,6 +2292,24 @@ export async function runAgentTurn(
                   Object.keys(intermediateRows[0] ?? {})
               );
               const next = [...(augmentedValues ?? [])];
+              // Remap source column names → alias names so values match
+              // agentResultRows columns (which use aliases, not source names).
+              const sourceToAlias = new Map<string, string>();
+              for (const agg of (tracePlan as QueryPlanBody).aggregations ?? []) {
+                const src = typeof agg?.column === "string" ? agg.column.trim() : "";
+                const alias = typeof agg?.alias === "string" ? agg.alias.trim() : "";
+                if (src && alias && src !== alias && resultCols.has(alias)) {
+                  sourceToAlias.set(src, alias);
+                }
+              }
+              for (let i = 0; i < next.length; i++) {
+                const alias = sourceToAlias.get(next[i]!);
+                if (alias && !existing.has(alias)) {
+                  existing.delete(next[i]!);
+                  next[i] = alias;
+                  existing.add(alias);
+                }
+              }
               for (const a of aliasNames) {
                 if (existing.has(a)) continue;
                 if (!resultCols.has(a)) continue;
@@ -2299,6 +2317,14 @@ export async function runAgentTurn(
                 existing.add(a);
               }
               augmentedValues = next;
+              // Remap valueAggregators keys to match the aliased column names.
+              if (pivotDefaults?.valueAggregators && sourceToAlias.size > 0) {
+                const remapped: Record<string, string> = {};
+                for (const [key, val] of Object.entries(pivotDefaults.valueAggregators)) {
+                  remapped[sourceToAlias.get(key) ?? key] = val;
+                }
+                pivotDefaults = { ...pivotDefaults, valueAggregators: remapped };
+              }
             }
             ctx.onIntermediateArtifact({
               // Smaller preview for data-prep status updates; the user just

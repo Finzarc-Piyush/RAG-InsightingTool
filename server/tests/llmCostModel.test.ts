@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it, afterEach } from "node:test";
 import {
   calculateCostUsd,
+  clampMaxTokens,
+  MAX_OUTPUT_TOKENS,
   normalizeUsage,
   RATE_USD_PER_MTOK,
 } from "../lib/agents/runtime/llmCostModel.js";
@@ -163,5 +165,44 @@ describe("llmCostModel · normalizeUsage", () => {
       prompt_tokens_details: { cached_tokens: -1 },
     });
     assert.deepStrictEqual(n, { promptTokens: 100, completionTokens: 50 });
+  });
+});
+
+describe("llmCostModel · clampMaxTokens", () => {
+  it("returns the requested value when under the model cap", () => {
+    assert.strictEqual(clampMaxTokens("gpt-4o", 8000), 8000);
+  });
+
+  it("clamps to the model cap when requested exceeds it", () => {
+    assert.strictEqual(clampMaxTokens("gpt-4o", 24_000), 16_384);
+  });
+
+  it("clamps narrator budget for claude-haiku-4-5", () => {
+    assert.strictEqual(clampMaxTokens("claude-haiku-4-5", 24_000), 8_192);
+  });
+
+  it("allows full budget on claude-opus-4-7", () => {
+    assert.strictEqual(clampMaxTokens("claude-opus-4-7", 24_000), 24_000);
+  });
+
+  it("is case-insensitive on the model key", () => {
+    assert.strictEqual(clampMaxTokens("GPT-4O", 24_000), 16_384);
+  });
+
+  it("uses default cap (16 384) for unknown models", () => {
+    assert.strictEqual(clampMaxTokens("some-future-model", 24_000), 16_384);
+  });
+
+  it("returns undefined when requested is undefined", () => {
+    assert.strictEqual(clampMaxTokens("gpt-4o", undefined), undefined);
+  });
+
+  it("every model in RATE_USD_PER_MTOK has a MAX_OUTPUT_TOKENS entry", () => {
+    for (const model of Object.keys(RATE_USD_PER_MTOK)) {
+      assert.ok(
+        model in MAX_OUTPUT_TOKENS,
+        `${model} is in RATE_USD_PER_MTOK but missing from MAX_OUTPUT_TOKENS`,
+      );
+    }
   });
 });

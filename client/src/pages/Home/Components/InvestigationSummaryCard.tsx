@@ -31,10 +31,12 @@ import {
   CircleDashed,
   CircleDot,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface InvestigationSummaryCardProps {
   summary: InvestigationSummary | undefined;
   defaultOpen?: boolean;
+  onSuggestedQuestionClick?: (question: string) => void;
 }
 
 type Status = NonNullable<InvestigationSummary["hypotheses"]>[number]["status"];
@@ -77,6 +79,7 @@ const PRIORITY_DOT: Record<Priority, string> = {
 export function InvestigationSummaryCard({
   summary,
   defaultOpen = true,
+  onSuggestedQuestionClick,
 }: InvestigationSummaryCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   if (!summary) return null;
@@ -187,20 +190,38 @@ export function InvestigationSummaryCard({
               <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Open questions
               </p>
-              <ul className="space-y-1">
-                {opens.map((q, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-[12.5px] leading-snug text-foreground"
-                  >
-                    <span
-                      className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[q.priority]}`}
-                      aria-label={`Priority: ${q.priority}`}
-                    />
-                    <span>{q.question}</span>
-                  </li>
-                ))}
-              </ul>
+              {onSuggestedQuestionClick ? (
+                <div className="flex flex-wrap gap-2">
+                  {opens.map((q, i) => (
+                    <Button
+                      key={i}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs rounded-full h-auto py-1.5 px-3"
+                      aria-label={`Investigate: ${q.question}`}
+                      onClick={() => onSuggestedQuestionClick(q.question)}
+                    >
+                      {q.question}
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {opens.map((q, i) => (
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 text-[12.5px] leading-snug text-foreground"
+                    >
+                      <span
+                        className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[q.priority]}`}
+                        aria-label={`Priority: ${q.priority}`}
+                      />
+                      <span>{q.question}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>

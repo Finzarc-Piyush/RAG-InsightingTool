@@ -137,10 +137,13 @@ export function InteractiveChartCard({
   const v2Spec = isChartSpecV2(chart) ? (chart as ChartSpecV2) : null;
   const activeSpec: ChartSpec | ChartSpecV2 = v2Spec ?? (localV1 as ChartSpec);
 
-  const canPivot = useMemo(
-    () => showPivotToggle && canShowPivotToggle(activeSpec),
-    [activeSpec, showPivotToggle],
-  );
+  const canPivot = useMemo(() => {
+    if (!showPivotToggle) return false;
+    const spec = isChartSpecV2(chart) ? null : (chart as ChartSpec);
+    if (!spec) return false;
+    if (chartSpecToPivotConfig(spec) === null) return false;
+    return Array.isArray(spec.data) && spec.data.length > 0;
+  }, [chart, showPivotToggle]);
   const effectiveView: "chart" | "pivot" = canPivot ? view : "chart";
 
   const toolbarVisible = useMemo(() => {

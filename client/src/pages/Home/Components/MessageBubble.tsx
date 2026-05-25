@@ -749,31 +749,6 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {/* W13 · Investigation summary card. Surfaces hypotheses tested
-            (with status), headline findings, and unresolved open questions.
-            Default-open so the user immediately sees the analysis was real
-            investigation, not a query log. Hidden on intermediate messages
-            and when the blackboard digest is empty (descriptive turns). */}
-        {!isUser && !message.isIntermediate && (
-          <InvestigationSummaryCard summary={message.investigationSummary} />
-        )}
-
-        {/* W37 · per-message PriorInvestigationsBanner. Renders the W30
-            `priorInvestigationsSnapshot` field — what the agent knew BEFORE
-            this turn ran. Only mounts on analytical messages (those with
-            an investigationSummary AND at least one snapshot entry) so it
-            stays visually subordinate to W13 and avoids noise on chatty
-            turns. Default-collapsed; reuses the W26 banner component in
-            its W37 mode (per-message snapshot, header label adapts). */}
-        {!isUser &&
-          !message.isIntermediate &&
-          message.investigationSummary &&
-          (message.priorInvestigationsSnapshot?.length ?? 0) > 0 && (
-            <PriorInvestigationsBanner
-              priorInvestigations={message.priorInvestigationsSnapshot}
-            />
-          )}
-
         {isDashboardMode ? (
           <AnalyticalDashboardResponse
             message={message}
@@ -1243,6 +1218,22 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             <InsightCard insights={message.insights} />
           </div>
         )}
+
+        {!isUser && !message.isIntermediate && (
+          <InvestigationSummaryCard
+            summary={message.investigationSummary}
+            onSuggestedQuestionClick={onSuggestedQuestionClick}
+          />
+        )}
+
+        {!isUser &&
+          !message.isIntermediate &&
+          message.investigationSummary &&
+          (message.priorInvestigationsSnapshot?.length ?? 0) > 0 && (
+            <PriorInvestigationsBanner
+              priorInvestigations={message.priorInvestigationsSnapshot}
+            />
+          )}
       </div>
 
       {isUser && (

@@ -36,6 +36,26 @@ export const RATE_USD_PER_MTOK: Record<string, ModelRate> = {
   "claude-haiku-4-5": { input: 0.8, output: 4.0, cachedInput: 0.08 },
 };
 
+export const MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "gpt-4o":            16_384,
+  "gpt-4o-mini":       16_384,
+  "claude-opus-4-7":   32_768,
+  "claude-opus-4-6":   32_768,
+  "claude-sonnet-4-6": 16_384,
+  "claude-haiku-4-5":   8_192,
+};
+
+const DEFAULT_MAX_OUTPUT = 16_384;
+
+export function clampMaxTokens(model: string, requested: number): number;
+export function clampMaxTokens(model: string, requested: undefined): undefined;
+export function clampMaxTokens(model: string, requested: number | undefined): number | undefined;
+export function clampMaxTokens(model: string, requested: number | undefined): number | undefined {
+  if (requested == null) return undefined;
+  const cap = MAX_OUTPUT_TOKENS[model.toLowerCase()] ?? DEFAULT_MAX_OUTPUT;
+  return Math.min(requested, cap);
+}
+
 /** Normalized token counts extracted from an OpenAI `response.usage` object. */
 export interface CallTokenUsage {
   promptTokens: number;

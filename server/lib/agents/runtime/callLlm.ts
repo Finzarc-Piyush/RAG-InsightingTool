@@ -21,7 +21,7 @@ import type {
   ChatCompletionCreateParamsNonStreaming,
 } from "openai/resources/chat/completions";
 import { openai } from "../../openai.js";
-import { calculateCostUsd, normalizeUsage } from "./llmCostModel.js";
+import { calculateCostUsd, clampMaxTokens, normalizeUsage } from "./llmCostModel.js";
 import {
   emitLlmUsage,
   type LlmCallUsage,
@@ -92,10 +92,16 @@ export async function callLlm(
   const effectiveModel = opts.purpose
     ? resolveModelFor(opts.purpose, { turnId: opts.turnId })
     : params.model;
-  const effectiveParams: ChatCompletionCreateParamsNonStreaming =
+  let effectiveParams: ChatCompletionCreateParamsNonStreaming =
     effectiveModel === params.model
       ? params
       : { ...params, model: effectiveModel };
+  if (effectiveParams.max_tokens != null) {
+    const clamped = clampMaxTokens(effectiveModel, effectiveParams.max_tokens);
+    if (clamped !== effectiveParams.max_tokens) {
+      effectiveParams = { ...effectiveParams, max_tokens: clamped };
+    }
+  }
   // W18 · test-only stub short-circuit. Production never sets the resolver;
   // when set (by installLlmStub in tests), it can return a canned response
   // keyed off `opts.purpose` and the system prompt. Returning `undefined`

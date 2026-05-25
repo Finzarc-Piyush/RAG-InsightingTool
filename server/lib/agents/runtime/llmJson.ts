@@ -2,7 +2,7 @@ import { MODEL, openai } from "../../openai.js";
 import type { ZodType } from "zod";
 import { agentLog } from "./agentLogger.js";
 import { callLlm, emitLlmUsage, type LlmCallUsage } from "./callLlm.js";
-import { calculateCostUsd, normalizeUsage } from "./llmCostModel.js";
+import { calculateCostUsd, clampMaxTokens, normalizeUsage } from "./llmCostModel.js";
 import { resolveModelFor, type LlmCallPurpose } from "./llmCallPurpose.js";
 import { isAnthropicModel } from "./anthropicProvider.js";
 
@@ -219,7 +219,7 @@ export async function completeJsonStreaming<T>(
       ],
       response_format: { type: "json_object" },
       temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 2048,
+      max_tokens: clampMaxTokens(effectiveModel, options.maxTokens ?? 2048),
       stream: true,
     } as never) as unknown as AsyncIterable<{
       choices?: Array<{ delta?: { content?: string | null } }>;
