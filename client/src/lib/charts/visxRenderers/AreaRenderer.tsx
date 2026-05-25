@@ -16,6 +16,11 @@ import { AxisBottom, AxisLeft } from "@visx/axis";
 import { GridRows } from "@visx/grid";
 import { curveMonotoneX } from "@visx/curve";
 import { localPoint } from "@visx/event";
+import {
+  useTooltip,
+  TooltipWithBounds,
+  defaultStyles as visxTooltipStyles,
+} from "@visx/tooltip";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -26,7 +31,8 @@ import {
   type Row,
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
-import { makeAxisTickFormatter } from "@/lib/charts/format";
+import { formatChartValue, makeAxisTickFormatter } from "@/lib/charts/format";
+import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
   MAX_X_AXIS_LABELS,
@@ -158,6 +164,19 @@ export function AreaRenderer({
   // slice. useRef (not useState) because the flag doesn't drive a
   // re-render. Mirrors LineRenderer's `brushExplainRef` shape.
   const brushExplainRef = useRef<boolean>(false);
+
+  // Wave WHov-area-crosshair · tooltip state for hover nearest-x snap.
+  const {
+    tooltipOpen,
+    tooltipLeft,
+    tooltipTop,
+    tooltipData,
+    showTooltip,
+    hideTooltip,
+  } = useTooltip<{
+    xRaw: unknown;
+    rows: Array<{ key: string; color: string; value: number }>;
+  }>();
 
   // Wave WI4-wiring-area · reset brush state when the underlying data
   // changes (encoding shelf change, cross-filter applied, etc.). Stale
@@ -311,13 +330,46 @@ export function AreaRenderer({
     brushExplainRef.current = e.altKey === true;
   };
 
-  const onBrushMove = (e: React.MouseEvent<SVGElement>) => {
-    if (brushStart === null) return;
-    if (!(e.buttons & 1)) return;
+  // Wave WHov-area-crosshair · combined handler: brush drag + hover
+  // nearest-x tooltip. Mirrors LineRenderer's onMouseMove shape.
+  const onMouseMove = (e: React.MouseEvent<SVGElement>) => {
     const pt = localPoint(e);
     if (!pt) return;
-    const x = pt.x - MARGIN.left;
-    setBrushEnd(Math.max(0, Math.min(innerWidth, x)));
+    if (brushStart !== null && (e.buttons & 1)) {
+      const x = pt.x - MARGIN.left;
+      setBrushEnd(Math.max(0, Math.min(innerWidth, x)));
+    }
+    const localX = pt.x - MARGIN.left;
+    if (localX < 0 || localX > innerWidth) {
+      hideTooltip();
+      return;
+    }
+    let nearest: SeriesPoint | null = null;
+    let minDx = Infinity;
+    for (const s of series) {
+      for (const p of s.points) {
+        const px = xPx(p.x);
+        const dx = Math.abs(px - localX);
+        if (dx < minDx) {
+          minDx = dx;
+          nearest = p;
+        }
+      }
+    }
+    if (!nearest) return;
+    const xRaw = nearest.x;
+    const rows = series
+      .map((s) => {
+        const found = s.points.find((p) => xPx(p.x) === xPx(xRaw));
+        if (!found) return null;
+        return { key: s.key, color: s.color, value: found.y };
+      })
+      .filter((r): r is { key: string; color: string; value: number } => !!r);
+    showTooltip({
+      tooltipLeft: pt.x,
+      tooltipTop: pt.y,
+      tooltipData: { xRaw, rows },
+    });
   };
 
   const onBrushUp = () => {
@@ -409,7 +461,7 @@ export function AreaRenderer({
   if (innerWidth <= 0 || innerHeight <= 0) return null;
 
   return (
-    <div className="flex flex-col" style={{ width, height }}>
+    <div className="relative flex flex-col" style={{ width, height }}>
     {showLegend && (
       <ChartLegend
         items={legendItems}
@@ -443,19 +495,16 @@ export function AreaRenderer({
       // power the alt-drag → explain-this-slice intent; the existing
       // onClick co-exists for cross-filter / drill-through clicks.
       onMouseDown={dashboardTile ? onBrushDown : undefined}
-      onMouseMove={dashboardTile ? onBrushMove : undefined}
+      onMouseMove={onMouseMove}
       onMouseUp={dashboardTile ? onBrushUp : undefined}
-      onMouseLeave={
-        dashboardTile
-          ? () => {
-              if (brushStart !== null) {
-                brushExplainRef.current = false;
-                setBrushStart(null);
-                setBrushEnd(null);
-              }
-            }
-          : undefined
-      }
+      onMouseLeave={() => {
+        hideTooltip();
+        if (brushStart !== null) {
+          brushExplainRef.current = false;
+          setBrushStart(null);
+          setBrushEnd(null);
+        }
+      }}
       onClick={
         dashboardTile
           ? (e: React.MouseEvent<SVGElement>) => {
@@ -536,6 +585,33 @@ export function AreaRenderer({
             pointerEvents="none"
           />
         )}
+        {/* Wave WHov-area-crosshair · vertical cross-hair at the
+            snapped nearest-x during hover. Mirrors the LineRenderer
+            WHov-line-crosshair pattern: one vertical line at the
+            x-pixel of tooltipData.xRaw (the SNAPPED bucket, NOT the
+            raw cursor x). Gated on brushStart === null so an active
+            brush rectangle isn't crossed by a stray indicator line.
+            pointerEvents="none" so the line can't capture mouse
+            events meant for the hover/brush surface. Placed under
+            the data areas so the filled shapes render OVER the
+            indicator — standard layering for this pattern. */}
+        {tooltipOpen && tooltipData && brushStart === null && (() => {
+          const cx = xPx(tooltipData.xRaw);
+          if (!Number.isFinite(cx)) return null;
+          return (
+            <line
+              x1={cx}
+              x2={cx}
+              y1={0}
+              y2={innerHeight}
+              stroke="hsl(var(--muted-foreground))"
+              strokeOpacity={0.45}
+              strokeDasharray="3 3"
+              strokeWidth={1}
+              pointerEvents="none"
+            />
+          );
+        })()}
         {yScale.domain()[0] <= 0 && yScale.domain()[1] >= 0 && (
           <line
             x1={0}
@@ -618,6 +694,28 @@ export function AreaRenderer({
         />
       </Group>
     </svg>
+      {tooltipOpen && tooltipData && (
+        <TooltipWithBounds
+          left={tooltipLeft}
+          top={tooltipTop}
+          style={{ ...visxTooltipStyles, background: "transparent", padding: 0 }}
+        >
+          <ChartTooltip
+            title={
+              isTemporal
+                ? formatChartValue(tooltipData.xRaw, xCh.field, {
+                    format: "date",
+                  })
+                : asString(tooltipData.xRaw)
+            }
+            rows={tooltipData.rows.map((r) => ({
+              color: r.color,
+              label: r.key,
+              value: formatChartValue(r.value, yCh.field),
+            }))}
+          />
+        </TooltipWithBounds>
+      )}
     </div>
   );
 }
