@@ -520,3 +520,8 @@ variables on init.
 theme toggles re-apply ECharts options within ~16ms (one frame). The
 `prefers-color-scheme` listener stays as a fallback for OS-driven
 changes.
+
+### Recent changes
+
+- Wave WHov-area-crosshair (2026-05-25) — add hover tooltip + vertical cross-hair indicator to AreaRenderer, mirroring LineRenderer's WHov-line-crosshair pattern; promotes the hover-crosshair convention to documented status. See `docs/WAVES.md`.
+- Wave WHov-line-crosshair (2026-05-22) — add hover-time vertical cross-hair indicator to LineRenderer; first instance of the hover-crosshair pattern. See `docs/WAVES.md`.
