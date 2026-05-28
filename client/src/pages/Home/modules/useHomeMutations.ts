@@ -576,10 +576,11 @@ export const useHomeMutations = ({
         onUploadProcessingStarted?.();
         setSessionId(data.sessionId);
         setIsDatasetPreviewLoading?.(true);
-        setIsDatasetEnriching?.(false);
+        setIsDatasetEnriching?.(true);
         previewStateRef.current = { rows: [], columns: [] };
         setMessages([]);
         upsertPreviewSystemMessage();
+        upsertEnrichmentSystemMessage();
         startUploadJobPolling(data.jobId, data.sessionId);
         toast({
           title: 'Upload started',
@@ -667,10 +668,11 @@ export const useHomeMutations = ({
   const applyImportStarted = async (data: { jobId: string; sessionId: string; fileName: string }) => {
     setSessionId(data.sessionId);
     setIsDatasetPreviewLoading?.(true);
-    setIsDatasetEnriching?.(false);
+    setIsDatasetEnriching?.(true);
     previewStateRef.current = { rows: [], columns: [] };
     setMessages([]);
     upsertPreviewSystemMessage();
+    upsertEnrichmentSystemMessage();
     startUploadJobPolling(data.jobId, data.sessionId);
     toast({
       title: 'Import Started',

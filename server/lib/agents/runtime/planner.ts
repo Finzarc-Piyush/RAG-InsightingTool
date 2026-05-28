@@ -281,6 +281,7 @@ function normalizeAddComputedColumnsStepArgs(
 
 export type PlannerRejectReason =
   | "llm_json_invalid"
+  | "api_error"
   | "unknown_tool"
   | "invalid_tool_args"
   | "column_not_in_schema"
@@ -299,6 +300,8 @@ export type PlannerRunResult =
       stepId?: string;
       argKeys?: string;
       zod_error?: string;
+      /** Upstream provider error message when `reason === "api_error"`. */
+      apiError?: string;
     };
 
 function firstInvalidQueryPlanColumn(
@@ -604,6 +607,13 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     purpose: LLM_PURPOSE.PLANNER,
   });
   if (!out.ok) {
+    // Distinguish upstream provider failures (config bug, rate limit, key
+    // rejected) from a real JSON/Zod parse failure so operators can act on
+    // the right thing. dataAnalyzer surfaces api_error detail to the user.
+    if (out.kind === "api_error") {
+      logReject({ reason: "api_error", apiError: out.error.slice(0, 300) }, turnId);
+      return { ok: false, reason: "api_error", apiError: out.error };
+    }
     logReject({ reason: "llm_json_invalid" }, turnId);
     return { ok: false, reason: "llm_json_invalid" };
   }

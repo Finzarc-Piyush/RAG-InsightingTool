@@ -526,7 +526,9 @@ export async function answerQuestion(
         });
         try {
           loopResult = await runDeepInvestigation(execCtx, agentOptions?.onAgentEvent);
-          if (!loopResult?.answer?.trim()) {
+          const deepHasContent = loopResult?.answer?.trim()
+            || (Array.isArray(loopResult?.table) && loopResult.table.length > 0);
+          if (!deepHasContent) {
             console.warn("⚠️  Deep investigation returned empty; falling back to single-flow");
             loopResult = null;
           } else {
@@ -543,7 +545,9 @@ export async function answerQuestion(
       if (!loopResult) {
         loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
       }
-      if (loopResult?.answer?.trim()) {
+      const hasContent = loopResult?.answer?.trim()
+        || (Array.isArray(loopResult?.table) && loopResult.table.length > 0);
+      if (hasContent) {
         console.log('✅ Agentic loop returned answer');
         return {
           answer: loopResult.answer,
@@ -582,7 +586,12 @@ export async function answerQuestion(
       const pr = trace?.plannerRejectReason;
       let emptyAnswer =
         "I couldn't complete this analysis with the agent. Please try again or rephrase your question.";
-      if (pr === "column_not_in_schema") {
+      if (pr === "api_error") {
+        const detail = (trace?.plannerRejectDetail ?? "").slice(0, 240);
+        emptyAnswer = detail
+          ? `The LLM provider rejected this request — please check the deployment configuration. Details: ${detail}`
+          : "The LLM provider rejected this request. Please check the deployment configuration and try again.";
+      } else if (pr === "column_not_in_schema") {
         emptyAnswer =
           "The agent's plan used column names that don't match your dataset. Check spelling against your headers and try again.";
       } else if (pr === "dependency_cycle" || pr === "bad_depends_on") {

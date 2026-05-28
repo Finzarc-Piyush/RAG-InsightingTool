@@ -1670,6 +1670,7 @@ export async function runAgentTurn(
           planResult.stepId,
           planResult.argKeys,
           planResult.zod_error,
+          planResult.apiError,
         ]
           .filter(Boolean)
           .join("|")
@@ -2903,7 +2904,11 @@ export async function runAgentTurn(
       await runContextAgentRound2(ctx, ctx.blackboard, turnId);
     }
 
-    await maybeMidTurn({
+    // W-QL-FIX2 · fire-and-forget: the session-context merge inside
+    // maybeMidTurn includes an LLM call + CosmosDB RMW (~24s observed).
+    // Narrator reads `observations[]` + `blackboard`, not session context,
+    // so this bookkeeping doesn't need to block synthesis.
+    void maybeMidTurn({
       phase: "pre_synthesis",
       bypassThrottle: true,
       ok: true,

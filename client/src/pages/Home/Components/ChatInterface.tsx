@@ -13,7 +13,7 @@ import { StreamingPreviewCard } from '@/pages/Home/Components/StreamingPreviewCa
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download, Save } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download, Save, Table2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -121,7 +121,11 @@ interface ChatInterfaceProps {
   localPreviewParseStatus?: 'full' | 'headers_only' | 'failed';
   uploadStartError?: string | null;
   /** Append an assistant message that only adds a chart (Chart Builder). */
-  onAppendAssistantChart?: (chart: ChartSpec) => void;
+  onAppendAssistantChart?: (chart: ChartSpec | import('@/shared/schema').ChartSpecV2) => void;
+  /** Trigger the latest analysis message's DataPreviewTable to switch to pivot view. */
+  onRequestPivotView?: () => void;
+  /** Counter incremented each time the user requests pivot view; threaded to DataPreviewTable. */
+  pivotViewRequest?: number;
   /**
    * W42 · live "Drafting answer…" preview text accumulated from
    * `answer_chunk` SSE events while the agent loop is still running.
@@ -205,6 +209,8 @@ export function ChatInterface({
   localPreviewParseStatus = 'full',
   uploadStartError = null,
   onAppendAssistantChart,
+  onRequestPivotView,
+  pivotViewRequest = 0,
   streamingNarratorPreview = "",
   fileNameForAutomation,
 }: ChatInterfaceProps) {
@@ -301,6 +307,13 @@ export function ChatInterface({
     });
     return map;
   }, [messages]);
+
+  const lastPivotEligibleIdx = useMemo(() => {
+    for (let i = filteredMessages.length - 1; i >= 0; i--) {
+      if (computeAllowPivotAutoShow(filteredMessages[i])) return i;
+    }
+    return -1;
+  }, [filteredMessages]);
 
   const previewAnchorKey = useMemo(() => {
     const previewMsg = filteredMessages.find(isDatasetPreviewSystemMessage);
@@ -1063,6 +1076,7 @@ export function ChatInterface({
             const allowPivotAutoShow = computeAllowPivotAutoShow(message);
             const uploadPreviewThinking =
               isDatasetPreviewLoading &&
+              !isDatasetEnriching &&
               isDatasetPreviewSystemMessage(message) &&
               carriesDatasetPreview
                 ? {
@@ -1111,19 +1125,8 @@ export function ChatInterface({
                   thinkingPanelStreaming={false}
                   onSuggestedQuestionClick={applySuggestionToComposer}
                   showDatasetEnrichmentLoader={
-                    // During enrichment, `normalizeDatasetSystemMessages` always
-                    // emits BOTH the dataset-preview and dataset-enrichment
-                    // system messages (uploadSystemMessages.ts). The pre-fix
-                    // gate `(isEnrichmentMessage || isDatasetPreviewSystemMessage)`
-                    // therefore mounted the loader twice — once per system
-                    // message — producing the visible duplicate "Enriching your
-                    // data understanding" cards. Mount only on the enrichment
-                    // system message; the preview message keeps its
-                    // `uploadPreviewThinking` mini-indicator for the preview-
-                    // loading phase via the prop below.
                     isEnrichmentMessage &&
-                    isDatasetEnriching &&
-                    !isDatasetPreviewLoading
+                    isDatasetEnriching
                   }
                   enrichmentPhase={enrichmentPoll?.enrichmentPhase}
                   enrichmentStep={enrichmentPoll?.enrichmentStep}
@@ -1143,6 +1146,8 @@ export function ChatInterface({
                   allowDatasetPreviewInAnswer={allowDatasetPreviewInAnswer}
                   allowPivotAutoShow={allowPivotAutoShow}
                   onAppendAssistantChart={onAppendAssistantChart}
+                  pivotViewRequest={pivotViewRequest}
+                  isLatestAnalysis={idx === lastPivotEligibleIdx}
                   precedingUserQuestion={precedingUserQuestion}
                   uploadPreviewThinking={uploadPreviewThinking}
                 />
@@ -1269,15 +1274,28 @@ export function ChatInterface({
                 </Button>
               </div>
             )}
-            <div className="flex-shrink-0">
+            <div className="flex-shrink-0 flex gap-1.5">
               {columns && columns.length > 0 && onAppendAssistantChart ? (
                 <ChartBuilderDialog
                   sessionId={sessionId}
                   columns={columns}
                   numericColumns={numericColumns ?? []}
                   dateColumns={dateColumns ?? []}
+                  sampleRows={sampleRows}
                   onChartAdded={onAppendAssistantChart}
                 />
+              ) : null}
+              {columns && columns.length > 0 && onRequestPivotView ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 px-4 text-sm font-medium border-2 border-border bg-card hover:bg-muted/40 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl gap-2"
+                  onClick={onRequestPivotView}
+                  title="Build a pivot table"
+                >
+                  <Table2 className="w-4 h-4 text-muted-foreground" />
+                  <span>Build pivot</span>
+                </Button>
               ) : null}
             </div>
             <div className="relative flex-1">
@@ -1287,8 +1305,7 @@ export function ChatInterface({
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 onBlur={handleTextareaBlur}
-                placeholder="Ask a question about your data..."
-                disabled={isLoading}
+                placeholder={isLoading ? "Type your next question…" : "Ask a question about your data..."}
                 data-testid="input-message"
                 rows={1}
                 className="min-h-[44px] max-h-40 flex-1 resize-none rounded-xl border-2 border-border/80 bg-card pr-8 text-sm shadow-sm focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40"

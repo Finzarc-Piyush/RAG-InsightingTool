@@ -918,6 +918,24 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         );
         return loadEnabledDomainContext();
       },
+      // W-QL-FIX3 · mode classification depends only on domainContext (not
+      // schemaBinding or intent analysis), so it chains after domainContext
+      // and runs in parallel with the schemaBind → intent serial chain.
+      classifyMode: (domainCtx) =>
+        classifyMode(
+          message,
+          modeDetectionChatHistory,
+          chatDocument.dataSummary,
+          undefined,
+          {
+            permanentContext: chatDocument.permanentContext,
+            domainContext: domainCtx?.text || undefined,
+            userIntentVerbatim:
+              chatDocument.sessionAnalysisContext?.userIntent?.verbatimNotes,
+            userIntentConstraints:
+              chatDocument.sessionAnalysisContext?.userIntent?.interpretedConstraints,
+          }
+        ),
     });
 
     onThinkingStep({
@@ -1081,6 +1099,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       }
     }
 
+    // W-QL-FIX3 · mode classification was kicked off in the parallel
+    // pre-classify block (chained after domainContext). Await the result
+    // here at the original consumption site so SSE ordering is unchanged.
     let detectedMode: 'analysis' | 'dataOps' | 'modeling' = 'analysis';
     try {
       onThinkingStep({
@@ -1089,45 +1110,26 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         timestamp: Date.now(),
       });
 
-      // Wave B4 · Thread the same ambient context the rest of the agent
-      // pipeline already uses. Pre-B4 the classifier saw only the question,
-      // recent chat history, and the columns list — so ambiguous follow-ups
-      // ("yes do it", "use MAT for this") missed user notes / domain vocab
-      // and could mis-route between analysis/dataOps/modeling. We resolve
-      // `domainContext` here (process-memoised; near-free) once per turn.
-      // WS2-pre-classify-parallel · kicked off at the top of the pre-classify
-      // block so the load overlaps with schemaBind + analyzeChatWithColumns;
-      // kickoff catches throws → null, so the prior try/catch is collapsed.
-      const domainContextResult = await kickoff.domainContext;
-      const modeDomainContext: string | undefined =
-        domainContextResult?.text || undefined;
-      const modeClassification = await classifyMode(
-        message,
-        modeDetectionChatHistory,
-        chatDocument.dataSummary,
-        undefined,
-        {
-          permanentContext: chatDocument.permanentContext,
-          domainContext: modeDomainContext,
-          userIntentVerbatim:
-            chatDocument.sessionAnalysisContext?.userIntent?.verbatimNotes,
-          userIntentConstraints:
-            chatDocument.sessionAnalysisContext?.userIntent?.interpretedConstraints,
-        }
-      );
-
-      detectedMode = modeClassification.mode;
-
-      onThinkingStep({
-        step: 'Detecting query type',
-        status: 'completed',
-        timestamp: Date.now(),
-        details: `Detected: ${detectedMode} (confidence: ${(modeClassification.confidence * 100).toFixed(0)}%)`,
-      });
-
-      console.log(
-        `🎯 Classified mode: ${detectedMode} (confidence: ${modeClassification.confidence.toFixed(2)})`
-      );
+      const modeClassification = await kickoff.modeClassification;
+      if (modeClassification) {
+        detectedMode = modeClassification.mode;
+        onThinkingStep({
+          step: 'Detecting query type',
+          status: 'completed',
+          timestamp: Date.now(),
+          details: `Detected: ${detectedMode} (confidence: ${(modeClassification.confidence * 100).toFixed(0)}%)`,
+        });
+        console.log(
+          `🎯 Classified mode: ${detectedMode} (confidence: ${modeClassification.confidence.toFixed(2)})`
+        );
+      } else {
+        onThinkingStep({
+          step: 'Detecting query type',
+          status: 'completed',
+          timestamp: Date.now(),
+          details: 'Using default: analysis',
+        });
+      }
     } catch (error) {
       console.error('⚠️ Mode classification failed, defaulting to analysis:', error);
       onThinkingStep({
@@ -1271,28 +1273,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 phase: p.phase,
               });
             },
-            onIntermediateArtifact: (payload: {
-              preview: Record<string, unknown>[];
-              insight?: string;
-              pivotDefaults?: import("../../shared/schema.js").Message["pivotDefaults"];
-              executionScalar?: boolean;
-              pivotUnavailable?: boolean;
-            }) => {
-              const {
-                preview,
-                insight,
-                pivotDefaults: segmentPivotDefaults,
-                executionScalar,
-                pivotUnavailable,
-              } = payload;
-              flushIntermediateSegment(
-                preview as Record<string, unknown>[],
-                insight,
-                segmentPivotDefaults,
-                executionScalar,
-                pivotUnavailable
-              );
-            },
+            // Pivot disabled — intermediate artifacts skipped to speed up
+            // time-to-answer. Re-enable by restoring the onIntermediateArtifact
+            // callback here.
+            onIntermediateArtifact: undefined,
           }
         : { chatDocument, onAgentEvent };
 
@@ -1318,77 +1302,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    // W12 · load enabled FMCG/Marico domain packs once and pass them down
-    // so chart insight generation can fill `businessCommentary`. Loader is
-    // process-cached; failures are non-fatal — commentary just won't render.
-    // Lifted to enclosing scope so Wave-3 pivot envelope enrichment (after
-    // pivotDefaults is merged) can reuse the same context without a reload.
-    let domainContextForCharts: string | undefined;
-    try {
-      const { loadEnabledDomainContext } = await import(
-        "../../lib/domainContext/loadEnabledDomainContext.js"
-      );
-      const { text } = await loadEnabledDomainContext();
-      if (text?.trim()) domainContextForCharts = text;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
-    }
+    // ── PHASE 1: Immediate response ──────────────────────────────────
+    // Response-first pipeline: send the answer + un-enriched charts to the
+    // user immediately. All LLM enrichments (chart keyInsight, workbench
+    // step insights, pivot insight, AI suggestions) run AFTER the response
+    // SSE so the user sees the answer within ~100ms of answerQuestion().
 
-    // Enrich charts
+    // attachAutoLayers is sync (~50ms) — keep before response
     if (result.charts && Array.isArray(result.charts)) {
-      result.charts = await enrichCharts(
-        result.charts,
-        chatDocument,
-        chatLevelInsights,
-        result.lastAnalyticalRowsForEnrichment,
-        {
-          userQuestion: message,
-          sessionAnalysisContext: chatDocument.sessionAnalysisContext,
-          permanentContext,
-          domainContext: domainContextForCharts,
-        }
-      );
-      // W19 · per-step LLM-enriched insights (env-gated, default off). Single
-      // batched LLM call that ties each workbench step to the analysis arc.
-      // Mutates `agentWorkbench` in place; persistence picks up the enriched
-      // entries automatically. Failures are non-fatal — deterministic W10
-      // insights stay as the fallback.
-      try {
-        const { enrichStepInsights, isRichStepInsightsEnabled } = await import(
-          "../../lib/agents/runtime/enrichStepInsights.js"
-        );
-        if (isRichStepInsightsEnabled() && agentWorkbench.length > 0) {
-          const enrichResult = await enrichStepInsights({
-            workbench: agentWorkbench,
-            finalAnswer: result.answer ?? "",
-            sessionAnalysisContext: chatDocument.sessionAnalysisContext,
-            domainContext: domainContextForCharts,
-            turnId: (result.agentTrace as { turnId?: string } | undefined)?.turnId ?? sessionId,
-          });
-          if (enrichResult.ok && enrichResult.enrichedCount > 0) {
-            // Push a final replacement event so the live UI updates in place.
-            // The persisted message will carry the enriched workbench too via
-            // the existing assistantSave path.
-            sendSSE(res, "workbench_enriched", { entries: agentWorkbench });
-          }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`W19 · enrichStepInsights failed: ${msg}`);
-      }
-      // WC7 · auto-attach analytical layers (reference lines / trend / forecast /
-      // outliers / comparison) inferred from the user's question. The legacy
-      // ChartRenderer ignores `_autoLayers`; the v2 ChartShim forwards them
-      // into ChartSpecV2.layers so PremiumChart picks them up.
-      // Fix-2: cap input length to bound regex worst-case backtracking.
       const safeQuestion = (message ?? "").slice(0, 4000);
       result.charts = result.charts.map((c) => attachAutoLayers(c, safeQuestion));
-    }
-
-    // Check connection after enriching charts
-    if (!checkConnection()) {
-      return;
     }
 
     // Validate and enrich response
@@ -1424,11 +1347,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         };
       }
     }
-    // Lightweight client hint for smart pivot/table visibility.
-    transformedResponse.pivotAutoShow = Boolean(
-      ((result as any).table && Array.isArray((result as any).table) && (result as any).table.length > 0) ||
-      pendingIntermediates.some((p) => Array.isArray(p.preview) && p.preview.length > 0)
-    );
+    // Pivot disabled — suppress auto-show unconditionally.
+    transformedResponse.pivotAutoShow = false;
     const parserPivotDefaults = derivePivotDefaultsHint({
       parsedQuery: parsedQueryForLoad,
       requiredColumns: schemaBinding.canonicalColumns,
@@ -1521,20 +1441,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       });
     }
 
-    // Wave 3 · when a pivot view is being rendered but the answer envelope
-    // didn't supply structured findings (dataOps / legacy turns), generate a
-    // narrator-style finding/implication/recommendation envelope from the
-    // pivot's primary chart so the pivot tab's "Key insight" matches the
-    // chat-analysis InsightCard tone instead of falling through to a single
-    // chart-keyInsight sentence. No-op when the envelope was already populated
-    // or when no pivot is rendered.
-    Object.assign(
-      transformedResponse,
-      await enrichPivotInsightFromEnvelope(result, transformedResponse, {
-        userQuestion: message,
-        domainContext: domainContextForCharts,
-      })
-    );
+    // Pivot insight enrichment deferred to Phase 2 (after response SSE).
 
     const allowPreviewInAnswer = userExplicitlyAskedForColumnsOrPreview(message);
     if (allowPreviewInAnswer) {
@@ -1553,43 +1460,146 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       transformedResponse.thinkingBefore = finalThinkingBefore;
     }
 
-    // Check connection before generating suggestions
+    // ── Send response SSE immediately (Phase 1) ──────────────────────
+    // User sees the answer + un-enriched charts NOW. Enrichments stream
+    // in later via response_charts / workbench_enriched SSE events.
     if (!checkConnection()) {
       return;
     }
 
-    // Generate AI suggestions
-    let suggestions: string[] = [];
+    const splitCharts =
+      isAgenticLoopEnabled() &&
+      Array.isArray(transformedResponse.charts) &&
+      transformedResponse.charts.length > 0;
+
+    if (splitCharts) {
+      if (
+        !sendSSE(res, "response", {
+          ...transformedResponse,
+          charts: [],
+          suggestions: [],
+        })
+      ) {
+        return;
+      }
+      if (
+        !sendSSE(res, "response_charts", {
+          charts: transformedResponse.charts,
+        })
+      ) {
+        return;
+      }
+    } else if (
+      !sendSSE(res, "response", {
+        ...transformedResponse,
+        suggestions: [],
+      })
+    ) {
+      return;
+    }
+
+    // ── PHASE 2: Parallel enrichments ──────────────────────────────────
+    // User already sees the answer. All LLM enrichments run in parallel.
+    // Each emits its own SSE update as it completes.
+    const safeSSE = (event: string, data: unknown): boolean => {
+      if (checkConnection()) return sendSSE(res, event, data);
+      return false;
+    };
+
+    let domainContextForCharts: string | undefined;
     try {
-      const updatedChatHistory = [
-        ...allMessages.slice(-15), // Use last 15 messages from DB
-        { role: 'user' as const, content: message, timestamp: Date.now() },
-        { role: 'assistant' as const, content: transformedResponse.answer, timestamp: Date.now() }
-      ];
-      suggestions = await generateAISuggestions(
-        updatedChatHistory,
-        chatDocument.dataSummary,
-        transformedResponse.answer,
-        result.agentSuggestionHints
+      const { loadEnabledDomainContext } = await import(
+        "../../lib/domainContext/loadEnabledDomainContext.js"
       );
-    } catch (error) {
-      console.error('Failed to generate suggestions:', error);
+      const { text } = await loadEnabledDomainContext();
+      if (text?.trim()) domainContextForCharts = text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
     }
 
-    const enrichmentFollowUps = [
-      ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
-      ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
-    ];
-    const mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(
-      0,
-      12
-    );
+    let mergedSuggestedQuestions: string[] = [];
+    const enrichSettled = await Promise.allSettled([
+      // 1. Chart enrichment → send enriched response_charts
+      (async () => {
+        if (!result.charts?.length) return;
+        const enriched = await enrichCharts(
+          result.charts,
+          chatDocument,
+          chatLevelInsights,
+          result.lastAnalyticalRowsForEnrichment,
+          {
+            userQuestion: message,
+            sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+            permanentContext,
+            domainContext: domainContextForCharts,
+          }
+        );
+        result.charts = enriched;
+        transformedResponse.charts = enriched;
+        safeSSE("response_charts", { charts: enriched });
+      })(),
 
-    // Check connection before saving messages
-    if (!checkConnection()) {
-      console.log('🚫 Client disconnected, skipping message save');
-      return;
-    }
+      // 2. Workbench step insights → send workbench_enriched
+      (async () => {
+        try {
+          const { enrichStepInsights, isRichStepInsightsEnabled } = await import(
+            "../../lib/agents/runtime/enrichStepInsights.js"
+          );
+          if (!isRichStepInsightsEnabled() || agentWorkbench.length === 0) return;
+          const enrichResult = await enrichStepInsights({
+            workbench: agentWorkbench,
+            finalAnswer: result.answer ?? "",
+            sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+            domainContext: domainContextForCharts,
+            turnId: (result.agentTrace as { turnId?: string } | undefined)?.turnId ?? sessionId,
+          });
+          if (enrichResult.ok && enrichResult.enrichedCount > 0) {
+            safeSSE("workbench_enriched", { entries: agentWorkbench });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`W19 · enrichStepInsights failed: ${msg}`);
+        }
+      })(),
+
+      // 3. Pivot insight enrichment
+      (async () => {
+        const patch = await enrichPivotInsightFromEnvelope(result, transformedResponse, {
+          userQuestion: message,
+          domainContext: domainContextForCharts,
+        });
+        Object.assign(transformedResponse, patch);
+      })(),
+
+      // 4. AI suggestions
+      (async () => {
+        try {
+          const updatedChatHistory = [
+            ...allMessages.slice(-15),
+            { role: 'user' as const, content: message, timestamp: Date.now() },
+            { role: 'assistant' as const, content: transformedResponse.answer, timestamp: Date.now() }
+          ];
+          const suggestions = await generateAISuggestions(
+            updatedChatHistory,
+            chatDocument.dataSummary,
+            transformedResponse.answer,
+            result.agentSuggestionHints
+          );
+          const enrichmentFollowUps = [
+            ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
+            ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
+          ];
+          mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(0, 12);
+        } catch (error) {
+          console.error('Failed to generate suggestions:', error);
+        }
+      })(),
+    ]);
+
+    // ── PHASE 3: Persistence ──────────────────────────────────────────
+    // Persist enriched data so reload gets the full version. Persistence
+    // runs even if the client disconnected during enrichment.
 
     // If targetTimestamp is provided, this is an edit operation
     // Truncate history AFTER processing (so processing had full context)
@@ -1879,7 +1889,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             ).pivotArtifacts,
           });
           if (memoryEntries.length > 0) {
-            await appendMemoryEntries(memoryEntries);
+            void appendMemoryEntries(memoryEntries).catch((e) =>
+              console.warn("⚠️ appendMemoryEntries fire-and-forget failed:", e)
+            );
             scheduleIndexMemoryEntries(memoryEntries);
             console.log(
               `📓 Memory: appended ${memoryEntries.length} entries for turn ${turnIdForMemory}`
@@ -1932,14 +1944,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       console.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
     }
 
-    // Check connection before sending response
-    if (!checkConnection()) {
-      return;
-    }
-
     // W2.3 · fire-and-forget persist of the completed turn for the semantic
-    // cache (W5) and feedback loop (W5.5). Never awaited — response latency
-    // must not depend on Cosmos / AI Search round-trips.
+    // cache (W5) and feedback loop (W5.5). Runs after enrichments so the
+    // cached version includes keyInsight/businessCommentary.
     maybeWritePastAnalysisDoc({
       sessionId,
       userId: username,
@@ -1948,38 +1955,6 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       chatDocument,
       turnStartedAt,
     });
-
-    // Agentic: emit answer first, then charts so the client can render text before heavy chart payloads.
-    const splitCharts =
-      isAgenticLoopEnabled() &&
-      Array.isArray(transformedResponse.charts) &&
-      transformedResponse.charts.length > 0;
-
-    if (splitCharts) {
-      if (
-        !sendSSE(res, "response", {
-          ...transformedResponse,
-          charts: [],
-          suggestions,
-        })
-      ) {
-        return;
-      }
-      if (
-        !sendSSE(res, "response_charts", {
-          charts: transformedResponse.charts,
-        })
-      ) {
-        return;
-      }
-    } else if (
-      !sendSSE(res, "response", {
-        ...transformedResponse,
-        suggestions,
-      })
-    ) {
-      return; // Client disconnected
-    }
 
     // Post-verifier business-actions seam. The agent loop spawned this
     // promise after the verifier returned `pass`; we await here so the

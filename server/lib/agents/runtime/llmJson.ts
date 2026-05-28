@@ -1,12 +1,26 @@
 import { MODEL, openai } from "../../openai.js";
 import type { ZodType } from "zod";
 import { agentLog } from "./agentLogger.js";
-import { callLlm, emitLlmUsage, type LlmCallUsage } from "./callLlm.js";
+import {
+  callLlm,
+  emitLlmUsage,
+  needsMaxCompletionTokens,
+  type LlmCallUsage,
+} from "./callLlm.js";
 import { calculateCostUsd, clampMaxTokens, normalizeUsage } from "./llmCostModel.js";
 import { resolveModelFor, type LlmCallPurpose } from "./llmCallPurpose.js";
 import { isAnthropicModel } from "./anthropicProvider.js";
 
 export type { LlmCallUsage } from "./callLlm.js";
+
+/**
+ * `kind` separates an upstream API failure (HTTP 4xx/5xx — config bug, rate
+ * limit, key rejected) from a schema/parse failure (model produced JSON that
+ * didn't satisfy the Zod schema after 3 retries). Both surface as `ok: false`
+ * but require different operator responses: api_error → check deployment
+ * config / billing; schema_error → tighten the prompt or the schema.
+ */
+export type CompleteJsonFailureKind = "api_error" | "schema_error";
 
 export async function completeJson<T>(
   system: string,
@@ -28,7 +42,10 @@ export async function completeJson<T>(
      */
     purpose?: LlmCallPurpose;
   }
-): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; data: T }
+  | { ok: false; error: string; kind: CompleteJsonFailureKind }
+> {
   const maxTokens = options.maxTokens ?? 2048;
   const temperature = options.temperature ?? 0.2;
   // W3.10 · pass turnId to keep the ramp decision stable across retries within
@@ -134,10 +151,18 @@ export async function completeJson<T>(
     if (parsed.success) {
       return { ok: true, data: parsed.data };
     }
-    return { ok: false, error: parsed.error.message };
+    return { ok: false, error: parsed.error.message, kind: "schema_error" };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg };
+    // OpenAI SDK errors carry a numeric `status` (4xx/5xx). Treat anything
+    // with a status as an API error so the caller can surface "provider
+    // rejected the request" instead of misdiagnosing it as a JSON failure.
+    const status =
+      typeof (e as { status?: unknown })?.status === "number"
+        ? ((e as { status: number }).status)
+        : null;
+    const kind: CompleteJsonFailureKind = status != null ? "api_error" : "schema_error";
+    return { ok: false, error: msg, kind };
   }
 }
 
@@ -186,7 +211,10 @@ export async function completeJsonStreaming<T>(
     /** Fires for each provider chunk; safe to throw — errors are caught and the stream continues. */
     onPartial?: (chunk: StreamingChunkInfo) => void;
   }
-): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; data: T }
+  | { ok: false; error: string; kind: CompleteJsonFailureKind }
+> {
   const fallback = () =>
     completeJson(system, user, schema, {
       maxTokens: options.maxTokens,
@@ -211,6 +239,13 @@ export async function completeJsonStreaming<T>(
   const startedAt = Date.now();
   let raw = "";
   try {
+    // GPT-5/o-series reject `max_tokens` even on streaming calls — swap to
+    // `max_completion_tokens` for those deployments. Mirrors callLlm.ts's
+    // non-streaming translation so both paths agree.
+    const clampedTokens = clampMaxTokens(effectiveModel, options.maxTokens ?? 2048);
+    const tokenLimitParam = needsMaxCompletionTokens(effectiveModel)
+      ? { max_completion_tokens: clampedTokens }
+      : { max_tokens: clampedTokens };
     const stream = await openai.chat.completions.create({
       model: effectiveModel as string,
       messages: [
@@ -219,7 +254,7 @@ export async function completeJsonStreaming<T>(
       ],
       response_format: { type: "json_object" },
       temperature: options.temperature ?? 0.2,
-      max_tokens: clampMaxTokens(effectiveModel, options.maxTokens ?? 2048),
+      ...tokenLimitParam,
       stream: true,
     } as never) as unknown as AsyncIterable<{
       choices?: Array<{ delta?: { content?: string | null } }>;

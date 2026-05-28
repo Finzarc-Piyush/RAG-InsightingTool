@@ -15,24 +15,28 @@
 // Both catching kickoffs prevent unhandled-rejection warnings when
 // `bindSchemaColumns` throws first and the other two settle later.
 
-export interface PreClassifyKickoffDeps<S, Q, D> {
+export interface PreClassifyKickoffDeps<S, Q, D, M = unknown> {
   bindSchemaColumns: () => Promise<S>;
   parseUserQuery: () => Promise<Q>;
   loadDomainContext: () => Promise<D>;
+  classifyMode?: (domainContext: D | null) => Promise<M>;
 }
 
-export interface PreClassifyKickoffResult<S, Q, D> {
+export interface PreClassifyKickoffResult<S, Q, D, M = unknown> {
   schemaBinding: Promise<S>;
   parsedQuery: Promise<Q | null>;
   domainContext: Promise<D | null>;
+  modeClassification: Promise<M | null>;
 }
 
-export function kickOffPreClassifyWork<S, Q, D>(
-  deps: PreClassifyKickoffDeps<S, Q, D>,
-): PreClassifyKickoffResult<S, Q, D> {
-  return {
-    schemaBinding: deps.bindSchemaColumns(),
-    parsedQuery: deps.parseUserQuery().catch(() => null),
-    domainContext: deps.loadDomainContext().catch(() => null),
-  };
+export function kickOffPreClassifyWork<S, Q, D, M = unknown>(
+  deps: PreClassifyKickoffDeps<S, Q, D, M>,
+): PreClassifyKickoffResult<S, Q, D, M> {
+  const schemaBinding = deps.bindSchemaColumns();
+  const parsedQuery = deps.parseUserQuery().catch(() => null as Q | null);
+  const domainContext = deps.loadDomainContext().catch(() => null as D | null);
+  const modeClassification = deps.classifyMode
+    ? domainContext.then((dc) => deps.classifyMode!(dc)).catch(() => null as M | null)
+    : Promise.resolve(null as M | null);
+  return { schemaBinding, parsedQuery, domainContext, modeClassification };
 }

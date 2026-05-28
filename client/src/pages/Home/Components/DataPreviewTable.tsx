@@ -206,6 +206,8 @@ interface DataPreviewTableProps {
   pivotFeedbackInitial?: { feedback: "up" | "down" | "none"; comment?: string };
   /** When true, suppresses feedback interaction (superadmin shadow viewer). */
   feedbackReadOnly?: boolean;
+  pivotViewRequest?: number;
+  isLatestAnalysis?: boolean;
 }
 
 function inferNumericColumns(
@@ -296,7 +298,10 @@ export function DataPreviewTable({
   feedbackTurnId,
   pivotFeedbackInitial,
   feedbackReadOnly = false,
+  pivotViewRequest = 0,
+  isLatestAnalysis = false,
 }: DataPreviewTableProps) {
+  const pivotViewContainerRef = useRef<HTMLDivElement>(null);
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
   const [pivotAddDialogPivot, setPivotAddDialogPivot] =
     useState<DashboardPivotSpec | null>(null);
@@ -339,6 +344,16 @@ export function DataPreviewTable({
   const pivotExpandButtonRef = useRef<HTMLButtonElement>(null);
   const pivotWasExpandedRef = useRef(false);
   const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('chart');
+  const pivotViewRequestHandledRef = useRef(0);
+  useEffect(() => {
+    if (pivotViewRequest > 0 && isLatestAnalysis && pivotViewRequest !== pivotViewRequestHandledRef.current) {
+      pivotViewRequestHandledRef.current = pivotViewRequest;
+      setAnalysisView('pivot');
+      requestAnimationFrame(() => {
+        pivotViewContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+  }, [pivotViewRequest, isLatestAnalysis]);
   const [chartType, setChartType] = useState<PivotChartKind>('bar');
   const [chartTitle, setChartTitle] = useState('Pivot chart');
   const [chartXCol, setChartXCol] = useState('');
@@ -2588,7 +2603,7 @@ export function DataPreviewTable({
   };
 
   return (
-    <Card className="p-4 mt-2 overflow-hidden border-border/60 shadow-sm bg-gradient-to-br from-card to-card/95">
+    <Card ref={pivotViewContainerRef} className="p-4 mt-2 overflow-hidden border-border/60 shadow-sm bg-gradient-to-br from-card to-card/95">
       {variant === "analysis" && trimmedAnalysisInsight && (
         <div className="mb-3">
           <Card className="p-4 bg-primary/5 border-l-4 border-l-primary shadow-sm border-border/60">

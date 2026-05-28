@@ -21,7 +21,7 @@ import {
   type LocalPreviewResult,
 } from '@/lib/localPreviewParser';
 import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages';
-import type { ChartSpec, SessionAnalysisContext } from '@/shared/schema';
+import type { ChartSpec, ChartSpecV2, SessionAnalysisContext } from '@/shared/schema';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
@@ -211,14 +211,17 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     resetState,
   });
 
+  const [pivotViewRequest, setPivotViewRequest] = useState(0);
+  const handleRequestPivotView = useCallback(() => setPivotViewRequest((n) => n + 1), []);
+
   const handleAppendAssistantChart = useCallback(
-    (chart: ChartSpec) => {
+    (chart: ChartSpec | ChartSpecV2) => {
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: 'Chart added from Chart Builder.',
-          charts: [chart],
+          charts: [chart as ChartSpec],
           timestamp: Date.now(),
         },
       ]);
@@ -1037,6 +1040,8 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         localPreviewParseStatus={localPreview?.parseStatus}
         uploadStartError={uploadStartError}
         onAppendAssistantChart={handleAppendAssistantChart}
+        onRequestPivotView={handleRequestPivotView}
+        pivotViewRequest={pivotViewRequest}
         fileNameForAutomation={fileName ?? undefined}
       />
       <ContextModal

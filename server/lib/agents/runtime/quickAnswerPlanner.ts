@@ -27,6 +27,74 @@ import {
 import type { AgentExecutionContext } from "./types.js";
 import type { DataSummary } from "../../../shared/schema.js";
 
+// ── LLM output sanitizers (W-QL-FIX1) ──────────────────────────────────
+// The Mini-tier LLM frequently produces JSON that fails the strict
+// queryPlanBodySchema. These preprocessors fix the three common patterns:
+//   1. `null` on optional fields (Zod .optional() accepts undefined, not null)
+//   2. `limit: 0` (.positive() rejects 0)
+//   3. Extra keys like `steps`, `rationale`, `measure` (.strict() rejects)
+//
+// Applied via z.preprocess() so the strict schema still validates the cleaned
+// output — no invalid plan can escape to the executor.
+
+const KNOWN_PLAN_KEYS = new Set([
+  "groupBy", "dateAggregationPeriod", "aggregations",
+  "computedAggregations", "windowAggregations",
+  "dimensionFilters", "limit", "sort",
+]);
+
+const KNOWN_AGG_KEYS = new Set([
+  "column", "operation", "alias", "predicate",
+  "perDimension", "innerOperation",
+]);
+
+export function sanitizeLlmPlan(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const obj = raw as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = {};
+  for (const key of KNOWN_PLAN_KEYS) {
+    if (!(key in obj)) continue;
+    const val = obj[key];
+    cleaned[key] = val === null ? undefined : val;
+  }
+  if (cleaned.limit === 0) delete cleaned.limit;
+  if (Array.isArray(cleaned.aggregations)) {
+    cleaned.aggregations = (cleaned.aggregations as unknown[]).map(
+      sanitizeLlmAggregation
+    );
+  }
+  return cleaned;
+}
+
+function sanitizeLlmAggregation(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const obj = raw as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = {};
+  for (const key of KNOWN_AGG_KEYS) {
+    if (!(key in obj)) continue;
+    const val = obj[key];
+    cleaned[key] = val === null ? undefined : val;
+  }
+  return cleaned;
+}
+
+export function sanitizeLlmResponse(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const obj = raw as Record<string, unknown>;
+  if (!("plan" in obj) && Array.isArray(obj.steps) && obj.steps.length > 0) {
+    const first = obj.steps[0] as Record<string, unknown> | undefined;
+    const args = first?.args as Record<string, unknown> | undefined;
+    if (args?.plan) {
+      return {
+        plan: args.plan,
+        questionRestated:
+          obj.questionRestated ?? obj.rationale ?? "lookup query",
+      };
+    }
+  }
+  return obj;
+}
+
 /**
  * Quick-lookup planner response. Mirrors the planner's structured output
  * pattern: one `plan` object + a one-line restatement that doubles as a
@@ -40,6 +108,14 @@ export const quickLookupPlanResponseSchema = z.object({
   /** One-sentence restatement the planner derived from the question. */
   questionRestated: z.string().min(4).max(160),
 });
+
+const quickLookupPlanResponseSchemaLenient = z.preprocess(
+  sanitizeLlmResponse,
+  z.object({
+    plan: z.preprocess(sanitizeLlmPlan, queryPlanBodySchema),
+    questionRestated: z.string().min(4).max(160),
+  }),
+);
 
 export type QuickLookupPlanResponse = z.infer<typeof quickLookupPlanResponseSchema>;
 
@@ -197,7 +273,7 @@ export async function runQuickLookupPlanner(
     const res = await completeJson(
       system,
       user,
-      quickLookupPlanResponseSchema,
+      quickLookupPlanResponseSchemaLenient,
       {
         purpose: LLM_PURPOSE.QUICK_LOOKUP_PLANNER,
         turnId: opts.turnId,
@@ -211,7 +287,7 @@ export async function runQuickLookupPlanner(
         temperature: 0.1,
       }
     );
-    if (res.ok) return res.data;
+    if (res.ok) return res.data as QuickLookupPlanResponse;
     console.warn(`[quickAnswerPlanner] terminal Zod fail: ${res.error.slice(0, 400)}`);
     return null;
   } catch (err) {

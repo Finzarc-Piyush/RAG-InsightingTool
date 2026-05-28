@@ -258,6 +258,8 @@ interface MessageBubbleProps {
   /** Auto-show pivot/table section for aggregated tabular assistant outputs. */
   allowPivotAutoShow?: boolean;
   onAppendAssistantChart?: (chart: ChartSpec) => void;
+  pivotViewRequest?: number;
+  isLatestAnalysis?: boolean;
   /** Last user message in this turn (for “save report dashboard”). */
   precedingUserQuestion?: string;
   /** Upload job: show live Thinking under data preview while server preview is loading. */
@@ -306,6 +308,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   allowDatasetPreviewInAnswer = false,
   allowPivotAutoShow = false,
   onAppendAssistantChart,
+  pivotViewRequest = 0,
+  isLatestAnalysis = false,
   precedingUserQuestion,
   uploadPreviewThinking,
 }, ref) => {
@@ -726,6 +730,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 (message as Message & { pivotUnavailable?: boolean }).pivotUnavailable === true
               }
               onChartAdded={onAppendAssistantChart}
+              pivotViewRequest={pivotViewRequest}
+              isLatestAnalysis={isLatestAnalysis}
               analysisIntermediateInsight={
                 message.isIntermediate ? message.intermediateInsight : undefined
               }

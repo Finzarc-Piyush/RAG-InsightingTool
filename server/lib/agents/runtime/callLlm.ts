@@ -36,6 +36,19 @@ export {
   type LlmCallUsage,
 } from "./llmUsageEmitter.js";
 
+/**
+ * GPT-5 family + o-series reasoning models reject `max_tokens` and require
+ * `max_completion_tokens`. Azure deployment names like "gpt-5.4-mini" pass
+ * straight through as the `model` param, so a regex on the deployment string
+ * is the reliable detector. Override via env when the deployment name doesn't
+ * follow the convention.
+ */
+export function needsMaxCompletionTokens(model: string): boolean {
+  if (process.env.OPENAI_USE_MAX_COMPLETION_TOKENS === "true") return true;
+  if (process.env.OPENAI_USE_MAX_COMPLETION_TOKENS === "false") return false;
+  return /^(gpt-5|o[1-4])/i.test(model);
+}
+
 export interface CallLlmOptions {
   /** Optional per-call usage callback (fires in addition to the global emitter). */
   onUsage?: (usage: LlmCallUsage) => void;
@@ -98,7 +111,19 @@ export async function callLlm(
       : { ...params, model: effectiveModel };
   if (effectiveParams.max_tokens != null) {
     const clamped = clampMaxTokens(effectiveModel, effectiveParams.max_tokens);
-    if (clamped !== effectiveParams.max_tokens) {
+    // GPT-5/o-series reject `max_tokens`; rename to `max_completion_tokens`.
+    // Anthropic path uses native max_tokens via callAnthropic, so only swap
+    // when the OpenAI path will actually consume these params.
+    if (
+      needsMaxCompletionTokens(effectiveModel) &&
+      !isAnthropicModel(effectiveModel)
+    ) {
+      const { max_tokens: _drop, ...rest } = effectiveParams;
+      effectiveParams = {
+        ...rest,
+        max_completion_tokens: clamped,
+      } as ChatCompletionCreateParamsNonStreaming;
+    } else if (clamped !== effectiveParams.max_tokens) {
       effectiveParams = { ...effectiveParams, max_tokens: clamped };
     }
   }

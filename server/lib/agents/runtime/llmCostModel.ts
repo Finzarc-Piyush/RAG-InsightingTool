@@ -28,6 +28,10 @@ export interface ModelRate {
 export const RATE_USD_PER_MTOK: Record<string, ModelRate> = {
   "gpt-4o": { input: 2.5, output: 10.0, cachedInput: 1.25 },
   "gpt-4o-mini": { input: 0.15, output: 0.6, cachedInput: 0.075 },
+  // GPT-5 family · Azure deployment names like "gpt-5.4-mini" pass through
+  // as the model param. Placeholder rates mirror gpt-4o-mini until Azure
+  // publishes per-tenant pricing; override via OPENAI_RATE_GPT_5_4_MINI_*.
+  "gpt-5.4-mini": { input: 0.15, output: 0.6, cachedInput: 0.075 },
   // Anthropic Claude (W1 · multi-provider). Prices per public Anthropic pricing
   // as of 2026-04-26; override via OPENAI_RATE_<MODEL>_<KIND> env vars.
   "claude-opus-4-7": { input: 15.0, output: 75.0, cachedInput: 1.5 },
@@ -39,6 +43,7 @@ export const RATE_USD_PER_MTOK: Record<string, ModelRate> = {
 export const MAX_OUTPUT_TOKENS: Record<string, number> = {
   "gpt-4o":            16_384,
   "gpt-4o-mini":       16_384,
+  "gpt-5.4-mini":      16_384,
   "claude-opus-4-7":   32_768,
   "claude-opus-4-6":   32_768,
   "claude-sonnet-4-6": 16_384,
