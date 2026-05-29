@@ -1,18 +1,23 @@
 import { randomUUID } from "crypto";
 import { Request, Response } from "express";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
-import { 
-  getAllSessions, 
-  getAllSessionsPaginated, 
-  getSessionsWithFilters, 
+import {
+  getAllSessions,
+  getAllSessionsPaginated,
+  getSessionsWithFilters,
   getSessionStatistics,
   getChatBySessionIdForUser,
   deleteSessionBySessionId,
   updateSessionFileName,
   updateSessionPinned,
   updateSessionPermanentContext,
-  ChatDocument 
+  ChatDocument
 } from "../models/chat.model.js";
+import {
+  listActiveDirectives,
+  revokeDirective,
+  getDatasetDirectivesDoc,
+} from "../models/datasetDirectives.model.js";
 import { loadChartsFromBlob } from "../lib/blobStorage.js";
 import { listPastAnalysesForSession } from "../models/pastAnalysis.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
@@ -700,6 +705,105 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
     res.status(500).json({
       error: errorMessage
     });
+  }
+};
+
+// ─── Wave W-UD9 · per-dataset directive endpoints ────────────────────────
+// Driven by the chat doc's `datasetFingerprint`. GET returns the full
+// directives doc (active + superseded + revoked) so the UI can render an
+// audit trail. DELETE flips a directive to `status: 'revoked'`. Both
+// authorise against the session owner so cross-tenant leakage is impossible.
+
+/** GET /api/session/:sessionId/directives — list directives for the
+ *  dataset that owns this session. */
+export const getSessionDirectivesEndpoint = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    const username = requireUsername(req);
+    const doc = await getChatBySessionIdForUser(sessionId, username);
+    if (!doc) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    const fingerprint = (doc.datasetFingerprint ?? "").trim();
+    if (!fingerprint) {
+      // Legacy session — no per-dataset directives yet. Return an empty
+      // shape rather than 404 so the UI can render the panel cleanly.
+      return res.json({
+        sessionId,
+        datasetFingerprint: null,
+        directives: [],
+        activeDirectives: [],
+      });
+    }
+    const directivesDoc = await getDatasetDirectivesDoc(username, fingerprint);
+    const active = await listActiveDirectives(username, fingerprint);
+    res.json({
+      sessionId,
+      datasetFingerprint: fingerprint,
+      directives: directivesDoc.directives,
+      activeDirectives: active,
+      updatedAt: directivesDoc.updatedAt,
+      version: directivesDoc.version,
+    });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    const msg = error instanceof Error ? error.message : "Failed to list directives";
+    console.error("getSessionDirectivesEndpoint failed:", error);
+    res.status(500).json({ error: msg });
+  }
+};
+
+/** DELETE /api/session/:sessionId/directives/:directiveId — revoke. */
+export const revokeSessionDirectiveEndpoint = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const { sessionId, directiveId } = req.params;
+    if (!sessionId || !directiveId) {
+      return res.status(400).json({
+        error: "Session ID and directive ID are required",
+      });
+    }
+    const username = requireUsername(req);
+    const doc = await getChatBySessionIdForUser(sessionId, username);
+    if (!doc) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    const fingerprint = (doc.datasetFingerprint ?? "").trim();
+    if (!fingerprint) {
+      return res.status(404).json({
+        error: "Session has no dataset fingerprint — no directives to revoke",
+      });
+    }
+    const updated = await revokeDirective(username, fingerprint, directiveId);
+    if (!updated) {
+      return res.status(404).json({
+        error: "Directive not found or already revoked",
+      });
+    }
+    const active = await listActiveDirectives(username, fingerprint);
+    res.json({
+      success: true,
+      directiveId,
+      datasetFingerprint: fingerprint,
+      activeDirectives: active,
+    });
+  } catch (error) {
+    if (error instanceof AuthenticationError) {
+      return res.status(401).json({ error: error.message });
+    }
+    const msg = error instanceof Error ? error.message : "Failed to revoke directive";
+    console.error("revokeSessionDirectiveEndpoint failed:", error);
+    res.status(500).json({ error: msg });
   }
 };
 

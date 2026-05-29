@@ -15,19 +15,17 @@
  */
 import type { AgentExecutionContext } from "./types.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
+import { applyCap, type TrimmedBlockInfo } from "./promptBudget.js";
 
-// WTL2 · 6_000 → 9_000. Marico packs grow over time and 6k started
-// truncating mid-paragraph on the larger ones.
+// Wave W-UD8 · the historical fixed caps are now SOFT defaults wrapped in
+// `applyCap`. They still bound very-large inputs (a multi-paragraph user
+// note doesn't get inlined as 50 KB), but every truncation now records a
+// `TrimmedBlockInfo` on `BuildSynthesisContextInput.contextTrimmedSink`
+// so the chatStream service can emit a `context_trimmed` SSE row.
 const DOMAIN_BLOCK_CHAR_CAP = 9_000;
-// WTL2 · W16 bumped 4_000 → 6_000 to fit the web-search sub-section;
-// 6_000 → 9_000 because the three sub-sections (vector / keyword / web)
-// were competing for the same budget and the synthesiser was missing
-// late hits. Each web hit ~1.5k × up to 5 = 7.5k worst case.
 const RAG_BLOCK_CHAR_CAP = 9_000;
 const COLUMN_ROLES_MAX = 20;
 const SUGGESTED_FOLLOWUPS_MAX = 4;
-// WTL2 · 2_000 → 4_000. User permanent context directly reflects how much
-// intent / preference the LLM sees; 2k clipped multi-paragraph user notes.
 const PERMANENT_NOTES_CAP = 4_000;
 
 export interface SynthesisContextBundle {
@@ -46,6 +44,10 @@ export interface BuildSynthesisContextInput {
   upfrontRagHitsBlock?: string;
   /** Optional analytical blackboard — `domainContext` entries surface here as RAG round-2 hits. */
   blackboard?: AnalyticalBlackboard;
+  /** Wave W-UD8 · optional sink that collects per-block truncation events.
+   *  When provided, the bundle pushes one `TrimmedBlockInfo` per cap site
+   *  that actually truncated. The caller emits the coalesced SSE row. */
+  contextTrimmedSink?: TrimmedBlockInfo[];
   /**
    * G4-P5 · structured tool I/O captured by the agent loop (Wave B3). Lets
    * the narrator's data-understanding block list each step's tool, args
@@ -76,17 +78,26 @@ export function buildSynthesisContext(
   input: BuildSynthesisContextInput = {}
 ): SynthesisContextBundle {
   return {
-    domainBlock: buildDomainBlock(ctx),
+    domainBlock: buildDomainBlock(ctx, input),
     dataUnderstandingBlock: buildDataUnderstandingBlock(ctx, input),
     ragBlock: buildRagBlock(ctx, input),
-    userBlock: buildUserBlock(ctx),
+    userBlock: buildUserBlock(ctx, input),
   };
 }
 
-function buildDomainBlock(ctx: AgentExecutionContext): string {
+function buildDomainBlock(
+  ctx: AgentExecutionContext,
+  input: BuildSynthesisContextInput
+): string {
   const raw = ctx.domainContext?.trim();
   if (!raw) return "";
-  return raw.slice(0, DOMAIN_BLOCK_CHAR_CAP);
+  const { content, trimmed } = applyCap(
+    "synthesis.domainBlock",
+    raw,
+    DOMAIN_BLOCK_CHAR_CAP
+  );
+  if (trimmed) input.contextTrimmedSink?.push(trimmed);
+  return content;
 }
 
 function buildDataUnderstandingBlock(
@@ -343,10 +354,19 @@ function buildRagBlock(
 
   void ctx; // reserved for future synthesis-time RAG re-call
   const joined = parts.join("\n\n").trim();
-  return joined.slice(0, RAG_BLOCK_CHAR_CAP);
+  const { content: ragOut, trimmed: ragTrim } = applyCap(
+    "synthesis.ragBlock",
+    joined,
+    RAG_BLOCK_CHAR_CAP
+  );
+  if (ragTrim) input.contextTrimmedSink?.push(ragTrim);
+  return ragOut;
 }
 
-function buildUserBlock(ctx: AgentExecutionContext): string {
+function buildUserBlock(
+  ctx: AgentExecutionContext,
+  input: BuildSynthesisContextInput
+): string {
   const lines: string[] = [];
 
   if (ctx.username?.trim()) {
@@ -354,9 +374,13 @@ function buildUserBlock(ctx: AgentExecutionContext): string {
   }
 
   if (ctx.permanentContext?.trim().length) {
-    lines.push(
-      `User notes (verbatim):\n${ctx.permanentContext.trim().slice(0, PERMANENT_NOTES_CAP)}`
+    const { content, trimmed } = applyCap(
+      "synthesis.permanentNotes",
+      ctx.permanentContext.trim(),
+      PERMANENT_NOTES_CAP
     );
+    if (trimmed) input.contextTrimmedSink?.push(trimmed);
+    lines.push(`User notes (verbatim):\n${content}`);
   }
 
   // Wave B7 · Surface userIntent.{verbatimNotes, interpretedConstraints}

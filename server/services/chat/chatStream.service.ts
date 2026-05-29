@@ -6,13 +6,14 @@ import { randomUUID } from "node:crypto";
 import { AgentWorkbenchEntry, Message, ThinkingStep } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
-import { 
-  getChatBySessionIdForUser, 
-  addMessagesBySessionId, 
+import {
+  getChatBySessionIdForUser,
+  addMessagesBySessionId,
   updateMessageAndTruncate,
   getChatBySessionIdEfficient,
   setPendingUserMessageForSession,
-  ChatDocument 
+  ensureDatasetFingerprintForSession,
+  ChatDocument
 } from "../../models/chat.model.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
 import { enrichCharts, enrichPivotInsightFromEnvelope, validateAndEnrichResponse } from "./chatResponse.service.js";
@@ -25,6 +26,17 @@ import { analyzeChatWithColumns } from "../../lib/chatAnalyzer.js";
 import { bindSchemaColumnsForAgentic } from "../../lib/schemaColumnBinding.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import { kickOffPreClassifyWork } from "./chatStreamPreClassifyKickoff.js";
+import { persistDirectivesFromUserMessage } from "./chatStreamDirectivePersist.js";
+import { fingerprintFromSummary } from "../../lib/datasetFingerprint.js";
+import {
+  appendDirective,
+  hydrateDirectivesForSession,
+} from "../../models/datasetDirectives.model.js";
+import type { UserDirective } from "../../shared/schema.js";
+import {
+  formatContextTrimmedPayload,
+  type TrimmedBlockInfo,
+} from "../../lib/agents/runtime/promptBudget.js";
 import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 import {
@@ -891,6 +903,32 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     const availableColumns = chatDocument.dataSummary.columns.map((c) => c.name);
 
+    // Wave W-UD-integration · resolve the dataset fingerprint for this
+    // session. When the chat doc already carries one (assigned at upload
+    // or set by an earlier turn), reuse it; otherwise compute from the
+    // dataset summary and fire a write-through that persists it under
+    // `withSessionWriteLock` for future turns. The write is awaited only
+    // because we need the resolved fingerprint to drive directive
+    // hydration in the kickoff below — the cost is one fast Cosmos RMW
+    // and only on first-touch sessions.
+    const datasetFingerprint = await (async (): Promise<string | undefined> => {
+      const existing = (chatDocument.datasetFingerprint ?? "").trim();
+      if (existing.length > 0) return existing;
+      const computed = fingerprintFromSummary(chatDocument.dataSummary);
+      if (!computed || computed.length === 0) return undefined;
+      // Mirror onto the in-memory chat doc so downstream callers (extractor,
+      // appendDirective) see the same value even if the write is still
+      // settling. The persisted-write below is fire-and-forget because the
+      // in-memory value is enough for this turn.
+      chatDocument.datasetFingerprint = computed;
+      void ensureDatasetFingerprintForSession(
+        sessionId,
+        username,
+        computed
+      );
+      return computed;
+    })();
+
     // Wave WS2-pre-classify-parallel · the three pre-classify operations
     // with no data dependency on each other (schemaBind, parseUserQuery,
     // domainContext) fire concurrently here, then each is awaited at its
@@ -899,6 +937,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // to the pre-wave sequential code; the floor savings come from
     // parseUserQuery + domainContext overlapping with the
     // schemaBind → analyzeChatWithColumns serial chain.
+    //
+    // Wave W-UD-integration · the dataset-directive hydration also joins
+    // this fan-out so the agent's `activeDirectives` are ready by the time
+    // `buildAgentExecutionContext` runs inside `answerQuestion`.
     const kickoff = kickOffPreClassifyWork({
       bindSchemaColumns: () =>
         bindSchemaColumnsForAgentic(
@@ -936,6 +978,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               chatDocument.sessionAnalysisContext?.userIntent?.interpretedConstraints,
           }
         ),
+      // Wave W-UD-integration · fetch the active per-dataset directives
+      // for this `(username, datasetFingerprint)` in parallel with the
+      // other pre-classify thunks. Returns `[]` when either field is
+      // missing or the Cosmos read fails — a directives outage must
+      // never block a chat turn.
+      hydrateDirectives: () =>
+        hydrateDirectivesForSession(username, datasetFingerprint),
     });
 
     onThinkingStep({
@@ -1243,6 +1292,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       }
     };
 
+    // Wave W-UD-integration · await the directive-hydration kickoff so the
+    // active list is available when `buildAgentExecutionContext` runs inside
+    // `answerQuestion`. The kickoff swallows errors to `[]` so this await is
+    // never the source of a thrown chat turn.
+    const activeDirectivesForTurn: UserDirective[] =
+      (await kickoff.activeDirectives) ?? [];
+
+    // Wave W-UD8 · per-turn sink for prompt-budget truncation events.
+    // Threaded through `agentOptions.contextTrimmedSink` into the agent
+    // execution context, where the synthesis / narrator / business-actions
+    // helpers push one row per cap site that actually trimmed. After the
+    // turn ends we emit a single coalesced `context_trimmed` SSE row.
+    const contextTrimmedSink: TrimmedBlockInfo[] = [];
+
     const agentOptions = isAgenticLoopEnabled()
         ? {
             onAgentEvent,
@@ -1258,6 +1321,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             username,
             chatDocument,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
+            activeDirectives: activeDirectivesForTurn,
+            contextTrimmedSink,
             // W27 · explicit annotations on the callback params so tsc can
             // type-check the body. Parameter shapes match the runtime
             // payloads emitted by the agent loop (see types.ts).
@@ -1506,6 +1571,15 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return false;
     };
 
+    // Wave W-UD8 · emit a single coalesced `context_trimmed` SSE row when
+    // any of the prompt-budget cap sites trimmed user-bearing input during
+    // the turn. The client renders this as a non-blocking toast so the user
+    // knows their saved context was clipped to fit the model window.
+    {
+      const payload = formatContextTrimmedPayload(contextTrimmedSink);
+      if (payload) safeSSE("context_trimmed", payload);
+    }
+
     let domainContextForCharts: string | undefined;
     try {
       const { loadEnabledDomainContext } = await import(
@@ -1568,8 +1642,42 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         const patch = await enrichPivotInsightFromEnvelope(result, transformedResponse, {
           userQuestion: message,
           domainContext: domainContextForCharts,
+          intentEnvelope: (result as any)?.intentEnvelope,
         });
         Object.assign(transformedResponse, patch);
+      })(),
+
+      // 5. Wave W-UD-integration · per-dataset directive extraction +
+      // persistence. Runs in parallel with the other enrichments so the
+      // chat-turn critical path is untouched. Each extracted draft is
+      // appended to the `dataset_directives` Cosmos doc and a sibling
+      // `directive_added` SSE row is emitted so the client can render a
+      // confirmation chip. No-op when no fingerprint is available
+      // (legacy session) or when the deterministic extractor finds no
+      // persistence-qualifier clause in the user message.
+      (async () => {
+        if (!datasetFingerprint || !username) return;
+        try {
+          await persistDirectivesFromUserMessage({
+            username,
+            fingerprint: datasetFingerprint,
+            message,
+            summary: chatDocument.dataSummary,
+            existingDirectives: activeDirectivesForTurn,
+            sourceSessionId: sessionId,
+            sourceTurnId: String(targetTimestamp ?? turnStartedAt),
+            appendDirective: (u, f, draft) => appendDirective(u, f, draft),
+            onAdded: (directive) => {
+              safeSSE("directive_added", {
+                directive,
+                fingerprint: datasetFingerprint,
+              });
+            },
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`W-UD-integration · directive persistence failed: ${msg}`);
+        }
       })(),
 
       // 4. AI suggestions

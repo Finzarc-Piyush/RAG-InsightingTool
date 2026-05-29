@@ -220,6 +220,9 @@ export function convertV1ToV2(v1: ChartSpec): V2ConversionResult {
         ? { title: { text: v1.title.slice(0, 200) } }
         : {}),
       ...(barLayout ? { barLayout } : {}),
+      // W-GMK9 · propagate v1 dataLabels → v2 config.dataLabels so the
+      // renderer can honour the InteractiveChartCard toolbar toggle.
+      ...(v1.dataLabels !== undefined ? { dataLabels: v1.dataLabels } : {}),
     },
     ...(v1._agentProvenance
       ? { _agentProvenance: v1._agentProvenance }

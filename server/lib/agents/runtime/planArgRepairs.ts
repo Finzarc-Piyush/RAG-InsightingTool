@@ -86,6 +86,17 @@ const SHARE_PATTERN_RE =
   /(?:\b(?:share|contribution|percentage|percent|fraction|portion|proportion)\b|%)\s+(?:of|in|to|within|out\s+of|relative\s+to|compared\s+to|vs\.?)\b/i;
 const CATEGORY_PATTERN_RE =
   /\b(category|categor[iy]|total|grand\s+total|overall|whole|entire|full|everything|all)\b/i;
+// RD2 · exclusion-intent override: when the user mentions the rollup name AND
+// pairs it with an exclusion verb within EXCLUDE_PROXIMITY_WINDOW chars, OR
+// when the question contains an explainer ("X is the entire category"), the
+// rollup-exclude filter MUST fire — the user is asking *to remove* the rollup,
+// not asking about it. Without this, "omit FEMALE SHOWER GEL" was treated the
+// same as "tell me about FEMALE SHOWER GEL" and the rollup stayed in the data.
+const EXCLUDE_VERB_RE_G =
+  /\b(omit|exclud(?:e|es|ed|ing)|without|except|leav(?:e|ing)\s+out|drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|skip(?:s|ped|ping)?|ignor(?:e|es|ed|ing)|aside\s+from|apart\s+from|other\s+than|don'?t\s+include|do\s+not\s+include|not\s+including|minus)\b/gi;
+const ROLLUP_EXPLAINER_RE =
+  /\b(?:is|are|=|equals)\s+(?:the\s+)?(?:entire|whole|full|total|grand\s+total|overall|aggregate|sum|category|parent|rollup|roll[\s-]?up)\b/i;
+const EXCLUDE_PROXIMITY_WINDOW = 60;
 
 export function shouldSkipRollupExclude(
   userQuestion: string | undefined,
@@ -96,6 +107,25 @@ export function shouldSkipRollupExclude(
   const qLower = q.toLowerCase();
   const rollupLower = hierarchy.rollupValue.toLowerCase();
   if (rollupLower && qLower.includes(rollupLower)) {
+    // RD2 · check exclusion-intent override before honoring the mention.
+    const rollupIdx = qLower.indexOf(rollupLower);
+    const rollupEnd = rollupIdx + rollupLower.length;
+    for (const m of qLower.matchAll(EXCLUDE_VERB_RE_G)) {
+      const verbStart = m.index ?? 0;
+      const verbEnd = verbStart + m[0].length;
+      const distance =
+        verbEnd <= rollupIdx
+          ? rollupIdx - verbEnd
+          : rollupEnd <= verbStart
+            ? verbStart - rollupEnd
+            : 0;
+      if (distance <= EXCLUDE_PROXIMITY_WINDOW) {
+        return { skip: false, reason: null };
+      }
+    }
+    if (ROLLUP_EXPLAINER_RE.test(qLower)) {
+      return { skip: false, reason: null };
+    }
     return { skip: true, reason: "mention" };
   }
   // RD1 · "MARICO's share of the category" / "% of total Products" /

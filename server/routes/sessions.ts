@@ -16,6 +16,8 @@ import {
   postChartKeyInsightEndpoint,
   putSessionHierarchiesEndpoint,
   putSessionSchemaAnnotationsEndpoint,
+  getSessionDirectivesEndpoint,
+  revokeSessionDirectiveEndpoint,
 } from "../controllers/sessionController.js";
 import {
   getMemoryEntriesEndpoint,
@@ -93,6 +95,16 @@ router.put(
 router.patch(
   '/sessions/:sessionId/messages/:messageTimestamp/pivot-state',
   updateMessagePivotStateEndpoint
+);
+
+// Wave W-UD9 · per-dataset user directives. List + revoke. The directives
+// doc lives keyed on `(username, datasetFingerprint)`; we look up the
+// fingerprint via the session doc so the path keeps the `:sessionId`
+// shape consistent with the rest of this router.
+router.get('/sessions/:sessionId/directives', getSessionDirectivesEndpoint);
+router.delete(
+  '/sessions/:sessionId/directives/:directiveId',
+  revokeSessionDirectiveEndpoint
 );
 
 // Delete session by session ID

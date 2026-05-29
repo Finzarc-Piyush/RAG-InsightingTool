@@ -59,6 +59,7 @@ import {
   formatChartValue,
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
+import { filterCollidingRects } from "@/lib/charts/labelCollision";
 import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
@@ -257,7 +258,16 @@ export function BarRenderer({
     setBrushEnd(null);
   }, [data]);
 
-  const showLabels = !!spec.config?.barLabels;
+  // Wave W-GMK6 · `dataLabels` is the unified per-spec toggle (defaults to
+  // true so labels appear on every mark by default). The legacy `barLabels`
+  // boolean is preserved for back-compat: when explicitly true it forces
+  // labels on for Bar; when dataLabels is explicitly false it wins.
+  const showLabels =
+    spec.config?.dataLabels === false
+      ? false
+      : spec.config?.dataLabels === true ||
+        spec.config?.barLabels === true ||
+        spec.config?.dataLabels === undefined;
 
   // ───────── series construction ─────────
   // Series indexed by (color × detail). Detail collapses to a single
@@ -978,11 +988,31 @@ export function BarRenderer({
               </Bar>
             );
           })}
-          {/* Optional in-bar value labels. */}
-          {showLabels &&
-            cells.map((c, i) => {
+          {/* Wave W-GMK6 · in-bar value labels, greedy-thinned to drop on
+              collision. Higher-magnitude bars win the collision check so
+              the most-important labels survive when the chart gets dense. */}
+          {showLabels && (() => {
+            type LabelPayload = {
+              tx: number;
+              ty: number;
+              anchor: "middle" | "end";
+              text: string;
+              key: string;
+            };
+            const candidates: Array<{
+              x: number;
+              y: number;
+              w: number;
+              h: number;
+              priority: number;
+              payload: LabelPayload;
+            }> = [];
+            const fontSize = 10;
+            const estCharWidth = fontSize * 0.6;
+            for (let i = 0; i < cells.length; i++) {
+              const c = cells[i]!;
               const outerPos = outerScale(c.outerKey);
-              if (outerPos === undefined) return null;
+              if (outerPos === undefined) continue;
               const innerOffset =
                 innerScale &&
                 (layout === "grouped" || layout === "grouped-stacked")
@@ -996,44 +1026,64 @@ export function BarRenderer({
                   : outerScale.bandwidth();
               const valStart = valueScale(c.base);
               const valEnd = valueScale(c.top);
-              const { x, y, w, h } = placeBar(bandPos, bandWidth, valStart, valEnd);
-              const labelText = formatChartValue(
-                Math.abs(c.value),
-                enc.y.field,
+              const { x, y, w, h } = placeBar(
+                bandPos,
+                bandWidth,
+                valStart,
+                valEnd,
               );
+              const text = formatChartValue(Math.abs(c.value), enc.y.field);
+              const estW = Math.max(8, text.length * estCharWidth);
               if (orientation === "vertical") {
-                if (h < 12) return null;
-                return (
-                  <text
-                    key={`lbl-${i}`}
-                    x={x + w / 2}
-                    y={y + 12}
-                    fontSize={10}
-                    fontFamily="var(--font-sans)"
-                    fill="hsl(var(--foreground))"
-                    textAnchor="middle"
-                    pointerEvents="none"
-                  >
-                    {labelText}
-                  </text>
-                );
+                if (h < 12) continue;
+                candidates.push({
+                  x: x + w / 2 - estW / 2,
+                  y: y + 4,
+                  w: estW,
+                  h: 12,
+                  priority: Math.abs(c.value),
+                  payload: {
+                    tx: x + w / 2,
+                    ty: y + 12,
+                    anchor: "middle",
+                    text,
+                    key: `lbl-${i}`,
+                  },
+                });
+              } else {
+                if (w < 28) continue;
+                candidates.push({
+                  x: x + w - 4 - estW,
+                  y: y + h / 2 - 5,
+                  w: estW,
+                  h: 12,
+                  priority: Math.abs(c.value),
+                  payload: {
+                    tx: x + w - 4,
+                    ty: y + h / 2 + 3,
+                    anchor: "end",
+                    text,
+                    key: `lbl-${i}`,
+                  },
+                });
               }
-              if (w < 28) return null;
-              return (
-                <text
-                  key={`lbl-${i}`}
-                  x={x + w - 4}
-                  y={y + h / 2 + 3}
-                  fontSize={10}
-                  fontFamily="var(--font-sans)"
-                  fill="hsl(var(--foreground))"
-                  textAnchor="end"
-                  pointerEvents="none"
-                >
-                  {labelText}
-                </text>
-              );
-            })}
+            }
+            const placed = filterCollidingRects(candidates, { padding: 2 });
+            return placed.map((p) => (
+              <text
+                key={p.payload.key}
+                x={p.payload.tx}
+                y={p.payload.ty}
+                fontSize={fontSize}
+                fontFamily="var(--font-sans)"
+                fill="hsl(var(--foreground))"
+                textAnchor={p.payload.anchor}
+                pointerEvents="none"
+              >
+                {p.payload.text}
+              </text>
+            ));
+          })()}
           {/* Reference lines. */}
           {refLines.map((r, i) => {
             const v = valueScale(r.value);

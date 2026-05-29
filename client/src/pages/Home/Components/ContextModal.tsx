@@ -9,7 +9,9 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Info } from 'lucide-react';
+import { Info, Trash2 } from 'lucide-react';
+import { sessionsApi } from '@/lib/api/sessions';
+import type { UserDirective } from '@/shared/schema';
 
 interface ContextModalProps {
   isOpen: boolean;
@@ -23,6 +25,12 @@ interface ContextModalProps {
    * the original first-time copy.
    */
   existingContext?: string;
+  /**
+   * Wave W-UD9 · session id is required to fetch + revoke per-dataset
+   * directives. When omitted (legacy callers), the Active Directives panel
+   * is hidden.
+   */
+  sessionId?: string;
 }
 
 export function ContextModal({
@@ -31,8 +39,12 @@ export function ContextModal({
   onSave,
   isLoading = false,
   existingContext,
+  sessionId,
 }: ContextModalProps) {
   const [context, setContext] = useState('');
+  const [directives, setDirectives] = useState<UserDirective[]>([]);
+  const [directivesLoading, setDirectivesLoading] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const hasExisting = !!existingContext && existingContext.trim().length > 0;
 
@@ -41,6 +53,47 @@ export function ContextModal({
   useEffect(() => {
     if (isOpen) setContext('');
   }, [isOpen]);
+
+  // Wave W-UD9 · fetch active directives whenever the modal opens for a
+  // session. Errors collapse to an empty list so the panel never blocks
+  // the rest of the modal.
+  useEffect(() => {
+    if (!isOpen || !sessionId) {
+      setDirectives([]);
+      return;
+    }
+    let cancelled = false;
+    setDirectivesLoading(true);
+    sessionsApi
+      .listDirectives(sessionId)
+      .then((resp) => {
+        if (cancelled) return;
+        setDirectives(resp.activeDirectives ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setDirectives([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDirectivesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, sessionId]);
+
+  const handleRevoke = async (directiveId: string) => {
+    if (!sessionId) return;
+    setRevokingId(directiveId);
+    try {
+      const resp = await sessionsApi.revokeDirective(sessionId, directiveId);
+      setDirectives(resp.activeDirectives ?? []);
+    } catch {
+      // Best-effort — keep the row in the panel; the user can retry. The
+      // server already preserves the audit trail.
+    } finally {
+      setRevokingId(null);
+    }
+  };
 
   const handleSave = async () => {
     if (context.trim()) {
@@ -105,6 +158,54 @@ export function ContextModal({
                 : 'This context is saved permanently with this analysis, indexed for retrieval, and sent with every message.'}
             </p>
           </div>
+
+          {sessionId && (
+            <div className="space-y-2 border-t pt-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Active directives
+              </p>
+              {directivesLoading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : directives.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No persistent rules yet. Say things like “from now on omit Pure
+                  Sense from any brand breakdown” mid-chat to add one.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {directives.map((d) => (
+                    <li
+                      key={d.id}
+                      className="flex items-start justify-between gap-3 rounded-md border bg-muted/30 p-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="break-words text-sm">{d.text}</div>
+                        {d.structured?.column && (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {d.structured.column}
+                            {' '}
+                            {d.structured.op}
+                            {' '}
+                            {(d.structured.values ?? []).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0"
+                        disabled={revokingId === d.id}
+                        onClick={() => handleRevoke(d.id)}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        {revokingId === d.id ? 'Revoking…' : 'Revoke'}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
 
         <DialogFooter>

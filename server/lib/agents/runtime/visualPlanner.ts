@@ -15,6 +15,8 @@ import {
 } from "../../axisScaling.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
+import { resolvePeriodAxis } from "../../periodColumnResolver.js";
+import { resolveFactsMetric } from "../../factsMetricResolver.js";
 
 export { validateChartProposal } from "./chartProposalValidation.js";
 
@@ -100,7 +102,74 @@ export async function proposeAndBuildExtraCharts(
       const dimCols = columns.filter((c) => !isNumericishOnSample(c));
 
       if (numericCols.length >= 1 && dimCols.length >= 1) {
-        const x = dimCols[0]!;
+        // Wave W-GMK3 · mirror chartFromTable's resolver-based x-axis pick.
+        // Keeps the visual-planner deterministic fallback in lockstep with the
+        // chart-promotion path so a Marico-style multi-period frame doesn't
+        // produce two different incoherent charts from the two paths.
+        const periodAxis = resolvePeriodAxis(
+          columns,
+          sample,
+          ctx.summary,
+          ctx.question
+        );
+
+        let x: string;
+        let workingRows: Record<string, unknown>[] = rows as Record<
+          string,
+          unknown
+        >[];
+        let axisReason: string | undefined;
+
+        if (periodAxis.pickedColumn) {
+          x = periodAxis.pickedColumn;
+          axisReason = periodAxis.reason;
+          if (periodAxis.injectedFilter) {
+            const f = periodAxis.injectedFilter;
+            const filtered = (rows as Record<string, unknown>[]).filter(
+              (r) => String(r?.[f.column] ?? "").trim() === f.value
+            );
+            if (filtered.length > 0) workingRows = filtered;
+          }
+        } else {
+          const usableDim = dimCols.find((c) => {
+            const distinct = new Set<string>();
+            for (const r of sample) {
+              const v = r?.[c];
+              if (v == null || v === "") continue;
+              distinct.add(String(v));
+              if (distinct.size >= 2) break;
+            }
+            return distinct.size >= 2;
+          });
+          if (!usableDim) {
+            // Skip the deterministic fallback when no usable dim — better
+            // to ship the LLM proposal (or nothing) than a one-bar chart.
+            // Fall out of the if-block.
+            return { charts: [] };
+          }
+          x = usableDim;
+        }
+
+        // Wave W-GMK4 · Facts/Metric awareness (mirrored from chartFromTable).
+        const factsMetric = resolveFactsMetric(
+          columns,
+          sample,
+          ctx.summary,
+          ctx.question
+        );
+        if (factsMetric.metricColumn && factsMetric.injectedFilter) {
+          const f = factsMetric.injectedFilter;
+          const filtered = workingRows.filter(
+            (r) => String(r?.[f.column] ?? "").trim() === f.value
+          );
+          if (filtered.length > 0) {
+            workingRows = filtered;
+            axisReason = axisReason
+              ? `${axisReason} · ${factsMetric.reason}`
+              : factsMetric.reason;
+          }
+        }
+
         const scoreMeasure = (col: string): number => {
           const n = col.toLowerCase();
           return (
@@ -116,15 +185,17 @@ export async function proposeAndBuildExtraCharts(
         const xTemporal =
           ctx.summary.dateColumns.includes(x) ||
           /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(x) ||
-          x.startsWith("__tf_");
+          x.startsWith("__tf_") ||
+          Boolean(periodAxis.pickedColumn);
 
         // Avoid building a bar chart with too many distinct X labels.
-        const xUnique = new Set(sample.map((r) => String(r?.[x] ?? ""))).size;
+        const workingSample = workingRows.slice(0, 80);
+        const xUnique = new Set(workingSample.map((r) => String(r?.[x] ?? ""))).size;
         if (xUnique <= 60) {
           const chartType = xTemporal ? "line" : "bar";
 
           const { merged: mp } = compileChartSpec(
-            rows as Record<string, unknown>[],
+            workingRows,
             {
               numericColumns: ctx.summary.numericColumns,
               dateColumns: ctx.summary.dateColumns,
@@ -138,7 +209,9 @@ export async function proposeAndBuildExtraCharts(
             title:
               mp.type === "heatmap"
                 ? `${mp.z} (${mp.x} × ${mp.y})`
-                : `${mp.y} by ${mp.x}`,
+                : factsMetric.metricValue
+                  ? `${factsMetric.metricValue} by ${mp.x}`
+                  : `${mp.y} by ${mp.x}`,
             x: mp.x,
             y: mp.y,
             ...(mp.z ? { z: mp.z } : {}),
@@ -150,6 +223,7 @@ export async function proposeAndBuildExtraCharts(
               (mp.type === "bar" || mp.type === "line" || mp.type === "area")
                 ? ("sum" as const)
                 : ("none" as const)),
+            ...(axisReason ? { axisReason } : {}),
           });
 
           if (
@@ -163,7 +237,7 @@ export async function proposeAndBuildExtraCharts(
             !existingCharts.length
           ) {
             const processed = processChartData(
-              rows,
+              workingRows,
               spec,
               ctx.summary.dateColumns,
               { chartQuestion: ctx.question }

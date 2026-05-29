@@ -5,6 +5,7 @@ import {
   DataSummary,
   Message,
   SessionAnalysisContext,
+  UserDirective,
 } from '../shared/schema.js';
 import {
   isAgenticLoopEnabled,
@@ -419,6 +420,18 @@ export interface AnswerQuestionAgentOptions {
   onIntermediateArtifact?: import('./agents/runtime/types.js').AgentExecutionContext['onIntermediateArtifact'];
   /** F3 · Aborted on SSE client disconnect; agent loop short-circuits between steps. */
   abortSignal?: AbortSignal;
+  /** Wave W-UD-integration · per-dataset directives hydrated from the
+   *  `dataset_directives` Cosmos container at session start. Threaded into
+   *  `buildAgentExecutionContext` so every agent role (planner, reflector,
+   *  verifier, synthesizer, business-actions) sees the directive block
+   *  verbatim via `formatDirectiveBlock`. Omitted / empty array = no
+   *  persistent directives apply for this dataset. */
+  activeDirectives?: UserDirective[];
+  /** Wave W-UD8 · per-turn sink for prompt-budget truncation events.
+   *  Forwarded to `AgentExecutionContext.contextTrimmedSink`; the chat
+   *  service reads it after the turn ends and emits one consolidated
+   *  `context_trimmed` SSE row. */
+  contextTrimmedSink?: import("./agents/runtime/promptBudget.js").TrimmedBlockInfo[];
 }
 
 export async function answerQuestion(
@@ -491,6 +504,8 @@ export async function answerQuestion(
         mode: mode || 'analysis',
         permanentContext,
         domainContext: domainContext || undefined,
+        activeDirectives: agentOptions?.activeDirectives,
+        contextTrimmedSink: agentOptions?.contextTrimmedSink,
         sessionAnalysisContext,
         columnarStoragePath,
         chatDocument: agentOptions?.chatDocument,

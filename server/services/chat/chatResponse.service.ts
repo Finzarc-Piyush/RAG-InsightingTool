@@ -321,6 +321,7 @@ export async function enrichPivotInsightFromEnvelope(
   options?: {
     userQuestion?: string;
     domainContext?: string;
+    intentEnvelope?: import("../../lib/agents/runtime/types.js").IntentEnvelope;
   }
 ): Promise<any> {
   if (!validated || !validated.pivotDefaults) return validated;
@@ -340,6 +341,7 @@ export async function enrichPivotInsightFromEnvelope(
       formatY: (n: number) => formatCompactNumber(n),
       userQuestion: options?.userQuestion,
       domainContext: options?.domainContext,
+      intentEnvelope: options?.intentEnvelope,
     });
 
     const items: string[] = [];

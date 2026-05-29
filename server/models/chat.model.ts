@@ -108,6 +108,22 @@ export interface ChatDocument {
   };
   dataOpsMode?: boolean; // Whether Data Ops mode is enabled for this session
   permanentContext?: string; // Permanent context provided by user during upload, sent to AI with each message
+  /**
+   * Wave W-UD1 · per-dataset directive fingerprint. Hash of the dataset's
+   * sorted lowercase columns + types (see [datasetFingerprint.ts](../lib/datasetFingerprint.ts)).
+   * Two sessions on datasets with identical column shapes share a fingerprint
+   * and therefore inherit each other's persisted directives. Computed at
+   * upload completion; persisted on the session for fast hydration.
+   */
+  datasetFingerprint?: string;
+  /**
+   * Wave W-UD1 · hydrated snapshot of the dataset's user directives at session
+   * start. The authoritative store is the `dataset_directives` Cosmos
+   * container; this field is a per-session mirror so the chat doc carries
+   * its own audit-visible copy. Read in `buildAgentExecutionContext` and
+   * projected into every agent role's prompt block.
+   */
+  userDirectives?: import("../shared/schema.js").UserDirective[];
   /** DuckDB/columnar path for large uploads (not in Cosmos payload). */
   columnarStoragePath?: string;
   /** Selected Excel worksheet name for this upload session. */
@@ -1274,6 +1290,49 @@ export const updateSessionPinned = async (
 };
 
 /**
+ * Wave W-UD-integration · ensure `datasetFingerprint` is populated on the
+ * session's chat doc. When the existing doc already carries a non-empty
+ * fingerprint, this is a no-op fast-path (returns the existing value).
+ * Otherwise, the supplied fingerprint is written under
+ * `withSessionWriteLock` (invariant #9) so it serialises against any
+ * other RMW on the same doc. Returns the fingerprint that ended up on
+ * the doc — caller can use it for downstream directives lookups.
+ *
+ * Failures are surfaced as `null` rather than thrown — the session can
+ * proceed without a persisted fingerprint (directives simply won't
+ * hydrate for that one turn), but a missing fingerprint must not block
+ * the user's chat turn.
+ */
+export const ensureDatasetFingerprintForSession = async (
+  sessionId: string,
+  username: string,
+  fingerprint: string
+): Promise<string | null> => {
+  if (!sessionId || !fingerprint) return null;
+  try {
+    const { withSessionWriteLock } = await import(
+      "../lib/sessionWriteLock.js"
+    );
+    return await withSessionWriteLock(sessionId, async () => {
+      const doc = await getChatBySessionIdForUser(sessionId, username);
+      if (!doc) return null;
+      const existing = (doc.datasetFingerprint ?? "").trim();
+      if (existing.length > 0) return existing;
+      doc.datasetFingerprint = fingerprint;
+      doc.lastUpdatedAt = Date.now();
+      await updateChatDocument(doc);
+      return fingerprint;
+    });
+  } catch (err) {
+    console.warn(
+      `⚠️ ensureDatasetFingerprintForSession failed (${sessionId}):`,
+      err
+    );
+    return null;
+  }
+};
+
+/**
  * Update session permanent context by session ID
  */
 export const updateSessionPermanentContext = async (
@@ -1404,6 +1463,32 @@ export const updateSessionPermanentContext = async (
         scheduleUpsertUserContextChunk(sessionId, combined);
       } catch (e) {
         console.warn("⚠️ RAG user_context upsert scheduling failed:", e);
+      }
+    }
+
+    // Wave W-UD3 · also persist the upload-context as a `free-text` directive
+    // in the per-dataset directives store, so re-uploads of the same dataset
+    // shape inherit the note. Fire-and-forget: the chat doc has already been
+    // upserted; a directive failure must not block the user's save action.
+    if (incoming.length > 0) {
+      const fingerprint = freshDoc.datasetFingerprint;
+      if (fingerprint && fingerprint.length > 0) {
+        void (async () => {
+          try {
+            const { appendDirective } = await import(
+              "./datasetDirectives.model.js"
+            );
+            await appendDirective(normalizedUsername, fingerprint, {
+              scope: "dataset",
+              kind: "free-text",
+              text: incoming,
+              source: "upload-context",
+              sourceSessionId: sessionId,
+            });
+          } catch (e) {
+            console.warn("⚠️ dataset_directives upload-context write failed:", e);
+          }
+        })();
       }
     }
 

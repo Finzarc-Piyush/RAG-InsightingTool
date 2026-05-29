@@ -19,10 +19,13 @@ import { chartSpecSchema } from "../../../shared/schema.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { processChartData } from "../../chartGenerator.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import { resolvePeriodAxis } from "../../periodColumnResolver.js";
+import { resolveFactsMetric } from "../../factsMetricResolver.js";
 
 const TEMPORAL_FACET_PREFIX_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
 const X_LABEL_CARDINALITY_CAP = 60;
 const ROW_COUNT_CAP = 200;
+const MIN_UNIQUE_X_FOR_CARDINALITY_PRUNE = 2;
 
 export interface AnalyticalTable {
   rows: Record<string, unknown>[];
@@ -101,7 +104,62 @@ export function buildChartFromAnalyticalTable(
 
   if (numericCols.length < 1 || dimCols.length < 1) return null;
 
-  const x = dimCols[0]!;
+  // Wave W-GMK2 · pick a coherent time x-axis when periods are present, else
+  // fall back to the first non-numeric column with cardinality ≥ 2 (skip
+  // single-value dims like Products = MARICO that produce useless one-bar
+  // charts). When the period resolver returns a multi-kind column with a
+  // PeriodKind discriminator filter, apply that filter to the rows so the
+  // downstream chart only sees one coherent kind.
+  const periodAxis = resolvePeriodAxis(columns, sample, summary, question);
+
+  let x: string;
+  let workingRows = rows;
+  let axisReason: string | undefined;
+
+  if (periodAxis.pickedColumn) {
+    x = periodAxis.pickedColumn;
+    axisReason = periodAxis.reason;
+    if (periodAxis.injectedFilter) {
+      const f = periodAxis.injectedFilter;
+      const filtered = rows.filter(
+        (r) => String(r?.[f.column] ?? "").trim() === f.value
+      );
+      if (filtered.length > 0) workingRows = filtered;
+    }
+  } else {
+    const usableDim = dimCols.find((c) => {
+      const distinct = new Set<string>();
+      for (const r of sample) {
+        const v = r?.[c];
+        if (v == null || v === "") continue;
+        distinct.add(String(v));
+        if (distinct.size >= MIN_UNIQUE_X_FOR_CARDINALITY_PRUNE) break;
+      }
+      return distinct.size >= MIN_UNIQUE_X_FOR_CARDINALITY_PRUNE;
+    });
+    if (!usableDim) return null;
+    x = usableDim;
+  }
+
+  // Wave W-GMK4 · Facts/Metric awareness — when the result table carries a
+  // narrow-format metric discriminator (e.g. `Facts` with values "Value
+  // Sales", "Volume Sales", "Distribution") summing across kinds produces
+  // nonsense. Pick one Facts value (question-matched or dominant), filter
+  // rows to it, and use the value as the measure name in the chart title.
+  const factsMetric = resolveFactsMetric(columns, sample, summary, question);
+  if (factsMetric.metricColumn && factsMetric.injectedFilter) {
+    const f = factsMetric.injectedFilter;
+    const filtered = workingRows.filter(
+      (r) => String(r?.[f.column] ?? "").trim() === f.value
+    );
+    if (filtered.length > 0) {
+      workingRows = filtered;
+      axisReason = axisReason
+        ? `${axisReason} · ${factsMetric.reason}`
+        : factsMetric.reason;
+    }
+  }
+
   const y = numericCols
     .slice()
     .sort((a, b) => scoreMeasure(b) - scoreMeasure(a))[0]!;
@@ -109,9 +167,11 @@ export function buildChartFromAnalyticalTable(
   const xTemporal =
     summary.dateColumns.includes(x) ||
     TEMPORAL_FACET_PREFIX_RE.test(x) ||
-    x.startsWith("__tf_");
+    x.startsWith("__tf_") ||
+    Boolean(periodAxis.pickedColumn);
 
-  const xUnique = new Set(sample.map((r) => String(r?.[x] ?? ""))).size;
+  const workingSample = workingRows.slice(0, 80);
+  const xUnique = new Set(workingSample.map((r) => String(r?.[x] ?? ""))).size;
   if (xUnique > X_LABEL_CARDINALITY_CAP) return null;
 
   const chartType: "line" | "bar" = xTemporal ? "line" : "bar";
@@ -119,7 +179,7 @@ export function buildChartFromAnalyticalTable(
   let compiled: ReturnType<typeof compileChartSpec>;
   try {
     compiled = compileChartSpec(
-      rows as Record<string, unknown>[],
+      workingRows as Record<string, unknown>[],
       {
         numericColumns: summary.numericColumns,
         dateColumns: summary.dateColumns,
@@ -140,7 +200,9 @@ export function buildChartFromAnalyticalTable(
         title ??
         (mp.type === "heatmap"
           ? `${mp.z} (${mp.x} × ${mp.y})`
-          : `${mp.y} by ${mp.x}`),
+          : factsMetric.metricValue
+            ? `${factsMetric.metricValue} by ${mp.x}`
+            : `${mp.y} by ${mp.x}`),
       x: mp.x,
       y: mp.y,
       ...(mp.z ? { z: mp.z } : {}),
@@ -152,6 +214,7 @@ export function buildChartFromAnalyticalTable(
         (mp.type === "bar" || mp.type === "line" || mp.type === "area")
           ? ("sum" as const)
           : ("none" as const)),
+      ...(axisReason ? { axisReason } : {}),
     });
   } catch {
     return null;
@@ -159,7 +222,7 @@ export function buildChartFromAnalyticalTable(
 
   let processed: Record<string, unknown>[];
   try {
-    processed = processChartData(rows, spec, summary.dateColumns, {
+    processed = processChartData(workingRows, spec, summary.dateColumns, {
       chartQuestion: question,
     }) as Record<string, unknown>[];
   } catch {

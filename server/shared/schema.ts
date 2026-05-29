@@ -127,6 +127,21 @@ export const chartSpecSchema = z.object({
    * styling.
    */
   businessCommentary: z.string().max(500).optional(),
+  /**
+   * W-GMK2 · short, user-facing explanation of why this x-axis was picked
+   * (e.g. "Showing Quarter · Period (filtered to PeriodKind = Quarter,
+   * sorted chronologically)"). Rendered as a subtitle under the title by
+   * `InteractiveChartCard`. Populated by `resolvePeriodAxis` when the chart
+   * has a time axis; absent otherwise.
+   */
+  axisReason: z.string().max(300).optional(),
+  /**
+   * W-GMK9 · per-chart override for inline data labels. Mirrors v2's
+   * `config.dataLabels`. When undefined the renderer defaults to true
+   * (labels on, collision-thinned). InteractiveChartCard's "Show
+   * labels" checkbox toggles this field.
+   */
+  dataLabels: z.boolean().optional(),
   /** When true, final enrichment must not rebuild series from full rawData (aggregated/agent charts). */
   _useAnalyticalDataOnly: z.boolean().optional(),
   /** Agent tool call id or trace ref linking narrative to evidence (optional). */
@@ -668,8 +683,21 @@ export const chartConfigSchema = z.object({
   /**
    * Render bar labels (the y-value) inside the bar when fits, else
    * outside. Defaults to false to keep charts uncluttered.
+   *
+   * @deprecated W-GMK6 · use `dataLabels` instead. `barLabels` is kept
+   * for back-compat — when set true, it implies `dataLabels` for the
+   * Bar renderer only.
    */
   barLabels: z.boolean().optional(),
+  /**
+   * W-GMK6 · render in-chart value labels on every mark (Bar / Line /
+   * Area / Point) with greedy collision filtering so labels appear ON
+   * by default and silently drop when their bounding boxes would overlap.
+   * Renderers default to `true` when this field is undefined so the
+   * user-requested "labels by default" behaviour kicks in across all
+   * mark types. Set to `false` to hide all data labels.
+   */
+  dataLabels: z.boolean().optional(),
 });
 export type ChartConfig = z.infer<typeof chartConfigSchema>;
 
@@ -3160,7 +3188,12 @@ export const automationSchema = z.object({
       .array(automationSessionComputedColumnSchema)
       .max(40)
       .optional(),
-    permanentContext: z.string().max(20000).optional(),
+    // Wave W-UD1 · Zod length cap dropped — user requirement is "store user
+    // context forever without any limit". The Cosmos 2 MB doc soft limit is
+    // the only ceiling now, enforced by `cosmosDocSizeGuard.test.ts`. The
+    // automation seed mirrors the same shape as `ChatDocument.permanentContext`
+    // (no Zod cap on the live field either).
+    permanentContext: z.string().optional(),
     /** Slim seed of the original sessionAnalysisContext (user intent +
      *  declared dimension hierarchies + dataset notes). */
     seedSessionAnalysisContext: sessionAnalysisContextSchema
@@ -3222,6 +3255,105 @@ export const runAutomationRequestSchema = z.object({
   columnMapping: automationColumnMappingSchema.optional(),
 });
 export type RunAutomationRequest = z.infer<typeof runAutomationRequestSchema>;
+
+// ============================================================================
+// Wave W-UD1 · User directives — per-dataset persistent rules
+// ============================================================================
+//
+// A `UserDirective` captures a user-provided rule that should persist beyond
+// the current chat turn — typically:
+//   - upload-time domain context ("this dataset is for haircare; treat brand
+//     X as a competitor")
+//   - mid-conversation instructions ("from now on omit Hair Oil from any
+//     category breakdown")
+//
+// Authoritative storage: the `dataset_directives` Cosmos container, keyed by
+// `(username, datasetFingerprint)`. A snapshot is mirrored onto every chat
+// session's `ChatDocument.userDirectives` for read-side audit visibility.
+//
+// Lifecycle: append-only. `status` transitions `active` → `superseded` (newer
+// directive overrides it) or `active` → `revoked` (user clicked revoke).
+// Nothing is ever deleted; the audit trail is preserved via
+// `supersedes` / `supersededBy`.
+
+export const userDirectiveScopeSchema = z.enum([
+  "session",
+  "dataset",
+  // Reserved for Phase B (deferred); the schema accepts them so a future
+  // wave can add writer paths without a migration.
+  "user",
+  "tenant",
+]);
+export type UserDirectiveScope = z.infer<typeof userDirectiveScopeSchema>;
+
+export const userDirectiveKindSchema = z.enum([
+  "exclude",
+  "include-only",
+  "rename",
+  "preference",
+  "definition",
+  "free-text",
+]);
+export type UserDirectiveKind = z.infer<typeof userDirectiveKindSchema>;
+
+export const userDirectiveSourceSchema = z.enum([
+  "upload-context",
+  "chat-message",
+  "automation-seed",
+  "admin-edit",
+]);
+export type UserDirectiveSource = z.infer<typeof userDirectiveSourceSchema>;
+
+export const userDirectiveStatusSchema = z.enum([
+  "active",
+  "superseded",
+  "revoked",
+]);
+export type UserDirectiveStatus = z.infer<typeof userDirectiveStatusSchema>;
+
+/** Structural projection of the directive — when present, the planner /
+ *  chart-intent-guard can apply it as a filter without re-parsing the prose. */
+export const userDirectiveStructuredSchema = z.object({
+  column: z.string().min(1).max(200).optional(),
+  op: z.enum(["in", "not_in", "eq", "neq"]).optional(),
+  values: z.array(z.string().min(1).max(400)).max(200).optional(),
+});
+export type UserDirectiveStructured = z.infer<
+  typeof userDirectiveStructuredSchema
+>;
+
+export const userDirectiveSchema = z.object({
+  id: z.string().min(1).max(80),
+  scope: userDirectiveScopeSchema,
+  kind: userDirectiveKindSchema,
+  /** Verbatim text — NO length cap by design. The 2 MB Cosmos doc soft limit
+   *  is the only ceiling. */
+  text: z.string().min(1),
+  structured: userDirectiveStructuredSchema.optional(),
+  source: userDirectiveSourceSchema,
+  sourceSessionId: z.string().min(1).max(200).optional(),
+  sourceTurnId: z.string().min(1).max(200).optional(),
+  addedAt: z.number().int().nonnegative(),
+  status: userDirectiveStatusSchema,
+  /** IDs of prior directives this one replaces. */
+  supersedes: z.array(z.string().min(1).max(80)).max(50).optional(),
+  /** Set when this directive itself is superseded by a newer one. */
+  supersededBy: z.string().min(1).max(80).optional(),
+});
+export type UserDirective = z.infer<typeof userDirectiveSchema>;
+
+/** Cosmos document body for the `dataset_directives` container.
+ *  id = `${username}__${datasetFingerprint}`, partitionKey = username. */
+export const datasetDirectivesDocSchema = z.object({
+  id: z.string().min(1).max(400),
+  username: z.string().min(1).max(200),
+  datasetFingerprint: z.string().min(1).max(64),
+  directives: z.array(userDirectiveSchema),
+  /** Monotonic — bumped on every successful write. Future ETag bridge. */
+  version: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type DatasetDirectivesDoc = z.infer<typeof datasetDirectivesDocSchema>;
 
 // W-EXP-1 · Dashboard-export `SlideDeckPlan` schema. Re-exported here so the
 // client side (`@shared/schema`) picks it up automatically — the planner

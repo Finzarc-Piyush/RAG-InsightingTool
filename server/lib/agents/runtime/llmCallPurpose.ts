@@ -95,6 +95,16 @@ export const LLM_PURPOSE = {
    * results via the WI2-cache LRU+TTL helper.
    */
   INSIGHT_REGEN: "insight_regen",
+  /**
+   * Wave W-UD5 · User-directive LLM extractor. Cheap MINI-tier call that
+   * inspects a user message + the dataset summary and emits zero-to-N
+   * structured `UserDirective` drafts with explicit supersede ids for any
+   * existing active directives the new utterance contradicts. Runs as a
+   * supplement to the deterministic extractor in `extractUserDirectives.ts`
+   * — verbose / paraphrased phrasings the regex misses. Result is cached
+   * by message hash so repeat sessions don't re-pay the LLM cost.
+   */
+  DIRECTIVE_EXTRACTION: "directive_extraction",
 } as const;
 
 export type LlmCallPurpose = (typeof LLM_PURPOSE)[keyof typeof LLM_PURPOSE];
@@ -145,6 +155,7 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.INDICATOR_ENRICH]: "MINI",
   [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
   [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
+  [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: "MINI",
 };
 
 /** Build the per-purpose override env-var name: `mode_classify` → `OPENAI_MODEL_FOR_MODE_CLASSIFY`. */

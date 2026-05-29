@@ -13,6 +13,11 @@ const COSMOS_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_DASHBOARDS_CONTAINER_I
 const COSMOS_SHARED_ANALYSES_CONTAINER_ID = process.env.COSMOS_SHARED_ANALYSES_CONTAINER_ID || "shared-analyses";
 const COSMOS_SHARED_DASHBOARDS_CONTAINER_ID = process.env.COSMOS_SHARED_DASHBOARDS_CONTAINER_ID || "shared-dashboards";
 const COSMOS_AUTOMATIONS_CONTAINER_ID = process.env.COSMOS_AUTOMATIONS_CONTAINER_ID || "automations";
+// Wave W-UD1 · per-dataset directives store. Document id = `${username}__${datasetFingerprint}`;
+// partition key = `/username`. Holds the authoritative `UserDirective[]` for a
+// dataset shape — every session whose dataset has the same fingerprint
+// inherits the list at session start.
+const COSMOS_DATASET_DIRECTIVES_CONTAINER_ID = process.env.COSMOS_DATASET_DIRECTIVES_CONTAINER_ID || "dataset_directives";
 
 // Lazy CosmosDB client so we don't throw "Invalid URL" at load time when env is not yet loaded or not set
 let clientInstance: CosmosClient | null = null;
@@ -32,6 +37,7 @@ let dashboardsContainer: Container;
 let sharedAnalysesContainer: Container;
 let sharedDashboardsContainer: Container;
 let automationsContainer: Container;
+let datasetDirectivesContainer: Container; // Wave W-UD1
 let initializationInProgress = false;
 let initializationPromise: Promise<void> | null = null;
 
@@ -107,7 +113,8 @@ export const initializeCosmosDB = async (): Promise<void> => {
     dashboardsContainer &&
     sharedAnalysesContainer &&
     sharedDashboardsContainer &&
-    automationsContainer
+    automationsContainer &&
+    datasetDirectivesContainer
   ) {
     return;
   }
@@ -175,6 +182,15 @@ export const initializeCosmosDB = async (): Promise<void> => {
         400
       );
       console.log(`✅ Automations container ready: ${COSMOS_AUTOMATIONS_CONTAINER_ID}`);
+
+      // Wave W-UD1 · per-dataset directives store
+      datasetDirectivesContainer = await createContainerSafely(
+        database,
+        COSMOS_DATASET_DIRECTIVES_CONTAINER_ID,
+        "/username",
+        400
+      );
+      console.log(`✅ Dataset directives container ready: ${COSMOS_DATASET_DIRECTIVES_CONTAINER_ID}`);
 
       console.log("✅ CosmosDB initialized successfully");
     } catch (error) {
@@ -408,6 +424,44 @@ export const waitForAutomationsContainer = async (
   }
 
   return automationsContainer;
+};
+
+/**
+ * Wave W-UD1 · Wait for the dataset_directives container to be initialized.
+ * Will attempt to initialize if not already done.
+ */
+export const waitForDatasetDirectivesContainer = async (
+  maxRetries: number = 60,
+  retryDelay: number = 500
+): Promise<Container> => {
+  if (!datasetDirectivesContainer) {
+    try {
+      await initializeCosmosDB();
+    } catch (error) {
+      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+    }
+  }
+
+  let retries = 0;
+  while (!datasetDirectivesContainer && retries < maxRetries) {
+    await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    if (retries % 5 === 0 && !datasetDirectivesContainer) {
+      try {
+        await initializeCosmosDB();
+      } catch (error) {
+        // Continue retrying
+      }
+    }
+    retries++;
+  }
+
+  if (!datasetDirectivesContainer) {
+    throw new Error(
+      "CosmosDB dataset_directives container not initialized. Please check your COSMOS_ENDPOINT and COSMOS_KEY environment variables and ensure CosmosDB is accessible."
+    );
+  }
+
+  return datasetDirectivesContainer;
 };
 
 /**

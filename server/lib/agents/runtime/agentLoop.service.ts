@@ -82,6 +82,10 @@ import {
   chartAxisSignature,
 } from "./chartFromTable.js";
 import {
+  validateChartAgainstIntent,
+  chartIntentGuardEnabled,
+} from "./chartIntentGuard.js";
+import {
   chartSpecSchema,
   type ChartSpec,
   type DashboardPivotSpec,
@@ -528,8 +532,34 @@ function materializeDeferredBuildCharts(
  * (`dashboardSheetSpecSchema.charts.max(24)`). Operators can still tighten
  * via the env var; the previous 14 default was the silent regression.
  */
-function finalizeMergedCharts(mergedCharts: ChartSpec[]): void {
+function finalizeMergedCharts(
+  mergedCharts: ChartSpec[],
+  intentEnvelope?: import("./types.js").IntentEnvelope
+): void {
   if (mergedCharts.length === 0) return;
+
+  // RD4 · catch-all intent guard. The chart-promotion path already runs the
+  // guard, but charts from the visual planner / dashboard sweep / deferred
+  // build_chart materializer also reach this list. Run a pre-dedupe pass so
+  // ANY chart whose leader contradicts the user's exclusion intent is
+  // dropped — regardless of which builder emitted it.
+  if (intentEnvelope?.exclusions.length && chartIntentGuardEnabled()) {
+    const kept: ChartSpec[] = [];
+    for (const c of mergedCharts) {
+      const verdict = validateChartAgainstIntent(c, intentEnvelope);
+      if (verdict.ok || !verdict.drop) {
+        kept.push(c);
+      }
+    }
+    if (kept.length !== mergedCharts.length) {
+      agentLog("finalize_charts_intent_guard_dropped", {
+        before: mergedCharts.length,
+        after: kept.length,
+      });
+      mergedCharts.length = 0;
+      for (const c of kept) mergedCharts.push(c);
+    }
+  }
 
   const seen = new Set<string>();
   const dedupedInPlace: ChartSpec[] = [];
@@ -732,6 +762,9 @@ async function synthesizeFinalAnswerEnvelope(
     buildSynthesisContext(ctx, {
       upfrontRagHitsBlock,
       blackboard: ctx.blackboard,
+      // Wave W-UD8 · forward the per-turn trim sink so the chatStream
+      // service can emit a `context_trimmed` SSE row.
+      contextTrimmedSink: ctx.contextTrimmedSink,
     })
   );
   const phase1Shape = ctx.analysisBrief?.questionShape;
@@ -1255,6 +1288,14 @@ export async function runAgentTurn(
         }
       : {};
 
+  // RD4 · forward the IntentEnvelope onto every AgentLoopResult exit so the
+  // pivot envelope LLM (chatResponse.enrichPivotInsightFromEnvelope) can read
+  // it without re-deriving the exclusion intent.
+  const intentEnvelopeOut = () =>
+    ctx.intentEnvelope?.exclusions.length
+      ? { intentEnvelope: ctx.intentEnvelope }
+      : {};
+
   const mergeStepArtifacts = (
     tool: string,
     result: ToolResult,
@@ -1708,6 +1749,7 @@ export async function runAgentTurn(
           lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
           ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
         };
       }
 
@@ -2000,6 +2042,7 @@ export async function runAgentTurn(
               lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
               ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
             };
           }
 
@@ -2479,26 +2522,91 @@ export async function runAgentTurn(
                 question: ctx.question,
               });
               if (promoted) {
-                const sig = chartAxisSignature(promoted);
-                const existingSigs = new Set(
-                  mergedCharts.map(chartAxisSignature)
-                );
-                if (!existingSigs.has(sig)) {
-                  const tagged: ChartSpec = {
-                    ...promoted,
-                    ...(finalCallId
-                      ? { _agentEvidenceRef: finalCallId, _agentTurnId: turnId }
-                      : {}),
-                  };
-                  mergedCharts.push(tagged);
-                  agentLog("chart_promoted_from_intermediate", {
-                    turnId,
-                    tool: step.tool,
-                    title: promoted.title,
-                    x: promoted.x,
-                    y: promoted.y,
-                    type: promoted.type,
-                  });
+                // RD4 · chart-intent guard: if the promoted chart's leader
+                // (or only bar) is a value the user said to exclude, drop or
+                // re-filter before push. The narrator already produced the
+                // correct text; the chart layer must not contradict it.
+                let chartToPush: ChartSpec | null = promoted;
+                if (chartIntentGuardEnabled()) {
+                  const verdict = validateChartAgainstIntent(
+                    promoted,
+                    ctx.intentEnvelope
+                  );
+                  if (!verdict.ok) {
+                    if (verdict.drop) {
+                      agentLog("chart_promotion_dropped_by_intent_guard", {
+                        turnId,
+                        tool: step.tool,
+                        reason: verdict.reason,
+                        title: promoted.title,
+                        x: promoted.x,
+                        y: promoted.y,
+                        excluded: verdict.excludedValues?.join(",") ?? "",
+                      });
+                      chartToPush = null;
+                    } else if (verdict.cleanedRows?.length) {
+                      // filter_pollution — strip offending rows and rebuild
+                      // the chart from the cleaned subset. We re-invoke
+                      // buildChartFromAnalyticalTable so processChartData /
+                      // calculateSmartDomainsForChart run against the
+                      // cleaned data and the title remains coherent.
+                      const cleanedSpec = buildChartFromAnalyticalTable({
+                        table: {
+                          rows: verdict.cleanedRows,
+                          columns: ctx.lastAnalyticalTable.columns,
+                        },
+                        summary: ctx.summary,
+                        question: ctx.question,
+                      });
+                      if (cleanedSpec) {
+                        chartToPush = cleanedSpec;
+                        agentLog("chart_promotion_recovered_by_intent_guard", {
+                          turnId,
+                          tool: step.tool,
+                          reason: verdict.reason,
+                          removedRows:
+                            ctx.lastAnalyticalTable.rows.length -
+                            verdict.cleanedRows.length,
+                          excluded:
+                            verdict.excludedValues?.join(",") ?? "",
+                        });
+                      } else {
+                        agentLog("chart_promotion_dropped_by_intent_guard", {
+                          turnId,
+                          tool: step.tool,
+                          reason: "recovery_yielded_no_chart",
+                          title: promoted.title,
+                        });
+                        chartToPush = null;
+                      }
+                    }
+                  }
+                }
+                if (chartToPush) {
+                  const sig = chartAxisSignature(chartToPush);
+                  const existingSigs = new Set(
+                    mergedCharts.map(chartAxisSignature)
+                  );
+                  if (!existingSigs.has(sig)) {
+                    const tagged: ChartSpec = {
+                      ...chartToPush,
+                      ...(finalCallId
+                        ? {
+                            _agentEvidenceRef: finalCallId,
+                            _agentTurnId: turnId,
+                          }
+                        : {}),
+                    };
+                    mergedCharts.push(tagged);
+                    agentLog("chart_promoted_from_intermediate", {
+                      turnId,
+                      tool: step.tool,
+                      title: chartToPush.title,
+                      x: chartToPush.x,
+                      y: chartToPush.y,
+                      type: chartToPush.type,
+                    });
+                  }
                 }
               }
             } catch (promoteErr) {
@@ -2826,6 +2934,7 @@ export async function runAgentTurn(
               lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
               ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
             };
           } else if (ref.action === "replan") {
             // Single-flow policy: replan is suppressed; continue with the
@@ -3068,7 +3177,7 @@ export async function runAgentTurn(
           checkAbort("pre-synthesis");
           const synthObservations =
             ctx.blackboard && ctx.blackboard.findings.length > 0
-              ? [`[BLACKBOARD]\n${formatForNarrator(ctx.blackboard).slice(0, 3000)}`, ...observations]
+              ? [`[BLACKBOARD]\n${formatForNarrator(ctx.blackboard, ctx.contextTrimmedSink).slice(0, 3000)}`, ...observations]
               : observations;
           const env = await synthesizeFinalAnswerEnvelope(
             ctx,
@@ -3490,7 +3599,7 @@ export async function runAgentTurn(
     // visual planner, dashboard sweep) are flushed into one canonical list.
     {
       const beforeCount = mergedCharts.length;
-      finalizeMergedCharts(mergedCharts);
+      finalizeMergedCharts(mergedCharts, ctx.intentEnvelope);
       if (mergedCharts.length !== beforeCount) {
         agentLog("merged_charts_finalized", {
           turnId,
@@ -3745,6 +3854,7 @@ export async function runAgentTurn(
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
       };
     }
 
@@ -3909,6 +4019,7 @@ export async function runAgentTurn(
         ? runBusinessActions(ctx, envelopeAnswerEnvelope, {
             turnId,
             onLlmCall,
+            contextTrimmedSink: ctx.contextTrimmedSink,
           }).catch((err) => {
             agentLog("businessActionsAgent.unhandled", {
               turnId,
@@ -3961,6 +4072,7 @@ export async function runAgentTurn(
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -3984,6 +4096,7 @@ export async function runAgentTurn(
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         ...briefOut(),
         ...appliedFiltersOut(),
+        ...intentEnvelopeOut(),
       };
     }
     if (msg === "AGENT_LLM_BUDGET") {
@@ -4011,6 +4124,7 @@ export async function runAgentTurn(
         lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
         ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
       };
     }
     trace.endedAt = Date.now();
@@ -4038,6 +4152,7 @@ export async function runAgentTurn(
       lastAnalyticalRowsForEnrichment: lastAnalyticalRowsSnapshot(ctx),
       ...briefOut(),
       ...appliedFiltersOut(),
+      ...intentEnvelopeOut(),
     };
   }
 }

@@ -81,6 +81,10 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   // model just renders the anchors that summarizeFilteredData already
   // computed, so flagship reasoning is overkill.
   [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
+  // Wave W-UD5 · user-directive extractor — MINI-tier cheap classifier
+  // that runs as a supplement to the deterministic regex extractor in
+  // `extractUserDirectives.ts`. Short JSON output, schema-aware input.
+  [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: "MINI",
 };
 
 describe("W3.11 · model-routing regression guard", () => {

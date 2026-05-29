@@ -32,6 +32,7 @@ import {
   formatDimensionHierarchiesBlock,
   formatWideFormatShapeBlock,
 } from "./context.js";
+import { applyCap, type TrimmedBlockInfo } from "./promptBudget.js";
 
 type AnswerEnvelope = NonNullable<Message["answerEnvelope"]>;
 export type BusinessActionItem = NonNullable<Message["businessActions"]>[number];
@@ -184,7 +185,8 @@ function formatHintsBlock(hints: string[]): string {
 
 function buildUserMessage(
   ctx: AgentExecutionContext,
-  envelope: AnswerEnvelope | undefined
+  envelope: AnswerEnvelope | undefined,
+  trimmedSink?: TrimmedBlockInfo[]
 ): string {
   const hints = extractStrategyIntentHints(ctx.question);
   const sections: string[] = [];
@@ -211,20 +213,25 @@ function buildUserMessage(
   }
   if (userNotesParts.length) {
     const joined = userNotesParts.join("\n");
-    sections.push(
-      "USER NOTES:\n" +
-        (joined.length > PERMANENT_CONTEXT_CHAR_CAP
-          ? joined.slice(0, PERMANENT_CONTEXT_CHAR_CAP) + "\n[truncated]"
-          : joined)
+    // Wave W-UD8 · budget-driven cap; trim event surfaces via trimmedSink.
+    const { content, trimmed } = applyCap(
+      "businessActions.userNotes",
+      joined,
+      PERMANENT_CONTEXT_CHAR_CAP
     );
+    if (trimmed) trimmedSink?.push(trimmed);
+    sections.push("USER NOTES:\n" + content);
   }
   if (ctx.domainContext && ctx.domainContext.trim()) {
-    const dc = ctx.domainContext.trim();
+    const { content, trimmed } = applyCap(
+      "businessActions.domainContext",
+      ctx.domainContext.trim(),
+      DOMAIN_CONTEXT_CHAR_CAP
+    );
+    if (trimmed) trimmedSink?.push(trimmed);
     sections.push(
       "FMCG / MARICO DOMAIN CONTEXT (background only; cite pack id when used; never numeric evidence):\n" +
-        (dc.length > DOMAIN_CONTEXT_CHAR_CAP
-          ? dc.slice(0, DOMAIN_CONTEXT_CHAR_CAP) + "\n[truncated]"
-          : dc)
+        content
     );
   }
   const prior = formatPriorInvestigations(ctx);
@@ -264,6 +271,10 @@ export interface RunBusinessActionsOptions {
   turnId: string;
   /** Increment cost counter on the agent loop. */
   onLlmCall?: () => void;
+  /** Wave W-UD8 · optional sink that receives per-block truncation events
+   *  (USER NOTES / DOMAIN CONTEXT). When supplied, the caller can forward
+   *  the rows to a `context_trimmed` SSE row. */
+  contextTrimmedSink?: TrimmedBlockInfo[];
 }
 
 /**
@@ -288,7 +299,7 @@ export async function runBusinessActions(
     return [];
   }
 
-  const user = buildUserMessage(ctx, envelope);
+  const user = buildUserMessage(ctx, envelope, opts.contextTrimmedSink);
 
   const result = await completeJson(
     SYSTEM_PROMPT,

@@ -1050,6 +1050,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onSave={handleSaveContext}
         isLoading={isSavingContext}
         existingContext={currentPermanentContext}
+        sessionId={contextModalSessionId ?? undefined}
       />
       <DataSummaryModal
         isOpen={showDataSummaryModal}

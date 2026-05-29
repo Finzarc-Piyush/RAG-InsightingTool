@@ -91,7 +91,13 @@ export interface InteractiveChartCardProps {
   chart: ChartSpec | ChartSpecV2;
   keyInsightSessionId?: string | null;
   /** Hide individual toolbar items when callers already provide them externally. */
-  controls?: { chartType?: boolean; barLayout?: boolean; pivotToggle?: boolean };
+  controls?: {
+    chartType?: boolean;
+    barLayout?: boolean;
+    pivotToggle?: boolean;
+    /** W-GMK9 · "Show value labels" checkbox. Defaults visible. */
+    dataLabels?: boolean;
+  };
   /** Caller-supplied legacy renderer; receives the locally-mutated spec. */
   renderLegacy: (spec: ChartSpec) => ReactNode;
   className?: string;
@@ -107,12 +113,14 @@ export function InteractiveChartCard({
   const showChartType = controls?.chartType !== false;
   const showBarLayout = controls?.barLayout !== false;
   const showPivotToggle = controls?.pivotToggle !== false;
+  const showDataLabelsToggle = controls?.dataLabels !== false;
 
   // useId guarantees label/select pairing stays correct when a chat message
   // renders multiple charts side-by-side (Bug F).
   const reactId = useId();
   const chartTypeId = `ic-chart-type-${reactId}`;
   const barLayoutId = `ic-bar-layout-${reactId}`;
+  const dataLabelsId = `ic-data-labels-${reactId}`;
 
   const [localV1, setLocalV1] = useState<ChartSpec | null>(() =>
     isChartSpecV2(chart) ? null : (chart as ChartSpec)
@@ -156,8 +164,11 @@ export function InteractiveChartCard({
     const hasSeries =
       !!localV1.seriesColumn || (localV1.seriesKeys?.length ?? 0) > 1;
     const hasLayoutSwitch = showBarLayout && localV1.type === "bar" && hasSeries;
-    return hasMarkSwitch || hasLayoutSwitch;
-  }, [canPivot, localV1, showChartType, showBarLayout]);
+    const hasDataLabelsSwitch =
+      showDataLabelsToggle &&
+      ["bar", "line", "area", "scatter", "point"].includes(localV1.type);
+    return hasMarkSwitch || hasLayoutSwitch || hasDataLabelsSwitch;
+  }, [canPivot, localV1, showChartType, showBarLayout, showDataLabelsToggle]);
 
   const handleMarkChange = (next: SwitchableMark) => {
     setLocalV1((prev) => (prev ? coerceMarkType(prev, next) : prev));
@@ -168,6 +179,14 @@ export function InteractiveChartCard({
       prev && prev.type === "bar" ? { ...prev, barLayout: next } : prev
     );
   };
+
+  // W-GMK9 · per-chart "Show value labels" toggle. Mutates the v1 spec's
+  // top-level `dataLabels`; `v1ToV2.ts` propagates that to v2 config so
+  // the visx renderers' collision-thinning kicks in (or doesn't).
+  const handleDataLabelsChange = (next: boolean) => {
+    setLocalV1((prev) => (prev ? { ...prev, dataLabels: next } : prev));
+  };
+  const currentDataLabels = localV1?.dataLabels !== false; // default true
 
   // When the toggle is in pivot view, the chart-type and bar-layout dropdowns
   // are irrelevant (they only mutate chart-rendering choices). Hide them so
@@ -225,6 +244,26 @@ export function InteractiveChartCard({
               </select>
             </div>
           ) : null}
+          {chartControlsVisible &&
+          localV1 &&
+          showDataLabelsToggle &&
+          ["bar", "line", "area", "scatter", "point"].includes(localV1.type) ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                id={dataLabelsId}
+                type="checkbox"
+                checked={currentDataLabels}
+                onChange={(e) => handleDataLabelsChange(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border/60 bg-background"
+              />
+              <label
+                htmlFor={dataLabelsId}
+                className="text-[11px] uppercase tracking-wide text-muted-foreground"
+              >
+                Show labels
+              </label>
+            </div>
+          ) : null}
           {canPivot ? (
             <div
               className="ml-auto inline-flex rounded-md border border-border overflow-hidden"
@@ -264,6 +303,18 @@ export function InteractiveChartCard({
               </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {/* W-GMK9 · axisReason subtitle — surfaces the period-resolver's
+          decision (e.g. "Showing Quarter · Period (filtered to PeriodKind
+          = Quarter, sorted chronologically)") so the user knows which
+          time grain was picked and why. Absent for non-period charts. */}
+      {localV1?.axisReason ? (
+        <div
+          className="mb-2 text-[11px] leading-snug text-muted-foreground"
+          data-testid="chart-axis-reason"
+        >
+          {localV1.axisReason}
         </div>
       ) : null}
       {effectiveView === "pivot" ? (

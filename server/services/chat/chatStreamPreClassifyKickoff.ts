@@ -14,12 +14,23 @@
 //
 // Both catching kickoffs prevent unhandled-rejection warnings when
 // `bindSchemaColumns` throws first and the other two settle later.
+//
+// Wave W-UD-integration · the kickoff now also runs the per-dataset directive
+// hydration in parallel. `hydrateDirectives` is optional — when omitted the
+// `activeDirectives` promise resolves to `[]` so callers can always pass the
+// result into `buildAgentExecutionContext` without a null check. Failures are
+// absorbed to `[]` for the same reason the other catching kickoffs swallow
+// theirs: a directives-store outage must never block a chat turn.
+
+import type { UserDirective } from "../../shared/schema.js";
 
 export interface PreClassifyKickoffDeps<S, Q, D, M = unknown> {
   bindSchemaColumns: () => Promise<S>;
   parseUserQuery: () => Promise<Q>;
   loadDomainContext: () => Promise<D>;
   classifyMode?: (domainContext: D | null) => Promise<M>;
+  /** Wave W-UD-integration · per-dataset directive hydration. Optional. */
+  hydrateDirectives?: () => Promise<UserDirective[]>;
 }
 
 export interface PreClassifyKickoffResult<S, Q, D, M = unknown> {
@@ -27,6 +38,9 @@ export interface PreClassifyKickoffResult<S, Q, D, M = unknown> {
   parsedQuery: Promise<Q | null>;
   domainContext: Promise<D | null>;
   modeClassification: Promise<M | null>;
+  /** Wave W-UD-integration · active `UserDirective[]` for `(username, datasetFingerprint)`.
+   *  Resolves to `[]` when no hydrator was supplied or the hydrator threw. */
+  activeDirectives: Promise<UserDirective[]>;
 }
 
 export function kickOffPreClassifyWork<S, Q, D, M = unknown>(
@@ -38,5 +52,14 @@ export function kickOffPreClassifyWork<S, Q, D, M = unknown>(
   const modeClassification = deps.classifyMode
     ? domainContext.then((dc) => deps.classifyMode!(dc)).catch(() => null as M | null)
     : Promise.resolve(null as M | null);
-  return { schemaBinding, parsedQuery, domainContext, modeClassification };
+  const activeDirectives = deps.hydrateDirectives
+    ? deps.hydrateDirectives().catch(() => [] as UserDirective[])
+    : Promise.resolve([] as UserDirective[]);
+  return {
+    schemaBinding,
+    parsedQuery,
+    domainContext,
+    modeClassification,
+    activeDirectives,
+  };
 }

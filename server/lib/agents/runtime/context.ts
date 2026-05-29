@@ -4,8 +4,15 @@ import type {
   Insight,
   Message,
   SessionAnalysisContext,
+  UserDirective,
 } from "../../../shared/schema.js";
-import type { AgentExecutionContext, AnalysisSpecForAgent, StreamPreAnalysis } from "./types.js";
+import type {
+  AgentExecutionContext,
+  AnalysisSpecForAgent,
+  ExclusionIntent,
+  IntentEnvelope,
+  StreamPreAnalysis,
+} from "./types.js";
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
 import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
@@ -26,6 +33,17 @@ export function buildAgentExecutionContext(params: {
   mode: "analysis" | "dataOps" | "modeling";
   permanentContext?: string;
   domainContext?: string;
+  /**
+   * Wave W-UD3 · Active user directives hydrated at session start from the
+   * `dataset_directives` Cosmos container. Optional — the caller is expected
+   * to populate this when the dataset fingerprint is known. When omitted, the
+   * agent loop behaves as if no persistent directives apply for the dataset.
+   */
+  activeDirectives?: UserDirective[];
+  /** Wave W-UD8 · sink for prompt-budget truncation events. Optional —
+   *  when omitted, the agent runtime allocates one internally so callers
+   *  that don't care about the SSE row don't have to set up a sink. */
+  contextTrimmedSink?: import("./promptBudget.js").TrimmedBlockInfo[];
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;
   chatDocument?: ChatDocument;
@@ -40,6 +58,18 @@ export function buildAgentExecutionContext(params: {
   const inferredFilters = inferFiltersFromQuestion(
     params.question,
     params.summary
+  );
+  // RD4 · build the intent envelope from THREE sources:
+  //   (a) negative inferred filters (Wave 3): "omit FSG" → not_in
+  //   (b) declared rollup hierarchies whose intent classifies as peer-comparison
+  //       (Wave 2): the rollup is to be excluded from the answer.
+  //   (c) Wave W-UD6 · persistent UserDirectives with structured `op: 'not_in'`
+  //       — survive across turns and re-apply automatically.
+  const intentEnvelope = buildIntentEnvelope(
+    inferredFilters,
+    params.sessionAnalysisContext,
+    params.question,
+    params.activeDirectives
   );
   // W-PivotState · find the most recent assistant message that carries a
   // persisted pivotState. We walk from the end so an intermediate message
@@ -66,6 +96,8 @@ export function buildAgentExecutionContext(params: {
     mode: params.mode,
     permanentContext: params.permanentContext,
     domainContext: params.domainContext,
+    activeDirectives: params.activeDirectives,
+    contextTrimmedSink: params.contextTrimmedSink,
     sessionAnalysisContext: params.sessionAnalysisContext,
     columnarStoragePath: params.columnarStoragePath,
     chatDocument: params.chatDocument,
@@ -76,8 +108,119 @@ export function buildAgentExecutionContext(params: {
     onIntermediateArtifact: params.onIntermediateArtifact,
     abortSignal: params.abortSignal,
     inferredFilters: inferredFilters.length ? inferredFilters : undefined,
+    intentEnvelope:
+      intentEnvelope.exclusions.length > 0 ? intentEnvelope : undefined,
     lastAssistantPivotState,
   };
+}
+
+/**
+ * RD4 · Aggregate active exclusion intents from negative inferred filters AND
+ * declared rollup hierarchies whose user-question intent is peer-comparison.
+ * Returns an envelope with `exclusions: []` when nothing applies — callers
+ * either elide the field (we do) or treat empty as "no constraint".
+ */
+function buildIntentEnvelope(
+  inferredFilters: ReturnType<typeof inferFiltersFromQuestion>,
+  sessionAnalysisContext: SessionAnalysisContext | undefined,
+  question: string,
+  activeDirectives: UserDirective[] | undefined
+): IntentEnvelope {
+  const byColumn = new Map<string, { values: Set<string>; sources: Set<ExclusionIntent["source"]> }>();
+
+  // Source (a) — negative inferred filters (current question).
+  for (const f of inferredFilters) {
+    if (f.op !== "not_in") continue;
+    if (!f.values?.length) continue;
+    const bucket = byColumn.get(f.column) ?? {
+      values: new Set<string>(),
+      sources: new Set<ExclusionIntent["source"]>(),
+    };
+    for (const v of f.values) bucket.values.add(v);
+    bucket.sources.add("user-negative");
+    byColumn.set(f.column, bucket);
+  }
+
+  // Source (b) — peer-comparison rollups.
+  const hierarchies =
+    sessionAnalysisContext?.dataset?.dimensionHierarchies ?? [];
+  if (hierarchies.length) {
+    const intents = classifyHierarchyIntent(question, hierarchies);
+    for (const it of intents) {
+      if (it.intent !== "peer-comparison") continue;
+      if (!it.rollupValue) continue;
+      const bucket = byColumn.get(it.column) ?? {
+        values: new Set<string>(),
+        sources: new Set<ExclusionIntent["source"]>(),
+      };
+      bucket.values.add(it.rollupValue);
+      bucket.sources.add("rollup-peer-mode");
+      byColumn.set(it.column, bucket);
+    }
+  }
+
+  // Source (c) — Wave W-UD6 · persistent UserDirectives. Active directives
+  // whose structured projection is `op: 'not_in'` on a column contribute
+  // their values as exclusions. Survives across turns.
+  if (activeDirectives?.length) {
+    for (const d of activeDirectives) {
+      if (d.status !== "active") continue;
+      if (!d.structured?.column || d.structured.op !== "not_in") continue;
+      if (!d.structured.values?.length) continue;
+      const bucket = byColumn.get(d.structured.column) ?? {
+        values: new Set<string>(),
+        sources: new Set<ExclusionIntent["source"]>(),
+      };
+      for (const v of d.structured.values) bucket.values.add(v);
+      bucket.sources.add("persisted-directive");
+      byColumn.set(d.structured.column, bucket);
+    }
+  }
+
+  const exclusions: ExclusionIntent[] = [];
+  for (const [column, bucket] of byColumn.entries()) {
+    if (bucket.values.size === 0) continue;
+    // Provenance: prefer current-turn signals over persisted, more-specific
+    // over rollup. Order: user-negative > persisted-directive > rollup-peer-mode.
+    const source: ExclusionIntent["source"] = bucket.sources.has("user-negative")
+      ? "user-negative"
+      : bucket.sources.has("persisted-directive")
+      ? "persisted-directive"
+      : "rollup-peer-mode";
+    exclusions.push({
+      column,
+      values: Array.from(bucket.values),
+      source,
+    });
+  }
+  return { exclusions };
+}
+
+/**
+ * Wave W-UD6 · render the user's active persistent directives as a compact,
+ * non-truncating prompt block. Prepended to planner / reflector / verifier /
+ * synthesizer / business-actions prompts so every agent role sees the same
+ * directive list.
+ *
+ * Format: one bullet per directive with verbatim text. Superseded / revoked
+ * entries are filtered out. Empty input → empty string (caller composes).
+ */
+export function formatDirectiveBlock(
+  directives: UserDirective[] | undefined
+): string {
+  if (!directives?.length) return "";
+  const active = directives.filter((d) => d.status === "active");
+  if (!active.length) return "";
+  const lines = active.map((d) => {
+    const projection = d.structured?.column
+      ? ` [${d.structured.column} ${d.structured.op ?? "?"} ${(d.structured.values ?? []).join(", ")}]`
+      : "";
+    return `  - ${d.text.trim()}${projection}`;
+  });
+  return (
+    `\n### USER DIRECTIVES (persistent rules the user has set for this dataset — treat as authoritative; apply on every turn unless explicitly revoked):\n` +
+    lines.join("\n")
+  );
 }
 
 /** Shared user notes + session JSON blocks (used by planner summary and reflector). */
@@ -86,6 +229,13 @@ export function formatUserAndSessionJsonBlocks(
   opts: { maxUserChars: number; maxJsonChars: number; maxDomainChars?: number }
 ): string {
   let s = "";
+  // Wave W-UD6 · persistent user directives go FIRST and are NEVER truncated.
+  // They are the highest-priority signal — a user's "from now on omit X" rule
+  // must reach every agent role verbatim.
+  const directiveBlock = formatDirectiveBlock(ctx.activeDirectives);
+  if (directiveBlock) {
+    s += directiveBlock;
+  }
   if (ctx.permanentContext?.trim().length) {
     s += `\nUser-provided notes (verbatim):\n${ctx.permanentContext.trim().slice(0, opts.maxUserChars)}`;
   }

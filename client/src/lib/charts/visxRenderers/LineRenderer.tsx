@@ -36,6 +36,7 @@ import {
   formatChartValue,
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
+import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import {
   MAX_X_AXIS_LABELS,
   pickEvenlySpacedTicks,
@@ -792,6 +793,61 @@ export function LineRenderer({
               />
             );
           })}
+          {/* Wave W-GMK7 · inline data labels at each point. Defaults on
+              via spec.config.dataLabels (undefined = true). Built by
+              greedy bbox collision so dense charts silently thin the
+              labels without overlap. Higher-y points win on ties so the
+              user always sees the peaks. */}
+          {(() => {
+            const cfg = (spec.config ?? {}) as {
+              dataLabels?: boolean;
+            };
+            const showLabels = cfg.dataLabels !== false;
+            if (!showLabels) return null;
+            const candidates: Array<{
+              cx: number;
+              cy: number;
+              text: string;
+              priority: number;
+              key: string;
+            }> = [];
+            for (const s of series) {
+              const op = seriesOpacity(s.key, legend.state);
+              if (op === 0) continue;
+              for (let i = 0; i < s.points.length; i++) {
+                const p = s.points[i]!;
+                const px = xPx(p.x);
+                const py = yScale(p.y);
+                if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+                candidates.push({
+                  cx: px,
+                  cy: py,
+                  text: formatChartValue(p.y, yCh.field),
+                  priority: Math.abs(asNumber(p.y) ?? 0),
+                  key: `dl-${s.key}-${i}`,
+                });
+              }
+            }
+            const placed = placeLabelsNoOverlap(candidates, {
+              fontSize: 10,
+              padding: 2,
+              bounds: { x: 0, y: 0, w: innerWidth, h: innerHeight },
+            });
+            return placed.map((p, i) => (
+              <text
+                key={`dl-${i}`}
+                x={p.cx}
+                y={p.cy - 6}
+                fontSize={10}
+                fontFamily="var(--font-sans)"
+                fill="hsl(var(--foreground))"
+                textAnchor="middle"
+                pointerEvents="none"
+              >
+                {p.text}
+              </text>
+            ));
+          })()}
           {/* WC5.1 — reference lines (mean / median / target / custom) */}
           {(() => {
             const refs = resolveReferenceLines(

@@ -5,6 +5,7 @@ import type {
   ActiveFilterCondition,
   DateTimeColumnPair,
   DimensionHierarchy,
+  UserDirective,
 } from "@/shared/schema";
 
 /** SU-UX1 · payload shape mirroring the per-column indicator metadata. */
@@ -106,6 +107,32 @@ export const sessionsApi = {
     ),
 
   deleteSession: (sessionId: string) => api.delete(`/api/sessions/${sessionId}`),
+
+  /**
+   * Wave W-UD9 · list per-dataset directives for the session's dataset
+   * fingerprint. Returns both the full directive list (for the audit
+   * panel) and the active subset (status === "active").
+   */
+  listDirectives: (sessionId: string) =>
+    api.get<{
+      sessionId: string;
+      datasetFingerprint: string | null;
+      directives: UserDirective[];
+      activeDirectives: UserDirective[];
+      updatedAt?: number;
+      version?: number;
+    }>(`/api/sessions/${encodeURIComponent(sessionId)}/directives`),
+
+  /** Wave W-UD9 · revoke (soft-delete) a directive. Audit row is preserved. */
+  revokeDirective: (sessionId: string, directiveId: string) =>
+    api.delete<{
+      success: true;
+      directiveId: string;
+      datasetFingerprint: string;
+      activeDirectives: UserDirective[];
+    }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/directives/${encodeURIComponent(directiveId)}`
+    ),
 
   getSessionAnalysisContext: (sessionId: string) =>
     api.get(`/api/sessions/${sessionId}/analysis-context`),

@@ -256,14 +256,37 @@ export function formatForPlanner(bb: AnalyticalBlackboard): string {
   return parts.join("\n");
 }
 
-/** Richer block fed to the narrator for synthesis. */
-export function formatForNarrator(bb: AnalyticalBlackboard): string {
+/** Richer block fed to the narrator for synthesis.
+ *
+ *  Wave W-UD8 · the optional `trimmedSink` parameter receives one
+ *  `TrimmedBlockInfo`-shaped record per domainContext entry that was
+ *  truncated by `MAX_CONTEXT_CHARS`. We avoid the type import to keep this
+ *  module dependency-free; the shape is identical so the caller can append
+ *  directly into its `TrimmedBlockInfo[]` accumulator. */
+export function formatForNarrator(
+  bb: AnalyticalBlackboard,
+  trimmedSink?: Array<{
+    id: string;
+    inputChars: number;
+    outputChars: number;
+    reason: "budget";
+  }>
+): string {
   const parts: string[] = [];
 
   if (bb.domainContext.length > 0) {
     parts.push("DOMAIN_CONTEXT:");
     for (const dc of bb.domainContext) {
-      parts.push(`  [${dc.source}] ${dc.content.slice(0, MAX_CONTEXT_CHARS)}`);
+      const trimmedContent = dc.content.slice(0, MAX_CONTEXT_CHARS);
+      if (trimmedSink && dc.content.length > MAX_CONTEXT_CHARS) {
+        trimmedSink.push({
+          id: `blackboard.domainContext.${dc.source}`,
+          inputChars: dc.content.length,
+          outputChars: trimmedContent.length,
+          reason: "budget",
+        });
+      }
+      parts.push(`  [${dc.source}] ${trimmedContent}`);
     }
   }
 

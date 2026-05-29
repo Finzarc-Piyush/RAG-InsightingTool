@@ -1044,6 +1044,60 @@ export const useHomeMutations = ({
                       'A database write failed after retries. Reload may not show this turn.',
                   });
                 }
+              } else if (event === 'directive_added') {
+                // Wave W-UD9 · server emitted a per-dataset directive
+                // chip after the W-UD5 extractor persisted a new
+                // `UserDirective`. Surface a confirmation toast so the
+                // user can SEE the rule took ("✓ Will exclude Hair Oil
+                // from now on"). The full audit + revoke UI lives in
+                // `ContextModal` — the toast is just the immediate
+                // acknowledgement chip from plan §2.8.
+                const payload = data as {
+                  directive?: {
+                    id?: string;
+                    text?: string;
+                    kind?: string;
+                    structured?: {
+                      column?: string;
+                      op?: string;
+                      values?: string[];
+                    };
+                  };
+                };
+                const d = payload.directive;
+                if (d?.text) {
+                  const structSummary =
+                    d.structured?.column && d.structured?.op
+                      ? ` (${d.structured.column} ${d.structured.op} ${(d.structured.values ?? []).join(', ')})`
+                      : '';
+                  toast({
+                    title: 'Saved as a persistent rule',
+                    description: `${d.text.slice(0, 200)}${structSummary}`,
+                  });
+                }
+              } else if (event === 'context_trimmed') {
+                // Wave W-UD8 · server emitted one row per flexible-slot
+                // prompt-budget cap that actually trimmed user-bearing
+                // input during the turn. Surface a non-blocking toast
+                // so the user knows their saved context was clipped to
+                // fit the model window. Directives are NEVER trimmed
+                // (they live in the reserved slot) so this is purely
+                // about RAG / blackboard / history.
+                const payload = data as {
+                  blocks?: Array<{
+                    id: string;
+                    inputChars: number;
+                    outputChars: number;
+                  }>;
+                };
+                const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
+                if (blocks.length > 0) {
+                  const ids = blocks.map((b) => b.id).slice(0, 3).join(', ');
+                  toast({
+                    title: 'Some background context was trimmed',
+                    description: `${blocks.length} block${blocks.length === 1 ? '' : 's'} clipped to fit (${ids}${blocks.length > 3 ? ', …' : ''}).`,
+                  });
+                }
               }
             },
             onIntermediate: (payload: StreamIntermediatePayload) => {

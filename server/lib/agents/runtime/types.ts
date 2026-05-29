@@ -157,6 +157,25 @@ export interface WorkingMemoryEntry {
 }
 
 /** Last successful analytical tool row frame (execute_query_plan, run_analytical_query, etc.). */
+/** RD4 · One declared "user wants these OUT" entry for a single column. */
+export interface ExclusionIntent {
+  column: string;
+  /** Canonical value strings to exclude (case-insensitive compare). */
+  values: string[];
+  /** Provenance.
+   *  - "user-negative" (Wave 3): current-question exclusion verb match
+   *  - "rollup-peer-mode" (Wave 2): declared rollup hierarchy peer-comparison
+   *  - "persisted-directive" (Wave W-UD6): persistent UserDirective with
+   *    structured `op: 'not_in'` on this column — survives across turns.
+   */
+  source: "user-negative" | "rollup-peer-mode" | "persisted-directive";
+}
+
+/** RD4 · Bundle of all active exclusions for a turn. Read by chart-intent guard. */
+export interface IntentEnvelope {
+  exclusions: ExclusionIntent[];
+}
+
 export type LastAnalyticalTable = {
   rows: Record<string, unknown>[];
   columns: string[];
@@ -182,11 +201,42 @@ export interface AgentExecutionContext {
    * analysis brief; enforced by the verifier's `MISSING_INFERRED_FILTER` rule.
    */
   inferredFilters?: InferredFilter[];
+  /**
+   * RD4 · Post-hoc validation substrate for the chart-promotion layer. Lists
+   * (column, values) pairs the user signalled they want OUT of the answer,
+   * gathered from BOTH (a) negative inferred filters (Wave 3) and (b)
+   * declared rollup hierarchies whose intent classified as `peer-comparison`
+   * (Wave 2). Read by `validateChartAgainstIntent` to drop or recover charts
+   * whose leader is a value the user said to exclude.
+   */
+  intentEnvelope?: IntentEnvelope;
   summary: DataSummary;
   chatHistory: Message[];
   chatInsights?: Insight[];
   mode: "analysis" | "dataOps" | "modeling";
   permanentContext?: string;
+  /**
+   * Wave W-UD3 · Active user directives for the current dataset's
+   * fingerprint, hydrated at session start from the `dataset_directives`
+   * Cosmos container. Filtered to `status === 'active'`. Empty / undefined
+   * means no directives apply.
+   *
+   * Projected into every agent role's prompt block (planner, reflector,
+   * verifier, synthesizer, business-actions) by `formatDirectiveBlock`
+   * (Wave W-UD6) and merged into `intentEnvelope` as structural exclusions.
+   * NEVER truncated by the prompt budget — directives are reserved budget,
+   * unlike RAG hits or the blackboard digest.
+   */
+  activeDirectives?: import("../../../shared/schema.js").UserDirective[];
+  /**
+   * Wave W-UD8 · per-turn sink for prompt-budget truncation events.
+   * Helpers that wrap large input blocks in `applyCap` push a
+   * `TrimmedBlockInfo` here whenever they actually trim. The chatStream
+   * service reads this sink after the turn completes and emits a single
+   * coalesced `context_trimmed` SSE row so the UI can surface a
+   * non-blocking toast ("Some background context was trimmed to fit").
+   */
+  contextTrimmedSink?: import("./promptBudget.js").TrimmedBlockInfo[];
   /**
    * WD7 · Composed domain knowledge (Marico/FMCG packs) — emitted into the
    * planner and reflector user-message context. Authored background only;
@@ -418,6 +468,13 @@ export interface AgentLoopResult {
     values: string[];
     match?: "exact" | "case_insensitive" | "contains";
   }>;
+  /**
+   * RD4 · the IntentEnvelope built at the start of the turn. Forwarded to the
+   * pivot-envelope LLM (chatResponse.enrichPivotInsightFromEnvelope) so that
+   * "Key Insight" sidebar respects the same user exclusions the chart layer
+   * does. Absent when the turn had no exclusion intents.
+   */
+  intentEnvelope?: IntentEnvelope;
   /**
    * W13 · compact digest of `ctx.blackboard` for client rendering. Built by
    * `buildInvestigationSummary` near the end of `runAgentTurn`, persisted

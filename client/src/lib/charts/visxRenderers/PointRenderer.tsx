@@ -34,6 +34,7 @@ import {
   formatChartValue,
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
+import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
@@ -525,6 +526,52 @@ export function PointRenderer({
               />
             );
           })}
+          {/* Wave W-GMK8 · inline data labels on points. Greedy bbox
+              collision drops labels where adjacent points would overlap. */}
+          {(() => {
+            const cfg = (spec.config ?? {}) as { dataLabels?: boolean };
+            if (cfg.dataLabels === false) return null;
+            const candidates: Array<{
+              cx: number;
+              cy: number;
+              text: string;
+              priority: number;
+            }> = [];
+            for (const p of points) {
+              const op = legendItems.length > 0
+                ? seriesOpacity(p.colorKey, legend.state)
+                : 1;
+              if (op === 0) continue;
+              const cx = xScale(p.x);
+              const cy = yScale(p.y);
+              if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+              candidates.push({
+                cx: cx as number,
+                cy: cy as number,
+                text: formatChartValue(p.y, yCh.field),
+                priority: Math.abs((p.y as number) ?? 0),
+              });
+            }
+            const placed = placeLabelsNoOverlap(candidates, {
+              fontSize: 10,
+              padding: 2,
+              bounds: { x: 0, y: 0, w: innerWidth, h: innerHeight },
+            });
+            return placed.map((p, i) => (
+              <text
+                key={`dl-${i}`}
+                x={p.cx}
+                y={p.cy - 8}
+                fontSize={10}
+                fontFamily="var(--font-sans)"
+                fill="hsl(var(--foreground))"
+                textAnchor="middle"
+                pointerEvents="none"
+              >
+                {p.text}
+              </text>
+            ));
+          })()}
           <AxisBottom
             top={innerHeight}
             scale={xScale}

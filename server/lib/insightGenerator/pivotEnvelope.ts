@@ -108,6 +108,14 @@ export type GeneratePivotEnvelopeInput = {
   formatY: (n: number) => string;
   userQuestion?: string;
   domainContext?: string;
+  /**
+   * RD4 · Active user-exclusion intents for this turn. When populated, the
+   * envelope prompt appends a GROUND TRUTH section listing the excluded
+   * values so the LLM does NOT name them as leaders / contributors. Goes
+   * AFTER the patterns block (cache boundary) so the byte-stable prefix is
+   * preserved when no exclusions apply.
+   */
+  intentEnvelope?: import("../agents/runtime/types.js").IntentEnvelope;
 };
 
 /**
@@ -120,7 +128,7 @@ export type GeneratePivotEnvelopeInput = {
 export async function generatePivotEnvelope(
   input: GeneratePivotEnvelopeInput
 ): Promise<PivotEnvelope> {
-  const { chartSpec, chartData, formatY, userQuestion, domainContext } = input;
+  const { chartSpec, chartData, formatY, userQuestion, domainContext, intentEnvelope } = input;
   if (!chartData || chartData.length === 0) {
     return { findings: [], implications: [], recommendations: [] };
   }
@@ -166,6 +174,18 @@ export async function generatePivotEnvelope(
   const domainBlock = isNonEmptyString(domainContext)
     ? `\n\nFMCG / MARICO DOMAIN CONTEXT (orientation only, never numeric evidence; cite pack id when used):\n${domainContext.trim().slice(0, 2000)}`
     : "";
+  // RD4 · GROUND TRUTH block — placed AFTER patternsBlock to preserve the
+  // byte-stable system+facts prefix for prompt-cache reuse. Empty envelope ⇒
+  // empty string ⇒ no prompt change.
+  const groundTruthBlock = (() => {
+    const exclusions = intentEnvelope?.exclusions ?? [];
+    if (!exclusions.length) return "";
+    const lines = exclusions.map(
+      (ex) =>
+        `- ${ex.column}: ${ex.values.map((v) => `"${v}"`).join(", ")}`
+    );
+    return `\n\nGROUND TRUTH (user intent): The user explicitly excluded the following values from this analysis. Your findings, implications, and recommendations MUST treat these as out of scope — do not name them as leaders, laggards, contributors, or anchors for follow-up.\n${lines.join("\n")}`;
+  })();
 
   const userPrompt = `Return JSON with the listed fields.
 
@@ -187,7 +207,7 @@ If you cannot identify a next step grounded in available columns, propose a *dia
 
 ${factsLines.join("\n")}
 
-${patternsBlock}${userBlock}${domainBlock}
+${patternsBlock}${userBlock}${domainBlock}${groundTruthBlock}
 
 OUTPUT JSON (exact keys only):
 {

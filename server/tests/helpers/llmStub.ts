@@ -199,6 +199,10 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   // sentences). Tests exercising the regen path override with richer
   // prose; this default keeps any incidental caller from blowing up.
   [LLM_PURPOSE.INSIGHT_REGEN]: () => "Stub insight regen — no detail.",
+  // Wave W-UD5 · directive extraction. Empty directives by default so
+  // existing tests that hit chat-stream paths don't suddenly grow a
+  // persisted directive. Tests exercising the extractor override.
+  [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: () => ({ directives: [] }),
 };
 
 /** Track installed handlers so `clearLlmStub` is a clean teardown. */
