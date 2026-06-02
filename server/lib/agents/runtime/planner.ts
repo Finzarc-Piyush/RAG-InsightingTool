@@ -24,6 +24,7 @@ import {
   ensureInferredFiltersOnStep,
   injectRollupExcludeFilters,
   injectCompoundShapeMetricGuard,
+  injectPeriodAdditivityGuard,
   extractDistinctMetricValues,
   detectPerXIntent,
   injectPerDimensionForRateIntent,
@@ -712,6 +713,29 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         : extractDistinctMetricValues(ctx.data ?? [], wideFormat.metricColumn);
   }
 
+  // PA1 · Resolve the period dimension catalogs ONCE per turn so the
+  // period-additivity guard can pin a single period on pure_period datasets.
+  let periodIsoValues: string[] = [];
+  let periodKindValues: string[] = [];
+  if (wideFormat?.detected && wideFormat.shape === "pure_period") {
+    const isoInfo = ctx.summary.columns.find(
+      (c) => c.name === wideFormat.periodIsoColumn
+    );
+    const kindInfo = ctx.summary.columns.find(
+      (c) => c.name === wideFormat.periodKindColumn
+    );
+    periodIsoValues = (isoInfo?.topValues ?? [])
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    periodKindValues = (kindInfo?.topValues ?? [])
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    if (!periodIsoValues.length)
+      periodIsoValues = extractDistinctMetricValues(ctx.data ?? [], wideFormat.periodIsoColumn);
+    if (!periodKindValues.length)
+      periodKindValues = extractDistinctMetricValues(ctx.data ?? [], wideFormat.periodKindColumn);
+  }
+
   // (PD1 / PD3 intents are hoisted above the empty-steps check so the QL2
   // aggregation-intent floor can synthesize a step BEFORE the early reject.)
 
@@ -813,6 +837,25 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         console.warn(
           `[planner] WARNING: compound-shape ${step.tool} step ${step.id} touches ${wideFormat.valueColumn} but no Metric values are known — values may mix incompatible metrics`
         );
+      }
+    }
+    // PA1 · Period-additivity guard: prevent silent SUM(Value) across the
+    // NON-ADDITIVE, overlapping period rows (L12M = latest 4 quarters; YTD
+    // overlaps quarters) on pure_period wide-format datasets. Defaults to the
+    // latest-12-months rollup; an explicit period in the question wins.
+    if (wideFormat?.detected && wideFormat.shape === "pure_period") {
+      const pg = injectPeriodAdditivityGuard(
+        step,
+        wideFormat,
+        ctx.question,
+        periodIsoValues,
+        periodKindValues
+      );
+      if (pg.injectedFilter) {
+        console.warn(
+          `[planner] injected period-additivity filter into ${step.tool} step ${step.id}: ${pg.injectedFilter.column} in [${pg.injectedFilter.values.join(", ")}] — ${pg.caveat ?? ""}`
+        );
+        if (pg.caveat) (ctx.deterministicCaveats ??= []).push(pg.caveat);
       }
     }
     // PD3 · multi-per intent fires FIRST: when the question contains

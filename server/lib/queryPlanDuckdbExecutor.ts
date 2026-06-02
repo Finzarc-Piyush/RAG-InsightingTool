@@ -450,9 +450,17 @@ export function buildQueryPlanDuckdbSql(
     // silently return null when Order Date is stored as an ISO datetime string
     // that DuckDB cannot auto-cast to DATE, collapsing all rows to one null group.
     const materializedExists = ctx?.tableColumns.has(g);
+    // For a melted period dimension, the inline expr derives the grain from the
+    // canonical PeriodIso column instead of date-casting the Period label
+    // (which is NULL for "Q1 23" / "YTD 2YA" and collapses every row to one
+    // null group → 0 rows for a `Quarter · Period` between-filter).
+    const pdForInline =
+      wf?.detected && periodColumn && periodIsoColumn
+        ? { periodCol: periodColumn, isoCol: periodIsoColumn }
+        : undefined;
     const inlineExpr =
       !materializedExists && ctx
-        ? facetColumnInlineDuckDbExpr(g, ctx.tableColumns)
+        ? facetColumnInlineDuckDbExpr(g, ctx.tableColumns, pdForInline)
         : null;
     if (inlineExpr) {
       selectParts.push(`${inlineExpr} AS ${qLog}`);

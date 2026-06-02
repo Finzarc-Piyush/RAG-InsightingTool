@@ -3382,6 +3382,11 @@ export const usageEventTypeSchema = z.enum([
   "message.regenerated",
   "message.edited",
   "admin.session.viewed",
+  // One row per question served from the past_analyses cache (exact or
+  // semantic). These turns DON'T write a fresh past_analyses doc, so the
+  // metrics aggregator folds them in to keep "Questions" / active-user counts
+  // honest. One event per (user, analysis served).
+  "analysis.cache_hit",
 ]);
 export type UsageEventType = z.infer<typeof usageEventTypeSchema>;
 

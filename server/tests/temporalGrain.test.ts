@@ -55,8 +55,10 @@ describe("formatDateForChartAxis", () => {
   });
 });
 
-describe("processChartData temporal x labels", () => {
-  it("formats line chart x when column is in profile dateColumns and values are Date", () => {
+describe("processChartData temporal x keys", () => {
+  it("emits CANONICAL period keys (not human labels) for a profile date column", () => {
+    // Display formatting now happens at the render layer (client tick formatter),
+    // so processChartData must keep sortable canonical keys (YYYY-MM-DD here).
     const chartSpec: ChartSpec = {
       type: "line",
       title: "Sales",
@@ -70,6 +72,7 @@ describe("processChartData temporal x labels", () => {
     ];
     const out = processChartData(data, chartSpec, ["Order Date"]);
     assert.equal(out.length, 2);
-    assert.match(String(out[0]!["Order Date"]), /^\d{2}\/\d{2}\/\d{2}$/);
+    assert.equal(String(out[0]!["Order Date"]), "2015-01-13");
+    assert.equal(String(out[1]!["Order Date"]), "2015-01-14");
   });
 });

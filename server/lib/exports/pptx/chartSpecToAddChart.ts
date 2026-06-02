@@ -20,6 +20,7 @@ import { PPTX_BRAND, PPTX_FONT } from "./master.js";
 import { PPTX_CHART_TYPE } from "./types.js";
 import type { PptxRectShape } from "./types.js";
 import type { ChartSpec } from "../../../shared/schema.js";
+import { formatPeriodKeyForDisplay } from "../../dateUtils.js";
 
 interface AddChartTarget {
   addChart: (chartType: unknown, data: unknown, options: Partial<PptxRectShape> & Record<string, unknown>) => unknown;
@@ -47,7 +48,9 @@ function readNum(v: unknown): number | null {
 
 function buildCartesianSeries(spec: ChartSpec): CartesianSeries[] {
   const data = spec.data ?? [];
-  const labels = data.map((r) => String(r[spec.x] ?? ""));
+  // Canonical period keys → human labels ("2023-Q1" → "Q1 2023"); positional so
+  // value alignment / order is unaffected. Non-period categories pass through.
+  const labels = data.map((r) => formatPeriodKeyForDisplay(r[spec.x]));
   const values = data.map((r) => readNum(r[spec.y]) ?? 0);
   return [
     {
@@ -73,7 +76,7 @@ function buildScatterSeries(spec: ChartSpec): ScatterSeries[] {
 
 function buildPieSeries(spec: ChartSpec): CartesianSeries[] {
   const data = spec.data ?? [];
-  const labels = data.map((r) => String(r[spec.x] ?? ""));
+  const labels = data.map((r) => formatPeriodKeyForDisplay(r[spec.x]));
   const values = data.map((r) => readNum(r[spec.y]) ?? 0);
   return [
     {

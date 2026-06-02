@@ -12,6 +12,7 @@ import { getFileFromBlob } from '../blobStorage.js';
 import { parseFile, convertDashToZeroForNumericColumns } from '../fileParser.js';
 import {
   applyTemporalFacetColumns,
+  periodDimensionFromSummary,
   remapGroupByToTemporalFacet,
 } from '../temporalFacetColumns.js';
 import { coerceTemporalFacetKeysToStrings } from "../temporalFacetKeyNormalization.js";
@@ -4144,8 +4145,11 @@ export async function executeDataOperation(
 
       const dateColsForFacets = sessionDoc?.dataSummary?.dateColumns ?? [];
       if (data.length > 0 && dateColsForFacets.length > 0) {
-        applyTemporalFacetColumns(data, dateColsForFacets);
+        applyTemporalFacetColumns(data, dateColsForFacets, {
+          periodDimension: periodDimensionFromSummary(sessionDoc?.dataSummary),
+        });
       }
+
 
       if (data.length > 0 && !(groupBy in data[0])) {
         return {

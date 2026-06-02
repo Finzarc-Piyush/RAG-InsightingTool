@@ -25,6 +25,7 @@ import {
 } from "../../models/database.config.js";
 import { listUsageEvents } from "../../models/usageEvent.model.js";
 import { dateKeyFromTimestamp } from "./bucketing.js";
+import { countTurnVotes } from "./feedbackVotes.js";
 import type { UsageEventDoc, UsageEventType } from "../../shared/schema.js";
 
 export interface DailyPoint {
@@ -67,96 +68,25 @@ function mapToSortedSeries(map: Map<string, number>): DailyPoint[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sessions / messages / charts — derived from getAllSessions()'s lightweight
-// SessionListSummary projection (per-session counts, not per-message). For
-// the admin KPI dashboard's "today we had N messages" view this is the right
-// granularity; per-message timestamps would require fetching full chat docs.
+// Sessions created by day · the ONE session-derived metric whose correct event
+// is the session's `createdAt`. Everything else (messages, charts, active
+// users, top users, feedback) is per-turn activity and is derived from
+// past_analyses below — attributing a session's lifetime counts to its
+// createdAt day badly mis-buckets every windowed / time-series metric.
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface SessionsAggregate {
-  activeUsersByDay: DailyPoint[];
-  sessionsCreatedByDay: DailyPoint[];
-  messagesByDay: DailyPoint[];
-  chartsByDay: DailyPoint[];
-  dauMauWau: { dau: number; wau: number; mau: number };
-  topUsers: Array<{ userEmail: string; sessions: number; messages: number; charts: number }>;
-}
-
-/**
- * Aggregate every session-related KPI in one pass over the lightweight
- * SessionListSummary projection. Single cross-partition Cosmos query.
- */
-export async function aggregateSessionMetrics(
+export async function aggregateSessionsCreatedByDay(
   range: DailyRange
-): Promise<SessionsAggregate> {
+): Promise<DailyPoint[]> {
   const sessions = await getAllSessions(undefined);
   const { fromMs, toMs } = rangeMs(range);
   const sessionsBy = new Map<string, number>();
-  const messagesBy = new Map<string, number>();
-  const chartsBy = new Map<string, number>();
-  const usersBy = new Map<string, Set<string>>(); // dateKey → distinct emails (last activity)
-  const userTotals = new Map<string, { sessions: number; messages: number; charts: number }>();
-
   for (const s of sessions as SessionListSummary[]) {
-    const owner = (s.username ?? "").trim().toLowerCase();
-    // Activity timestamp for active-users — last update; falls back to createdAt.
-    const activityTs = s.lastUpdatedAt ?? s.createdAt ?? null;
-    if (inWindow(activityTs, fromMs, toMs) && owner) {
-      const dk = dateKeyFromTimestamp(activityTs!);
-      if (!usersBy.has(dk)) usersBy.set(dk, new Set());
-      usersBy.get(dk)!.add(owner);
-    }
     if (inWindow(s.createdAt, fromMs, toMs)) {
-      const dk = dateKeyFromTimestamp(s.createdAt!);
-      bumpCount(sessionsBy, dk);
-      bumpCount(messagesBy, dk, s.messageCount ?? 0);
-      bumpCount(chartsBy, dk, s.chartCount ?? 0);
-      if (owner) {
-        const t = userTotals.get(owner) ?? { sessions: 0, messages: 0, charts: 0 };
-        t.sessions += 1;
-        t.messages += s.messageCount ?? 0;
-        t.charts += s.chartCount ?? 0;
-        userTotals.set(owner, t);
-      }
+      bumpCount(sessionsBy, dateKeyFromTimestamp(s.createdAt!));
     }
   }
-
-  const activeUsersByDay = Array.from(usersBy.entries())
-    .map(([dateKey, set]) => ({ dateKey, value: set.size }))
-    .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
-
-  // DAU / WAU / MAU computed from the requested window (DAU = today within
-  // the window; WAU = last 7 days; MAU = last 30 days).
-  const allUserSets = activeUsersByDay.map((p) => p);
-  const dau = allUserSets[allUserSets.length - 1]?.value ?? 0;
-  const lastSeven = new Set<string>();
-  const lastThirty = new Set<string>();
-  const today = new Date(toMs);
-  const sevenAgo = today.getTime() - 7 * 86400000;
-  const thirtyAgo = today.getTime() - 30 * 86400000;
-  for (const [dk, set] of usersBy) {
-    const t = Date.UTC(
-      Number(dk.slice(0, 4)),
-      Number(dk.slice(4, 6)) - 1,
-      Number(dk.slice(6, 8))
-    );
-    if (t >= sevenAgo) for (const u of set) lastSeven.add(u);
-    if (t >= thirtyAgo) for (const u of set) lastThirty.add(u);
-  }
-
-  const topUsers = Array.from(userTotals.entries())
-    .map(([userEmail, t]) => ({ userEmail, ...t }))
-    .sort((a, b) => b.messages - a.messages)
-    .slice(0, 25);
-
-  return {
-    activeUsersByDay,
-    sessionsCreatedByDay: mapToSortedSeries(sessionsBy),
-    messagesByDay: mapToSortedSeries(messagesBy),
-    chartsByDay: mapToSortedSeries(chartsBy),
-    dauMauWau: { dau, wau: lastSeven.size, mau: lastThirty.size },
-    topUsers,
-  };
+  return mapToSortedSeries(sessionsBy);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -253,25 +183,166 @@ export async function aggregateLlmMetrics(range: DailyRange): Promise<LlmAggrega
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feedback by day · group past_analyses' feedbackDetails by createdAt.
+// Per-turn activity & feedback · derived from past_analyses, the canonical
+// one-doc-per-completed-turn event log. This is the correct source for any
+// windowed / time-series metric because each doc carries the turn's own
+// `createdAt`, `userId`, `sessionId`, per-turn chart count, and feedback.
+//
+// Known minor gap: exact-cache-hit replays (serveCachedExactAnswer) don't
+// write a fresh past_analyses doc, so they aren't counted as new turns. That is
+// an acceptable small undercount and far more correct than the previous
+// session-lifetime-attributed-to-createdAt model.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface FeedbackAggregate {
+/** Projected past_analyses row — only the fields the aggregator needs. */
+export interface PastAnalysisRow {
+  createdAt: number;
+  userId?: string | null;
+  sessionId?: string | null;
+  /** ARRAY_LENGTH(c.charts) — charts produced on this turn. */
+  chartCount?: number | null;
+  /** Answer-level sentiment (legacy / mirrored from the "answer" detail). */
+  feedback?: string | null;
+  /** Granular per-target feedback (answer + per-chart) — superset of `feedback`. */
+  feedbackDetails?: Array<{ feedback?: string | null }> | null;
+}
+
+export interface PastAnalysisAggregate {
+  turnsByDay: DailyPoint[];
+  chartsByDay: DailyPoint[];
+  activeUsersByDay: DailyPoint[];
   thumbsUpByDay: DailyPoint[];
   thumbsDownByDay: DailyPoint[];
+  /** Distinct active users across the whole requested window. */
+  windowActiveUsers: number;
+  dauMauWau: { dau: number; wau: number; mau: number };
   totalUp: number;
   totalDown: number;
   totalNone: number;
+  topUsers: Array<{ userEmail: string; sessions: number; messages: number; charts: number }>;
 }
 
-export async function aggregateFeedbackMetrics(range: DailyRange): Promise<FeedbackAggregate> {
+/**
+ * Pure aggregation over the projected past_analyses rows for a window. Extracted
+ * from the Cosmos call so it is unit-testable with synthetic rows.
+ *
+ * DAU = distinct users active on the window's final day (`toDateKey`).
+ * WAU / MAU = distinct users in the trailing 7 / 30 days before the window end
+ * (clamped to the window, since only in-window rows are passed in).
+ */
+export function summarizePastAnalysisRows(
+  rows: PastAnalysisRow[],
+  range: DailyRange
+): PastAnalysisAggregate {
+  const { fromMs, toMs } = rangeMs(range);
+  const turnsBy = new Map<string, number>();
+  const chartsBy = new Map<string, number>();
+  const usersBy = new Map<string, Set<string>>();
+  const upBy = new Map<string, number>();
+  const downBy = new Map<string, number>();
+  const windowUsers = new Set<string>();
+  const dauUsers = new Set<string>();
+  const wauUsers = new Set<string>();
+  const mauUsers = new Set<string>();
+  const userTotals = new Map<
+    string,
+    { messages: number; charts: number; sessions: Set<string> }
+  >();
+  let totalUp = 0;
+  let totalDown = 0;
+  let totalNone = 0;
+
+  const wauFrom = toMs - 7 * 86400000;
+  const mauFrom = toMs - 30 * 86400000;
+
+  for (const row of rows) {
+    const ts = row.createdAt;
+    if (!inWindow(ts, fromMs, toMs)) continue;
+    const dk = dateKeyFromTimestamp(ts);
+    const charts = Number(row.chartCount ?? 0) || 0;
+    bumpCount(turnsBy, dk);
+    if (charts) bumpCount(chartsBy, dk, charts);
+
+    const owner = (row.userId ?? "").trim().toLowerCase();
+    if (owner) {
+      if (!usersBy.has(dk)) usersBy.set(dk, new Set());
+      usersBy.get(dk)!.add(owner);
+      windowUsers.add(owner);
+      if (dk === range.toDateKey) dauUsers.add(owner);
+      if (ts >= wauFrom) wauUsers.add(owner);
+      if (ts >= mauFrom) mauUsers.add(owner);
+      const t =
+        userTotals.get(owner) ?? { messages: 0, charts: 0, sessions: new Set<string>() };
+      t.messages += 1;
+      t.charts += charts;
+      if (row.sessionId) t.sessions.add(row.sessionId);
+      userTotals.set(owner, t);
+    }
+
+    const votes = countTurnVotes(row);
+    if (votes.up) {
+      bumpCount(upBy, dk, votes.up);
+      totalUp += votes.up;
+    }
+    if (votes.down) {
+      bumpCount(downBy, dk, votes.down);
+      totalDown += votes.down;
+    }
+    if (!votes.up && !votes.down) totalNone += 1;
+  }
+
+  const activeUsersByDay = Array.from(usersBy.entries())
+    .map(([dateKey, set]) => ({ dateKey, value: set.size }))
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+
+  const topUsers = Array.from(userTotals.entries())
+    .map(([userEmail, t]) => ({
+      userEmail,
+      sessions: t.sessions.size,
+      messages: t.messages,
+      charts: t.charts,
+    }))
+    .sort((a, b) => b.messages - a.messages)
+    .slice(0, 25);
+
+  return {
+    turnsByDay: mapToSortedSeries(turnsBy),
+    chartsByDay: mapToSortedSeries(chartsBy),
+    activeUsersByDay,
+    thumbsUpByDay: mapToSortedSeries(upBy),
+    thumbsDownByDay: mapToSortedSeries(downBy),
+    windowActiveUsers: windowUsers.size,
+    dauMauWau: { dau: dauUsers.size, wau: wauUsers.size, mau: mauUsers.size },
+    totalUp,
+    totalDown,
+    totalNone,
+    topUsers,
+  };
+}
+
+/**
+ * Query the projected past_analyses rows for a window (no aggregation). Single
+ * cross-partition query; the heavy chart bodies are never fetched (we project
+ * ARRAY_LENGTH).
+ *
+ * Split from the summarize step so the caller can MERGE in extra per-turn rows
+ * before a single aggregation pass — e.g. cache-hit usage events, which don't
+ * write a fresh past_analyses doc. One pass keeps distinct-active-user counts
+ * correct (a user with both a fresh turn and a cache hit on the same day is
+ * counted once).
+ */
+export async function fetchPastAnalysisRows(
+  range: DailyRange
+): Promise<PastAnalysisRow[]> {
   const container = await waitForPastAnalysesContainer();
   const { fromMs, toMs } = rangeMs(range);
   const { resources } = await container.items
-    .query<{ feedback: string; updatedAt?: number; createdAt?: number; feedbackDetails?: Array<{ feedback: string; updatedAt?: number; createdAt?: number }> }>(
+    .query<PastAnalysisRow>(
       {
         query:
-          "SELECT c.feedback, c.feedbackDetails, c.createdAt FROM c WHERE c.createdAt >= @from AND c.createdAt <= @to",
+          "SELECT c.createdAt, c.userId, c.sessionId, c.feedback, c.feedbackDetails, " +
+          "IIF(IS_DEFINED(c.charts) AND IS_ARRAY(c.charts), ARRAY_LENGTH(c.charts), 0) AS chartCount " +
+          "FROM c WHERE c.createdAt >= @from AND c.createdAt <= @to",
         parameters: [
           { name: "@from", value: fromMs },
           { name: "@to", value: toMs },
@@ -280,31 +351,14 @@ export async function aggregateFeedbackMetrics(range: DailyRange): Promise<Feedb
       {}
     )
     .fetchAll();
-  const upBy = new Map<string, number>();
-  const downBy = new Map<string, number>();
-  let totalUp = 0;
-  let totalDown = 0;
-  let totalNone = 0;
-  for (const row of resources) {
-    const baseTs = row.createdAt ?? 0;
-    const dk = dateKeyFromTimestamp(baseTs);
-    if (row.feedback === "up") {
-      bumpCount(upBy, dk);
-      totalUp += 1;
-    } else if (row.feedback === "down") {
-      bumpCount(downBy, dk);
-      totalDown += 1;
-    } else {
-      totalNone += 1;
-    }
-  }
-  return {
-    thumbsUpByDay: mapToSortedSeries(upBy),
-    thumbsDownByDay: mapToSortedSeries(downBy),
-    totalUp,
-    totalDown,
-    totalNone,
-  };
+  return resources;
+}
+
+/** Fetch + aggregate per-turn activity from past_analyses (no extra rows). */
+export async function aggregatePastAnalysisMetrics(
+  range: DailyRange
+): Promise<PastAnalysisAggregate> {
+  return summarizePastAnalysisRows(await fetchPastAnalysisRows(range), range);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,6 +369,7 @@ export async function aggregateUsageEventMetrics(range: DailyRange): Promise<{
   dashboardsExportedByDay: DailyPoint[];
   pivotsGeneratedByDay: DailyPoint[];
   dashboardsOpenedByDay: DailyPoint[];
+  cacheHitsByDay: DailyPoint[];
   raw: UsageEventDoc[];
 }> {
   const events = await listUsageEvents({
@@ -331,6 +386,7 @@ export async function aggregateUsageEventMetrics(range: DailyRange): Promise<{
     dashboardsExportedByDay: groupedBy("dashboard.exported"),
     pivotsGeneratedByDay: groupedBy("pivot.generated"),
     dashboardsOpenedByDay: groupedBy("dashboard.opened"),
+    cacheHitsByDay: groupedBy("analysis.cache_hit"),
     raw: events,
   };
 }

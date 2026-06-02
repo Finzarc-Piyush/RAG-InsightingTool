@@ -32,6 +32,7 @@ import {
   effectiveConditionCount,
 } from "../lib/activeFilter/applyActiveFilter.js";
 import { invalidateFilteredDataView } from "../lib/activeFilter/resolveSessionDataTable.js";
+import { selectPreviewRows } from "../lib/activeFilter/selectPreviewRows.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import {
   withSessionWriteLock,
@@ -53,16 +54,21 @@ interface ActiveFilterResponse {
   totalRows: number;
   /** Rows surviving the filter (== totalRows when no filter is active). */
   filteredRows: number;
-  /** First N filtered rows for the data preview. */
+  /**
+   * Filter-aware preview rows. Default depth is the first `PREVIEW_ROWS`;
+   * `GET …?full=1` returns up to `FULL_PREVIEW_CAP` for the "entire dataset"
+   * view. See `selectPreviewRows`.
+   */
   preview: Record<string, unknown>[];
+  /** True when more rows survive the filter than `preview` contains. */
+  previewTruncated: boolean;
   effectiveConditionCount: number;
 }
 
-const PREVIEW_ROWS = 50;
-
 async function buildResponse(
   sessionId: string,
-  username: string
+  username: string,
+  full = false
 ): Promise<ActiveFilterResponse> {
   const doc = await getChatBySessionIdForUser(sessionId, username);
   if (!doc) {
@@ -79,12 +85,14 @@ async function buildResponse(
   // blob fetch — actually one round trip suffices because loadLatestData
   // returns filtered rows already.
   const filteredAll = await loadLatestData(doc);
+  const { preview, previewTruncated } = selectPreviewRows(filteredAll, full);
   return {
     ok: true,
     activeFilter: spec,
     totalRows,
     filteredRows: filteredAll.length,
-    preview: filteredAll.slice(0, PREVIEW_ROWS),
+    preview,
+    previewTruncated,
     effectiveConditionCount: effectiveConditionCount(spec),
   };
 }
@@ -94,7 +102,10 @@ export const getActiveFilterEndpoint = async (req: Request, res: Response) => {
     const sessionId = req.params.sessionId;
     if (!sessionId) return res.status(400).json({ error: "Session ID is required" });
     const username = requireUsername(req);
-    const out = await buildResponse(sessionId, username);
+    // `?full=1` returns the "entire dataset" preview (up to FULL_PREVIEW_CAP)
+    // instead of the default first-N rows. Used by the on-demand full-mode fetch.
+    const full = req.query.full === "1" || req.query.full === "true";
+    const out = await buildResponse(sessionId, username, full);
     return res.json(out);
   } catch (err: unknown) {
     return handleError(res, err, "Failed to load active filter");

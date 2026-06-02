@@ -13,15 +13,17 @@
 
 import type { Request, Response } from "express";
 import {
-  aggregateSessionMetrics,
+  fetchPastAnalysisRows,
+  summarizePastAnalysisRows,
   aggregateLlmMetrics,
-  aggregateFeedbackMetrics,
+  aggregateSessionsCreatedByDay,
   aggregateUsageEventMetrics,
   getDashboardsCreatedByDay,
   getChatsSharedByDay,
   getDashboardsSharedByDay,
   type DailyPoint,
   type DailyRange,
+  type PastAnalysisRow,
 } from "../lib/admin/metricsAggregator.js";
 import { withMetricsCache } from "../lib/admin/metricsCache.js";
 import {
@@ -89,26 +91,43 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
 
     const overview = await withMetricsCache(cacheKey, async () => {
       const [
-        sessions,
+        paRows,
         llm,
-        feedback,
         events,
+        sessionsCreatedByDay,
         dashboardsCreated,
         chatsShared,
         dashboardsShared,
       ] = await Promise.all([
-        aggregateSessionMetrics(range),
+        fetchPastAnalysisRows(range),
         aggregateLlmMetrics(range),
-        aggregateFeedbackMetrics(range),
         aggregateUsageEventMetrics(range),
+        aggregateSessionsCreatedByDay(range),
         getDashboardsCreatedByDay(range),
         getChatsSharedByDay(range),
         getDashboardsSharedByDay(range),
       ]);
 
-      const sessionsCount = sessions.sessionsCreatedByDay.reduce((s, p) => s + p.value, 0);
-      const messagesCount = sessions.messagesByDay.reduce((s, p) => s + p.value, 0);
-      const chartsCount = sessions.chartsByDay.reduce((s, p) => s + p.value, 0);
+      // Fold cache-served questions into the per-turn activity. A cache hit
+      // doesn't write a fresh past_analyses doc, so we synthesize a lightweight
+      // turn row (no charts, no feedback) from each `analysis.cache_hit` usage
+      // event and aggregate them together — a single pass keeps distinct
+      // active-user counts correct (a user with a fresh turn AND a cache hit on
+      // the same day is counted once).
+      const cacheHitRows: PastAnalysisRow[] = events.raw
+        .filter((e) => e.eventType === "analysis.cache_hit")
+        .map((e) => ({
+          createdAt: e.timestamp,
+          userId: e.userEmail,
+          sessionId: e.sessionId ?? null,
+          chartCount: 0,
+        }));
+      const activity = summarizePastAnalysisRows([...paRows, ...cacheHitRows], range);
+
+      const sessionsCount = sessionsCreatedByDay.reduce((s, p) => s + p.value, 0);
+      const messagesCount = activity.turnsByDay.reduce((s, p) => s + p.value, 0);
+      const chartsCount = activity.chartsByDay.reduce((s, p) => s + p.value, 0);
+      const cacheHitsCount = events.cacheHitsByDay.reduce((s, p) => s + p.value, 0);
       const dashboardsCreatedCount = dashboardsCreated.reduce((s, p) => s + p.value, 0);
       const dashboardsExportedCount = events.dashboardsExportedByDay.reduce(
         (s, p) => s + p.value,
@@ -129,13 +148,14 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
         range,
         kpis: {
           activeUsers: {
-            window: sessions.dauMauWau.mau, // total distinct users in window
-            dau: sessions.dauMauWau.dau,
-            wau: sessions.dauMauWau.wau,
-            mau: sessions.dauMauWau.mau,
+            window: activity.windowActiveUsers, // distinct users across the whole window
+            dau: activity.dauMauWau.dau,
+            wau: activity.dauMauWau.wau,
+            mau: activity.dauMauWau.mau,
           },
           sessionsCreated: sessionsCount,
           messages: messagesCount,
+          cacheHits: cacheHitsCount,
           charts: chartsCount,
           pivotsGenerated: pivotsGeneratedCount,
           dashboardsCreated: dashboardsCreatedCount,
@@ -143,12 +163,12 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
           dashboardsOpened: dashboardsOpenedCount,
           chatsShared: chatsSharedCount,
           dashboardsShared: dashboardsSharedCount,
-          thumbsUp: feedback.totalUp,
-          thumbsDown: feedback.totalDown,
-          thumbsTotal: feedback.totalUp + feedback.totalDown + feedback.totalNone,
+          thumbsUp: activity.totalUp,
+          thumbsDown: activity.totalDown,
+          thumbsTotal: activity.totalUp + activity.totalDown,
           thumbsDownRate:
-            feedback.totalUp + feedback.totalDown > 0
-              ? feedback.totalDown / (feedback.totalUp + feedback.totalDown)
+            activity.totalUp + activity.totalDown > 0
+              ? activity.totalDown / (activity.totalUp + activity.totalDown)
               : 0,
           costUsd: llm.totalCostUsd,
           tokensIn: llm.totalTokensIn,
@@ -157,21 +177,22 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
           avgMessagesPerSession: sessionsCount > 0 ? messagesCount / sessionsCount : 0,
         },
         seriesDaily: {
-          activeUsers: sessions.activeUsersByDay,
-          sessionsCreated: sessions.sessionsCreatedByDay,
-          messages: sessions.messagesByDay,
-          charts: sessions.chartsByDay,
+          activeUsers: activity.activeUsersByDay,
+          sessionsCreated: sessionsCreatedByDay,
+          messages: activity.turnsByDay,
+          cacheHits: events.cacheHitsByDay,
+          charts: activity.chartsByDay,
           dashboardsCreated,
           dashboardsExported: events.dashboardsExportedByDay,
           dashboardsOpened: events.dashboardsOpenedByDay,
           pivotsGenerated: events.pivotsGeneratedByDay,
           chatsShared,
           dashboardsShared,
-          thumbsUp: feedback.thumbsUpByDay,
-          thumbsDown: feedback.thumbsDownByDay,
+          thumbsUp: activity.thumbsUpByDay,
+          thumbsDown: activity.thumbsDownByDay,
           costUsd: llm.costUsdByDay,
         },
-        topUsersByActivity: sessions.topUsers,
+        topUsersByActivity: activity.topUsers,
         topUsersByCost: llm.topUsersByCost,
       };
     });

@@ -29,6 +29,7 @@
  */
 import * as echarts from "echarts";
 import type { ChartSpec } from "../../shared/schema.js";
+import { formatPeriodKeyForDisplay } from "../dateUtils.js";
 
 /**
  * Brand palette mirrored from `client/src/pages/Dashboard/exportTheme.ts`.
@@ -171,7 +172,9 @@ function cartesianOption(
   // Single series for now (the planner-fed slim data we render here is one
   // chart per slide). Multi-series via seriesColumn lands in the v2 chart
   // overhaul — out of scope for the export-rewrite stream.
-  const xValues = data.map((r) => String(r[xKey] ?? ""));
+  // Canonical period keys ("2023-Q1") → human labels ("Q1 2023") for display.
+  // Positional category axis: y-values align by index, so order is preserved.
+  const xValues = data.map((r) => formatPeriodKeyForDisplay(r[xKey]));
   const yValues = data.map((r) => readNum(r, yKey) ?? 0);
 
   const seriesType = spec.type === "area" ? "line" : spec.type;

@@ -5,7 +5,10 @@
 import { updateProcessedDataBlob } from '../blobStorage.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { createDataSummary, canonicalizeDateColumnValues } from '../fileParser.js';
-import { applyTemporalFacetColumns } from '../temporalFacetColumns.js';
+import {
+  applyTemporalFacetColumns,
+  periodDimensionFromSummary,
+} from '../temporalFacetColumns.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
 import { withSessionWriteLock } from '../sessionWriteLock.js';
 
@@ -126,7 +129,12 @@ async function saveModifiedDataLocked(
   // Update data summary (canonicalize dates then refresh typing / grains)
   const preSummary = createDataSummary(modifiedData);
   canonicalizeDateColumnValues(modifiedData, preSummary.dateColumns);
-  applyTemporalFacetColumns(modifiedData, preSummary.dateColumns);
+  // The fresh heuristic preSummary doesn't carry the melt's wideFormatTransform;
+  // source the period dimension from the persisted session summary (self-detect
+  // backstops if absent).
+  applyTemporalFacetColumns(modifiedData, preSummary.dateColumns, {
+    periodDimension: periodDimensionFromSummary(doc.dataSummary),
+  });
   doc.dataSummary = createDataSummary(modifiedData);
   
   // Clear pre-computed data summary statistics since data has changed

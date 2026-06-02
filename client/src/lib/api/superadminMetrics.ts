@@ -25,6 +25,7 @@ export interface MetricsOverview {
     activeUsers: { window: number; dau: number; wau: number; mau: number };
     sessionsCreated: number;
     messages: number;
+    cacheHits: number;
     charts: number;
     pivotsGenerated: number;
     dashboardsCreated: number;

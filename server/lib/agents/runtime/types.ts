@@ -202,6 +202,13 @@ export interface AgentExecutionContext {
    */
   inferredFilters?: InferredFilter[];
   /**
+   * PA1 · Human-readable caveats from deterministic plan-arg guards (e.g. the
+   * period-additivity guard pinning a SUM to the latest-12-months rollup).
+   * Appended to the narrator answer envelope's `caveats` so the chosen slice
+   * is visible to the user rather than appearing as a magic number.
+   */
+  deterministicCaveats?: string[];
+  /**
    * RD4 · Post-hoc validation substrate for the chart-promotion layer. Lists
    * (column, values) pairs the user signalled they want OUT of the answer,
    * gathered from BOTH (a) negative inferred filters (Wave 3) and (b)

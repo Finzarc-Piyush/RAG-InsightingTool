@@ -354,6 +354,37 @@ export function normalizeDateToPeriod(
   };
 }
 
+/**
+ * Human label for a CANONICAL period key (the inverse of `normalizeDateToPeriod`'s
+ * `normalizedKey`). Shape-detects the grain so quarters stay quarters:
+ *   "2023"        → "2023"
+ *   "2023-Q1"     → "Q1 2023"
+ *   "2023-H1"     → "H1 2023"
+ *   "2023-01"     → "Jan 2023"
+ *   "2023-W12"    → "W12 2023"
+ *   "2023-01-15"  → "15 Jan 2023"
+ * Relative / unknown keys (e.g. "L12M", "YTD-TY") are returned verbatim.
+ * Mirrored on the client by `formatTemporalPeriodKeyForDisplay`.
+ */
+export function formatPeriodKeyForDisplay(key: unknown): string {
+  if (key === null || key === undefined) return '';
+  const s = String(key).trim();
+  if (!s) return '';
+  let m: RegExpMatchArray | null;
+  if ((m = s.match(/^(\d{4})-Q([1-4])$/))) return `Q${m[2]} ${m[1]}`;
+  if ((m = s.match(/^(\d{4})-H([12])$/))) return `H${m[2]} ${m[1]}`;
+  if ((m = s.match(/^(\d{4})-W(\d{1,2})$/))) return `W${Number(m[2])} ${m[1]}`;
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) {
+    const mi = Number(m[2]) - 1;
+    if (mi >= 0 && mi < 12) return `${Number(m[3])} ${MONTH_SHORT_NAMES[mi]} ${m[1]}`;
+  }
+  if ((m = s.match(/^(\d{4})-(\d{2})$/))) {
+    const mi = Number(m[2]) - 1;
+    if (mi >= 0 && mi < 12) return `${MONTH_SHORT_NAMES[mi]} ${m[1]}`;
+  }
+  return s;
+}
+
 /** Simple period hints from natural language. Order: finer / explicit phrases before broad "date". */
 export function detectPeriodFromQuery(query: string): DatePeriod | null {
   const q = query.toLowerCase();

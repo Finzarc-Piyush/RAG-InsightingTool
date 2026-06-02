@@ -16,7 +16,10 @@ import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analytic
 import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 import { canonicalizeDateColumnValues } from "../../lib/fileParser.js";
-import { applyTemporalFacetColumns } from "../../lib/temporalFacetColumns.js";
+import {
+  applyTemporalFacetColumns,
+  periodDimensionFromSummary,
+} from "../../lib/temporalFacetColumns.js";
 
 export interface AnswerQuestionDataLoadResult {
   latestData: Record<string, any>[];
@@ -111,7 +114,9 @@ export async function resolveAnswerQuestionDataLoad(params: {
     const dateCols = chatDocument.dataSummary?.dateColumns;
     if (latestData.length > 0 && dateCols && dateCols.length > 0) {
       canonicalizeDateColumnValues(latestData, dateCols);
-      applyTemporalFacetColumns(latestData, dateCols);
+      applyTemporalFacetColumns(latestData, dateCols, {
+        periodDimension: periodDimensionFromSummary(chatDocument.dataSummary),
+      });
     }
     columnarStoragePathOpt = true;
     loadFullDataOpt = () =>

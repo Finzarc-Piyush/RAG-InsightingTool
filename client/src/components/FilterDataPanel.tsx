@@ -32,9 +32,20 @@ import {
   X,
 } from "lucide-react";
 import { fetchPivotColumnDistincts } from "@/lib/api";
-import type { ActiveFilterCondition, ActiveFilterSpec } from "@/shared/schema";
+import { DatasetPreviewPane, type PreviewMode } from "@/components/DatasetPreviewPane";
+import { formatTemporalPeriodKeyForDisplay } from "@/lib/temporalPeriodDisplay";
+import { compareTemporalOrLexicalLabels } from "@/lib/temporalAxisSort";
+import {
+  classifyFilterColumn,
+  type FilterColumnKind,
+} from "@/lib/filterColumnKind";
+import type {
+  ActiveFilterCondition,
+  ActiveFilterSpec,
+  TemporalDisplayGrain,
+} from "@/shared/schema";
 
-export type FilterColumnKind = "text" | "numeric" | "date";
+export type { FilterColumnKind };
 
 export interface FilterDataPanelProps {
   open: boolean;
@@ -43,6 +54,9 @@ export interface FilterDataPanelProps {
   columns: string[];
   numericColumns: string[];
   dateColumns: string[];
+  /** Temporal facet columns (e.g. "Quarter · Period") + the PeriodIso column —
+   * classified as "period": ordered chronologically, labelled as periods. */
+  temporalColumns?: string[];
   /** Canonical / filtered row counts shown in the footer. */
   totalRows: number;
   filteredRows: number;
@@ -54,16 +68,20 @@ export interface FilterDataPanelProps {
   onClearAll: () => void;
   /** Optional indicator while a server PUT is in flight. */
   saving?: boolean;
-}
 
-function classifyColumn(
-  name: string,
-  numericColumns: string[],
-  dateColumns: string[]
-): FilterColumnKind {
-  if (dateColumns.includes(name)) return "date";
-  if (numericColumns.includes(name)) return "numeric";
-  return "text";
+  // --- Wave-FA · live data preview (left pane) ---
+  /** First-N filter-aware rows (200 mode), from the active-filter responses. */
+  previewRows: Record<string, unknown>[];
+  /** Full filter-aware rows (entire-dataset mode), fetched on demand. */
+  fullPreviewRows: Record<string, unknown>[];
+  previewMode: PreviewMode;
+  onPreviewModeChange: (mode: PreviewMode) => void;
+  /** True while the full-mode fetch is in flight. */
+  loadingFullPreview?: boolean;
+  /** True when the full set was capped at the server limit. */
+  previewTruncated?: boolean;
+  /** Per-column display grains for date formatting in the preview. */
+  temporalDisplayGrainsByColumn?: Record<string, TemporalDisplayGrain>;
 }
 
 function conditionsByColumn(
@@ -101,15 +119,25 @@ function CategoricalPicker({
   sessionId,
   selected,
   onChange,
+  isPeriod = false,
 }: {
   field: string;
   sessionId: string | null;
   selected: string[] | null;
   onChange: (next: string[]) => void;
+  /** Period column: order values chronologically and label them as periods,
+   * while the stored/filtered values stay the canonical keys ("2023-Q1"). */
+  isPeriod?: boolean;
 }) {
   const [options, setOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
+
+  // Display label per option — period keys → "Q1 2023"; everything else verbatim.
+  const labelFor = useCallback(
+    (opt: string) => (isPeriod ? formatTemporalPeriodKeyForDisplay(opt) : opt),
+    [isPeriod]
+  );
 
   useEffect(() => {
     if (!sessionId) {
@@ -126,7 +154,11 @@ function CategoricalPicker({
         const values = await fetchPivotColumnDistincts(sessionId, field, 100_000, {
           excludeColumn: field,
         });
-        if (!cancelled) setOptions(values);
+        if (!cancelled) {
+          // Period values must read chronologically (2023-Q1, 2023-Q2, …) rather
+          // than in the server's (lexical) distinct order.
+          setOptions(isPeriod ? [...values].sort(compareTemporalOrLexicalLabels) : values);
+        }
       } catch {
         if (!cancelled) setOptions([]);
       } finally {
@@ -136,13 +168,16 @@ function CategoricalPicker({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, field]);
+  }, [sessionId, field, isPeriod]);
 
   const visible = useMemo(() => {
     if (!search.trim()) return options;
     const q = search.toLowerCase();
-    return options.filter((v) => v.toLowerCase().includes(q));
-  }, [options, search]);
+    // Match against both the canonical value and its display label.
+    return options.filter(
+      (v) => v.toLowerCase().includes(q) || labelFor(v).toLowerCase().includes(q)
+    );
+  }, [options, search, labelFor]);
 
   const selectedSet = useMemo(() => new Set(selected ?? []), [selected]);
   const allSelected = selected !== null && selected.length === options.length;
@@ -202,7 +237,7 @@ function CategoricalPicker({
       ) : visible.length === 0 ? (
         <p className="py-2 text-center text-xs text-muted-foreground">No values</p>
       ) : (
-        <ScrollArea className="h-56 pr-2">
+        <ScrollArea className="max-h-56 pr-2">
           <div className="space-y-1.5">
             {visible.map((opt) => {
               // Default state when the user hasn't touched the column: "all
@@ -227,7 +262,7 @@ function CategoricalPicker({
                       }
                     }}
                   />
-                  <span className="truncate">{opt || "(blank)"}</span>
+                  <span className="truncate">{labelFor(opt) || "(blank)"}</span>
                 </label>
               );
             })}
@@ -316,20 +351,40 @@ function DateRange({
   );
 }
 
-export function FilterDataPanel({
-  open,
-  onOpenChange,
+/**
+ * The filter controls (header + per-column facet list + footer). Extracted
+ * verbatim from the original panel body so the right pane is unchanged; the
+ * shell below lays it out beside the data preview. Renders a Fragment — it
+ * must stay a descendant of `SheetContent` so Radix Dialog finds its Title.
+ */
+type FilterControlsProps = Pick<
+  FilterDataPanelProps,
+  | "sessionId"
+  | "columns"
+  | "numericColumns"
+  | "dateColumns"
+  | "temporalColumns"
+  | "totalRows"
+  | "filteredRows"
+  | "activeFilter"
+  | "onConditionsChange"
+  | "onClearAll"
+  | "saving"
+>;
+
+function FilterControls({
   sessionId,
   columns,
   numericColumns,
   dateColumns,
+  temporalColumns = [],
   totalRows,
   filteredRows,
   activeFilter,
   onConditionsChange,
   onClearAll,
   saving,
-}: FilterDataPanelProps) {
+}: FilterControlsProps) {
   // Local working copy of the conditions; pushed to parent (debounced upstream).
   const [working, setWorking] = useState<ActiveFilterCondition[]>(
     activeFilter?.conditions ?? []
@@ -374,11 +429,7 @@ export function FilterDataPanel({
   const conditionCount = working.length;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="flex w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
-      >
+    <>
         <SheetHeader className="border-b border-border/80 p-4">
           <div className="flex items-center gap-2">
             <FilterIcon className="h-5 w-5 text-primary" />
@@ -422,7 +473,7 @@ export function FilterDataPanel({
         <ScrollArea className="flex-1">
           <div className="divide-y divide-border/60">
             {visibleColumns.map((column) => {
-              const kind = classifyColumn(column, numericColumns, dateColumns);
+              const kind = classifyFilterColumn(column, numericColumns, dateColumns, temporalColumns);
               const isOpen = expanded.has(column);
               const condition = byColumn.get(column);
               const summary = condition ? describeCondition(condition) : null;
@@ -459,10 +510,11 @@ export function FilterDataPanel({
                   </button>
                   {isOpen && (
                     <div className="mt-2 pl-6">
-                      {kind === "text" && (
+                      {(kind === "text" || kind === "period") && (
                         <CategoricalPicker
                           field={column}
                           sessionId={sessionId}
+                          isPeriod={kind === "period"}
                           selected={
                             condition && condition.kind === "in"
                               ? condition.values
@@ -553,6 +605,85 @@ export function FilterDataPanel({
               </span>
             )}
           </div>
+        </div>
+    </>
+  );
+}
+
+/**
+ * Wave-FA · Two-pane filter experience.
+ *
+ * The right pane is the existing filter controls at their original ~28rem
+ * width (visually unchanged). The remaining left area shows a live, filter-
+ * aware data preview (`DatasetPreviewPane`). Below `lg` the preview is hidden
+ * and the panel reverts to the original right-anchored 28rem sheet, so narrow
+ * screens behave exactly as before.
+ *
+ * Reuses the Radix `Sheet` primitive — focus-trap, Escape, scroll-lock,
+ * portal, and the close button are all inherited. We only widen `SheetContent`
+ * to the full viewport at `lg+` and switch it to a row layout.
+ */
+export function FilterDataPanel({
+  open,
+  onOpenChange,
+  sessionId,
+  columns,
+  numericColumns,
+  dateColumns,
+  temporalColumns,
+  totalRows,
+  filteredRows,
+  activeFilter,
+  onConditionsChange,
+  onClearAll,
+  saving,
+  previewRows,
+  fullPreviewRows,
+  previewMode,
+  onPreviewModeChange,
+  loadingFullPreview,
+  previewTruncated,
+  temporalDisplayGrainsByColumn,
+}: FilterDataPanelProps) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="flex w-full max-w-md flex-col gap-0 p-0 sm:max-w-md lg:w-screen lg:max-w-full lg:flex-row"
+      >
+        {/* LEFT · live data preview — hidden below lg (narrow = original sheet). */}
+        <div className="hidden min-w-0 flex-1 flex-col bg-background lg:flex">
+          <DatasetPreviewPane
+            previewRows={previewRows}
+            fullRows={fullPreviewRows}
+            mode={previewMode}
+            onModeChange={onPreviewModeChange}
+            loadingFull={loadingFullPreview}
+            truncated={previewTruncated}
+            columns={columns}
+            numericColumns={numericColumns}
+            dateColumns={dateColumns}
+            temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+            filteredRows={filteredRows}
+            saving={saving}
+          />
+        </div>
+
+        {/* RIGHT · filter controls — original width + look, fixed at lg+. */}
+        <div className="flex h-full w-full flex-col bg-background lg:w-[28rem] lg:flex-none lg:border-l lg:border-border/80">
+          <FilterControls
+            sessionId={sessionId}
+            columns={columns}
+            numericColumns={numericColumns}
+            dateColumns={dateColumns}
+            temporalColumns={temporalColumns}
+            totalRows={totalRows}
+            filteredRows={filteredRows}
+            activeFilter={activeFilter}
+            onConditionsChange={onConditionsChange}
+            onClearAll={onClearAll}
+            saving={saving}
+          />
         </div>
       </SheetContent>
     </Sheet>

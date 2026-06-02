@@ -27,6 +27,8 @@ import { useToast } from '@/hooks/use-toast';
 import { ChartBuilderDialog } from '@/components/ChartBuilderDialog';
 import type { ChartSpec } from '@/shared/schema';
 import { FilterDataPanel } from '@/components/FilterDataPanel';
+import type { PreviewMode } from '@/components/DatasetPreviewPane';
+import { useFilteredFullRows } from '@/hooks/useFilteredFullRows';
 import { ActiveFilterChips } from '@/components/ActiveFilterChips';
 import { SaveAutomationModal } from '@/components/SaveAutomationModal';
 import { sessionsApi, type ActiveFilterResponse } from '@/lib/api/sessions';
@@ -215,6 +217,16 @@ export function ChatInterface({
   fileNameForAutomation,
 }: ChatInterfaceProps) {
   const { scrollRequest, clearPivotScrollRequest } = useChatSidebarNav();
+  // Temporal facet columns ("Quarter · Period", …) + the canonical PeriodIso column.
+  // The filter panel classifies these as "period": ordered chronologically, labelled
+  // as periods rather than raw TEXT.
+  const temporalColumns = useMemo(() => {
+    const names = new Set<string>();
+    for (const m of temporalFacetColumns ?? []) if (m?.name) names.add(m.name);
+    const iso = wideFormatTransform?.periodIsoColumn;
+    if (iso) names.add(iso);
+    return [...names];
+  }, [temporalFacetColumns, wideFormatTransform]);
   const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [selectedCollaborator, setSelectedCollaborator] = useState<string>('all');
@@ -425,6 +437,20 @@ export function ChatInterface({
   const [filterTotalRows, setFilterTotalRows] = useState<number>(totalRows ?? 0);
   const [savingFilter, setSavingFilter] = useState(false);
   const filterRequestSeqRef = useRef(0);
+  // Wave-FA · Live data-preview pane beside the filter panel. `previewRows` is
+  // the first-N filter-aware rows that ride on every active-filter response;
+  // full-mode rows are fetched on demand by `useFilteredFullRows`.
+  const [previewRows, setPreviewRows] = useState<Record<string, unknown>[]>([]);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('200');
+  const {
+    rows: fullPreviewRows,
+    loading: loadingFullPreview,
+    truncated: previewTruncated,
+  } = useFilteredFullRows(
+    sessionId ?? null,
+    activeFilter?.version,
+    filterModalOpen && previewMode === 'full'
+  );
 
   // Load the server-persisted filter (used on session change AND on
   // cross-tab `active_filter` broadcasts from peer tabs).
@@ -435,6 +461,7 @@ export function ChatInterface({
       setActiveFilter(out.activeFilter);
       setFilteredRows(out.filteredRows);
       setFilterTotalRows(out.totalRows);
+      setPreviewRows(out.preview ?? []);
     } catch {
       // Endpoint not yet enabled or session not found — silently fall back to
       // unfiltered view. The button still works once the user clicks it.
@@ -453,6 +480,12 @@ export function ChatInterface({
     }
   });
 
+  // Wave-FA · Re-run on session change, when the dataset becomes ready
+  // (`totalRows` flips from 0 once a fresh upload finishes materializing), and
+  // whenever the filter panel opens. Without the `totalRows`/`filterModalOpen`
+  // triggers, the mount-time fetch could capture an empty result for a
+  // just-uploaded session and leave the 200-row preview + counts stuck at 0
+  // even though the data (and full-mode fetch) are fine.
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
@@ -463,7 +496,7 @@ export function ChatInterface({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, refetchActiveFilter]);
+  }, [sessionId, totalRows, filterModalOpen, refetchActiveFilter]);
 
   // Push a conditions array to the server (debounced — see invokers).
   //
@@ -489,6 +522,7 @@ export function ChatInterface({
         setActiveFilter(out.activeFilter);
         setFilteredRows(out.filteredRows);
         setFilterTotalRows(out.totalRows);
+        setPreviewRows(out.preview ?? []);
         // Wave E2 · broadcast to peer tabs so their pivot/chart caches
         // refetch on the new filter version.
         emitSessionBroadcast('active_filter');
@@ -509,6 +543,7 @@ export function ChatInterface({
           setActiveFilter(out.activeFilter);
           setFilteredRows(out.filteredRows);
           setFilterTotalRows(out.totalRows);
+          setPreviewRows(out.preview ?? []);
         } catch {
           /* refetch failed too — UI stays divergent but the toast
              already warned the user, and the next successful filter
@@ -549,6 +584,7 @@ export function ChatInterface({
       setActiveFilter(out.activeFilter);
       setFilteredRows(out.filteredRows);
       setFilterTotalRows(out.totalRows);
+      setPreviewRows(out.preview ?? []);
       // Wave E2 · broadcast clear to peer tabs.
       emitSessionBroadcast('active_filter');
     } catch (err) {
@@ -567,6 +603,7 @@ export function ChatInterface({
         setActiveFilter(out.activeFilter);
         setFilteredRows(out.filteredRows);
         setFilterTotalRows(out.totalRows);
+        setPreviewRows(out.preview ?? []);
       } catch {
         /* refetch failed; UI stays divergent until next successful op */
       }
@@ -1426,12 +1463,20 @@ export function ChatInterface({
           columns={columns}
           numericColumns={numericColumns ?? []}
           dateColumns={dateColumns ?? []}
+          temporalColumns={temporalColumns}
           totalRows={filterTotalRows}
           filteredRows={filteredRows}
           activeFilter={activeFilter}
           onConditionsChange={handleConditionsChange}
           onClearAll={handleClearAllFilters}
           saving={savingFilter}
+          previewRows={previewRows}
+          fullPreviewRows={fullPreviewRows}
+          previewMode={previewMode}
+          onPreviewModeChange={setPreviewMode}
+          loadingFullPreview={loadingFullPreview}
+          previewTruncated={previewTruncated}
+          temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
         />
       )}
     </div>

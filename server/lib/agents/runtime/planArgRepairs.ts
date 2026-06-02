@@ -11,6 +11,7 @@ import {
   parseTemporalFacetDisplayKey,
 } from "../../temporalFacetColumns.js";
 import type { TemporalFacetGrain } from "../../temporalFacetColumns.js";
+import { matchPeriod } from "../../wideFormat/periodVocabulary.js";
 
 /** Tools that accept `dimensionFilters` at args[plan].dimensionFilters. */
 const NESTED_PLAN_TOOLS = new Set(["execute_query_plan"]);
@@ -551,6 +552,184 @@ export function injectCompoundShapeMetricGuard(
     },
   ];
   return { injectedFilter: toFilter, fallbackUsed };
+}
+
+export interface PeriodAdditivityGuardResult {
+  injectedFilter?: { column: string; values: string[] };
+  /** Human-readable note surfaced to the user (the chosen single period). */
+  caveat?: string;
+  reason?:
+    | "not_pure_period"
+    | "no_value_touch"
+    | "no_filter_host"
+    | "period_filter_already_present"
+    | "period_in_group_by"
+    | "no_period_catalog";
+}
+
+const PERIOD_COMPARATIVE_SUFFIX_RE = /-(?:YA|2YA|3YA)$/i;
+// Canonical sortable calendar PeriodIso shapes (quarter/half/month/week/day/year).
+const CALENDAR_ISO_RE =
+  /^\d{4}(?:-(?:Q[1-4]|H[12]|W\d{2}|\d{2}(?:-\d{2})?))?$/;
+
+/** 1–3 word n-grams from a question (trailing punctuation stripped per word). */
+function questionPeriodNgrams(question: string): string[] {
+  const words = question
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[?,.;:!]+$/, ""))
+    .filter(Boolean);
+  const grams: string[] = [];
+  for (let n = 3; n >= 1; n--) {
+    for (let i = 0; i + n <= words.length; i++) {
+      grams.push(words.slice(i, i + n).join(" "));
+    }
+  }
+  return grams;
+}
+
+/**
+ * Honor an explicitly-named calendar period (e.g. "Q1 2024") when it exists in
+ * the catalog — the user named a concrete period, which must win over the
+ * latest-12-months default. Comparative variants (…-YA) are never auto-picked.
+ */
+function resolveExplicitPeriodIso(
+  question: string | undefined,
+  periodIsoValues: ReadonlyArray<string>
+): string | null {
+  if (!question?.trim() || !periodIsoValues.length) return null;
+  const catalog = new Map(periodIsoValues.map((v) => [v.toLowerCase(), v]));
+  for (const g of questionPeriodNgrams(question)) {
+    const m = matchPeriod(g);
+    if (m && m.confidence >= 0.7 && !PERIOD_COMPARATIVE_SUFFIX_RE.test(m.iso)) {
+      const hit = catalog.get(m.iso.toLowerCase());
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/**
+ * Default single period when the question names none: prefer the latest-12-months
+ * rollup (the data's pre-computed answer), else the latest single calendar period
+ * (PeriodIso is canonically sortable), else pin to one PeriodKind as a last resort.
+ */
+function pickDefaultPeriod(
+  periodIsoValues: ReadonlyArray<string>,
+  periodKindValues: ReadonlyArray<string>,
+  isoCol: string,
+  kindCol: string
+): { column: string; value: string; caveat: string } | null {
+  const rollup =
+    periodIsoValues.find((v) => /^L12M$/i.test(v)) ??
+    periodIsoValues.find((v) => /^L\d+M$/i.test(v)) ??
+    periodIsoValues.find((v) => /^MAT\b/i.test(v));
+  if (rollup) {
+    return {
+      column: isoCol,
+      value: rollup,
+      caveat: `Showing the latest 12 months (${rollup}) only — period rows are pre-computed overlapping totals and cannot be summed across grains.`,
+    };
+  }
+  const calendar = periodIsoValues.filter((v) => CALENDAR_ISO_RE.test(v)).sort();
+  if (calendar.length) {
+    const latest = calendar[calendar.length - 1]!;
+    return {
+      column: isoCol,
+      value: latest,
+      caveat: `Showing the latest period (${latest}) only — period rows overlap and cannot be summed across grains.`,
+    };
+  }
+  const kind =
+    periodKindValues.find((k) => /latest_n/i.test(k)) ??
+    periodKindValues.find((k) => /quarter/i.test(k)) ??
+    periodKindValues[0];
+  if (kind) {
+    return {
+      column: kindCol,
+      value: kind,
+      caveat: `Filtered to ${kind} periods only to avoid summing overlapping period types.`,
+    };
+  }
+  return null;
+}
+
+/**
+ * PA1 · Inject a single-period dimensionFilter on pure_period (melted wide-format)
+ * datasets so SUM(Value) is not computed across the NON-ADDITIVE, overlapping
+ * period rows (L12M already = the latest 4 quarters; YTD overlaps quarters).
+ *
+ * Mirrors `injectCompoundShapeMetricGuard`. Runs in `planner.ts` (and the
+ * quick-answer fast path) after the compound guard.
+ *
+ * Fires ONLY when: pure_period shape AND the step aggregates Value AND groupBy
+ * does NOT include a period column AND no Period/PeriodIso/PeriodKind filter is
+ * already present. (groupBy-on-period means each row is one period → summing
+ * within groups is correct → no-op; this is the quarterly-trend escape hatch.)
+ *
+ * Default period (per product decision): the latest-12-months rollup
+ * (PeriodIso='L12M'); an explicitly-named period in the question wins.
+ */
+export function injectPeriodAdditivityGuard(
+  step: PlanStep,
+  wideFormatTransform: WideFormatTransform | undefined,
+  userQuestion: string | undefined,
+  periodIsoValues: ReadonlyArray<string>,
+  periodKindValues: ReadonlyArray<string>
+): PeriodAdditivityGuardResult {
+  if (
+    !wideFormatTransform?.detected ||
+    wideFormatTransform.shape !== "pure_period"
+  ) {
+    return { reason: "not_pure_period" };
+  }
+  const valueCol = wideFormatTransform.valueColumn;
+  const periodCol = wideFormatTransform.periodColumn;
+  const isoCol = wideFormatTransform.periodIsoColumn;
+  const kindCol = wideFormatTransform.periodKindColumn;
+
+  if (!stepTouchesValueColumn(step, valueCol)) return { reason: "no_value_touch" };
+  const host = dimensionFilterHost(step);
+  if (!host) return { reason: "no_filter_host" };
+
+  const existing = Array.isArray(host.dimensionFilters)
+    ? (host.dimensionFilters as Array<Record<string, unknown>>)
+    : [];
+  const periodCols = new Set([periodCol, isoCol, kindCol]);
+  if (
+    existing.some(
+      (f) => typeof f?.column === "string" && periodCols.has(f.column as string)
+    )
+  ) {
+    return { reason: "period_filter_already_present" };
+  }
+  if (collectGroupingDimensions(step).some((d) => periodCols.has(d))) {
+    return { reason: "period_in_group_by" };
+  }
+
+  const explicitIso = resolveExplicitPeriodIso(userQuestion, periodIsoValues);
+  const chosen = explicitIso
+    ? {
+        column: isoCol,
+        value: explicitIso,
+        caveat: `Showing ${explicitIso} only — period rows overlap and cannot be summed across grains.`,
+      }
+    : pickDefaultPeriod(periodIsoValues, periodKindValues, isoCol, kindCol);
+  if (!chosen) return { reason: "no_period_catalog" };
+
+  host.dimensionFilters = [
+    ...existing,
+    {
+      column: chosen.column,
+      op: "in",
+      values: [chosen.value],
+      match: "case_insensitive",
+    },
+  ];
+  return {
+    injectedFilter: { column: chosen.column, values: [chosen.value] },
+    caveat: chosen.caveat,
+  };
 }
 
 /**

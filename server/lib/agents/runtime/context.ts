@@ -17,6 +17,7 @@ import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
 import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
 import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
+import { inferPeriodFilterFromQuestion } from "../utils/inferPeriodFilterFromQuestion.js";
 import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
 import { classifyHierarchyIntent } from "./planArgRepairs.js";
 
@@ -55,10 +56,13 @@ export function buildAgentExecutionContext(params: {
   onIntermediateArtifact?: AgentExecutionContext["onIntermediateArtifact"];
   abortSignal?: AbortSignal;
 }): AgentExecutionContext {
-  const inferredFilters = inferFiltersFromQuestion(
-    params.question,
-    params.summary
-  );
+  const inferredFilters = [
+    ...inferFiltersFromQuestion(params.question, params.summary),
+    // Relative-period phrases ("latest 12 months", "YTD") → a concrete filter
+    // on the melted PeriodIso/PeriodKind dimension, so Value is not summed
+    // across overlapping non-additive period rows (pure_period datasets only).
+    ...inferPeriodFilterFromQuestion(params.question, params.summary),
+  ];
   // RD4 · build the intent envelope from THREE sources:
   //   (a) negative inferred filters (Wave 3): "omit FSG" → not_in
   //   (b) declared rollup hierarchies whose intent classifies as peer-comparison
@@ -384,6 +388,41 @@ export function formatWideFormatShapeBlock(summary: DataSummary): string {
       `If the user's question is metric-ambiguous, use clarify_user with the available metric values.`;
   }
 
+  // PA1 · pure_period shape: the Period dimension holds PRE-COMPUTED, OVERLAPPING
+  // aggregates (L12M = sum of the latest 4 quarters; YTD overlaps quarters), so
+  // SUMming Value across PeriodKinds double/triple-counts. Mirror compoundCritical.
+  let periodCritical = "";
+  if (wf.shape === "pure_period") {
+    const kindCol = summary.columns.find((c) => c.name === wf.periodKindColumn);
+    const isoCol = summary.columns.find((c) => c.name === wf.periodIsoColumn);
+    const kinds = (kindCol?.topValues ?? [])
+      .slice(0, 12)
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    const isos = (isoCol?.topValues ?? [])
+      .slice(0, 24)
+      .map((t) => String(t.value).trim())
+      .filter(Boolean);
+    periodCritical =
+      `\n\nCRITICAL — OVERLAPPING PERIOD ROWS (pure_period shape): the ${wf.periodColumn} ` +
+      `dimension contains PRE-COMPUTED, OVERLAPPING aggregates, NOT additive time buckets. ` +
+      `A "latest 12 months" (L12M) row already EQUALS the sum of the latest 4 quarters; ` +
+      `YTD rows overlap the quarters inside them. NEVER SUM ${wf.valueColumn} across multiple ` +
+      `${wf.periodKindColumn} values — it double/triple-counts. Every plan that SUMs ${wf.valueColumn} ` +
+      `MUST either (a) filter to ONE period via a dimensionFilter on ${wf.periodIsoColumn}, or ` +
+      `(b) groupBy ${wf.periodIsoColumn}/${wf.periodKindColumn} so each row stays one period. ` +
+      `Common intents → filter: "latest 12 months"/"TTM" → ${wf.periodIsoColumn}="L12M" (the ` +
+      `non-comparative variant, NOT L12M-YA/2YA); "year to date" → ${wf.periodKindColumn}="ytd" ` +
+      `(or ${wf.periodIsoColumn}="YTD-TY"); "quarterly trend" → groupBy ${wf.periodIsoColumn} with ` +
+      `${wf.periodKindColumn}="quarter".` +
+      (kinds.length ? ` Distinct ${wf.periodKindColumn} values: ${kinds.join(" | ")}.` : "") +
+      (isos.length
+        ? ` Distinct ${wf.periodIsoColumn} values: ${isos.join(" | ")}${
+            (isoCol?.topValues?.length ?? 0) > 24 ? ", …" : ""
+          }.`
+        : "");
+  }
+
   const meltedCap = 20;
   const meltedShown = wf.meltedColumns.slice(0, meltedCap).join(", ");
   const meltedMore =
@@ -402,7 +441,7 @@ export function formatWideFormatShapeBlock(summary: DataSummary): string {
     `← ALWAYS sort/order time queries by this column, not ${wf.periodColumn}. ` +
     `Lexicographic sort on ${wf.periodColumn} produces "Q1 24" before "Q2 23" — wrong.\n` +
     `- PeriodKind (grain, e.g. quarter | year_to_date | latest_n): ${wf.periodKindColumn}\n` +
-    `- Value (numeric): ${wf.valueColumn}${currencyTag}${metricLine}${compoundCritical}\n\n` +
+    `- Value (numeric): ${wf.valueColumn}${currencyTag}${metricLine}${compoundCritical}${periodCritical}\n\n` +
     `Original wide-format column names that NO LONGER EXIST (do NOT reference these in any tool args; ` +
     `if the user mentions one, translate to ${wf.periodColumn}+${wf.valueColumn}` +
     `${isCompound ? `+${wf.metricColumn}` : ""} on the long form): ${meltedShown}${meltedMore}`

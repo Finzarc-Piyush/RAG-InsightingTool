@@ -32,6 +32,7 @@ import {
   type Row,
 } from "@/lib/charts/encodingResolver";
 import { qualitativeColor } from "@/lib/charts/palette";
+import { parseTemporalLabelSortKey } from "@/lib/temporalAxisSort";
 import {
   formatChartValue,
   makeAxisTickFormatter,
@@ -126,7 +127,10 @@ function asTime(value: unknown): number {
   if (typeof value === "number") return value;
   if (typeof value === "string") {
     const t = Date.parse(value);
-    return Number.isFinite(t) ? t : Number.NaN;
+    if (Number.isFinite(t)) return t;
+    // Canonical period keys ("2023-Q1", "2023-H1", "2023-W12") aren't ISO-parseable
+    // by Date.parse — position them at their period start instead of dropping them.
+    return parseTemporalLabelSortKey(value) ?? Number.NaN;
   }
   return Number.NaN;
 }

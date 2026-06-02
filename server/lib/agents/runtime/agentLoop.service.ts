@@ -3143,6 +3143,10 @@ export async function runAgentTurn(
             if (narResult.findings?.length) env.findings = narResult.findings;
             if (narResult.methodology) env.methodology = narResult.methodology;
             if (narResult.caveats?.length) env.caveats = narResult.caveats;
+            // PA1 · surface deterministic-guard caveats (e.g. period-additivity
+            // pinned the SUM to the latest 12 months) so the chosen slice is visible.
+            if (ctx.deterministicCaveats?.length)
+              env.caveats = [...(env.caveats ?? []), ...ctx.deterministicCaveats];
             // PVT3 · for direct factual questions ("What is the average X per
             // Y?", "Which Z has the most W?"), drop the narrator's
             // recommendations + suggested next-steps — the user's rule "if
@@ -3464,6 +3468,8 @@ export async function runAgentTurn(
         if (repaired.findings?.length) envFresh.findings = repaired.findings;
         if (repaired.methodology) envFresh.methodology = repaired.methodology;
         if (repaired.caveats?.length) envFresh.caveats = repaired.caveats;
+        if (ctx.deterministicCaveats?.length)
+          envFresh.caveats = [...(envFresh.caveats ?? []), ...ctx.deterministicCaveats];
         const repairedCtas = (repaired.ctas ?? [])
           .map((c) => c.trim())
           .filter(Boolean)

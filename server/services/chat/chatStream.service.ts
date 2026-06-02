@@ -62,6 +62,7 @@ import {
   upsertPastAnalysisDoc,
 } from "../../models/pastAnalysis.model.js";
 import { stripChartDataForPastAnalysis } from "../../lib/pastAnalysisChartStrip.js";
+import { recordUsageEvent } from "../../models/usageEvent.model.js";
 import {
   materializePivotArtifact,
   type RawPivotArtifact,
@@ -203,6 +204,24 @@ async function serveCachedExactAnswer(params: {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`⚠️ cache-hit message persist failed for ${chatDocument.id}: ${msg}`);
   }
+
+  // Wave AD-CH · Count this cache-served question as a usage event so the
+  // superadmin metrics (which derive "Questions"/active users from
+  // past_analyses, and cache hits DON'T write a fresh past_analyses doc) stay
+  // honest. Fire-and-forget — recordUsageEvent never throws. One event per
+  // (user, analysis served).
+  void recordUsageEvent({
+    eventType: "analysis.cache_hit",
+    userEmail: username,
+    sessionId,
+    metadata: {
+      source: hit.source,
+      sourceSessionId,
+      sourceTurnId,
+      dataVersion: hit.doc.dataVersion,
+      ageMs: hit.ageMs,
+    },
+  });
 
   if (!res.writableEnded && !res.destroyed) {
     res.end();

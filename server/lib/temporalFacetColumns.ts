@@ -76,6 +76,119 @@ const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
   Year: "year",
 };
 
+/**
+ * Canonical column names produced by the wide→long melt
+ * (`server/lib/wideFormat/meltDataset.ts` — kept in sync here so the hot facet
+ * path does not import the melt module). A "period dimension" is the
+ * `Period` / `PeriodIso` / `PeriodKind` triple: a melted period column whose
+ * grain facets must derive from the already-canonical `PeriodIso` value, NOT
+ * from parsing the human `Period` label as a calendar date.
+ */
+export const MELT_PERIOD_COL = "Period";
+export const MELT_PERIOD_ISO_COL = "PeriodIso";
+export const MELT_PERIOD_KIND_COL = "PeriodKind";
+
+export interface PeriodDimensionBinding {
+  /** The melted human-label period column (e.g. "Period"). */
+  periodCol: string;
+  /** The companion canonical ISO column (e.g. "PeriodIso"). */
+  isoCol: string;
+}
+
+/**
+ * Per-grain gate on the canonical `PeriodIso` SHAPE. We gate on shape rather
+ * than `PeriodKind` because the half-year matcher reuses `kind:"quarter"` with
+ * an `YYYY-HN` iso (periodVocabulary.ts). The `year` grain rolls up from any
+ * calendar shape (captures the leading `YYYY`); every finer grain fills only
+ * when its own shape matches. Relative isos (`L12M-2YA`, `YTD-TY`, `MAT-…`,
+ * `XXXX-Q1`) match nothing → null in all grains (correct: no calendar grain).
+ */
+const PERIOD_ISO_GRAIN_RE: Record<TemporalFacetGrain, RegExp> = {
+  year: /^(\d{4})(?:-(?:Q[1-4]|H[12]|\d{2}|W\d{2}|\d{2}-\d{2}))?$/,
+  half_year: /^\d{4}-H[12]$/,
+  quarter: /^\d{4}-Q[1-4]$/,
+  month: /^\d{4}-\d{2}$/,
+  week: /^\d{4}-W\d{2}$/,
+  date: /^\d{4}-\d{2}-\d{2}$/,
+};
+
+/**
+ * Grain value for one `PeriodIso` cell, or null when the iso has no such grain.
+ * `year` extracts the leading `YYYY`; every other grain returns the iso verbatim.
+ */
+export function periodIsoFacetValue(
+  iso: unknown,
+  grain: TemporalFacetGrain
+): string | null {
+  if (typeof iso !== "string" || !iso) return null;
+  const m = iso.match(PERIOD_ISO_GRAIN_RE[grain]);
+  if (!m) return null;
+  return grain === "year" ? m[1]! : iso;
+}
+
+/**
+ * Fill the six grain facet columns for a melted period dimension directly from
+ * the canonical `PeriodIso` value, bypassing `parseRowDate` (which cannot read
+ * labels like "Q1 23" / "YTD 2YA"). Mutates rows; returns the column metadata.
+ */
+export function applyPeriodDimensionFacets(
+  data: Record<string, any>[],
+  binding: PeriodDimensionBinding
+): TemporalFacetColumnMeta[] {
+  if (data.length === 0) return [];
+  const meta: TemporalFacetColumnMeta[] = GRAINS.map((grain) => ({
+    name: facetColumnKey(binding.periodCol, grain),
+    sourceColumn: binding.periodCol,
+    grain,
+  }));
+  for (const row of data) {
+    const iso = row[binding.isoCol];
+    for (const grain of GRAINS) {
+      row[facetColumnKey(binding.periodCol, grain)] = periodIsoFacetValue(iso, grain);
+    }
+  }
+  return meta;
+}
+
+/**
+ * Build a `PeriodDimensionBinding` from a data summary's wide-format transform.
+ * Returns undefined for tidy (non-melted) datasets. Use at facet call sites that
+ * have the summary in hand to gate the period path on the authoritative
+ * `wf.detected` flag rather than relying on self-detection.
+ */
+export function periodDimensionFromSummary(
+  summary: Pick<DataSummary, "wideFormatTransform"> | null | undefined
+): PeriodDimensionBinding | undefined {
+  const wf = summary?.wideFormatTransform;
+  if (wf?.detected && wf.periodColumn && wf.periodIsoColumn) {
+    return { periodCol: wf.periodColumn, isoCol: wf.periodIsoColumn };
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the period-dimension binding for a facet pass. Prefers the explicit
+ * binding (threaded from `summary.wideFormatTransform`); falls back to
+ * self-detection when the melt's canonical triple is present on the rows and
+ * the period column is among the date columns being faceted.
+ */
+function resolvePeriodDimension(
+  dateColumns: string[],
+  rowKeys: Set<string>,
+  explicit?: PeriodDimensionBinding
+): PeriodDimensionBinding | undefined {
+  if (explicit && dateColumns.includes(explicit.periodCol) && rowKeys.has(explicit.isoCol)) {
+    return explicit;
+  }
+  if (
+    dateColumns.includes(MELT_PERIOD_COL) &&
+    rowKeys.has(MELT_PERIOD_ISO_COL)
+  ) {
+    return { periodCol: MELT_PERIOD_COL, isoCol: MELT_PERIOD_ISO_COL };
+  }
+  return undefined;
+}
+
 export function isTemporalFacetColumnKey(name: string): boolean {
   if (name.startsWith(TEMPORAL_FACET_PREFIX)) return true;
   return DISPLAY_FACET_HEADER_RE.test(name);
@@ -199,7 +312,8 @@ export function duckPhysicalColumnName(
  */
 export function facetColumnInlineDuckDbExpr(
   logical: string,
-  tableColumns: Set<string>
+  tableColumns: Set<string>,
+  periodDimension?: PeriodDimensionBinding
 ): string | null {
   const m = logical.match(/^(Day|Week|Month|Quarter|Half-year|Year) · (.+)$/);
   if (!m) return null;
@@ -208,6 +322,41 @@ export function facetColumnInlineDuckDbExpr(
   if (!tableColumns.has(sourceCol)) return null;
   const grain = LABEL_TO_GRAIN_TOKEN[grainLabel] as TemporalFacetGrain | undefined;
   if (!grain) return null;
+
+  // Melted period dimension: derive the grain from the canonical PeriodIso
+  // value, never from casting the human Period label to a DATE (which yields
+  // NULL for "Q1 23" / "YTD 2YA"). Prefer the explicit binding; self-detect
+  // the canonical triple otherwise.
+  const pd =
+    periodDimension &&
+    sourceCol === periodDimension.periodCol &&
+    tableColumns.has(periodDimension.isoCol)
+      ? periodDimension
+      : sourceCol === MELT_PERIOD_COL && tableColumns.has(MELT_PERIOD_ISO_COL)
+        ? { periodCol: MELT_PERIOD_COL, isoCol: MELT_PERIOD_ISO_COL }
+        : undefined;
+  if (pd) {
+    const iso = `"${pd.isoCol.replace(/"/g, '""')}"`;
+    // RE2 full-match patterns mirror PERIOD_ISO_GRAIN_RE. Plain single-quoted
+    // DuckDB strings do not process backslash escapes, so '\\d' → \d reaches RE2.
+    switch (grain) {
+      case "year":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}(-(Q[1-4]|H[12]|\\d{2}|W\\d{2}|\\d{2}-\\d{2}))?') THEN regexp_extract(${iso}, '^(\\d{4})', 1) END`;
+      case "half_year":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}-H[12]') THEN ${iso} END`;
+      case "quarter":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}-Q[1-4]') THEN ${iso} END`;
+      case "month":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}-\\d{2}') THEN ${iso} END`;
+      case "week":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}-W\\d{2}') THEN ${iso} END`;
+      case "date":
+        return `CASE WHEN regexp_full_match(${iso}, '\\d{4}-\\d{2}-\\d{2}') THEN ${iso} END`;
+      default:
+        return null;
+    }
+  }
+
   const q = `"${sourceCol.replace(/"/g, '""')}"`;
   // COALESCE: try direct DATE cast first (works for "YYYY-MM-DD"), then fall
   // back through TIMESTAMP for ISO datetime strings like "2018-01-03T00:00:00.000Z"
@@ -434,11 +583,20 @@ export function resolveFacetSourceBindings(
  * fields it generates would be entirely null and only pollute the schema +
  * the XLSX download. When the caller supplies this set, those columns are
  * skipped from facet generation entirely.
+ *
+ * `periodDimension` (optional) — when the dataset was melted from wide format,
+ * the `Period` label column must NOT be parsed as a date (its values are
+ * "Q1 23" / "YTD 2YA" which `parseRowDate` cannot read). Its grain facets are
+ * derived from the canonical `PeriodIso` shape instead. Self-detected from the
+ * melt's `Period`/`PeriodIso` triple when not supplied.
  */
 export function applyTemporalFacetColumns(
   data: Record<string, any>[],
   dateColumns: string[],
-  options?: { excludeTimeOfDayColumns?: ReadonlySet<string> }
+  options?: {
+    excludeTimeOfDayColumns?: ReadonlySet<string>;
+    periodDimension?: PeriodDimensionBinding;
+  }
 ): TemporalFacetColumnMeta[] {
   if (
     process.env.DISABLE_TEMPORAL_FACETS === "1" ||
@@ -454,13 +612,27 @@ export function applyTemporalFacetColumns(
     : dateColumns;
   if (effectiveDateColumns.length === 0) return [];
 
-  migrateLegacyTemporalFacetRowKeys(data, effectiveDateColumns);
-
   const keys = new Set(Object.keys(data[0]));
-  const bindings = resolveFacetSourceBindings(keys, effectiveDateColumns);
-  // Never strip facet keys unless we can re-derive them from a bound source date column.
-  // Otherwise columnar rows that already carry materialized facets would lose them.
-  if (!bindings.length) return [];
+
+  // A melted period dimension derives its grain facets from PeriodIso; it must
+  // be removed from the generic (parseRowDate) date path so it is never faceted
+  // by date-casting the label.
+  const periodDim = resolvePeriodDimension(
+    effectiveDateColumns,
+    keys,
+    options?.periodDimension
+  );
+  const genericDateColumns = periodDim
+    ? effectiveDateColumns.filter((c) => c !== periodDim.periodCol)
+    : effectiveDateColumns;
+
+  migrateLegacyTemporalFacetRowKeys(data, genericDateColumns);
+
+  const bindings = resolveFacetSourceBindings(keys, genericDateColumns);
+  // Never strip facet keys unless we can re-derive them — from a bound source
+  // date column or from the period dimension. Otherwise columnar rows that
+  // already carry materialized facets would lose them.
+  if (!bindings.length && !periodDim) return [];
 
   stripTemporalFacetColumns(data);
 
@@ -489,6 +661,10 @@ export function applyTemporalFacetColumns(
         row[colKey] = norm ? norm.normalizedKey : null;
       }
     }
+  }
+
+  if (periodDim) {
+    meta.push(...applyPeriodDimensionFacets(data, periodDim));
   }
 
   return meta;

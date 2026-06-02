@@ -23,7 +23,13 @@ export interface ActiveFilterResponse {
   activeFilter: ActiveFilterSpec | null;
   totalRows: number;
   filteredRows: number;
+  /**
+   * Filter-aware preview rows. Default depth is the first 200; the full-mode
+   * fetch (`getActiveFilterFull`) returns up to the server cap.
+   */
   preview: Record<string, unknown>[];
+  /** True when more rows survive the filter than `preview` contains. */
+  previewTruncated?: boolean;
   effectiveConditionCount: number;
 }
 
@@ -159,6 +165,16 @@ export const sessionsApi = {
   getActiveFilter: (sessionId: string) =>
     api.get<ActiveFilterResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/active-filter`
+    ),
+
+  /**
+   * Full-mode preview fetch — returns up to the server's preview cap of
+   * filter-aware rows for the "entire dataset" toggle. On-demand only; the
+   * default GET/PUT path stays at the 200-row preview.
+   */
+  getActiveFilterFull: (sessionId: string) =>
+    api.get<ActiveFilterResponse>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/active-filter?full=1`
     ),
 
   setActiveFilter: (sessionId: string, conditions: ActiveFilterCondition[]) =>

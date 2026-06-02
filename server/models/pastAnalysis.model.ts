@@ -20,6 +20,7 @@ import {
   type PastAnalysisPivotArtifact,
 } from "../shared/schema.js";
 import type { BusinessActionItem } from "../shared/schema.js";
+import { countTurnVotes } from "../lib/admin/feedbackVotes.js";
 
 export const COSMOS_PAST_ANALYSES_CONTAINER_ID =
   process.env.COSMOS_PAST_ANALYSES_CONTAINER_ID || "past_analyses";
@@ -417,18 +418,25 @@ export async function aggregateFeedbackCountsBySession(): Promise<
 > {
   const container = await waitForPastAnalysesContainer();
   const { resources } = await container.items
-    .query<{ sessionId: string; feedback: "up" | "down" | "none" }>(
-      { query: "SELECT c.sessionId, c.feedback FROM c" },
-      { enableCrossPartitionQuery: true }
+    .query<{
+      sessionId: string;
+      feedback?: string | null;
+      feedbackDetails?: Array<{ feedback?: string | null }> | null;
+    }>(
+      { query: "SELECT c.sessionId, c.feedback, c.feedbackDetails FROM c" },
+      {}
     )
     .fetchAll();
 
   const out = new Map<string, { up: number; down: number; none: number }>();
   for (const row of resources) {
     const counts = out.get(row.sessionId) ?? { up: 0, down: 0, none: 0 };
-    if (row.feedback === "up") counts.up += 1;
-    else if (row.feedback === "down") counts.down += 1;
-    else counts.none += 1;
+    // Count chart-level votes too — they live only in feedbackDetails[]; the
+    // root `feedback` field stays "none" for non-answer targets.
+    const { up, down } = countTurnVotes(row);
+    counts.up += up;
+    counts.down += down;
+    if (up === 0 && down === 0) counts.none += 1; // turn with no vote
     out.set(row.sessionId, counts);
   }
   return out;

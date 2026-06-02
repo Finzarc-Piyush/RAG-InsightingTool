@@ -11,6 +11,10 @@
  */
 
 import { format as formatDate } from "date-fns";
+import {
+  formatTemporalPeriodKeyForDisplay,
+  isCanonicalPeriodKey,
+} from "@/lib/temporalPeriodDisplay";
 
 const CURRENCY_RE =
   /\b(revenue|sales|price|cost|margin|profit|spend|amount|cash|usd|inr|gbp|eur)\b/i;
@@ -164,6 +168,10 @@ export function formatChartValue(
   opts: FormatterOptions = {},
 ): string {
   if (value === null || value === undefined || value === "") return "—";
+  // Canonical period keys ("2023-Q1", "2023-01", …) are categorical x-axis values
+  // — render the human label (quarters stay quarters) and never run them through
+  // numeric / smart-date formatting. Numeric measures never match this shape.
+  if (isCanonicalPeriodKey(value)) return formatTemporalPeriodKeyForDisplay(value);
   const hint = opts.format ?? inferFormatHint(field);
   const num = typeof value === "number" ? value : Number(value);
 

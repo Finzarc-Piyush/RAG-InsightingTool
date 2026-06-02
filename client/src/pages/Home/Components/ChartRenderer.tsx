@@ -47,6 +47,7 @@ import {
 } from '@/lib/chartFilters';
 import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
+import { formatTemporalPeriodKeyForDisplay } from '@/lib/temporalPeriodDisplay';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import {
   CHART_SERIES_COLORS as COLORS,
@@ -814,6 +815,7 @@ export function ChartRenderer({
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                   angle={-45}
                   textAnchor="end"
+                  tickFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)}
                   ticks={lineAreaXTicks}
                   label={{
                     value: xLabel || x,
@@ -847,7 +849,7 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                   tickCount={DEFAULT_Y_TICKS}
                 />
-                <Tooltip formatter={rechartsTooltipValueFormatter} />
+                <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
                 {(specSeriesKeys ?? [])
                   .map((k, i) => ({ k, i }))
                   .filter(({ k }) => !hiddenSeries.has(k))
@@ -988,7 +990,7 @@ export function ChartRenderer({
                   tickCount={DEFAULT_Y_TICKS}
                 />
               )}
-              <Tooltip formatter={rechartsTooltipValueFormatter} />
+              <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
               {chart.y2 && (
                 <Legend
                   wrapperStyle={{ paddingTop: 4 }}
@@ -1071,6 +1073,7 @@ export function ChartRenderer({
                 angle={-45}
                 textAnchor="end"
                 interval={0}
+                tickFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)}
                 ticks={barXTicks}
                 label={{ value: xLabel || x, position: 'bottom', offset: 10, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
                 height={fillParent ? 80 : isSingleChart ? 90 : 70}
@@ -1087,7 +1090,7 @@ export function ChartRenderer({
                 }}
                 tickCount={DEFAULT_Y_TICKS}
               />
-              <Tooltip formatter={rechartsTooltipValueFormatter} />
+              <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
               {multiKeys.length > 0 ? (
                 <>
                   {(specSeriesKeys ?? [])
@@ -1435,7 +1438,7 @@ export function ChartRenderer({
                   <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip formatter={rechartsTooltipValueFormatter} />
+              <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
               <Legend
                 verticalAlign="bottom"
                 height={40}
@@ -1475,6 +1478,7 @@ export function ChartRenderer({
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                   angle={-45}
                   textAnchor="end"
+                  tickFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)}
                   ticks={lineAreaXTicks}
                   label={{
                     value: xLabel || x,
@@ -1507,7 +1511,7 @@ export function ChartRenderer({
                   domain={unifiedDomain}
                   tickCount={DEFAULT_Y_TICKS}
                 />
-                <Tooltip formatter={rechartsTooltipValueFormatter} />
+                <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
                 {(specSeriesKeys ?? [])
                   .map((k, i) => ({ k, i }))
                   .filter(({ k }) => !hiddenSeries.has(k))
@@ -1591,7 +1595,7 @@ export function ChartRenderer({
                 }}
                 tickCount={DEFAULT_Y_TICKS}
               />
-              <Tooltip formatter={rechartsTooltipValueFormatter} />
+              <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
               <Area
                 type="monotone"
                 dataKey={y}

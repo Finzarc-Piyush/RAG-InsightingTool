@@ -76,7 +76,13 @@ function Router() {
 
   // Extract page type from location
   const getCurrentPage = (): PageType => {
-    if (location.startsWith('/superadmin')) return 'superadmin';
+    // Admin surface spans two URL prefixes: /superadmin/* (overview, sessions,
+    // dashboards) and /admin/* (costs, context-packs, semantic-models). Both
+    // must map to the 'superadmin' page type so Layout keeps the admin sidebar
+    // mounted — otherwise clicking Costs/Context packs (which live under
+    // /admin/*) flips isAdminMode false and reverts to the normal user sidebar.
+    if (location.startsWith('/superadmin') || location.startsWith('/admin'))
+      return 'superadmin';
     if (location.startsWith('/dashboard')) return 'dashboard';
     if (location === '/history' || location.startsWith('/history')) return 'analysis';
     // W62 · Memory page is session-scoped: /analysis/:sessionId/memory.

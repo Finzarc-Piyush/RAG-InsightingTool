@@ -470,6 +470,19 @@ class UploadQueue {
         applyWideFormatTransformToSummary(summary, wideFormatTransform);
       };
 
+      // Options for applyTemporalFacetColumns: for melted wide-format data the
+      // Period column's grain facets must derive from PeriodIso, not from
+      // date-casting the human label. undefined for tidy datasets.
+      const facetOptsForUpload = (): { periodDimension: { periodCol: string; isoCol: string } } | undefined =>
+        wideFormatTransform
+          ? {
+              periodDimension: {
+                periodCol: wideFormatTransform.periodColumn,
+                isoCol: wideFormatTransform.periodIsoColumn,
+              },
+            }
+          : undefined;
+
       const columnOrderBeforeClean = Object.keys(data[0] || {});
 
       const skipUploadLlm =
@@ -499,7 +512,7 @@ class UploadQueue {
       canonicalizeDateColumnValues(previewSample, previewDateCols);
       if (previewDateCols.length > 0) {
         const { applyTemporalFacetColumns } = await import('../lib/temporalFacetColumns.js');
-        applyTemporalFacetColumns(previewSample, previewDateCols);
+        applyTemporalFacetColumns(previewSample, previewDateCols, facetOptsForUpload());
       }
       warnSuspiciousDuplicateRowIdInSample(previewSample, `upload_preview:${job.sessionId}`);
 
@@ -1052,7 +1065,7 @@ class UploadQueue {
       canonicalizeDateColumnValues(sampleRows, summary.dateColumns);
       if (summary.dateColumns.length > 0) {
         const { applyTemporalFacetColumns } = await import('../lib/temporalFacetColumns.js');
-        applyTemporalFacetColumns(sampleRows, summary.dateColumns);
+        applyTemporalFacetColumns(sampleRows, summary.dateColumns, facetOptsForUpload());
       }
       warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
@@ -1061,7 +1074,7 @@ class UploadQueue {
       // (sampleRows already received applyTemporalFacetColumns above; this mirrors that for DuckDB.)
       if (summary.dateColumns.length > 0 && !useLargeFileProcessing) {
         const { applyTemporalFacetColumns: applyFacets } = await import('../lib/temporalFacetColumns.js');
-        applyFacets(data, summary.dateColumns);
+        applyFacets(data, summary.dateColumns, facetOptsForUpload());
       }
       job.status = 'saving';
       job.progress = 88;

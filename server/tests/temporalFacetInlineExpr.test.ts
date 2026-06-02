@@ -70,3 +70,46 @@ describe("facetColumnInlineDuckDbExpr (W13)", () => {
     assert.ok(expr.includes('"A""B"'), `expected escaped identifier in: ${expr}`);
   });
 });
+
+describe("facetColumnInlineDuckDbExpr · melted period dimension (derive from PeriodIso)", () => {
+  const periodCols = new Set(["Period", "PeriodIso", "PeriodKind", "Value"]);
+  const binding = { periodCol: "Period", isoCol: "PeriodIso" };
+
+  it("quarter expr reads PeriodIso shape, not date-casts the Period label", () => {
+    const expr = facetColumnInlineDuckDbExpr("Quarter · Period", periodCols, binding);
+    assert.ok(expr !== null);
+    assert.ok(expr.includes('regexp_full_match("PeriodIso"'), `expected regexp_full_match on PeriodIso in: ${expr}`);
+    assert.ok(/\\d\{4\}-Q\[1-4\]/.test(expr), `expected quarter iso pattern in: ${expr}`);
+    assert.ok(!expr.includes("TRY_CAST"), `must NOT date-cast the Period label: ${expr}`);
+    assert.ok(!expr.includes("QUARTER("), `must NOT use QUARTER() over a cast date: ${expr}`);
+  });
+
+  it("year expr extracts the leading 4-digit year from PeriodIso", () => {
+    const expr = facetColumnInlineDuckDbExpr("Year · Period", periodCols, binding);
+    assert.ok(expr !== null);
+    assert.ok(expr.includes('regexp_extract("PeriodIso"'), `expected regexp_extract in: ${expr}`);
+    assert.ok(!expr.includes("strftime"), `must NOT strftime a cast date: ${expr}`);
+  });
+
+  it("self-detects the Period/PeriodIso triple even without an explicit binding", () => {
+    const expr = facetColumnInlineDuckDbExpr("Quarter · Period", periodCols);
+    assert.ok(expr !== null);
+    assert.ok(expr.includes('regexp_full_match("PeriodIso"'), `expected self-detected PeriodIso path in: ${expr}`);
+  });
+
+  it("does NOT hijack a real date column named Period when no PeriodIso sibling exists", () => {
+    const tidy = new Set(["Period", "Sales"]);
+    const expr = facetColumnInlineDuckDbExpr("Quarter · Period", tidy);
+    assert.ok(expr !== null);
+    assert.ok(expr.includes("QUARTER("), `tidy Period should still date-cast: ${expr}`);
+    assert.ok(!expr.includes("PeriodIso"), `no PeriodIso reference expected: ${expr}`);
+  });
+
+  it("leaves real date columns (Order Date) on the date-cast path even with a period binding present", () => {
+    const mixed = new Set(["Order Date", "Period", "PeriodIso", "Sales"]);
+    const expr = facetColumnInlineDuckDbExpr("Quarter · Order Date", mixed, binding);
+    assert.ok(expr !== null);
+    assert.ok(expr.includes("QUARTER("), `Order Date must keep QUARTER(): ${expr}`);
+    assert.ok(!expr.includes("PeriodIso"), `Order Date must not reference PeriodIso: ${expr}`);
+  });
+});

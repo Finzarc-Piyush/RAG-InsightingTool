@@ -43,6 +43,7 @@ import {
 import {
   injectRollupExcludeFilters,
   injectCompoundShapeMetricGuard,
+  injectPeriodAdditivityGuard,
   extractDistinctMetricValues,
   detectPerXIntent,
   detectMultiPerIntent,
@@ -173,6 +174,29 @@ export async function tryQuickAnswer(
         ctx.question,
         distinctMetrics
       );
+    }
+    // PA1 · Period-additivity guard on the quick-answer fast path — the
+    // quick-lookup shape ("highest sales in the latest 12 months") would
+    // otherwise bypass the planner backstop and SUM across overlapping periods.
+    if (wf?.detected && wf.shape === "pure_period") {
+      const isoInfo = ctx.summary.columns.find((c) => c.name === wf.periodIsoColumn);
+      const kindInfo = ctx.summary.columns.find((c) => c.name === wf.periodKindColumn);
+      const isoVals =
+        (isoInfo?.topValues ?? []).map((t) => String(t.value).trim()).filter(Boolean) ||
+        [];
+      const kindVals =
+        (kindInfo?.topValues ?? []).map((t) => String(t.value).trim()).filter(Boolean) ||
+        [];
+      const pg = injectPeriodAdditivityGuard(
+        stubStep,
+        wf,
+        ctx.question,
+        isoVals.length ? isoVals : extractDistinctMetricValues(ctx.data, wf.periodIsoColumn),
+        kindVals.length ? kindVals : extractDistinctMetricValues(ctx.data, wf.periodKindColumn)
+      );
+      if (pg.injectedFilter && pg.caveat) {
+        (ctx.deterministicCaveats ??= []).push(pg.caveat);
+      }
     }
   } catch (err) {
     // Repairs are best-effort. A throw here is unexpected; log and continue

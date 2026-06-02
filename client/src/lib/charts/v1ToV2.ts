@@ -29,6 +29,7 @@ import type {
   ChartEncodingChannel,
   ChartAggOp,
 } from "@/shared/schema";
+import { isTemporalFacetFieldId } from "@/lib/temporalFacetDisplay";
 
 const TYPE_TO_MARK: Record<ChartSpec["type"], ChartV2Mark> = {
   line: "line",
@@ -52,6 +53,13 @@ function inferType(
   fieldName: string | undefined,
 ): ChartFieldType {
   if (channel === "y" || channel === "y2" || channel === "z") return "q";
+  // Temporal FACET columns ("Quarter · Period", "Year · Period", …) hold discrete
+  // canonical period buckets ("2023-Q1"), not a continuous timestamp. Render them as
+  // ordered categories (scalePoint) — a time scale would Date.parse("2023-Q1") → NaN
+  // and collapse every point to x=0. Display labels come from the period formatter.
+  if (channel === "x" && fieldName && isTemporalFacetFieldId(fieldName)) {
+    return "n";
+  }
   if (
     (mark === "line" || mark === "area") &&
     channel === "x" &&

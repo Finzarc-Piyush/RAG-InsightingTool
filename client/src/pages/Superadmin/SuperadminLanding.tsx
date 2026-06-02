@@ -49,7 +49,8 @@ const GRANULARITY_OPTIONS: ReadonlyArray<{ key: Granularity; label: string }> = 
 const METRIC_OPTIONS: ReadonlyArray<{ key: string; label: string; isCurrency?: boolean }> = [
   { key: "activeUsers", label: "Active users" },
   { key: "sessionsCreated", label: "Sessions created" },
-  { key: "messages", label: "Messages" },
+  { key: "messages", label: "Questions" },
+  { key: "cacheHits", label: "Cache hits" },
   { key: "charts", label: "Charts" },
   { key: "pivotsGenerated", label: "Pivots generated" },
   { key: "dashboardsCreated", label: "Dashboards created" },
@@ -320,7 +321,12 @@ export default function SuperadminLanding() {
               subline={`DAU ${overview.kpis.activeUsers.dau} · WAU ${overview.kpis.activeUsers.wau} · MAU ${overview.kpis.activeUsers.mau}`}
             />
             <KpiCard label="Sessions" value={formatNumber(overview.kpis.sessionsCreated)} />
-            <KpiCard label="Messages" value={formatNumber(overview.kpis.messages)} />
+            <KpiCard
+              label="Questions"
+              value={formatNumber(overview.kpis.messages)}
+              subline={`${formatNumber(overview.kpis.cacheHits)} from cache`}
+            />
+            <KpiCard label="Cache hits" value={formatNumber(overview.kpis.cacheHits)} />
             <KpiCard label="Charts" value={formatNumber(overview.kpis.charts)} />
             <KpiCard
               label="Pivots generated"
@@ -403,7 +409,7 @@ export default function SuperadminLanding() {
                   <tr className="text-left text-xs uppercase text-muted-foreground border-b border-border/40">
                     <th className="py-2">User</th>
                     <th className="py-2 text-right">Sessions</th>
-                    <th className="py-2 text-right">Messages</th>
+                    <th className="py-2 text-right">Questions</th>
                     <th className="py-2 text-right">Charts</th>
                   </tr>
                 </thead>

@@ -8,7 +8,10 @@ import { SessionDataNotMaterializedError } from "../lib/columnarStorage.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
 import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";
 import { getDataForAnalysis } from "../lib/largeFileProcessor.js";
-import { applyTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
+import {
+  applyTemporalFacetColumns,
+  periodDimensionFromSummary,
+} from "../lib/temporalFacetColumns.js";
 import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
 import { applyWideFormatMeltIfNeeded } from "../lib/wideFormat/applyWideFormatMeltIfNeeded.js";
 
@@ -128,7 +131,9 @@ function canonicalizeLoadedData(
   const dateCols = chatDocument.dataSummary?.dateColumns;
   if (data.length > 0 && dateCols && dateCols.length > 0) {
     canonicalizeDateColumnValues(data, dateCols);
-    applyTemporalFacetColumns(data, dateCols);
+    applyTemporalFacetColumns(data, dateCols, {
+      periodDimension: periodDimensionFromSummary(chatDocument.dataSummary),
+    });
   }
   return data;
 }
