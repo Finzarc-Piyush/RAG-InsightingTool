@@ -1,23 +1,35 @@
 /**
- * DB3 · Dashboard coverage gate.
+ * ============================================================================
+ * dashboardCoverageGate.ts — make sure a "build me a dashboard" request charts
+ * every dimension it promised
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the user asks for a dashboard, an earlier step (the analysis brief)
+ *   lists which categorical columns ("dimensions" — e.g. Region, Category) the
+ *   dashboard should break the outcome metric down by. This gate inspects the
+ *   planner's proposed steps and checks that each promised dimension is actually
+ *   the x-axis of at least one `build_chart` step. For any dimension that was
+ *   forgotten — and is sensible to chart (between 2 and 47 distinct values) —
+ *   it appends a deterministic `build_chart` step so the dashboard is complete.
+ *   Very-high-cardinality dimensions are left for a later "feature sweep" that
+ *   buckets them into top-N + Other.
  *
- * After the planner returns, when `brief.requestsDashboard === true`, verify
- * every dimension named in `brief.candidateDriverDimensions ∪
- * brief.segmentationDimensions` is the `x` of at least one `build_chart`
- * step. Any uncovered dimension within a sane cardinality envelope (2 ≤
- * topValues ≤ 47) gets a deterministic `build_chart` step appended — the
- * downstream feature sweep (DB4) handles the high-cardinality (top-N+Other)
- * case.
+ * WHY IT MATTERS
+ *   Without this gate, a planner LLM building a 12-chart dashboard might silently
+ *   skip half the requested breakdowns, leaving holes. Running BEFORE tool
+ *   execution (rather than patching after the narrator) means the added charts
+ *   flow through the full pipeline (insight enrichment, magnitudes, arrangement)
+ *   like any other planned chart, not as bare appended shells.
  *
- * Why upstream of the planner's tool execution rather than post-synthesis
- * (where `dashboardFeatureSweep` already lives): plan-time additions go
- * through the full agent processing chain (chart-insight enrichment,
- * magnitudes, dashboard arrangement) instead of being deterministic shells
- * appended after the narrator.
+ * KEY PIECES
+ *   - assertDashboardCoverage — pure check; returns missing/high-card dimensions + the extra steps needed
+ *   - applyDashboardCoverage — convenience wrapper that mutates the plan in place and returns the result
+ *   - DashboardCoverageResult — { ok, missingDimensions, highCardinalityDimensions, extensions }
  *
- * This is NOT a replan — single-flow policy is preserved. We append steps to
- * the planner's emitted plan so the original-plan-wins invariant from
- * agentLoop.service.ts:1988 still holds.
+ * HOW IT CONNECTS
+ *   Reads `ctx.analysisBrief` + `ctx.summary` (DataSummary). Appends `PlanStep`s
+ *   the agent loop then executes. This is NOT a replan — it only adds to the
+ *   planner's own plan, so the single-flow "original plan wins" policy holds.
  */
 
 import type { PlanStep, AgentExecutionContext } from "./types.js";
@@ -54,7 +66,7 @@ function collectChartedDimensions(plan: PlanStep[]): Set<string> {
  * `topValues` is computed from up to 12k rows and saturates at 48 distinct
  * entries. `length === 0` means the column never collected categorical
  * frequencies (i.e. numeric, date, or post-cap). We treat saturated columns
- * as high-cardinality so DB4's feature-sweep bucketing handles them.
+ * as high-cardinality so the downstream feature-sweep bucketing handles them.
  */
 function classifyCardinality(
   summary: DataSummary,

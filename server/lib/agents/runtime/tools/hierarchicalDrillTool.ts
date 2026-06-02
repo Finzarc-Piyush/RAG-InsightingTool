@@ -1,25 +1,36 @@
 /**
- * Wave WT8 · `run_hierarchical_drill` tool.
+ * ============================================================================
+ * hierarchicalDrillTool.ts — "top-N + Other" rollup (the `run_hierarchical_drill` tool)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_hierarchical_drill` tool. "High-cardinality" means a
+ *   column with lots of distinct values (e.g. 50 regions, 200 SKUs); charting
+ *   all of them at once is unreadable. This tool aggregates a numeric metric by
+ *   that column, keeps the top-N biggest (or smallest) groups, and rolls every
+ *   remaining group into a single "Other" bucket. ("Drill-down" is the broader
+ *   idea of starting at a summary level and zooming into detail; here we keep
+ *   the summary clean while preserving the Other group as a summable total.)
+ *   Each output row carries a `_rank` (1, 2, 3 ... and `-1` for the Other
+ *   bucket) and a `_share` (its fraction of the grand total, 0..1) so chart
+ *   renderers can label slices without recomputing percentages.
  *
- * Rolls high-cardinality dimensions (e.g., 50 regions, 200 SKUs) into
- * **top-N actual values + an "Other" bucket** for the remainder. Closes
- * the explicit "matrix charts with 50 categories are unreadable" gap
- * from the agent-runtime audits — without losing the drill-down
- * affordance (the Other group is summable + clickable for future
- * waves).
+ * WHY IT MATTERS
+ *   It turns an unreadable 50-category chart into a clean "top 10 + Other"
+ *   view. Pure JavaScript, no Python — fast and runs on the in-memory working
+ *   dataset.
  *
- * Pure-Node, no Python. Operates on `ctx.exec.data` (the working
- * dataset, post-active-filter when applicable) with row-level
- * `dimension_filters` applied first. Returns a stable result-row shape:
+ * KEY PIECES
+ *   - hierarchicalDrillArgsSchema — validates the request (dimension, metric
+ *     column, aggregation, topN, direction, otherLabel, optional row filters).
+ *   - registerHierarchicalDrillTool — registers the tool wrapper.
+ *   - runHierarchicalDrill — the pure transform: filter → bucket → aggregate →
+ *     sort → split into keep + Other → build the table. Exported for tests and
+ *     reuse from skills; does no I/O.
  *
- *   [{ [dimension]: "Brand A", [metric]: 12345, _rank: 1, _share: 0.34 },
- *    { [dimension]: "Brand B", [metric]:  9870, _rank: 2, _share: 0.27 },
- *    ...
- *    { [dimension]: "Other",   [metric]:  5512, _rank: -1, _share: 0.15 }]
- *
- * The `_share` column is a 0..1 fraction of the grand total so renderers
- * can label slices without an extra pass. `_rank: -1` flags the Other
- * bucket for downstream consumers that want to dim / mark it.
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry (toolRegistry.ts).
+ *   Operates on `ctx.exec.data` (the post-active-filter working dataset).
+ *   Often paired with `execute_query_plan` when raw rows need shaping first.
  */
 
 import { z } from "zod";

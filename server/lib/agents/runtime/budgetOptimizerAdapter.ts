@@ -1,12 +1,36 @@
 /**
- * W54 · adapter: maps run_budget_optimizer's operationResult into the
- * deterministic shape AnswerCard / MessageBubble already render.
+ * ============================================================================
+ * budgetOptimizerAdapter.ts — turn the MMM budget optimiser's math into
+ * human-readable recommendations / magnitudes / methodology text
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The "MMM" (Marketing-Mix Model) budget optimiser is a tool that, given how
+ *   much a brand spent per channel (TV, digital, etc.) and the sales that
+ *   resulted, computes the OPTIMAL way to re-split the same total budget to
+ *   sell more. This file takes that raw numeric result and converts it into the
+ *   exact display shapes the chat UI already knows how to render: a ranked list
+ *   of "recommendations" (do X, because Y), short "magnitude" pills for the
+ *   answer header (projected lift, biggest shift), and a one-paragraph
+ *   methodology/caveats blurb ("domain lens").
  *
- * The narrator LLM is allowed to populate answerEnvelope.recommendations on
- * its own, but for budget reallocation the numbers must come from the
- * optimizer, not the model. This adapter emits per-channel actions with
- * exact spend deltas + projected lift, then the caller overrides the LLM's
- * recommendations with these.
+ * WHY IT MATTERS
+ *   The narrator LLM is normally allowed to write recommendations itself, but
+ *   for budget reallocation the NUMBERS must come from the optimiser, not from
+ *   a model that might hallucinate. This adapter produces deterministic,
+ *   math-backed text the caller uses to OVERRIDE the LLM's version — so spend
+ *   deltas and projected lift the user sees are exactly what the model computed.
+ *
+ * KEY PIECES
+ *   - isBudgetRedistributeOperationResult — type guard: is this op a budget result?
+ *   - buildRecommendationsFromBudgetOptimizer — ranked per-channel actions (biggest reallocation first)
+ *   - buildMagnitudesFromBudgetOptimizer — short header pills (lift, total held, biggest shift)
+ *   - buildDomainLensFromBudgetOptimizer — methodology + caveats paragraph
+ *
+ * HOW IT CONNECTS
+ *   Consumes a `BudgetRedistributeResponse` from `../../dataOps/mmmService.js`
+ *   (the Python MMM service result). The agent loop calls these builders after
+ *   the `run_budget_optimizer` tool runs and splices the output over the
+ *   narrator's `answerEnvelope.{recommendations,magnitudes,domainLens}`.
  */
 import type { BudgetRedistributeResponse } from "../../dataOps/mmmService.js";
 

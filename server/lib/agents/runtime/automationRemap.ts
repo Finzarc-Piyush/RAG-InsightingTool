@@ -1,15 +1,36 @@
 /**
- * Wave A7 · Automation column-remap LLM call.
+ * ============================================================================
+ * automationRemap.ts — match a saved analysis's columns onto a freshly
+ * uploaded dataset so the automation can replay
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   An "automation" is a saved analysis recipe the user can re-run on new data
+ *   (e.g. next month's sales file). For the replay to work, the columns the
+ *   recipe expects must be matched to the new file's columns. This file does
+ *   that matching: first it pairs columns whose names are identical
+ *   (case-insensitive), then for any saved column that has no exact match it
+ *   asks a small/cheap LLM to propose the most likely new-dataset column —
+ *   based on name similarity, type compatibility, and overlapping sample values
+ *   — returning each guess with a high/medium/low confidence and a short reason.
  *
- * Given a saved automation's `expectedSchema.finalColumns` and a new
- * dataset's `dataSummary.columns`, computes a strict by-name diff and
- * — for any unmatched-saved-columns — asks a MINI-tier LLM to propose
- * a `{savedName, suggestedName, confidence}` mapping based on column
- * name similarity, type compatibility, and sample-value patterns.
+ * WHY IT MATTERS
+ *   Real-world files drift: "Q1 23 Value Sales" becomes "Q1 24 Value Sales",
+ *   casing changes, abbreviations appear. Without this remap an automation would
+ *   silently break or run against the wrong column. It is defensive: any LLM
+ *   guess that names a column that doesn't actually exist is downgraded to
+ *   "unmatchable", and on LLM failure every unmatched column is reported so the
+ *   user can fix or cancel — never a silent partial mapping.
  *
- * Pure orchestrator — does not mutate the recipe. Wave A8's run/dry-run
- * endpoints surface the result to the user, who confirms or edits before
- * the actual replay starts.
+ * KEY PIECES
+ *   - computeAutomationColumnRemap — main: exact-match diff + LLM call for the remainder
+ *   - AutomationDryRunResult shape: { exactMatches, proposedMappings, unmatchable }
+ *
+ * HOW IT CONNECTS
+ *   Pure orchestrator — does NOT mutate the saved recipe. Consumes
+ *   `AutomationColumnInfo` and returns `AutomationDryRunResult` (both from
+ *   `../../../shared/schema.js`). Calls the LLM via `completeJson` (llmJson.js).
+ *   The automation run/dry-run endpoints surface the result for the user to
+ *   confirm or edit before the actual replay starts.
  */
 
 import { z } from "zod";

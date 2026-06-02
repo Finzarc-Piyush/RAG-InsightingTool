@@ -1,16 +1,29 @@
 /**
- * Wave C8 · `RowSetRef` symbolic row-set references for cross-tool data
- * passing.
+ * ============================================================================
+ * rowSetRef.ts — pass a filtered row set between tools by reference, not copy
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines a "RowSetRef": a tiny pointer to a subset of rows, described by the
+ *   FILTER that selects them (plus a row count and an optional small sample)
+ *   rather than the rows themselves. A later tool resolves the ref by re-running
+ *   that filter against the full in-memory data frame.
  *
- * When tool 2 produces a filtered row set, it stores a `RowSetRef` (filter
- * spec + count + optional small sample) on the scratchpad instead of pushing
- * 5 000 rows into the next tool's args. Tool 5 reads via `resolveRowSet`,
- * which re-runs the filter against the row-level frame.
+ * WHY IT MATTERS
+ *   When one tool narrows the data to, say, 5,000 rows, copying those rows into
+ *   the next tool's arguments bloats the stored chat document and can get
+ *   truncated by the observation size cap. A ref is small, and because the
+ *   filter is the single source of truth, there's no drift between snapshots.
  *
- * Benefits:
- *   - Cosmos doc bloat goes away (refs are tiny).
- *   - No drift between snapshots — filter is the single source of truth.
- *   - Observation char cap can't truncate the underlying rows.
+ * KEY PIECES
+ *   - RowSetRef — the reference shape (filter, count, sample, provenance).
+ *   - makeRowSetRef(args) — create a ref (samples clipped to 5 rows).
+ *   - resolveRowSet(rows, ref) / applyFilterSpec(rows, filter) — re-apply the
+ *     filter to recover the actual rows. Supports equality, `in`, and
+ *     gt/gte/lt/lte operators, with loose (case-insensitive) value matching.
+ *
+ * HOW IT CONNECTS
+ *   A producing tool stores a RowSetRef on the agent scratchpad; a downstream
+ *   tool calls resolveRowSet against the row-level frame. Pure functions, no I/O.
  */
 
 export interface RowSetRef {

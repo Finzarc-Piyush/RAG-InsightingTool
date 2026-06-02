@@ -1,19 +1,41 @@
 /**
- * Deterministic dashboard feature sweep.
+ * ============================================================================
+ * dashboardFeatureSweep.ts — fill the gaps so a dashboard is actually complete
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a user asks for a dashboard, the LLM planner builds some charts but
+ *   often misses obvious ones. This file runs AFTER the planner and
+ *   deterministically (no LLM, just rules) fills the holes. It looks at every
+ *   meaningful breakdown dimension the analysis identified (segmentation
+ *   dimensions + candidate driver dimensions) and, for any that isn't already
+ *   charted against the main outcome metric, builds an "outcome by dimension"
+ *   chart. It also adds a primary time-trend on the best date column if one
+ *   isn't there yet. To stay legible it caps how many charts it adds and
+ *   handles high-cardinality dimensions by bucketing the long tail into "Other"
+ *   (top 15 values kept), and skips dimensions with too many distinct values.
  *
- * After the LLM-driven planner + visual planner produce charts, fill in
- * coverage gaps when the user explicitly asked for a dashboard
- * (`analysisBrief.requestsDashboard === true`). For every dimension named
- * in `segmentationDimensions ∪ candidateDriverDimensions` that is NOT
- * already charted against the outcome metric, build a deterministic
- * outcome-by-dim chart so the dashboard reaches genuine breadth — and add
- * a primary trend on the strongest date column when one isn't already
- * present.
+ * WHY IT MATTERS
+ *   Dashboards are a headline feature, and "the dashboard missed the obvious
+ *   breakdowns" was a real complaint. This guarantees genuine breadth — every
+ *   important dimension gets a chart — without relying on the LLM to remember
+ *   them all. Because it reuses the exact same compile path as the planner's
+ *   fallback, the charts it adds are indistinguishable from LLM-proposed ones
+ *   downstream.
  *
- * Pure module: no LLM calls, no I/O. Uses the same compile path as the
- * visual planner's deterministic fallback (compileChartSpec +
- * processChartData + calculateSmartDomainsForChart) so the resulting
- * specs are indistinguishable from LLM-proposed charts downstream.
+ * KEY PIECES
+ *   - enumerateMissingDashboardCharts — main entry: returns the net-new chart
+ *       specs to append (respecting the maxAdds cap and a coverage check).
+ *   - bucketRowsTopN — collapses long-tail dimension values into "Other".
+ *   - tryBuildChart — compiles one (outcome × dim) chart, or null on failure.
+ *   - FeatureSweepReport — records skipped high-cardinality + bucketed dims so
+ *       the caller can emit telemetry.
+ *
+ * HOW IT CONNECTS
+ *   Pure module, no LLM calls and no I/O. Called from agentLoop.service.ts when
+ *   assembling a dashboard. Reuses chartSpecCompiler (compileChartSpec),
+ *   chartGenerator (processChartData) and axisScaling
+ *   (calculateSmartDomainsForChart) — the same path as the visual planner's
+ *   deterministic fallback.
  */
 import type { AgentExecutionContext } from "./types.js";
 import type { ChartSpec } from "../../../shared/schema.js";
@@ -23,25 +45,25 @@ import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 
 /**
- * DB4 · Cardinality regime.
+ * Cardinality regime (how many distinct values a dimension has):
  *  - 2 ≤ uniques ≤ LOW_CARDINALITY_MAX → chart natively.
  *  - LOW_CARDINALITY_MAX < uniques ≤ MEDIUM_CARDINALITY_MAX → chart against a
  *    top-N + Other bucketing of the dim column. Captures the long-tail
- *    contribution that the pre-DB4 hard skip silently dropped (e.g. 200-unique
+ *    contribution that a plain hard skip would silently drop (e.g. 200-unique
  *    customer columns) without producing illegible 200-bar charts.
- *  - uniques > MEDIUM_CARDINALITY_MAX → still skipped; reported in
+ *  - uniques > MEDIUM_CARDINALITY_MAX → skipped; reported in
  *    `skippedHighCardinality` so the caller can emit telemetry.
  */
 const LOW_CARDINALITY_MAX = 60;
 const MEDIUM_CARDINALITY_MAX = 500;
 const TOP_N_BUCKET = 15;
 const OTHER_BUCKET_LABEL = "Other";
-// DPF6 · 18 → 24 to align with `DASHBOARD_CHART_HARD_CAP` and the
-// per-sheet schema ceiling (`dashboardSheetSpecSchema.charts.max(24)`).
-// This is only the FALLBACK ceiling — agentLoop.service.ts always passes
+// Aligned with `DASHBOARD_CHART_HARD_CAP` and the per-sheet schema ceiling
+// (`dashboardSheetSpecSchema.charts.max(24)`). This is only the FALLBACK
+// ceiling — agentLoop.service.ts always passes
 // `maxAdds: remaining = DASHBOARD_CHART_HARD_CAP - mergedCharts.length`
 // so the effective ceiling matches the hard cap. Tests / direct callers
-// that don't pass `maxAdds` get the same 24 ceiling now.
+// that don't pass `maxAdds` get this 24 ceiling.
 const DEFAULT_MAX_SWEEP_CHARTS = 24;
 
 export interface FeatureSweepOptions {
@@ -125,8 +147,8 @@ export function enumerateMissingDashboardCharts(
     }
     if (uniques > LOW_CARDINALITY_MAX) {
       // Top-N + Other bucketing keeps the chart legible while still surfacing
-      // the dim in the dashboard. Without DB4, this entire dim was silently
-      // dropped — that's the "missed features" complaint at the root.
+      // the dim in the dashboard. Without this, a high-cardinality dim would
+      // be silently dropped — that's the "missed features" complaint at the root.
       const bucketed = bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
       const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
       if (built) {
@@ -177,7 +199,7 @@ function bucketRowsTopN(
   });
 }
 
-// DB4 · exposed for tests so the bucketing helper can be pinned independently.
+// Exposed for tests so the bucketing helper can be pinned independently.
 export const __test__ = {
   bucketRowsTopN,
   LOW_CARDINALITY_MAX,

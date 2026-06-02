@@ -1,18 +1,42 @@
 /**
- * variance_decomposer — for "why did X fall in segment Y between A and B?" shapes.
+ * ============================================================================
+ * varianceDecomposer.ts — the "why did metric X fall/rise?" diagnostic skill
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the skill for variance-diagnostic questions like "why did sales
+ *   fall in the North region between A and B?". Despite the name, it does NOT
+ *   compute a formal variance decomposition itself; its job is to gather the
+ *   right evidence so the final answer can explain the move with numbers:
+ *     1. A time series of the outcome metric inside the user's filters (built
+ *        via execute_query_plan, grouped by date) — the backbone the narrative
+ *        references.
+ *     2. A breakdown on the first candidate driver dimension (e.g. Product
+ *        Category) — shows who moved.
+ *     3. A breakdown on the second candidate driver (e.g. Channel), if present.
+ *     4. A line chart of the time series.
  *
- * The skill does NOT itself compute variance decomposition. Its value is
- * ensuring the *right set of evidence* is collected so the synthesiser can
- * explain the fall with magnitudes:
+ * WHY IT MATTERS
+ *   "Why did X change?" needs both a trend backbone and contributor breakdowns
+ *   to answer credibly; collecting them together avoids a thin, single-tool
+ *   answer. This is a broad fallback skill (default priority 0); more specific
+ *   time skills (time_window_diff at 10) shadow it when their stricter
+ *   preconditions are met. It is the one skill marked parallelizable: false —
+ *   its steps run serially.
  *
- *  1. Time series of the outcome metric inside the user's filters — the
- *     backbone the narrative will reference.
- *  2. A breakdown on the first candidate driver dimension (e.g. Product
- *     Category) — shows who moved.
- *  3. A breakdown on the second candidate driver (e.g. Channel), if present.
- *  4. A line chart of the time series.
+ * KEY PIECES
+ *   - pickDateColumn — first date column from the summary; if none, the skill
+ *     can't build a time series so plan() returns null.
+ *   - resolvedFilters — normalise the brief's user filters to the tool shape
+ *     (case-insensitive in / not_in).
+ *   - skill (exported as varianceDecomposerSkill) — the AnalysisSkill object;
+ *     appliesTo() requires a "variance_diagnostic" shape + an outcome metric;
+ *     plan() chooses a date grain (day/week/month/year) and builds the steps.
  *
- * No new tool types — every step calls an existing registered tool.
+ * HOW IT CONNECTS
+ *   Self-registers via registerSkill (registry.ts) when imported from
+ *   skills/index.ts; selected/expanded by selectSkill / expandSkill. Steps call
+ *   the low-level tools execute_query_plan, run_breakdown_ranking, and
+ *   build_chart. Brief type comes from the shared AnalysisBrief schema.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";

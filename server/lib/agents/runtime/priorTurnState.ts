@@ -1,14 +1,33 @@
 /**
- * Wave B9 · `PriorTurnHandle` builder.
+ * ============================================================================
+ * priorTurnState.ts — gives the current turn typed access to the last answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   In a chat, each user question is a "turn". When the user asks a follow-up,
+ *   the agent benefits from knowing what the PREVIOUS answer concluded — its
+ *   findings and hypotheses. Every finalised assistant message stores this as
+ *   `agentInternals` (a saved snapshot of the agent's internal state). This file
+ *   finds the most recent finalised assistant message, reads that snapshot, and
+ *   wraps it in a `PriorTurnHandle` — a small object with typed read accessors
+ *   (`findings(...)`, `hypotheses()`) so the planner/reflector/narrator can query
+ *   structured prior state directly instead of parsing a blob of recall text.
  *
- * Reads the prior assistant message's persisted `agentInternals` (Wave A1/A2)
- * and exposes typed read accessors so a follow-up turn's planner / reflector /
- * narrator can reason against structured prior state instead of the W60
- * memory-recall TEXT block.
+ * WHY IT MATTERS
+ *   It lets a follow-up turn build on the last turn instead of starting cold —
+ *   e.g. "chain hypotheses, don't re-run settled questions". When no prior
+ *   snapshot exists (first turn, or older messages saved before this feature),
+ *   it returns null and the system falls back to a plain-text memory-recall path.
  *
- * Falls back to `null` when no prior assistant message has `agentInternals`
- * persisted (legacy turns or first-turn sessions). The W60 memory recall path
- * stays in place as a TEXT fallback in those cases.
+ * KEY PIECES
+ *   - buildPriorTurnHandle — walks chat history backward, returns a handle from
+ *     the latest finalised assistant message (skips streaming-preview rows).
+ *   - formatPriorTurnHandleForPrompt — renders the handle as a labelled
+ *     "PRIOR_TURN_STATE" prompt block (empty string when nothing to show).
+ *
+ * HOW IT CONNECTS
+ *   Types come from investigationState.js (StructuredFinding, HypothesisNode,
+ *   PriorTurnHandle) and shared/schema.js (AgentInternals, Message). The prompt
+ *   block produced here is injected into planner/reflector/narrator prompts.
  */
 import type {
   StructuredFinding,

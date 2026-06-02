@@ -1,7 +1,45 @@
 /**
- * Mode Classifier
- * Top-level AI classifier that determines which mode (analysis, dataOps, or modeling)
- * a user query should route to. This sits above all other layers.
+ * ============================================================================
+ * modeClassifier.ts — the very first fork in the road: which of three big
+ * "modes" should a question go to?
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is the top-level traffic cop. Before we work out the fine-grained intent
+ *   (intentClassifier.ts), we first ask the LLM (language model) one coarse
+ *   question: is the user trying to ANALYSE the data (correlations, charts,
+ *   stats — the default), do DATA OPS on it (add/remove/transform columns, view
+ *   the raw data), or do MODELING (build/train a machine-learning model)? It
+ *   returns one of those three labels plus a confidence score and optional
+ *   reasoning. It leans heavily on conversation history so a bare "yes" or "do
+ *   it" inherits the mode of whatever was being discussed.
+ *
+ * WHY IT MATTERS
+ *   It sits above every other classifier and handler — pick the wrong mode and
+ *   the whole request goes to the wrong subsystem. It also accepts optional
+ *   "ambient context" (standing user notes, FMCG/Marico domain vocabulary, and
+ *   the interpreted intent from earlier turns) so it can resolve ambiguity that
+ *   plain regex on the question text would get wrong — e.g. recognising that
+ *   "compute MAT" is analytical vocabulary, not a data transformation, or that a
+ *   short follow-up in a long modeling chat should stay in modeling mode.
+ *
+ * KEY PIECES
+ *   - modeClassificationSchema / ModeClassification — the result shape (mode,
+ *     confidence, optional reasoning), validated by Zod.
+ *   - ClassifyModeContext — the four OPTIONAL ambient-context blocks
+ *     (permanentContext, domainContext, userIntentVerbatim,
+ *     userIntentConstraints) callers can thread in to disambiguate.
+ *   - classifyMode(question, chatHistory, summary, maxRetries, context) — the
+ *     main call: builds a tightly-capped prompt, asks the LLM for JSON, validates
+ *     with Zod, retries, and falls back to keyword + chat-history matching if the
+ *     LLM never returns valid output.
+ *   - removeNulls(obj) — strips nulls so Zod accepts the LLM's optional fields.
+ *
+ * HOW IT CONNECTS
+ *   Calls the LLM via runtime/callLlm.js (purpose MODE_CLASSIFY from
+ *   runtime/llmCallPurpose.js) on the cheap "intent"-tier model from models.js.
+ *   Called by chatStream.service / chat.service near the start of a request; the
+ *   chosen mode then decides whether to run analysis, runDataOpsFromAgent.ts, or
+ *   the modeling flow. Types DataSummary + Message come from the shared schema.
  */
 import { z } from 'zod';
 import { callLlm } from './runtime/callLlm.js';
@@ -47,17 +85,13 @@ function removeNulls(obj: any): any {
 }
 
 /**
- * Wave B4 · Optional ambient context the classifier can use to resolve
- * ambiguity. Pre-B4 the classifier only saw question + recent chat
- * history + columns list — and would route based on surface-form regex
- * even when the user had set a standing context note like "I'm building
- * a model" or "treat `budget` as cost_cap_eur". With these blocks
- * threaded in, the classifier can: (a) honour user-stated intent in
- * permanentContext, (b) resolve FMCG/Marico vocabulary in domainContext
- * (e.g. "compute MAT" → analysis, not dataOps), (c) read the rolling
- * SAC's userIntent.interpretedConstraints so a multi-turn modeling
- * conversation stays in modeling mode even when the user's wording
- * drifts.
+ * Optional ambient context the classifier can use to resolve ambiguity that
+ * surface-form regex on the question would get wrong. With these blocks threaded
+ * in, the classifier can: (a) honour user-stated intent in permanentContext,
+ * (b) resolve FMCG/Marico vocabulary in domainContext (e.g. "compute MAT" →
+ * analysis, not dataOps), (c) read the rolling SAC's
+ * userIntent.interpretedConstraints so a multi-turn modeling conversation stays
+ * in modeling mode even when the user's wording drifts.
  *
  * All four blocks are OPTIONAL. The current callers (chatStream.service,
  * chat.service) pass them when available; tests don't need to.
@@ -92,9 +126,9 @@ export async function classifyMode(
   // Build available columns context
   const allColumns = summary.columns.map(c => c.name).join(', ');
 
-  // Wave B4 · Optional user-intent + domain blocks. Capped tightly because
-  // mode classification is a high-volume MINI-tier call; we want the
-  // prompt under ~3KB even with full context.
+  // Optional user-intent + domain blocks. Capped tightly because mode
+  // classification is a high-volume MINI-tier call; we want the prompt under
+  // ~3KB even with full context.
   const userNotes = (context?.permanentContext ?? '').trim();
   const userNotesBlock = userNotes
     ? `\n\nUSER NOTES (standing context the user set on this session — apply when relevant to the routing decision):\n${userNotes.slice(0, 600)}`

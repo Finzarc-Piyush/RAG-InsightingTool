@@ -1,3 +1,39 @@
+/**
+ * ============================================================================
+ * toolRegistry.ts — the catalogue and runner for the agent's tools
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The agent answers questions by calling "tools" — structured actions like
+ *   running a DuckDB SQL query, computing a correlation, doing segment-driver
+ *   analysis, or a web search. This file defines the registry that holds every
+ *   tool: each tool is registered once with a name, a Zod input schema (which
+ *   validates the arguments the planner LLM supplies), the function that runs it,
+ *   and a one-line description + args hint shown to the planner. It also runs
+ *   tools safely: validate args, execute, time it, log, and turn any thrown error
+ *   into a normal `{ ok: false, summary }` result instead of crashing the turn.
+ *
+ * WHY IT MATTERS
+ *   This is the single doorway between the agent's reasoning and the real actions
+ *   it can take. The shared ToolResult shape (summary, charts, insights, parsed
+ *   query, analytical metadata, etc.) is how every tool reports back to the loop,
+ *   reflector, and narrator. Duplicate tool names are a fatal mistake (a merge
+ *   landed two implementations), so registration throws rather than silently
+ *   replacing one — failing loud at boot beats swapping behaviour at runtime.
+ *
+ * KEY PIECES
+ *   - ToolRegistry — the map of name → tool; register / execute / validate /
+ *     format-manifest-for-planner / list-descriptions.
+ *   - ToolResult / ToolExecutor / ToolRunContext — the contracts every tool
+ *     implements and receives.
+ *   - ToolManifestEntry — the planner-facing {description, argsHelp} metadata.
+ *   - ToolAlreadyRegisteredError — thrown on a duplicate name at boot.
+ *
+ * HOW IT CONNECTS
+ *   Tools are added in tools/<name>Tool.ts and wired up in registerTools.ts.
+ *   Uses AgentConfig / AgentExecutionContext (types.js) and agentLog
+ *   (agentLogger.js). The act loop calls execute(); the planner reads
+ *   formatToolManifestForPlanner() to know what tools exist and how to call them.
+ */
 import { z } from "zod";
 import type { AgentWorkbenchEntry } from "../../../shared/schema.js";
 import type { AgentConfig } from "./types.js";
@@ -7,7 +43,7 @@ import { agentLog } from "./agentLogger.js";
 export interface ToolRunContext {
   exec: AgentExecutionContext;
   config: AgentConfig;
-  /** Optional — current turn id for tools that emit Memory entries (W59). */
+  /** Optional — current turn id for tools that emit Memory entries. */
   turnId?: string;
 }
 

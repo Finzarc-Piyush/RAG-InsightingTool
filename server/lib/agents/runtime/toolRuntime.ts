@@ -1,17 +1,40 @@
 /**
- * Wave B2 · ToolRuntime API.
+ * ============================================================================
+ * toolRuntime.ts — the "handle" a tool uses to read state and record results
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Each tool the agent can call (run a query, compute a correlation, etc.)
+ *   used to receive just its arguments and a context object. This file upgrades
+ *   that to a richer "ToolRuntime" handle that lets a tool BOTH look back at
+ *   what already happened this turn AND record what it found. Reads include:
+ *   "what findings exist so far?", "has this tool already run?", "what did the
+ *   last query return?", "what's in the scratchpad?". Writes include: emit a
+ *   finding, emit a follow-up sub-question, spawn or resolve a hypothesis, set
+ *   a scratchpad value. (A "finding" is a concrete result with evidence; a
+ *   "hypothesis" is a guess being tested; the "blackboard" is the shared store
+ *   of all this for a turn.)
  *
- * Replaces the bare `(args, ctx)` tool signature with a richer handle that
- * exposes read accessors for the analytical state and write helpers for
- * structured emissions. Tools that opt in become first-class reasoners
- * ("did a prior step already correlate X with Y? skip"). Tools that ignore
- * the runtime keep working unchanged.
+ * WHY IT MATTERS
+ *   It turns tools from dumb functions into "first-class reasoners" that can be
+ *   smart — e.g. skip a correlation a previous step already computed, or build
+ *   on an earlier finding. Crucially, all writes are funneled through the
+ *   existing blackboard accessors so the older summary view
+ *   (AnalyticalBlackboard) the narrator/reflector prompts read stays perfectly
+ *   in sync. Tools that ignore the runtime keep working unchanged.
  *
- * The runtime is instantiated per-step inside `agentLoop.service.ts`. It
- * delegates reads to the live in-memory state (`ctx.blackboard`,
- * `workingMemory`, `observations`, `state.findings`, etc.) and writes via the
- * existing accessors so the legacy projection (`AnalyticalBlackboard`) stays
- * in sync.
+ * KEY PIECES
+ *   - ToolRuntime (interface) — the composite read+write handle plus `args`,
+ *       `ctx`, `stepId`, `tool`.
+ *   - createToolRuntime — builds a runtime for one step from the live arrays
+ *       and the loop's emit hooks.
+ *   - projectStructuredFindingToLegacy — adapter that mirrors a new structured
+ *       finding into the legacy blackboard shape.
+ *
+ * HOW IT CONNECTS
+ *   Instantiated per-step inside agentLoop.service.ts, which passes in the live
+ *   in-memory arrays (observations, findings, working facts, scratchpad,
+ *   hypotheses) and the onEmit* hooks that fan writes out to the blackboard.
+ *   Types come from investigationState.js and analyticalBlackboard.js.
  */
 import type { AgentExecutionContext } from "./types.js";
 import type {
@@ -60,7 +83,7 @@ export interface ToolRuntimeReads {
   findings(filter?: FindingFilter): readonly StructuredFinding[];
   /** Hypothesis nodes (tree form). */
   hypotheses(): readonly HypothesisNode[];
-  /** Past tool I/O (full ToolResult preserved by Wave B3). */
+  /** Past tool I/O (full ToolResult preserved). */
   priorToolResults(filter?: ToolResultFilter): readonly StructuredObservation[];
   /** Most-recent value of a working-memory slot key, if set. */
   workingFact(field: string): Fact | undefined;
@@ -78,13 +101,13 @@ export interface ToolRuntimeReads {
  */
 export interface ToolRuntimeWrites {
   /**
-   * Emit a structured finding. Returns the new finding id. Wave B4 wires
-   * this through `analyticalBlackboard.addFinding` for projection compat.
+   * Emit a structured finding. Returns the new finding id. Wired through
+   * `analyticalBlackboard.addFinding` for projection compat.
    */
   emitFinding(f: Omit<StructuredFinding, "id" | "createdAt">): FindingId;
-  /** Emit a sub-question for the orchestrator (Wave B7). */
+  /** Emit a sub-question for the orchestrator. */
   emitSubQuestion(q: Omit<SubQuestion, "id" | "createdAt">): string;
-  /** Add a hypothesis to the tree (B7-aware). */
+  /** Add a hypothesis to the tree. */
   spawnHypothesis(h: Omit<HypothesisNode, "id" | "createdAt" | "evidence" | "testedBy">): HypothesisId;
   /** Mark a hypothesis status. */
   resolveHypothesis(id: HypothesisId, status: HypothesisNode["status"], evidenceFindingId?: FindingId): void;

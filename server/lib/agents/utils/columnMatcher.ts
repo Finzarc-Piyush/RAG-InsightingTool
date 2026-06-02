@@ -1,19 +1,50 @@
 /**
- * Column Matching Utility
- * Finds matching column names using fuzzy matching
+ * ============================================================================
+ * columnMatcher.ts — fuzzy-match a requested column name to a real one
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The LLM (or a user) often refers to a dataset column by a slightly wrong
+ *   name — different casing, spaces vs. underscores, a partial phrase, or just
+ *   one word of a longer header. This file takes the requested name and the
+ *   list of columns that actually exist, then tries progressively looser
+ *   strategies to find the right one: exact match (ignoring case/spaces/
+ *   underscores/dashes), prefix match, substring match, word-boundary match,
+ *   whole-phrase containment, and finally reverse-containment. It returns the
+ *   real (trimmed) column name, or null if nothing is a confident match.
+ *
+ * WHY IT MATTERS
+ *   Tools that run SQL/DuckDB queries need the EXACT column name or they fail.
+ *   This matcher bridges the gap between how people/LLMs talk about columns and
+ *   how they're actually spelled, which prevents a huge class of "column not
+ *   found" errors. It also guards against a subtle bug: when a dataset was
+ *   "melted" from wide to long format at upload, the original wide column names
+ *   no longer exist, and naive fuzzy matching could silently bind them to the
+ *   wrong column — so this file deliberately refuses those stale names.
+ *
+ * KEY PIECES
+ *   - FindMatchingColumnOptions — options bag; carries the wide-format melt
+ *       metadata used to reject stale wide-column names.
+ *   - findMatchingColumn(searchName, availableColumns, options?) — the matcher;
+ *       returns the matched real column name or null.
+ *
+ * HOW IT CONNECTS
+ *   Imports the `WideFormatTransform` type from ../../../shared/schema.js
+ *   (describes how/whether a dataset was melted). Called throughout the agent
+ *   tools/skills whenever a column name from the LLM or user must be resolved
+ *   to a column that exists in the loaded dataset.
  */
 
 import type { WideFormatTransform } from "../../../shared/schema.js";
 
 export interface FindMatchingColumnOptions {
   /**
-   * WPF5 · When the dataset was melted from wide format at upload, the
-   * original wide column names (e.g. "Q1 23 Value Sales") no longer exist.
-   * If the agent or user mentions one of those names, our fuzzy matcher
-   * silently binds to a substring like `Value` or `Period` — silent
-   * corruption. When this option is set and the requested name matches an
-   * entry in `meltedColumns` (case-insensitive), we refuse the match and
-   * return null so the caller can emit a corrective error.
+   * When the dataset was melted from wide format at upload, the original wide
+   * column names (e.g. "Q1 23 Value Sales") no longer exist. If the agent or
+   * user mentions one of those names, our fuzzy matcher would silently bind to
+   * a substring like `Value` or `Period` — silent corruption. When this option
+   * is set and the requested name matches an entry in `meltedColumns`
+   * (case-insensitive), we refuse the match and return null so the caller can
+   * emit a corrective error.
    */
   wideFormatTransform?: WideFormatTransform;
 }
@@ -28,9 +59,9 @@ export function findMatchingColumn(
 ): string | null {
   if (!searchName) return null;
 
-  // WPF5 · Refuse matches against original wide-format columns that were
-  // melted away. Without this, fuzzy substring matching binds "Q1 23 Value
-  // Sales" → "Value" silently and runs the analysis on the wrong column.
+  // Refuse matches against original wide-format columns that were melted away.
+  // Without this, fuzzy substring matching binds "Q1 23 Value Sales" → "Value"
+  // silently and runs the analysis on the wrong column.
   const meltedColumns = options?.wideFormatTransform?.detected
     ? options.wideFormatTransform.meltedColumns
     : undefined;

@@ -1,10 +1,38 @@
 /**
- * Pure prompt-builders for the dashboard-autogen LLM call. Extracted from
- * buildDashboard.ts so the cohesion contract can be unit-tested without
- * loading the OpenAI client (which insists on Azure env vars at import).
+ * ============================================================================
+ * buildDashboardPrompt.ts — writes the prompts that ask the LLM for a dashboard
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the agent auto-generates a dashboard from a finished analysis, it asks
+ *   an LLM to write the narrative (titles, key conclusion, recommendations,
+ *   limitations) for a fixed two-sheet layout. This file holds the pure string
+ *   builders for that LLM call: a constant SYSTEM prompt describing the exact
+ *   two-sheet contract, and a USER prompt that packs in everything the LLM should
+ *   draw from — the question, the answer body, the structured AnswerEnvelope
+ *   (TL;DR, findings, implications, recommendations, caveats, domain lens),
+ *   magnitudes, the user's pivot snapshot, intermediate step findings, and the
+ *   list of provided charts.
  *
- * Anything in here MUST stay free of side-effecting imports (no completeJson,
- * no agentLog) — only types and string assembly.
+ * WHY IT MATTERS
+ *   The two-sheet contract is strict on purpose: the LLM writes ONLY narrative
+ *   for Sheet 1 and a bare shell for Sheet 2 — the server places all charts,
+ *   pivots, and ledger blocks deterministically (see dashboardTemplates.ts). The
+ *   user prompt repeatedly instructs "use verbatim, never invent figures, cite
+ *   these exact chart titles" so the dashboard stays anchored to real, decision-
+ *   grade content the agent already produced rather than re-summarising loosely.
+ *
+ * KEY PIECES
+ *   - DASHBOARD_SYSTEM_PROMPT / buildDashboardSystemPrompt — the fixed contract.
+ *   - buildDashboardUserPrompt — assembles the per-turn user prompt from
+ *     BuildDashboardPromptArgs, slicing each section to stay within length caps.
+ *
+ * HOW IT CONNECTS
+ *   Reads types from shared/schema.js (AnalysisBrief, ChartSpec,
+ *   DashboardAnswerEnvelope). Extracted from buildDashboard.ts (the runtime that
+ *   actually makes the LLM call and assembles sheets) so these builders can be
+ *   unit-tested without importing the OpenAI client (which demands Azure env vars
+ *   at import time). MUST stay free of side-effecting imports — types + string
+ *   assembly only, no completeJson, no agentLog.
  */
 import type {
   AnalysisBrief,

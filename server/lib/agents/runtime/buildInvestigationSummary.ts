@@ -1,17 +1,27 @@
 /**
- * Wave W13 · buildInvestigationSummary
+ * ============================================================================
+ * buildInvestigationSummary.ts — digest the blackboard for the saved message
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Boils the full "analytical blackboard" (the engine's working notes for a
+ *   turn — every hypothesis, finding, and open question) down to a small
+ *   InvestigationSummary that gets saved on the assistant message. It keeps only
+ *   what the UI needs for a digest card: hypotheses tested, headline findings,
+ *   and unresolved questions — trimmed and length-capped.
  *
- * Pure helper that distils an `AnalyticalBlackboard` into the compact
- * `InvestigationSummary` shape persisted onto the assistant message. The
- * persisted shape intentionally omits evidence refs, sequence ids, and any
- * pre-confirmation hypothesis bookkeeping — clients render a digest card
- * (hypotheses tested + headline findings + unresolved questions), not a
- * detailed audit trail. The audit trail still lives on `ctx.blackboard` for
- * server-side telemetry / future verifier rules.
+ * WHY IT MATTERS
+ *   Clients render a short summary card, not a forensic audit trail, so the
+ *   saved shape deliberately drops evidence refs and bookkeeping ids. The full
+ *   detail still lives on ctx.blackboard for server-side telemetry / verifier rules.
  *
- * Returns `undefined` when the blackboard has nothing worth surfacing
- * (no hypotheses AND no findings AND no open questions). The caller can
- * then skip persisting the field entirely.
+ * KEY PIECES
+ *   - buildInvestigationSummary(blackboard) — returns the compact summary, or
+ *     undefined when there's nothing worth showing (no hypotheses, findings, or
+ *     open questions) so the caller can skip persisting the field.
+ *
+ * HOW IT CONNECTS
+ *   Reads AnalyticalBlackboard/Finding from analyticalBlackboard.js; output type
+ *   InvestigationSummary comes from shared/schema.ts. Pure function, no I/O.
  */
 import type { AnalyticalBlackboard, Finding } from "./analyticalBlackboard.js";
 import type { InvestigationSummary } from "../../../shared/schema.js";

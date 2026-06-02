@@ -1,25 +1,45 @@
 /**
- * Wave WT7 · `run_price_elasticity` tool.
+ * ============================================================================
+ * priceElasticityTool.ts — how much does demand move when price moves
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_price_elasticity` tool. "Price elasticity" measures how
+ *   sensitive quantity sold is to price changes: an elasticity of -1.5 means a
+ *   1% price increase roughly cuts volume by 1.5%. The standard way to estimate
+ *   it is a log-log regression — fit the line
+ *       log(quantity) = a + b · log(price)
+ *   and the slope `b` IS the elasticity. ("OLS" = ordinary least squares, the
+ *   plain best-fit-line method. "Regression" = fitting a line through data
+ *   points.) The tool can also split by a `groupColumn` to get a separate
+ *   elasticity per SKU / region / channel. For each fit it reports the
+ *   elasticity, its 95% confidence interval (CI), the t-value (how far from
+ *   zero / how trustworthy the slope is), R² (how well the line fits, 0..1),
+ *   and a plain-English label like "inelastic" or "highly elastic".
  *
- * Log-log OLS regression for price-quantity elasticity, separately from
- * the MMM optimiser. Closes the price-elasticity question-shape gap
- * from the 1000x master plan (Workstream 5).
+ * WHY IT MATTERS
+ *   Answers "what happens to volume if I raise shelf price by 5%?" without a
+ *   Python round-trip. It is deliberately a simple single-variable OLS fit —
+ *   no fixed effects, instrumental variables, or panel corrections. The
+ *   multi-driver case (price + promo + media together) is handled by the MMM
+ *   optimiser pipeline in the Python service instead.
  *
- * Pure-Node, no Python. The fundamental identity is:
+ * KEY PIECES
+ *   - priceElasticityArgsSchema — validates price/quantity columns, optional
+ *     group column, minObservations, row filters.
+ *   - interpretElasticity — maps a slope to a human label.
+ *   - bucketPriceElasticity — maps a slope onto the shared four-step effect-
+ *     size taxonomy (negligible / small / medium / large) used by the
+ *     confidence classifier downstream.
+ *   - fitLogLogElasticity — the pure OLS math; exported for direct tests.
+ *   - registerPriceElasticityTool / runPriceElasticity — register the tool and
+ *     the pure per-group transform (filter → fit → rank → build table).
  *
- *   log(quantity) = a + b · log(price)   ⇒   b = price elasticity
- *
- * Optionally segments by `groupColumn` (per-SKU / per-region / per-channel
- * elasticity). The Marico use case is "what happens to Parachute Coconut
- * 200ml volume if I raise the shelf price by 5%?" — the tool reports the
- * elasticity, its 95% CI, t-value, R² and a human-readable
- * interpretation per segment.
- *
- * NOTE: this tool is intentionally a simple OLS fit, not a full
- * regression suite (no fixed effects, no IV, no panel correction). The
- * MMM pipeline (W46-W55) handles the multi-driver case via scipy SLSQP
- * in Python; this tool answers the 1-variable question without a
- * round-trip.
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry (toolRegistry.ts), runs
+ *   on `ctx.exec.data`. The result summary is decorated with a canonical
+ *   "evidence" suffix (n, R², effect magnitude) via composeFindingDetail
+ *   (../formatFindingEvidence.js) so the downstream confidence grader can judge
+ *   the finding by real numbers rather than guessing.
  */
 
 import { z } from "zod";
@@ -111,12 +131,12 @@ export function interpretElasticity(elasticity: number, significant: boolean): s
 }
 
 /**
- * Wave WV6-bucket · Maps a fitted price elasticity (β) to the canonical
- * four-bucket `effectMagnitude` taxonomy on `FindingEvidence` so the
- * downstream WQ1 confidence classifier can distinguish "highly inelastic
- * with tight n" (real but tiny practical effect → LOW confidence in
- * acting on it) from "highly elastic with tight n" (real and large →
- * HIGH). Mirrors `bucketCorrelationR` in [`correlationMath.ts`](../../../correlationMath.ts)
+ * Maps a fitted price elasticity (β) to the canonical four-bucket
+ * `effectMagnitude` taxonomy on `FindingEvidence` so the downstream
+ * confidence classifier can distinguish "highly inelastic with tight n"
+ * (real but tiny practical effect → LOW confidence in acting on it) from
+ * "highly elastic with tight n" (real and large → HIGH). Mirrors
+ * `bucketCorrelationR` in [`correlationMath.ts`](../../../correlationMath.ts)
  * and `bucketCohensD` / `bucketCramersV` in [`significanceTests.ts`](../../../significanceTests.ts).
  *
  * Bucket boundaries align to the existing five-step `interpretElasticity`
@@ -386,23 +406,20 @@ export function runPriceElasticity(
         "interpretation",
       ];
 
-  // Wave WV6 · canonical FindingEvidence suffix. Top row by |elasticity| is
-  // the headline result; emit its n + R² so the WW2 extractor catches them
-  // deterministically and WQ1 grades by real evidence. Both summary branches
-  // get the suffix — the no-group branch already had R² + n inline in
-  // legacy prose, but adding the canonical block keeps the format uniform
+  // Canonical FindingEvidence suffix. Top row by |elasticity| is the headline
+  // result; emit its n + R² so the downstream extractor catches them
+  // deterministically and the confidence grader judges by real evidence. Both
+  // summary branches get the suffix — keeping the canonical block uniform
   // across tools (extractor returns the first match either way; the
   // duplication is harmless and the canonical phrasing is the contract).
   //
-  // Wave WV6-bucket · the headline row's β + significance flag get
-  // mapped to the canonical four-bucket `effectMagnitude` token via
-  // `bucketPriceElasticity` so WQ1 can downgrade "highly inelastic
-  // with tight n" from HIGH to LOW confidence (real but practically
-  // negligible response — same shape as WV4-bucket's Cohen-on-|r| for
-  // correlation). The bucket only emits when finite β + non-anomalous
-  // sign; positive β (Giffen-good shape) returns null and the suffix
-  // omits the magnitude field rather than ship a misleading "large"
-  // for a sign-anomalous fit.
+  // The headline row's β + significance flag also get mapped to the canonical
+  // four-bucket `effectMagnitude` token via `bucketPriceElasticity` so the
+  // grader can downgrade "highly inelastic with tight n" from HIGH to LOW
+  // confidence (real but practically negligible response). The bucket only
+  // emits when finite β + non-anomalous sign; positive β (Giffen-good shape)
+  // returns null and the suffix omits the magnitude field rather than ship a
+  // misleading "large" for a sign-anomalous fit.
   const topRow = tableRows[0];
   const headlineEvidence: FindingEvidence = {};
   if (typeof topRow.n === "number" && Number.isFinite(topRow.n) && topRow.n >= 0) {

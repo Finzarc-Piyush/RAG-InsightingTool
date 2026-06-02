@@ -1,15 +1,33 @@
 /**
- * W3 · clean fallback renderer used when the synthesizer's narrative LLM
- * paths all return empty/refused. The legacy fallback was
+ * ============================================================================
+ * synthesisFallback.ts — produce a clean answer when the narrator LLM gives us
+ * nothing usable
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   At the end of a turn the "synthesizer" (narrator) LLM is supposed to write
+ *   the final answer. Sometimes it returns empty text or refuses. This module
+ *   is the safety net for that case: it scans the tools' raw output strings
+ *   ("observations") for the most recent `Sample: [...]` block (a small JSON
+ *   sample of result rows the tools emit), parses it, and renders it as a clean
+ *   GitHub-flavored markdown table. If no parseable sample exists, it returns a
+ *   short, polite apology line instead.
  *
- *   "Summary from tool output:\n\n[execute_query_plan] Grouped by Region…
- *    Sample: [{...}]"
+ * WHY IT MATTERS
+ *   The user must never see leaked internal plumbing. An older fallback dumped
+ *   raw observation text like `Summary from tool output: [execute_query_plan]…`.
+ *   This module guarantees the output is either a tidy table or a clean apology
+ *   — the literal strings `"Summary from tool output:"` and
+ *   `"[execute_query_plan]"` MUST never appear in what it returns.
  *
- * — i.e. internal observation prefixes leaked to the user. This module
- * replaces that with either a markdown table parsed from the latest tool
- * Sample block, or a clean apology line. The literal strings
- * `"Summary from tool output:"` and `"[execute_query_plan]"` MUST never
- * appear in the output.
+ * KEY PIECES
+ *   - renderFallbackAnswer — main entry: observations[] in, { content, tableMarkdown } out
+ *   - extractTableFromObservations / extractFirstJsonArray — find + balance-parse the Sample[] block
+ *   - renderRowsAsMarkdownTable / formatCell — turn parsed rows into a readable table
+ *
+ * HOW IT CONNECTS
+ *   Pure (no I/O, no LLM, no clock) so it is safe to call from anywhere in the
+ *   synthesis path. Uses `formatCompactNumber` from `../../formatCompactNumber.js`
+ *   to keep large numbers manager-friendly (710K, 1.95M).
  */
 
 import { formatCompactNumber } from "../../formatCompactNumber.js";
@@ -145,7 +163,7 @@ function collectColumnsInFirstRowOrder(rows: Record<string, unknown>[]): string[
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "number" && Number.isFinite(v)) {
-    // G3-P3 · readers are managers / CXOs — render large numbers compactly
+    // Readers are managers / CXOs — render large numbers compactly
     // (710K, 1.95M) instead of raw decimals (710,212.40). Keep small numbers
     // (< 1000) precise so percentages, ratios, and counts stay readable.
     if (Math.abs(v) >= 1000) {

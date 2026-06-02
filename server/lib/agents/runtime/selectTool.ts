@@ -1,19 +1,35 @@
 /**
- * Wave WT6 · `selectTool` — pure planner tool-router helper.
+ * ============================================================================
+ * selectTool.ts — a deterministic "tool router" that suggests which analysis
+ * tool fits a question
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The agent has many analytical tools (cohort analysis, RFM segmentation,
+ *   market-basket, price elasticity, growth, seasonality, etc.). This file is a
+ *   pure lookup that, given a coarse question "intent" (e.g. "cohort_retention",
+ *   "growth", "comparison") plus a few boolean hints about the dataset (has a
+ *   date column? has price + quantity? has entity ids?), returns an ORDERED list
+ *   of recommended tools — each with a one-line rationale and a high/medium/low
+ *   confidence. The first entry is the preferred pick; the rest are fallbacks.
  *
- * Maps a question intent + lightweight dataset hints onto an ordered
- * list of tool recommendations with rationale. Closes the "tool router
- * upgrade" item from Workstream 5 of the [1000x master
- * plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): give the planner a
- * deterministic starting recommendation instead of leaving the
- * `run_analytical_query` vs `execute_query_plan` choice to LLM intuition.
+ * WHY IT MATTERS
+ *   It gives the planner a deterministic starting recommendation instead of
+ *   leaving tool choice (e.g. `run_analytical_query` vs `execute_query_plan`) to
+ *   pure LLM intuition. The planner may still deviate, but it must record why —
+ *   so tool selection becomes auditable and consistent.
  *
- * This wave ships the **pure mapper**. The wiring that surfaces the
- * recommendation in the planner system prompt + tool manifest belongs
- * to a follow-up wave (touches [planner.ts](server/lib/agents/runtime/planner.ts)
- * which is integration-point code, deserves its own atomic isolation).
+ * KEY PIECES
+ *   - selectTool — the public mapper: (intent, hints) → ordered ToolRecommendation[]
+ *   - AnalystIntent / DatasetHints — the small enum + boolean struct it consumes
+ *   - renderToolRouterPromptBlock — formats the recommendations for the planner prompt
+ *   - listSupportedIntents — introspection helper for tests
  *
- * Design:
+ * HOW IT CONNECTS
+ *   Pure — does NOT inspect actual row content, only the supplied hints. Tool
+ *   names are kept in sync with `registerTools.ts` by hand. Consumed by
+ *   `plannerHintsBlock.ts`, which wires the output into the planner's prompt.
+ *
+ * Design notes:
  *  - Intent is a small enum the helper itself defines. The upstream
  *    classifier (analysisBrief, questionShape) can map its richer shape
  *    set onto this enum; the helper stays stable across classifier
@@ -58,7 +74,7 @@ export interface DatasetHints {
   /** Dataset has a numeric metric column. */
   hasNumericMetric?: boolean;
   /** Whether the upstream filter detector found external-claim markers
-   *  (typically populated by WQ2's externalClaimDetector). */
+   *  (typically populated by the externalClaimDetector). */
   hasExternalClaimMarkers?: boolean;
 }
 

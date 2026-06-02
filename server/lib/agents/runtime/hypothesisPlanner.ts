@@ -1,10 +1,34 @@
 /**
- * Wave W3 · hypothesisPlanner
+ * ============================================================================
+ * hypothesisPlanner.ts — before planning, brainstorm 3–5 testable hypotheses
+ * to bound the investigation
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Runs as a pre-step before the main planner. Given the user's question and a
+ *   metadata-rich description of the dataset's columns, it asks an LLM to
+ *   generate 3–5 concise, FALSIFIABLE hypotheses — candidate explanations that
+ *   a simple query, breakdown, or correlation could confirm or refute (e.g.
+ *   "South region drives most of the volume decline"). These are written to the
+ *   shared blackboard so the planner and downstream stages have an explicit set
+ *   of things to test rather than fishing blindly.
  *
- * Runs before the main planner. Given the user question, schema summary,
- * and session context, generates 3–5 testable hypotheses that bound the
- * upcoming investigation. Writes them to the blackboard and returns a
- * formatted block for injection into the planner prompt.
+ * WHY IT MATTERS
+ *   Framing the investigation up front makes the planner's tool choices
+ *   purposeful and keeps the analysis focused on explanations that actually
+ *   answer the question (including FMCG-specific ones like seasonality,
+ *   channel-mix shifts, or premiumisation). If the LLM call fails the planner
+ *   still works — hypotheses are an enhancement, not a hard dependency.
+ *
+ * KEY PIECES
+ *   - generateHypotheses — main: prompts the LLM, writes hypotheses to the blackboard, returns ok/false
+ *   - formatColumnMeta — builds a metadata-rich column line (cardinality, sample range, examples)
+ *   - buildUserBlock — assembles the per-turn user prompt (question + columns + brief + domain)
+ *
+ * HOW IT CONNECTS
+ *   Reads `AgentExecutionContext` (question, summary, brief, domain context),
+ *   calls the LLM via `completeJson` (llmJson.js), and stores results through
+ *   `addHypothesis` on the `AnalyticalBlackboard`. The static `ANALYST_PREAMBLE`
+ *   prefix keeps the system prompt cache-eligible.
  */
 
 import { z } from "zod";
@@ -31,19 +55,19 @@ const hypothesisOutputSchema = z.object({
 type HypothesisOutput = z.infer<typeof hypothesisOutputSchema>;
 
 /** Cap on the FMCG/Marico domain context block injected into the user prompt.
- * WTL2 · 2_500 → 4_000 to match the merged W39 path; helps domain-aware
- * hypothesis quality. Packs are background, not numeric evidence. */
+ * Higher caps help domain-aware hypothesis quality. Packs are background, not
+ * numeric evidence. */
 const HYPOTHESIS_DOMAIN_CONTEXT_CAP = 4000;
 
-/** DB1 · cap on columns enumerated with metadata in the user block. */
+/** Cap on columns enumerated with metadata in the user block. */
 const HYPOTHESIS_COLUMN_CAP = 60;
 const HYPOTHESIS_EXAMPLES_PER_COL = 6;
 
 /**
- * DB1 · Build a metadata-rich column line for the hypothesis prompt.
+ * Build a metadata-rich column line for the hypothesis prompt.
  *
- * Pre-DB1 the planner only saw `name (type)` per column — the LLM had no way
- * to discriminate id-like columns from real dimensions, missed candidate
+ * If the planner only saw `name (type)` per column, the LLM would have no way
+ * to discriminate id-like columns from real dimensions, would miss candidate
  * drivers, and couldn't ground hypotheses in actual value distributions.
  * `dataSummary.columns` already carries `topValues` (top categorical values
  * by frequency, capped at 48) and `sampleValues` (first non-null values);
@@ -129,7 +153,7 @@ function buildUserBlock(ctx: AgentExecutionContext): string {
     .join("\n");
 }
 
-// DB1 · exposed for tests so the metadata-rich column formatting is pinned.
+// Exposed for tests so the metadata-rich column formatting is pinned.
 export const __test__ = { formatColumnMeta, buildUserBlock };
 
 /**
@@ -143,8 +167,8 @@ export async function generateHypotheses(
   turnId: string,
   onLlmCall: () => void
 ): Promise<boolean> {
-  // W4.2 · ANALYST_PREAMBLE prefix → cache eligibility (>1024 tokens). System
-  // is purely static; the per-turn dataset/question/brief lives in user via
+  // ANALYST_PREAMBLE prefix → cache eligibility (>1024 tokens). System is
+  // purely static; the per-turn dataset/question/brief lives in user via
   // buildUserBlock(ctx).
   const system = `${ANALYST_PREAMBLE}You are an investigation planner for a data analysis assistant.
 Given a user question and dataset schema, generate 3 to 5 concise testable hypotheses
@@ -165,8 +189,8 @@ Rules:
 
   const user = buildUserBlock(ctx);
   const result = await completeJson(system, user, hypothesisOutputSchema, {
-    // WTL2 · 512 → 1200. Lets the model emit more candidate hypotheses
-    // when the dataset / domain context invites them; was clipping mid-list.
+    // Roomy cap so the model can emit more candidate hypotheses when the
+    // dataset / domain context invites them; smaller caps clipped mid-list.
     maxTokens: 1200,
     temperature: 0.3,
     turnId,

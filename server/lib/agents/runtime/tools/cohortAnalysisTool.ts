@@ -1,25 +1,51 @@
 /**
- * Wave WT2 · `run_cohort_analysis` tool.
+ * ============================================================================
+ * cohortAnalysisTool.ts — the "run_cohort_analysis" tool (retention tables)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the tool that builds a cohort / retention table. A "cohort" is a
+ *   group of entities (customers, stores, SKUs) that all started in the same
+ *   period — e.g. "everyone first seen in 2024-01". The tool then tracks how
+ *   that same group behaves in later periods, so you can see retention
+ *   (do they keep coming back?) or expansion (do they spend more over time?).
  *
- * Groups entities (customers, stores, SKUs) into cohorts and tracks
- * activity across subsequent periods. Closes the cohort/retention
- * question-shape gap from the 1000x master plan (Workstream 5).
+ *   Output is a "wide" matrix — one row per cohort, and one column per
+ *   period offset (period_offset_0 is the cohort's first/"birth" period,
+ *   period_offset_1 is the next period, and so on):
  *
- * Pure-Node, no Python. Operates on `ctx.exec.data` with row-level
- * `dimension_filters` applied first. Output is a wide-format cohort
- * matrix:
+ *     [{ cohort: "2024-01", cohort_size: 120,
+ *        period_offset_0: 120, period_offset_1: 95, period_offset_2: 78, ... },
+ *      { cohort: "2024-02", cohort_size:  98,
+ *        period_offset_0:  98, period_offset_1: 80, ... }]
  *
- *   [{ cohort: "2024-01", cohort_size: 120,
- *      period_offset_0: 120, period_offset_1: 95, period_offset_2: 78, ... },
- *    { cohort: "2024-02", cohort_size:  98,
- *      period_offset_0:  98, period_offset_1: 80, ... }]
+ *   Behaviour notes:
+ *     • `cohort_size` = count of distinct entities in period_offset_0,
+ *       regardless of the chosen aggregation.
+ *     • If `cohortColumn` is omitted, each entity's cohort is auto-computed as
+ *       its earliest observed `periodColumn` value (classic acquisition cohort).
+ *     • If `retentionMode: true`, every cell is divided by the cohort's
+ *       period_offset_0 value, turning counts into 0..1 retention fractions.
  *
- * - `cohort_size` is the count of distinct entities in period_offset_0
- *   (the cohort's "birth" period), regardless of aggregation.
- * - When `cohortColumn` is omitted, each entity's cohort is computed as
- *   its earliest observed `periodColumn` value.
- * - When `retentionMode: true`, every cell is divided by the cohort's
- *   period_offset_0 value, yielding 0..1 retention fractions.
+ *   It is pure Node.js (no Python call) and runs on the in-memory row data.
+ *
+ * WHY IT MATTERS
+ *   Retention/expansion is a distinct question shape that simple aggregation
+ *   can't answer. This fills that gap so the agent can answer "how well do we
+ *   keep customers month over month?".
+ *
+ * KEY PIECES
+ *   - cohortAnalysisArgsSchema — Zod schema for the tool arguments (entity,
+ *     period, optional explicit cohort, optional metric, aggregation, how many
+ *     period columns, retention mode, row filters).
+ *   - registerCohortAnalysisTool — registers the tool as "run_cohort_analysis".
+ *   - runCohortAnalysis — the exported pure transform that does the actual
+ *     bucketing and matrix building (also reused by tests and skills).
+ *
+ * HOW IT CONNECTS
+ *   Registered into the ToolRegistry (../toolRegistry.js). Logs progress via
+ *   agentLog (../agentLogger.js). Reads `ctx.exec.data` (the row-level data
+ *   for the session); applies its own simple dimension filters first. Pairs
+ *   well with execute_query_plan when pre-aggregated rows are needed.
  */
 
 import { z } from "zod";

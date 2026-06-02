@@ -1,34 +1,49 @@
 /**
- * W-EXP-3 · Deterministic verifier for `SlideDeckPlan` (W-EXP-1).
+ * ============================================================================
+ * deckPlanVerifier.ts — quality gate for a slide-deck plan before it renders
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the tool exports an analysis as a slide deck, an LLM first produces a
+ *   structured "plan" (a `SlideDeckPlan`: an ordered list of slides, each with
+ *   a layout type, a title, bullets, etc.). This file checks that plan against
+ *   a fixed set of professional-presentation rules BEFORE anything gets drawn.
+ *   Every rule here is mechanical (regex, counting words, checking a slide's
+ *   position) — there is NO second AI grading the work, so the checks are fast,
+ *   cheap, repeatable, and easy to explain.
  *
- * Sits between the deck planner LLM (W-EXP-2) and the renderers (W-EXP-5/6/8/10)
- * in the export controller flow. Encodes the hard rules that separate
- * "professional" from "shitty" in analytical decks. Every check is
- * objective — regex / position / count / enum membership — so the repair
- * loop is bounded and decisions are auditable. No LLM-as-judge here.
+ *   The rules it enforces:
+ *     1. Every slide's title is "action-led": starts with a capital/number, is
+ *        a full sentence (≥5 words), names a number or proper noun, and is not
+ *        a lazy placeholder like "Findings" or "Overview".
+ *     2. If there's a title slide, it must be first.
+ *     3. Methodology slides belong in the back third of the deck.
+ *     4. The executive-summary slide belongs in the first half (TL;DR up front).
+ *     5. Every slide has speaker notes of at least 20 characters.
+ *     6. No single bullet/caption crams 2+ numeric figures (one idea per slide).
  *
- * Mirrors the spirit of [`checkEnvelopeCompleteness`](./checkEnvelopeCompleteness.ts)
- * (deterministic, repair-via-existing-LLM, bounded retries) but operates on
- * structured slide plans rather than narrator output.
+ * WHY IT MATTERS
+ *   This is the line between a polished, decision-grade deck and a generic,
+ *   template-looking one. Because the checks are deterministic, the surrounding
+ *   "repair loop" is bounded: if the plan fails, the caller feeds the failure
+ *   description back to the deck-planner LLM to fix and re-checks (just one
+ *   repair round). Without this gate, the deck planner could emit vague titles,
+ *   misordered sections, or overloaded slides with no safety net.
  *
- * The rules (locked in the approved plan):
- *   1. Every slide has an `actionTitle` that is verb-led, contains a number
- *      OR a proper-noun reference, has ≥ 5 words, and is not a topic-title
- *      cliché ("Findings", "Overview", "Analysis", …).
- *   2. The first slide is `TitleSlide` if any TitleSlide exists.
- *   3. Methodology slides (one or more) must all live in the back third of
- *      the deck.
- *   4. ExecSummary slides (typically one) must live in the first half so
- *      the reader gets the TL;DR up front.
- *   5. Speaker notes are ≥ 20 chars on every slide (already schema-enforced
- *      via the slide-spec union — re-validated here for defense-in-depth).
- *   6. No slide has 2+ explicit numeric magnitudes inside the same bullet /
- *      caption — those need splitting per the one-message-per-slide rule.
+ * KEY PIECES
+ *   - DeckVerifierResult — pass/fail result; on fail carries human-readable
+ *     `description` + `courseCorrection` text to feed back to the planner LLM.
+ *   - checkActionTitle(title) — validates one slide title; returns null if OK,
+ *     else a one-line issue string.
+ *   - verifyDeckPlan(plan) — runs every rule over the whole plan and aggregates
+ *     per-slide issues plus deck-level ordering issues.
+ *   - findOverloadedBullets(slide) — flags bullets/captions with 2+ figures.
  *
- * Failure shape mirrors `checkEnvelopeCompleteness`: callers feed the
- * `description` + `courseCorrection` back into `runDeckPlanner` via the
- * `repair` branch, then re-verify. Bounded at 1 repair round at the call
- * site (W-EXP-7/11).
+ * HOW IT CONNECTS
+ *   Sits between the deck-planner LLM and the slide renderers in the export
+ *   flow. Operates on the `SlideDeckPlan` / `SlideSpec` types from
+ *   ../../../shared/exportSchema.js. Mirrors the spirit of the answer-envelope
+ *   gate in ./checkEnvelopeCompleteness.ts (deterministic, repair-via-LLM,
+ *   bounded retries) but for slide plans rather than narrator output.
  */
 
 import type { SlideDeckPlan, SlideSpec } from "../../../shared/exportSchema.js";
@@ -275,7 +290,7 @@ function findOverloadedBullets(slide: SlideSpec): string[] {
       break;
     default: {
       // Exhaustiveness check — TS forces a case here when a new LayoutKind
-      // ships in W-EXP-1's enum (compile-time). The runtime fallthrough
+      // is added to the enum (compile-time). The runtime fallthrough
       // never fires.
       const _exhaustive: never = slide;
       void _exhaustive;

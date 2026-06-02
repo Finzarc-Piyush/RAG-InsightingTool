@@ -1,3 +1,47 @@
+/**
+ * ============================================================================
+ * contextResolver.ts — turns vague follow-up questions into explicit ones by
+ * reading the conversation so far.
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   People talk to a chat tool the way they talk to a person: "now change that",
+ *   "show me a chart of it", "rename the above column", or just "yes". On their
+ *   own these are meaningless to a data engine. This file looks back through the
+ *   chat history and rewrites such phrases into something concrete — e.g. "that
+ *   column" becomes the actual name of the last column the assistant created, or
+ *   a bare "yes" becomes the full action the assistant had just offered to do.
+ *   This is called "coreference / context resolution": replacing pronouns and
+ *   back-references ("it", "that", "the previous one") with their real targets.
+ *
+ * WHY IT MATTERS
+ *   It runs in early request triage, before intent/mode classification. If a
+ *   follow-up isn't resolved first, the downstream classifiers and the agentic
+ *   loop would either misread the user or have to ask "what do you mean?" every
+ *   time. Resolving here keeps multi-turn conversations feeling natural and
+ *   keeps the right intent (e.g. correlation vs. plain chart) intact when the
+ *   user simply confirms an earlier suggestion.
+ *
+ * KEY PIECES
+ *   - ResolvedReference — small type describing a found target (chart, insight,
+ *     column, etc.) and where in the history it was found.
+ *   - findLastCreatedColumn(history) — scans assistant messages for "created
+ *     column X" phrasing and returns the most recent column name.
+ *   - detectAISuggestion(history) — finds the assistant's last "Would you like
+ *     me to…/I can…/Should I…" offer and reconstructs the concrete action it
+ *     implies, preserving correlation wording so intent stays correct.
+ *   - resolveContextReferences(question, history) — the main entry point: turns
+ *     "yes" into the offered action, and pronouns into the last column / chart /
+ *     insight, in priority order.
+ *   - resolveContextReference(reference, history) — looks up a single reference
+ *     and returns its type + value + index.
+ *
+ * HOW IT CONNECTS
+ *   Reads Message / ChartSpec shapes from the shared schema. Its rewritten
+ *   question is fed into the classifiers (intentClassifier.ts, modeClassifier.ts)
+ *   and handlers like runDataOpsFromAgent.ts, which calls
+ *   resolveContextReferences before parsing a data-op. Pure string/array logic —
+ *   no LLM calls, no I/O.
+ */
 import { Message, ChartSpec } from '../../shared/schema.js';
 
 /**

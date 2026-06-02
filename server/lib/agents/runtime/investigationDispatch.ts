@@ -1,27 +1,28 @@
 /**
- * Wave W73 · Deep-investigation dispatch.
+ * ============================================================================
+ * investigationDispatch.ts — route a turn to deep investigation or not
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Decides whether a chat turn should run the heavier multi-thread "deep
+ *   investigation" orchestrator (which explores several sub-questions in
+ *   parallel) or the normal single-flow agentic loop (runAgentTurn). The
+ *   decision is deterministic and cheap — pure regex, no AI.
  *
- * Determines whether a chat turn should run the multi-thread deep
- * investigation orchestrator
- * ([investigationOrchestrator.ts](./investigationOrchestrator.ts)) or the
- * standard single-flow agentic loop (`runAgentTurn`).
+ * WHY IT MATTERS
+ *   Deep investigation is gated behind a feature flag by design (invariant #6:
+ *   re-wiring deep investigation requires a flag). This dispatcher only reads
+ *   that flag and applies a multi-part trigger; it never changes the default.
  *
- * Decision is deterministic + cheap (pure regex):
+ * KEY PIECES
+ *   - DeepInvestigationDispatchDecision — { fire, reason, optional multiPart }.
+ *   - shouldDispatchDeepInvestigation(question) — fire only when the flag is on
+ *     AND the question splits into >= 2 sub-questions.
  *
- *   - Master gate: `DEEP_INVESTIGATION_ENABLED` env var
- *     ([investigationTree.ts](./investigationTree.ts) :: `isDeepInvestigationEnabled`).
- *     Invariant #6 — re-wiring deep investigation requires a feature flag.
- *     This dispatcher *uses* the flag, doesn't change its default.
- *
- *   - Trigger: question is multi-part per `detectMultiPartQuestion` (W11
- *     D1). Future wave (W74+) widens the trigger to investigative
- *     `questionShape` (`driver_discovery`, `variance_diagnostic`,
- *     `comparison`) once `analysisBrief` is computed pre-turn.
- *
- * Returns a structured decision so callers can emit a `flow_decision`
- * SSE row for the workbench timeline.
- *
- * Pure function. No I/O.
+ * HOW IT CONNECTS
+ *   Reads the flag from investigationTree.ts (isDeepInvestigationEnabled) and
+ *   splits questions via detectMultiPartQuestion.ts. The returned decision lets
+ *   the caller emit a `flow_decision` SSE row for the workbench timeline and,
+ *   when fire is true, invoke the investigationOrchestrator. Pure function, no I/O.
  */
 
 import {

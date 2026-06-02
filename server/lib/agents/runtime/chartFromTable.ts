@@ -1,14 +1,38 @@
 /**
- * Synthesize a `ChartSpec` from an analytical-table result (rows + columns).
+ * ============================================================================
+ * chartFromTable.ts — turn a result table into a ready-to-render chart
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the agent runs a data query (`execute_query_plan`) it gets back a
+ *   table (rows + column names). This file looks at that table and, using
+ *   simple rules, decides whether it can become a sensible chart — and if so,
+ *   builds the full chart specification ("ChartSpec": chart type, x/y axes,
+ *   processed data, axis scaling). The rules: pick a category column for the
+ *   x-axis (preferring a time/period column), pick the most "measure-like"
+ *   numeric column for the y-axis (names ending in _sum, _avg, _count rank
+ *   higher), use a line chart when x is a date else a bar chart. It bails out
+ *   (returns null) when there's no clean chart to make — e.g. a single-row
+ *   scalar result, no category column, no numeric column, or too many x labels.
  *
- * Used by the agent loop to promote intermediate `execute_query_plan` results
- * into first-class charts on the final message — without that promotion, only
- * explicit `build_chart` steps end up in `message.charts`, so a turn that ran
- * five breakdowns surfaces only the one chart the planner explicitly built.
+ * WHY IT MATTERS
+ *   Charts are first-class output in this product. Without this "promotion"
+ *   step, only charts the planner EXPLICITLY asked to build would appear — so a
+ *   turn that quietly ran five breakdowns would surface just one chart. This
+ *   file auto-promotes those intermediate query results into real charts so the
+ *   user sees the full visual story. It mirrors the deterministic fallback in
+ *   visualPlanner.ts so auto-built charts look the same as planner-built ones.
  *
- * Mirrors the deterministic-fallback heuristic in `visualPlanner.ts`:
- * pick the first dimension column as X, the highest-ranked numeric column as Y,
- * infer line/area for temporal X otherwise bar.
+ * KEY PIECES
+ *   - buildChartFromAnalyticalTable — the main builder: table in, ChartSpec or
+ *       null out.
+ *   - chartAxisSignature — a stable `(type|x|y|series)` key used to dedupe
+ *       charts so the same breakdown isn't shown twice.
+ *
+ * HOW IT CONNECTS
+ *   Called by the agent loop when assembling the final message's charts. Relies
+ *   on chartSpecCompiler (compileChartSpec), chartGenerator (processChartData),
+ *   axisScaling (calculateSmartDomainsForChart), and the period / facts-metric
+ *   resolvers to pick coherent axes for time-series and narrow-format data.
  *
  * Returns `null` when the table doesn't lend itself to a clean chart (no
  * dimension column, no numeric measure, too many X labels, or compile-time
@@ -89,13 +113,12 @@ export function buildChartFromAnalyticalTable(
   if (rows.length === 0 || rows.length > ROW_COUNT_CAP) return null;
   if (columns.length < 2) return null;
 
-  // Wave QL9.C · Pure scalars (1 row) don't have a meaningful x-axis. The
-  // QL7 ratio shape returns `[{ total_visits: 104870, num_days: 30,
-  // avg_per_day: 3495.67 }]` — three numerics, zero dimensions. Promoting
-  // this to a bar chart picks one numeric as x (e.g. num_days=30) and the
-  // other as y (avg=3.5K), producing a single bar with a number on the
-  // x-axis that the user can't interpret. Skip; the user sees the AnswerCard
-  // text + the pivot's flat 3-column row (from Wave QL9.A) instead.
+  // Pure scalars (1 row) don't have a meaningful x-axis. A ratio shape like
+  // `[{ total_visits: 104870, num_days: 30, avg_per_day: 3495.67 }]` — three
+  // numerics, zero dimensions — would promote to a bar chart that picks one
+  // numeric as x (e.g. num_days=30) and the other as y (avg=3.5K), producing
+  // a single bar with a number on the x-axis the user can't interpret. Skip;
+  // the user sees the AnswerCard text + the pivot's flat 3-column row instead.
   if (rows.length === 1) return null;
 
   const sample = rows.slice(0, 80);
@@ -104,8 +127,8 @@ export function buildChartFromAnalyticalTable(
 
   if (numericCols.length < 1 || dimCols.length < 1) return null;
 
-  // Wave W-GMK2 · pick a coherent time x-axis when periods are present, else
-  // fall back to the first non-numeric column with cardinality ≥ 2 (skip
+  // Pick a coherent time x-axis when periods are present, else fall back to
+  // the first non-numeric column with cardinality ≥ 2 (skip
   // single-value dims like Products = MARICO that produce useless one-bar
   // charts). When the period resolver returns a multi-kind column with a
   // PeriodKind discriminator filter, apply that filter to the rows so the
@@ -141,8 +164,8 @@ export function buildChartFromAnalyticalTable(
     x = usableDim;
   }
 
-  // Wave W-GMK4 · Facts/Metric awareness — when the result table carries a
-  // narrow-format metric discriminator (e.g. `Facts` with values "Value
+  // Facts/Metric awareness — when the result table carries a narrow-format
+  // metric discriminator (e.g. `Facts` with values "Value
   // Sales", "Volume Sales", "Distribution") summing across kinds produces
   // nonsense. Pick one Facts value (question-matched or dominant), filter
   // rows to it, and use the value as the measure name in the chart title.

@@ -1,16 +1,41 @@
 /**
- * driver_discovery — for "what impacts my [metric] the most?" shapes.
+ * ============================================================================
+ * driverDiscovery.ts — the "what impacts my metric the most?" analysis skill
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines one "skill": a reusable, multi-step analytical routine the agent
+ *   can fire when a user asks something like "what drives my sales?" Instead of
+ *   the agent guessing one tool, this skill pre-packages a small plan of tool
+ *   calls so the final answer can rank the true drivers with numbers behind
+ *   them. The plan it builds:
+ *     1. run_correlation on the outcome metric — finds which NUMERIC columns
+ *        move together with it (e.g. ad-spend correlates with sales).
+ *     2. run_breakdown_ranking for up to 2 candidate CATEGORICAL dimensions —
+ *        finds which category values (e.g. region, channel) show the biggest
+ *        per-segment swings in the outcome.
+ *     3. build_chart — a bar chart of the first breakdown as a visual anchor.
+ *   The "synthesiser" (the step that writes the final answer) then ranks the
+ *   drivers across both evidence types and explains the top few with magnitudes.
  *
- * Collects both sides of the driver picture in one plan:
- *   1. run_correlation on the outcome metric — surfaces the numeric
- *      features most correlated with it.
- *   2. run_breakdown_ranking for each candidateDriverDimension (cap 2) —
- *      surfaces the categorical dimensions whose values produce the
- *      largest per-segment variation in the outcome.
- *   3. build_chart — bar chart of the first breakdown as a visual anchor.
+ * WHY IT MATTERS
+ *   "What drives X?" is one of the most common analytical question shapes.
+ *   Without this skill the planner tends to pick a single shallow tool; the
+ *   skill guarantees both numeric (correlation) and categorical (breakdown)
+ *   evidence is collected in one shot, producing a far richer answer.
  *
- * The synthesiser then ranks drivers by effect size across the two
- * evidence types and explains the top 3 with magnitudes.
+ * KEY PIECES
+ *   - resolvedFilters — converts the brief's user filters into the shape the
+ *     correlation / breakdown tools expect (case-insensitive in / not_in).
+ *   - skill (exported as driverDiscoverySkill) — the AnalysisSkill object:
+ *     appliesTo() decides when to fire; plan() builds the tool-call steps.
+ *
+ * HOW IT CONNECTS
+ *   Registers itself into the skill registry via registerSkill (registry.ts)
+ *   on import; that import is triggered from skills/index.ts. The planner uses
+ *   selectSkill / expandSkill (registry.ts) to choose and run it. Step "tools"
+ *   (run_correlation, run_breakdown_ranking, build_chart) are low-level tools
+ *   registered elsewhere in the agent runtime. Types come from ./types.js and
+ *   the shared AnalysisBrief schema.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";

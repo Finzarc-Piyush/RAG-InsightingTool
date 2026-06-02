@@ -1,3 +1,40 @@
+/**
+ * ============================================================================
+ * analysisBrief.ts — turn a vague analytical question into a structured plan of
+ * what to analyse
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   For diagnostic, report, dashboard, or budget-reallocation questions, this
+ *   module makes ONE LLM call before the planner that produces a structured
+ *   "analysis brief": the outcome metric to study, which categorical dimensions
+ *   to break it down by, candidate driver columns, any user-named filters, the
+ *   time window, the "question shape" (driver_discovery / trend / comparison /
+ *   etc.), and clarifying questions if the ask is ambiguous. It decides WHETHER
+ *   a brief is even needed, hands the LLM a metadata-rich column list (with
+ *   cardinality + example values for dashboard-shaped asks), and merges in any
+ *   deterministically-inferred filters so user-named segments are never dropped.
+ *
+ * WHY IT MATTERS
+ *   The brief is the shared contract the planner, verifier, and dashboard
+ *   coverage gate all align to. Without it the planner would have to guess the
+ *   outcome metric and dimensions from raw column names, and a dashboard request
+ *   could silently omit half its breakdowns. For marketing-mix data it also
+ *   classifies the budget_reallocation shape that routes to the MMM optimiser.
+ *
+ * KEY PIECES
+ *   - maybeRunAnalysisBrief — main: gated LLM call that sets ctx.analysisBrief
+ *   - shouldBuildAnalysisBrief — the gate (diagnostic / report / dashboard / budget intent)
+ *   - looksLikeBudgetReallocationQuestion — detects MMM "where should I spend" intent
+ *   - mergeInferredFiltersIntoBrief — union user-named filters into the brief
+ *   - formatAnalysisBriefForPrompt — render the brief for planner / verifier prompts
+ *
+ * HOW IT CONNECTS
+ *   Validates against `analysisBriefSchema` (shared/schema.js); reads
+ *   `AgentExecutionContext`. Uses marketing column tagging
+ *   (marketingColumnTags.js) and dashboard/report intent detectors. The merged
+ *   pre-planner path (runHypothesisAndBrief.ts) reuses this file's gate, merge,
+ *   and schema so the two paths stay behaviourally identical.
+ */
 import { analysisBriefSchema, type AnalysisBrief } from "../../../shared/schema.js";
 import type { AgentExecutionContext } from "./types.js";
 import { userMessageHasReportIntent } from "../../reportIntent.js";
@@ -8,8 +45,8 @@ import {
   looksLikeMarketingMixDataset,
 } from "../../marketingColumnTags.js";
 
-// W39 · exported so the merged-pre-planner path can apply the same gate
-// the per-task analysisBrief call uses, keeping behaviour identical.
+// Exported so the merged-pre-planner path can apply the same gate the per-task
+// analysisBrief call uses, keeping behaviour identical.
 export function shouldBuildAnalysisBrief(ctx: AgentExecutionContext): boolean {
   if (ctx.mode !== "analysis") return false;
   if (ctx.analysisSpec?.mode === "diagnostic") return true;
@@ -27,7 +64,7 @@ const STRONG_PHRASE_RX =
 /**
  * Lightweight intent detector for the budget_reallocation question shape. Used
  * both in shouldBuildAnalysisBrief (so the brief LLM gets to confirm) and in
- * the W53 tool's planner-priority hint. Two patterns:
+ * the budget-optimizer tool's planner-priority hint. Two patterns:
  *   - strong phrase ("media mix", "MMM", "where should I spend")
  *   - reallocation verb + budget/media noun in the same question
  */
@@ -37,15 +74,15 @@ export function looksLikeBudgetReallocationQuestion(question: string): boolean {
 }
 
 /**
- * DB2 · The brief LLM drives `candidateDriverDimensions`, which in turn drives
- * the planner's per-dimension `build_chart` fan-out and the deterministic
- * post-hoc feature sweep. Pre-DB2, the user message sent only column NAMES,
- * so when the LLM was told "list every plausible categorical dimension", it
- * had no signal to pick column X over Y other than name semantics — for
- * large schemas, half the dimensions were silently overlooked.
+ * The brief LLM drives `candidateDriverDimensions`, which in turn drives the
+ * planner's per-dimension `build_chart` fan-out and the deterministic post-hoc
+ * feature sweep. If the user message sent only column NAMES, then when the LLM
+ * was told "list every plausible categorical dimension" it would have no signal
+ * to pick column X over Y other than name semantics — for large schemas, half
+ * the dimensions would be silently overlooked.
  *
- * For dashboard-shaped intent we now emit a structured per-column table with
- * cardinality and value examples (sourced from the existing `topValues` /
+ * For dashboard-shaped intent we therefore emit a structured per-column table
+ * with cardinality and value examples (sourced from the existing `topValues` /
  * `sampleValues`). For all other intents we keep the cheap comma-separated
  * name list (cost-neutral with prior behaviour).
  */
@@ -104,7 +141,7 @@ function columnListForBrief(ctx: AgentExecutionContext): string {
   return `(format: name | type | cardinality-hint | top-values)\n${lines.join("\n")}${truncated}`;
 }
 
-// DB2 · exposed for tests so the dashboard-mode prompt shape is pinned.
+// Exposed for tests so the dashboard-mode prompt shape is pinned.
 export const __test__ = {
   columnListForBrief,
   describeColumnForBrief,
@@ -157,9 +194,9 @@ comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly 
   const out = await completeJson(system, user, analysisBriefSchema, {
     turnId,
     temperature: 0.15,
-    // WTL2 · 1_200 → 2_000. Brief includes outcome/dimensions/filters/
-    // timeWindow/clarifyingQuestions/epistemicNotes/comparisonPeriods
-    // and a successCriteria string (≤1.2k chars) — clipped on rich briefs.
+    // Roomy cap: the brief includes outcome/dimensions/filters/timeWindow/
+    // clarifyingQuestions/epistemicNotes/comparisonPeriods and a
+    // successCriteria string (≤1.2k chars) — smaller caps clipped rich briefs.
     maxTokens: 2000,
     onLlmCall,
     purpose: LLM_PURPOSE.ANALYSIS_BRIEF,

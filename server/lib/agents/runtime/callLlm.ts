@@ -1,19 +1,44 @@
 /**
- * Thin wrapper around `openai.chat.completions.create` that emits token-usage
- * telemetry without changing call semantics. W1.2 · purely additive.
+ * ============================================================================
+ * callLlm.ts — the one doorway every LLM chat call goes through
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is a thin drop-in replacement for `openai.chat.completions.create`.
+ *   Calling code uses `callLlm(params)` instead, and gets back the exact same
+ *   ChatCompletion. While passing the call through, it does three quiet jobs:
+ *     1. Picks the right model. Each call can declare a "purpose" (planner,
+ *        reflector, narrator, ...); when set, the model is chosen by purpose via
+ *        the router instead of whatever the caller hard-coded.
+ *     2. Fixes per-model quirks. It clamps the requested max output tokens to the
+ *        model's cap, and for GPT-5 / o-series models renames `max_tokens` to the
+ *        `max_completion_tokens` field those models require.
+ *     3. Emits cost/usage telemetry. After the call it computes USD cost and
+ *        publishes a `LlmCallUsage` event so a listener can record spend.
+ *   It also routes Anthropic Claude models through a separate adapter that returns
+ *   an OpenAI-shaped response, so downstream callers don't need to know which
+ *   provider answered.
  *
- * Every direct chat-completion call in the server flows through `callLlm`.
- * Each call publishes a `LlmCallUsage` event to the global emitter; a sink
- * (W1.3) subscribes and persists to Cosmos. Until the sink lands the emitter
- * has no listeners and this wrapper is indistinguishable from calling the SDK
- * directly.
+ * WHY IT MATTERS
+ *   Funnelling every chat call through one place is what makes per-role model
+ *   routing, multi-provider support, and cost tracking possible without touching
+ *   dozens of call sites. Telemetry is best-effort: a failing usage listener is
+ *   caught and never breaks a turn.
  *
- * Design contracts:
- *   - callLlm's signature mirrors `openai.chat.completions.create` for
- *     non-streaming completions. Caller code changes only the function name.
- *   - Telemetry failures never propagate to the caller (sinks run in a
- *     try/catch; a bad listener cannot break a turn).
- *   - Streaming is out of scope (no current call site streams).
+ * KEY PIECES
+ *   - callLlm — the wrapper itself (non-streaming completions only).
+ *   - needsMaxCompletionTokens — detects models that need the renamed token field.
+ *   - CallLlmOptions — per-call knobs: purpose (model routing), turnId (keeps the
+ *     routing decision stable within a turn), onUsage, skipGlobalEmit.
+ *   - __setLlmStubResolver — TEST-ONLY hook to short-circuit the network call with
+ *     a canned response (production never sets it; one null-check cost per call).
+ *   - Re-exports the usage emitter API (emitLlmUsage, registerLlmUsageListener).
+ *
+ * HOW IT CONNECTS
+ *   Calls the OpenAI client (../../openai.js) or callAnthropic (anthropicProvider.js)
+ *   based on the model name. Uses llmCostModel.js (clampMaxTokens, calculateCostUsd,
+ *   normalizeUsage), llmCallPurpose.js (resolveModelFor) and llmUsageEmitter.js.
+ *   Used everywhere the server makes a direct chat-completion call, and by the
+ *   higher-level completeJson wrapper.
  */
 
 import type {
@@ -55,7 +80,7 @@ export interface CallLlmOptions {
   /**
    * Labels the call site so the router can pick MINI vs PRIMARY model.
    * When set, OVERRIDES `params.model` with `resolveModelFor(purpose)`.
-   * Explicit model is honored only when purpose is absent (W3.2).
+   * Explicit model is honored only when purpose is absent.
    */
   purpose?: LlmCallPurpose;
   /** Optional turn correlation id. */
@@ -68,7 +93,7 @@ export interface CallLlmOptions {
 }
 
 /**
- * W18 · TEST-ONLY stub resolver. Production code never sets this; it is only
+ * TEST-ONLY stub resolver. Production code never sets this; it is only
  * imported by `tests/helpers/llmStub.ts`. When set, `callLlm` consults the
  * resolver before hitting the real provider; if it returns a `ChatCompletion`,
  * that response short-circuits the network call. Returning `undefined` means
@@ -99,9 +124,9 @@ export async function callLlm(
   opts: CallLlmOptions = {}
 ): Promise<ChatCompletion> {
   const startedAt = Date.now();
-  // W3.2 · purpose (when set) picks the model — callers stop deciding per-site.
-  // W3.10 · the ramp resolver uses `turnId` to keep the MINI/PRIMARY decision
-  // stable within a single turn for a given purpose.
+  // purpose (when set) picks the model — callers stop deciding per-site.
+  // The ramp resolver uses `turnId` to keep the MINI/PRIMARY decision stable
+  // within a single turn for a given purpose.
   const effectiveModel = opts.purpose
     ? resolveModelFor(opts.purpose, { turnId: opts.turnId })
     : params.model;
@@ -127,7 +152,7 @@ export async function callLlm(
       effectiveParams = { ...effectiveParams, max_tokens: clamped };
     }
   }
-  // W18 · test-only stub short-circuit. Production never sets the resolver;
+  // Test-only stub short-circuit. Production never sets the resolver;
   // when set (by installLlmStub in tests), it can return a canned response
   // keyed off `opts.purpose` and the system prompt. Returning `undefined`
   // means "no stub for this call" → fall through to the real path.
@@ -135,7 +160,7 @@ export async function callLlm(
     const stubbed = __llmStubResolver(effectiveParams, opts);
     if (stubbed) return stubbed;
   }
-  // W1 · dispatch by model-name prefix. Claude routes through the Anthropic
+  // Dispatch by model-name prefix. Claude routes through the Anthropic
   // /v1/messages adapter, which returns an OpenAI-shaped ChatCompletion so
   // every downstream caller (completeJson, direct callers) is unaffected.
   const res = isAnthropicModel(effectiveModel)

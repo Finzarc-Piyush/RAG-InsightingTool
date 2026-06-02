@@ -1,32 +1,36 @@
 /**
- * Wave W39 · merged hypothesis + analysis-brief LLM call (env-gated)
+ * ============================================================================
+ * runHypothesisAndBrief.ts — fuse the two pre-planner LLM calls into one to
+ * save a round-trip
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Before the planner runs, an analytical turn normally makes TWO separate LLM
+ *   calls: one to brainstorm hypotheses (see hypothesisPlanner.ts) and one to
+ *   build a structured "analysis brief" (the outcome metric, driver dimensions,
+ *   question shape, etc. — see analysisBrief.ts). Both read the same question +
+ *   dataset summary. This module merges them into a SINGLE LLM call that returns
+ *   both objects at once, then applies the hypotheses to the blackboard and the
+ *   brief to the execution context exactly like the separate paths would.
  *
- * A typical analytical turn currently fires TWO sequential LLM calls before
- * the planner:
- *   1. `generateHypotheses` — produces 3–5 testable hypotheses for the
- *      blackboard.
- *   2. `maybeRunAnalysisBrief` — produces a structured brief (shape,
- *      driver dimensions, etc.) when diagnostic-intent is detected.
+ * WHY IT MATTERS
+ *   It shaves roughly one network round-trip (~1–3s) and consolidates token
+ *   spend on every analytical turn. It is conservative: gated behind the
+ *   `MERGED_PRE_PLANNER=true` env flag (default OFF), and on any failure (flag
+ *   off, malformed sub-section, LLM/parse error) it returns `{ ok: false }` so
+ *   the caller cleanly falls back to the two separate calls — it never ships a
+ *   half-broken brief.
  *
- * Both consume the same dataset summary + question and ask the LLM for
- * related but distinct outputs. This wave merges them into a SINGLE LLM
- * call that returns both objects — cuts wall-time by ~one network round-
- * trip per analytical turn (~1–3s) AND consolidates token spend.
+ * KEY PIECES
+ *   - isMergedPrePlannerEnabled — the env gate
+ *   - runHypothesisAndBriefMerged — main: one prompt, two parsed sub-sections, applied to ctx + blackboard
+ *   - mergedOutputSchema — { hypotheses, brief? } (reuses the existing per-task schemas)
  *
- * Gated by `MERGED_PRE_PLANNER=true` (default OFF). Falls back to the
- * existing per-task calls on:
- *   - Env flag off
- *   - Schema validation failure on either sub-section (so we never ship
- *     a half-broken brief)
- *   - LLM call failure (network, parse)
- *
- * The merged-prompt is RIGOROUS about format separation: each sub-section
- * lives under its own schema key (`hypotheses` and `brief`), parsed
- * independently. If either is malformed, we fall through.
- *
- * Reuses the existing `hypothesisOutputSchema` and `analysisBriefSchema`
- * directly so any callsite expecting the original shapes continues to
- * work — no shape divergence.
+ * HOW IT CONNECTS
+ *   Reuses `analysisBriefSchema` + `mergeInferredFiltersIntoBrief` from
+ *   analysisBrief.ts and `addHypothesis` from analyticalBlackboard.js so output
+ *   shapes never diverge from the per-task paths. Calls the LLM via
+ *   `completeJson` (llmJson.js); mutates `AgentExecutionContext.analysisBrief`
+ *   and the blackboard on success.
  */
 import { z } from "zod";
 import { completeJson } from "./llmJson.js";
@@ -150,7 +154,7 @@ Output STRICTLY ONE JSON object: { "hypotheses": [...], "brief": {...} | null }`
 
   const result = await completeJson(system, user, mergedOutputSchema, {
     turnId: `${turnId}_merged_pre_planner`,
-    // WTL2 · 1_600 → 2_800. Merged hypothesis+brief — both halves benefit.
+    // Merged hypothesis+brief — both halves benefit from a roomier cap.
     maxTokens: 2800,
     temperature: 0.25,
     onLlmCall,

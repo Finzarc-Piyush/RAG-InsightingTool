@@ -1,16 +1,45 @@
-// Relative-period → filter translation for melted wide-format ("pure_period")
-// datasets. A Nielsen topline melt produces a NON-ADDITIVE period dimension
-// (Period / PeriodIso / PeriodKind) where rows like "Latest 12 Mths" (L12M)
-// are pre-computed rollups that already equal the sum of the latest 4 quarters.
-// The categorical `inferFiltersFromQuestion` only matches LITERAL catalog
-// values, so a phrase like "latest 12 months" never resolves to PeriodIso=L12M
-// and Value gets summed across every overlapping period row.
-//
-// This deterministic pass maps relative-period phrases to a single concrete
-// filter on PeriodIso (preferred) or PeriodKind, gated on the value actually
-// existing in the column catalog. Output rides the existing inferred-filters
-// pipeline (context.ts → INFERRED_FILTERS_JSON → every dimensionFilter tool),
-// so no tool changes are needed.
+/**
+ * ============================================================================
+ * inferPeriodFilterFromQuestion.ts — map "latest 12 months"/"YTD" to one filter
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Handles relative time phrases ("latest 12 months", "YTD", "most recent",
+ *   "trailing 6 weeks") for datasets that were melted from a wide Nielsen-style
+ *   table into a long "pure_period" shape. In such datasets the period column
+ *   is NON-ADDITIVE: it contains pre-computed rollup rows like "Latest 12 Mths"
+ *   (iso code L12M) that already equal the sum of the latest four quarters. This
+ *   file deterministically converts a relative-period phrase in the question
+ *   into AT MOST ONE concrete equality filter on the period dimension — either
+ *   the PeriodIso column (preferred) or the PeriodKind column — but only if that
+ *   value actually exists in the dataset's catalog. Otherwise it abstains.
+ *
+ * WHY IT MATTERS
+ *   Without this, summing "Value" for "latest 12 months" would double- or
+ *   triple-count, because the generic categorical filter inferer only matches
+ *   literal catalog strings and never resolves "latest 12 months" to L12M. By
+ *   pinning the query to the single correct rollup row, the numbers come out
+ *   right. It plugs into the same inferred-filters pipeline, so no individual
+ *   tool needs to change.
+ *
+ * KEY PIECES
+ *   - inferPeriodFilterFromQuestion(question, summary) — main entry; returns []
+ *       for non-melted datasets or when nothing resolvable is found, otherwise a
+ *       single-element InferredFilter array.
+ *   - RELATIVE_PHRASE_RULES — ordered rule table (most specific first) mapping
+ *       phrase regexes to candidate PeriodIso codes / PeriodKind fallbacks.
+ *   - RelativePhraseRule — the shape of one such rule.
+ *   - catalogStrings / catalogHit (internal) — read a column's known values and
+ *       case-insensitively test whether a candidate value really exists.
+ *
+ * HOW IT CONNECTS
+ *   Reuses the `InferredFilter` type from inferFiltersFromQuestion.ts (its
+ *   categorical sibling) and `matchPeriod` from
+ *   ../../wideFormat/periodVocabulary.js to derive iso codes for generic
+ *   "latest N months" phrases. Reads `DataSummary.wideFormatTransform`
+ *   (../../../shared/schema.js) to know whether the dataset is melted and which
+ *   columns hold the period iso/kind. Output rides the existing inferred-filters
+ *   pipeline (context.ts → INFERRED_FILTERS_JSON → every dimensionFilter tool).
+ */
 
 import type { DataSummary } from "../../../shared/schema.js";
 import type { InferredFilter } from "./inferFiltersFromQuestion.js";

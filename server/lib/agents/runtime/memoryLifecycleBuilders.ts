@@ -1,11 +1,46 @@
 /**
- * W59 · Lifecycle entry builders + a fire-and-forget scheduler.
+ * ============================================================================
+ * memoryLifecycleBuilders.ts — turn app events into saved "memory" journal rows
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   As the user works (uploads a file, saves a dashboard, adds a computed
+ *   column, runs a data transform, leaves a note), the app records a short
+ *   audit entry describing what happened. This file holds the small "builder"
+ *   functions that construct one well-formed `AnalysisMemoryEntry` for each
+ *   kind of event — filling in a stable id, a clipped title and summary, the
+ *   actor (system / user / agent), and a structured `body` payload. It also
+ *   provides a fire-and-forget scheduler that persists each entry to durable
+ *   storage and queues it for the per-session search index.
  *
- * Each producer hook (upload, dashboards, computed columns, data ops, user
- * notes) calls one of these builders + `scheduleLifecycleMemory` to record
- * the event into the durable Memory container (W56) and the per-session AI
- * Search index (W57). All writes are best-effort — a Cosmos or Search
- * outage must never surface as a failed user-facing action.
+ *   "Memory" here means the running journal of an analysis session: a durable
+ *   record (in a Cosmos DB container) plus a searchable index, so later turns
+ *   and other features can recall "what has this session done so far".
+ *
+ * WHY IT MATTERS
+ *   These entries give the agent and the UI cross-turn continuity and an audit
+ *   trail. The writes are deliberately best-effort: if the database or search
+ *   index is down, the user's actual action (the upload, the dashboard save)
+ *   must still succeed — a memory-write failure is logged, never surfaced.
+ *
+ * KEY PIECES
+ *   - buildAnalysisCreatedEntry / buildEnrichmentCompleteEntry — upload +
+ *     profiling lifecycle.
+ *   - buildDashboardPromotedEntry / buildDashboardPatchedEntry — dashboard
+ *     save and edit events.
+ *   - buildComputedColumnEntry / buildDataOpEntry — agent-driven column adds
+ *     and data transforms (with a human-readable diff of what changed).
+ *   - buildUserNoteEntry — a marker that the user added a context note.
+ *   - persistLifecycleMemory(entry) — awaits the durable write, then queues
+ *     the search-index write (fire-and-forget).
+ *   - scheduleLifecycleMemory(entry) — the routine path: schedules the whole
+ *     persist on the next tick and never throws back to the caller.
+ *
+ * HOW IT CONNECTS
+ *   Called by producer hooks across upload, dashboards, computed columns, data
+ *   ops, and user notes. Builds the `AnalysisMemoryEntry` type from
+ *   ../../../shared/schema.js, writes via `appendMemoryEntries` /
+ *   `buildMemoryEntryId` in ../../../models/analysisMemory.model.js, and indexes
+ *   via `scheduleIndexMemoryEntries` from ../../rag/indexSession.js.
  */
 import type { AnalysisMemoryEntry } from "../../../shared/schema.js";
 import type { ComputedColumnDef } from "../../computedColumns.js";

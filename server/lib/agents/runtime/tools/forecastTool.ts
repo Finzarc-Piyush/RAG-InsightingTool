@@ -1,25 +1,39 @@
 /**
- * Wave F1 · run_forecast tool.
+ * ============================================================================
+ * forecastTool.ts — predict where a number is heading (the `run_forecast` tool)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_forecast` tool the AI agent calls to project a numeric
+ *   series into the future. "Forecasting" here means: take historical values
+ *   bucketed by month / quarter / year (e.g. monthly revenue), fit a straight-
+ *   line trend plus an optional repeating "seasonal" pattern (regular ups and
+ *   downs, like a holiday spike), and extend that line `horizon` periods ahead.
+ *   It also returns a confidence band (a low/high range around each predicted
+ *   point) so the user sees how uncertain the forecast is. The result table
+ *   contains both the historical "actual" rows and the future "forecast" rows
+ *   so a chart can draw one continuous curve.
  *
- * Forecasts a numeric series `horizon` periods into the future. Two
- * usage patterns:
+ * WHY IT MATTERS
+ *   Answers "what does next quarter look like?", "where will revenue be in 6
+ *   months?". It's a simple pure-JavaScript fit (no Python round-trip) —
+ *   deliberately "good enough for a directional estimate", NOT a full ARIMA /
+ *   Prophet model. The tool surface is stable so the math can later be swapped
+ *   for the Python statsmodels service without changing callers.
  *
- *   1. Time-series question: "what does next quarter look like for
- *      revenue?" → caller groups data by quarter/month, picks the
- *      strongest date column, and asks for `horizon: 4` periods.
+ * KEY PIECES
+ *   - forecastArgsSchema — validates the request (timeColumn, valueColumn,
+ *     granularity, horizon, optional seasonality hint).
+ *   - bucketKey / bucketComparator — group raw dates into period buckets and
+ *     keep them in calendar order.
+ *   - registerForecastTool — registers the tool; aggregates rows into buckets,
+ *     calls the forecaster, builds the actual+forecast table.
  *
- *   2. Trend extrapolation: "where will MARICO's share be in 6
- *      months?" → caller pre-filters / aggregates first, then forecasts.
- *
- * Pure-Node implementation via `forecastSeries` — linear trend +
- * optional auto-detected seasonal pattern, with bootstrap-style
- * confidence intervals via residual std. NOT a substitute for ARIMA /
- * Prophet — this is "good enough to give the user a directional
- * point-forecast and uncertainty band". Upgrading to Python-service
- * statsmodels later is a swap behind the same tool surface.
- *
- * Gated by `FORECAST_ENABLED=true` so the planner sees the tool but
- * production stays opt-in until the user explicitly turns it on.
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry. The actual math lives
+ *   in `forecastSeries` (../../../forecasting/forecastSeries.js). Gated by the
+ *   `FORECAST_ENABLED=true` env flag — the tool always registers (so the
+ *   planner can see it) but returns a clear "disabled" message when the flag
+ *   is off, so production stays opt-in.
  */
 import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";

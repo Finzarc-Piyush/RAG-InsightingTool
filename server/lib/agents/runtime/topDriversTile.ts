@@ -1,16 +1,27 @@
 /**
- * W6 · Top Drivers tile builder.
+ * ============================================================================
+ * topDriversTile.ts — build a "Top drivers of X" ranked bar chart
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Takes a list of (driver name, impact value) pairs and produces one bar
+ *   ChartSpec that ranks the drivers by how strongly they affect an outcome,
+ *   sorted by absolute impact and capped at 8 bars. A "ChartSpec" is the
+ *   declarative description of a chart (type, axes, data) the client renders.
  *
- * For "what impacts X most" question shapes (driver_discovery), the auto-built
- * dashboard typically lists per-dimension breakdown charts but lacks a single
- * tile that *ranks the drivers* by their impact. This pure function takes a
- * list of (driverName, impactValue) pairs and emits a single bar `ChartSpec`
- * sorted by absolute impact, capped at 8 — to be inserted as the first chart
- * on the dashboard's All Artefacts sheet.
+ * WHY IT MATTERS
+ *   For "what impacts X the most?" questions, the auto-built dashboard usually
+ *   has per-dimension breakdown charts but no single tile that ranks the drivers
+ *   head-to-head. This fills that gap as the lead chart on the dashboard.
  *
- * The signal-source decision (correlation strength vs share-of-variance vs
- * normalised breakdown gap) is the caller's responsibility; this function is
- * just the deterministic chart-spec emitter.
+ * KEY PIECES
+ *   - DriverImpact / BuildTopDriversTileArgs — input shapes.
+ *   - buildTopDriversTile(args) — returns the ChartSpec, or null when the inputs
+ *     don't meet the contract (< 2 valid drivers, non-finite impacts, etc.).
+ *
+ * HOW IT CONNECTS
+ *   ChartSpec comes from shared/schema.ts. The caller decides which signal feeds
+ *   "impact" (correlation strength, share-of-variance, breakdown gap, ...);
+ *   this is just the deterministic spec emitter. Pure function, no I/O.
  */
 import type { ChartSpec } from "../../../shared/schema.js";
 

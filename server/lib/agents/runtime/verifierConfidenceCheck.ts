@@ -1,23 +1,40 @@
 /**
- * Wave WV1 · verifier-side confidence overclaim detector.
+ * ============================================================================
+ * verifierConfidenceCheck.ts — catches the narrator overstating its confidence
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The final answer ("narrator output") labels each magnitude and implication
+ *   with a confidence tier (low / medium / high). Separately, the system can
+ *   derive each finding's TRUE confidence tier from hard statistics (sample size,
+ *   p-value, confidence interval, R²) — this is the deterministic classifier.
+ *   This pure helper compares the two: it counts how many high/medium/low tiers
+ *   the narrator CLAIMED against how many the evidence ACTUALLY supports, and
+ *   raises "overclaim" flags when the narrator inflated certainty beyond the
+ *   evidence.
  *
- * Pure helper that compares the narrator's claimed confidence on its
- * `magnitudes` / `implications` fields against the deterministic WQ1 tiers
- * derived from blackboard findings. Surfaces overclaim flags the verifier
- * can use to ask for a `revise_narrative` re-run when the narrator inflated
- * confidence beyond what the evidence supports.
+ * WHY IT MATTERS
+ *   In a decision-grade tool, overstated confidence is dangerous — it makes a
+ *   shaky number look bankable. The verifier uses these flags to demand a
+ *   `revise_narrative` re-run so the narrative is re-graded and hedged honestly.
+ *   The deterministic classifier is the "floor" the narrator can't sneak below;
+ *   this check enforces that floor.
  *
- * Pairs with WW1 (planner directive) + WW2 (per-finding tier in narrator
- * user prompt). Without WV1 the narrator's tier choice is unaudited — the
- * directive nudges but doesn't enforce. WV1 closes the loop on the
- * deterministic-floor design.
+ * KEY PIECES
+ *   - detectConfidenceOverclaims — the detector; returns claimed vs actual tier
+ *     counts, a list of flags, and `shouldRevise` (true when any flag is
+ *     warning/block, signalling the verifier to request a re-narration).
+ *   - ConfidenceOverclaimReport / ConfidenceOverclaimFlag — the result shapes.
  *
- * Aggregate-level check, not per-finding matching. Narrator magnitudes
- * carry `{label, value, confidence?}` with no findingId reference, so
- * pairing each magnitude to a specific finding requires fuzzy matching
- * that drifts. Counting tiers across the whole output vs the whole
- * blackboard is robust and surfaces the actual failure mode (narrator
- * marked 5/5 magnitudes "high" when the blackboard's evidence supports 0).
+ * HOW IT CONNECTS
+ *   Reads NarratorOutput (narratorAgent.js), tiers findings via
+ *   tierBlackboardFindings (narratorHintsBlock.js) over the AnalyticalBlackboard,
+ *   and uses ConfidenceTier (scaleNarrativeByConfidence.js). Called by the
+ *   verifier stage of the agent loop.
+ *
+ * NOTE: this is an AGGREGATE check (counts across the whole output vs the whole
+ * blackboard), not per-finding matching — narrator magnitudes carry no findingId,
+ * so fuzzy 1:1 pairing would drift. The three decision rules are documented inline
+ * on detectConfidenceOverclaims.
  */
 
 import type { NarratorOutput } from "./narratorAgent.js";
@@ -72,7 +89,7 @@ function countClaimedTiers(
   return counts;
 }
 
-/** Count actual tiers across blackboard findings via WQ1. */
+/** Count actual tiers across blackboard findings via the deterministic classifier. */
 function countActualTiers(blackboard: AnalyticalBlackboard): ConfidenceTierCounts {
   const tiered = tierBlackboardFindings(blackboard);
   const counts: ConfidenceTierCounts = { high: 0, medium: 0, low: 0, total: tiered.length };

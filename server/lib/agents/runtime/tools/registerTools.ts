@@ -1,3 +1,81 @@
+/**
+ * ============================================================================
+ * registerTools.ts — wires every agent tool into the registry so the act loop
+ *                     can discover and call them
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The "agent" in this product answers a question by running a plan/act loop:
+ *   a planner LLM picks a sequence of TOOLS to call, and an act loop executes
+ *   them one by one. A TOOL is a named capability — e.g. "run SQL on the
+ *   dataset", "compute correlations", "build a chart", "search the web". Each
+ *   tool is just four things bundled together:
+ *     1. a NAME           — the string the planner uses to call it (e.g.
+ *                           "execute_query_plan").
+ *     2. an ARG SCHEMA    — a Zod schema describing the JSON arguments the tool
+ *                           accepts. Zod validates the LLM's arguments before
+ *                           the handler runs, so bad/unknown keys are rejected
+ *                           with a clear error instead of crashing. Most schemas
+ *                           here are `.strict()`, meaning "no extra keys allowed".
+ *     3. a HANDLER (run)  — an async function `(ctx, args) => ToolResult` that
+ *                           does the actual work. `ctx` carries the execution
+ *                           context (the dataset rows, schema summary, session
+ *                           id, current question, config caps, etc.); the result
+ *                           carries `ok`, a human/LLM-readable `summary`, and
+ *                           optional structured payloads (charts, tables,
+ *                           memorySlots for chained planning, workbench
+ *                           artifacts).
+ *     4. METADATA         — a `description` (the one-liner the planner LLM sees
+ *                           and uses to decide WHEN to call the tool) and
+ *                           `argsHelp` (an example of the exact arg shape, since
+ *                           strict schemas reject anything unexpected).
+ *
+ *   `registerDefaultTools(registry)` is the single entry point. It calls
+ *   `registry.register(name, schema, handler, meta)` once per tool. Some tools
+ *   live inline in this file (e.g. retrieve_semantic_context, get_schema_summary,
+ *   run_analytical_query, execute_query_plan, run_correlation, build_chart). The
+ *   rest live in their own `runtime/tools/<name>Tool.ts` file and are pulled in
+ *   via `register<Name>Tool(registry)` calls near the bottom — same effect, just
+ *   organised per-tool for the bigger ones.
+ *
+ * WHY IT MATTERS
+ *   This is the SINGLE SOURCE OF TRUTH for what the agent can do. If a tool is
+ *   not registered here, the planner never sees it and the act loop can never
+ *   call it. Adding a new capability means: write `tools/<name>Tool.ts`, then
+ *   wire a `register<Name>Tool(registry)` line into `registerDefaultTools`.
+ *
+ *   INVARIANT — duplicate tool names are a FATAL BOOT ERROR. `registry.register`
+ *   throws `ToolAlreadyRegisteredError` if the same name is registered twice
+ *   (see toolRegistry.ts). The registry is populated exactly once at startup, so
+ *   a duplicate almost always means a merge accidentally landed two
+ *   implementations — we fail loud rather than silently swap behaviour.
+ *
+ * KEY PIECES
+ *   - registerDefaultTools(registry) — the one exported function; registers
+ *       every tool. Called once per agent run.
+ *   - inline tools — retrieve_semantic_context (RAG vector search),
+ *       get_schema_summary, sample_rows, run_analytical_query (NL → aggregates,
+ *       DuckDB-backed when columnar storage is active), execute_query_plan
+ *       (structured query plan, DuckDB-first for aggregations),
+ *       derive_dimension_bucket, add_computed_columns, run_readonly_sql,
+ *       run_correlation, run_segment_driver_analysis (flag-gated), build_chart,
+ *       clarify_user, run_data_ops.
+ *   - delegated registrars — registerBreakdownRankingTool, …,
+ *       registerExecuteMetricQueryTool: each registers one tool defined in its
+ *       own file under runtime/tools/.
+ *   - helpers — allowlistedColumns / allowedColumnNames / assertColumns /
+ *       assertChartColumns guard arguments against the dataset schema and the
+ *       current in-memory frame; logAnalyticalToolMeta emits structured logs.
+ *
+ * HOW IT CONNECTS
+ *   - Imports the registry type from ../toolRegistry.ts, and one symbol from
+ *     each runtime/tools/*Tool.ts file it wires in.
+ *   - Consumed by agentLoop.service.ts (the act loop): it does
+ *     `registerDefaultTools(registry)` at startup, then `registry.execute(...)`
+ *     to run each planned step. replayLoop.service.ts does the same for replays.
+ *   - planner.ts calls `registry.formatToolManifestForPlanner()` to render the
+ *     name + description + argsHelp of every tool into the planner prompt — that
+ *     is how the LLM learns the menu of capabilities defined here.
+ */
 import { z } from "zod";
 import { ToolRegistry, type ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
@@ -666,7 +744,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         Boolean(ctx.exec.sessionId) &&
         canExecuteQueryPlanOnDuckDb(normalizedPlan);
 
-      // Wave QL6 · DuckDB-first for analytical aggregations. When the plan
+      // DuckDB-first for analytical aggregations. When the plan
       // has aggregations we MUST hit DuckDB (the authoritative analytical
       // surface). The in-memory fallback only fires for:
       //   (a) plans with NO aggregations (projections, sample-style queries)
@@ -699,7 +777,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           descriptions = duck.descriptions;
           inputRowCount = duck.inputRowCount;
         } else {
-          // PD2 · Surface perDimension (nested aggregation) failures with the
+          // Surface perDimension (nested aggregation) failures with the
           // resolved perDimension and a sample of tableColumns so production
           // logs make column-not-found cases debuggable.
           const nestedPerDims = (normalizedPlan.aggregations ?? [])
@@ -712,7 +790,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
               error: duck.error.slice(0, 400),
             });
           }
-          // Wave QL6 · Hard-fail on DuckDB execution errors when the plan
+          // Hard-fail on DuckDB execution errors when the plan
           // has aggregations AND the error is NOT a column-binding failure.
           // Column-binding failures usually mean a per-turn computed column
           // isn't materialized in DuckDB yet — that's the only case where
@@ -752,7 +830,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           inputRowCount = memFrame.length;
         }
       } else {
-        // Wave QL6 · No DuckDB materialization available. For aggregations,
+        // No DuckDB materialization available. For aggregations,
         // this is a hard fail — we never silently grind through Cosmos-loaded
         // rows for what should be a DuckDB query. For non-aggregation plans
         // (projections, row lists, sample fetches), the in-memory path is
@@ -850,7 +928,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
       const cols =
         resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
-      // RNK1 · slim the narrator observation snippet — 200 rows of JSON often
+      // Slim the narrator observation snippet — 200 rows of JSON often
       // brushed the 40k observation cap and truncated unrelated tool output
       // from the same turn. The full result still rides on `table.rows` below
       // and powers downstream pivot/leaderboard surfacing.
@@ -1070,11 +1148,11 @@ export function registerDefaultTools(registry: ToolRegistry) {
         .map((c) => `${c.name}: ${c.nonNull}/${c.total}`)
         .join(", ");
 
-      // W59 · record the computed-column recipe (regardless of persistToSession)
-      // so resume-after-days the planner can see what derived metrics were
-      // useful in past turns and reference them by name. W68 · skip silently
-      // when username is missing so the producer doesn't fail schema validation
-      // (the entry can be backfilled later via the W67 script).
+      // Record the computed-column recipe (regardless of persistToSession) so
+      // that on resume-after-days the planner can see what derived metrics were
+      // useful in past turns and reference them by name. Skip silently when
+      // username is missing so the producer doesn't fail schema validation (the
+      // entry can be backfilled later).
       const memoryUsername = ctx.exec.username?.trim();
       if (memoryUsername) {
         void (async () => {
@@ -1196,7 +1274,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     correlationArgs,
     async (ctx, args) => {
       const requestedTarget = (args.targetVariable as string) ?? "";
-      // W48 · forgive case/spacing/underscore/dash differences before strict
+      // Forgive case/spacing/underscore/dash differences before strict
       // assertion. Same `findMatchingColumn` already used by chart builders,
       // chart downsampling, dataTransform, pivot preview, segment driver — no
       // new abstraction. Resolves "sales" → "Total Sales", "Sales (USD)", etc.
@@ -1251,7 +1329,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
       }
 
-      // W47 · frame-fit guard. `frame` is whatever the previous tool left in
+      // Frame-fit guard. `frame` is whatever the previous tool left in
       // ctx.exec.data — if a `run_aggregation` / `execute_query_plan` ran
       // first, the rows are aggregated (`{bucket, Sales_sum}`) and the schema
       // numeric list (`Sales`, `Price`, …) doesn't match the row keys.
@@ -1294,9 +1372,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ctx.exec.sessionId,
         true,
         frameCategorical,
-        // W15 · pipe domain context + user/session signals through so the
-        // agent-path correlation charts can render `businessCommentary`,
-        // matching the W12 chatStream path.
+        // Pipe domain context + user/session signals through so the agent-path
+        // correlation charts can render `businessCommentary`, matching the
+        // chatStream path.
         {
           userQuestion: ctx.exec.question,
           sessionAnalysisContext: ctx.exec.sessionAnalysisContext,
@@ -1306,13 +1384,13 @@ export function registerDefaultTools(registry: ToolRegistry) {
       );
       const noteSuffix = `${resolutionNote}${filterNote}`;
 
-      // Wave WV4 · canonical FindingEvidence suffix on the summary so the
+      // Append a canonical FindingEvidence suffix on the summary so the
       // downstream blackboard `addFinding` (agentLoop.service.ts) gets a
-      // detail string the WW2 extractor catches deterministically and WQ1
-      // grades on real evidence (R², n) instead of defaulting to "medium /
-      // no evidence supplied". Strongest correlation by |r|; R² = r².
-      // Wave WV4-bucket · also emit the categorical effect-size via Cohen's
-      // |r| conventions so WQ1 can distinguish "r = 0.05 on n = 10000" (real
+      // detail string the evidence extractor catches deterministically and the
+      // confidence grader can grade on real evidence (R², n) instead of
+      // defaulting to "medium / no evidence supplied". Strongest correlation by
+      // |r|; R² = r². Also emit the categorical effect-size via Cohen's |r|
+      // conventions so the grader can distinguish "r = 0.05 on n = 10000" (real
       // and trivial) from "r = 0.7 on n = 80" (real and large).
       let wv4EvidenceSuffix = "";
       if (topCorrelations && topCorrelations.length > 0) {
@@ -1333,10 +1411,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
         // (leading space + parenthesised block) — safe to concatenate.
         wv4EvidenceSuffix = composeFindingDetail("", evidence);
       }
-      // W49 · ok:false when the analyzer produced nothing useful. The reflector
-      // already retries on ok:false (see dimensionFilters zero-rows path
-      // above) — keep correlation consistent so the planner gets a signal to
-      // try a different target, drop filters, or move on instead of treating
+      // Return ok:false when the analyzer produced nothing useful. The
+      // reflector already retries on ok:false (see dimensionFilters zero-rows
+      // path above) — keep correlation consistent so the planner gets a signal
+      // to try a different target, drop filters, or move on instead of treating
       // empty as success.
       if (charts.length === 0 && insights.length === 0) {
         const reason = diagnostic?.reason ?? "unknown";
@@ -1543,50 +1621,51 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   );
 
+  // --- Delegated registrars: each registers ONE tool defined in its own ---
+  // --- runtime/tools/<name>Tool.ts file. Same `registry.register` effect. ---
   registerBreakdownRankingTool(registry);
   registerTwoSegmentCompareTool(registry);
   registerPatchDashboardTool(registry);
-  // W14 · web_search is registered unconditionally so the planner can see it
-  // and learn the no-op message when WEB_SEARCH_ENABLED is false. Real
-  // execution is gated inside the tool itself.
+  // web_search is registered unconditionally so the planner can see it and
+  // learn the no-op message when WEB_SEARCH_ENABLED is false. Real execution is
+  // gated inside the tool itself.
   registerWebSearchTool(registry);
-  // W53 · marketing-mix budget reallocator. Trips on questions like
-  // "how should I redistribute my budget" — see budget_reallocation question
-  // shape in analysisBrief.ts.
+  // Marketing-mix budget reallocator. Trips on questions like "how should I
+  // redistribute my budget" — see budget_reallocation question shape in
+  // analysisBrief.ts.
   registerBudgetOptimizerTool(registry);
-  // WGR3 · period-over-period growth (YoY/QoQ/MoM/WoW). Use for trend /
-  // "fastest growing market" / "biggest decliner" questions.
+  // Period-over-period growth (YoY/QoQ/MoM/WoW). Use for trend / "fastest
+  // growing market" / "biggest decliner" questions.
   registerComputeGrowthTool(registry);
-  // WSE3 · within-year recurring seasonality (month-of-year / quarter-of-year).
+  // Within-year recurring seasonality (month-of-year / quarter-of-year).
   // Use for trend questions on multi-year monthly/quarterly data.
   registerDetectSeasonalityTool(registry);
-  // Wave F1 · time-series forecasting (linear trend + optional seasonal).
+  // Time-series forecasting (linear trend + optional seasonal).
   // Gated by FORECAST_ENABLED=true; surfaces a clear off-message otherwise.
   registerForecastTool(registry);
-  // Wave WT8 · hierarchical drill — top-N + "Other" rollup for unreadable
+  // Hierarchical drill — top-N + "Other" rollup for unreadable
   // high-cardinality breakdowns (50+ regions, 200+ SKUs). Pure-Node.
   registerHierarchicalDrillTool(registry);
-  // Wave WT2 · cohort retention/expansion table. Pure-Node; tracks entities
-  // across period offsets to answer "of cohort X, how many remain in period Y?".
+  // Cohort retention/expansion table. Pure-Node; tracks entities across period
+  // offsets to answer "of cohort X, how many remain in period Y?".
   registerCohortAnalysisTool(registry);
-  // Wave WT3 · RFM segmentation. Pure-Node; scores entities on Recency /
-  // Frequency / Monetary and assigns canonical RFM segment labels.
+  // RFM segmentation. Pure-Node; scores entities on Recency / Frequency /
+  // Monetary and assigns canonical RFM segment labels.
   registerRfmSegmentationTool(registry);
-  // Wave WT7 · price elasticity (log-log OLS). Pure-Node; returns slope,
-  // R², 95% CI, t-value, and a categorical interpretation per group.
+  // Price elasticity (log-log OLS). Pure-Node; returns slope, R², 95% CI,
+  // t-value, and a categorical interpretation per group.
   registerPriceElasticityTool(registry);
-  // Wave WT4 · market-basket association rules (1-LHS apriori). Pure-Node;
-  // returns support / confidence / lift per rule, sorted by lift desc.
+  // Market-basket association rules (1-LHS apriori). Pure-Node; returns
+  // support / confidence / lift per rule, sorted by lift desc.
   registerMarketBasketTool(registry);
-  // Wave F2 · outlier / anomaly detection (IQR + z-score). Gated by
+  // Outlier / anomaly detection (IQR + z-score). Gated by
   // ANOMALY_DETECTION_ENABLED=true.
   registerAnomalyDetectionTool(registry);
-  // Wave F3 · statistical significance tests (Welch's t, paired t, χ²).
-  // Gated by SIGNIFICANCE_TESTS_ENABLED=true.
+  // Statistical significance tests (Welch's t, paired t, χ²). Gated by
+  // SIGNIFICANCE_TESTS_ENABLED=true.
   registerSignificanceTestTool(registry);
-  // Wave W60 · semantic-layer dispatcher — wraps compileMetricQuery (W58)
-  // and dispatches through execute_query_plan. Closes the W56→W59b chain:
-  // the SEMANTIC_CATALOG block becomes the planner's preferred dispatch
-  // path, not just read-only grounding.
+  // Semantic-layer dispatcher — wraps compileMetricQuery and dispatches through
+  // execute_query_plan, so the SEMANTIC_CATALOG block becomes the planner's
+  // preferred dispatch path, not just read-only grounding.
   registerExecuteMetricQueryTool(registry);
 }

@@ -1,25 +1,38 @@
 /**
- * Wave W74 · investigation budget exhaustion detector.
+ * ============================================================================
+ * investigationBudget.ts — tells you WHY a deep investigation must stop
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A "deep investigation" is the bigger, multi-branch version of answering a
+ *   question: the agent spawns a tree of sub-questions and keeps digging. To
+ *   avoid running forever (and burning money), it has hard budget caps — a max
+ *   number of LLM calls, a max wall-clock time, and a max number of tree nodes.
+ *   This file is a small pure helper (no I/O, no side effects) that looks at the
+ *   current investigation tree plus its budget config and reports the FIRST cap
+ *   that has been hit, with a human-readable explanation. Returns `null` while
+ *   there is still budget left.
  *
- * Pure helper that inspects an `InvestigationTree` + `DeepInvestigationConfig`
- * and reports WHY the deep-investigation loop would terminate (or has
- * terminated) on budget grounds, so the orchestrator can surface a
- * `flow_decision` SSE row with a specific reason instead of silently
- * stopping when `withinBudget` flips false.
+ * WHY IT MATTERS
+ *   Without this, the loop would just silently stop when budget ran out, leaving
+ *   no trace of why. Here it produces a specific reason so the orchestrator can
+ *   show the user (via a `flow_decision` SSE row / agent log) exactly which limit
+ *   triggered the halt — observability for the hard budget caps.
  *
- * Closes the second item of Workstream 3 (W74) from the [1000x master
- * plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md): *hard budget caps with
- * explicit observability when they trigger*.
+ * KEY PIECES
+ *   - BudgetExhaustionReason — the three reasons: "llm_calls_exhausted",
+ *     "wall_time_exhausted", "max_nodes_reached".
+ *   - evaluateBudgetExhaustion — the main check; returns the first triggered
+ *     reason in priority order, or null when within budget.
+ *   - formatBudgetExhaustionMessage — builds the canonical message string.
  *
- * Three exhaustion reasons (priority-ordered — same priority the
- * `withinBudget` + `canAddNode` checks already enforce):
+ * HOW IT CONNECTS
+ *   Reads types from investigationTree.js (InvestigationTree, DeepInvestigationConfig).
+ *   Called by the deep-investigation orchestrator to decide when to stop and what
+ *   reason to emit.
  *
- *  - `llm_calls_exhausted` — `totalBudgetUsed.llmCalls >= maxTotalLlmCalls`.
- *  - `wall_time_exhausted` — `elapsedMs >= maxTotalWallTimeMs`.
- *  - `max_nodes_reached` — total node count >= `maxNodes`. Soft cap: the
- *    loop may still drain pending nodes but no new children can be spawned.
- *
- * Returns `null` when budget remains.
+ * NOTE on the three caps:
+ *   max_nodes is a SOFT cap — the loop may still drain already-pending nodes but
+ *   cannot spawn new children once reached. The other two are hard halts.
  */
 
 import type {

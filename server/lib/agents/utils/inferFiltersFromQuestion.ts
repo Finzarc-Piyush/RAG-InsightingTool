@@ -1,3 +1,45 @@
+/**
+ * ============================================================================
+ * inferFiltersFromQuestion.ts — guess data filters straight from the question
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Before the LLM planner ever runs, this file takes a stab at the obvious
+ *   filters implied by the user's wording — deterministically, with no model
+ *   call. It tokenizes the question, builds 1-to-3-word phrases ("n-grams"),
+ *   and tries to resolve each phrase to a unique (column, value) pair using the
+ *   categorical value hints already stored on the dataset summary. Matches
+ *   become "positive" filters (op `in` — keep these values). It also scans for
+ *   exclusion verbs ("omit", "without", "except for X", …) and turns the clause
+ *   after them into "negative" filters (op `not_in` — drop these values), while
+ *   honoring polarity flippers like "everything else but X" that invert the
+ *   meaning. It deliberately abstains whenever a phrase is ambiguous.
+ *
+ * WHY IT MATTERS
+ *   Pre-resolving the easy, unambiguous filters makes the agent faster and more
+ *   reliable: the planner gets handed correct filters instead of guessing them,
+ *   which reduces wrong-column / wrong-value mistakes. Because it only emits a
+ *   filter when a phrase maps to exactly one catalog value, it is safe to run
+ *   on every question.
+ *
+ * KEY PIECES
+ *   - InferredFilter — one inferred filter (column, op, values, match mode, the
+ *       question tokens that triggered it, and positive/negative intent).
+ *   - inferFiltersFromQuestion(question, summary, opts?) — main entry; returns
+ *       the list of positive (and, if enabled, negative) filters.
+ *   - inferNegativeFiltersFromExclusionVerbs (internal) — the `not_in` scanner.
+ *   - EXCLUDE_VERB_RE_G / NEG_CAPTURE_CHAR_CAP / NEG_SENTENCE_BOUNDARIES_RE /
+ *       NEG_POLARITY_FLIPPER_RE — the exclusion-clause vocabulary, exported so
+ *       the persistent-directive extractor reuses the exact same patterns.
+ *
+ * HOW IT CONNECTS
+ *   Reads `DataSummary` (../../../shared/schema.js) for column + categorical
+ *   value hints, and resolves phrases via `findUniqueValueColumnMatch`
+ *   (../../dimensionFilterRepair.js). Output rides the inferred-filters pipeline
+ *   into the planner and tools (see inferPeriodFilterFromQuestion.ts for the
+ *   period-specific sibling). The exported exclusion regexes are reused by
+ *   extractUserDirectives.ts. Negative inference can be turned off via the env
+ *   var AGENT_INFER_NEGATIVE_FILTERS=false.
+ */
 import type { DataSummary } from "../../../shared/schema.js";
 import { findUniqueValueColumnMatch } from "../../dimensionFilterRepair.js";
 
@@ -7,19 +49,18 @@ export interface InferredFilter {
   values: string[];
   match: "exact" | "case_insensitive";
   matchedTokens: string[];
-  /** RD3 · "positive" = user wants these values IN, "negative" = user wants OUT. */
+  /** "positive" = user wants these values IN, "negative" = user wants OUT. */
   intent?: "positive" | "negative";
 }
 
-// RD3 · exclusion-verb scan. The clause following each verb (up to a sentence
+// Exclusion-verb scan. The clause following each verb (up to a sentence
 // boundary or NEG_CAPTURE_CHAR_CAP chars) is run through the same n-gram
 // resolver; uniquely-matched values become `not_in` filters. Mirrors the
-// verb set used by RD2 in planArgRepairs.ts but operates on the raw question
-// text (no rollup-name proximity gate — any captured value qualifies).
+// verb set used in planArgRepairs.ts but operates on the raw question text
+// (no rollup-name proximity gate — any captured value qualifies).
 //
-// Wave W-UD4 · these constants are exported so the persistent-directive
-// extractor (`extractUserDirectives.ts`) can reuse the same vocabulary
-// without drift.
+// These constants are exported so the persistent-directive extractor
+// (`extractUserDirectives.ts`) can reuse the same vocabulary without drift.
 export const EXCLUDE_VERB_RE_G =
   /\b(omit|exclud(?:e|es|ed|ing)|without|except|leav(?:e|ing)\s+out|drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|skip(?:s|ped|ping)?|ignor(?:e|es|ed|ing)|aside\s+from|apart\s+from|other\s+than|don'?t\s+include|do\s+not\s+include|not\s+including|minus)\b/gi;
 export const NEG_CAPTURE_CHAR_CAP = 80;
@@ -176,7 +217,7 @@ export function inferFiltersFromQuestion(
     });
   }
 
-  // RD3 · negative-filter pre-scan. Disabled via AGENT_INFER_NEGATIVE_FILTERS=false.
+  // Negative-filter pre-scan. Disabled via AGENT_INFER_NEGATIVE_FILTERS=false.
   if (process.env.AGENT_INFER_NEGATIVE_FILTERS !== "false") {
     const negative = inferNegativeFiltersFromExclusionVerbs(
       question,
@@ -208,9 +249,9 @@ export function inferFiltersFromQuestion(
   return out;
 }
 
-// RD3 · "ignore the rest, just X" / "except for X" inverts the polarity of the
+// "ignore the rest, just X" / "except for X" inverts the polarity of the
 // exclusion verb — the captured clause names what to KEEP, not what to omit.
-// Exported for W-UD4 reuse in the directive extractor.
+// Exported for reuse in the directive extractor.
 export const NEG_POLARITY_FLIPPER_RE =
   /\b(?:just|only|the\s+rest|everything\s+else|all\s+else|all\s+but|except\s+for)\b/i;
 

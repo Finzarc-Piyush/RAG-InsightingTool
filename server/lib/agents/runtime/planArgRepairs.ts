@@ -1,3 +1,101 @@
+/**
+ * ============================================================================
+ * planArgRepairs.ts — self-healing plan/tool arguments before execution
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a user asks an analytical question, an LLM "planner" writes a PLAN: a
+ *   short list of STEPS, where each step names a TOOL (e.g. `execute_query_plan`
+ *   which runs a DuckDB SQL query, `breakdown_ranking`, `run_correlation`, …)
+ *   plus the ARGUMENTS to call that tool with (which columns to group by, which
+ *   to sum, which filters to apply, sort order, row limits, etc).
+ *
+ *   LLMs are fluent but imprecise. They routinely emit arguments that are
+ *   slightly-to-badly wrong: a column name that doesn't exist, a missing
+ *   required field, a sort entry with the wrong key, a filter the user clearly
+ *   asked for but the model forgot, or — worst — an aggregation that quietly
+ *   produces a WRONG NUMBER (e.g. summing across overlapping time periods, or
+ *   mixing "value sales" rows with "volume" rows in one SUM).
+ *
+ *   This file is a large library of DETERMINISTIC "repair" functions. They run
+ *   AFTER the planner produces a plan but BEFORE any tool actually executes.
+ *   Each function inspects a step's args and, where it can be confident, fixes
+ *   or normalizes them. "Deterministic" = plain code with regexes and lookups,
+ *   no extra LLM call — so the behaviour is predictable, testable, and free.
+ *
+ *   Jargon used throughout:
+ *     - dimensionFilters: a list of {column, op, values} filter clauses tools
+ *       accept (op = "in" / "not_in" / "eq" / "gt" / …). Some tools nest them
+ *       under `args.plan.dimensionFilters`; others take them at top level.
+ *     - groupBy / aggregations / sort / limit: the SQL-ish shape of an
+ *       execute_query_plan step.
+ *     - rollup row: a "category total" row whose value is the sum of its
+ *       children (e.g. FEMALE SHOWER GEL = MARICO + PURITE + …). Including it
+ *       in a per-brand breakdown means "the parent always wins" — usually wrong.
+ *     - wide-format / compound / pure_period shape: dataset layouts where one
+ *       column says WHAT a value means (Metric column: value_sales vs volume)
+ *       or WHEN (Period columns). Summing the value column without filtering
+ *       these mixes incompatible units / overlapping periods → garbage.
+ *     - temporal facet: a derived bucketing column like "Day · Date" / "Week ·
+ *       Date" used to aggregate a raw date column by a chosen grain.
+ *     - "per X" / rate intent: "average visits per day" means SUM per day FIRST,
+ *       then AVG across days — a nested aggregation, not a flat average of rows.
+ *
+ * WHY IT MATTERS
+ *   This layer is the single biggest reliability lever in the agentic loop.
+ *   Instead of a tool throwing a Zod validation error (or, far worse, silently
+ *   returning a plausible-but-wrong number), the plan is quietly corrected so
+ *   the tool runs and returns a trustworthy answer. It lets the planner stay
+ *   "roughly right" while these guards make it "exactly right".
+ *
+ * KEY PIECES (grouped by category — see the section dividers below)
+ *   Filter injection / dimension hygiene:
+ *     - ensureInferredFiltersOnStep   — fill in filters inferred from the
+ *       question that the planner forgot to emit.
+ *     - injectRollupExcludeFilters / shouldSkipRollupExclude — exclude
+ *       category-total rows from breakdowns (unless the user wants them).
+ *     - classifyHierarchyIntent       — label each hierarchy as peer-compare /
+ *       rollup-mention / share-of-category for a planner prompt hint.
+ *     - checkMissingInferredFilters   — verifier backstop: any inferred filter
+ *       absent from every applicable step?
+ *   Wide-format correctness guards:
+ *     - injectCompoundShapeMetricGuard / resolveMetricFromQuestion /
+ *       extractDistinctMetricValues — force a single Metric value (or expand
+ *       groupBy by Metric) so SUM(Value) doesn't mix units.
+ *     - injectPeriodAdditivityGuard   — pin one period so SUM(Value) isn't
+ *       computed across overlapping, non-additive period rows.
+ *   Schema-drift repairs (make plans pass Zod validation):
+ *     - repairExecuteQueryPlanDimensionFilters — default/normalize filter `op`,
+ *       coerce `values` to a string array, accept alias keys.
+ *     - repairExecuteQueryPlanSort    — normalize sort alias keys/values,
+ *       default direction, drop bad entries.
+ *   Ranking-intent enforcement:
+ *     - extractRankingIntent + enforceRankingPlanShape — recognise "top N" /
+ *       "who has the highest X" / "list the products" and force groupBy + sort +
+ *       limit so rankings aren't truncated or mis-shaped.
+ *   Rate / nested-aggregation intent:
+ *     - detectPerXIntent + injectPerDimensionForRateIntent — "avg X per day" →
+ *       nested perDimension aggregation.
+ *     - detectMultiPerIntent + injectMultiPerIntent — "avg X per day per
+ *       cluster" → move the rate denominator out of groupBy into perDimension.
+ *     - detectRollingWindowIntent     — "rolling 4-week average" / "YTD" /
+ *       "running total" → a windowAggregations shape.
+ *   Aggregation-intent floor:
+ *     - synthesizeAggregationStep + planAlreadyCoversAggregation — when the
+ *       planner emitted ZERO analytical steps for a clear aggregation question,
+ *       synthesize one execute_query_plan step from scratch.
+ *
+ * HOW IT CONNECTS
+ *   These helpers are called from the planner / act loop (see `planner.ts` —
+ *   the function-level comments name the exact ordering: rollup excludes →
+ *   ranking shape → compound metric guard → period guard → per-X / multi-per
+ *   rewrites, with the aggregation floor synthesizing a step when the plan is
+ *   empty).
+ *   They lean on shared building blocks: `findMatchingColumn` (fuzzy column
+ *   resolution, ../utils/columnMatcher.js), the temporal-facet helpers in
+ *   ../../temporalFacetColumns.js, the period vocabulary in
+ *   ../../wideFormat/periodVocabulary.js, and the DataSummary / wide-format
+ *   metadata produced at upload time (../../../shared/schema.js).
+ */
 import type { PlanStep } from "./types.js";
 import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
 import type {
@@ -76,23 +174,23 @@ export function ensureInferredFiltersOnStep(
 }
 
 /**
- * H3 / RD1 · Returns true when the user's question is asking *about* the
- * rollup row rather than comparing peer items. In either case, the
- * deterministic exclude filter must NOT fire — the rollup row needs to
- * be in the data (a) for direct lookups ("show me FEMALE SHOWER GEL")
- * and (b) so the LLM can use it as the denominator for share-of-category
- * questions ("MARICO's share of the category").
+ * Returns true when the user's question is asking *about* the rollup row
+ * rather than comparing peer items. In either case, the deterministic exclude
+ * filter must NOT fire — the rollup row needs to be in the data (a) for direct
+ * lookups ("show me FEMALE SHOWER GEL") and (b) so the LLM can use it as the
+ * denominator for share-of-category questions ("MARICO's share of the
+ * category").
  */
 const SHARE_PATTERN_RE =
   /(?:\b(?:share|contribution|percentage|percent|fraction|portion|proportion)\b|%)\s+(?:of|in|to|within|out\s+of|relative\s+to|compared\s+to|vs\.?)\b/i;
 const CATEGORY_PATTERN_RE =
   /\b(category|categor[iy]|total|grand\s+total|overall|whole|entire|full|everything|all)\b/i;
-// RD2 · exclusion-intent override: when the user mentions the rollup name AND
-// pairs it with an exclusion verb within EXCLUDE_PROXIMITY_WINDOW chars, OR
-// when the question contains an explainer ("X is the entire category"), the
+// Exclusion-intent override: when the user mentions the rollup name AND pairs
+// it with an exclusion verb within EXCLUDE_PROXIMITY_WINDOW chars, OR when the
+// question contains an explainer ("X is the entire category"), the
 // rollup-exclude filter MUST fire — the user is asking *to remove* the rollup,
-// not asking about it. Without this, "omit FEMALE SHOWER GEL" was treated the
-// same as "tell me about FEMALE SHOWER GEL" and the rollup stayed in the data.
+// not asking about it. Without this, "omit FEMALE SHOWER GEL" is treated the
+// same as "tell me about FEMALE SHOWER GEL" and the rollup stays in the data.
 const EXCLUDE_VERB_RE_G =
   /\b(omit|exclud(?:e|es|ed|ing)|without|except|leav(?:e|ing)\s+out|drop(?:s|ped|ping)?|remov(?:e|es|ed|ing)|skip(?:s|ped|ping)?|ignor(?:e|es|ed|ing)|aside\s+from|apart\s+from|other\s+than|don'?t\s+include|do\s+not\s+include|not\s+including|minus)\b/gi;
 const ROLLUP_EXPLAINER_RE =
@@ -108,7 +206,7 @@ export function shouldSkipRollupExclude(
   const qLower = q.toLowerCase();
   const rollupLower = hierarchy.rollupValue.toLowerCase();
   if (rollupLower && qLower.includes(rollupLower)) {
-    // RD2 · check exclusion-intent override before honoring the mention.
+    // Check exclusion-intent override before honoring the mention.
     const rollupIdx = qLower.indexOf(rollupLower);
     const rollupEnd = rollupIdx + rollupLower.length;
     for (const m of qLower.matchAll(EXCLUDE_VERB_RE_G)) {
@@ -129,12 +227,11 @@ export function shouldSkipRollupExclude(
     }
     return { skip: true, reason: "mention" };
   }
-  // RD1 · "MARICO's share of the category" / "% of total Products" /
-  // "what fraction of the overall belongs to MARICO" — share-pattern
-  // combined with EITHER the column name OR a generic category word
-  // means the user wants the rollup as denominator. Skip the exclude
-  // so the rollup row stays in the data; let the narrator + planner
-  // hint guide the LLM to use it as the denominator.
+  // "MARICO's share of the category" / "% of total Products" / "what fraction
+  // of the overall belongs to MARICO" — share-pattern combined with EITHER the
+  // column name OR a generic category word means the user wants the rollup as
+  // denominator. Skip the exclude so the rollup row stays in the data; let the
+  // narrator + planner hint guide the LLM to use it as the denominator.
   if (SHARE_PATTERN_RE.test(qLower)) {
     const colLower = hierarchy.column.toLowerCase();
     if (qLower.includes(colLower) || CATEGORY_PATTERN_RE.test(qLower)) {
@@ -145,17 +242,17 @@ export function shouldSkipRollupExclude(
 }
 
 /**
- * H3 · Auto-inject `not_in` filters that exclude declared rollup values from
- * the dimensions a step is about to group/rank by. Without this, breakdowns
- * like "Total_Sales by Products" are dominated by the category-total row
- * (e.g. FEMALE SHOWER GEL = sum of MARICO + PURITE + ...) which is just
- * "the parent always wins".
+ * Auto-inject `not_in` filters that exclude declared rollup values from the
+ * dimensions a step is about to group/rank by. Without this, breakdowns like
+ * "Total_Sales by Products" are dominated by the category-total row (e.g.
+ * FEMALE SHOWER GEL = sum of MARICO + PURITE + ...) which is just "the parent
+ * always wins".
  *
  * Skips injection when:
  *   - The user question explicitly mentions the rollup value (case-insensitive)
  *     — the user is asking *about* the rollup, not comparing peers.
- *   - RD1 · The user question matches a "share/contribution/% of the
- *     category" pattern — the user wants the rollup AS the denominator.
+ *   - The user question matches a "share/contribution/% of the category"
+ *     pattern — the user wants the rollup AS the denominator.
  *   - The step args already include any filter on the same column whose `in`
  *     values contain the rollup value — explicit user-driven inclusion wins.
  *   - The step args already include a `not_in` filter on the same column whose
@@ -184,10 +281,10 @@ export function injectRollupExcludeFilters(
   const next = [...existing];
 
   for (const col of dims) {
-    // ML1 · multi-level same-column hierarchies: the user can declare
-    // more than one rollup per column (e.g. "World" AND "Asia" are both
-    // category totals in a Geography column). Collect ALL rollup values
-    // for this column and decide per-value whether to exclude.
+    // Multi-level same-column hierarchies: the user can declare more than one
+    // rollup per column (e.g. "World" AND "Asia" are both category totals in a
+    // Geography column). Collect ALL rollup values for this column and decide
+    // per-value whether to exclude.
     const hierarchiesForCol = hierarchies.filter((h) => h.column === col);
     if (hierarchiesForCol.length === 0) continue;
 
@@ -232,9 +329,9 @@ export function injectRollupExcludeFilters(
 }
 
 /**
- * RD1 · For each declared hierarchy, classify how the user's question
- * relates to it. Used to surface a planner prompt hint that tells the
- * LLM to use the rollup as denominator for share-of-category questions.
+ * For each declared hierarchy, classify how the user's question relates to it.
+ * Used to surface a planner prompt hint that tells the LLM to use the rollup as
+ * denominator for share-of-category questions.
  */
 export interface HierarchyIntent {
   column: string;
@@ -282,8 +379,12 @@ function collectGroupingDimensions(step: PlanStep): string[] {
   return dims;
 }
 
+// ---------------------------------------------------------------------------
+// Wide-format correctness guards — compound (Metric column) datasets.
+// ---------------------------------------------------------------------------
+
 /**
- * WPF2 · Vocabulary mapping question keywords → metric value families.
+ * Vocabulary mapping question keywords → metric value families.
  * Compound-shape datasets carry a `Metric` column (e.g. value_sales / volume).
  * If the planner's step touches the value column without filtering by metric,
  * we silently sum across mixed metrics → garbage. This vocab lets us infer
@@ -356,7 +457,7 @@ export function resolveMetricFromQuestion(
 }
 
 /**
- * WPF2 · Detect when a step touches the wide-format value column. Mirrors the
+ * Detect when a step touches the wide-format value column. Mirrors the
  * tool-args inspection pattern in `dimensionFilterHost` / `collectGroupingDimensions`.
  *
  * Tools considered:
@@ -396,9 +497,9 @@ function stepTouchesValueColumn(step: PlanStep, valueColumn: string): boolean {
 }
 
 /**
- * WPF2 · Whether the step's groupBy already includes the metric column,
- * indicating the user wants a cross-metric breakdown (no single-metric filter
- * should be injected — let each metric stay separable).
+ * Whether the step's groupBy already includes the metric column, indicating the
+ * user wants a cross-metric breakdown (no single-metric filter should be
+ * injected — let each metric stay separable).
  */
 function stepGroupsByMetric(step: PlanStep, metricColumn: string): boolean {
   if (step.tool === "execute_query_plan") {
@@ -420,10 +521,9 @@ function stepGroupsByMetric(step: PlanStep, metricColumn: string): boolean {
 }
 
 /**
- * WPF2 · Add the metric column to the step's groupBy (for cross-metric
- * questions). Mutates step.args. Returns true when the column was added,
- * false when no addable target existed (silent no-op for tools without
- * a groupBy concept).
+ * Add the metric column to the step's groupBy (for cross-metric questions).
+ * Mutates step.args. Returns true when the column was added, false when no
+ * addable target existed (silent no-op for tools without a groupBy concept).
  */
 function addMetricToGroupBy(step: PlanStep, metricColumn: string): boolean {
   if (step.tool === "execute_query_plan") {
@@ -461,11 +561,11 @@ export interface CompoundMetricGuardResult {
 }
 
 /**
- * WPF2 · Inject a deterministic Metric-column filter (or expand groupBy by
- * the Metric column for cross-metric intent) on compound-shape datasets.
+ * Inject a deterministic Metric-column filter (or expand groupBy by the Metric
+ * column for cross-metric intent) on compound-shape datasets.
  *
- * Mirrors the H3 dimension-hierarchy injection pattern. Runs in `planner.ts`
- * right after `injectRollupExcludeFilters`.
+ * Mirrors the dimension-hierarchy injection pattern. Runs in `planner.ts` right
+ * after `injectRollupExcludeFilters`.
  *
  * Why: compound-shape long-form datasets have a `Metric` column whose values
  * (e.g. value_sales / volume) describe what the `Value` column means. Any
@@ -654,8 +754,12 @@ function pickDefaultPeriod(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Wide-format correctness guards — pure_period (overlapping period rows).
+// ---------------------------------------------------------------------------
+
 /**
- * PA1 · Inject a single-period dimensionFilter on pure_period (melted wide-format)
+ * Inject a single-period dimensionFilter on pure_period (melted wide-format)
  * datasets so SUM(Value) is not computed across the NON-ADDITIVE, overlapping
  * period rows (L12M already = the latest 4 quarters; YTD overlaps quarters).
  *
@@ -733,7 +837,7 @@ export function injectPeriodAdditivityGuard(
 }
 
 /**
- * WPF2 · Extract the distinct values of the metric column from the dataset.
+ * Extract the distinct values of the metric column from the dataset.
  * Used by `injectCompoundShapeMetricGuard` so the planner can build a
  * concrete `metric IN [...]` filter rather than guessing from training data.
  *
@@ -796,6 +900,10 @@ export function checkMissingInferredFilters(
     .filter((col) => !covered.has(col));
 }
 
+// ---------------------------------------------------------------------------
+// Schema-drift repairs — make a structurally-wrong plan pass Zod validation.
+// ---------------------------------------------------------------------------
+
 /**
  * Repairs common planner schema drift for execute_query_plan.
  *
@@ -825,9 +933,9 @@ export function repairExecuteQueryPlanDimensionFilters(step: PlanStep): void {
       (d as any).op = operator;
     }
 
-    // CMP1 · accept the extended op set (eq/neq/lt/lte/gt/gte/between)
-    // alongside categorical in/not_in. Default to "in" only when the planner
-    // emitted nothing usable.
+    // Accept the extended op set (eq/neq/lt/lte/gt/gte/between) alongside
+    // categorical in/not_in. Default to "in" only when the planner emitted
+    // nothing usable.
     const VALID_OPS = new Set([
       "in",
       "not_in",
@@ -906,19 +1014,15 @@ export function repairExecuteQueryPlanSort(step: PlanStep): void {
 }
 
 // ---------------------------------------------------------------------------
-// RNK1 · Ranking / leaderboard / entity-max question intent extraction +
+// Ranking / leaderboard / entity-max question intent extraction +
 // deterministic plan-shape enforcement.
 //
-// User report: questions like "who are the top 300 salespeople" /
-// "who has the maximum leaves this month" / "who has the highest
-// absenteeism" / "list the products" used to produce wrong or truncated
-// answers because (a) breakdown_ranking silently capped topN at 50,
-// (b) the planner had no explicit rule to emit groupBy + sort + limit
-// for these shapes, (c) full-row results were embedded inside the
-// observation summary string and truncated by the 40k/20k char caps
-// before reaching the narrator. RNK1.1+RNK1.5 fix (a) and (c); the
-// helpers below fix (b) deterministically so the LLM can't drop the
-// shape on the floor.
+// Questions like "who are the top 300 salespeople" / "who has the maximum
+// leaves this month" / "who has the highest absenteeism" / "list the products"
+// can produce wrong or truncated answers if the planner doesn't emit a clean
+// groupBy + sort + limit shape. The helpers below recognise the intent from
+// the question wording and enforce that shape deterministically so the LLM
+// can't drop it on the floor.
 // ---------------------------------------------------------------------------
 
 /** Shape of a user-question ranking intent, when one is recognised. */
@@ -1166,7 +1270,7 @@ export function extractRankingIntent(
   if (kind !== "entityList" && !metricColumn) {
     // No numeric column named, no wide-format value column to default to —
     // we can't responsibly emit groupBy+sort+limit without a metric. Leave
-    // intent null so the LLM's plan stands; the prompt block (RNK1.4) still
+    // intent null so the LLM's plan stands; the planner prompt block still
     // nudges the LLM toward the right shape.
     return null;
   }
@@ -1340,21 +1444,21 @@ export function enforceRankingPlanShape(
 }
 
 // =============================================================================
-// PD1 · "per X" rate-intent detection + deterministic plan repair
+// "per X" rate-intent detection + deterministic plan repair
 // =============================================================================
 //
 // User asks "What is the average number of compliance visits per day across
-// clusters?" → the agent today emits a single-pass `mean(Compliance Visit)
+// clusters?" → a naive plan emits a single-pass `mean(Compliance Visit)
 // GROUP BY Cluster`, which averages RAW ROWS. When each row is already a
 // per-employee-per-day count, that's the wrong number — the user wanted
-// per-cluster daily totals averaged across days. PD1 detects this intent
-// from question phrasing and rewrites the plan to use the new
+// per-cluster daily totals averaged across days. We detect this intent from
+// question phrasing and rewrite the plan to use the
 // `aggregations[].perDimension` primitive (executed as a derived-table
 // subquery: SUM per (cluster, day) inside, AVG across days outside).
 //
-// Mirrors the H3 / WPF2 / RNK1 deterministic-repair pattern: regex-gated
-// detection, override-by-mention, idempotent rewrite, called from planner.ts
-// right after `injectCompoundShapeMetricGuard`.
+// Mirrors the deterministic-repair pattern used above: regex-gated detection,
+// override-by-mention, idempotent rewrite, called from planner.ts right after
+// `injectCompoundShapeMetricGuard`.
 
 type PerXOuterOp = "mean" | "sum" | "min" | "max";
 
@@ -1392,7 +1496,7 @@ const PER_TEMPORAL_UNIT_TO_GRAIN: Record<
 };
 
 /**
- * PD1 · Detect "<outerOp> X per Y" intent in the user's question. Returns
+ * Detect "<outerOp> X per Y" intent in the user's question. Returns
  * null for non-rate questions. The match is strict by design: requires a
  * recognised aggregation verb followed (within 40 chars) by `per <unit>`
  * OR an adverbial form (`daily average`, `weekly total`, `per-day`).
@@ -1416,8 +1520,8 @@ export interface PerXIntent {
   perDimensionKind: "temporal" | "dimension";
   rawCapture: string;
   /**
-   * PD2 · For temporal intents, the source date column the perDimension
-   * facet derives from (e.g. perDimension="Day · Date" → sourceColumn="Date").
+   * For temporal intents, the source date column the perDimension facet
+   * derives from (e.g. perDimension="Day · Date" → sourceColumn="Date").
    * Used by the injector to detect when the planner has ALREADY decomposed
    * by the same temporal axis (via groupBy of the raw column or any other
    * facet over the same source). Undefined for non-temporal intents.
@@ -1535,11 +1639,11 @@ export function detectPerXIntent(
 }
 
 /**
- * Wave W2 · Rolling-window / cumulative intent.
+ * Rolling-window / cumulative intent.
  *
  * Detects user phrasings that map naturally to a `windowAggregations`
- * shape (introduced in Wave W1) rather than `perDimension` nested
- * aggregation. Examples we want to catch:
+ * shape rather than `perDimension` nested aggregation. Examples we want
+ * to catch:
  *   - "rolling 4-week average sales"
  *   - "4-week rolling average of revenue"
  *   - "trailing 7-day mean"
@@ -1714,7 +1818,7 @@ export function detectRollingWindowIntent(
 }
 
 /**
- * PD1 · Injector. For an `execute_query_plan` step whose aggregations are
+ * Injector. For an `execute_query_plan` step whose aggregations are
  * single-pass and match the detected outer op + numeric column, rewrite
  * each matching aggregation to add `perDimension` + `innerOperation: "sum"`.
  * Idempotent: skips aggs that already have perDimension. Also skips when
@@ -1738,7 +1842,7 @@ export interface InjectPerDimensionResult {
 }
 
 /**
- * PD2 · Returns the set of column names that are semantically equivalent to
+ * Returns the set of column names that are semantically equivalent to
  * decomposing by `intent.perDimension`. For temporal intents, this includes
  * the perDimension itself, the source date column, AND every facet over that
  * source (Day · X / Week · X / Month · X / Quarter · X / Half-year · X /
@@ -1794,8 +1898,8 @@ export function injectPerDimensionForRateIntent(
     ? (planObj.groupBy as string[]).map(String)
     : [];
 
-  // PD2 · Semantic check: the planner may have already decomposed the
-  // temporal axis via the raw date column (groupBy: ["Cluster Name",
+  // Semantic check: the planner may have already decomposed the temporal axis
+  // via the raw date column (groupBy: ["Cluster Name",
   // "Date"]) or any other facet over the same source ("Week · Date" /
   // "Month · Date" / etc). In all these cases, adding perDimension would
   // either be redundant (1:1 with the existing groupBy bucket) or create
@@ -1861,7 +1965,7 @@ export function injectPerDimensionForRateIntent(
 }
 
 // =============================================================================
-// PD3 · Multi-per intent — "<agg> X per Y per Z" / "<agg> X per Y by Z"
+// Multi-per intent — "<agg> X per Y per Z" / "<agg> X per Y by Z"
 // =============================================================================
 //
 // English reading: "average compliance visits PER DAY PER CLUSTER" means
@@ -1869,13 +1973,13 @@ export function injectPerDimensionForRateIntent(
 // per-target, usually temporal) is the RATE DENOMINATOR. Z (subsequent
 // per/by-targets) is the ANSWER DIMENSION the result is grouped by.
 //
-// Single-per PD1 detection treats the first `per` clause as a rate; PD2's
-// semantic-skip prevents over-rewriting when the planner already
-// decomposed by date. But for multi-per, the planner OFTEN puts BOTH Y and
-// Z in groupBy, picking the trend-with-breakdown interpretation. PD3
-// recognises this and ACTIVELY MOVES the rate denominator out of groupBy
-// into perDimension — turning the wrong-interpretation plan into the
-// right-interpretation plan deterministically.
+// Single-per detection treats the first `per` clause as a rate; the semantic-
+// skip prevents over-rewriting when the planner already decomposed by date.
+// But for multi-per, the planner OFTEN puts BOTH Y and Z in groupBy, picking
+// the trend-with-breakdown interpretation. This pass recognises that and
+// ACTIVELY MOVES the rate denominator out of groupBy into perDimension —
+// turning the wrong-interpretation plan into the right-interpretation plan
+// deterministically.
 
 export interface MultiPerIntent {
   outerOp: PerXOuterOp;
@@ -1895,10 +1999,10 @@ const PER_ANY_REGEX_GLOBAL =
   /\bper\s+([A-Za-z][\w\s·\-]{0,40}?)(?=\s|[.,?!]|$)/gi;
 
 /**
- * PD3 · Strict multi-per detector. Returns a MultiPerIntent ONLY when the
- * question has both a temporal per-clause (rate denominator) AND at least
- * one other resolvable dimension per-clause (group). Otherwise null —
- * single-per cases fall through to PD1's existing detector.
+ * Strict multi-per detector. Returns a MultiPerIntent ONLY when the question
+ * has both a temporal per-clause (rate denominator) AND at least one other
+ * resolvable dimension per-clause (group). Otherwise null — single-per cases
+ * fall through to the single-per detector (`detectPerXIntent`).
  *
  * Adverbial forms ("daily average X by region", "weekly total Y per cluster")
  * also fire: the adverb provides the rate denominator, the per/by clause
@@ -1911,7 +2015,7 @@ export function detectMultiPerIntent(
   const q = (question ?? "").trim();
   if (!q) return null;
 
-  // Outer-op verb (any form). Reuse PD1's mapping.
+  // Outer-op verb (any form). Reuse the single-per detector's mapping.
   let outerOpWord: string | null = null;
   const verbMatch = q.match(
     /\b(average|avg|mean|total|sum|max|maximum|highest|min|minimum|lowest)\b/i
@@ -2022,10 +2126,10 @@ export function detectMultiPerIntent(
     resolved.push({ kind: "dimension", column: matched, raw });
   }
 
-  // PD3 fires ONLY when we have AT LEAST ONE temporal AND AT LEAST ONE
-  // dimension. Single-temporal questions fall through to PD1. Multiple
-  // temporals are ambiguous (which is the rate? which is the bucket?) —
-  // also fall through to PD1's first-match behaviour.
+  // Fire ONLY when we have AT LEAST ONE temporal AND AT LEAST ONE dimension.
+  // Single-temporal questions fall through to the single-per detector. Multiple
+  // temporals are ambiguous (which is the rate? which is the bucket?) — also
+  // fall through to the single-per detector's first-match behaviour.
   const temporals = resolved.filter((r) => r.kind === "temporal");
   const dimensions = resolved.filter((r) => r.kind === "dimension");
   if (temporals.length === 0 || dimensions.length === 0) return null;
@@ -2060,7 +2164,7 @@ export interface InjectMultiPerResult {
 }
 
 /**
- * PD3 · Aggressive multi-per repair. When the planner emitted
+ * Aggressive multi-per repair. When the planner emitted
  * `groupBy: [groupDim, rateDim]` (the trend-with-breakdown reading of a
  * multi-per question), MOVE the rate denominator OUT of groupBy and into
  * the aggregation's `perDimension` field. The result is the rate-per-group
@@ -2110,8 +2214,8 @@ export function injectMultiPerIntent(
     : [];
 
   // Build equivalence set for the rate denominator (perDim + source + all
-  // facets over source). Same idea as PD2's semanticDecompositionAliases,
-  // but here we WANT a match — to move the column out of groupBy.
+  // facets over source). Same idea as semanticDecompositionAliases, but here
+  // we WANT a match — to move the column out of groupBy.
   const rateAliases = new Set<string>([intent.rateDenominator.column]);
   rateAliases.add(intent.rateDenominator.sourceColumn);
   const grains: TemporalFacetGrain[] = [
@@ -2187,14 +2291,14 @@ export function injectMultiPerIntent(
 }
 
 // =============================================================================
-// Wave QL2 · Aggregation-intent floor
+// Aggregation-intent floor
 // =============================================================================
 //
-// Background: the planner LLM CAN miss aggregation questions. The Marico-VN
-// "What is the average number of compliance visits per day across all
-// clusters?" case generated 5 hypotheses but zero `execute_query_plan` steps,
-// causing the narrator to emit "not computable" despite the dataset having
-// the literal columns the question names. Existing PD1 / PD3 repair passes
+// Background: the planner LLM CAN miss aggregation questions entirely. A
+// question like "What is the average number of compliance visits per day across
+// all clusters?" can generate hypotheses but zero `execute_query_plan` steps,
+// causing the narrator to emit "not computable" despite the dataset having the
+// literal columns the question names. The per-X / multi-per repair passes above
 // only fix bad plans — they need the LLM to emit ONE step first.
 //
 // This floor synthesizes a deterministic `execute_query_plan` step when the
@@ -2244,7 +2348,7 @@ const ANSWER_DIM_RE =
   /\b(?:by|across|for\s+each|for\s+every|grouped\s+by|broken\s+down\s+by)\s+(?:all\s+|the\s+|each\s+|every\s+)?([A-Za-z][\w\s·\-]{0,40}?)(?=\s|[.,?!]|$)/gi;
 
 /**
- * Wave QL2 · Resolve an answer-dimension column from "across X" / "by X" /
+ * Resolve an answer-dimension column from "across X" / "by X" /
  * "for each X" clauses. Strips stop-words ("all", "the", "each", "every")
  * and applies a singular-fallback ("clusters" → "cluster") so plural
  * spoken English binds to singular column names.
@@ -2287,8 +2391,8 @@ export function resolveAnswerDimensionFromQuestion(
 }
 
 /**
- * Wave QL2 · Resolve the metric column the user wants to aggregate. Scans
- * the question for a numeric-column mention via existing `findMatchingColumn`
+ * Resolve the metric column the user wants to aggregate. Scans the question for
+ * a numeric-column mention via existing `findMatchingColumn`
  * (which already handles substring/reverse-substring matching). Prefers
  * non-identifier-looking numeric columns and applies a singular-fallback.
  *
@@ -2366,8 +2470,8 @@ interface BuildSynthStepInput {
   outerOp: string;
   perDimension: string | null;
   /**
-   * Wave QL7 · When set (and `outerOp === "mean"`), emit the simpler ratio
-   * shape: `SUM(metric) / COUNT(DISTINCT denominatorSourceColumn) AS avg`.
+   * When set (and `outerOp === "mean"`), emit the simpler ratio shape:
+   * `SUM(metric) / COUNT(DISTINCT denominatorSourceColumn) AS avg`.
    * One row per group, simple arithmetic, no nested aggregation. Set to
    * the SOURCE column of a temporal facet (e.g. "Date" for "Day · Date")
    * so the count is over distinct calendar days.
@@ -2394,8 +2498,8 @@ function buildSynthAggregationStep(
   } = input;
 
   let plan: Record<string, unknown>;
-  // Wave QL7 · Prefer the ratio shape for mean-rate questions with a
-  // temporal denominator. Simpler than perDimension, one row per group,
+  // Prefer the ratio shape for mean-rate questions with a temporal
+  // denominator. Simpler than perDimension, one row per group,
   // and the planner LLM is far less likely to mis-emit it as a 2D grid.
   if (
     denominatorSourceColumn &&
@@ -2449,17 +2553,17 @@ function buildSynthAggregationStep(
 }
 
 /**
- * Wave QL2 · Aggregation-intent floor. Returns a synthetic
- * `execute_query_plan` step when the question matches an aggregation shape
- * and the metric column resolves unambiguously. Returns null otherwise
- * (caller falls through to the existing empty-plan retry path).
+ * Aggregation-intent floor. Returns a synthetic `execute_query_plan` step when
+ * the question matches an aggregation shape and the metric column resolves
+ * unambiguously. Returns null otherwise (caller falls through to the existing
+ * empty-plan retry path).
  *
  * Priority of intent shapes:
- *   1. Multi-per (PD3): "<agg> X per Y per Z" / "<agg> X per Y across Z" / etc.
+ *   1. Multi-per: "<agg> X per Y per Z" / "<agg> X per Y across Z" / etc.
  *      Uses Y as rate denominator, Z as answer dimension.
- *   2. Single-per (PD1) + standalone answer dim from "across/by X".
+ *   2. Single-per + standalone answer dim from "across/by X".
  *      Uses Y as rate denominator, X as answer dimension.
- *   3. Single-per (PD1) alone — synthesizes a one-row rate aggregation.
+ *   3. Single-per alone — synthesizes a one-row rate aggregation.
  *   4. Simple aggregation ("What is the average X" / "Total X by Y") with no
  *      per-clause — synthesizes a flat groupBy aggregation.
  *
@@ -2482,7 +2586,7 @@ export function synthesizeAggregationStep(
   if (!q) return null;
   const wf = dataSummary.wideFormatTransform;
 
-  // Branch 1 · multi-per intent has both rate denominator and group dim.
+  // Branch 1 — multi-per intent has both rate denominator and group dim.
   if (multiPerIntent && multiPerIntent.groupColumns.length > 0) {
     const metric = resolveMetricColumnFromQuestion(q, dataSummary, {
       wideFormatTransform: wf,
@@ -2493,16 +2597,15 @@ export function synthesizeAggregationStep(
       metric,
       outerOp: multiPerIntent.outerOp,
       perDimension: multiPerIntent.rateDenominator.column,
-      // Wave QL7 · multiPerIntent.rateDenominator always carries the source
-      // column (it's a temporal facet by construction). Use it for the
-      // simpler ratio shape.
+      // multiPerIntent.rateDenominator always carries the source column (it's a
+      // temporal facet by construction). Use it for the simpler ratio shape.
       denominatorSourceColumn: multiPerIntent.rateDenominator.sourceColumn,
       idPrefix: options?.idPrefix,
       reason: "multi_per_intent",
     });
   }
 
-  // Branch 2/3 · single-per intent (PD1) — try to find a standalone answer dim.
+  // Branch 2/3 — single-per intent — try to find a standalone answer dim.
   if (perXIntent) {
     const metric = resolveMetricColumnFromQuestion(q, dataSummary, {
       wideFormatTransform: wf,
@@ -2511,7 +2614,7 @@ export function synthesizeAggregationStep(
     const answerDim = resolveAnswerDimensionFromQuestion(q, dataSummary, {
       wideFormatTransform: wf,
     });
-    // Wave QL9.B · Suppress synthesis for the degenerate scalar case:
+    // Suppress synthesis for the degenerate scalar case:
     // "average X per <temporal unit>" with NO answer dimension. The LLM's
     // exploratory step (typically a date-grouped trend) already gives the
     // user the breakdown that produces the scalar answer; adding the floor's
@@ -2530,8 +2633,8 @@ export function synthesizeAggregationStep(
       metric,
       outerOp: perXIntent.outerOp,
       perDimension: perXIntent.perDimension,
-      // Wave QL7 · Only temporal perDimensions translate cleanly to ratio
-      // shape (COUNT(DISTINCT date) makes sense; COUNT(DISTINCT region)
+      // Only temporal perDimensions translate cleanly to ratio shape
+      // (COUNT(DISTINCT date) makes sense; COUNT(DISTINCT region)
       // doesn't have the same physical meaning per row). Non-temporal
       // perDimensions fall through to the legacy nested shape.
       denominatorSourceColumn:
@@ -2543,7 +2646,7 @@ export function synthesizeAggregationStep(
     });
   }
 
-  // Branch 4 · simple aggregation with no per-clause ("What is the total X by Y").
+  // Branch 4 — simple aggregation with no per-clause ("What is the total X by Y").
   const verbMatch = q.match(SIMPLE_AGG_VERB_RE);
   if (!verbMatch) return null;
   const outerOp = SIMPLE_AGG_TO_OP[verbMatch[1]!.toLowerCase()];
@@ -2570,13 +2673,13 @@ export function synthesizeAggregationStep(
 }
 
 /**
- * Wave QL2 · Idempotency check. Returns true when an existing
- * `execute_query_plan` step already covers the synthesized aggregation
- * (same outer op + same metric column + groupBy contains all answer dims).
- * When true, the caller should skip synthesis to avoid duplicate work.
+ * Idempotency check. Returns true when an existing `execute_query_plan` step
+ * already covers the synthesized aggregation (same outer op + same metric
+ * column + groupBy contains all answer dims). When true, the caller should skip
+ * synthesis to avoid duplicate work.
  *
- * Wave QL8 · Stricter coverage semantics. If the LLM's groupBy includes the
- * synthesized step's rate denominator (the temporal column whose buckets we
+ * Stricter coverage semantics: if the LLM's groupBy includes the synthesized
+ * step's rate denominator (the temporal column whose buckets we
  * average across, e.g. "Day · Date" / "Date" / "Week · Date"), then the
  * LLM has produced a TREND-WITH-BREAKDOWN grid (one row per cluster × date)
  * — that is a different intent from rate-per-group (one row per cluster).
@@ -2592,10 +2695,10 @@ export function planAlreadyCoversAggregation(
   const targetOp = synth.outerOp.toLowerCase();
   const targetMetric = synth.metricColumn;
 
-  // Wave QL8 · Derive the synth's rate denominator + its temporal aliases
-  // ONCE. The denominator may surface as `perDimension` on an aggregation
-  // (current shape) or as a `count_distinct`-op aggregation column (Wave
-  // QL7 ratio shape). The alias set lets us reject "LLM grouped by Date"
+  // Derive the synth's rate denominator + its temporal aliases ONCE. The
+  // denominator may surface as `perDimension` on an aggregation (nested shape)
+  // or as a `count_distinct`-op aggregation column (ratio shape). The alias
+  // set lets us reject "LLM grouped by Date"
   // when synth's perDimension is "Day · Date" — same source, different
   // facet, still the rate denominator semantically.
   const synthRateDenominatorAliases = collectRateDenominatorAliases(
@@ -2624,8 +2727,8 @@ export function planAlreadyCoversAggregation(
     const groupByCovers = synth.groupBy.every((g) => groupBy.includes(g));
     if (!groupByCovers) continue;
 
-    // Wave QL8 · Even if the answer dim is covered, reject when the LLM
-    // ALSO grouped by the rate denominator — that's a different question
+    // Even if the answer dim is covered, reject when the LLM ALSO grouped by
+    // the rate denominator — that's a different question
     // (trend-with-breakdown vs. rate-per-group). Synthesis must still
     // fire so the user sees the literal answer in the pivot.
     if (synthRateDenominatorAliases.size > 0) {
@@ -2647,8 +2750,8 @@ export function planAlreadyCoversAggregation(
 }
 
 /**
- * Wave QL8 · Returns the set of column names that semantically represent
- * the synth's rate denominator — including the literal perDimension, its
+ * Returns the set of column names that semantically represent the synth's rate
+ * denominator — including the literal perDimension, its
  * temporal source column, and all temporal facets over that source. Empty
  * set when the synth has no rate denominator (e.g. simple-aggregation
  * shape with no per-clause).
@@ -2670,8 +2773,8 @@ function collectRateDenominatorAliases(
     if (typeof a?.perDimension === "string" && a.perDimension.trim()) {
       addRateAliases(out, a.perDimension, knownDateCols);
     }
-    // Wave QL7 ratio shape: a count_distinct aggregation on a temporal
-    // column IS the rate denominator.
+    // Ratio shape: a count_distinct aggregation on a temporal column IS the
+    // rate denominator.
     if (
       typeof a?.operation === "string" &&
       a.operation.toLowerCase() === "count_distinct" &&
@@ -2696,10 +2799,10 @@ function addRateAliases(
     addAllFacetsForSource(out, parsed.sourceColumn);
     return;
   }
-  // Branch 2 · column is a raw date column (Wave QL7 ratio shape uses
-  // count_distinct on the source column itself, not a facet). Expand to
-  // all facet aliases so "LLM grouped by Week · Date" still trips QL8
-  // when synth's count_distinct is on "Date".
+  // Branch 2 · column is a raw date column (the ratio shape uses
+  // count_distinct on the source column itself, not a facet). Expand to all
+  // facet aliases so "LLM grouped by Week · Date" still trips the coverage
+  // check when synth's count_distinct is on "Date".
   if (knownDateCols.has(column)) {
     addAllFacetsForSource(out, column);
   }

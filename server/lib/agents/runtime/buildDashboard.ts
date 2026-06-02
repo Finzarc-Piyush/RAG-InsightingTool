@@ -1,14 +1,47 @@
 /**
- * Phase 2 — buildDashboard
+ * ============================================================================
+ * buildDashboard.ts — auto-builds a multi-sheet dashboard from a chat answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   After the agent has answered a question (and drawn some charts), this file
+ *   can automatically assemble those charts, KPI numbers, and narrative into a
+ *   two-sheet "dashboard" — a saveable, shareable report. A "DashboardSpec" is
+ *   the JSON blueprint of that dashboard (which sheets, which charts on each,
+ *   what text blocks). One LLM call writes the narrative/curation; the rest of
+ *   the layout (which charts are featured, the KPI strip, etc.) is filled in
+ *   deterministically by code so it's predictable.
  *
- * Runs after synthesis when:
- *   - DASHBOARD_AUTOGEN_ENABLED=true, AND
- *   - ctx.analysisBrief.requestsDashboard === true, AND
- *   - this turn produced at least one chart (nothing useful to dashboard otherwise).
+ *   The two sheets it always builds:
+ *     - "Executive Summary": a KPI strip + LLM-curated narrative + up to 3
+ *       featured charts + the user's pivot.
+ *     - "All Artefacts": every chart from the turn + the pivot (deterministic).
  *
- * One LLM call produces a DashboardSpec whose sheet layout mirrors the
- * Cosmos DashboardSheet shape; the client renders it as an inline preview
- * card and POSTs it to /api/dashboards/from-spec on user confirmation.
+ * WHY IT MATTERS
+ *   It turns a one-off chat answer into a durable artefact the user can confirm
+ *   and persist. The function NEVER throws: if the LLM call fails (bad JSON,
+ *   network error), it falls back to a deterministic spec built from the same
+ *   inputs, so the user always gets a dashboard once the gate decides to build
+ *   one. The gate (should we build? for whom?) lives in a separate file so it
+ *   can be unit-tested without loading the OpenAI client.
+ *
+ * KEY PIECES
+ *   - buildDashboardFromTurn — public entry. Builds prompts, calls the LLM,
+ *     decorates the result (or fallback) into the final DashboardSpec.
+ *   - buildFallbackSpec — deterministic minimal spec used when the LLM fails.
+ *   - pickFeaturedCharts — chooses up to 3 charts for the Executive Summary
+ *     (priority: "Top drivers of…" tile → first time-series → first remaining).
+ *   - buildAllArtefactsNarrativeBlocks — now a hard no-op (returns []); see its
+ *     own comment for why the per-step "Step N" blocks were removed.
+ *   - Re-exports: prompt builders (from buildDashboardPrompt.js) and the gate
+ *     functions (from dashboardAutogenGate.js) for backward-compatible imports.
+ *
+ * HOW IT CONNECTS
+ *   Called from the agent loop after synthesis when the autogen gate fires
+ *   (flag on + the analysis brief requested a dashboard + at least one chart
+ *   exists). Prompts come from buildDashboardPrompt.js; the KPI strip from
+ *   kpiStripBlock.js; final layout polish from dashboardTemplates.js. The
+ *   resulting spec rides on AgentLoopResult.dashboardDraft and the client
+ *   later POSTs it to /api/dashboards/from-spec to persist into Cosmos.
  */
 import { randomUUID } from "crypto";
 
@@ -70,20 +103,21 @@ export interface BuildDashboardArgs {
    */
   intermediateSummaries?: string[];
   /**
-   * W5 · slim AnswerEnvelope from the narrator. Threaded into the prompt
-   * (so Sheet 1 narrative can reuse findings/recommendations verbatim) AND
-   * persisted on the resulting `DashboardSpec` so the export can render
-   * cover/exec-summary/methodology slides.
+   * Slim AnswerEnvelope from the narrator (TL;DR, findings, recommendations,
+   * methodology, caveats). Threaded into the prompt (so the Executive Summary
+   * narrative can reuse findings/recommendations verbatim) AND persisted on the
+   * resulting `DashboardSpec` so the export can render cover/exec-summary/
+   * methodology slides.
    */
   envelope?: DashboardAnswerEnvelope;
   /**
-   * W8 · the user's frozen pivot snapshot for this turn. When provided
-   * the dashboard runtime appends it to the All Artefacts sheet and
-   * (when the LLM cites it) to the Executive Summary sheet.
+   * The user's frozen pivot snapshot for this turn. When provided the dashboard
+   * runtime appends it to the All Artefacts sheet and (when the LLM cites it)
+   * to the Executive Summary sheet.
    */
   pivot?: DashboardPivotSpec;
   /**
-   * DPF2 · message-mirroring fields populated synchronously at auto-create.
+   * Message-mirroring fields populated synchronously at auto-create.
    * `businessActions` is intentionally NOT here — it resolves post-verifier
    * via a Promise on `AgentLoopResult`, so the dashboard receives it via
    * `patchDashboardBusinessActions` after initial persist.
@@ -97,7 +131,7 @@ export interface BuildDashboardArgs {
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
 }
 
-// W7.6 · Pure-logic gating moved to ./dashboardAutogenGate.ts so it can be
+// Pure-logic gating lives in ./dashboardAutogenGate.ts so it can be
 // unit-tested without loading the openai module. Re-exported here for
 // backward compatibility with the existing call sites.
 export {
@@ -181,32 +215,22 @@ function pickFeaturedCharts(authoritative: ChartSpec[]): ChartSpec[] {
   return out;
 }
 
-/** Step-by-step narrative blocks for Sheet 2. One block per intermediate
- *  summary, untouched markdown content.
+/** Intentionally a hard no-op: always returns `[]`.
  *
- *  DPF6 · cap raised 8 → 30. The 8-step ceiling silently dropped the
- *  long-tail step narratives on comprehensive dashboard turns ("give me
- *  a sales / hr / marketing / finance dashboard") where the planner
- *  routinely runs 12-20 tool calls. 30 stays well below the per-sheet
- *  schema ceiling (`dashboardSheetSpecSchema.narrativeBlocks.max(40)`)
- *  while leaving room for the KPI strip + LLM-curated narrative on
- *  Sheet 1. The per-summary 1500-char body cap is unchanged — it's a
- *  defensive bound on runaway tool summaries, not a content-dropping
- *  cap.
- *
- *  Wave DR17 · this function is now a hard `[]` no-op. The "Step N"
- *  blocks dumped raw tool-call summaries onto the All Artefacts sheet
- *  (e.g. `get_schema_summary: rows=9800 columns=…`,
+ *  This used to emit one "Step N" narrative block per intermediate tool
+ *  summary onto the All Artefacts sheet. Those blocks dumped raw tool-call
+ *  summaries (e.g. `get_schema_summary: rows=9800 columns=…`,
  *  `execute_query_plan: Grouped by Region with sum(Sales)…`) which are
- *  internal audit data, not a user-facing artefact. The function is
- *  kept (not deleted) so the existing call sites compile unchanged
- *  and the DPF6 regression test continues to pin "no Step N blocks
- *  ever surface". The `intermediateSummaries` argument is preserved
- *  on the signature for the same reason; if ever re-used it should
- *  feed a different artefact (a structured per-step audit log on the
- *  agent trace, not a narrative block on a user dashboard).
+ *  internal audit data, not a user-facing artefact, so they were removed.
  *
- *  Exported for unit tests so DPF6 has a focused regression guard. */
+ *  The function is kept (not deleted) so the existing call sites compile
+ *  unchanged and the regression test continues to pin "no Step N blocks ever
+ *  surface". The `intermediateSummaries` argument is preserved on the signature
+ *  for the same reason; if ever re-used it should feed a different artefact
+ *  (a structured per-step audit log on the agent trace, not a narrative block
+ *  on a user dashboard).
+ *
+ *  Exported for unit tests so the no-op has a focused regression guard. */
 export function buildAllArtefactsNarrativeBlocks(
   // Kept on the signature for back-compat; deliberately unused — see comment above.
   _intermediateSummaries: string[] | undefined
@@ -265,9 +289,9 @@ async function runDashboardCompletion(
     });
     let spec: DashboardSpec;
     if (!out.ok) {
-      // FIX · LLM parse failure used to drop the dashboard silently. Build a
-      // deterministic fallback spec from the same inputs the runtime would
-      // have decorated. The user always gets a dashboard when the gate fired.
+      // On LLM parse failure, build a deterministic fallback spec from the same
+      // inputs the runtime would have decorated, rather than dropping the
+      // dashboard silently. The user always gets a dashboard when the gate fired.
       agentLog("buildDashboard.parse_failed_fallback", {
         turnId: args.turnId,
         error: out.error.slice(0, 400),
@@ -288,9 +312,9 @@ async function runDashboardCompletion(
     const allSheet = pickOrCreateSheet(spec, "sheet_all", "All Artefacts");
 
     // ---- Sheet 1: Executive Summary ----
-    // FIX · always populate charts/pivots deterministically — the new prompt
-    // tells the LLM NOT to emit them, so any leftover artefacts on the LLM's
-    // sheet are discarded.
+    // Always populate charts/pivots deterministically — the prompt tells the
+    // LLM NOT to emit them, so any leftover artefacts on the LLM's sheet are
+    // discarded.
     summarySheet.charts = pickFeaturedCharts(args.charts);
     summarySheet.pivots = args.pivot ? [args.pivot] : [];
 
@@ -327,17 +351,17 @@ async function runDashboardCompletion(
       spec.defaultSheetId = "sheet_summary";
     }
 
-    // W5 · attach the slim envelope so it survives the spec → from-spec →
-    // Cosmos round-trip. The export pipeline reads this for cover, exec
-    // summary, and methodology slides.
+    // Attach the slim envelope so it survives the spec → from-spec → Cosmos
+    // round-trip. The export pipeline reads this for cover, exec summary, and
+    // methodology slides.
     if (args.envelope) {
       spec.answerEnvelope = args.envelope;
     }
-    // DPF2 · stamp the three synchronously-available message-mirroring
-    // fields onto the spec so the from-spec persist round-trips them onto
-    // the Cosmos `Dashboard` document. Deterministic — not LLM-rewritten —
-    // so the dashboard view shows the same TL;DR / follow-up CTAs / digest
-    // the user saw in chat.
+    // Stamp the three synchronously-available message-mirroring fields onto the
+    // spec so the from-spec persist round-trips them onto the Cosmos
+    // `Dashboard` document. Deterministic — not LLM-rewritten — so the
+    // dashboard view shows the same TL;DR / follow-up CTAs / digest the user
+    // saw in chat.
     if (args.followUpPrompts && args.followUpPrompts.length > 0) {
       spec.followUpPrompts = args.followUpPrompts;
     }
@@ -351,8 +375,8 @@ async function runDashboardCompletion(
     applyDashboardTemplateLayout(spec);
     return spec;
   } catch (err) {
-    // FIX · network/runtime errors used to drop the dashboard silently. Build
-    // a deterministic fallback so the user still sees a draft + auto-persist.
+    // On network/runtime errors, build a deterministic fallback so the user
+    // still sees a draft + auto-persist rather than dropping the dashboard.
     agentLog("buildDashboard.threw_fallback", {
       turnId: args.turnId,
       error: err instanceof Error ? err.message : String(err),
@@ -385,8 +409,8 @@ async function runDashboardCompletion(
       }
       spec.defaultSheetId = "sheet_summary";
       if (args.envelope) spec.answerEnvelope = args.envelope;
-      // DPF2 · same stamp on the LLM-failure fallback path so a network
-      // hiccup doesn't strip the message-mirroring fields.
+      // Same stamp on the LLM-failure fallback path so a network hiccup doesn't
+      // strip the message-mirroring fields.
       if (args.followUpPrompts && args.followUpPrompts.length > 0) {
         spec.followUpPrompts = args.followUpPrompts;
       }

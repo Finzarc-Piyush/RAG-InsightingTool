@@ -1,25 +1,35 @@
 /**
- * Wave W-UD4 · Deterministic user-directive extractor.
+ * ============================================================================
+ * extractUserDirectives.ts — detect standing "always do X" rules in a chat
+ * message and turn them into persistent directives
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A user might say "from now on always exclude the South region" or "for this
+ *   dataset, only show premium SKUs". Those are not one-off filters — they are
+ *   STANDING rules that should apply to every future answer. This module scans a
+ *   message sentence-by-sentence for a persistence cue ("always", "from now on",
+ *   "by default", "for this dataset", etc.) sitting next to an exclude/include
+ *   clause, resolves which column + values it refers to (reusing the one-turn
+ *   filter parser), and emits a `DirectiveDraft` ready to be saved.
  *
- * Scans a user message for **persistent** instructions — exclusion / inclusion
- * rules tagged with a temporal qualifier ("always", "from now on", "going
- * forward", "for the rest of this session", "permanently", "by default"). When
- * such a phrasing is present, the matched exclusion clause becomes a
- * `UserDirective` to be persisted in the per-dataset directives store.
+ * WHY IT MATTERS
+ *   It is how the tool "remembers" user preferences across turns. It is strictly
+ *   ADDITIVE: messages WITHOUT a persistence cue stay one-turn filters handled
+ *   by `inferFiltersFromQuestion.ts`, so existing behaviour is unchanged. It
+ *   also detects contradictions — if a new rule reverses an existing active one
+ *   (same column, opposing include/exclude, overlapping values) it lists the old
+ *   directive's id in `supersedes` so the caller can retire it in the same write.
  *
- * Mid-conversation utterances WITHOUT a persistence qualifier remain one-turn
- * filters handled by `inferFiltersFromQuestion.ts` — this extractor is strictly
- * additive and does not change existing one-turn behaviour.
+ * KEY PIECES
+ *   - extractUserDirectives — main: message in, ExtractedDirective[] out (empty when no standing rule)
+ *   - detectSupersedeIds — find prior active directives the new one contradicts/repeats
+ *   - PERSISTENCE_QUALIFIER_RE / INCLUSION_VERB_RE — the cue vocabularies
  *
- * Auto-supersede detection: when the new directive's `(column, op, values)`
- * structurally contradicts an existing active directive (same column,
- * opposing op, overlapping values), the existing directive's id is returned
- * in `supersedes` so the model can transition it to `status: 'superseded'`
- * within the same write.
- *
- * The output is a `DirectiveDraft[]` (see [datasetDirectives.model.ts](../../models/datasetDirectives.model.ts))
- * ready to be appended via `appendDirective`. This module does NOT perform
- * the Cosmos write itself — that responsibility stays in the model layer.
+ * HOW IT CONNECTS
+ *   Reuses exclusion-clause regexes + `inferFiltersFromQuestion` from
+ *   `../utils/inferFiltersFromQuestion.js`. Returns `DirectiveDraft`s (see
+ *   `datasetDirectives.model.ts`) — it does NOT perform the database write
+ *   itself; that stays in the model layer's `appendDirective`.
  */
 import type { DataSummary, UserDirective } from "../../../shared/schema.js";
 import type { DirectiveDraft } from "../../../models/datasetDirectives.model.js";
@@ -162,8 +172,8 @@ export function extractUserDirectives(
 
     // Polarity-flipped EXCLUSION sentences ("exclude everything except for X")
     // are semantically ambiguous in a persistent context. The deterministic
-    // pass bails — the LLM extractor (W-UD5) handles these. Only applies when
-    // an exclusion verb is the primary intent; inclusion-only sentences carry
+    // pass bails — the LLM extractor handles these. Only applies when an
+    // exclusion verb is the primary intent; inclusion-only sentences carry
     // "only"/"just" as part of the verb itself and don't need this gate.
     if (hasExcl && !hasIncl && NEG_POLARITY_FLIPPER_RE.test(sentence)) continue;
 

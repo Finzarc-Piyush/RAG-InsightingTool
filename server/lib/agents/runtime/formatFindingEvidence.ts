@@ -1,26 +1,34 @@
 /**
- * Wave WV2 · canonical `FindingEvidence → detail prose` formatter.
+ * ============================================================================
+ * formatFindingEvidence.ts — write a finding's stats as canonical prose
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Turns a finding's statistical evidence (sample size n, p-value, R², a
+ *   confidence-interval width, an effect size) into a short, standard-format
+ *   suffix appended to the finding's free-text detail, e.g.
+ *   " (n = 850; p < 0.001; R² = 0.71)". p-value = chance the result is noise;
+ *   R² = how much of the variation the model explains; both are common stats.
  *
- * Companion to WW2's `extractFindingEvidence` regex extractor. Tools that
- * produce findings can opt into this canonical phrasing so the downstream
- * WW2 extractor reliably recovers the statistical fields — closing the
- * deterministic-evidence loop without forcing a schema migration on the
- * `Finding` interface.
+ * WHY IT MATTERS
+ *   It is the encoding half of a roundtrip with the regex EXTRACTOR
+ *   (extractFindingEvidence). The load-bearing contract is:
+ *     extractFindingEvidence(formatEvidenceForFindingDetail(ev)) ≈ ev
+ *   Writing the numbers in exactly the shape the extractor expects lets the
+ *   stats be recovered later WITHOUT adding fields to the Finding type.
  *
- * The roundtrip property is the load-bearing contract:
- *   extractFindingEvidence(formatEvidenceForFindingDetail(ev)) ≈ ev
+ * KEY PIECES
+ *   - formatEvidenceForFindingDetail(evidence) — the canonical suffix (or "" if
+ *     no evidence; the leading space lets callers concatenate cleanly).
+ *   - composeFindingDetail(prefix, evidence) — prefix + suffix convenience.
  *
- * Tools call:
- *   const detailPrefix = "Driver model fit on revenue.";
- *   const evSuffix = formatEvidenceForFindingDetail({ n: 850, pValue: 0.001, rSquared: 0.71 });
- *   addFinding(bb, { ..., detail: detailPrefix + evSuffix });
- *
- * Returns "" when no evidence is supplied so callers can concatenate safely.
+ * HOW IT CONNECTS
+ *   FindingEvidence is defined in scaleNarrativeByConfidence.js. Tools call this
+ *   when adding findings to the blackboard; the matching extractor reads it back.
  */
 
 import type { FindingEvidence } from "./scaleNarrativeByConfidence.js";
 
-/** Format a p-value for prose. Matches the WW2 extractor's accepted shapes. */
+/** Format a p-value for prose. Matches the extractor's accepted shapes. */
 function formatP(p: number): string {
   if (p < 0.001) return "0.001"; // emitted as "p < 0.001"; helper handles the prefix.
   if (p < 0.01) return p.toFixed(3);
@@ -69,7 +77,7 @@ export function formatEvidenceForFindingDetail(evidence: FindingEvidence): strin
     const pct = Math.round(evidence.ciRelativeWidth * 100);
     parts.push(`±${pct}% of the estimate`);
   }
-  // Wave WQ8 · canonical categorical effect-size token. Trails the
+  // Canonical categorical effect-size token. Trails the
   // numeric fields so prose reads "n=…; p=…; effect = large".
   if (
     evidence.effectMagnitude === "negligible" ||

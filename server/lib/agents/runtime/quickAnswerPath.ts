@@ -1,18 +1,45 @@
 /**
- * Wave QL1 · Quick-lookup orchestrator.
+ * ============================================================================
+ * quickAnswerPath.ts — the "fast lane" for simple lookup questions
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a user asks a SIMPLE question (e.g. "which region had the highest
+ *   sales last quarter?"), running the full plan/act agent loop is overkill —
+ *   it would take 60-120 seconds and produce a wordy report. This file is the
+ *   shortcut. It checks whether the question looks like a plain table lookup,
+ *   asks a small/cheap LLM ("Mini-tier" planner) to draft ONE database query,
+ *   runs that query, and returns the resulting table directly. Total time is
+ *   roughly 2 seconds.
  *
- * The single seam wired into `runAgentTurn`. Detects whether the question
- * fits the lookup shape, calls the Mini-tier planner, executes the resulting
- * `QueryPlanBody` via the same DuckDB/in-memory executor the agent loop uses,
- * and composes a minimal `AgentLoopResult` (preview rows + deterministic
- * follow-up chips + a stub agentTrace so pivot defaults derive correctly).
+ *   "Fast path" / "fast lane" = an optimisation that handles the easy cases
+ *   quickly so the heavyweight machinery only runs when actually needed.
+ *   "QueryPlanBody" = a structured (JSON) description of a database query
+ *   (group by, aggregate, filter, sort) that the executor turns into real SQL.
  *
- * On ANY failure path — detector miss, planner null, validation fail, zero
- * rows, executor error — returns null so the caller falls through to the
- * full agentic loop. The fast path NEVER ships a degraded answer.
+ * WHY IT MATTERS
+ *   It makes the product feel snappy for the common, simple questions while the
+ *   full agent loop stays reserved for genuinely analytical ones. Crucially, on
+ *   ANY problem — the detector says "not simple", the planner returns nothing,
+ *   the query fails validation, zero rows come back, or the executor errors —
+ *   it returns `null` so the caller silently falls through to the full agent
+ *   loop. It NEVER ships a half-baked or wrong answer just to be fast.
  *
- * Latency budget: ~1.5s planner + ~300ms execute ≈ 2s total. The full loop
- * for the same lookup question takes 60-120s.
+ * KEY PIECES
+ *   - tryQuickAnswer — the orchestrator. Runs a series of "gates" (feature
+ *     flag, mode check, detector, has-data check), then plans → repairs →
+ *     validates → executes → composes an AgentLoopResult. Returns null to bail.
+ *   - formatQuickLookupIntentHint — builds a steering hint that is appended to
+ *     a retry prompt when the first plan failed but the question clearly has an
+ *     aggregation shape ("X per Y", "X per Y per Z").
+ *
+ * HOW IT CONNECTS
+ *   Called once from the agent-loop entry point (`runAgentTurn` in
+ *   agentLoop.service.ts) before the full pipeline. It reuses the same query
+ *   executors as the full loop (queryPlanExecutor.js for in-memory,
+ *   queryPlanDuckdbExecutor.js for DuckDB), the same planner-side repairs
+ *   (planArgRepairs.js), and the Mini-tier planner in quickAnswerPlanner.js.
+ *   Detection lives in quickAnswerDetector.js; follow-up chips in
+ *   quickAnswerFollowUps.js.
  */
 
 import { randomUUID } from "node:crypto";
@@ -80,8 +107,11 @@ export async function tryQuickAnswer(
   // their own dispatch shape; the fast path would short-circuit a transform.
   if (ctx.mode !== "analysis") return null;
 
-  // Gate 3 — detector regex/heuristic.
-  if (!detectQuickLookup(ctx.question)) return null;
+  // Gate 3 — detector regex/heuristic, OR the front-door router's explicit
+  // lookup route (Wave R2). The router (tryDirectAnswer) understands phrasings
+  // the regex misses ("give me a list of X", "what markets exist?") and sets
+  // `ctx.routeToLookup` so the fast path still fires.
+  if (!ctx.routeToLookup && !detectQuickLookup(ctx.question)) return null;
 
   // Gate 4 — there has to BE row data. An unmounted / empty session can't
   // answer a lookup question.
@@ -101,12 +131,12 @@ export async function tryQuickAnswer(
 
   // 1) Plan generation — single Mini-tier LLM call with one retry built in.
   //
-  // Wave QL3 · When the first attempt returns null AND the question has a
-  // detectable aggregation shape (PD3 multi-per or PD1 per-X), retry once
-  // with an explicit steering hint appended to the user prompt. This closes
-  // the silent fall-through that motivated the Marico-VN failure: the Mini
-  // model misread the multi-`per` shape, returned a Zod-invalid plan, and
-  // the user got a 60-120s full-loop with hypotheses instead of a 2s table.
+  // When the first attempt returns null AND the question has a detectable
+  // aggregation shape (multi-per or per-X), retry once with an explicit
+  // steering hint appended to the user prompt. This closes the silent
+  // fall-through where the Mini model misreads a multi-`per` shape, returns a
+  // schema-invalid plan, and the user gets a slow full-loop with hypotheses
+  // instead of a 2s table.
   const plannerStartedAt = Date.now();
   let plannerOut = await runQuickLookupPlanner(ctx, {
     turnId,
@@ -143,10 +173,10 @@ export async function tryQuickAnswer(
     return null;
   }
 
-  // 2) Deterministic planner-side repairs (H3 rollup-exclude, WPF2 compound
-  // metric guard). These mirror the full-loop planner repairs so wide-format
-  // and dimension-hierarchy invariants are honoured even when the LLM
-  // produces a naïve plan.
+  // 2) Deterministic planner-side repairs (rollup-exclude, compound metric
+  // guard). These mirror the full-loop planner repairs so wide-format and
+  // dimension-hierarchy invariants are honoured even when the LLM produces a
+  // naïve plan.
   const stubStep: PlanStep = {
     id: "ql_s1",
     tool: "execute_query_plan",
@@ -175,9 +205,9 @@ export async function tryQuickAnswer(
         distinctMetrics
       );
     }
-    // PA1 · Period-additivity guard on the quick-answer fast path — the
-    // quick-lookup shape ("highest sales in the latest 12 months") would
-    // otherwise bypass the planner backstop and SUM across overlapping periods.
+    // Period-additivity guard on the quick-answer fast path — the quick-lookup
+    // shape ("highest sales in the latest 12 months") would otherwise bypass
+    // the planner backstop and SUM across overlapping periods (double-counting).
     if (wf?.detected && wf.shape === "pure_period") {
       const isoInfo = ctx.summary.columns.find((c) => c.name === wf.periodIsoColumn);
       const kindInfo = ctx.summary.columns.find((c) => c.name === wf.periodKindColumn);
@@ -294,13 +324,13 @@ export async function tryQuickAnswer(
       execError = duck.error;
     }
   }
-  // QL1 is the fast-path optimization layer; the in-memory fallback gives
-  // the user a 2-second answer instead of falling through to the 60-120s
-  // full loop. The user's "DuckDB always for aggregations" architectural
-  // contract is enforced at the FULL-LOOP `execute_query_plan` tool seam
-  // (Wave QL6 hard-fail in registerTools.ts) — that's where the slow path
-  // would otherwise silently grind through Cosmos-loaded rows. QL1 stays
-  // permissive so users with short questions still get fast results.
+  // This fast path is an optimization layer; the in-memory fallback gives the
+  // user a 2-second answer instead of falling through to the slow full loop.
+  // The "DuckDB always for aggregations" architectural contract is enforced at
+  // the FULL-LOOP `execute_query_plan` tool seam (hard-fail in
+  // registerTools.ts) — that's where the slow path would otherwise silently
+  // grind through Cosmos-loaded rows. The fast path stays permissive so users
+  // with short questions still get fast results.
   if (!execOk) {
     const mem = executeQueryPlan(ctx.data, ctx.summary, normalizedPlan);
     if (mem.ok) {
@@ -352,9 +382,9 @@ export async function tryQuickAnswer(
       timestamp: Date.now(),
       details: "no rows, falling back",
     });
-    // Wave QL3 · High-signal diagnostic: zero rows on an aggregation-shape
-    // question almost always means the planner bound the wrong column or
-    // wrong filter. Surfaces in agent logs to inform tuning.
+    // High-signal diagnostic: zero rows on an aggregation-shape question almost
+    // always means the planner bound the wrong column or wrong filter. Surfaces
+    // in agent logs to inform tuning.
     const hasAggIntent =
       detectPerXIntent(ctx.question, ctx.summary) !== null ||
       detectMultiPerIntent(ctx.question, ctx.summary) !== null;
@@ -449,13 +479,13 @@ export async function tryQuickAnswer(
 }
 
 /**
- * Wave QL3 · Build a steering hint for the retry attempt when the Mini-tier
- * planner failed and the question carries a detectable aggregation shape.
- * Returns null when neither PD3 nor PD1 detected an intent — no point retrying
- * the planner with a generic nudge.
+ * Build a steering hint for the retry attempt when the Mini-tier planner failed
+ * and the question carries a detectable aggregation shape. Returns null when
+ * neither a multi-per nor a per-X intent was detected — no point retrying the
+ * planner with a generic nudge.
  *
- * The hint goes into the USER message (not system) so the system-prompt
- * cache stays warm across the initial + retry pair.
+ * The hint goes into the USER message (not system) so the system-prompt cache
+ * stays warm across the initial + retry pair.
  */
 export function formatQuickLookupIntentHint(
   perX: ReturnType<typeof detectPerXIntent>,

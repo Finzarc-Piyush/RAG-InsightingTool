@@ -1,24 +1,49 @@
 /**
- * Business Action Items agent.
+ * ============================================================================
+ * businessActionsAgent.ts — suggests concrete business moves after an answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Once the main analysis is finished and verified, this optional agent reads
+ *   the completed answer (the "answer envelope": TL;DR, findings, magnitudes,
+ *   implications, caveats) plus the user's question and any domain/user context,
+ *   and decides whether to add a short list of CONCRETE BUSINESS ACTIONS — real
+ *   things the user could go do in the business ("run a 90-day shelf-share audit
+ *   in metro stores"), each with a rationale that cites a specific finding, a
+ *   time horizon (now / this_quarter / strategic), and a confidence level.
  *
- * Runs *after* the narrator's answer envelope has passed all deterministic
- * gates AND the final verifier returned `pass`. Reads the completed envelope
- * + question + domain context + user notes and decides whether to emit a
- * short list of CONCRETE BUSINESS ACTIONS — things the user could do in the
- * world to act on the analysis, distinct from the analytical next-steps that
- * already live in `answerEnvelope.recommendations[]`.
+ *   These are deliberately different from the "analytical next steps" that live
+ *   in `answerEnvelope.recommendations[]` (which are things to do inside the
+ *   app, like "drill into Q3 segments"). This agent is about decisions to act on
+ *   outside the app.
  *
- * Self-gating: the agent is invited on every passing turn (cheap MINI-routed
- * call). When the question isn't a strategy ask, or the envelope's findings
- * don't ground at least 2 actions, the agent returns `{ items: [] }` and the
- * client renders no section. There is intentionally no regex or classifier
- * gate above this — past iterations of that gate silently suppressed
- * legitimate strategy phrasings ("the team's wondering what to do about
- * LASHE — talk me through it") and produced false negatives.
+ * WHY IT MATTERS
+ *   It turns analysis into a decision aid for strategy/"what should we do"
+ *   questions. It self-gates: the LLM itself returns an empty list when the
+ *   question is purely descriptive or the findings are too thin to ground at
+ *   least two actions — and the UI then renders nothing. There is intentionally
+ *   NO regex/classifier gate above it, because earlier gates wrongly suppressed
+ *   conversational strategy phrasings ("the team's wondering what to do about
+ *   LASHE — talk me through it"). Any error returns `[]`, so this can only add
+ *   value, never disturb the answer that was already produced.
  *
- * Failure mode: any error or timeout returns `[]` to the caller, which means
- * the answer envelope is delivered/persisted exactly as it would have been
- * without this agent. Zero impact on the existing analytical path.
+ * KEY PIECES
+ *   - businessActionsOutputSchema — the strict `{ items: [...] }` shape; the
+ *     wrapper lets the agent legitimately return an empty array.
+ *   - SYSTEM_PROMPT — the strategist persona + strict rules (cite real
+ *     findings, never invent numbers/brands, respect rollup hierarchies and
+ *     melted wide-format column semantics, ≤5 items).
+ *   - buildUserMessage(ctx, envelope) — assembles the prompt: question, intent
+ *     hints, the formatted envelope, user notes, domain context, prior
+ *     investigations, and dimension-hierarchy / wide-format shape blocks.
+ *   - runBusinessActions(ctx, envelope, opts) — hard-skips when there's nothing
+ *     to ground actions on, else makes one LLM call; returns items or `[]`.
+ *
+ * HOW IT CONNECTS
+ *   Runs after the final verifier passes. Uses `completeJson` from ./llmJson.js
+ *   (LLM_PURPOSE.BUSINESS_ACTIONS), strategy-intent hints from
+ *   ./businessActionsHints.js, context-block formatters from ./context.js, and
+ *   the budget/trim helpers from ./promptBudget.js. Emits the `businessActions`
+ *   field on a chat Message (../../../shared/schema.js) for the client to render.
  */
 
 import { z } from "zod";
@@ -213,7 +238,7 @@ function buildUserMessage(
   }
   if (userNotesParts.length) {
     const joined = userNotesParts.join("\n");
-    // Wave W-UD8 · budget-driven cap; trim event surfaces via trimmedSink.
+    // Budget-driven cap; trim event surfaces via trimmedSink.
     const { content, trimmed } = applyCap(
       "businessActions.userNotes",
       joined,
@@ -238,22 +263,21 @@ function buildUserMessage(
   if (prior) {
     sections.push("PRIOR INVESTIGATIONS (most recent first; for cross-turn continuity):\n" + prior);
   }
-  // Wave B2 · Dimension hierarchies (H1+) — if any column has a user-
-  // declared rollup row (e.g. "FEMALE SHOWER GEL" is a category total in
-  // the Marico-VN dataset), the agent must NOT recommend "deep dive on
-  // FEMALE SHOWER GEL vs MARICO" — they're not peers. Without this
-  // block the agent treated the rollup as a competing brand.
+  // Dimension hierarchies — if any column has a user-declared rollup row
+  // (e.g. "FEMALE SHOWER GEL" is a category total in the Marico-VN dataset),
+  // the agent must NOT recommend "deep dive on FEMALE SHOWER GEL vs MARICO" —
+  // they're not peers. Without this block the agent treats the rollup as a
+  // competing brand.
   const hierarchies = formatDimensionHierarchiesBlock(ctx);
   if (hierarchies) {
     sections.push(hierarchies);
   }
-  // Wave B2 · Wide-format shape (WPF1+) — when the dataset arrived in
-  // wide form and was melted at upload time, the agent must know about
-  // the Period/PeriodIso semantics and the compound-shape Metric column.
-  // Without this block recommended actions could reference the original
-  // wide column names ("Q3 2024 Value Sales") which no longer exist
-  // post-melt, or recommend SUM(Value) without scoping by Metric — both
-  // of which produce nonsense follow-ups.
+  // Wide-format shape — when the dataset arrived in wide form and was melted
+  // (wide→long) at upload time, the agent must know about the Period/PeriodIso
+  // semantics and the compound-shape Metric column. Without this block,
+  // recommended actions could reference the original wide column names ("Q3
+  // 2024 Value Sales") which no longer exist post-melt, or recommend
+  // SUM(Value) without scoping by Metric — both produce nonsense follow-ups.
   if (ctx.summary) {
     const shape = formatWideFormatShapeBlock(ctx.summary);
     if (shape) {
@@ -271,9 +295,9 @@ export interface RunBusinessActionsOptions {
   turnId: string;
   /** Increment cost counter on the agent loop. */
   onLlmCall?: () => void;
-  /** Wave W-UD8 · optional sink that receives per-block truncation events
-   *  (USER NOTES / DOMAIN CONTEXT). When supplied, the caller can forward
-   *  the rows to a `context_trimmed` SSE row. */
+  /** Optional sink that receives per-block truncation events (USER NOTES /
+   *  DOMAIN CONTEXT). When supplied, the caller can forward the rows to a
+   *  `context_trimmed` SSE row. */
   contextTrimmedSink?: TrimmedBlockInfo[];
 }
 

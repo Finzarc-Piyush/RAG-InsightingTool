@@ -279,6 +279,13 @@ function maybeWritePastAnalysisDoc(params: {
   try {
     const turnId: string | undefined = params.transformedResponse?.agentTrace?.turnId;
     if (!turnId) return; // non-agentic paths (legacy) — skip for now
+    // Wave R1 · Never cache a direct-answer front-door reply. Conversational /
+    // general-knowledge answers are not grounded in this dataset's rows, so a
+    // semantic cache hit could replay e.g. a "hi" answer for an unrelated later
+    // question. The `planRationale` marker is set by directAnswerPath.ts.
+    if (params.transformedResponse?.agentTrace?.planRationale === "direct_answer") {
+      return;
+    }
     const totals = takeTurnTotals(turnId);
     const answer = typeof params.transformedResponse.answer === "string"
       ? params.transformedResponse.answer

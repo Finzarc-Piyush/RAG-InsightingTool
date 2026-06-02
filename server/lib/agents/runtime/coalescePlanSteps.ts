@@ -1,12 +1,36 @@
 /**
- * Merge consecutive `execute_query_plan` steps with identical query shape
- * (groupBy / dimensionFilters / sort / limit / dateAggregationPeriod /
- * parallelGroup) into a single step whose `aggregations[]` is the union of
- * theirs. The DuckDB executor already handles multi-aggregation natively, so
- * the merged step produces ONE pivot card with N value columns instead of
- * N separate cards rendering nearly-identical bar charts.
+ * ============================================================================
+ * coalescePlanSteps.ts — merges duplicate-shaped query steps into one
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The planner sometimes produces several `execute_query_plan` steps that query
+ *   the data in the exact same SHAPE — same groupBy, same filters, same sort,
+ *   limit, date bucketing, and parallel group — but compute a different number
+ *   (e.g. one step sums Sales, the next sums Units, grouped by the same Region).
+ *   This pure function spots those same-shape steps and merges them into a single
+ *   step whose `aggregations[]` list is the union of the originals (de-duped by
+ *   column+operation+alias). DuckDB (the in-process SQL engine) can compute many
+ *   aggregations in one query natively.
  *
- * Pure function — no side effects.
+ * WHY IT MATTERS
+ *   Without merging, each step renders its own pivot card and near-identical bar
+ *   chart — visually redundant and wasteful. After merging, the user gets ONE
+ *   pivot card with several value columns. It also preserves provenance: every
+ *   merged step's `hypothesisId` flows into a `hypothesisIds[]` array so the
+ *   loop's hypothesis-resolution pass can still mark each original resolved.
+ *
+ * KEY PIECES
+ *   - coalesceQueryPlanSteps — the merge pass over an array of PlanSteps.
+ *   - isCoalesceEnabled — env kill switch (AGENT_COALESCE_SAME_SHAPE_QUERIES);
+ *     defaults to ON.
+ *   - queryPlanShapeSignature (internal) — stable string key of a step's shape;
+ *     returns null for non-mergeable steps (wrong tool, missing plan, or has a
+ *     dependsOn edge — keeping dependency order wins over merging). Cross-
+ *     parallelGroup merges are rejected because the group id is in the signature.
+ *
+ * HOW IT CONNECTS
+ *   Operates on PlanStep (types.js). Called by the planning stage of the agent
+ *   loop before the steps are executed.
  */
 import type { PlanStep } from "./types.js";
 

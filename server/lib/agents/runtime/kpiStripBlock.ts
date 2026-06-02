@@ -1,10 +1,26 @@
 /**
- * W7 · Headline Numbers KPI strip.
+ * ============================================================================
+ * kpiStripBlock.ts — "Headline numbers" strip for the dashboard
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Takes up to 4 "magnitudes" (a magnitude is a labelled headline number such
+ *   as "Revenue — $1.2M") from an answer and formats them into a small markdown
+ *   block (a "narrative block") that the dashboard can show as a KPI strip.
+ *   "KPI" = Key Performance Indicator, the few numbers that matter most.
  *
- * Pure function that turns up to 4 magnitudes from the AnswerEnvelope into a
- * deterministic dashboard narrative block. Prepended to the Executive Summary
- * sheet by `buildDashboardFromTurn` after the LLM call returns, so the strip
- * appears even if the LLM forgot to mention the headline numbers.
+ * WHY IT MATTERS
+ *   It is built deterministically from the answer's own figures and prepended
+ *   to the Executive Summary sheet, so the headline numbers always appear even
+ *   if the dashboard-writing LLM forgot to mention them.
+ *
+ * KEY PIECES
+ *   - KpiMagnitude — { label, value, optional confidence } input shape.
+ *   - buildKpiStripBlock(magnitudes) — returns a DashboardNarrativeBlock, or
+ *     null when no valid magnitude was supplied.
+ *
+ * HOW IT CONNECTS
+ *   Called by the dashboard builder (buildDashboardFromTurn) after its LLM call
+ *   returns. DashboardNarrativeBlock comes from shared/schema.ts.
  */
 import { randomUUID } from "crypto";
 

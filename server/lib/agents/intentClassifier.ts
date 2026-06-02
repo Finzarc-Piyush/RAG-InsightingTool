@@ -1,3 +1,45 @@
+/**
+ * ============================================================================
+ * intentClassifier.ts — works out WHAT KIND of analysis a question is asking for.
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Once we know the broad mode (see modeClassifier.ts), this file figures out the
+ *   specific intent of a question and pulls out the details needed to act on it.
+ *   It asks the LLM (language model) to label the question as one of: correlation
+ *   ("what affects revenue?"), chart ("show sales over time"), statistical ("what
+ *   is the average?"), comparison ("which brand is best?"), ml_model ("train a
+ *   random forest"), conversational (greetings / general questions), or custom
+ *   (complex multi-condition queries). Alongside the label it extracts structured
+ *   fields: the target variable, other variables, chart type, axis mappings,
+ *   filters, the ML model type, and whether it needs to ask the user for
+ *   clarification. The huge prompt string is the rulebook the model follows.
+ *
+ * WHY IT MATTERS
+ *   This is the routing brain of early triage. The intent it returns decides which
+ *   downstream handler and which tools the agentic loop will use. Getting it wrong
+ *   (e.g. calling a correlation question a "chart") sends the request down the
+ *   wrong path and produces a useless answer. The prompt is deliberately strict
+ *   about edge cases (follow-up "yes" after a model offer = ml_model, "best month"
+ *   = statistical not comparison) because those are the mistakes that hurt most.
+ *
+ * KEY PIECES
+ *   - analysisIntentSchema / AnalysisIntent — the validated result shape, plus
+ *     extra optional fields (operation, column, modelType, originalQuestion…)
+ *     bolted on for Data Ops and ML model flows.
+ *   - classifyIntent(question, chatHistory, summary, maxRetries) — the main call:
+ *     builds the prompt with column context + recent history, asks the LLM for
+ *     JSON, validates it with Zod, retries on failure, and falls back to simple
+ *     keyword matching if the LLM never returns valid output.
+ *   - normalizeQuestion / removeNulls — small helpers (lowercase/trim for cache
+ *     keys; strip nulls so Zod accepts the LLM's optional fields).
+ *
+ * HOW IT CONNECTS
+ *   Calls the LLM via runtime/callLlm.js (purpose INTENT_CLASSIFY from
+ *   runtime/llmCallPurpose.js) on the cheap "intent" model from models.js. Usually
+ *   runs after the question has been cleaned up by contextResolver.ts and after
+ *   modeClassifier.ts. Its output feeds the analysis handlers in the agentic
+ *   runtime. Types DataSummary + Message come from the shared schema.
+ */
 import { z } from 'zod';
 import { callLlm } from './runtime/callLlm.js';
 import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';

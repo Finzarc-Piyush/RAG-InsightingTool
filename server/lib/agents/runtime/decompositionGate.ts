@@ -1,18 +1,27 @@
 /**
- * Wave B7 · feature flag gate + question-shape predicate for decomposition.
+ * ============================================================================
+ * decompositionGate.ts — should this turn be split into parallel arcs?
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A single read-only check the agent loop can call to ask: "should this
+ *   question be broken into multiple parallel investigation 'arcs' instead of
+ *   answered as one flow?" An "arc" is one independent line of analysis. It
+ *   decides via a feature flag plus question-shape regex (and the analysis brief).
  *
- * The coordinator's `decomposeQuestion` and the investigation orchestrator
- * (`runInvestigationOrchestrator`) both exist as live code but are unwired
- * from `runAgentTurn` per the W11-W13 single-flow policy. This module
- * provides a single read-only check the agent loop can call: "should this
- * turn run as multiple parallel arcs?".
+ * WHY IT MATTERS
+ *   The decomposition machinery (decomposeQuestion + investigation
+ *   orchestrator) is live code but intentionally unwired from runAgentTurn by
+ *   the single-flow policy (invariant #6). This gate is the controlled on-switch:
+ *   default OFF, enabled per-deploy via AGENT_DECOMPOSITION_ENABLED=true.
  *
- * Default off. Enable per-deploy via `AGENT_DECOMPOSITION_ENABLED=true`.
+ * KEY PIECES
+ *   - DecompositionDecision — { shouldDecompose, reason, optional suggestedArcs }.
+ *   - shouldDecompose(opts) — true for multi-part conjunctions, compound (two
+ *     "?") questions, why+do mixes, or comparison briefs with >= 2 dimensions.
  *
- * Question shapes that benefit from decomposition:
- *   - `multi_part`: explicit conjunction ("X AND what should we do?").
- *   - `why_drop_with_action`: causal + recommendation in one breath.
- *   - `compare_segments`: A vs B that wants explicit per-arc evidence.
+ * HOW IT CONNECTS
+ *   Reads AnalysisBrief from shared/schema.ts. The reason string is surfaced in
+ *   trace + SSE for visibility. Pure function, no I/O.
  */
 import type { AnalysisBrief } from "../../../shared/schema.js";
 

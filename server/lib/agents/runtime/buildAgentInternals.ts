@@ -1,13 +1,37 @@
 /**
- * Wave A1/A2 · build the persistable `AgentInternals` snapshot from a turn's
- * in-memory state (working memory, structured reflector + verifier verdicts,
- * full blackboard, per-step tool I/O).
+ * ============================================================================
+ * buildAgentInternals.ts — pack a turn's debug state into a saveable snapshot
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   While the agent answers a question it accumulates a lot of internal state:
+ *   working-memory entries, the reflector's "what should I do next" verdicts,
+ *   the verifier's "is this answer good" verdicts, the full blackboard
+ *   (hypotheses, findings, open questions, domain context), and the inputs and
+ *   outputs of every tool call. This file boils all of that down into one
+ *   compact `AgentInternals` object that gets stored alongside the chat
+ *   message. Critically, it TRIMS each part to a fixed size — keeping the most
+ *   recent N entries (FIFO) and capping long text fields — so the saved record
+ *   never gets too big.
  *
- * The function applies a per-field FIFO trim before the schema's max() caps
- * kick in, so a richly instrumented turn produces a payload that fits inside
- * Cosmos's 2 MB document limit. Total budget defaults to ~80 KB / turn; the
- * housekeeping wave (planned, not in this wave) prunes older messages'
- * `agentInternals` once a session approaches the warn threshold.
+ * WHY IT MATTERS
+ *   This snapshot is what lets you debug, replay, or post-mortem a turn after
+ *   the fact, and it feeds the next turn's "what happened last time" handle.
+ *   The trimming is essential: chat documents live in Cosmos DB, which has a
+ *   2 MB per-document hard limit, so a richly instrumented turn must be capped
+ *   (budget defaults to roughly 80 KB/turn) or saving the message would fail.
+ *
+ * KEY PIECES
+ *   - buildAgentInternals — main builder: in-memory turn state in, trimmed
+ *       AgentInternals snapshot out (with a computed budgetBytes for telemetry).
+ *   - buildBlackboardSnapshot — trims the blackboard portion specifically.
+ *   - toolIORecordFromCall — converts one tool-call record (with its full
+ *       result) into the stored ToolIORecord shape.
+ *   - FIELD_CAPS / fifo / trimEnd — the size caps and the trim helpers.
+ *
+ * HOW IT CONNECTS
+ *   Called by the agent loop at turn end to produce the `agentInternals` field
+ *   on the saved Message. Types come from shared/schema, types.js, and
+ *   analyticalBlackboard.js.
  */
 import type { AgentInternals } from "../../../shared/schema.js";
 import type { AgentTrace, WorkingMemoryEntry, ToolCallRecord } from "./types.js";
@@ -67,9 +91,9 @@ const FIELD_CAPS = {
   findings: 60,
   openQuestions: 20,
   domainContext: 20,
-  // WTL2 · per-trace-element +50% across the board. AGENT_TRACE_MAX_BYTES
-  // (WTL1) gives us the headroom to persist these richer slices; trace is
-  // the surface we read when debugging or replaying.
+  // These per-field char caps are generous on purpose: the trace is the
+  // surface we read when debugging or replaying, so richer slices are worth
+  // the bytes (the overall AGENT_TRACE_MAX_BYTES budget gives the headroom).
   workingMemorySummaryPreviewChars: 1200,
   reflectorRationaleChars: 3000,
   verifierRationaleChars: 3000,
@@ -184,7 +208,7 @@ function buildBlackboardSnapshot(b: AnalyticalBlackboard) {
             text: trimEnd(h.text, FIELD_CAPS.hypothesisTextChars),
             status: h.status,
             evidenceFindingIds: h.evidenceRefs?.slice(0, 20),
-            parentId: undefined, // tree structure arrives in B1; flat for now
+            parentId: undefined, // flat for now (no tree structure persisted)
             alternatives: undefined,
           })
         )
@@ -203,7 +227,7 @@ function buildBlackboardSnapshot(b: AnalyticalBlackboard) {
               | "low"
               | "medium"
               | "high"
-              | undefined, // populated by Wave B4 when findings become structured
+              | undefined, // populated once findings carry structured confidence
           })
         )
       : undefined,

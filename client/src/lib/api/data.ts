@@ -57,24 +57,107 @@ export const dataApi = {
     ),
 
   getDataSummary: (sessionId: string) =>
-    api.get<{
-      summary: Array<{
-        variable: string;
-        datatype: string;
-        total_values: number;
-        null_values: number;
-        non_null_values: number;
-        mean?: number | null;
-        median?: number | null;
-        mode?: any;
-        std_dev?: number | null;
-        min?: number | string | null;
-        max?: number | string | null;
-      }>;
-      qualityScore: number;
-      recommendedQuestions: string[];
-    }>(`/api/sessions/${sessionId}/data-summary`),
+    api.get<RichDataSummaryResponse>(
+      `/api/sessions/${sessionId}/data-summary`,
+    ),
 };
+
+/* ------------------------------------------------------------------ *
+ * Rich, type-aware data-summary response (GET /sessions/:id/data-summary)
+ * Mirrors server/lib/richColumnProfile.ts. Each column carries only the
+ * statistics that are meaningful for its kind.
+ * ------------------------------------------------------------------ */
+
+export type ColumnKind = "numeric" | "date" | "categorical" | "boolean";
+
+export interface BaseColumnProfile {
+  name: string;
+  kind: ColumnKind;
+  datatypeLabel: string;
+  totalValues: number;
+  nullCount: number;
+  nullPct: number;
+  completeness: number;
+  distinctCount: number;
+}
+
+export interface NumericColumnProfile extends BaseColumnProfile {
+  kind: "numeric";
+  nonNumericCount: number;
+  mean: number | null;
+  median: number | null;
+  std: number | null;
+  variance: number | null;
+  min: number | null;
+  max: number | null;
+  range: number | null;
+  q1: number | null;
+  q3: number | null;
+  iqr: number | null;
+  p5: number | null;
+  p95: number | null;
+  sum: number | null;
+  zeroCount: number;
+  negativeCount: number;
+  outlierCount: number;
+  skewness: number | null;
+  cv: number | null;
+  integerLike: boolean;
+  currencySymbol: string | null;
+  histogram: Array<{ x0: number; x1: number; count: number }>;
+}
+
+export interface DateColumnProfile extends BaseColumnProfile {
+  kind: "date";
+  minIso: string | null;
+  maxIso: string | null;
+  spanDays: number | null;
+  distinctDayCount: number;
+  unparseableCount: number;
+  grain: "dayOrWeek" | "monthOrQuarter" | "year" | null;
+  timeline: Array<{ label: string; count: number }>;
+}
+
+export interface CategoricalColumnProfile extends BaseColumnProfile {
+  kind: "categorical" | "boolean";
+  mode: string | number | null;
+  topValues: Array<{ value: string | number; count: number; pct: number }>;
+  otherCount: number;
+  otherPct: number;
+  cardinalityRatio: number;
+  isHighCardinality: boolean;
+  isLikelyId: boolean;
+  isConstant: boolean;
+  minLength: number | null;
+  maxLength: number | null;
+  avgLength: number | null;
+  positiveValues?: string[];
+  negativeValues?: string[];
+}
+
+export type RichColumnProfile =
+  | NumericColumnProfile
+  | DateColumnProfile
+  | CategoricalColumnProfile;
+
+export interface RichDataSummaryResponse {
+  dataset: {
+    rowCount: number;
+    columnCount: number;
+    typeBreakdown: {
+      numeric: number;
+      date: number;
+      categorical: number;
+      boolean: number;
+    };
+    totalCells: number;
+    totalNulls: number;
+    overallCompleteness: number;
+    duplicateRowCount: number | null;
+  };
+  qualityScore: number;
+  columns: RichColumnProfile[];
+}
 
 export async function pivotQuery(
   sessionId: string,

@@ -1,20 +1,39 @@
 /**
- * Wave WQ1 · `scaleNarrativeByConfidence` — pure pre-narrator helper.
+ * ============================================================================
+ * scaleNarrativeByConfidence.ts — grade each finding's statistical confidence
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the tool gives an answer (e.g. "Saffola sales rose 12%"), how sure
+ *   are we that the number is real and not just noise? This file looks at the
+ *   statistical evidence behind a finding — sample size (n), p-value (the
+ *   "is this just luck?" probability), confidence-interval width (how fuzzy
+ *   the estimate is), R² (how well a model fits), and effect size (does the
+ *   difference actually matter?) — and stamps each finding with a confidence
+ *   tier: "high", "medium", or "low". It also hands back plain-English reasons
+ *   and a "hedge" phrase (e.g. "treat as directional") the writer should use.
  *
- * Decorates blackboard findings with a `confidenceTier` ("high" |
- * "medium" | "low") computed from per-finding evidence (sample size,
- * p-value, CI width, R²). The narrator can then vary verbosity + hedge
- * phrasing by tier. Closes the first item of Workstream 9 from the
- * [1000x master plan](/Users/tida/.claude/plans/go-through-the-entire-partitioned-yao.md):
- * *confidence-aware narration*.
+ * WHY IT MATTERS
+ *   The final answer the user reads is written by an LLM "narrator". Without
+ *   confidence grading, the narrator could state a shaky finding from 5 rows
+ *   with the same swagger as one from 5,000 rows. This file lets the narrator
+ *   speak loudly when the data is solid and hedge honestly when it isn't — so
+ *   the tool earns trust instead of overclaiming. A key trick: a result can be
+ *   "statistically significant" yet practically meaningless; a "negligible"
+ *   effect size is treated as LOW no matter how big the sample.
  *
- * This wave ships the **pure decorator**. A follow-up wave wires the
- * decorator into the narrator prompt assembly path; for now any caller
- * (skill, manual narrator block, fact-check pre-pass) can use it.
+ * KEY PIECES
+ *   - FindingEvidence — the optional statistical inputs for one finding.
+ *   - assessConfidence — the deterministic classifier: evidence in, tier out.
+ *   - decorateFindings — attaches a confidence assessment to a list of findings.
+ *   - summarizeConfidenceTiers — one-line tier tally for the narrator prompt.
+ *   - narratorBudget / hedgeFor — per-tier prose limits and hedge phrasing.
  *
- * The classifier is deterministic, side-effect-free, and zero-dep. The
- * thresholds are tunable but intentionally hard-coded here so that
- * future drift comparisons are reproducible.
+ * HOW IT CONNECTS
+ *   Pure, side-effect-free, zero-dependency logic — importable from anywhere
+ *   in the agent runtime. Callers (skills, the narrator prompt builder, a
+ *   fact-check pre-pass) feed it findings + evidence and use the result to
+ *   shape the answer envelope's wording. Thresholds are hard-coded on purpose
+ *   so confidence grading stays reproducible across runs.
  */
 
 /** Statistical evidence behind a single finding. All fields optional. */
@@ -31,7 +50,7 @@ export interface FindingEvidence {
   /** 95% CI width as a fraction of the point estimate. 0 = perfectly
    *  tight; > 0.5 = noisy. */
   ciRelativeWidth?: number;
-  /** Wave WQ8 · categorical effect-size bucket from significance tests
+  /** Categorical effect-size bucket from significance tests
    *  (Cohen's d on welch_t / paired_t; Cramér's V on chi_square). Lets the
    *  classifier distinguish "statistically significant but practically
    *  negligible" (p ≤ 0.05 with `effectMagnitude = "negligible"`) from "real
@@ -108,7 +127,7 @@ export function assessConfidence(evidence: FindingEvidence): ConfidenceAssessmen
   if (evidence.rSquared !== undefined && evidence.rSquared < 0.2) {
     lowReasons.push(`poor model fit (R²=${evidence.rSquared.toFixed(2)})`);
   }
-  // Wave WQ8 · a "negligible" effect-size bucket is itself a hard-fail
+  // A "negligible" effect-size bucket is itself a hard-fail
   // signal: even if p ≤ 0.05 and n is large, the finding is practically
   // immaterial. This is the load-bearing wedge that lets the narrator
   // hedge "significant but trivial" results instead of overclaiming.

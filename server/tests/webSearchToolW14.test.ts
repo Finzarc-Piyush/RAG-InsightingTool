@@ -101,10 +101,14 @@ describe("W14 · web_search tool registration + gating", () => {
     else process.env.WEB_SEARCH_ENABLED = prevEnabled;
   });
 
-  it("returns ok:false with a clear message when enabled but no provider key", async () => {
+  it("returns ok:false with a clear message when a KEY-BEARING provider has no key", async () => {
+    // R4 · only key-bearing providers (tavily) gate on a key; the default
+    // keyless `auto` does not. Make the provider explicit to assert the gate.
     const prevEnabled = process.env.WEB_SEARCH_ENABLED;
     const prevKey = process.env.TAVILY_API_KEY;
+    const prevProvider = process.env.WEB_SEARCH_PROVIDER;
     process.env.WEB_SEARCH_ENABLED = "true";
+    process.env.WEB_SEARCH_PROVIDER = "tavily";
     delete process.env.TAVILY_API_KEY;
     const registry = new ToolRegistry();
     registerWebSearchTool(registry);
@@ -114,5 +118,7 @@ describe("W14 · web_search tool registration + gating", () => {
     if (prevEnabled === undefined) delete process.env.WEB_SEARCH_ENABLED;
     else process.env.WEB_SEARCH_ENABLED = prevEnabled;
     if (prevKey !== undefined) process.env.TAVILY_API_KEY = prevKey;
+    if (prevProvider === undefined) delete process.env.WEB_SEARCH_PROVIDER;
+    else process.env.WEB_SEARCH_PROVIDER = prevProvider;
   });
 });

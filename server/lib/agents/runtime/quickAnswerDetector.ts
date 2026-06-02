@@ -1,17 +1,30 @@
 /**
- * Wave QL1 · Quick-lookup detector.
+ * ============================================================================
+ * quickAnswerDetector.ts — is this a simple lookup we can fast-path?
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A regex gate that decides whether a question is a simple lookup ("top 10
+ *   SKUs by sales", "how many regions") that one DuckDB query plus a results
+ *   table can answer — so the engine can skip the heavy pipeline
+ *   (hypothesis → brief → planner → reflector → narrator → verifier) and reply
+ *   fast. DuckDB is the in-process SQL engine that runs queries on the dataset.
  *
- * Pure regex/heuristic gate that decides whether a user question can be
- * answered by a single DuckDB query plan + a deterministic results table,
- * bypassing the full hypothesis → brief → planner → reflector → narrator →
- * verifier pipeline.
+ * WHY IT MATTERS
+ *   The full loop is slow; many questions don't need it. But getting it wrong is
+ *   asymmetric: a false negative just costs normal latency, while a false
+ *   positive would silently strip out the analysis the user expected. So it is
+ *   deliberately conservative — any analytical keyword (why, compare, trend,
+ *   driver, ...) rejects the fast path.
  *
- * Conservative by design: every analytical-intent keyword (`why`, `compare`,
- * `trend`, `driver`, …) rejects the fast path. False negatives are cheap
- * (user pays the normal latency); false positives would silently strip the
- * answer of the analysis the user expected.
+ * KEY PIECES
+ *   - detectQuickLookup(question) — true only when the question is lookup-shaped,
+ *     short enough, carries no analytical keyword, and isn't multi-part.
+ *   - isQuickLookupEnabled() — env kill-switch (default ON; set
+ *     QUICK_LOOKUP_ENABLED=false to force every turn through the full loop).
  *
- * Tested in isolation by `tests/quickAnswerDetector.test.ts`.
+ * HOW IT CONNECTS
+ *   Called at the top of a turn before classification. Tested by
+ *   tests/quickAnswerDetector.test.ts.
  */
 
 /** Max question length for the fast path. Anything longer almost certainly carries

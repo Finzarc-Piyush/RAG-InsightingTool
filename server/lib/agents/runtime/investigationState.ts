@@ -1,22 +1,59 @@
 /**
- * Wave B1 · Foundational types for the state-centric investigation substrate.
+ * ============================================================================
+ * investigationState.ts — the data shapes that hold everything the agent
+ *                        learns while answering one question
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This file is pure TypeScript type definitions (plus two tiny helpers). It
+ *   describes the "investigation state": one big object that records, in a
+ *   structured and lossless way, everything the agent discovers while working a
+ *   question — the hypotheses it's testing, the findings it confirms, the raw
+ *   results of every tool call ("observations"), facts it's holding in working
+ *   memory, RAG/web context it pulled in, contradictions it spotted, and its
+ *   verification trail. "Lossless" means the full tool result is kept (the whole
+ *   table, charts, numbers), not just a one-line summary — the summary is only
+ *   for showing the model, while the full result stays available for code.
  *
- * The agent loop today is prompt-centric: rich `ToolResult` objects collapse
- * to one prose line in `observations[]`; LLM-prose `addFinding` discards
- * structure; tools never read prior state. These types define the lossless
- * replacements that B2-B10 wire in incrementally.
+ * WHY IT MATTERS
+ *   An older design was "prompt-centric": rich tool results were flattened into
+ *   a single prose line, findings lost their structure, and tools couldn't read
+ *   what earlier steps had found. These types are the foundation for a
+ *   "state-centric" alternative where steps cite each other by id, every finding
+ *   carries typed evidence and a confidence level, and hypotheses form a tree
+ *   with parents, children, and alternative explanations. Many other runtime
+ *   files build, read, and project from this state.
  *
- * Design invariants:
- *   - **Lossless**: full `ToolResult.payload` (table, charts, numericPayload)
+ * KEY PIECES
+ *   - InvestigationState — the top-level object tying everything together.
+ *   - createInvestigationState(question) — make a fresh, empty state.
+ *   - StructuredFinding — a single typed claim with evidence + confidence.
+ *   - HypothesisNode / HypothesisTree — tree of hypotheses and their status.
+ *   - StructuredObservation — one tool call's full result + a compact summary.
+ *   - Fact / ScratchpadEntry — working memory and a cross-step typed scratchpad.
+ *   - MagnitudeClaim / MagnitudeAudit — the numeric core of a claim and its
+ *     re-checked verification record.
+ *   - RagHit / Contradiction / VerificationLog / CausalNode — context, detected
+ *     inconsistencies, the verification trail, and a causal-chain shape.
+ *   - PriorTurnHandle — read-only access to a previous turn's structured state.
+ *   - nextId(prefix) — generate a short unique id (e.g. "finding-…").
+ *
+ * HOW IT CONNECTS
+ *   Imports `AgentInternals` and the verdict-record types from sibling files
+ *   (../../../shared/schema.js, ./buildAgentInternals.js). The legacy
+ *   `AnalyticalBlackboard` (analyticalBlackboard.ts) is a *projection* of this
+ *   state, so older code keeps working unchanged on top of these richer shapes.
+ *
+ * DESIGN INVARIANTS
+ *   - Lossless: full `ToolResult.payload` (table, charts, numericPayload) is
  *     preserved on `StructuredObservation`. Prompt rendering reads
  *     `resultSummary`; programmatic access reads `result`.
- *   - **Structured**: every finding has typed evidence + confidence + sources;
+ *   - Structured: every finding has typed evidence + confidence + sources;
  *     every magnitude carries a verifying query + (later) confidence interval.
- *   - **Cross-step references**: tools cite each other by `stepId` (symbolic),
+ *   - Cross-step references: tools cite each other by `stepId` (symbolic),
  *     not by re-shipping payloads.
- *   - **Tree-structured hypotheses**: parent/child + alternatives so multi-
+ *   - Tree-structured hypotheses: parent/child + alternatives so multi-
  *     hypothesis investigations track branches explicitly.
- *   - **Back-compat**: legacy `AnalyticalBlackboard` is a *projection* of this
+ *   - Back-compat: legacy `AnalyticalBlackboard` is a *projection* of this
  *     state (analyticalBlackboard.ts keeps working unchanged at the data layer).
  */
 
@@ -77,7 +114,7 @@ export interface MagnitudeClaim {
   value: number;
   unit: string;
   direction?: Direction;
-  /** 95% CI when computed (Wave C7). */
+  /** 95% confidence interval when computed. */
   ci?: [number, number];
   /** Optional column / metric label for prompt rendering. */
   metric?: string;
@@ -124,7 +161,7 @@ export interface StructuredFinding {
   };
   /** Optional numeric magnitude (the "−12% drop" core of the claim). */
   magnitude?: MagnitudeClaim;
-  /** Findings this contradicts (cross-checked by Wave B10 watcher). */
+  /** Findings this contradicts (cross-checked by the contradiction watcher). */
   contradicts?: FindingCitation[];
   /** Findings this supports. */
   supports?: FindingCitation[];
@@ -180,7 +217,7 @@ export interface SubQuestion {
   triggeredByFindingId?: FindingId;
   /** Suggested columns for whoever investigates it. */
   suggestedColumns?: string[];
-  /** Set when the orchestrator picked it up (Wave B7). */
+  /** Set when the orchestrator picked it up. */
   arcId?: string;
   createdAt: number;
 }
@@ -228,7 +265,7 @@ export interface Fact {
   createdAt: number;
 }
 
-// ─── Inconsistencies (cross-finding contradictions detected by B10) ────────
+// ─── Inconsistencies (cross-finding contradictions detected by the watcher) ─
 
 export interface Contradiction {
   id: string;
@@ -265,12 +302,12 @@ export interface RagHit {
   score?: number;
   url?: string;
   source: "rag_round1" | "rag_round2" | "web" | "injected";
-  /** Step that triggered Round-2 retrieval (Wave B8). */
+  /** Step that triggered Round-2 retrieval. */
   triggeredByStepId?: StepId;
   createdAt: number;
 }
 
-// ─── Causal chain (for diagnostic question shape, populated by B10) ────────
+// ─── Causal chain (for diagnostic question shape) ──────────────────────────
 
 export interface CausalNode {
   id: string;
@@ -283,7 +320,7 @@ export interface CausalNode {
   isRootCause?: boolean;
 }
 
-// ─── Cross-step typed scratchpad (B8) ──────────────────────────────────────
+// ─── Cross-step typed scratchpad ───────────────────────────────────────────
 
 export interface ScratchpadEntry {
   key: string;
@@ -296,7 +333,7 @@ export interface ScratchpadEntry {
   createdAt: number;
 }
 
-// ─── Cross-turn handle (B9) ────────────────────────────────────────────────
+// ─── Cross-turn handle ─────────────────────────────────────────────────────
 
 import type { AgentInternals } from "../../../shared/schema.js";
 
@@ -305,7 +342,7 @@ export interface PriorTurnHandle {
   timestamp: number;
   /** Read-only access to prior turn's structured state, if persisted. */
   agentInternals?: AgentInternals;
-  /** Lazy resolvers (B9 implements these — read-only views). */
+  /** Lazy resolvers — read-only views. */
   findings(filter?: { tag?: string; relatedColumn?: string }): readonly StructuredFinding[];
   hypotheses(): readonly HypothesisNode[];
 }

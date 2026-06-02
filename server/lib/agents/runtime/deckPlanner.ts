@@ -1,34 +1,51 @@
 /**
- * W-EXP-2 · Dashboard-export deck planner.
+ * ============================================================================
+ * deckPlanner.ts — turns a saved dashboard into a slide-deck plan
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the user wants to EXPORT a dashboard as a PowerPoint or PDF, something
+ *   has to decide the slide structure: which slide shows which chart, what the
+ *   slide titles say, what the presenter notes are. That's this file. It hands
+ *   a trimmed-down ("slim") version of the dashboard to an LLM and asks it to
+ *   produce a `SlideDeckPlan` — a JSON blueprint of slides. A separate renderer
+ *   later reads that plan and produces the actual .pptx / .pdf files; the
+ *   renderer is "dumb" about strategy and just lays out whatever the plan says.
  *
- * Composes a `SlideDeckPlan` (W-EXP-1 schema) from a saved Dashboard. The
- * structural reasoning lives in the LLM call; the renderers (W-EXP-5/6/8/10)
- * are deterministic and unaware of layout choice — they just consume the plan.
+ *   Key vocabulary:
+ *     - "action title" = a slide headline that is a full sentence with a verb
+ *       and (ideally) a number, e.g. "Sales fell 12% in Q3 driven by mix shift"
+ *       — so reading only the titles tells the whole story (the "Pyramid
+ *       Principle" from management-consulting decks).
+ *     - "layout" = one of a fixed (closed) set of slide templates (TitleSlide,
+ *       ExecSummary, KpiRow, ChartWithInsight, …).
  *
- * Architecture (locked in the approved plan):
- *   Dashboard → buildDeckPlannerUserPrompt → Claude Opus 4.7 (structured output)
- *      → SlideDeckPlan (Zod-validated; one repair round on fail)
- *      → caller renders to .pptx and .pdf in parallel
+ * WHY IT MATTERS
+ *   It is the brains of the export feature. Without it the renderer would have
+ *   no structure to render. It is careful NOT to invent numbers (every value
+ *   must trace back to the dashboard's own answer envelope or chart insights)
+ *   and NOT to pick fonts/colours/positions (the renderer's job). On failure it
+ *   returns null so the caller can fall back to a minimal deterministic deck —
+ *   the user always gets a download.
  *
- * What this agent does:
- *   - Picks layout per slide from the closed `LayoutKind` enum.
- *   - Writes action titles (verb + number, complete sentence).
- *   - Writes speaker notes (presenter cues, ≥ 20 chars).
- *   - Splits findings into one-message-per-slide chunks (the verifier in
- *     W-EXP-3 enforces this — the planner is asked to obey it up front so the
- *     repair round doesn't fire on every deck).
+ * KEY PIECES
+ *   - runDeckPlanner — the public entry. Calls the LLM, optionally with a
+ *     "repair" branch that re-feeds verifier issues + the prior plan to fix it.
+ *   - buildDeckPlannerUserPrompt — assembles the user message from the slim
+ *     dashboard plus optional ambient-context blocks (user notes, dimension
+ *     hierarchies, wide-format shape).
+ *   - buildSlimDashboard — strips the dashboard down to only what the planner
+ *     needs (drops raw chart data, provenance, layout) → smaller, cheaper prompt.
+ *   - resolveChartIdToSpec — maps a slide's `chartId` back to the real ChartSpec
+ *     so the renderer can load the chart; ids are formatted "s{sheet}c{chart}".
+ *   - DECK_PLANNER_SYSTEM — the byte-stable system prompt holding all the slide
+ *     authoring rules (kept stable so prompt-caching keeps hitting).
  *
- * What this agent does NOT do:
- *   - Pick fonts, colours, exact positions — that's the renderer's job.
- *   - Fabricate numbers — every magnitude / KPI value comes from the
- *     dashboard's own answerEnvelope or chart-level fields. The user prompt
- *     hands the planner a slim inventory; the planner cites by reference.
- *   - Fire the deterministic verifier — that's the next file (W-EXP-3) which
- *     will sit between this agent and the renderers in the controller flow.
- *
- * The system prompt is deliberately byte-stable across calls (no per-deck
- * substitutions) so the prefix cache holds — same pattern as `narratorAgent`
- * (W4.2 cache-eligibility rule).
+ * HOW IT CONNECTS
+ *   Called by the dashboard-export controller. It validates against
+ *   slideDeckPlanSchema (shared/exportSchema.js), uses completeJson (llmJson.js)
+ *   for the structured LLM call, and shares the analyst preamble from
+ *   sharedPrompts.js. Its output feeds the deterministic verifier and the
+ *   PowerPoint/PDF renderers downstream.
  */
 
 import { completeJson } from "./llmJson.js";
@@ -66,18 +83,16 @@ export interface DeckPlannerInputs {
   /** Confidentiality classification for the deck footer. Default "Internal". */
   confidentiality?: string;
   /**
-   * Wave B6 · Optional ambient context the deck planner can use. Pre-B6
-   * the planner saw only the dashboard contents (charts, narrative
-   * blocks, answer envelope, business actions, captured filter). If the
-   * user added a permanent context note AFTER the analysis was authored
-   * (e.g. "flag Q1 data quality", "always include the cost-of-goods
-   * caveat in exec summaries"), the deck planner had no way to honour
-   * it. Same for hierarchies (BAI-style "FEMALE SHOWER GEL is a
-   * category total" — must NOT show as a peer slide-vs-slide in the
-   * deck) and wide-format shape (the deck must refer to Period /
-   * PeriodIso / Value column names post-melt, never the original
-   * wide column headers). All four optional; the upload caller resolves
-   * them from the session that owns the dashboard.
+   * Optional ambient context the deck planner can use beyond the dashboard
+   * contents (charts, narrative blocks, answer envelope, business actions,
+   * captured filter). If the user added a permanent context note AFTER the
+   * analysis was authored (e.g. "flag Q1 data quality", "always include the
+   * cost-of-goods caveat in exec summaries"), the deck planner can honour it
+   * here. Same for dimension hierarchies (a "FEMALE SHOWER GEL is a category
+   * total" must NOT show as a peer in the deck) and wide-format shape (the deck
+   * must refer to Period / PeriodIso / Value column names post-melt, never the
+   * original wide column headers). All four optional; the caller resolves them
+   * from the session that owns the dashboard.
    */
   permanentContext?: string;
   domainContext?: string;
@@ -110,7 +125,7 @@ interface SlimChart {
   y?: string;
   z?: string;
   seriesColumn?: string;
-  /** Pre-existing per-chart commentary (W12 businessCommentary), surfaced verbatim. */
+  /** Pre-existing per-chart commentary (businessCommentary), surfaced verbatim. */
   insight?: string;
   businessCommentary?: string;
 }
@@ -413,9 +428,9 @@ function formatSlimDashboardForPrompt(slim: SlimDashboard): string {
 
 export function buildDeckPlannerUserPrompt(inputs: DeckPlannerInputs): string {
   const slim = buildSlimDashboard(inputs);
-  // Wave B6 · Optional ambient-context blocks. Capped tight so the
-  // prompt stays under the W-EXP-2 system+user budget. Each block is
-  // labelled so the planner can disregard / honour it independently.
+  // Optional ambient-context blocks. Capped tight so the prompt stays under the
+  // system+user budget. Each block is labelled so the planner can disregard /
+  // honour it independently.
   const sections: string[] = [formatSlimDashboardForPrompt(slim)];
 
   if (inputs.permanentContext?.trim()) {
@@ -460,7 +475,7 @@ export function buildDeckPlannerUserPrompt(inputs: DeckPlannerInputs): string {
 }
 
 export interface DeckPlannerRepairContext {
-  /** Issues surfaced by the deterministic verifier (W-EXP-3). */
+  /** Issues surfaced by the deterministic deck verifier. */
   issues: string;
   /** The prior plan that failed verification — let the model fix in place. */
   priorPlan: SlideDeckPlan;
@@ -475,9 +490,8 @@ export interface DeckPlannerOptions {
 
 /**
  * Run the deck-planner LLM call with optional repair branch. Returns null on
- * failure; the caller renders a deterministic fallback (W-EXP-7/11 will land
- * a "minimal deck" path that the controller falls back to so the user always
- * gets a download even when the planner errors).
+ * failure; the caller renders a deterministic "minimal deck" fallback so the
+ * user always gets a download even when the planner errors.
  */
 export async function runDeckPlanner(
   inputs: DeckPlannerInputs,

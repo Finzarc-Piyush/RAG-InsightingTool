@@ -1,25 +1,35 @@
 /**
- * Wave W19 · enrichStepInsights — single-batched per-step LLM commentary
+ * ============================================================================
+ * enrichStepInsights.ts — one cheap LLM pass to write a richer one-liner for
+ * each step shown in the "workbench"
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The "workbench" is the timeline of steps the UI shows for a turn (each tool
+ *   call, decision, etc.), and every step carries a short deterministic
+ *   one-line `insight`. After the final answer is written, this module fires
+ *   ONE LLM call that reads all the workbench entries plus the final answer and
+ *   returns a richer 1–2 sentence interpretation per step — explaining what each
+ *   step contributed to the answer in plain language. It writes those back onto
+ *   the entries in place; steps the LLM skips keep their original one-liner.
  *
- * After synthesis completes, fire ONE LLM call that takes the accumulated
- * workbench entries plus the final answer and returns a richer 1–2 sentence
- * interpretation per step. Backfills `entry.insight` in-place; deterministic
- * W10 insights stay as the fallback for entries the LLM omits.
+ * WHY IT MATTERS
+ *   It makes the step-by-step trace readable to non-technical users without
+ *   slowing the answer down: it is a single batched call on a cheap model
+ *   (~2–5s), is gated by an env flag (RICH_STEP_INSIGHTS_ENABLED), and on ANY
+ *   failure it leaves the workbench untouched — the deterministic insights ship
+ *   as-is, so it can never break a turn.
  *
- * Design notes:
- *   - Single LLM call per turn (cheap model — `getInsightModel`). One extra
- *     call's latency (~2–5s) is the only user-visible cost. Gated by env.
- *   - Skips noise rows (`flow_decision` with no insight or override) so the
- *     LLM sees only meaningful steps.
- *   - Cap each enriched insight at 200 chars to match the W10 schema cap.
- *   - On any failure (LLM error, parse error, env disabled) returns the
- *     workbench unchanged. The deterministic W10 insights ship as-is.
+ * KEY PIECES
+ *   - isRichStepInsightsEnabled — env gate
+ *   - enrichStepInsights — main: builds the prompt, calls the LLM, backfills insights, returns telemetry
+ *   - EnrichResult — { ok, enrichedCount, latencyMs }
  *
- * Why this lives outside `agentLoop.service.ts`: the agent loop doesn't
- * accumulate the workbench (it streams events via SSE; the workbench is
- * built up in `chatStream.service.ts`). Running enrichment after the agent
- * loop returns keeps the loop pure and the entire workbench available for
- * a single batched call.
+ * HOW IT CONNECTS
+ *   Lives OUTSIDE `agentLoop.service.ts` because the agent loop streams events
+ *   over SSE and does not hold the assembled workbench — that is built in
+ *   `chatStream.service.ts`, which calls this after the loop returns. Uses
+ *   `completeJson` (llmJson.js) and the insight-model config so the whole
+ *   workbench is available for one batched call.
  */
 import type {
   AgentWorkbenchEntry,
@@ -35,8 +45,8 @@ export function isRichStepInsightsEnabled(): boolean {
   return process.env.RICH_STEP_INSIGHTS_ENABLED === "true";
 }
 
-// WTL2 · 200 → 400. 200 chars was too short for substantive per-step
-// insight; users see these in the workbench.
+// 200 chars was too short for a substantive per-step insight; users see these
+// in the workbench, so allow more room.
 const ENRICHED_INSIGHT_MAX = 400;
 const FINAL_ANSWER_PREVIEW_MAX = 4_000;
 const ENTRY_SUMMARY_MAX = 400;
@@ -142,7 +152,7 @@ ${clip(params.finalAnswer, FINAL_ANSWER_PREVIEW_MAX)}${sacBrief}${domainBrief}`;
 
   const out = await completeJson(system, user, enrichStepInsightsSchema, {
     turnId: `${params.turnId}_step_enrich`,
-    // WTL2 · 1_500 → 2_400. Step insights are user-visible — give them room.
+    // Step insights are user-visible — give them room.
     maxTokens: 2_400,
     temperature: getInsightTemperature(),
     model: getInsightModel(),

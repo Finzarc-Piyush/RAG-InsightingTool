@@ -1,11 +1,46 @@
 /**
- * W58 · Pure mapper — given a completed turn's persisted artifacts, produce
- * the array of `AnalysisMemoryEntry` documents for the W56 container and the
- * W57 RAG mirror. No side effects: caller owns Cosmos write + AI Search index.
+ * ============================================================================
+ * memoryEntryBuilders.ts — turn the results of one finished chat turn into
+ *                          saveable "memory" records
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   After the agent finishes answering a question, this file looks at everything
+ *   that turn produced (the question, hypotheses tested, findings, charts, pivot
+ *   tables, applied filters, dashboard drafts, the final conclusion) and turns
+ *   each of those into a small structured record called an `AnalysisMemoryEntry`.
+ *   These records form the app's "analysis memory": a browsable, searchable
+ *   timeline of what was investigated. There is one small pure function per
+ *   record type, which keeps the code easy to read and unit-test.
+ *   "Pure" here means these functions only compute and return data — they do not
+ *   write to any database. Writing the records to storage (Cosmos DB) and to the
+ *   search index (Azure AI Search) is the caller's job.
  *
- * One pure builder per entry type (`question_asked`, `hypothesis`, `finding`,
- * `chart_created`, `filter_applied`, `dashboard_drafted`, `conclusion`) keeps
- * the file scannable and unit-testable.
+ * WHY IT MATTERS
+ *   The analysis-memory feature lets users (and later turns) recall what was
+ *   already discovered without re-running the analysis. This file is the single
+ *   place that decides what gets remembered from each turn and how each record
+ *   is shaped (title, summary, body, references). Without it, finished turns
+ *   would leave no durable, searchable trace.
+ *
+ * KEY PIECES
+ *   - TurnEndContext — input bag: everything a finished turn produced, plus ids
+ *     (session, user, turn), the data version, and a single timestamp so all
+ *     records from the turn sort in a stable order.
+ *   - buildTurnEndMemoryEntries(ctx) — the only public entry point. Calls every
+ *     per-type builder, drops empty results, and returns one clean list to save.
+ *   - buildQuestionEntry / buildHypothesisEntries / buildFindingEntries /
+ *     buildChartEntries / buildPivotEntries / buildFilterEntries /
+ *     buildDashboardDraftEntry / buildConclusionEntry — one builder per record
+ *     type; each maps a slice of the turn into `AnalysisMemoryEntry` records.
+ *   - clip / clipNonEmpty — trim and length-cap text for titles/summaries.
+ *
+ * HOW IT CONNECTS
+ *   Pulls `AnalysisMemoryEntry`, `ChartSpec`, etc. types from
+ *   ../../../shared/schema.js, deterministic ids from
+ *   ../../../models/analysisMemory.model.js, and pivot-artifact previews from
+ *   ../../pastAnalysisPivotArtifact.js. Pivot rows themselves are NOT duplicated
+ *   here — they live on the cross-session `past_analyses` doc, and each
+ *   `pivot_computed` record just references them by a deterministic artifactId.
  */
 import type {
   AnalysisMemoryEntry,
@@ -41,13 +76,13 @@ export interface TurnEndContext {
     match?: "exact" | "case_insensitive" | "contains";
   }>;
   /**
-   * AMR7 · Raw pivot captures from `execute_query_plan` steps. Each entry
-   * also flows through `materializePivotArtifact` to be persisted on the
-   * cross-session `past_analyses` doc (AMR3). Here we emit one
-   * `pivot_computed` analysis_memory entry per capture; the body references
-   * the deterministic `artifactId` (sha256 of session|turn|step) so a
-   * client opening the entry can fetch rows via the AMR3c recall endpoint.
-   * Storage isn't duplicated — past_analyses owns the rows.
+   * Raw pivot captures from `execute_query_plan` steps. Each entry also flows
+   * through `materializePivotArtifact` to be persisted on the cross-session
+   * `past_analyses` doc. Here we emit one `pivot_computed` analysis_memory
+   * entry per capture; the body references the deterministic `artifactId`
+   * (sha256 of session|turn|step) so a client opening the entry can fetch rows
+   * via the recall endpoint. Storage isn't duplicated — past_analyses owns the
+   * rows.
    */
   pivotArtifacts?: RawPivotArtifact[];
 }
@@ -136,11 +171,11 @@ function chartTitle(c: ChartSpec, idx: number): string {
 function buildChartEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
   const charts = ctx.assistant.charts ?? [];
   return charts.map((c, i) => {
-    // AMR7 · richer chart_created body: carry the per-chart insight +
-    // commentary and a stripped-data chart spec so the AnalysisMemory
-    // page renders the original narrative + a recreatable spec, not just
-    // axis identifiers. `data` is excluded — heavy rows live in the
-    // past_analyses pivot artifact / are reconstructible from the query.
+    // Richer chart_created body: carry the per-chart insight + commentary and
+    // a stripped-data chart spec so the AnalysisMemory page renders the
+    // original narrative + a recreatable spec, not just axis identifiers.
+    // `data` is excluded — heavy rows live in the past_analyses pivot artifact
+    // / are reconstructible from the query.
     const { data: _data, ...specWithoutData } = c as ChartSpec & { data?: unknown };
     return {
       id: buildMemoryEntryId(ctx.sessionId, "chart_created", i, ctx.turnId),

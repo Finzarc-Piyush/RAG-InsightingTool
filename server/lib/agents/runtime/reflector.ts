@@ -1,3 +1,40 @@
+/**
+ * ============================================================================
+ * reflector.ts — the agent's "should I keep going?" decision-maker
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The agent answers questions in a plan/act loop: it makes a plan, runs a tool,
+ *   looks at the result, and decides what to do next. This file IS that "decide
+ *   what to do next" step (the "reflector"). After each tool runs, it asks an LLM
+ *   to read the latest observations, the question, and the current blackboard
+ *   (shared scratchpad of findings/hypotheses), then return one strategic verdict
+ *   as JSON: continue (run more planned steps), finish (we have enough to answer),
+ *   replan (the plan is wrong), clarify (ask the user), or investigate_gap (an
+ *   open hypothesis has no evidence — add a targeted tool call to fill it).
+ *
+ * WHY IT MATTERS
+ *   This is the steering wheel of the act loop. Good reflection stops the agent
+ *   from finishing on bad data (e.g. an un-aggregated or empty query result) and
+ *   from looping forever. It also detects anomalies worth spawning follow-up
+ *   sub-questions for, and avoids repeating a verdict it already gave this turn.
+ *
+ * KEY PIECES
+ *   - runReflector — builds the system+user prompts, calls the LLM via
+ *     completeJson with the reflector schema, and returns the parsed verdict.
+ *     On parse failure it safely defaults to {action:"continue"}.
+ *
+ * HOW IT CONNECTS
+ *   Uses completeJson (llmJson.js) with reflectorOutputSchema (schemas.js), the
+ *   shared ANALYST_PREAMBLE (sharedPrompts.js), context appendix
+ *   (context.js · appendixForReflectorPrompt), and the blackboard formatter
+ *   (analyticalBlackboard.js · formatForPlanner). LLM_PURPOSE.REFLECTOR
+ *   (llmCallPurpose.js) selects which model handles this role. Called by the main
+ *   act loop after each tool execution.
+ *
+ * NOTE: the system prompt starts with ANALYST_PREAMBLE so the static system text
+ * is long enough to clear Azure OpenAI's prompt-cache threshold — every dynamic
+ * value (question, observations, blackboard) lives in the user message instead.
+ */
 import type { AgentExecutionContext } from "./types.js";
 import { reflectorOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
@@ -17,14 +54,13 @@ export async function runReflector(
       outputRowCount: number;
       appliedAggregation: boolean;
     };
-    /** P-A3: columns observed in prior successful tool calls — helps the
-     *  reflector choose replan vs continue based on what has actually been
-     *  explored. */
+    /** Columns observed in prior successful tool calls — helps the reflector
+     *  choose replan vs continue based on what has actually been explored. */
     workingMemorySuggestedColumns?: string[];
     /**
-     * Wave B6 · prior reflector verdicts emitted earlier in THIS turn. Lets
-     * the reflector detect repetition ("I already said replan at step 3
-     * and was suppressed; don't say it again") and converge.
+     * Prior reflector verdicts emitted earlier in THIS turn. Lets the
+     * reflector detect repetition ("I already said replan at step 3 and was
+     * suppressed; don't say it again") and converge.
      */
     priorReflectorVerdicts?: ReadonlyArray<{
       stepIndex: number;
@@ -32,9 +68,9 @@ export async function runReflector(
       rationale: string;
     }>;
     /**
-     * Wave B6 · prior verifier verdicts emitted earlier in THIS turn. Lets
-     * the reflector escalate if the verifier already flagged something
-     * the current plan keeps reasserting.
+     * Prior verifier verdicts emitted earlier in THIS turn. Lets the
+     * reflector escalate if the verifier already flagged something the
+     * current plan keeps reasserting.
      */
     priorVerifierVerdicts?: ReadonlyArray<{
       stepIndex: number;
@@ -46,7 +82,7 @@ export async function runReflector(
   onLlmCall: () => void,
   interAgentDigest?: string
 ) {
-  // W4.2 · ANALYST_PREAMBLE prepended (~520 tokens) so this system string clears
+  // ANALYST_PREAMBLE prepended (~520 tokens) so this system string clears
   // Azure OpenAI's 1024-token cache threshold. Below the preamble is purely
   // static text — every dynamic bit (question, observations, blackboard) is in
   // the user message.
@@ -63,7 +99,6 @@ If "Columns explored so far" is present and the question asks about a dimension 
 W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE ANOMALOUS pattern (a spike, drop, or outlier with specific numbers that is NOT explained by the current plan), emit up to 3 sub-questions as spawnedQuestions:[{"question":string,"spawnReason":string,"priority":"high"|"medium"|"low","suggestedColumns":[]}]. ONLY spawn for anomalies where a follow-up investigation would substantially improve the root answer. Do NOT spawn for routine findings, expected patterns, or when the question is already fully answered.`;
 
   const appendix = appendixForReflectorPrompt(ctx);
-  // WTL2 · 4_000 → 6_000.
   const digestBlock =
     interAgentDigest?.trim().length ?
       `Coordinator handoff log (this turn):\n${interAgentDigest.trim().slice(0, 6_000)}\n\n`
@@ -76,13 +111,13 @@ W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE
     payload.workingMemorySuggestedColumns && payload.workingMemorySuggestedColumns.length > 0
       ? `Columns explored so far (from prior tool suggestedColumns): ${payload.workingMemorySuggestedColumns.slice(0, 20).join(", ")}\n`
       : "";
-  // W11: inject blackboard hypothesis state so the reflector can identify uncovered hypotheses.
-  // WTL2 · 2_000 → 4_000. Reflector quality gates replans; don't starve it.
+  // Inject blackboard hypothesis state so the reflector can identify uncovered
+  // hypotheses. Generous char budget — the reflector quality-gates replans, so
+  // don't starve it of context.
   const bbBlock = ctx.blackboard ? `${formatForPlanner(ctx.blackboard).slice(0, 4_000)}\n\n` : "";
-  // Wave B6 · prior in-turn verdict history so the reflector can detect
-  // repetition ("I already said replan at step 3") and the verifier
-  // pattern ("verifier flagged FABRICATED_MAGNITUDES at step 2; the
-  // current plan still asserts it").
+  // Prior in-turn verdict history so the reflector can detect repetition
+  // ("I already said replan at step 3") and the verifier pattern ("verifier
+  // flagged FABRICATED_MAGNITUDES at step 2; the current plan still asserts it").
   const priorReflectorBlock =
     payload.priorReflectorVerdicts && payload.priorReflectorVerdicts.length > 0
       ? `Past reflector verdicts in this turn (most recent last):\n${payload.priorReflectorVerdicts
@@ -104,7 +139,7 @@ W8 — spawnedQuestions: when action="finish" AND observations reveal a CONCRETE
           .join("\n")}\n\n`
       : "";
   const head = `Question: ${ctx.question}${appendix}\n${digestBlock}${bbBlock}${priorReflectorBlock}${priorVerifierBlock}${metaLine}${columnsLine}Last tool: ${payload.lastTool} ok=${payload.lastOk}\nObservations:\n`;
-  // P-A3: bump observation cap so the reflector can reason on real error/summary text.
+  // Generous observation cap so the reflector can reason on real error/summary text.
   const obsMax = Math.max(0, 12000 - head.length);
   const user = `${head}${payload.observations.join("\n---\n").slice(0, obsMax)}`;
 

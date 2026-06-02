@@ -1,20 +1,37 @@
 /**
- * Wave W21 · prior-turn investigation carry-over
+ * ============================================================================
+ * priorInvestigations.ts — remembers what past turns concluded, for the planner
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Across a chat session the agent should remember what earlier questions
+ *   settled, so it can chain hypotheses and not re-run work already done. These
+ *   pure helpers keep a short rolling memory of past "investigations": each entry
+ *   is a compact digest of one turn — its question, headline finding, and which
+ *   hypotheses were confirmed / refuted / still open. The list is capped at 5
+ *   (oldest dropped first) and all strings are clipped to keep it small.
  *
- * Two pure helpers:
- *   1. `appendPriorInvestigation` — pushes a turn's `InvestigationSummary`
- *      into `sessionAnalysisContext.sessionKnowledge.priorInvestigations`
- *      with FIFO eviction (cap = 5) and string clipping. Idempotent on the
- *      input session-context (returns a new object).
- *   2. `formatPriorInvestigationsForPlanner` — renders the array as a
- *      labelled markdown block the planner can read directly. Emitted by
- *      `formatUserAndSessionJsonBlocks` so every prompt gets the same
- *      stable text — keeps prefix-cache friendly.
+ * WHY IT MATTERS
+ *   It gives the planner cross-turn continuity. Injected into the prompt as a
+ *   stable, labelled "PRIOR_INVESTIGATIONS" block, it tells the agent to pick up
+ *   open threads and avoid re-settling closed questions — while still drawing all
+ *   actual figures from the current turn's fresh tool output. Building this block
+ *   the same way every time also keeps prompts prefix-cache friendly.
  *
- * Why this lives outside `sessionAnalysisContext.ts`: that file is the merge
- * machinery (LLM-driven). The W21 carry-over is deterministic — no LLM
- * call needed — so it sits in the agents/runtime layer alongside the other
- * deterministic block builders.
+ * KEY PIECES
+ *   - buildPriorInvestigationDigest — distils a turn's question + InvestigationSummary
+ *     into one compact digest (or undefined when there's nothing worth keeping).
+ *   - appendPriorInvestigation — pushes a digest with FIFO eviction (cap 5);
+ *     returns a NEW session-context object (does not mutate the input).
+ *   - formatPriorInvestigationsForPlanner — renders the list as the markdown
+ *     prompt block ("" when empty).
+ *   - Re-exports priorInvestigationItemSchema / PriorInvestigationItem whose
+ *     single source of truth lives in shared/schema.ts (avoids a circular import).
+ *
+ * HOW IT CONNECTS
+ *   Reads InvestigationSummary / SessionAnalysisContext (shared/schema.js). The
+ *   prompt block is emitted via formatUserAndSessionJsonBlocks into planner /
+ *   reflector prompts. Lives in agents/runtime (not sessionAnalysisContext.ts)
+ *   because it's deterministic — no LLM merge needed — unlike that file.
  */
 import type {
   InvestigationSummary,
@@ -22,11 +39,10 @@ import type {
 } from "../../../shared/schema.js";
 
 /**
- * W30 · re-export the canonical per-entry schema (defined in
- * `shared/schema.ts` to avoid a circular import — the lib layer imports
- * schema, not the other way round). Callers that already imported
- * priorInvestigations.ts continue to work; the schema's single source of
- * truth lives in `shared/schema.ts`.
+ * Re-export the canonical per-entry schema (defined in `shared/schema.ts` to
+ * avoid a circular import — the lib layer imports schema, not the other way
+ * round). Callers that already imported priorInvestigations.ts continue to
+ * work; the schema's single source of truth lives in `shared/schema.ts`.
  */
 export {
   priorInvestigationItemSchema,

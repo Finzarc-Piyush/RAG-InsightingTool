@@ -1,29 +1,41 @@
 /**
- * Wave W41 · streaming JSON field extractor
+ * ============================================================================
+ * jsonFieldStreamExtractor.ts — pull live human text out of a JSON token stream
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The LLM that writes the final answer streams it as JSON, arriving a few
+ *   characters at a time, e.g. `{"body":"Saffola lost...`. If we showed those
+ *   raw chunks to the user as a "Drafting answer…" preview, they'd see JSON
+ *   gibberish. This file watches the chunks fly by and extracts ONLY the text
+ *   inside one named field's string value (e.g. `body`), un-escaping JSON
+ *   escapes (`\"`, `\n`, `\t`, `\\`) back into real characters as it goes — so
+ *   the live preview reads as actual prose. ("SSE" = server-sent events, the
+ *   one-way stream the server uses to push these chunks to the browser.)
  *
- * The W38 streaming narrator emits raw JSON tokens to the client via
- * `answer_chunk` SSE events: `{"body":"Saffola lost...`. The client
- * accumulates these into `streamingNarratorPreview`, which renders as
- * unreadable JSON garbage.
+ * WHY IT MATTERS
+ *   It makes the streaming "answer being written right now" experience
+ *   readable. Crucially it is best-effort UX only, NEVER a correctness gate:
+ *   the authoritative parse/validation of the full message happens elsewhere
+ *   (Zod schema validation in completeJsonStreaming). This extractor is built
+ *   to NEVER throw — any malformed input just means it emits nothing or stops
+ *   early, so a streaming glitch can't crash the answer flow.
  *
- * This helper consumes the same chunks via `process(delta)` and returns
- * ONLY the new text from a single named string field's value, with JSON
- * escapes (`\"`, `\n`, `\t`, `\\`, etc.) decoded back to their plain-text
- * equivalents. Suitable for narrator's `body` field — the user-facing
- * prose — so the live "Drafting answer…" preview shows actual text.
+ * KEY PIECES
+ *   - JsonFieldStreamExtractor — a small state machine; one instance per stream.
+ *       .process(delta) — feed the next chunk; returns newly-decoded plain text.
+ *       .hasStarted() / .isDone() — where it is in the field's value.
+ *   - decodeJsonStringFragment — turns JSON escapes back into plain characters.
+ *   - findUnescapedClose — finds the real closing quote (ignoring escaped `"`).
+ *
+ * HOW IT CONNECTS
+ *   Pure logic, no I/O — importable anywhere. The chat/SSE layer constructs one
+ *   extractor per narrator call, feeds it each streamed chunk, and forwards the
+ *   returned text to the client's live preview.
  *
  * State machine:
  *   - `pre`  → buffering until we see `"<fieldName>":` followed by `"`
  *   - `in`   → emitting text, watching for unescaped close `"`
  *   - `done` → close quote seen; subsequent calls return ""
- *
- * Robustness contract: this helper NEVER throws. Every malformed-input
- * case results in either no emission (silently stuck in `pre`) or an
- * early transition to `done`. The full-message Zod validation in
- * `completeJsonStreaming` is the authoritative correctness gate;
- * extraction is best-effort UX, never a correctness path.
- *
- * Pure-logic. No I/O. Importable from anywhere.
  */
 
 type State = "pre" | "in" | "done";
@@ -42,8 +54,7 @@ const ESCAPE_MAP: Record<string, string> = {
 /**
  * Decode a JSON-escaped fragment to plain text. Unicode escapes
  * (`\uXXXX`) are NOT decoded — they pass through as the raw 6 chars.
- * Acceptable for narrator output where unicode is rare; can be lifted
- * in a follow-up wave.
+ * Acceptable for narrator output where unicode is rare.
  */
 function decodeJsonStringFragment(s: string): string {
   let out = "";
@@ -62,7 +73,7 @@ function decodeJsonStringFragment(s: string): string {
     }
     const next = s[i + 1];
     if (next === "u") {
-      // Pass `\uXXXX` through as-is. Future wave can decode.
+      // Pass `\uXXXX` through as-is (not decoded).
       if (i + 6 <= s.length) {
         out += s.slice(i, i + 6);
         i += 6;

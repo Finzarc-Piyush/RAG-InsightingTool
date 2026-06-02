@@ -1,15 +1,27 @@
 /**
- * W60 · Semantic Memory Recall block for the planner prompt.
+ * ============================================================================
+ * memoryRecall.ts — pull relevant past findings into the planner prompt
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Builds a "MEMORY_RECALL" text block listing prior analytical findings from
+ *   this session that are semantically relevant to the current question. It
+ *   does a vector search ("semantic search" = find by meaning, not exact words)
+ *   over a per-session search index and returns only the top-k matches.
  *
- * Replaces the FIFO-capped `priorInvestigations` digest with a vector-search
- * over the per-session AI Search index (W57). Every analytical event written
- * by the producer hooks (W58/W59) becomes individually retrievable; the
- * planner sees only the top-k relevant entries for the current question, so
- * the prompt stays bounded while session memory itself is unbounded.
+ * WHY IT MATTERS
+ *   Lets the planner chain on earlier work — avoid re-running settled questions,
+ *   pick up open threads — while keeping the prompt small. Session memory itself
+ *   can grow without bound, but only the few relevant entries ever hit the prompt.
  *
- * Pure formatter: caller decides where to inject the block (currently the
- * planner's user prompt at the top, just below RAG hits and prior turn
- * observations).
+ * KEY PIECES
+ *   - formatMemoryRecallForPlanner(args) — async; returns the markdown block, or
+ *     "" when RAG is off, nothing matches, or search fails (so callers can just
+ *     concatenate, no conditionals needed).
+ *
+ * HOW IT CONNECTS
+ *   Searches via rag/retrieve.js (searchMemoryEntries); gated by rag/config.js
+ *   (isRagEnabled). Caller injects the block near the top of the planner's user
+ *   prompt, below RAG hits and prior-turn observations.
  */
 import { searchMemoryEntries } from "../../rag/retrieve.js";
 import { isRagEnabled } from "../../rag/config.js";
@@ -26,7 +38,7 @@ export async function formatMemoryRecallForPlanner(args: {
   sessionId: string;
   question: string;
   /**
-   * W66 · Optional staleness floor. Defaults to undefined (return entries
+   * Optional staleness floor. Defaults to undefined (return entries
    * from all dataVersions) since old findings are usually informational
    * context — the agent should weigh relevance, not the index. Callers can
    * tighten when there's a reason (e.g. drastic transform).

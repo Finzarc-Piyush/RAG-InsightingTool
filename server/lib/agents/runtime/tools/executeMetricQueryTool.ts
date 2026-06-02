@@ -1,26 +1,41 @@
 /**
- * Wave W60 · `execute_metric_query` tool dispatcher.
+ * ============================================================================
+ * executeMetricQueryTool.ts — run a "semantic metric" query in plain business terms
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `execute_metric_query` tool that the AI agent can call while
+ *   answering a question. A "semantic catalog" is a per-dataset dictionary of
+ *   business measures (e.g. `net_sales = SUM(gross_sales) - SUM(returns)`) and
+ *   dimensions (e.g. `region`, `brand`). Instead of forcing the AI to write a
+ *   raw query against confusing column names, this tool lets it ask for a
+ *   catalog metric by name with optional breakdowns, filters, sorting and a
+ *   row limit. A "compiler" then translates that friendly request into the
+ *   lower-level query shape (`QueryPlanBody`) and hands it off to the existing
+ *   `execute_query_plan` tool, which actually runs the SQL (DuckDB first, with
+ *   an in-memory fallback). This file is a pure dispatcher — it does no math
+ *   itself, it just translates and delegates.
  *
- * Closes the W56 + W57 + W58 + W59a + W59b semantic-layer chain. Until
- * now the catalog was read-only grounding: every planner LLM call saw
- * the byte-stable manifest from `formatMetricCatalog` (W59b) but the
- * planner still had to translate metric / dimension names back to raw
- * `execute_query_plan` shapes against schema columns. W60 promotes the
- * catalog to a first-class dispatch path — the planner emits
- * `{ metric, breakdownBy?, filters?, sortBy?, limit? }` against the
- * **semantic** names, the compiler (W58) translates to a `QueryPlanBody`
- * against raw columns, and the executor runs through the existing
- * `execute_query_plan` plumbing (DuckDB first, in-memory fallback).
+ * WHY IT MATTERS
+ *   The catalog encodes the one correct way to compute each measure, so the AI
+ *   can't accidentally pick the wrong column or aggregation (e.g. averaging a
+ *   total). Without this tool the planner has to hand-translate every measure
+ *   back to raw columns, which is error-prone. If there is no catalog on the
+ *   session, the tool fails fast and tells the planner to fall back to
+ *   `execute_query_plan` with raw column names.
  *
- * Args mirror `CompileMetricQueryInput` minus the `model` (read from
- * `ctx.exec.chatDocument.semanticModel`). The tool fails fast with a
- * clear summary when there is no catalog on the session — planner
- * should fall back to `execute_query_plan` against raw schema columns.
+ * KEY PIECES
+ *   - executeMetricQueryArgsSchema — Zod schema validating the AI's request
+ *     (metric name, optional breakdownBy / filters / sortBy / limit).
+ *   - compiledPlanToQueryPlanBody — converts the compiler's output into the
+ *     executor's input shape (deep-copies arrays, drops empty optionals).
+ *   - registerExecuteMetricQueryTool — wires the tool into the registry.
  *
- * Pure dispatcher: the only side effect is registry delegation to
- * `execute_query_plan`. Compilation is pure (`compileMetricQuery` from
- * W58). The plan-to-body conversion (`compiledPlanToQueryPlanBody`) is
- * exported so tests can exercise it directly.
+ * HOW IT CONNECTS
+ *   Called by the agent's act loop via the tool registry (toolRegistry.ts).
+ *   Reads the catalog from `ctx.exec.chatDocument.semanticModel`, compiles via
+ *   `compileMetricQuery` (../../../semantic/compiler.js), then delegates to the
+ *   `execute_query_plan` tool through `registry.execute`. The exported
+ *   `compiledPlanToQueryPlanBody` is unit-tested directly.
  */
 
 import { z } from "zod";

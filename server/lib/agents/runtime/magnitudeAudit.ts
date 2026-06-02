@@ -1,16 +1,35 @@
 /**
- * Wave C2 · Magnitude audit at finding emission.
+ * ============================================================================
+ * magnitudeAudit.ts — double-check the numbers a finding claims against the raw
+ * data
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a tool reports a finding with a concrete number (a "magnitude", e.g.
+ *   "South region averages 12.4 units"), this helper independently recomputes
+ *   that number from the underlying rows and compares. If it matches it marks
+ *   the audit "ok"; if it differs by more than a drift threshold (default 5%)
+ *   it marks "drift"; if it simply can't check (no data, no budget left, no
+ *   parseable filter) it marks "unverifiable". It also exposes a small
+ *   row-sampling helper so the narrator/verifier can peek at example rows.
  *
- * When a tool emits a structured finding with a numeric magnitude, this
- * helper attempts to re-verify the magnitude against raw data via the
- * read-only SQL escape hatch (DuckDB session table). Failures are not fatal
- * — the audit just records `unverifiable` so narrator / verifier downstream
- * can phrase the caveat appropriately rather than asserting.
+ * WHY IT MATTERS
+ *   It is a cheap, bounded honesty check that catches numbers that drifted from
+ *   reality before they reach the user. Crucially, failures are NOT fatal — an
+ *   "unverifiable" or "drift" result just lets downstream stages phrase a
+ *   caveat instead of asserting a possibly-wrong figure. It is budget-capped
+ *   (max audits + max samples per turn) so it can't blow up latency or cost.
  *
- * Bounded:
- *   - Max 10 audits per turn (env: AGENT_MAGNITUDE_AUDIT_MAX, default 10).
- *   - Each audit is async and side-effect-free (read-only SELECT).
- *   - Drift threshold default 5%; overrideable per-call.
+ * KEY PIECES
+ *   - auditMagnitude — main: recompute one finding's magnitude, return ok / drift / unverifiable
+ *   - sampleRowsForVerification — return up to N filtered rows (capped per turn) for inspection
+ *   - getAuditBudgetRemaining / resetTurnCounter — per-turn budget accounting
+ *
+ * HOW IT CONNECTS
+ *   Operates on `AgentExecutionContext`'s in-memory row frame
+ *   (`turnStartDataRef` or `ctx.data`) and the `StructuredFinding` /
+ *   `MagnitudeClaim` types from investigationState.js. Returns a
+ *   `MagnitudeAudit` the narrator and verifier read when phrasing magnitudes.
+ *   Per-turn budget is configurable via env (AGENT_MAGNITUDE_AUDIT_MAX).
  */
 import type {
   StructuredFinding,
@@ -80,9 +99,9 @@ export async function auditMagnitude(
   }
   tickBudget(ctx);
 
-  // For Wave C2, the simplest audit reads `ctx.turnStartDataRef` (always row-
-  // level when available) and recomputes the magnitude in JavaScript. Future
-  // C9 will route through the DuckDB stats cache for accuracy + cost.
+  // The simplest audit reads `ctx.turnStartDataRef` (always row-level when
+  // available) and recomputes the magnitude in JavaScript. A future version
+  // could route through the DuckDB stats cache for accuracy + cost.
   const frame =
     (ctx as { turnStartDataRef?: Record<string, unknown>[] | null }).turnStartDataRef ??
     ctx.data ??
@@ -187,9 +206,9 @@ function recomputeMagnitude(
 }
 
 /**
- * Wave C2 · `runtime.data.sampleRowsForVerification` capability for narrator
- * and verifier. Returns up to `limit` rows from the row-level frame matching
- * `filter`. Capped 50 rows × 5 calls per turn (see spec).
+ * `runtime.data.sampleRowsForVerification` capability for narrator and
+ * verifier. Returns up to `limit` rows from the row-level frame matching
+ * `filter`. Capped 50 rows × 5 calls per turn.
  */
 const SAMPLE_BUDGET_PER_TURN = 5;
 const sampleBudgets = new Map<string, number>();

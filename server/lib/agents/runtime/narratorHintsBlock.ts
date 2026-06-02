@@ -1,19 +1,34 @@
 /**
- * Wave WW2 · narrator-side wiring of WQ1's `scaleNarrativeByConfidence`.
+ * ============================================================================
+ * narratorHintsBlock.ts — grade each finding's statistical confidence and tell
+ * the narrator how strongly to phrase it
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   During an analysis, tools post "findings" to a shared scratchpad called the
+ *   blackboard. Each finding is plain prose that may mention statistics (e.g.
+ *   "n = 2500, p < 0.001, R² = 0.71"). This file mines those numbers back out
+ *   of the text with regexes, grades each finding's confidence (high / medium /
+ *   low) using a separate scoring helper, and builds ONE compact prompt block
+ *   that tells the narrator: which tier each finding is, how many sentences it
+ *   deserves, and the exact "hedge" phrase to use verbatim for shakier findings.
  *
- * Reads the blackboard's findings, extracts statistical evidence from each
- * finding's `detail` text via regex (sample size, p-value, R², CI width),
- * decorates them with a `ConfidenceAssessment` via WQ1, and emits ONE
- * compact prompt block the narrator concatenates into its user message.
+ * WHY IT MATTERS
+ *   It prevents the narrator from stating weak, small-sample results with the
+ *   same confidence as rock-solid ones. By pinning the per-finding tier and
+ *   forcing a hedge phrase for medium/low findings, the answer's confidence
+ *   labels stay honest and consistent instead of being the LLM's guess.
  *
- * Closes the WQ1 wiring debt the WW1 wave deferred. WW1 surfaced WQ1 as a
- * static *directive* in the planner's system prompt (nudging tool choice
- * toward statistical paths); WW2 surfaces the per-finding tier + canonical
- * hedge phrase to the narrator so it can vary verbosity, mark confidence
- * on magnitudes / implications, and use the hedge verbatim for low /
- * medium findings.
+ * KEY PIECES
+ *   - extractFindingEvidence — regex out n / p-value / R² / CI width / effect size from prose
+ *   - tierBlackboardFindings — decorate every blackboard finding with a confidence assessment
+ *   - buildNarratorConfidenceBlock — the FINDING_CONFIDENCE prompt block (empty when no findings)
+ *   - summarizeNarratorConfidence — counts per tier, for telemetry
  *
- * Pure: blackboard in, string out. No LLM calls, no side effects.
+ * HOW IT CONNECTS
+ *   Pure (blackboard in, string out — no LLM, no side effects). Uses
+ *   `scaleNarrativeByConfidence.js` for the grading/hedge logic and reads the
+ *   `AnalyticalBlackboard` from `analyticalBlackboard.js`. The returned block is
+ *   concatenated into the narrator's user message by the synthesis path.
  */
 
 import {
@@ -29,12 +44,12 @@ import type { AnalyticalBlackboard, Finding } from "./analyticalBlackboard.js";
 /**
  * Regex-extract `FindingEvidence` from a finding's detail string. The agent
  * runtime does not (today) carry structured statistical fields on findings —
- * tools write prose that mentions n / p / R² / CI inline. WW2 mines those
- * back out so WQ1 can grade the finding.
+ * tools write prose that mentions n / p / R² / CI inline, so we mine those
+ * back out so the grader can score the finding.
  *
- * Conservative: returns an empty object when nothing matches. WQ1 then tiers
- * the finding as "medium" with the canonical "no evidence supplied" reason
- * (NEVER silently "high").
+ * Conservative: returns an empty object when nothing matches. The grader then
+ * tiers the finding as "medium" with the canonical "no evidence supplied"
+ * reason (NEVER silently "high").
  */
 export function extractFindingEvidence(detail: string): FindingEvidence {
   if (!detail) return {};
@@ -85,10 +100,10 @@ export function extractFindingEvidence(detail: string): FindingEvidence {
     }
   }
 
-  // Wave WQ8 · categorical effect size: "effect = large", "effect: small",
-  // "effect-size: medium", "effect_magnitude: negligible". Matches the WV2
-  // formatter output AND the sig-test tool's `effect_magnitude` table column
-  // when it lands in narrator prose.
+  // Categorical effect size: "effect = large", "effect: small",
+  // "effect-size: medium", "effect_magnitude: negligible". Matches the
+  // significance-test formatter output AND the sig-test tool's
+  // `effect_magnitude` table column when it lands in narrator prose.
   const effMatch =
     /\beffect(?:[-_\s]?(?:size|magnitude))?\s*[=:]\s*(negligible|small|medium|large)\b/i.exec(text);
   if (effMatch) {

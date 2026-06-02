@@ -1,25 +1,38 @@
 /**
- * Wave WW1 · planner-side wiring of the pure helpers shipped in WT6 / WQ2 / WQ1.
+ * ============================================================================
+ * plannerHintsBlock.ts — assemble the deterministic hint block injected into
+ * the planner's prompt
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is the glue that wires three pure helpers into the planner's prompt.
+ *   From the user question + analysis brief + dataset summary it builds ONE
+ *   compact text block the planner's user message appends, containing, in order:
+ *     1. TOOL_ROUTER_HINT — ranked tool suggestions (from selectTool.ts), based
+ *        on an intent it infers from the question text + brief.
+ *     2. EXTERNAL_CLAIM_MARKERS — when the question mentions things the dataset
+ *        alone can't answer (competitor share, market size, etc.), a note
+ *        telling the planner to add a `web_search` step.
+ *   It also exports a static one-line "confidence directive" that is added to
+ *   the planner's SYSTEM message to nudge it toward tools that emit statistical
+ *   evidence (n / p-value / R² / CI width).
  *
- * Reads the user question + analysis brief + dataset summary and emits ONE
- * compact prompt block the planner's user message concatenates. Closes the
- * "wiring debt" item — three pure helpers existed but nothing in the planner
- * path read them.
+ * WHY IT MATTERS
+ *   It centralises planner prompt-hint construction so `planner.ts` stays the
+ *   single integration point. Without it those helpers would exist but nothing
+ *   in the planner path would read them, and the planner would lose its
+ *   deterministic tool steer and its prompt to fetch external context.
  *
- * The block contains, in order:
- *   1. TOOL_ROUTER_HINT     (from WT6's `selectTool`) — ranked tool suggestions
- *   2. EXTERNAL_CLAIM_MARKERS (from WQ2's `detectExternalClaims`) — when
- *      the question references competitor / market-size / etc. claims the
- *      dataset alone cannot answer, instructing the planner to add a
- *      `web_search` step.
+ * KEY PIECES
+ *   - buildPlannerHintsBlock — main: returns { block, intent, topRecommendation, hasExternalClaim }
+ *   - inferAnalystIntent — map question text (regex rules) + brief shape onto an AnalystIntent
+ *   - buildDatasetHints — derive boolean dataset hints from column names (no row scanning)
+ *   - PLANNER_CONFIDENCE_DIRECTIVE — static system-prompt line favouring statistical tools
  *
- * WQ1's `scaleNarrativeByConfidence` is a narrator concern, not a planner
- * concern — but its existence is surfaced as a single-line directive in the
- * planner system message so the planner picks tools that emit statistical
- * evidence (n / p / R² / CI width) when possible. The directive itself is
- * exported from this module so planner.ts stays the only integration point.
- *
- * This helper is pure: question + summary + brief in, string out.
+ * HOW IT CONNECTS
+ *   Pure (question + summary + brief in, string out). Calls `selectTool` /
+ *   `renderToolRouterPromptBlock` (selectTool.ts) and `detectExternalClaims` /
+ *   `summarizeExternalClaims` (utils/externalClaimDetector.js). Consumed by
+ *   `planner.ts`, which concatenates `block` after the question line.
  */
 
 import type { AnalysisBrief, DataSummary, QuestionShape } from "../../../shared/schema.js";
@@ -37,18 +50,19 @@ import {
 } from "./selectTool.js";
 
 /**
- * Static directive describing the downstream WQ1 confidence-tier classifier.
- * Concatenated into the planner SYSTEM message (not the per-question user
- * block) by `planner.ts`. Keeps system-prompt drift bounded while signalling
- * that statistical evidence buys narrator confidence (and prose budget).
+ * Static directive describing the downstream narrator confidence-tier
+ * classifier. Concatenated into the planner SYSTEM message (not the per-question
+ * user block) by `planner.ts`. Keeps system-prompt drift bounded while
+ * signalling that statistical evidence buys narrator confidence (and prose
+ * budget).
  */
 export const PLANNER_CONFIDENCE_DIRECTIVE =
   "- WQ1 · downstream narrator hedges findings by statistical confidence (n / p-value / R² / CI width). When the question's payoff justifies it, prefer tools that emit those fields (run_significance_test, run_two_segment_compare, run_correlation with R², run_price_elasticity) over point-estimate-only paths so the narrator can cite \"high-confidence\" rather than defaulting to \"medium\".";
 
 /**
- * Map `analysisBrief.questionShape` (7 values) onto the WT6 AnalystIntent
- * enum (15 values). Conservative — the question-text classifier below
- * refines into the more specific intents (cohort / rfm / basket / etc.).
+ * Map `analysisBrief.questionShape` (7 values) onto the `selectTool`
+ * AnalystIntent enum (15 values). Conservative — the question-text classifier
+ * below refines into the more specific intents (cohort / rfm / basket / etc.).
  */
 const SHAPE_TO_INTENT: Record<QuestionShape, AnalystIntent> = {
   driver_discovery: "correlation",
@@ -89,7 +103,7 @@ const QUESTION_INTENT_RULES: { intent: AnalystIntent; pattern: RegExp }[] = [
   { intent: "comparison", pattern: /\bcompare\b|\b\s+vs\.?\s+\b|\bversus\b/i },
 ];
 
-/** Infer the most specific AnalystIntent supported by the WT6 router. */
+/** Infer the most specific AnalystIntent supported by the tool router. */
 export function inferAnalystIntent(
   question: string,
   analysisBrief?: AnalysisBrief,
@@ -119,8 +133,8 @@ function anyColumnMatches(
 }
 
 /**
- * Build the `DatasetHints` struct WT6's `selectTool` consumes. Conservative
- * — undefined hints fall through as "maybe present" so the router doesn't
+ * Build the `DatasetHints` struct `selectTool` consumes. Conservative —
+ * undefined hints fall through as "maybe present" so the router doesn't
  * over-filter. The detector ONLY inspects column names + the summary's
  * `numericColumns` / `dateColumns` arrays; it does not scan row content.
  */
@@ -171,7 +185,7 @@ export interface PlannerHintsBlockResult {
   intent: AnalystIntent;
   /** Diagnostic: top-of-list recommendation, or null when intent has none. */
   topRecommendation: ToolRecommendation | null;
-  /** Diagnostic: whether the WQ2 detector fired. */
+  /** Diagnostic: whether the external-claim detector fired. */
   hasExternalClaim: boolean;
 }
 

@@ -1,21 +1,52 @@
 /**
- * WGR4 · growth_analysis skill — period-over-period growth narratives.
+ * ============================================================================
+ * growthAnalysis.ts — the "trend / growth over time" analysis skill
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the skill that answers period-over-period growth questions: trends,
+ *   "fastest growing market", "biggest decliner", YoY/QoQ/MoM/WoW change, CAGR,
+ *   momentum, etc. It fires when the user's wording matches growth keywords (or
+ *   the brief is tagged as a "trend" shape) AND the dataset has a time axis —
+ *   either a raw date column or a "wide-format" PeriodIso column (a normalised
+ *   period label like 2024-Q3 derived when each row holds many period columns).
+ *   It does not do the math itself; it composes existing tools:
+ *     - retrieve_semantic_context — pulls background RAG context (round 1).
+ *     - compute_growth — the actual growth math. Two routes:
+ *         * rankByGrowth mode for "fastest/slowest" questions (one call, the
+ *           ranked segments ARE the headline).
+ *         * series + summary pair for open-ended trends (per-segment AND total
+ *           growth so the final answer can cite both).
+ *     - detect_seasonality — auto-added only when the data has enough history
+ *       (>=2 years and either >=6 months or >=4 quarters in a year), so the
+ *       answer says "Q4 peaks every year" rather than "Nov 2018 was the peak".
+ *     - build_chart — a line or bar chart of the growth.
  *
- * Activates when the user asks about trend / growth / "fastest growing" /
- * "biggest decliner" and the dataset has a temporal column (raw date OR
- * wide-format PeriodIso). Composes existing tools — `compute_growth`
- * for the math, `build_chart` for the line/bar, `retrieve_semantic_context`
- * for the RAG round-1.
+ * WHY IT MATTERS
+ *   Growth/trend is a top question shape and the most error-prone to narrate.
+ *   The seasonality guard and the series+summary pairing exist specifically to
+ *   stop the final answer from over-reading a single spike or computing growth
+ *   across only two periods. It sits at priority 5: above the broad fallback
+ *   skills (0) but below time_window_diff (10), which wins when the user names
+ *   two explicit periods to compare.
  *
- * Selection priority (per F1 / CLAUDE.md skill convention):
- *   - timeWindowDiff   = 10  (highest — explicit A vs B periods)
- *   - growthAnalysis   = 5   (this — open-ended growth)
- *   - varianceDecomposer / driverDiscovery / insightExplorer = 0
+ * KEY PIECES
+ *   - GROWTH_KEYWORD_REGEX / RANK_BY_GROWTH_PATTERN — wording detectors that
+ *     decide activation and which compute_growth mode to use.
+ *   - pickPeriodColumns — finds the time axis (wide-format PeriodIso first,
+ *     else first raw date column).
+ *   - hasSeasonalityTemporalCoverage — heuristic scan (capped at 5000 rows)
+ *     checking there is enough history for seasonality to be meaningful.
+ *   - pickDimensionColumn / pickGrainFromBrief / resolveDimensionFiltersFromBrief
+ *     — translate the brief into a segment dimension, a growth grain
+ *     (yoy/qoq/mom/wow/auto), and tool-shaped filters.
+ *   - skill (exported as growthAnalysisSkill) — the AnalysisSkill object.
  *
- * The "fastest growing" / "biggest decliner" pattern routes the
- * compute_growth call into `mode: "rankByGrowth"` automatically;
- * otherwise it emits a series + summary pair so the synthesiser has
- * both per-segment and aggregate growth to cite.
+ * HOW IT CONNECTS
+ *   Self-registers via registerSkill (registry.ts) when imported from
+ *   skills/index.ts; selected/expanded by selectSkill / expandSkill. GrowthGrain
+ *   type comes from server/lib/growth/periodShift.js. The seasonality coverage
+ *   check intentionally duplicates a small helper from computeGrowthTool.ts to
+ *   avoid an import cycle through the tools layer.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";
@@ -46,7 +77,7 @@ function pickPeriodColumns(ctx: AgentExecutionContext): {
 }
 
 /**
- * WSE4 · detect whether the dataset has the temporal coverage required
+ * Detect whether the dataset has the temporal coverage required
  * to compute seasonality. We need ≥2 distinct years AND either ≥6
  * distinct months in a single year (monthly cadence) OR ≥4 distinct
  * quarters in a single year (quarterly cadence). Without that, the
@@ -142,7 +173,7 @@ const skill: AnalysisSkill = {
     "For trend / growth / 'fastest growing' / 'biggest decliner' questions: compute YoY/QoQ/MoM/WoW growth across all available periods (not just Year-1 vs Year-2) and, when a dimension is at hand, rank segments by growth so the synthesiser can name the fastest-growing / fastest-declining markets.",
   handles: ["trend", "comparison", "exploration", "descriptive"],
   // Above varianceDecomposer (0) and below timeWindowDiff (10) — explicit
-  // A-vs-B questions still win. See skillSelectionPriority.test.ts.
+  // A-vs-B questions still win.
   priority: 5,
 
   appliesTo(brief, ctx): boolean {
@@ -257,7 +288,7 @@ const skill: AnalysisSkill = {
         },
         parallelGroup: "ga_parallel",
       });
-      // WSE4 · seasonality step — surfaces recurring within-year peaks
+      // Seasonality step — surfaces recurring within-year peaks
       // (Q4 holiday spike, Q1 summer peak, etc.). Auto-emitted when the
       // dataset has ≥2 years × ≥6 months OR ≥4 quarters; otherwise the
       // tool would refuse anyway. Critical for trend questions: stops

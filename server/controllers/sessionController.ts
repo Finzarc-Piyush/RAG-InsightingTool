@@ -21,12 +21,7 @@ import {
 import { loadChartsFromBlob } from "../lib/blobStorage.js";
 import { listPastAnalysesForSession } from "../models/pastAnalysis.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
-import { getDataSummary } from "../lib/dataOps/pythonService.js";
-import { generateAISuggestions, getDefaultSuggestions } from "../lib/suggestionGenerator.js";
-import {
-  createStatisticalSummary,
-  type StatisticalSummary,
-} from "../lib/statisticalSummary.js";
+import { buildRichDataSummary } from "../lib/richColumnProfile.js";
 import {
   chartSpecSchema,
   dateTimeColumnPairSchema,
@@ -59,32 +54,6 @@ import { generateChartInsights } from "../lib/insightGenerator.js";
 
 const CHART_KEY_INSIGHT_MAX_ROWS = 800;
 
-function isTransientPythonSummaryError(e: unknown): boolean {
-  if (e && typeof e === "object" && "code" in e) {
-    const code = (e as { code?: string }).code;
-    if (code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === "ECONNRESET") {
-      return true;
-    }
-  }
-  const msg = e instanceof Error ? e.message : String(e);
-  return /ECONNREFUSED|ETIMEDOUT|ECONNRESET|fetch failed|socket hang up/i.test(msg);
-}
-
-/** Column stats shape returned to the data-summary API (matches Python /summary). */
-type DataSummaryApiColumn = {
-  variable: string;
-  datatype: string;
-  total_values: number;
-  null_values: number;
-  non_null_values: number;
-  mean?: number | null;
-  median?: number | null;
-  std_dev?: number | null;
-  min?: number | string | null;
-  max?: number | string | null;
-  mode?: any;
-};
-
 function normalizeDataSummaryForLocalStats(ds: DataSummary): DataSummary {
   return {
     ...ds,
@@ -92,59 +61,6 @@ function normalizeDataSummaryForLocalStats(ds: DataSummary): DataSummary {
     numericColumns: ds.numericColumns ?? [],
     dateColumns: ds.dateColumns ?? [],
   };
-}
-
-function statisticalSummaryToApiColumns(
-  stat: StatisticalSummary
-): DataSummaryApiColumn[] {
-  return stat.columns.map((col) => {
-    const total =
-      col.type === "numeric" ? col.count + col.nullCount : col.count;
-    const nulls = col.nullCount;
-    const base: DataSummaryApiColumn = {
-      variable: col.column,
-      datatype:
-        col.type === "numeric"
-          ? "numeric"
-          : col.type === "date"
-            ? "datetime"
-            : "object",
-      total_values: total,
-      null_values: nulls,
-      non_null_values: Math.max(0, total - nulls),
-    };
-    if (col.type === "numeric") {
-      return {
-        ...base,
-        mean: col.mean ?? null,
-        median: col.median ?? null,
-        std_dev: col.stdDev ?? null,
-        min: col.min ?? null,
-        max: col.max ?? null,
-        mode: null,
-      };
-    }
-    if (col.type === "date") {
-      return {
-        ...base,
-        mean: null,
-        median: null,
-        std_dev: null,
-        min: col.dateRange?.min ?? null,
-        max: col.dateRange?.max ?? null,
-        mode: null,
-      };
-    }
-    return {
-      ...base,
-      mean: null,
-      median: null,
-      std_dev: null,
-      min: null,
-      max: null,
-      mode: col.topValues?.[0]?.value ?? null,
-    };
-  });
 }
 
 // Get all sessions
@@ -979,141 +895,51 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Data summary not available for this session' });
     }
 
-    // Check if we have pre-computed data summary statistics (from upload)
-    if (session.dataSummaryStatistics && session.dataSummaryStatistics.summary) {
-      console.log('✅ Using pre-computed data summary statistics from upload');
-      
-      // Generate recommended questions
-      const chatHistory = session.messages || [];
-      const lastAnswer = chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant'
-        ? chatHistory[chatHistory.length - 1].content
-        : undefined;
-      
-      let recommendedQuestions: string[] = [];
-      try {
-        recommendedQuestions = await generateAISuggestions(
-          chatHistory,
-          normalizeDataSummaryForLocalStats(session.dataSummary),
-          lastAnswer
-        );
-      } catch (error) {
-        console.error('Failed to generate AI suggestions:', error);
-        recommendedQuestions = getDefaultSuggestions(session.dataSummary);
-      }
+    // Load latest data (reflecting any data-operation modifications) and build
+    // an authoritative, type-aware profile. Column kinds come from the
+    // dataset's own classification (numericColumns / dateColumns / indicator
+    // metadata) — not an independent re-detection that could disagree with how
+    // the agent treats each column. See server/lib/richColumnProfile.ts.
+    let data = await loadLatestData(session);
 
+    const dataSummary = normalizeDataSummaryForLocalStats(session.dataSummary);
+
+    if (!data || data.length === 0) {
+      // No rows (e.g. an empty working set) — still return dataset-level shape
+      // so the modal renders an empty state instead of erroring.
       return res.json({
-        summary: session.dataSummaryStatistics.summary,
-        qualityScore: session.dataSummaryStatistics.qualityScore,
-        recommendedQuestions,
+        dataset: {
+          rowCount: 0,
+          columnCount: dataSummary.columns?.length ?? 0,
+          typeBreakdown: { numeric: 0, date: 0, categorical: 0, boolean: 0 },
+          totalCells: 0,
+          totalNulls: 0,
+          overallCompleteness: 100,
+          duplicateRowCount: 0,
+        },
+        qualityScore: 0,
+        columns: [],
       });
     }
 
-    // Fallback: Compute on-demand if not pre-computed
-    console.log('⚠️ No pre-computed data summary found, computing on-demand...');
-    
-    // Load latest data (including any modifications from data operations)
-    let data = await loadLatestData(session);
-    
-    if (!data || data.length === 0) {
-      return res.status(404).json({ error: 'No data available for this session' });
-    }
-
-    // For large datasets, sample the data before sending to Python service
-    // Python service has limits and sending 200k+ rows causes timeouts
-    const MAX_ROWS_FOR_SUMMARY = 50000; // Limit to 50k rows for summary calculation
-    if (data.length > MAX_ROWS_FOR_SUMMARY) {
-      console.log(`📊 Dataset has ${data.length} rows, sampling ${MAX_ROWS_FOR_SUMMARY} rows for summary calculation`);
-      
-      // Use stratified sampling: take evenly spaced rows to get a representative sample
-      const step = Math.floor(data.length / MAX_ROWS_FOR_SUMMARY);
-      const sampledData: Record<string, any>[] = [];
-      for (let i = 0; i < data.length && sampledData.length < MAX_ROWS_FOR_SUMMARY; i += step) {
-        sampledData.push(data[i]);
-      }
-      data = sampledData;
-      console.log(`✅ Sampled ${data.length} rows for summary calculation`);
-    }
-
-    // Prefer Python /summary; fall back to in-process stats if the service is down (e.g. ECONNREFUSED → "fetch failed")
-    let summaryResponse: { summary: DataSummaryApiColumn[] };
-    try {
-      const pySummary = await getDataSummary(data);
-      if (!pySummary?.summary || !Array.isArray(pySummary.summary)) {
-        throw new Error("Invalid summary response from Python service");
-      }
-      summaryResponse = {
-        summary: pySummary.summary as DataSummaryApiColumn[],
-      };
-    } catch (pyError) {
-      console.error(
-        "Python data summary failed; using in-process fallback:",
-        pyError,
-        { requestId, sessionId: req.params.sessionId }
+    // Soft cap for very large datasets: evenly sample rows so per-column
+    // profiling stays bounded. Statistics are representative; completeness is
+    // near-exact at this scale.
+    const MAX_ROWS_FOR_PROFILE = 300_000;
+    if (data.length > MAX_ROWS_FOR_PROFILE) {
+      console.log(
+        `📊 Dataset has ${data.length} rows; sampling ${MAX_ROWS_FOR_PROFILE} for the profile`,
       );
-      const ds = normalizeDataSummaryForLocalStats(session.dataSummary);
-      const colNames = (ds.columns ?? []).map((c) => c.name).filter(Boolean);
-      const requiredCols =
-        colNames.length > 0 ? colNames : Object.keys(data[0] || {});
-      const stat = createStatisticalSummary(data, ds, requiredCols);
-      summaryResponse = { summary: statisticalSummaryToApiColumns(stat) };
-      if (summaryResponse.summary.length === 0) {
-        const err =
-          pyError instanceof Error ? pyError : new Error(String(pyError));
-        throw err;
+      const step = data.length / MAX_ROWS_FOR_PROFILE;
+      const sampled: Record<string, any>[] = [];
+      for (let i = 0; i < data.length && sampled.length < MAX_ROWS_FOR_PROFILE; i += step) {
+        sampled.push(data[Math.floor(i)]);
       }
+      data = sampled;
     }
 
-    // Calculate quality score based on null values
-    // Scale statistics to full dataset size (if we sampled the data)
-    const fullDataRowCount = session.dataSummary?.rowCount || data.length;
-    
-    // Calculate total cells and nulls for quality score
-    const totalCells = summaryResponse.summary.reduce((sum, col) => sum + fullDataRowCount, 0);
-    const totalNulls = summaryResponse.summary.reduce((sum, col) => {
-      // Scale null count proportionally
-      const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
-      return sum + Math.round(nullPercentage * fullDataRowCount);
-    }, 0);
-    const nullPercentage = totalCells > 0 ? (totalNulls / totalCells) * 100 : 0;
-    const qualityScore = Math.max(0, Math.round(100 - nullPercentage));
-    
-    // Scale summary statistics to full dataset size for display
-    // Statistical measures (mean, median, std_dev, min, max) remain the same from sample
-    // Only scale counts (total_values, null_values, non_null_values)
-    const scaledSummary = summaryResponse.summary.map(col => {
-      const nullPercentage = col.total_values > 0 ? col.null_values / col.total_values : 0;
-      const scaledNulls = Math.round(nullPercentage * fullDataRowCount);
-      return {
-        ...col,
-        total_values: fullDataRowCount,
-        null_values: scaledNulls,
-        non_null_values: fullDataRowCount - scaledNulls,
-      };
-    });
-
-    // Generate recommended questions
-    const chatHistory = session.messages || [];
-    const lastAnswer = chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'assistant'
-      ? chatHistory[chatHistory.length - 1].content
-      : undefined;
-    
-    let recommendedQuestions: string[] = [];
-    try {
-      recommendedQuestions = await generateAISuggestions(
-        chatHistory,
-        normalizeDataSummaryForLocalStats(session.dataSummary),
-        lastAnswer
-      );
-    } catch (error) {
-      console.error('Failed to generate AI suggestions:', error);
-      recommendedQuestions = getDefaultSuggestions(session.dataSummary);
-    }
-
-    res.json({
-      summary: scaledSummary,
-      qualityScore,
-      recommendedQuestions,
-    });
+    const richSummary = buildRichDataSummary(data, dataSummary);
+    return res.json(richSummary);
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
@@ -1138,14 +964,6 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       return res.status(403).json({ error: errorMessage });
     }
 
-    if (isTransientPythonSummaryError(error)) {
-      return res.status(503).json({
-        error: 'Data profiling service is temporarily unavailable. Please try again shortly.',
-        retryAfter: 5,
-        requestId,
-      });
-    }
-    
     res.status(500).json({ error: errorMessage, requestId });
   }
 };

@@ -1,27 +1,60 @@
 /**
- * Wave W7 · buildSynthesisContext
+ * ============================================================================
+ * buildSynthesisContext.ts — gather all the background context the answer-writers
+ *                          need into four tidy, labelled text blocks
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Before the agent writes its final answer, it needs background context: what
+ *   the dataset actually is, who the user is, any related knowledge pulled from
+ *   search (RAG = retrieval-augmented generation; "RAG hits" are relevant
+ *   documents found for the question), and authored FMCG/Marico domain knowledge.
+ *   This file collects all of that from places the app already computed it and
+ *   formats it into four clearly-labelled markdown sections: DATA UNDERSTANDING,
+ *   USER CONTEXT, RELATED CONTEXT (RAG / web), and DOMAIN KNOWLEDGE. Each block
+ *   is independently optional — if a signal is missing, that block is empty and
+ *   gets dropped, so the prompt stays minimal. Very large inputs are softly
+ *   length-capped (and each truncation is recorded so the UI can tell the user
+ *   "we trimmed some context").
  *
- * Pure-ish helper that bundles the contextual signals the project already
- * computes (domain packs, RAG hits, data understanding, user identity) into
- * four labelled markdown blocks. The narrator and synthesizer both consume
- * the same bundle so prompt-cache prefixes stay byte-stable across calls
- * within a turn.
+ * WHY IT MATTERS
+ *   Both answer-writers — the narrator and the synthesizer — consume the SAME
+ *   bundle from this one place. That matters for two reasons: (1) consistency —
+ *   both writers see identical context; (2) prompt caching — because the bundle
+ *   is built in stable byte-order, the prompt prefix stays identical across calls
+ *   in a turn, which lets the LLM provider reuse cached tokens (cheaper, faster).
+ *   Centralising also means new context sources get wired into both writers in
+ *   one edit rather than two. A key behaviour: it surfaces per-tool-call SCOPE
+ *   (which step filtered to a subset vs. queried everything) so the writer doesn't
+ *   wrongly conclude "the data is incomplete" from one filtered step's output.
  *
- * Why this lives outside the writers: pre-W7, the narrator and synthesizer
- * each had to mine signals out of the raw `sessionAnalysisContext` JSON blob
- * and never saw the domain packs or upfront RAG hits at all. Centralising
- * the bundle here means new context (e.g. web-search hits in a later wave)
- * gets wired into both writers in one place.
+ * KEY PIECES
+ *   - buildSynthesisContext(ctx, input) — main builder; returns the four-block
+ *     SynthesisContextBundle.
+ *   - formatSynthesisContextBundle(bundle) — render the bundle into one labelled
+ *     markdown string for the prompt, omitting empty sections.
+ *   - SynthesisContextBundle / BuildSynthesisContextInput — the output and input
+ *     shapes (input can include upfront RAG hits, the blackboard, a trim sink,
+ *     and structured tool observations).
+ *   - buildDomainBlock / buildDataUnderstandingBlock / buildRagBlock /
+ *     buildUserBlock — one private builder per section.
+ *   - formatToolScope(tool, args) — render a tool call's filters/groupBy compactly.
+ *
+ * HOW IT CONNECTS
+ *   Reads from AgentExecutionContext (./types.js) and the AnalyticalBlackboard
+ *   (./analyticalBlackboard.js). Uses applyCap / TrimmedBlockInfo
+ *   (./promptBudget.js) for soft length limits with truncation reporting. Its
+ *   output is consumed by narratorAgent.ts (and the synthesizer) to build the
+ *   final answer prompt.
  */
 import type { AgentExecutionContext } from "./types.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { applyCap, type TrimmedBlockInfo } from "./promptBudget.js";
 
-// Wave W-UD8 · the historical fixed caps are now SOFT defaults wrapped in
-// `applyCap`. They still bound very-large inputs (a multi-paragraph user
-// note doesn't get inlined as 50 KB), but every truncation now records a
-// `TrimmedBlockInfo` on `BuildSynthesisContextInput.contextTrimmedSink`
-// so the chatStream service can emit a `context_trimmed` SSE row.
+// These caps are SOFT defaults wrapped in `applyCap`. They bound very-large
+// inputs (a multi-paragraph user note doesn't get inlined as 50 KB), and every
+// truncation records a `TrimmedBlockInfo` on
+// `BuildSynthesisContextInput.contextTrimmedSink` so the chatStream service can
+// emit a `context_trimmed` SSE row telling the user some context was dropped.
 const DOMAIN_BLOCK_CHAR_CAP = 9_000;
 const RAG_BLOCK_CHAR_CAP = 9_000;
 const COLUMN_ROLES_MAX = 20;
@@ -40,20 +73,20 @@ export interface SynthesisContextBundle {
 }
 
 export interface BuildSynthesisContextInput {
-  /** Optional formatted RAG block from the upfront retrieval (P-A1). */
+  /** Optional formatted RAG block from the upfront retrieval. */
   upfrontRagHitsBlock?: string;
   /** Optional analytical blackboard — `domainContext` entries surface here as RAG round-2 hits. */
   blackboard?: AnalyticalBlackboard;
-  /** Wave W-UD8 · optional sink that collects per-block truncation events.
-   *  When provided, the bundle pushes one `TrimmedBlockInfo` per cap site
-   *  that actually truncated. The caller emits the coalesced SSE row. */
+  /** Optional sink that collects per-block truncation events. When provided,
+   *  the bundle pushes one `TrimmedBlockInfo` per cap site that actually
+   *  truncated. The caller emits the coalesced SSE row. */
   contextTrimmedSink?: TrimmedBlockInfo[];
   /**
-   * G4-P5 · structured tool I/O captured by the agent loop (Wave B3). Lets
-   * the narrator's data-understanding block list each step's tool, args
-   * (filter / groupBy / etc.), output row count, and aggregation flag — so
-   * the narrator can tell "this step queried all four regions" from "this
-   * step filtered to Central only" instead of guessing from text observations.
+   * Structured tool I/O captured by the agent loop. Lets the narrator's
+   * data-understanding block list each step's tool, args (filter / groupBy /
+   * etc.), output row count, and aggregation flag — so the narrator can tell
+   * "this step queried all four regions" from "this step filtered to Central
+   * only" instead of guessing from text observations.
    */
   structuredObservations?: ReadonlyArray<{
     stepId: string;
@@ -118,7 +151,7 @@ function buildDataUnderstandingBlock(
     lines.push(`Shape: ${r} rows × ${c} columns`);
   }
 
-  // WPF1 · When the dataset was melted from wide format at upload, surface the
+  // When the dataset was melted from wide format at upload, surface the
   // long-form schema semantics so the narrator phrases magnitudes correctly
   // (e.g. cites the metric name not raw "Value", uses Period labels for
   // human-readable periods, doesn't fabricate the original wide column names).
@@ -141,8 +174,8 @@ function buildDataUnderstandingBlock(
     );
   }
 
-  // TOD1 · Time-of-day columns are HH:MM:SS strings (no calendar date), not
-  // dates. The narrator must phrase them as clock times ("9:30 AM cutoff",
+  // Time-of-day columns are HH:MM:SS strings (no calendar date), not dates.
+  // The narrator must phrase them as clock times ("9:30 AM cutoff",
   // "average clock-in 09:45") and never reach for date-arithmetic phrasing.
   const todColumns = (summary?.columns ?? []).filter(
     (c) => c.timeOfDay !== undefined,
@@ -203,8 +236,8 @@ function buildDataUnderstandingBlock(
     }
   }
 
-  // W-PivotState · what view the user is currently looking at on the most
-  // recent assistant message. Lets the narrator phrase the answer relative to
+  // What view the user is currently looking at on the most recent assistant
+  // message. Lets the narrator phrase the answer relative to
   // the active baseline ("compared to the bar chart you have open …").
   const pv = ctx.lastAssistantPivotState;
   if (pv) {
@@ -221,11 +254,11 @@ function buildDataUnderstandingBlock(
     }
   }
 
-  // G4-P5 · per-step tool scope so the narrator can distinguish "this step
-  // queried the whole dataset" from "this step filtered to a subset". Without
-  // this surface, the narrator concludes "data is incomplete" when looking
-  // only at a filtered tool's output text. Each line lists tool name +
-  // dimensionFilters / groupBy / outputRowCount.
+  // Per-step tool scope so the narrator can distinguish "this step queried the
+  // whole dataset" from "this step filtered to a subset". Without this surface,
+  // the narrator concludes "data is incomplete" when looking only at a filtered
+  // tool's output text. Each line lists tool name + dimensionFilters / groupBy
+  // / outputRowCount.
   const obs = input.structuredObservations ?? [];
   if (obs.length > 0) {
     const stepLines: string[] = [];
@@ -251,12 +284,12 @@ function buildDataUnderstandingBlock(
 }
 
 /**
- * G4-P5 · render the meaningful scope-defining args of a tool call as a
- * compact line for the narrator. Surfaces dimensionFilters (so the narrator
- * sees "filtered to Central"), groupBy, plan-level dimensionFilters, etc.
+ * Render the meaningful scope-defining args of a tool call as a compact line
+ * for the narrator. Surfaces dimensionFilters (so the narrator sees "filtered
+ * to Central"), groupBy, plan-level dimensionFilters, etc.
  *
- * Best-effort — when args don't fit a known shape, returns "" and the
- * narrator just sees the row count.
+ * Best-effort — when args don't fit a known shape, returns "" and the narrator
+ * just sees the row count.
  */
 function formatToolScope(tool: string, args: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -340,11 +373,11 @@ function buildRagBlock(
     parts.push(`# Findings-driven retrieval (round 2)\n${r2Block}`);
   }
 
-  // W16 · web search hits live in the same blackboard slot under
-  // `source: "web"`. They render in their own sub-section so the synthesizer
-  // sees them as background grounding, never as numeric evidence. The tool
-  // already formats hits with `[web:tavily:N]` prefixes, so we don't double-
-  // tag them with the dc-id — just emit the content verbatim.
+  // Web search hits live in the same blackboard slot under `source: "web"`.
+  // They render in their own sub-section so the synthesizer sees them as
+  // background grounding, never as numeric evidence. The tool already formats
+  // hits with `[web:tavily:N]` prefixes, so we don't double-tag them with the
+  // dc-id — just emit the content verbatim.
   const webHits =
     input.blackboard?.domainContext?.filter((e) => e.source === "web") ?? [];
   if (webHits.length > 0) {
@@ -383,13 +416,12 @@ function buildUserBlock(
     lines.push(`User notes (verbatim):\n${content}`);
   }
 
-  // Wave B7 · Surface userIntent.{verbatimNotes, interpretedConstraints}
-  // explicitly. Pre-B7 the narrator only saw these constraints if the
-  // hypothesis planner happened to encode them in the blackboard; when
-  // the blackboard was empty (synthesis-fallback path) or thin
-  // (single-tool turn), they were lost. Now they ALWAYS appear in the
-  // user block when set. Caps mirror the other text blocks (800 chars
-  // verbatim, 8 constraints × 200 chars each).
+  // Surface userIntent.{verbatimNotes, interpretedConstraints} explicitly, so
+  // the narrator always sees them. (Relying on the hypothesis planner to encode
+  // them in the blackboard loses them when the blackboard is empty — the
+  // synthesis-fallback path — or thin, e.g. a single-tool turn.) They ALWAYS
+  // appear in the user block when set. Caps mirror the other text blocks (800
+  // chars verbatim, 8 constraints × 200 chars each).
   const userIntent = ctx.sessionAnalysisContext?.userIntent;
   if (userIntent) {
     const verbatim = (userIntent.verbatimNotes ?? "").trim();

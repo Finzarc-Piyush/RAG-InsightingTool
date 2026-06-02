@@ -1,21 +1,31 @@
 /**
- * Wave T3 · `checkTemporalTrendBuckets`
+ * ============================================================================
+ * checkTemporalTrendBuckets.ts — guard against "trend" answers with no time axis
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A check that runs after the narrator drafts an answer. If the user asked for
+ *   a trend over time ("over time", "trend", "evolution", ...) but the query
+ *   that ran returned only one (or zero) distinct time bucket, you can't
+ *   actually plot a trend. This detects that mismatch and tells the narrator to
+ *   add a caveat instead of silently presenting a single-period snapshot as a trend.
  *
- * Deterministic post-narrator gate that fires when the user asked for a
- * temporal trend ("over time", "trend", "evolution", ...) but the executed
- * query produced ≤ 1 distinct value on the grouped temporal facet axis.
- * Without this check, the agent silently delivers a cross-sectional answer
- * to a temporal question with no caveat — the failure mode that motivated
- * the trend-grain-aware planner change in T2.
+ * WHY IT MATTERS
+ *   The failure mode is subtle: the answer looks fine but quietly answered a
+ *   "how did X change over time" question with a one-period cross-section. The
+ *   check forces an honest caveat naming the dataset's real time scope.
  *
- * Pure logic — no I/O, no LLM. Mirrors the W17 / W22 / W35 check shape so
- * the agent-loop's existing batched repair pipeline can fold it in without
- * structural changes.
+ * KEY PIECES
+ *   - checkTemporalTrendBuckets(question, observations) — returns { ok: true }
+ *     when fine, or a TEMPORAL_TREND_SINGLE_BUCKET issue with a courseCorrection
+ *     (a precise instruction for the narrator) when the trend can't be plotted.
+ *   - Honors explicit "daily" phrasing: a genuinely one-day dataset won't trip it.
  *
- * Bounded by `config.maxVerifierRoundsFinal` at the call site (one repair
- * round in practice) — the gate fires once per turn at most, and the
- * narrator either honours the course-correction (adds a caveat) or
- * is forced into a no-op pass.
+ * HOW IT CONNECTS
+ *   Uses isTemporalFacetColumnKey (temporalFacetColumns.js) and TREND_OVER_TIME_RE
+ *   (queryPlanTemporalPatch.js); reads StructuredObservation from
+ *   investigationState.js. Plugs into the agent loop's batched repair pipeline,
+ *   bounded by config.maxVerifierRoundsFinal (fires at most once per turn).
+ *   Pure logic — no I/O, no LLM.
  */
 import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
 import { TREND_OVER_TIME_RE } from "../../queryPlanTemporalPatch.js";

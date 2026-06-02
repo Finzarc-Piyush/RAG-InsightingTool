@@ -1,14 +1,34 @@
 /**
- * Wave QL1 · Deterministic follow-up generator for the quick-lookup fast path.
+ * ============================================================================
+ * quickAnswerFollowUps.ts — suggests next-question chips after a quick lookup
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   For simple "quick-lookup" questions, the system answers fast without the full
+ *   agentic loop. This pure function then proposes up to 3 follow-up question
+ *   "chips" the user can click to dig deeper (e.g. "How has X trended over
+ *   time?", "How does Y split by Z?"). It builds them from what the lookup
+ *   actually did: the query's groupBy dimension, its measure, the top result row,
+ *   and a sensible alternate dimension to break the data down by.
  *
- * Given the executed plan + result rows + dataset shape, returns up to 3
- * "want me to analyze further?" chips that the user can click to escalate
- * the lookup into a full agentic analysis. Templates are filled from the
- * plan's groupBy + measure + top result row + remaining dimensions; trend
- * suggestions are gated on `dataSummary.dateColumns` being non-empty so we
- * never recommend a trend question on a dataset without a time axis.
+ * WHY IT MATTERS
+ *   It turns a one-shot lookup into a guided path toward real analysis without
+ *   making the user phrase the next question themselves. Crucially it's safe: it
+ *   only suggests trend questions when the dataset actually HAS a date column, so
+ *   it never proposes "trend over time" on data with no time axis.
  *
- * No LLM calls. Pure function. Tested in `tests/quickAnswerFollowUps.test.ts`.
+ * KEY PIECES
+ *   - buildQuickAnswerFollowUps — the entry point; branches on whether the plan
+ *     had groupBy and/or a measure, fills templates, then tops up from the shared
+ *     summary-based suggester if it has fewer than 3.
+ *   - pickAlternateDimension (internal) — chooses a low-cardinality categorical
+ *     column (Category before SKU) to break results down by, skipping numeric,
+ *     date, identifier-shaped, and already-used columns.
+ *
+ * HOW IT CONNECTS
+ *   Uses suggestedFollowUpsFromDataSummary (../../suggestedFollowUpsFromSummary.js)
+ *   as filler, isLikelyIdentifierColumnName (../../columnIdHeuristics.js) to skip
+ *   id-like columns, and types DataSummary (shared/schema.js) + QueryPlanBody
+ *   (../../queryPlanExecutor.js). No LLM calls — fully deterministic.
  */
 
 import { suggestedFollowUpsFromDataSummary } from "../../suggestedFollowUpsFromSummary.js";

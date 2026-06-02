@@ -1,17 +1,36 @@
 /**
- * Wave B10 · cross-finding inconsistency detection + confidence propagation.
+ * ============================================================================
+ * inconsistencyWatcher.ts — catches contradictions and keeps confidence honest
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   As the agent investigates, it accumulates "findings" (each is a claim with a
+ *   measured magnitude, e.g. "South sales fell 8%"). This file is a set of pure
+ *   helpers that guard the quality of those findings in three ways:
+ *     1. Contradiction detection — if a new finding's number disagrees with an
+ *        older finding measuring the SAME metric on the SAME scope by more than
+ *        20%, it flags a `Contradiction` so the reflector can look into it.
+ *     2. Confidence propagation — when the narrator builds an implication or
+ *        recommendation from several findings, its confidence is the WEAKEST
+ *        (minimum) of the supporting findings. A conclusion can't be more
+ *        certain than its shakiest input.
+ *     3. Magnitude-audit completeness — every number in the final answer should
+ *        be traceable to a "MagnitudeAudit" (a recorded spot-check). This lists
+ *        magnitudes that have no such audit so the narrator can add a caveat.
  *
- * Three responsibilities:
- *   1. **Inconsistency watcher**: when a new finding is emitted, compare its
- *      magnitude against existing findings on the same metric/scope. If the
- *      magnitudes diverge by > 20%, flag a `Contradiction` for the reflector
- *      to investigate.
- *   2. **Confidence propagation**: when the narrator composes implications /
- *      recommendations from findings, the composite's confidence = min of
- *      contributing findings' confidence. Pure function.
- *   3. **Magnitude audit graph completeness**: at narrator output time,
- *      every magnitude in the envelope must trace to a `MagnitudeAudit`
- *      (Wave C2). Magnitudes without an audit are flagged.
+ * WHY IT MATTERS
+ *   These are the truthfulness guardrails. Without them the final answer could
+ *   contain self-contradicting numbers, overstated confidence, or figures with
+ *   no provenance — all fatal for a "decision-grade" analytical tool.
+ *
+ * KEY PIECES
+ *   - detectContradictions — compares a new finding against existing ones.
+ *   - propagatedConfidence — min-confidence rollup for composed statements.
+ *   - findUnauditedMagnitudes — magnitudes lacking a backing audit.
+ *
+ * HOW IT CONNECTS
+ *   Types come from investigationState.js (StructuredFinding, Contradiction,
+ *   MagnitudeAudit, FindingId). Called by the reflector and narrator stages of
+ *   the agent loop.
  */
 import type {
   StructuredFinding,

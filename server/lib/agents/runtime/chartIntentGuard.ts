@@ -1,20 +1,35 @@
 /**
- * RD4 · Validate an auto-promoted ChartSpec against the user's exclusion
- * intent. The agent's chart-promotion path (agentLoop.service.ts) calls this
- * with the just-built chart and the turn's IntentEnvelope. If the chart's
- * leader bar is a value the user said to exclude, we drop or recover the
- * chart before it ships to the SSE payload.
+ * ============================================================================
+ * chartIntentGuard.ts — stops a chart from showing values the user excluded
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a user asks something like "top brands excluding our own brand", that
+ *   exclusion is captured in an "IntentEnvelope" for the turn. The agent may
+ *   auto-build a chart from query results, and that chart could accidentally
+ *   include — or even be led by — the very value the user asked to omit. This
+ *   pure helper checks a built ChartSpec against the turn's exclusions and
+ *   returns one of three outcomes: it's fine, drop it entirely, or strip the
+ *   offending rows so the caller can rebuild a clean chart.
  *
- * Three outcomes:
- *   - ok: chart is consistent with user intent (or no relevant exclusion)
- *   - drop + reason "single_excluded_bar": the chart has ONE bar/row and it
- *     is the excluded value (e.g. the FSG bug — the chart shows the value
- *     the user said to omit). Always drop.
- *   - drop + reason "excluded_leader": multi-row chart whose max-y row is the
- *     excluded value. Drop — the chart's headline contradicts user intent.
- *   - recover + reason "filter_pollution" + cleanedRows: multi-row chart that
- *     includes the excluded value but not as the leader. Strip those rows;
- *     caller re-processes the data via processChartData + calculateSmartDomains.
+ * WHY IT MATTERS
+ *   A chart whose biggest bar is the thing the user said to exclude directly
+ *   contradicts their request and undermines trust. This guard is the last line
+ *   of defence before the chart ships to the client over SSE.
+ *
+ * KEY PIECES
+ *   - validateChartAgainstIntent — the check. Outcomes:
+ *       • ok — consistent with intent (or no relevant exclusion).
+ *       • drop "single_excluded_bar" — the only bar IS the excluded value.
+ *       • drop "excluded_leader" — multi-row chart whose tallest bar is excluded.
+ *       • recover "filter_pollution" + cleanedRows — excluded value present but
+ *         not the leader; rows stripped for the caller to re-process.
+ *   - chartIntentGuardEnabled — env kill switch (AGENT_CHART_INTENT_GUARD),
+ *     defaults ON, so operators can disable the guard during an incident.
+ *
+ * HOW IT CONNECTS
+ *   Reads ChartSpec (shared/schema.js) and IntentEnvelope (types.js). Called by
+ *   the chart-promotion path in agentLoop.service.ts; on "filter_pollution" the
+ *   caller re-runs processChartData + calculateSmartDomains on cleanedRows.
  */
 import type { ChartSpec } from "../../../shared/schema.js";
 import type { IntentEnvelope } from "./types.js";

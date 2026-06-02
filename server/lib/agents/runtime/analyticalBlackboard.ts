@@ -1,8 +1,49 @@
 /**
- * Wave W2 · analyticalBlackboard
+ * ============================================================================
+ * analyticalBlackboard.ts — the shared "evidence whiteboard" for one analysis
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A "blackboard" is a classic AI pattern: a shared scratchpad that many
+ *   cooperating agents read from and write to as they work on the same problem.
+ *   This file defines that scratchpad for a single analytical question (and any
+ *   sub-questions it spawns). It holds four kinds of notes:
+ *     - Hypotheses — guesses the agent is testing ("sales fell because of X"),
+ *       each open / confirmed / refuted / partial.
+ *     - Findings — concrete results from tool calls, with cited numbers and a
+ *       significance flag (routine / notable / anomalous).
+ *     - Open questions — follow-ups worth investigating, with a priority.
+ *     - Domain context — background grounding pulled from RAG search or the web
+ *       (citable, but never treated as numeric evidence).
  *
- * Shared structured evidence store for all agents in a turn / investigation tree.
- * Pure functions only — no I/O, no LLM calls.
+ *   Everything here is PURE: just plain data plus functions that add to or read
+ *   from it. No database, no network, no LLM calls.
+ *
+ * WHY IT MATTERS
+ *   It is the single source of truth that the planner, the act loop, and the
+ *   narrator all share. Helper functions read it to decide whether the
+ *   investigation has enough evidence to write an answer (`shouldUseNarrator`),
+ *   whether it has converged (`isConverged`), and how to format the evidence
+ *   compactly for the planner vs. richly for the narrator. Without it the
+ *   agents would have no common, structured memory of what's been learned.
+ *
+ * KEY PIECES
+ *   - createBlackboard() — fresh empty board.
+ *   - addHypothesis / resolveHypothesis — record and close out guesses.
+ *   - addFinding — record a cited result from a tool call.
+ *   - addOpenQuestion / markQuestionActioned — track follow-up work.
+ *   - addDomainContext — record background grounding (RAG / web).
+ *   - shouldUseNarrator(bb) — true once there's ≥1 finding AND ≥1 hypothesis.
+ *   - isConverged(bb) — true when all hypotheses are resolved and no
+ *     high-priority question is still pending.
+ *   - formatForPlanner(bb) / formatForNarrator(bb) — render the board to text
+ *     for the two consumers; the narrator version sorts findings by
+ *     significance and can report what it truncated.
+ *
+ * HOW IT CONNECTS
+ *   Consumed throughout the agent runtime — the planner and reflector read
+ *   `formatForPlanner`, the narrator reads `formatForNarrator`, and the verifier
+ *   (./verifier.ts) checks the narrative against the board's findings. Pure
+ *   data type, so it has no imports of its own.
  */
 
 export type HypothesisStatus = "open" | "confirmed" | "refuted" | "partial";
@@ -49,10 +90,10 @@ export interface DomainContextEntry {
   id: string;
   content: string;
   /**
-   * W16 · "web" added so `web_search` tool hits flow into the same blackboard
-   * slot as RAG round-1/round-2 hits. The W7 synthesis context bundle renders
-   * web entries in their own labelled sub-section so the synthesizer treats
-   * them as background grounding (citable), never as numeric evidence.
+   * "web" lets `web_search` tool hits flow into the same blackboard slot as
+   * RAG round-1/round-2 hits. The narrator's context bundle renders web entries
+   * in their own labelled sub-section so the synthesizer treats them as
+   * background grounding (citable), never as numeric evidence.
    */
   source: "rag_round1" | "rag_round2" | "injected" | "web";
 }
@@ -258,11 +299,11 @@ export function formatForPlanner(bb: AnalyticalBlackboard): string {
 
 /** Richer block fed to the narrator for synthesis.
  *
- *  Wave W-UD8 · the optional `trimmedSink` parameter receives one
- *  `TrimmedBlockInfo`-shaped record per domainContext entry that was
- *  truncated by `MAX_CONTEXT_CHARS`. We avoid the type import to keep this
- *  module dependency-free; the shape is identical so the caller can append
- *  directly into its `TrimmedBlockInfo[]` accumulator. */
+ *  The optional `trimmedSink` parameter receives one `TrimmedBlockInfo`-shaped
+ *  record per domainContext entry that was truncated by `MAX_CONTEXT_CHARS`.
+ *  We avoid the type import to keep this module dependency-free; the shape is
+ *  identical so the caller can append directly into its `TrimmedBlockInfo[]`
+ *  accumulator. */
 export function formatForNarrator(
   bb: AnalyticalBlackboard,
   trimmedSink?: Array<{

@@ -1,19 +1,39 @@
 /**
- * time_window_diff — for explicit "period A vs period B" comparisons.
+ * ============================================================================
+ * timeWindowDiff.ts — the explicit "period A vs period B" comparison skill
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the skill for questions that name two specific time windows to
+ *   compare, e.g. "Mar-22 vs Apr-25" or "Q3 vs Q4". It fires only when the
+ *   brief parser has filled in `comparisonPeriods` (two filter sets, A and B)
+ *   and there is an outcome metric. It does not narrate the delta itself; it
+ *   pre-packages the evidence so the final answer can explain the change with
+ *   numbers:
+ *     1. run_two_segment_compare on the outcome metric, with segment A/B
+ *        filters taken from comparisonPeriods — produces the headline delta.
+ *     2. For the first candidate driver dimension, a pair of
+ *        run_breakdown_ranking calls (one per period) so the answer can say
+ *        which segments moved the most.
+ *     3. build_chart — a bar chart of the two-segment compare as a visual anchor.
  *
- * Activates only when the brief parser has populated `comparisonPeriods`
- * with two filter sets and the turn has an outcome metric. The skill
- * leaves the narrative math to the synthesiser (Phase-1 PR 1.G rich
- * envelope); its job is to pre-package the right evidence so the
- * synthesiser can explain the delta with magnitudes:
+ * WHY IT MATTERS
+ *   "A vs B" is a sharp, common ask, and it is the most specific of the
+ *   time-related skills. Its priority is 10 — higher than growth_analysis (5)
+ *   and variance_decomposer (0) — so when the user explicitly names two periods
+ *   this skill wins over the broader trend/variance skills.
  *
- *   1. run_two_segment_compare on the outcome metric with
- *      segment_a_filters / segment_b_filters pulled from
- *      comparisonPeriods. Gives the headline delta.
- *   2. For each candidateDriverDimension (cap 2), a pair of
- *      run_breakdown_ranking calls — one per period — so the
- *      synthesiser can name which segments moved most.
- *   3. A bar chart on the two-segment result as a visual anchor.
+ * KEY PIECES
+ *   - Filter interface + resolveFilters — normalise the brief's raw filter
+ *     objects into the case-insensitive in / not_in shape the tools expect.
+ *   - skill (exported as timeWindowDiffSkill) — the AnalysisSkill object;
+ *     appliesTo() gates on comparisonPeriods + an outcome metric + a
+ *     comparison/variance question shape; plan() builds the steps.
+ *
+ * HOW IT CONNECTS
+ *   Self-registers via registerSkill (registry.ts) when imported from
+ *   skills/index.ts; selected/expanded by selectSkill / expandSkill. Steps call
+ *   the low-level tools run_two_segment_compare, run_breakdown_ranking, and
+ *   build_chart. Brief type comes from the shared AnalysisBrief schema.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";

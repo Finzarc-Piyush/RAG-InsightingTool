@@ -1,3 +1,53 @@
+/**
+ * ============================================================================
+ * verifier.ts — the fact-checker that grades the agent's draft answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   After the agent drafts an answer (or part of one), this "verifier" double-
+ *   checks it before it reaches the user. It assumes the draft might be WRONG
+ *   and looks for problems: a chart pointing at a column that doesn't exist or
+ *   the wrong chart type; numbers in the prose that no chart actually supports
+ *   (fabrication); a filter the plan inferred but never actually applied;
+ *   anomalous findings the narrative quietly dropped; or confidence claims that
+ *   outrun the evidence. It runs cheap deterministic (pure-logic) checks first
+ *   and short-circuits on those, then — if the draft survives — sends it to a
+ *   powerful "deep verifier" LLM that returns a structured verdict.
+ *
+ *   A verdict is one of a fixed set: pass / revise_narrative (just rewrite the
+ *   words) / retry_tool / replan / ask_user / abort_partial. Each comes with a
+ *   list of issues (code, severity, description) and a recommended next action.
+ *
+ * WHY IT MATTERS
+ *   This is the quality gate that makes answers "decision-grade" — it is what
+ *   catches hallucinated numbers and unsupported causal claims before a user
+ *   acts on them. The deterministic pre-checks save money by rejecting obvious
+ *   problems without paying for the LLM, and `rewriteNarrative` lets the system
+ *   fix wording issues in place instead of re-running the whole investigation.
+ *
+ * KEY PIECES
+ *   - runVerifier(ctx, params, onLlmCall) — the orchestrator: runs the chart
+ *     pre-check, filter-fidelity check, missing-findings check, confidence-
+ *     overclaim check, and numeric-fabrication check; if all pass, calls the
+ *     deep-verifier LLM and returns its verdict. Falls back to `pass` if the
+ *     LLM call itself fails (never blocks an answer on verifier downtime).
+ *   - chartPrecheck(candidate, ctx) — pure check for bad axes, bar-on-time, and
+ *     unreadable high-cardinality series.
+ *   - rewriteNarrative(ctx, bad, issues, ...) — given the issues, asks the LLM
+ *     to rewrite the draft while staying grounded in the evidence.
+ *   - Re-exports `checkInferredFilterFidelity` / `checkMissingFindings` from
+ *     ./verifierHelpers.js (pure fns kept separate so they're testable without
+ *     the OpenAI dependency).
+ *
+ * HOW IT CONNECTS
+ *   Reads the shared evidence board (./analyticalBlackboard.js) and the
+ *   narrator's output (./narratorAgent.js). Verdicts use the
+ *   VERIFIER_VERDICT constants from ./schemas.ts (invariant: never raw string
+ *   literals). Helper checks live in ./verifierHelpers.js,
+ *   ./verifierConfidenceCheck.js, and ./verifyNarrativeNumbers.js. The deep
+ *   verifier call goes through `completeJson` (./llmJson.js) routed by
+ *   LLM_PURPOSE.VERIFIER_DEEP. Called by the act loop to gate each step and the
+ *   final answer.
+ */
 import type { AgentExecutionContext, PlanStep } from "./types.js";
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import type { VerifierResult, VerdictType } from "./types.js";
@@ -85,15 +135,15 @@ function chartPrecheck(
   return null;
 }
 
-// O4: re-exported from verifierHelpers so the pure fn is testable without the OpenAI dep.
+// Re-exported from verifierHelpers so the pure fn is testable without the OpenAI dep.
 export { checkMissingFindings } from "./verifierHelpers.js";
 import { checkMissingFindings } from "./verifierHelpers.js";
-// W7.5 · narrative-vs-numbers prefilter (pure logic, no LLM cost).
+// Narrative-vs-numbers prefilter (pure logic, no LLM cost).
 import { verifyNarrativeAgainstCharts } from "./verifyNarrativeNumbers.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 
 /**
- * W7.5 · Tunable thresholds for the narrative-vs-numbers prefilter:
+ * Tunable thresholds for the narrative-vs-numbers prefilter:
  *  - Need at least N unsupported claims AND at least P% of total claims unsupported
  *    before we early-return revise_narrative. Both gates protect against
  *    single-outlier false positives (e.g. a rounded year mistakenly extracted).
@@ -111,13 +161,13 @@ export async function runVerifier(
     blackboard?: AnalyticalBlackboard;
     /** Current plan steps — used to detect inferred filters that never reached execution. */
     planSteps?: PlanStep[];
-    /** W7.5 · Charts produced this turn; powers the narrative-vs-numbers check. */
+    /** Charts produced this turn; powers the narrative-vs-numbers check. */
     charts?: ChartSpec[];
     /**
-     * Wave B6 · prior verifier verdicts emitted earlier in THIS turn. Lets
-     * the verifier escalate when a previously-flagged issue is being
-     * reasserted (e.g. magnitude FABRICATED at step 2 surfaces again at
-     * step 5 — bump severity / flip course_correction toward replan).
+     * Prior verifier verdicts emitted earlier in THIS turn. Lets the verifier
+     * escalate when a previously-flagged issue is being reasserted (e.g.
+     * magnitude FABRICATED at step 2 surfaces again at step 5 — bump severity /
+     * flip course_correction toward replan).
      */
     priorVerifierVerdicts?: ReadonlyArray<{
       stepIndex: number;
@@ -125,13 +175,13 @@ export async function runVerifier(
       rationale: string;
     }>;
     /**
-     * Wave WV3 · narrator output (or a partial view of it carrying
-     * `magnitudes` + `implications`) so the pre-LLM confidence-overclaim
-     * detector can fire. Only meaningful at the FINAL verifier round —
-     * per-step rounds pass `undefined` since the narrator hasn't synthesised
-     * yet. When present alongside `blackboard`, `detectConfidenceOverclaims`
-     * runs and may short-circuit to `revise_narrative` with the new
-     * `CONFIDENCE_OVERCLAIM` issue code.
+     * Narrator output (or a partial view of it carrying `magnitudes` +
+     * `implications`) so the pre-LLM confidence-overclaim detector can fire.
+     * Only meaningful at the FINAL verifier round — per-step rounds pass
+     * `undefined` since the narrator hasn't synthesised yet. When present
+     * alongside `blackboard`, `detectConfidenceOverclaims` runs and may
+     * short-circuit to `revise_narrative` with the `CONFIDENCE_OVERCLAIM`
+     * issue code.
      */
     narratorOutput?: NarratorOutput;
   },
@@ -153,7 +203,7 @@ export async function runVerifier(
     }
   }
 
-  // O4: flag anomalous blackboard findings that the narrative didn't cite.
+  // Flag anomalous blackboard findings that the narrative didn't cite.
   if (params.blackboard) {
     const missingIssues = checkMissingFindings(params.candidate, params.blackboard);
     if (missingIssues.length > 0) {
@@ -165,13 +215,12 @@ export async function runVerifier(
     }
   }
 
-  // Wave WV3 · confidence-overclaim short-circuit. Compares narrator-claimed
-  // tier counts on magnitudes + implications against WQ1's deterministic
-  // assessment of the blackboard. When the narrator inflated confidence past
-  // what the evidence supports (warning or block severity), demand
-  // `revise_narrative` BEFORE incurring the deep-verifier LLM cost. Pairs
-  // WW1+WW2 (planner + narrator nudges) with an enforcement gate so the
-  // deterministic-floor design actually bites.
+  // Confidence-overclaim short-circuit. Compares narrator-claimed tier counts
+  // on magnitudes + implications against a deterministic assessment of the
+  // blackboard's evidence. When the narrator inflated confidence past what the
+  // evidence supports (warning or block severity), demand `revise_narrative`
+  // BEFORE incurring the deep-verifier LLM cost — an enforcement gate so the
+  // deterministic confidence floor actually bites.
   if (params.blackboard && params.narratorOutput) {
     const report = detectConfidenceOverclaims(params.narratorOutput, params.blackboard);
     if (report.shouldRevise) {
@@ -191,19 +240,19 @@ export async function runVerifier(
         user_visible_note: hasBlock
           ? "Confidence overclaim detected — narrator marked findings high-confidence beyond what the evidence supports."
           : undefined,
-        // Wave WV8 · attach the report so agentLoop.service.ts can surface
-        // claimed-vs-actual tier counts on the critic_verdict SSE payload.
-        // The workbench renders these so the user sees what the deterministic
-        // floor disagreed with, not just that *something* was overclaimed.
+        // Attach the report so agentLoop.service.ts can surface claimed-vs-
+        // actual tier counts on the critic_verdict SSE payload. The workbench
+        // renders these so the user sees what the deterministic floor disagreed
+        // with, not just that *something* was overclaimed.
         confidenceOverclaim: report,
       };
     }
   }
 
-  // W7.5 · Catch numerical fabrication (the agent quoted a figure no chart
-  // supports). Cheap pure-logic check — fires only when there's actual chart
-  // data to anchor against AND multiple unsupported claims (single outliers
-  // could be a rounding artefact, the regex catching a date, etc.).
+  // Catch numerical fabrication (the agent quoted a figure no chart supports).
+  // Cheap pure-logic check — fires only when there's actual chart data to
+  // anchor against AND multiple unsupported claims (single outliers could be a
+  // rounding artefact, the regex catching a date, etc.).
   if (params.charts && params.charts.length > 0) {
     const verdict = verifyNarrativeAgainstCharts(params.candidate, params.charts);
     const total = verdict.totalClaims;
@@ -232,7 +281,7 @@ export async function runVerifier(
     }
   }
 
-  // W4.2 · ANALYST_PREAMBLE prefix → cache eligibility (>1024 tokens). Below
+  // ANALYST_PREAMBLE prefix → prompt-cache eligibility (>1024 tokens). Below
   // is purely static; everything dynamic (question, brief, evidence, candidate)
   // lives in the user message.
   const system = `${ANALYST_PREAMBLE}You are a verifier, not an assistant. Assume the draft may be wrong.
@@ -253,8 +302,8 @@ Phase-1 completeness checks (only when ANALYSIS_BRIEF_JSON.questionShape is set)
 Prefer course_correction "revise_narrative" for completeness issues (evidence is usually present; the narrative just didn't surface it). Only escalate to "replan" when the required evidence is actually absent from the tool output.`;
 
   const brief = formatAnalysisBriefForPrompt(ctx);
-  // Wave B6 · prior in-turn verifier verdicts so this round can detect
-  // re-assertion of already-flagged issues. Cap at 4 KB total.
+  // Prior in-turn verifier verdicts so this round can detect re-assertion of
+  // already-flagged issues. Cap at 4 KB total.
   const priorVerdictsBlock =
     params.priorVerifierVerdicts && params.priorVerifierVerdicts.length > 0
       ? `\n\nPast verifier verdicts in this turn (most recent last; escalate when the candidate reasserts a previously-flagged issue):\n${params.priorVerifierVerdicts
@@ -266,9 +315,9 @@ Prefer course_correction "revise_narrative" for completeness issues (evidence is
           .join("\n")
           .slice(0, 4_000)}`
       : "";
-  // W4 · evidence cap 6000 → 16000, candidate cap 4000 → 8000. Deep verifier
-  // runs on Claude Opus 4.7 (per W2 routing); expanding the window catches
-  // numeric-fabrication errors that hide past truncation boundaries.
+  // Wide evidence/candidate caps (16k / 8k chars). The deep verifier runs on a
+  // large model, so the bigger window catches numeric-fabrication errors that
+  // would otherwise hide past truncation boundaries.
   const user = `User question:\n${ctx.question}\n${brief}\n\nEvidence (tool output, truncated):\n${params.evidenceSummary.slice(0, 16_000)}\n\nCandidate:\n${params.candidate.slice(0, 8_000)}${priorVerdictsBlock}`;
 
   const out = await completeJson(system, user, verifierOutputSchema, {
@@ -310,7 +359,7 @@ export async function rewriteNarrative(
   onLlmCall();
   const { MODEL } = await import("../../openai.js");
   const { callLlm } = await import("./callLlm.js");
-  // W4 · evidence cap 6000 → 16000 to match the deep verifier's window.
+  // Evidence cap (16k chars) matched to the deep verifier's window.
   const evBlock =
     evidenceSummary?.trim().length ?
       `\nEvidence (tool output; cite only facts supported here):\n${evidenceSummary.trim().slice(0, 16_000)}\n`
@@ -330,14 +379,13 @@ export async function rewriteNarrative(
         },
       ],
       temperature: 0.3,
-      // W4 · 800 → 2000; WTL2 · 2_000 → 3_500. Course corrections often
-      // include a full multi-paragraph rewrite; 2k clipped late paragraphs.
+      // Generous token budget — course corrections often include a full
+      // multi-paragraph rewrite, and a smaller cap clipped late paragraphs.
       max_tokens: 3500,
     },
-    // W4 · was LLM_PURPOSE.CHART_JSON_REPAIR (a copy-paste from the chart
-    // repair path). VERIFIER_DEEP routes through W2 to Claude Opus 4.7 and
-    // matches the model that produced the verdict, keeping the rewrite as
-    // analytically careful as the critique that prompted it.
+    // Route the rewrite through VERIFIER_DEEP so it uses the same large model
+    // that produced the verdict, keeping the rewrite as analytically careful as
+    // the critique that prompted it.
     { purpose: LLM_PURPOSE.VERIFIER_DEEP }
   );
   return res.choices[0]?.message?.content?.trim() || bad;

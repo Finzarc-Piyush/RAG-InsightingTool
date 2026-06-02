@@ -1,9 +1,37 @@
 /**
- * When AGENTIC_LOOP_ENABLED=true, route single-intent analysis questions to the
- * legacy AgentOrchestrator instead of the full planner/tool/critic loop — same
- * handler stack as non-agentic mode, faster for questions like sales trends.
+ * ============================================================================
+ * simpleAnalysisFastPath.ts — a shortcut that sends easy questions down a
+ * lighter, faster route instead of the full agent.
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The full agentic loop (planner → tools → critic) is powerful but slow and
+ *   expensive — overkill for a plain "show me the sales trend" or "what's the
+ *   revenue by month?". This file decides whether a question is simple enough to
+ *   handle via the lighter AgentOrchestrator.processQuery path instead of the
+ *   heavyweight runAgentTurn loop. It is pure decision logic: two lists of
+ *   regexes — one that screams "too complex, use the real agent" (compare,
+ *   correlate, train a model, dashboards, root cause…) and one that says "this
+ *   is a simple chart/stat request" (trend, chart, over time, show me…).
  *
- * Disable with SIMPLE_ANALYSIS_FAST_PATH=false or 0.
+ * WHY IT MATTERS
+ *   It's a latency/cost optimisation in early triage. It only ever applies to
+ *   analysis-mode questions and errs on the side of caution: anything unclear
+ *   falls through to the full agent, so the shortcut can never silently give a
+ *   worse answer to a hard question. Controlled by the SIMPLE_ANALYSIS_FAST_PATH
+ *   env var so it can be switched off entirely.
+ *
+ * KEY PIECES
+ *   - isSimpleAnalysisFastPathEnabled() — reads SIMPLE_ANALYSIS_FAST_PATH;
+ *     returns false only when explicitly set to 0/false/off, otherwise true.
+ *   - shouldUseOrchestratorInsteadOfAgentLoop(question, mode) — returns true to
+ *     take the fast path. Bails for non-analysis modes, bare confirmations
+ *     ("yes"/"ok"), and anything matching the complex patterns; only returns
+ *     true when a simple-analysis pattern matches.
+ *
+ * HOW IT CONNECTS
+ *   Has no imports — just env reads and regex. Called by the chat request
+ *   pipeline (chatStream.service / chat.service) after mode classification to
+ *   choose between AgentOrchestrator.processQuery and the full runAgentTurn.
  */
 
 export function isSimpleAnalysisFastPathEnabled(): boolean {

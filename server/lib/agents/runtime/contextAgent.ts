@@ -1,14 +1,35 @@
 /**
- * Wave W4 · contextAgent
+ * ============================================================================
+ * contextAgent.ts — second round of background-knowledge retrieval (RAG)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   RAG = "retrieval-augmented generation": before/while answering, the system
+ *   fetches relevant background snippets (domain knowledge, prior notes) and
+ *   feeds them to the LLM. Round 1 of RAG already runs at the very start of a
+ *   turn. This file is Round 2: AFTER the first batch of analytical tools has run
+ *   and produced findings, it turns those findings into fresh search queries,
+ *   retrieves more domain context, and writes the results back onto the
+ *   "blackboard" (the shared scratchpad where the agent's findings and context
+ *   live for this turn).
  *
- * Multi-round RAG. Round 1 already runs upfront in agentLoop (the
- * `upfrontRagHitsBlock`). This module implements Round 2 (and optionally
- * Round 3): after the first parallel tool group completes, derive queries
- * from the findings on the blackboard and retrieve additional domain context.
- * Results are written to the blackboard as DomainContextEntry records.
+ * WHY IT MATTERS
+ *   Findings reveal what's actually interesting (e.g. an anomaly in a specific
+ *   region), and Round 2 lets the system pull background that's targeted to those
+ *   discoveries — context Round 1 couldn't know to ask for. It's best-effort and
+ *   non-fatal: if RAG is disabled or a search fails, the agent loop continues
+ *   uninterrupted (the function just returns 0).
  *
- * Calling this is non-fatal; if RAG is not enabled or the search call fails
- * the loop continues uninterrupted.
+ * KEY PIECES
+ *   - runContextAgentRound2 — runs Round 2; returns how many new context entries
+ *     were added (0 = disabled / no hits / error).
+ *   - deriveQueriesFromFindings (internal) — builds up to 3 queries, preferring
+ *     anomalous over notable over routine findings, falling back to open
+ *     hypotheses then the root question so it never returns empty.
+ *
+ * HOW IT CONNECTS
+ *   Lazily imports rag/config.js (isRagEnabled) and rag/retrieve.js
+ *   (retrieveRagHits, formatHitsForPrompt). Writes via addDomainContext into the
+ *   AnalyticalBlackboard. Called from the main agent loop between tool groups.
  */
 
 import { agentLog } from "./agentLogger.js";

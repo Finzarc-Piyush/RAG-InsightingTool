@@ -1,13 +1,49 @@
 /**
- * Wave W5 · narratorAgent
+ * ============================================================================
+ * narratorAgent.ts — turn the agent's findings into the written, business-ready
+ *                   answer the user reads
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is the "writer" step at the end of an investigation. It reads the
+ *   analytical blackboard (the structured record of which hypotheses were tested,
+ *   their outcomes, and the findings that emerged) and asks an LLM to compose a
+ *   clear, decision-grade narrative. The output is a JSON object that maps to the
+ *   app's "answer envelope": a one-line TL;DR, headline findings with evidence,
+ *   the so-what implications, recommended next steps, methodology, caveats, and
+ *   key magnitudes (the important numbers). Most of this file is a very detailed
+ *   system prompt that enforces a manager-friendly voice (plain English, no
+ *   jargon, compact numbers, no padding, only numbers that actually appear in the
+ *   evidence) and many domain-specific rules (growth, seasonality, share-of-
+ *   category, confidence tiers, time-trend caveats).
  *
- * Evidence-based synthesis from the analytical blackboard. Replaces the raw
- * observations dump when the blackboard has findings. The narrator reads the
- * structured hypothesis outcomes and findings and writes an investigation
- * narrative: what was tested, what was found, what it means for the business.
+ * WHY IT MATTERS
+ *   This is what makes answers read like a senior analyst wrote them rather than
+ *   a raw data dump. It is the final synthesis stage of the plan/act loop: the
+ *   agent gathers evidence, then the narrator explains it. It also supports a
+ *   "repair" mode where the verifier flags problems and the narrator rewrites,
+ *   and a streaming mode so the user sees the answer appear progressively.
  *
- * When the blackboard is empty (dataOps turns, or hypothesis planner was
- * skipped), the caller falls back to the existing synthesizeFinalAnswerEnvelope.
+ * KEY PIECES
+ *   - runNarrator(...) — the main function. Builds the system + user prompts,
+ *     calls the LLM (streaming or not), validates the JSON, logs, returns the
+ *     parsed answer or null on failure (caller then falls back to the synthesizer).
+ *   - narratorOutputSchema / NarratorOutput — the zod schema + type for the JSON
+ *     the narrator must emit (body, tldr, findings, implications, etc.).
+ *   - NarratorRepairContext — extra input when re-running after a verifier asks
+ *     for a rewrite (the flagged issues + the prior draft to improve, not repeat).
+ *   - NarratorStreamingHook — optional callback that receives partial output so
+ *     the UI can stream the answer as it's generated.
+ *   - shouldUseNarrator — re-exported gate deciding when the narrator path is used.
+ *
+ * HOW IT CONNECTS
+ *   Reads the blackboard via formatForNarrator (./analyticalBlackboard.js),
+ *   builds extra context via buildSynthesisContext / formatSynthesisContextBundle
+ *   (./buildSynthesisContext.js), confidence hints via ./narratorHintsBlock.js,
+ *   and dimension hierarchies via ./context.js. It calls the LLM through
+ *   completeJson / completeJsonStreaming (./llmJson.js) under the NARRATOR
+ *   purpose. When the blackboard has no findings (dataOps turns, or the
+ *   hypothesis planner was skipped), the caller instead falls back to
+ *   synthesizeFinalAnswerEnvelope.
  */
 
 import { z } from "zod";
@@ -35,10 +71,10 @@ export { shouldUseNarrator } from "./analyticalBlackboard.js";
 const narratorOutputSchema = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
-  // W8 · `.default([])` produced a TS input/output type mismatch when read via
-  // `z.infer` after the W8 schema additions. Switching to `.optional()` keeps
-  // the same runtime behaviour (callers already coerce `undefined → []`) and
-  // makes the inferred return type compatible with `runNarrator`'s signature.
+  // `.optional()` (rather than `.default([])`) avoids a TS input/output type
+  // mismatch when read via `z.infer`. Runtime behaviour is unchanged — callers
+  // already coerce `undefined → []` — and the inferred return type stays
+  // compatible with `runNarrator`'s signature.
   ctas: z.array(z.string()).optional(),
   /** 2–4 entries backing the main claim: {label, value, confidence?} */
   magnitudes: z
@@ -51,11 +87,11 @@ const narratorOutputSchema = z.object({
     )
     .optional(),
   unexplained: z.string().optional(),
-  // W3 · AnswerEnvelope — optional structured rendering hints. Narrator may
-  // emit any subset; the UI's AnswerCard renders whichever fields are present
-  // and falls back to `body` markdown for the rest. Caps loosened in lockstep
-  // with shared/schema.ts answerEnvelope so output that passes the local
-  // validator also passes the persistence schema.
+  // AnswerEnvelope — optional structured rendering hints. Narrator may emit any
+  // subset; the UI's AnswerCard renders whichever fields are present and falls
+  // back to `body` markdown for the rest. Caps are kept in lockstep with
+  // shared/schema.ts answerEnvelope so output that passes the local validator
+  // also passes the persistence schema.
   tldr: z.string().max(600).optional(),
   findings: z
     .array(
@@ -69,7 +105,7 @@ const narratorOutputSchema = z.object({
     .optional(),
   methodology: z.string().max(3500).optional(),
   caveats: z.array(z.string().max(400)).max(10).optional(),
-  // W8 · "So what" reading of the headline findings.
+  // "So what" reading of the headline findings.
   implications: z
     .array(
       z.object({
@@ -80,7 +116,7 @@ const narratorOutputSchema = z.object({
     )
     .max(12)
     .optional(),
-  // W8 · concrete next actions, grouped by horizon.
+  // Concrete next actions, grouped by horizon.
   recommendations: z
     .array(
       z.object({
@@ -91,20 +127,20 @@ const narratorOutputSchema = z.object({
     )
     .max(12)
     .optional(),
-  // W8 · one-paragraph framing of the findings against FMCG/Marico priors.
+  // One-paragraph framing of the findings against FMCG/Marico priors.
   domainLens: z.string().max(2000).optional(),
 });
 
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
 
 /**
- * W4 · narrator-repair branch.
+ * Narrator-repair branch.
  *
- * When the deep verifier returns `revise_narrative`, the agent loop hands
- * the issues + the prior draft back into runNarrator (rather than the legacy
- * rewriteNarrative path, which loses blackboard context). Both fields are
- * optional — `priorDraft` lets the model see what it said last time so it
- * can preserve good content while fixing the flagged issues.
+ * When the deep verifier returns `revise_narrative`, the agent loop hands the
+ * issues + the prior draft back into runNarrator (rather than a plain rewrite
+ * path that would lose blackboard context). Both fields are optional —
+ * `priorDraft` lets the model see what it said last time so it can preserve
+ * good content while fixing the flagged issues.
  */
 export interface NarratorRepairContext {
   issues: string;
@@ -113,19 +149,19 @@ export interface NarratorRepairContext {
 }
 
 /**
- * Run the narrator to produce an investigation narrative from the blackboard.
- * Returns null if the LLM call fails (caller uses synthesizer fallback).
- */
-/**
- * W38 · streaming-mode hook. When provided, the narrator uses
- * `completeJsonStreaming` and forwards each chunk's accumulated raw
- * text to `onPartial`. Repair calls (W17/W22 retries) ignore this and
- * stay non-streaming — the user already saw the initial draft.
+ * Streaming-mode hook. When provided, the narrator uses
+ * `completeJsonStreaming` and forwards each chunk's accumulated raw text to
+ * `onPartial`. Repair calls ignore this and stay non-streaming — the user
+ * already saw the initial draft, so re-streaming a rewrite would visually thrash.
  */
 export interface NarratorStreamingHook {
   onPartial: (chunk: { rawSoFar: string; delta: string }) => void;
 }
 
+/**
+ * Run the narrator to produce an investigation narrative from the blackboard.
+ * Returns null if the LLM call fails (caller uses the synthesizer fallback).
+ */
 export async function runNarrator(
   ctx: AgentExecutionContext,
   blackboard: AnalyticalBlackboard,
@@ -134,10 +170,10 @@ export async function runNarrator(
   repair?: NarratorRepairContext,
   streaming?: NarratorStreamingHook,
   /**
-   * G4-P5 · structured tool I/O captured by the agent loop. When provided,
-   * the narrator's data-understanding block lists each step's tool, args,
-   * and row count — so it can distinguish "this step queried the whole
-   * dataset" from "this step filtered to Central only".
+   * Structured tool I/O captured by the agent loop. When provided, the
+   * narrator's data-understanding block lists each step's tool, args, and row
+   * count — so it can distinguish "this step queried the whole dataset" from
+   * "this step filtered to Central only".
    */
   structuredObservations?: ReadonlyArray<{
     stepId: string;
@@ -154,19 +190,18 @@ export async function runNarrator(
   const blackboardBlock = formatForNarrator(blackboard);
   if (!blackboardBlock.trim()) return null;
 
-  // W8 · the W7 bundle replaces the old raw-JSON sessionContext + truncated
-  // user-notes blocks. It carries data understanding, user identity, RAG
-  // hits (including blackboard round-2 entries), and FMCG/Marico domain
+  // The synthesis-context bundle carries data understanding, user identity,
+  // RAG hits (including blackboard round-2 entries), and FMCG/Marico domain
   // packs in stable byte-order so the prefix cache holds across calls.
   const synthBundleBlock = formatSynthesisContextBundle(
     buildSynthesisContext(ctx, { blackboard, structuredObservations })
   );
   const phase1Shape = ctx.analysisBrief?.questionShape;
 
-  // W4.2 · system is now byte-stable across calls — the phase-1 envelope
+  // The system prompt is byte-stable across calls — the phase-1 envelope
   // template is unconditionally present, and per-call questionShape is moved
   // to the user message. Combined with ANALYST_PREAMBLE this clears Azure's
-  // 1024-token prefix-cache threshold.
+  // 1024-token prefix-cache threshold so the prompt prefix can be cached.
   const system = `${ANALYST_PREAMBLE}You are a senior data analyst presenting the results of a completed investigation.
 You have access to a structured blackboard: the hypotheses that were tested, their outcomes
 (confirmed / refuted / partial / open), and the findings that emerged. The user message also
@@ -332,10 +367,10 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   const phase1Line = phase1Shape
     ? `questionShape: ${phase1Shape}\n`
     : `questionShape: none\n`;
-  // W4 · when re-invoked after a verifier `revise_narrative` verdict, append
-  // the issues + course correction + prior draft so the model can do a
-  // grounded rewrite instead of starting blind. Cap at 4000 chars to keep
-  // the user prompt within the existing budget.
+  // When re-invoked after a verifier `revise_narrative` verdict, append the
+  // issues + course correction + prior draft so the model can do a grounded
+  // rewrite instead of starting blind. Slices cap each piece to keep the user
+  // prompt within the existing budget.
   const repairBlock = repair
     ? `\n\nVerifier flagged issues with the previous draft. Address them:\nIssues: ${repair.issues.slice(0, 1500)}${
         repair.courseCorrection ? `\nCourse correction: ${repair.courseCorrection.slice(0, 500)}` : ""
@@ -346,28 +381,27 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   const bundleSection = synthBundleBlock ? `\n\n${synthBundleBlock}` : "";
   const hierarchyBlock = formatDimensionHierarchiesBlock(ctx);
   const hierarchySection = hierarchyBlock ? `\n${hierarchyBlock}` : "";
-  // Wave WW2 · WQ1 wiring. Extracts statistical evidence (n / p / R² / CI)
-  // from each finding's detail text and emits a FINDING_CONFIDENCE block
-  // pinning per-finding tiers + canonical hedge phrases. The narrator uses
-  // the tier to set magnitudes[].confidence and implications[].confidence,
-  // and weaves the hedge into prose for medium / low findings.
+  // Extracts statistical evidence (n / p / R² / CI) from each finding's detail
+  // text and emits a FINDING_CONFIDENCE block pinning per-finding tiers +
+  // canonical hedge phrases. The narrator uses the tier to set
+  // magnitudes[].confidence and implications[].confidence, and weaves the
+  // hedge into prose for medium / low findings.
   const confidenceBlock = buildNarratorConfidenceBlock(blackboard);
   const confidenceSection = confidenceBlock ? `\n\n${confidenceBlock}` : "";
   const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${bundleSection}${hierarchySection}${repairBlock}`;
 
-  // W38 · use the streaming variant when (1) env flag is on, (2) caller
-  // supplied a streaming hook, AND (3) this is the initial call (not a
-  // W17/W22 repair). Repairs stay non-streaming because the user already
-  // saw the initial draft; streaming a repair would visually thrash.
+  // Use the streaming variant when (1) the env flag is on, (2) the caller
+  // supplied a streaming hook, AND (3) this is the initial call (not a repair).
+  // Repairs stay non-streaming because the user already saw the initial draft;
+  // streaming a repair would visually thrash.
   const useStreaming = !repair && Boolean(streaming) && isStreamingNarratorEnabled();
   const result = useStreaming
     ? await completeJsonStreaming(system, user, narratorOutputSchema, {
         turnId: `${turnId}_narrator_stream`,
-        // 10_000 → 24_000. With rigid length bands removed and per-field
-        // schema caps relaxed, deep analytical dives can legitimately produce
-        // 15 findings + 12 implications + 12 recommendations + extended
-        // methodology and domainLens. Claude Opus 4.7 has plenty of output
-        // headroom; the cap exists only as runaway protection.
+        // Generous cap: with rigid length bands removed and per-field schema
+        // caps relaxed, deep analytical dives can legitimately produce 15
+        // findings + 12 implications + 12 recommendations + extended
+        // methodology and domainLens. The cap exists only as runaway protection.
         maxTokens: 24_000,
         temperature: 0.25,
         onLlmCall,
@@ -376,7 +410,7 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
       })
     : await completeJson(system, user, narratorOutputSchema, {
         turnId: `${turnId}_narrator${repair ? "_repair" : ""}`,
-        // 10_000 → 24_000. See streaming branch above for rationale.
+        // Generous cap — see streaming branch above for rationale.
         maxTokens: 24_000,
         temperature: 0.25,
         onLlmCall,

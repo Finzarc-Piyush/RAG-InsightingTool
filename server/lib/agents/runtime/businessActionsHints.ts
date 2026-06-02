@@ -1,4 +1,31 @@
 /**
+ * ============================================================================
+ * businessActionsHints.ts — spot "strategy intent" cues in the question
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Runs regex patterns over the user's question and returns short labels for
+ *   any "strategy intent" cues it finds (e.g. an action verb + business noun
+ *   like "grow margins", or an open ask like "what should we do"). These are
+ *   HINTS only — observations about the wording — not a switch that decides
+ *   anything.
+ *
+ * WHY IT MATTERS
+ *   The businessActionsAgent (which proposes recommended actions) reads these
+ *   hints next to the raw question and decides for itself whether to fire. An
+ *   empty hint list is NOT a "no actions" signal — a question can be phrased
+ *   naturally and still deserve actions. Tuned for over-recall: extra hints are
+ *   harmless; missing one is the failure we avoid by keeping it non-gating.
+ *
+ * KEY PIECES
+ *   - extractStrategyIntentHints(question) — returns labelled hint strings;
+ *     empty array when nothing matched.
+ *
+ * HOW IT CONNECTS
+ *   Output is appended to the businessActionsAgent's user message in the agent
+ *   runtime. Pure function — no I/O.
+ */
+
+/**
  * Strategy-intent hint extraction.
  *
  * Pure-function regex over the user's question that produces *informational*

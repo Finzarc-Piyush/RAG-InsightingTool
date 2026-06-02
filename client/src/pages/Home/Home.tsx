@@ -107,10 +107,6 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setExternalComposerDraft(null);
   }, []);
 
-  const handleDraftMessageFromModal = useCallback((text: string) => {
-    composerDraftIdRef.current += 1;
-    setExternalComposerDraft({ text, id: composerDraftIdRef.current });
-  }, []);
   const { toast } = useToast();
   const { setPivotEntries, setPivotMutationHandlers } = useChatSidebarNav();
   const {
@@ -1056,8 +1052,6 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         isOpen={showDataSummaryModal}
         onClose={() => setShowDataSummaryModal(false)}
         sessionId={sessionId}
-        onSendMessage={handleSendMessage}
-        onDraftMessage={handleDraftMessageFromModal}
       />
       {pendingAutomation && (
         <AutomationRemapDialog

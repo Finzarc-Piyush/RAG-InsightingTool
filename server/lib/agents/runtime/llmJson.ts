@@ -1,3 +1,48 @@
+/**
+ * ============================================================================
+ * llmJson.ts — call an LLM and get back validated, schema-shaped JSON
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Almost every agent in this codebase needs the LLM to answer in a precise
+ *   JSON shape (a query plan, a verdict, a list of actions) rather than free
+ *   prose. This file is the single helper that makes that reliable. You give it
+ *   a system prompt, a user prompt, and a Zod schema (a runtime description of
+ *   the exact JSON you expect); it calls the model, parses the reply, and checks
+ *   it against the schema. LLMs frequently emit slightly-wrong JSON, so it runs
+ *   a built-in 3-attempt repair loop: (1) try it; (2) feed the validation error
+ *   back and ask the model to fix it; (3) one last clean-slate attempt with a
+ *   minimal instruction. It also tolerates a model wrapping JSON in extra prose
+ *   by extracting the first {...} or [...] block.
+ *
+ * WHY IT MATTERS
+ *   It is the workhorse boundary between "the model said something" and
+ *   "structured data the rest of the pipeline can trust". It also picks the
+ *   right model per call purpose (cheap MINI tier vs. powerful PRIMARY tier),
+ *   emits cost/latency/token telemetry for every attempt, and cleanly
+ *   distinguishes an upstream API failure (billing/rate-limit/config) from a
+ *   schema failure (prompt/schema needs tightening) so operators know what to
+ *   fix. Without it, every agent would re-implement parsing, retries, model
+ *   routing, and cost tracking.
+ *
+ * KEY PIECES
+ *   - completeJson(system, user, schema, options) — the main entry point;
+ *     returns { ok: true, data } or { ok: false, error, kind }. Owns the
+ *     3-attempt repair loop and never relies on the caller to retry.
+ *   - CompleteJsonFailureKind — "api_error" vs "schema_error" so callers/ops
+ *     can react differently.
+ *   - completeJsonStreaming(...) — same contract, but streams the model's
+ *     output chunk-by-chunk via `onPartial` for live narration UX; falls back
+ *     to `completeJson` whenever streaming is disabled, the model is Anthropic
+ *     (no streaming adapter), or anything goes wrong mid-stream.
+ *   - isStreamingNarratorEnabled() — env-flag gate (STREAMING_NARRATOR_ENABLED).
+ *
+ * HOW IT CONNECTS
+ *   Called by nearly every runtime agent (planner, verifier, narrator,
+ *   businessActionsAgent, quickAnswerPlanner, directive extractor, …). Calls
+ *   `callLlm` from ./callLlm.js for the actual request, resolves the model via
+ *   `resolveModelFor` in ./llmCallPurpose.js, computes cost via ./llmCostModel.js,
+ *   and detects Anthropic models via ./anthropicProvider.js.
+ */
 import { MODEL, openai } from "../../openai.js";
 import type { ZodType } from "zod";
 import { agentLog } from "./agentLogger.js";
@@ -33,12 +78,12 @@ export async function completeJson<T>(
     model?: string;
     turnId?: string;
     onLlmCall?: () => void;
-    /** Fires once per API call with token counts + computed USD cost (W1.1 telemetry). */
+    /** Fires once per API call with token counts + computed USD cost. */
     onUsage?: (usage: LlmCallUsage) => void;
     /**
-     * W3.2 · When set, selects the model via `resolveModelFor(purpose)` and
-     * OVERRIDES `options.model`. Migrated call sites pass this and stop caring
-     * which deployment to use — ops flip env vars to route.
+     * When set, selects the model via `resolveModelFor(purpose)` and OVERRIDES
+     * `options.model`. Call sites pass this and stop caring which deployment to
+     * use — ops flip env vars to route.
      */
     purpose?: LlmCallPurpose;
   }
@@ -48,7 +93,7 @@ export async function completeJson<T>(
 > {
   const maxTokens = options.maxTokens ?? 2048;
   const temperature = options.temperature ?? 0.2;
-  // W3.10 · pass turnId to keep the ramp decision stable across retries within
+  // Pass turnId to keep the model-routing decision stable across retries within
   // the same logical turn. completeJson owns the retry loop (attempt 1..3)
   // and we want every attempt to hit the same side of the MINI/PRIMARY ramp.
   const model = options.purpose
@@ -64,8 +109,8 @@ export async function completeJson<T>(
     const startedAt = Date.now();
     // Bypass `callLlm`'s default single-attempt emit because completeJson owns
     // the retry loop — we need to publish with the correct `attempt` index. We
-    // still publish via the same global emitter so the sink (W1.3) sees every
-    // retry call.
+    // still publish via the same global emitter so the telemetry sink sees
+    // every retry call.
     const res = await callLlm(
       {
         model: model as string,
@@ -82,9 +127,9 @@ export async function completeJson<T>(
         // and re-emit below with the correct `attempt` index.
         skipGlobalEmit: true,
         turnId: options.turnId,
-        // W18 · purpose forwarded so the test stub resolver (in callLlm) can
-        // route by purpose. Production cost is one extra `resolveModelFor`
-        // call per attempt — idempotent, negligible.
+        // purpose forwarded so the test stub resolver (in callLlm) can route by
+        // purpose. Production cost is one extra `resolveModelFor` call per
+        // attempt — idempotent, negligible.
         purpose: options.purpose,
       }
     );
@@ -141,8 +186,8 @@ export async function completeJson<T>(
     }
     agentLog("llm_json_retry2", { turnId: options.turnId, err: parsed.error.message });
 
-    // Pass 3 (P-021): a last, minimal-instruction attempt that strips the
-    // prior attempt's context entirely. Often the model just needed a clean slate.
+    // Pass 3: a last, minimal-instruction attempt that strips the prior
+    // attempt's context entirely. Often the model just needed a clean slate.
     text = await runOnce(
       "Return ONLY a single JSON object matching the caller's schema. No prose, no explanation.",
       user
@@ -167,10 +212,10 @@ export async function completeJson<T>(
 }
 
 /**
- * W38 · streaming variant of `completeJson`. Same contract — validates the
- * full response against a Zod schema at the end — but emits each provider
- * chunk to `onPartial(rawTextSoFar, deltaText)` so the caller can forward
- * partial text to the client (e.g. via SSE) for live narration UX.
+ * Streaming variant of `completeJson`. Same contract — validates the full
+ * response against a Zod schema at the end — but emits each provider chunk to
+ * `onPartial(rawTextSoFar, deltaText)` so the caller can forward partial text
+ * to the client (e.g. via SSE) for live narration UX.
  *
  * Streaming is gated by env flag `STREAMING_NARRATOR_ENABLED=true` AND the
  * effective model not being Anthropic (the existing Anthropic adapter at

@@ -1,16 +1,35 @@
 /**
- * Deterministic dashboard intent classifier.
+ * ============================================================================
+ * dashboardIntent.ts — decide if a turn should produce a dashboard
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Classifies, with no AI, whether the user wants a dashboard from this turn.
+ *   ("Deterministic" = pure rules, same input → same answer.) Three outcomes:
+ *     - "auto_create": the user explicitly asked (regex matched their words) OR
+ *       the brief LLM flagged it → server builds AND saves it; client navigates.
+ *     - "offer": the turn made several charts (>= 3) but no one asked → server
+ *       builds the spec but does NOT save; client shows a "Build Dashboard"
+ *       button the user can click.
+ *     - "none": single-chart or no-chart turn → nothing happens.
  *
- * Two tracks:
- *   - "auto_create": user explicitly asks (regex match) OR brief LLM set
- *     `requestsDashboard=true`. Server builds + persists; client auto-navigates.
- *   - "offer": multi-chart turn (>= 3 charts) without an explicit ask. Server
- *     builds the spec but does NOT persist; client renders a "Build Dashboard"
- *     button the user can click.
- *   - "none": single-chart / no-chart turn. Nothing emitted.
+ * WHY IT MATTERS
+ *   Regex-first means the feature still works even if the brief LLM forgets to
+ *   set its flag — the explicit phrasing alone is enough to trigger a build.
  *
- * Regex-first so the feature does not silently no-op when the brief LLM forgets
- * to set the flag. Brief LLM remains a backup signal.
+ * KEY PIECES
+ *   - DashboardIntent — the "auto_create" | "offer" | "none" result type.
+ *   - EXPLICIT_RX — regex matching "build me a dashboard / report / ..." phrasing.
+ *   - MULTI_CHART_OFFER_THRESHOLD — the >= 3 charts cutoff for "offer".
+ *   - classifyDashboardIntent(args) — returns the intent for the turn.
+ *
+ * HOW IT CONNECTS
+ *   Output feeds dashboardAutogenGate.ts (dashboardBuildDecision), which turns
+ *   the intent into build/persist booleans inside the agent loop.
+ */
+
+/**
+ * Deterministic dashboard intent classifier. See header above for the three
+ * tracks (auto_create / offer / none) and why regex comes first.
  */
 
 export type DashboardIntent = "auto_create" | "offer" | "none";

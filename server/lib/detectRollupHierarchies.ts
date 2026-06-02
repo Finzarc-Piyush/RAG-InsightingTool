@@ -59,8 +59,8 @@ interface GroupTotal {
 }
 
 const DEFAULTS: Required<DetectRollupOptions> = {
-  minDominance: 0.7,
-  minTopRatio: 4,
+  minDominance: 0.8,
+  minTopRatio: 5,
   minCardinality: 4,
   maxCardinality: 30,
   maxItemValues: 25,

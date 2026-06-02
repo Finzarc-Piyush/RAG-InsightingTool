@@ -1,18 +1,41 @@
 /**
- * insight_explorer — for "show me something interesting / surprising about my data".
+ * ============================================================================
+ * insightExplorer.ts — the "show me something interesting" exploration skill
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the skill that handles open-ended prompts with no specific metric,
+ *   like "show me something surprising about my data". Such prompts normally
+ *   confuse the planner into picking one tool and giving a shallow answer. This
+ *   skill instead reads the dataset summary and auto-builds a cheap exploration
+ *   plan:
+ *     1. get_schema_summary — quick overview + top values to ground the answer.
+ *     2. run_correlation on the primary numeric column (the first numeric, which
+ *        is usually a sales/revenue metric).
+ *     3. run_breakdown_ranking of that numeric by the first usable categorical
+ *        dimension (skipping ID-like columns such as id/uuid/code/key).
+ *     4. build_chart — a bar chart of that breakdown (depends on step 3).
  *
- * Open prompts with no specific metric usually confuse the planner: it picks
- * one tool and produces a shallow answer. This skill builds a small
- * auto-exploration plan from the dataset summary:
+ * WHY IT MATTERS
+ *   It turns a vague "surprise me" request into a structured, multi-angle
+ *   exploration so the user gets a substantive first answer instead of a
+ *   one-tool guess. It is a broad fallback skill (default priority 0), so it
+ *   only fires when the question is genuinely an open exploration.
  *
- *   1. get_schema_summary — cheap overview with top values (grounds the synth).
- *   2. run_correlation on the primary numeric column (usually a sales / revenue
- *      metric — first numeric in summary.numericColumns).
- *   3. run_breakdown_ranking of that numeric column by the first categorical
- *      dimension we can find (skipping ID-like columns).
- *   4. build_chart: bar, metric by dimension (depends on step 3).
+ * KEY PIECES
+ *   - ID_LIKE_PATTERN — regex used to skip identifier columns when choosing a
+ *     dimension to break down by (breaking down sales by a UUID is useless).
+ *   - firstCategoricalDimension — picks the first non-numeric, non-date,
+ *     non-ID column from the summary.
+ *   - skill (exported as insightExplorerSkill) — the AnalysisSkill object;
+ *     appliesTo() requires an "exploration" shape with at least some usable
+ *     column; plan() bails (returns a non-skill plan) if it can't build >=2
+ *     meaningful steps.
  *
- * Skill opts into parallelizable: steps 1/2/3 have no inter-dependencies.
+ * HOW IT CONNECTS
+ *   Self-registers via registerSkill (registry.ts) when imported from
+ *   skills/index.ts; chosen/run via selectSkill / expandSkill. Steps call the
+ *   low-level tools get_schema_summary, run_correlation, run_breakdown_ranking,
+ *   and build_chart. DataSummary type comes from the shared schema.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief, DataSummary } from "../../../../shared/schema.js";

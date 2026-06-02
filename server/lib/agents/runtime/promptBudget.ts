@@ -1,32 +1,40 @@
 /**
- * Wave W-UD7 · Prompt budget allocator.
+ * ============================================================================
+ * promptBudget.ts — fit prompt sections into a fixed size, fairly and visibly
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Everything we send to an LLM has a size limit. The prompt is built from
+ *   several blocks of text (the user's standing instructions, the schema, RAG
+ *   search hits, the findings "blackboard", prior-investigation history, etc.).
+ *   This file is a "budget allocator": you tell it the total character budget
+ *   and which blocks are RESERVED (never cut — e.g. user directives) vs
+ *   FLEXIBLE (can be trimmed). If the flexible blocks overflow, it shrinks them
+ *   in a fixed priority order (RAG first since it's the most expendable, then
+ *   blackboard, then history), trimming each proportionally. It works in
+ *   characters, not tokens — characters are a coarse but stable proxy (roughly
+ *   4 characters per English token).
  *
- * Replaces the scatter of fixed `slice(0, N)` caps across the agent prompt
- * builders with a single, auditable budget allocator. The motivation is the
- * plan §2.5 finding: a user can save 20 KB of `permanentContext` but the
- * narrator sees only 4 K and the business-actions agent sees 1.2 K — without
- * any signal. Replacing the constants with a budget object makes truncation
- * visible (the SSE row + the audit field), and lets us elevate
- * **user directives** to a reserved slot that is **never** trimmed.
+ * WHY IT MATTERS
+ *   It replaces scattered ad-hoc `slice(0, N)` caps with ONE auditable place.
+ *   The old way silently starved important context (a user could save 20 KB of
+ *   notes but the narrator only ever saw 4 KB, with no signal). Now every cut
+ *   is recorded so the caller can emit a `context_trimmed` SSE row, and
+ *   user-supplied directives get a reserved slot that is NEVER trimmed — so the
+ *   user's explicit instructions always survive.
  *
- * The allocator is intentionally simple. It is NOT a token counter. Tokens
- * vary by model + tokeniser; characters are a coarse but consistent proxy,
- * and char-budgets translate to predictable token-budgets within the same
- * model family (≈ 4 chars per English token).
+ * KEY PIECES
+ *   - PromptBudget / DEFAULT_PROMPT_BUDGET — the budget shape and defaults.
+ *   - flexibleBudget — chars left for flexible blocks after reservations.
+ *   - applyFlexible — the core allocator: trims flexible blocks to fit,
+ *       returns trimmed-block records for telemetry.
+ *   - applyCap — drop-in replacement for one inline `value.slice(0, K)` that
+ *       also records the trim.
+ *   - formatContextTrimmedPayload — package trim records for an SSE row.
  *
- * Reserved slots (`reserved.*`) are returned verbatim — the caller MUST emit
- * them. Flexible slots (`flexible.*`) are trimmed in priority order to fit
- * the residual budget after the reserved slots are accounted for; the
- * priority is fixed at:
- *
- *   1. `rag` — most expendable (the upstream RAG / blackboard digest is
- *       already a summary; further trimming costs little).
- *   2. `blackboard` — domain-context entries on the blackboard.
- *   3. `history` — prior-investigation digests and verbatim notes.
- *
- * `applyFlexible({...})` returns `{ trimmedBlocks: [...] }` listing every
- * block that was trimmed so the caller can emit a `context_trimmed` SSE
- * row (sibling to `flow_decision` per invariant #6).
+ * HOW IT CONNECTS
+ *   Pure logic, no I/O. Used by the agent's prompt builders. Callers forward
+ *   the returned trim records into a `context_trimmed` SSE row (sibling to
+ *   `flow_decision` per repo invariant #6).
  */
 
 /** Map of well-known slot ids. Adding a new slot is a one-liner. */
@@ -34,7 +42,7 @@ export type ReservedSlot = "directives" | "instructions" | "schema";
 export type FlexibleSlot = "rag" | "blackboard" | "history";
 
 export interface PromptBudgetReserved {
-  /** User directives — the W-UD6 `formatDirectiveBlock` output. Never trimmed. */
+  /** User directives — the `formatDirectiveBlock` output. Never trimmed. */
   directives: number;
   /** System instructions / role prompt header. Never trimmed. */
   instructions: number;

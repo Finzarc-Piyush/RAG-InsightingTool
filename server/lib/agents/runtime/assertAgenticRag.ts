@@ -1,3 +1,30 @@
+/**
+ * ============================================================================
+ * assertAgenticRag.ts — startup guards that fail fast on bad config
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Two boot-time checks. The first refuses to start if the agentic loop is on
+ *   but RAG is not configured (RAG = Retrieval-Augmented Generation: the search
+ *   index of dataset chunks the agent reads from). The second refuses to start
+ *   if dashboard autogeneration is on while the agent loop is off — that would
+ *   be dead config because dashboards are only built inside the loop.
+ *
+ * WHY IT MATTERS
+ *   "Fail fast": crashing at startup with a clear FATAL message beats running
+ *   in a silently broken state where the agent has no data to retrieve, or a
+ *   feature that can never fire. Honors invariant #1 (the loop needs RAG).
+ *
+ * KEY PIECES
+ *   - assertAgenticRagConfiguration() — exits(1) if loop is on but RAG is off.
+ *   - assertDashboardAutogenConfiguration() — exits(1) if autogen is on but
+ *     the loop is off.
+ *   - Both honor escape hatches: AGENTIC_ALLOW_NO_RAG (tests) and the feature
+ *     flags themselves.
+ *
+ * HOW IT CONNECTS
+ *   Reads flags via types.js (isAgenticLoopEnabled) and rag/config.js
+ *   (isRagEnabled). Called once at app startup (e.g. from createApp).
+ */
 import { isAgenticLoopEnabled } from "./types.js";
 import { isRagEnabled } from "../../rag/config.js";
 
@@ -23,7 +50,7 @@ export function assertAgenticRagConfiguration(): void {
 }
 
 /**
- * Phase 2.D · When dashboard autogen is on, the agentic loop must be on.
+ * When dashboard autogen is on, the agentic loop must be on.
  * buildDashboard only fires inside runAgentTurn, so enabling autogen
  * without AGENTIC_LOOP_ENABLED=true would be silently dead configuration.
  */

@@ -1,15 +1,36 @@
 /**
- * Phase 2 — deterministic `gridLayout` generators for agent-emitted
- * DashboardSpecs. Keeps layout logic off the LLM (the LLM picks narrative
- * + template name; we place the tiles). Output maps directly onto the
- * `lg` breakpoint react-grid-layout consumes; smaller breakpoints fall
- * back to the client's stable-place helper.
+ * ============================================================================
+ * dashboardTemplates.ts — places chart tiles on a dashboard grid by hand
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When the agent builds a dashboard, the LLM only decides the story and which
+ *   "template" to use (executive / deep_dive / monitoring). It does NOT decide
+ *   where each chart sits on the page. This file does that part with plain code:
+ *   given a template name and how many charts there are, it computes a grid
+ *   layout — x/y position, width, height — for each chart tile. "Grid layout"
+ *   here means the coordinates the front-end library react-grid-layout uses to
+ *   arrange tiles on a 12-column grid.
  *
- * Chart tile ids must match what DashboardView.tsx produces:
- *   chart-${index}    — index inside sheet.charts[].
+ * WHY IT MATTERS
+ *   Layout math is deterministic and cheap, so keeping it off the LLM saves
+ *   tokens, avoids hallucinated/overlapping coordinates, and gives every
+ *   dashboard a consistent look per template. The chart tile ids it emits
+ *   ("chart-0", "chart-1", ...) must match what the client's DashboardView.tsx
+ *   expects, or tiles won't render.
  *
- * Current scope is charts only — narrative tiles inherit the client's
- * default stable-place layout.
+ * KEY PIECES
+ *   - chartGridItemsForTemplate — returns grid entries for N charts under a
+ *     given template (executive = hero + 3-up; deep_dive = uniform 3-up;
+ *     monitoring = compact 3-up).
+ *   - applyDashboardTemplateLayout — mutates a DashboardSpec in place, adding an
+ *     `lg`-breakpoint layout to each sheet that has charts. Idempotent: skips
+ *     sheets that already have a sufficient layout.
+ *
+ * HOW IT CONNECTS
+ *   Types come from shared/schema.js (DashboardSpec, DashboardTemplate). Called
+ *   by the dashboard builder after the LLM returns its narrative+template. Only
+ *   the `lg` (large) breakpoint is set here; smaller screens fall back to the
+ *   client's own stable-place helper. Narrative tiles are not laid out here.
  */
 import type { DashboardSpec, DashboardTemplate } from "../../../shared/schema.js";
 

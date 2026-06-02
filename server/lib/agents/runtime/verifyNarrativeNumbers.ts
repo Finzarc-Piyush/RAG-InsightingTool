@@ -1,18 +1,33 @@
 /**
- * W7.5 · Narrative-vs-numbers verifier helper.
+ * ============================================================================
+ * verifyNarrativeNumbers.ts — catch numbers in the written answer that aren't
+ * actually backed by any chart
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The narrator writes a prose answer full of figures ("sales fell 17%",
+ *   "₹4.2 lakh"). This file pulls every numeric claim out of that prose
+ *   (percentages, currency, magnitudes like 1.2M, plain decimals) and checks
+ *   whether each one actually appears — within a ±2% tolerance — somewhere in
+ *   the charts that ship with the answer (their underlying data rows, their
+ *   `keyInsight` text, or their axis domains). Claims with no match are returned
+ *   as `unsupported`.
  *
- * Extracts every numeric claim from the agent's narrative answer and confirms
- * each one appears (within ±2% tolerance, configurable) in at least one chart's
- * underlying data, in any chart's `keyInsight`, or in the `data` payload of any
- * chart that ships with the response. Numbers that don't match are returned
- * as `unsupportedClaims` so the verifier can flag them.
+ * WHY IT MATTERS
+ *   This is a hallucination guard: it surfaces fabricated figures (a 17% drop
+ *   that appears in no chart) so the verifier can flag or revise them before the
+ *   user sees them. It is a SOFT check — it only reports; the verifier still
+ *   decides whether to revise the narrative or pass it through. When there is no
+ *   chart data to anchor against it reports everything as supported (no false
+ *   positives) and lets other checks rule.
  *
- * This is a soft check — the verifier still gets to decide whether to revise
- * the narrative or pass the answer through. The point is to surface obviously
- * fabricated figures (model hallucinated a 17% drop that doesn't appear in
- * any chart) before they reach the user.
+ * KEY PIECES
+ *   - extractNumbersFromNarrative — regex out numeric claims (skips years + tiny ints to cut noise)
+ *   - verifyNarrativeAgainstCharts — main: split claims into supported / unsupported
+ *   - VerifyResult / ExtractedNumber — the returned shapes
  *
- * Pure-logic, no I/O. Importable from anywhere.
+ * HOW IT CONNECTS
+ *   Pure logic, no I/O — importable anywhere. Consumes `ChartSpec[]` from
+ *   `../../../shared/schema.js`. Called by the verifier stage of the agent loop.
  */
 
 import type { ChartSpec } from "../../../shared/schema.js";

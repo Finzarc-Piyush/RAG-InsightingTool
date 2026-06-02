@@ -1,25 +1,46 @@
 /**
- * Wave W-UD5 · LLM-based user-directive extractor.
+ * ============================================================================
+ * extractUserDirectivesLlm.ts — AI pass that spots standing user instructions
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A "directive" is a persistent rule the user wants applied across many
+ *   future questions, not a one-off filter — e.g. "from now on always exclude
+ *   the Central region" or "interpret 'budget' as cost_cap_eur". This file uses
+ *   a cheap LLM call to read the user's latest chat message and pull out any
+ *   such standing instructions, returning them as structured drafts.
  *
- * Companion to the deterministic extractor at [extractUserDirectives.ts](./extractUserDirectives.ts).
- * The deterministic pass covers the explicit "from now on omit X" / "always
- * exclude Y" shape; this LLM pass catches verbose paraphrases the regex
- * misses ("I'd really prefer that we not bring up Hair Oil any more"), and
- * fuzzy supersede arbitration where the new utterance's contradiction of an
- * existing directive isn't a clean opposing-op + overlap pair.
+ *   It is the AI companion to a faster regex-based extractor
+ *   (./extractUserDirectives.ts). The regex pass catches the obvious "always
+ *   exclude X" wording; this LLM pass catches verbose paraphrases the regex
+ *   misses ("I'd really prefer we not bring up Hair Oil any more") and judges
+ *   trickier cases where a new instruction contradicts ("supersedes") an
+ *   existing one in a non-obvious way. Results are cached per message (so the
+ *   same message never costs a second call) and every failure quietly returns
+ *   an empty list — a model outage must never block the user's chat turn.
  *
- * Wiring rules (per plan §2.3):
- *   - MINI-tier model (`LLM_PURPOSE.DIRECTIVE_EXTRACTION`)
- *   - JSON-mode `completeJson`
- *   - Cached by message hash (sha256-16) so re-runs on the same message are
- *     free
- *   - Merged with the deterministic pass: union by structural key
- *     `(column, op, sortedValues)` then triggerSpan; **deterministic wins on
- *     conflict** — its supersede + structured-projection logic is the
- *     source of truth
+ * WHY IT MATTERS
+ *   Without it, the tool would forget the user's standing preferences whenever
+ *   they were phrased conversationally, and would re-apply rules the user has
+ *   since reversed. Together with the regex pass it keeps long-term user
+ *   instructions sticky and contradiction-free.
  *
- * Failure semantics: any LLM error / schema parse failure / empty result
- * collapses to `[]`. A model outage must never block the user's chat turn.
+ * KEY PIECES
+ *   - extractUserDirectivesLlm(input) — runs the LLM extractor on one message;
+ *     returns drafts (possibly empty); cached, never throws.
+ *   - mergeDirectiveExtractions(deterministic, llm) — unions the regex and LLM
+ *     outputs by structural key; the DETERMINISTIC pass wins on conflict (its
+ *     supersede + column projection logic is the source of truth).
+ *   - llmDirectiveSchema / LLM_DIRECTIVE_SYSTEM — the strict output shape and
+ *     the system prompt instructing the model what counts as "persistent".
+ *   - In-process cache (cacheKey/cacheGet/cacheSet) keyed by
+ *     (dataset fingerprint, message, active-directive ids), 30-minute TTL.
+ *
+ * HOW IT CONNECTS
+ *   Uses `completeJson` from ./llmJson.js for the MINI-tier LLM call
+ *   (LLM_PURPOSE.DIRECTIVE_EXTRACTION). Produces `ExtractedDirective` /
+ *   `DirectiveDraft` shapes shared with ./extractUserDirectives.js and
+ *   ../../../models/datasetDirectives.model.js. The merged result feeds the
+ *   directive-persistence layer that stores per-dataset user rules.
  */
 import { createHash } from "crypto";
 import { z } from "zod";

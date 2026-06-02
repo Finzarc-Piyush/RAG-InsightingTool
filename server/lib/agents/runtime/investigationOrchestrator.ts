@@ -1,17 +1,40 @@
 /**
- * Wave W9 · investigationOrchestrator
+ * ============================================================================
+ * investigationOrchestrator.ts — the driver of a deep, self-directed inquiry
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is the "outer loop" for the deep-investigation mode. Given a hard
+ *   question, it: (1) asks a coordinator to split it into a few parallel
+ *   "threads" (sub-questions); (2) runs them breadth-first — answering a batch
+ *   of ready sub-questions at once, each via one bounded agent turn that shares
+ *   a common "blackboard" of findings; (3) lets answered nodes spawn fresh
+ *   sub-questions when something surprising turns up, adding them to the tree
+ *   as long as budget allows; (4) stops when the investigation "converges"
+ *   (enough is known) or the budget runs out, then has the narrator write one
+ *   synthesized answer from everything on the blackboard. ("BFS" =
+ *   breadth-first search; it widens before it deepens.)
  *
- * BFS outer loop for deep self-directed investigations.
- * Activated only when DEEP_INVESTIGATION_ENABLED=true.
+ * WHY IT MATTERS
+ *   This is the engine behind genuinely multi-step research answers, instead
+ *   of a single shot. It is gated entirely behind DEEP_INVESTIGATION_ENABLED;
+ *   if that flag is off, runDeepInvestigation returns null and the caller uses
+ *   the normal single-turn flow. The budget caps and pruning keep a branching
+ *   investigation from running forever or overspending. SSE rows (`flow_decision`,
+ *   `sub_question_spawned`, `node_answered`, `investigation_progress`) make the
+ *   inner workings visible to the UI as it runs.
  *
- * Flow:
- *  1. Coordinator decomposes the question into root-level threads (or uses a
- *     single root node for simple questions).
- *  2. BFS loop: run ready nodes in parallel (up to maxParallelNodes at once).
- *     Each node calls runAgentTurn with a sub-question and the shared blackboard.
- *  3. After each batch: collect spawnedQuestions from node results, add child
- *     nodes within budget, check convergence.
- *  4. Convergence or budget exhausted → narrator synthesizes from full blackboard.
+ * KEY PIECES
+ *   - runDeepInvestigation — main entry; builds the tree, runs the BFS loop,
+ *       synthesizes the final answer. Returns null when the flag is off.
+ *   - investigateNode — runs ONE sub-question as a bounded agent turn.
+ *   - isDeepInvestigationEnabled — re-exported flag check.
+ *
+ * HOW IT CONNECTS
+ *   Uses investigationTree.js for the tree/budget bookkeeping, coordinatorAgent
+ *   (decomposeQuestion) to split the question, agentLoop.service (runAgentTurn)
+ *   to answer each node, analyticalBlackboard for the shared findings store,
+ *   investigationBudget (evaluateBudgetExhaustion) to detect a budget halt, and
+ *   narratorAgent (runNarrator) to write the final synthesized answer.
  */
 
 import { agentLog } from "./agentLogger.js";
@@ -125,7 +148,7 @@ export async function runDeepInvestigation(
     }
   }
 
-  // O5: derive a request-scoped prefix to prevent node ID collisions in concurrent investigations.
+  // Derive a request-scoped prefix to prevent node ID collisions in concurrent investigations.
   const idPrefix = `${(ctx.sessionId ?? "").slice(-6)}_${Date.now().toString(36)}_`;
 
   if (threads && threads.length > 0) {
@@ -198,9 +221,9 @@ export async function runDeepInvestigation(
     }
   }
 
-  // Wave W74 · emit a flow_decision SSE row when the BFS loop terminated
-  // on a budget cap (rather than converging or running out of pending
-  // nodes). Pure detector — no behaviour change, just observability.
+  // Emit a flow_decision SSE row when the BFS loop terminated on a budget
+  // cap (rather than converging or running out of pending nodes). Pure
+  // detector — no behaviour change, just observability.
   const budgetExhaustion = evaluateBudgetExhaustion(tree, config);
   if (budgetExhaustion) {
     try {

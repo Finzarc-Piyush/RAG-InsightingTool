@@ -1,6 +1,43 @@
 /**
- * Complex Query Detector
- * Uses AI to detect complex multi-condition queries that require special handling
+ * ============================================================================
+ * complexQueryDetector.ts — decides if a user's question is "hard enough" to
+ * need the heavyweight general handler instead of a quick canned answer.
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   A user types a question in plain English. Some questions are easy ("what is
+ *   the average revenue?") and some are gnarly ("which months had revenue above
+ *   the yearly average BUT only from orders with discount below 10%?"). This file
+ *   tells the rest of the system which kind it is. It does this two ways:
+ *     1. A cheap, instant regex check (quickLikelyComplexQuery) — no AI call.
+ *     2. A full AI judgement (detectComplexQuery) that asks the LLM (language
+ *        model) to score complexity 0–1 and explain why.
+ *   "Complex" = the question needs multiple filters/conditions, comparisons to
+ *   computed values (averages, percentiles), time-period comparisons, or layered
+ *   grouping — the kind of thing that needs a real multi-step query plan.
+ *
+ * WHY IT MATTERS
+ *   This is part of early request triage (the gate that runs before the heavy
+ *   agentic plan/act loop). Calling the LLM costs time and money, so the cheap
+ *   regex pre-filter lets simple questions skip the AI call entirely — a big
+ *   latency win. When the AI call fails, a heuristic fallback still produces an
+ *   answer so the pipeline never gets stuck.
+ *
+ * KEY PIECES
+ *   - complexQuerySchema / ComplexQueryDetection — the shape of the result
+ *     (isComplex, confidence, optional reasons + reasoning), validated by Zod.
+ *   - quickLikelyComplexQuery(question) — fast no-AI heuristic. Returns true to
+ *     mean "probably complex, run the full detector"; false to skip it safely.
+ *   - detectComplexQuery(...) — the AI-backed detector with retries + a regex
+ *     fallback if the LLM keeps failing.
+ *   - removeNulls(obj) — strips null values so Zod (which rejects null on
+ *     optional fields) can validate the LLM's JSON.
+ *
+ * HOW IT CONNECTS
+ *   Calls the LLM via runtime/callLlm.js, tags the call with a purpose from
+ *   runtime/llmCallPurpose.js, and picks the model via models.js (the cheap
+ *   "intent" tier). Consumed by the triage layer that decides whether to force
+ *   the GeneralHandler / full agentic path. Types DataSummary + Message come
+ *   from the shared schema.
  */
 import { z } from 'zod';
 import { callLlm } from './runtime/callLlm.js';

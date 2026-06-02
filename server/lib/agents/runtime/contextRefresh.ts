@@ -1,14 +1,28 @@
 /**
- * Wave B8 · step-triggered RAG / domain pack refresh.
+ * ============================================================================
+ * contextRefresh.ts — per-turn budget for extra mid-turn retrieval
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Mid-turn, a tool may discover it needs more reference material — another
+ *   RAG search (RAG = the dataset/document search index) or a "domain pack" (a
+ *   bundle of business-domain context). This module is the bookkeeper that
+ *   caps and de-dupes those extra fetches per turn: at most 3 RAG searches and
+ *   2 domain packs, and never the same query/pack twice.
  *
- * Tools that emit a finding which references a new domain term or that opens
- * a question only answerable by additional retrieval can call
- * `runtime.requestRagRound(query)` or `runtime.requestDomainPack(packId)` to
- * trigger a Round-2 fetch. Throttled (max 3 RAG, 2 domain per turn) and
- * de-duped on (query, packId) so chatty tools can't blow the budget.
+ * WHY IT MATTERS
+ *   Without a budget, a chatty tool could fire endless retrievals and blow up
+ *   latency and cost. This keeps "fetch more context on demand" useful but bounded.
  *
- * Hits are added to `state.ragHits` with `triggeredByStepId` so the planner /
- * narrator can attribute them. Failures are non-fatal.
+ * KEY PIECES
+ *   - canRequestRag / recordRagRound — check-then-record a RAG fetch for a turn.
+ *   - canRequestDomainPack / recordDomainPackFetch — same for domain packs.
+ *   - clearTurnRefreshBudget(turnId) — free the per-turn state at turn end.
+ *   - getRefreshState(turnId) — peek at counters (tests / observability).
+ *
+ * HOW IT CONNECTS
+ *   Called by the act loop's requestRagRound / requestDomainPack handlers; the
+ *   resulting hits are attributed back to the triggering step for the planner /
+ *   narrator. State is an in-memory Map keyed by turnId.
  */
 
 const RAG_BUDGET_PER_TURN = 3;

@@ -1,3 +1,32 @@
+/**
+ * ============================================================================
+ * verifierHelpers.ts — evidence assembly + sanity checks for the verifier
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Helpers for the "verifier" — the final agent that fact-checks the drafted
+ *   answer against the evidence before it ships. This file (1) builds the
+ *   evidence text the verifier reads, and (2) provides two deterministic checks
+ *   that catch specific mistakes and raise "issues" with a severity and code.
+ *
+ * WHY IT MATTERS
+ *   The verifier needs the same facts the narrator had, plus cheap rule-based
+ *   checks that don't require an LLM. These catch (a) plans that ignored filters
+ *   the user named, and (b) standout ("anomalous") findings the narrative failed
+ *   to mention — both common, high-impact errors.
+ *
+ * KEY PIECES
+ *   - buildFinalEvidence(...) — concatenate observations, chart titles,
+ *     blackboard detail, and magnitudes into one capped evidence string.
+ *   - checkInferredFilterFidelity(ctx, steps) — flag MISSING_INFERRED_FILTER
+ *     when no plan step applied a filter the user explicitly named.
+ *   - checkMissingFindings(candidate, blackboard) — flag MISSING_FINDING when an
+ *     anomalous finding's keywords don't appear in the narrative.
+ *
+ * HOW IT CONNECTS
+ *   Reads blackboard data via analyticalBlackboard.js (formatForNarrator),
+ *   filter logic via planArgRepairs.js, and types from types.js. Used by the
+ *   verifier / narrative-rewrite step. Pure functions — no I/O, no LLM calls.
+ */
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { formatForNarrator } from "./analyticalBlackboard.js";
 import type {
@@ -9,7 +38,7 @@ import type {
 import { checkMissingInferredFilters } from "./planArgRepairs.js";
 
 /**
- * W12b: Build the evidence string for the Final Verifier and rewriteNarrative.
+ * Build the evidence string for the Final Verifier and rewriteNarrative.
  * Includes full blackboard finding detail (with numeric facts) and narrator
  * magnitudes — the same data the Narrator had when writing the narrative body.
  *
@@ -38,12 +67,12 @@ export function buildFinalEvidence(
     parts.push(`\nMAGNITUDES:\n${magLines}`);
   }
 
-  // Wider than the old 10 000 cap; runVerifier still truncates to 6 000 at call time.
+  // Capped here at 14 000; runVerifier still truncates to 6 000 at call time.
   return parts.join("\n").slice(0, 14000);
 }
 
 /**
- * W4 backstop: if any inferred filter column is absent from every plan step
+ * Backstop: if any inferred filter column is absent from every plan step
  * that accepts dimensionFilters, emit a `MISSING_INFERRED_FILTER` issue with
  * a replan verdict. The planner's `ensureInferredFiltersOnStep` auto-repair
  * handles the common case; this fires only when the plan never produced a
@@ -72,7 +101,7 @@ export function checkInferredFilterFidelity(
   ];
 }
 
-/** O4: flag anomalous blackboard findings whose label/detail text doesn't appear in the candidate narrative. */
+/** Flag anomalous blackboard findings whose label/detail text doesn't appear in the candidate narrative. */
 export function checkMissingFindings(
   candidate: string,
   blackboard: AnalyticalBlackboard

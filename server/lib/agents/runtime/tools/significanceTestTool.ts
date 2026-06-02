@@ -1,21 +1,48 @@
 /**
- * Wave F3 · run_significance_test tool.
+ * ============================================================================
+ * significanceTestTool.ts — "is this difference real or just noise?"
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_significance_test` tool, which runs a statistical test
+ *   to judge whether an observed difference is genuine or could be random
+ *   chance. A "p-value" is the headline output: roughly the probability of
+ *   seeing this difference if there were really no difference — small p (e.g.
+ *   < 0.05) means "probably real". It supports three test shapes:
+ *     - welch_t   — compares the average of two separate (unpaired) groups,
+ *                   e.g. "is conversion higher in metro stores than rural?".
+ *                   The caller supplies a value column plus filters for each
+ *                   group.
+ *     - paired_t  — compares two measurements on the same units, e.g. "did
+ *                   revenue per store improve after the redesign?". The caller
+ *                   supplies two columns of equal length.
+ *     - chi_square — tests whether a category breakdown differs across groups,
+ *                   e.g. "do product preferences differ by segment?". The
+ *                   caller supplies a precomputed contingency (counts) table.
+ *   Each result also reports an "effect size" — how BIG the difference is, not
+ *   just whether it's real — bucketed as negligible / small / medium / large.
  *
- * Answers "is the difference real or noise?" for three common shapes:
+ * WHY IT MATTERS
+ *   Stops the agent from over-claiming on tiny or noisy differences. The
+ *   p-value, sample size, and effect-size bucket are folded into the result so
+ *   the downstream confidence grader can mark a "statistically significant but
+ *   practically negligible" finding as low-confidence.
  *
- *   - **welch_t**: two unpaired groups → "is conversion rate higher in
- *     metro stores than rural?". Caller passes the column + dimension
- *     filters for each group.
+ * KEY PIECES
+ *   - buildEvidenceSuffix — appends the canonical evidence block (p, effective
+ *     n, effect magnitude) to the result summary; effective n is test-specific.
+ *   - significanceTestArgsSchema — a discriminated union over the `test` field
+ *     so each test gets exactly the args it needs.
+ *   - registerSignificanceTestTool — registers the tool; resolves group rows,
+ *     runs the chosen test, returns a one-row result table + memory slots.
  *
- *   - **paired_t**: paired observations → "did revenue per store improve
- *     after the redesign?". Caller passes two columns of equal length.
- *
- *   - **chi_square**: contingency table → "do product preferences differ
- *     across customer segments?". Caller passes a precomputed 2D table.
- *
- * Gated by `SIGNIFICANCE_TESTS_ENABLED=true`. Tool registered
- * unconditionally so the planner sees it; off-message inside the body
- * when the flag is unset.
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry (toolRegistry.ts). The
+ *   math lives in runSignificanceTest (../../../significanceTests.js); row
+ *   filtering uses filterRowsByDimensionFilters (../../../dataTransform.js);
+ *   the evidence suffix uses composeFindingDetail (../formatFindingEvidence.js).
+ *   Gated by `SIGNIFICANCE_TESTS_ENABLED=true` — always registered so the
+ *   planner can see it, but returns a clear "disabled" message when the flag
+ *   is unset.
  */
 import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
@@ -26,12 +53,11 @@ import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 
 /**
- * Wave WV5 · build a canonical FindingEvidence suffix from a significance
- * test result. Companion to WV4's `run_correlation` migration. p-value and
- * effective sample size are the load-bearing evidence; both flow through
- * the downstream `addFinding` (agentLoop.service.ts) into the blackboard's
- * finding `detail`, where WW2's extractor catches them and WQ1 grades the
- * finding by real evidence instead of "no evidence supplied".
+ * Build a canonical FindingEvidence suffix from a significance test result.
+ * p-value and effective sample size are the load-bearing evidence; both flow
+ * through the downstream `addFinding` (agentLoop.service.ts) into the
+ * blackboard's finding `detail`, where the extractor catches them and the
+ * grader judges the finding by real evidence instead of "no evidence supplied".
  *
  * `effectiveN` is test-specific:
  *   - welch_t   → sampleA + sampleB (independent samples; combined size)
@@ -40,7 +66,7 @@ import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
  *   - chi_square → grand total      (= sampleA, the contingency total)
  *
  * Defensive: NaN / out-of-range silently drops to the empty suffix
- * (worst case: finding tiers as medium, the pre-WV5 baseline).
+ * (worst case: finding tiers as medium, the pre-evidence baseline).
  */
 function buildEvidenceSuffix(
   pValue: number,
@@ -54,9 +80,9 @@ function buildEvidenceSuffix(
   if (Number.isFinite(effectiveN) && effectiveN >= 0) {
     evidence.n = effectiveN;
   }
-  // Wave WQ8 · carry the categorical effect-size bucket through into the
-  // finding detail so the WW2 extractor recovers it and WQ1 grades the
-  // finding as LOW when the test was "significant but negligible".
+  // Carry the categorical effect-size bucket through into the finding detail
+  // so the extractor recovers it and the grader marks the finding as LOW when
+  // the test was "significant but negligible".
   if (
     effectMagnitude === "negligible" ||
     effectMagnitude === "small" ||
@@ -169,9 +195,9 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
         if (!result.ok) {
           return { ok: false, summary: `run_significance_test: ${result.error}` };
         }
-        // Wave WV5 · canonical FindingEvidence suffix. welch_t: combined n.
-        // Wave WQ8 · also carries `result.effectSize.magnitude` so WQ1 can
-        // grade a "significant but negligible" welch_t as LOW.
+        // Canonical FindingEvidence suffix. welch_t: combined n. Also carries
+        // `result.effectSize.magnitude` so the grader can mark a "significant
+        // but negligible" welch_t as LOW.
         return {
           ok: true,
           summary:
@@ -250,9 +276,9 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
         if (!result.ok) {
           return { ok: false, summary: `run_significance_test: ${result.error}` };
         }
-        // Wave WV5 · canonical FindingEvidence suffix. paired_t: pair count
-        // (not 2 × sampleA — pairs aren't independent observations).
-        // Wave WQ8 · also carries `result.effectSize.magnitude`.
+        // Canonical FindingEvidence suffix. paired_t: pair count (not
+        // 2 × sampleA — pairs aren't independent observations). Also carries
+        // `result.effectSize.magnitude`.
         return {
           ok: true,
           summary:
@@ -305,9 +331,9 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
       if (!result.ok) {
         return { ok: false, summary: `run_significance_test: ${result.error}` };
       }
-      // Wave WV5 · canonical FindingEvidence suffix. chi_square: grand total
-      // (sampleA = grandTotal of contingency table; sampleB is unset).
-      // Wave WQ8 · also carries `result.effectSize.magnitude`.
+      // Canonical FindingEvidence suffix. chi_square: grand total (sampleA =
+      // grandTotal of contingency table; sampleB is unset). Also carries
+      // `result.effectSize.magnitude`.
       return {
         ok: true,
         summary:

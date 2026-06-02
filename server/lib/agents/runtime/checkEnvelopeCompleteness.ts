@@ -1,19 +1,40 @@
 /**
- * Wave W17 · checkEnvelopeCompleteness
+ * ============================================================================
+ * checkEnvelopeCompleteness.ts — objective quality gates on the final answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The final answer is a structured "answer envelope" — TL;DR, findings,
+ *   implications, recommendations, caveats, a domain lens, etc. This file holds
+ *   a few DETERMINISTIC checks (plain code, no LLM) that decide whether that
+ *   envelope is good enough to ship and, if not, produce a precise repair
+ *   instruction for the narrator to fix it. The three gates are:
+ *     1. Completeness — does an analytical answer actually have implications /
+ *        recommendations / a domain lens (when domain context was supplied)?
+ *     2. Citation honesty — does the `domainLens` only cite domain "pack" ids
+ *        that were really given to it (not hallucinated ones)?
+ *     3. Aggregation addressed — if the user asked a plain compute question
+ *        ("total sales by region") but the draft says "not computable" AND no
+ *        query was ever run, force the agent to actually run the calculation.
  *
- * Deterministic pre-LLM gate that decides whether an analytical answer's
- * structured envelope carries enough decision-grade content to ship.
+ * WHY IT MATTERS
+ *   The LLM "deep verifier" is expensive and sometimes wrong because it judges
+ *   subjectively. These checks are objective facts ("implications.length < 1"
+ *   is not an opinion), so they can run cheaply before the LLM and reliably
+ *   catch the most common ways an answer falls short of "decision-grade". They
+ *   route failures through the same narrator-repair path and are bounded at the
+ *   call site so they can't loop forever.
  *
- * Why pre-LLM and separate from `runVerifier`: the deep verifier is an
- * LLM-judged check (expensive, sometimes wrong). Envelope completeness is
- * objective — `implications.length < 2` is a fact, not an opinion — so we
- * gate it deterministically. Failures route through the same
- * `NarratorRepairContext` pathway the W4 deep verifier used to use, but
- * because the check is objective the agent loop is willing to retry it
- * even though the single-flow policy suppresses LLM-judged repairs.
+ * KEY PIECES
+ *   - checkEnvelopeCompleteness — flags missing decision-grade sections.
+ *   - checkDomainLensCitations — flags hallucinated domain-pack id citations.
+ *   - extractSuppliedPackIds — finds which pack ids were actually supplied.
+ *   - checkAggregationQuestionAddressed — catches "not computable" cop-outs on
+ *       literal aggregation questions where the columns clearly exist.
  *
- * Bounded by `config.maxVerifierRoundsFinal` at the call site so we can't
- * loop forever if the narrator can't satisfy the floor.
+ * HOW IT CONNECTS
+ *   Pure functions over the answer envelope (from shared/schema). Called by the
+ *   agent loop after the narrator drafts an answer; a failed gate yields a
+ *   description + courseCorrection the loop feeds back as a repair prompt.
  */
 import type { Message } from "../../../shared/schema.js";
 
@@ -92,7 +113,7 @@ export function checkEnvelopeCompleteness(
 }
 
 /**
- * W22 · anti-hallucination check on `domainLens` citations.
+ * Anti-hallucination check on `domainLens` citations.
  *
  * The narrator + synthesizer prompts instruct: "cite the pack id verbatim"
  * (e.g. `marico-haircare-portfolio`). This check confirms that any backtick-
@@ -179,10 +200,10 @@ export function extractSuppliedPackIds(domainContext: string | undefined): strin
 }
 
 // =============================================================================
-// Wave QL4 · "Aggregation question not addressed" envelope gate
+// "Aggregation question not addressed" envelope gate
 // =============================================================================
 //
-// Defense-in-depth for Wave QL2's deterministic synthesis floor. If QL2
+// Defense-in-depth for the deterministic synthesis floor. If that floor
 // misfires (column binding ambiguous, intent regex misses an unusual
 // phrasing) and the narrator still says "not computable" on a question whose
 // columns clearly exist, this gate forces ONE repair round with explicit
@@ -216,15 +237,15 @@ export interface AggregationAddressedInputs {
   ranExecuteQueryPlan: boolean;
   /**
    * Whether deterministic aggregation intent was detected for this question
-   * by the QL2 pipeline (PD1 / PD3 / simple-agg with metric resolvable).
-   * Passed by the call site — the gate itself is question-agnostic.
+   * by the quick-lookup pipeline (PD1 / PD3 / simple-agg with metric
+   * resolvable). Passed by the call site — the gate itself is question-agnostic.
    */
   hasAggregationIntent: boolean;
 }
 
 /**
- * Wave QL4 · Returns `{ ok: false }` only when the narrator's draft claims
- * the question is uncomputable AND aggregation intent was detected AND no
+ * Returns `{ ok: false }` only when the narrator's draft claims the question
+ * is uncomputable AND aggregation intent was detected AND no
  * analytical query ran. Otherwise passes. The combined trigger makes false
  * positives nearly impossible — a why/driver/comparison question with a
  * legitimate "data doesn't support that" narration will not fire because

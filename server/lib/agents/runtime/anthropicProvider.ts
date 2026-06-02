@@ -1,24 +1,50 @@
 /**
- * Wave W1 · anthropicProvider
+ * ============================================================================
+ * anthropicProvider.ts — call Anthropic's Claude API but make it look like
+ *                        an OpenAI response
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The rest of the server talks to language models in OpenAI's request/response
+ *   shape. This file lets some of those calls go to Anthropic's Claude models
+ *   instead, without the callers noticing. It sends one plain HTTP POST to
+ *   Anthropic's `/v1/messages` endpoint, then re-packages the reply into the
+ *   exact `ChatCompletion` object shape OpenAI returns. It is selected
+ *   automatically whenever the chosen model name starts with `claude-`.
+ *   It also handles two Anthropic quirks: Anthropic has no built-in "give me
+ *   JSON" mode, so when JSON is requested this file uses the standard trick of
+ *   "prefilling" the assistant's reply with an opening `{` and stitching it back
+ *   on; and Anthropic forbids two messages of the same role in a row, so
+ *   adjacent same-role messages are merged.
  *
- * Fetch-based Anthropic provider that returns OpenAI-shaped `ChatCompletion`
- * objects so `callLlm` can dispatch by model-name prefix without changing any
- * caller. Selected when `resolveModelFor(purpose)` (or an explicit `params.model`)
- * returns a string starting with `claude-`.
+ * WHY IT MATTERS
+ *   It is the bridge that lets the agent route specific roles (planner,
+ *   narrator, verifier, etc.) to Claude via per-purpose env overrides while
+ *   every other line of code keeps assuming OpenAI shapes. Without this adapter,
+ *   switching any role to Claude would require rewriting every call site.
  *
- * Why fetch instead of `@anthropic-ai/sdk`: we don't need streaming, file
- * uploads, or beta features — just one POST to /v1/messages. Skipping the SDK
- * keeps the dependency surface flat and the test mock trivial.
+ * KEY PIECES
+ *   - isAnthropicModel(model) — true when the model name routes to Anthropic
+ *     (starts with "claude-"). Centralised so tests and the dispatcher agree.
+ *   - callAnthropic(params, opts) — the main entry point; a drop-in replacement
+ *     for `openai.chat.completions.create`. Builds the request, sends it through
+ *     a concurrency gate, retries on 429 / 5xx with backoff, returns a
+ *     ChatCompletion. Throws if ANTHROPIC_API_KEY is missing.
+ *   - buildAnthropicRequest — translate OpenAI params → Anthropic body.
+ *   - mapResponseToOpenAI — translate Anthropic reply → OpenAI ChatCompletion.
+ *   - parseRetryAfterMs / jitteredBackoffMs / isRetryableStatus — retry helpers.
+ *   - __test__ — internal exports so unit tests can poke the private helpers.
  *
- * Why we shape the response like OpenAI's ChatCompletion: every existing call
- * site (completeJson + direct callLlm) expects `res.choices[0].message.content`
- * and `res.usage.{prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens}`.
- * Mapping at the provider boundary means zero refactor downstream.
+ * HOW IT CONNECTS
+ *   Uses `withAnthropicSlot` from ./anthropicSemaphore.js to cap how many Claude
+ *   calls run at once (prevents 429 storms when a dashboard turn fans out many
+ *   parallel calls). It is invoked by the LLM dispatch layer (the code behind
+ *   `callLlm` / `completeJson`) which decides per-call whether the model is an
+ *   OpenAI deployment or a Claude model. Token usage is reported in OpenAI's
+ *   shape so the shared usage-normalisation code needs no special case.
  *
- * JSON-mode handling: Anthropic has no `response_format: json_object`. The
- * recommended pattern is "prefill the assistant turn with `{`" — we do that
- * automatically when the OpenAI request has `response_format.type === "json_object"`,
- * and re-prepend the `{` to the response text so callers parse the same shape.
+ * WHY FETCH, NOT THE SDK
+ *   We only need one non-streaming POST. Skipping `@anthropic-ai/sdk` keeps the
+ *   dependency surface flat and makes the test mock (a fake `fetch`) trivial.
  */
 
 import type {
@@ -114,9 +140,8 @@ function buildAnthropicRequest(
     model: params.model,
     messages: turns,
     // Default fallback used only when caller does not pass an explicit
-    // max_tokens. Per-call max_tokens still wins. Bumped 4096 → 16000 so
-    // helper LLM calls that don't care about budget tuning don't silently
-    // truncate long outputs.
+    // max_tokens. Per-call max_tokens still wins. Set high so helper LLM calls
+    // that don't care about budget tuning don't silently truncate long outputs.
     max_tokens: params.max_tokens ?? 16000,
   };
   if (systems.length) body.system = systems.join("\n\n");
@@ -252,12 +277,12 @@ function isRetryableStatus(status: number): boolean {
  * Anthropic. Throws on missing `ANTHROPIC_API_KEY` so the failure surfaces at
  * the same layer as Azure OpenAI's missing-key check.
  *
- * RL1 · 429 + 5xx are retried with `Retry-After` honoured (clamped to
+ * 429 + 5xx are retried with `Retry-After` honoured (clamped to
  * `[RETRY_MIN_DELAY_MS, ANTHROPIC_RETRY_MAX_MS]`) when present, otherwise with
  * jittered exponential backoff. Bounded by `ANTHROPIC_MAX_ATTEMPTS` (default 3
- * = initial + 2 retries). Combined with RL2's process-wide concurrency
- * semaphore, this prevents 429 cascades during dashboard turns that fan out
- * many parallel LLM calls.
+ * = initial + 2 retries). Combined with the process-wide concurrency semaphore,
+ * this prevents 429 cascades during dashboard turns that fan out many parallel
+ * LLM calls.
  */
 export async function callAnthropic(
   params: ChatCompletionCreateParamsNonStreaming,
@@ -281,7 +306,7 @@ export async function callAnthropic(
 
   const { body, prefilledOpenBrace } = buildAnthropicRequest(params);
 
-  // RL2 · semaphore-gated execution. Holding the slot across retries keeps
+  // Semaphore-gated execution. Holding the slot across retries keeps
   // instantaneous outbound pressure bounded; the slot is released only after
   // the call resolves or exhausts its retries.
   return withAnthropicSlot(() => executeAnthropicCall({

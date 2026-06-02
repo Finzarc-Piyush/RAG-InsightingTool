@@ -1,27 +1,61 @@
 /**
- * WGR3 · compute_growth tool.
+ * ============================================================================
+ * computeGrowthTool.ts — the "compute_growth" tool (period-over-period change)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the tool that measures how a metric changed over time. It computes
+ *   period-over-period growth at a chosen "grain":
+ *     • YoY  = Year-over-Year (this Jan vs last Jan)
+ *     • QoQ  = Quarter-over-Quarter
+ *     • MoM  = Month-over-Month
+ *     • WoW  = Week-over-Week
+ *     • auto = pick the right one from how much history the data covers.
+ *   For each period it finds the matching prior period, then reports the
+ *   value, the prior value, the percentage change (growth_pct), and the
+ *   absolute change (growth_abs).
  *
- * Period-over-period growth analysis (YoY/QoQ/MoM/WoW). Three modes:
- *   - "series"        — one row per (dimension?, period) with growth_pct
- *   - "summary"       — one row per period (no dimension)
- *   - "rankByGrowth"  — fastest-growing N dimension values; this is the
- *                       "fastest growing market" path the user asked for
+ *   Three output modes:
+ *     • "series"       — one row per (dimension, period) with its growth.
+ *     • "summary"      — one row per period, no dimension breakdown.
+ *     • "rankByGrowth" — the fastest-growing (or biggest-declining) N
+ *       dimension values; this is the "which market grew fastest?" path.
  *
- * Routing:
- *   - When columnar DuckDB is active for the session, the SQL emitted by
- *     `buildGrowthSql` runs against the canonical `data` table (or the
- *     `data_filtered` view when an active filter is present, per FA2).
- *   - In-memory fallback uses `priorPeriodKey` from `growth/periodShift`
- *     to pair each period to its prior — supports the same three modes.
+ * WHY IT MATTERS
+ *   "Is it up or down, and by how much vs last year?" is one of the most
+ *   common business questions. Doing the prior-period matching correctly (and
+ *   choosing the right grain) is fiddly, so the agent delegates it here rather
+ *   than eyeballing a table.
  *
- * Wide-format awareness:
- *   - `periodIsoColumn` defaults to `wideFormatTransform.periodIsoColumn`
- *     when present. The DuckDB SQL ORDER BY uses it (per WPF3 convention).
- *   - On compound-shape (wide-format) datasets, when the args don't carry
- *     a Metric filter and no Metric is in groupBy, this tool refuses with
- *     a guidance message — same posture as WPF2's compound-shape guard.
- *     The planner's `injectCompoundShapeMetricGuard` is the canonical
- *     fixer; this is defense-in-depth.
+ * KEY PIECES
+ *   - computeGrowthArgsSchema — Zod schema for the tool arguments (metric,
+ *     optional dimension, date/period columns, grain, period kind, mode, topN,
+ *     aggregation, filters).
+ *   - registerComputeGrowthTool — registers the tool as "compute_growth".
+ *   - computeGrowthInMemory — the JavaScript fallback that aggregates by
+ *     (dimension, period) and pairs each period to its prior.
+ *   - detectTemporalCoverage / inferGrainFromKind — helpers that look at the
+ *     data to decide a sensible default grain.
+ *   - summarizeRanked / summarizeSeries — write the short human-readable result.
+ *
+ * HOW IT CONNECTS
+ *   Registered into the ToolRegistry (../toolRegistry.js).
+ *   Two execution paths:
+ *     • Preferred: DuckDB (a fast in-process SQL engine). When columnar
+ *       storage is active, SQL from ../../../growth/buildGrowthSql.js runs
+ *       against the session's data table (or the filtered view when an active
+ *       filter is set) via ColumnarStorageService (../../../columnarStorage.js)
+ *       and resolveSessionDataTable (../../../activeFilter/...).
+ *     • Fallback: in-memory, using priorPeriodKey/chooseAutoGrain from
+ *       ../../../growth/periodShift.js.
+ *
+ * WIDE-FORMAT AWARENESS
+ *   "Wide format" = a dataset where time periods are spread across columns and
+ *   a single "Metric" column names what each Value row measures. For these,
+ *   periodIsoColumn defaults to the detected wide-format period column. On
+ *   "compound" wide-format data, if the caller hasn't pinned a single Metric
+ *   (via a filter or groupBy), the tool refuses — summing Value across mixed
+ *   metrics produces nonsense. The planner normally injects that guard; this
+ *   is a second line of defense.
  */
 import { z } from "zod";
 import type { ToolRegistry } from "../toolRegistry.js";
@@ -337,7 +371,7 @@ export function registerComputeGrowthTool(registry: ToolRegistry) {
       }
 
       // Compound-shape Metric guard (defense-in-depth — planner should have
-      // already injected this via WPF2).
+      // already injected this).
       if (
         wft?.detected &&
         wft.shape === "compound" &&

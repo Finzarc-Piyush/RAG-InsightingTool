@@ -1,18 +1,47 @@
 /**
- * Wave QL1 · Quick-lookup planner. One Mini-tier LLM call that turns a simple
- * lookup question into a schema-grounded `QueryPlanBody`.
+ * ============================================================================
+ * quickAnswerPlanner.ts — the "fast path" for simple data-lookup questions
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Most of the app answers questions with a heavyweight "agentic loop" (an AI
+ *   that plans, runs many tools, verifies, and writes a long answer). But some
+ *   questions are dead simple — "top 10 brands by sales", "how many orders",
+ *   "latest 5 rows". This file is the shortcut for those. It makes ONE cheap
+ *   LLM call (a small/"Mini-tier" model) that turns the question into a single
+ *   `QueryPlanBody` — a structured description of a database query (which
+ *   columns to group by, what to sum/count, how to sort, how many rows). That
+ *   plan is later executed against the dataset to produce the answer.
  *
- * Inputs to the user prompt are kept slim (under ~2KB) — only the columns
- * the planner needs to pick groupBy/aggregations/filters from, plus the
- * wide-format shape block and dimension-hierarchy block already used by the
- * full planner. Repair budget is ONE retry on Zod fail; on terminal failure
- * the caller (`tryQuickAnswer`) returns null and the request falls through
- * to the full agentic loop.
+ *   Small LLMs often emit slightly-wrong JSON, so this file also includes
+ *   "sanitizers" that clean common mistakes (a `null` where a field should be
+ *   absent, `limit: 0`, extra unexpected keys) before the strict validator runs.
  *
- * The output plan is run through the existing `normalizeAndValidateQueryPlanBody`
- * + planner-side deterministic repairs (`injectRollupExcludeFilters`,
- * `injectCompoundShapeMetricGuard`) so wide-format and hierarchy invariants
- * are honoured for free.
+ * WHY IT MATTERS
+ *   The fast path makes trivial lookups feel instant and cheap instead of
+ *   spinning up the full multi-tool reasoning engine. It is intentionally
+ *   fail-safe: if it can't produce a valid plan, it returns null and the caller
+ *   simply falls back to the full agentic loop — so it can only ever speed
+ *   things up, never break an answer.
+ *
+ * KEY PIECES
+ *   - sanitizeLlmPlan / sanitizeLlmAggregation / sanitizeLlmResponse —
+ *     preprocessors that scrub common small-model JSON mistakes.
+ *   - quickLookupPlanResponseSchema — the strict shape: a `plan` + a one-line
+ *     restatement of the question (used as a UI header / sanity check).
+ *   - runQuickLookupPlanner(ctx, opts) — the single LLM call; returns the
+ *     plan + restatement, or null on any failure. NEVER throws.
+ *   - buildSchemaChips / buildUserPrompt — build the slim (~2KB) prompt: just
+ *     the columns + dataset-shape + hierarchy + user/domain context the planner
+ *     needs to pick the right groupBy/aggregations/filters.
+ *
+ * HOW IT CONNECTS
+ *   Called by the fast-path entry (`tryQuickAnswer`). Uses `completeJson` from
+ *   ./llmJson.js for the LLM call (which owns its own 3-attempt repair loop),
+ *   `queryPlanBodySchema` from ../../queryPlanExecutor.js for the plan shape,
+ *   and the shared context-block formatters in ./context.js. The plan it emits
+ *   is later run through the same deterministic repairs the full planner uses
+ *   (rollup-exclude filters, compound-shape metric guard) so wide-format and
+ *   dimension-hierarchy rules are honoured for free.
  */
 
 import { z } from "zod";
@@ -27,7 +56,7 @@ import {
 import type { AgentExecutionContext } from "./types.js";
 import type { DataSummary } from "../../../shared/schema.js";
 
-// ── LLM output sanitizers (W-QL-FIX1) ──────────────────────────────────
+// ── LLM output sanitizers ──────────────────────────────────────────────
 // The Mini-tier LLM frequently produces JSON that fails the strict
 // queryPlanBodySchema. These preprocessors fix the three common patterns:
 //   1. `null` on optional fields (Zod .optional() accepts undefined, not null)
@@ -152,11 +181,11 @@ interface RunQuickLookupPlannerOpts {
   /** Optional pre-stub override (tests). Production passes nothing. */
   systemPromptOverride?: string;
   /**
-   * Wave QL3 · Optional intent steering hint. When QL3 retries after a
-   * null result, the caller passes the detected PD1/PD3 shape here so the
-   * planner LLM gets an explicit "use perDimension + this groupBy" nudge.
-   * Appended to the user prompt without changing the system prompt so
-   * prompt-cache hits stay maximal on the first attempt.
+   * Optional intent-steering hint. When the caller retries after a null
+   * result, it can pass a detected query shape here so the planner LLM gets
+   * an explicit "use perDimension + this groupBy" nudge. Appended to the user
+   * prompt without changing the system prompt so prompt-cache hits stay
+   * maximal on the first attempt.
    */
   intentHint?: string;
 }
@@ -210,10 +239,10 @@ function buildUserPrompt(ctx: AgentExecutionContext): string {
           .join("\n")}`
       : "";
 
-  // Wave B1 · Bring the same first-class context the full planner sees so
-  // QL1 doesn't return a "perfect" lookup that quietly ignores user
-  // intent / domain vocabulary. Pre-B1 QL1's user prompt was just
-  // schema + wide-format + hierarchies + active filter. It was BLIND to:
+  // Bring the same first-class context the full planner sees so the quick
+  // path doesn't return a "perfect" lookup that quietly ignores user intent
+  // or domain vocabulary. This adds, on top of schema + wide-format +
+  // hierarchies + active filter:
   //   - the user's free-text "additional context" notes (ctx.permanentContext)
   //   - the FMCG/Marico domain knowledge packs (ctx.domainContext)
   //   - prior-turn investigation digests (ctx.sessionAnalysisContext.sessionKnowledge.priorInvestigations)
@@ -221,17 +250,17 @@ function buildUserPrompt(ctx: AgentExecutionContext): string {
   //
   // Concrete failures this closes:
   //   - "always exclude Central region from regional rollups" lives in
-  //     permanentContext → QL1 had no way to honor it
+  //     permanentContext → otherwise the quick planner has no way to honor it
   //   - "what's our top product" in a session where the user already
-  //     asked "show me brand-level Marico" — QL1 doesn't see the prior
-  //     and re-asks the SKU-level breakdown
-  //   - VND/MAT/L12M terminology in the domain packs — QL1 couldn't
-  //     resolve those metric names without re-asking
+  //     asked "show me brand-level Marico" — without the prior, the planner
+  //     re-asks the SKU-level breakdown
+  //   - VND/MAT/L12M terminology in the domain packs — needed to resolve
+  //     those metric names without re-asking
   //
-  // Caps are tighter than the full planner's (this is the MINI-tier
-  // path; we want the prompt under ~5KB even with full context). The
-  // helper itself reads `ctx.permanentContext`, `ctx.domainContext`, and
-  // the prior-investigations digest from `ctx.sessionAnalysisContext`.
+  // Caps are tighter than the full planner's (this is the MINI-tier path;
+  // we want the prompt under ~5KB even with full context). The helper reads
+  // `ctx.permanentContext`, `ctx.domainContext`, and the prior-investigations
+  // digest from `ctx.sessionAnalysisContext`.
   const userSessionBlocks = formatUserAndSessionJsonBlocks(ctx, {
     maxUserChars: 800,
     maxJsonChars: 1500,

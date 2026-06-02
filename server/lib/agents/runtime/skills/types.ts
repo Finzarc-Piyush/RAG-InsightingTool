@@ -1,15 +1,36 @@
 /**
- * Shared types for the Phase-1 analysis skills catalog.
+ * ============================================================================
+ * types.ts — the shared shapes (contracts) for the analysis skills catalog
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the TypeScript interfaces every skill must satisfy, plus the two
+ *   feature-flag helpers that gate the whole subsystem. A "skill" is a named
+ *   analytical competency; this file says what one looks like in code: it knows
+ *   which question shapes it handles, how to expand into an ordered list of
+ *   PlanSteps built from existing tools (skills add no new tool types), and
+ *   whether those steps may run concurrently.
  *
- * A Skill is a named analytical competency. Each skill knows:
- *  - the question shapes it handles,
- *  - how to expand into an ordered list of PlanSteps using the existing
- *    tool registry (no new tool types),
- *  - whether its steps can run concurrently (PR 1.E).
+ * WHY IT MATTERS
+ *   Every skill file and the registry import these types, so this is the single
+ *   contract that keeps them interchangeable. The flag helpers here are the
+ *   on/off switch and gradual-rollout control for the entire skills feature.
  *
- * Skills are flag-gated behind `DEEP_ANALYSIS_SKILLS_ENABLED=true` (see
- * isDeepAnalysisSkillsEnabled) and rolled out per-skill via a coarse
- * override flag `DEEP_ANALYSIS_SKILL_ALLOWLIST` (comma-separated names).
+ * KEY PIECES
+ *   - SkillInvocation — the concrete output of a skill: an id, a label for the
+ *     thinking panel, the ordered PlanSteps, a parallelizable flag, and an
+ *     optional rationale for traces.
+ *   - AnalysisSkill — the skill itself: name, description (shown in the planner
+ *     manifest), appliesTo() (gate), plan() (build steps), handles (question
+ *     shapes), and priority (higher wins when several skills match — narrow,
+ *     stricter skills should carry a higher number).
+ *   - isDeepAnalysisSkillsEnabled — true only when DEEP_ANALYSIS_SKILLS_ENABLED
+ *     === "true"; the master switch.
+ *   - skillAllowlist — parses DEEP_ANALYSIS_SKILL_ALLOWLIST (comma-separated
+ *     names) into a Set, or null when unset (meaning all skills eligible).
+ *
+ * HOW IT CONNECTS
+ *   Imported by registry.ts and every skill file. PlanStep / AgentExecutionContext
+ *   come from ../types.js; AnalysisBrief / QuestionShape from the shared schema.
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief, QuestionShape } from "../../../../shared/schema.js";

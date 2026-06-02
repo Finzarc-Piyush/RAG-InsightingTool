@@ -1,3 +1,31 @@
+/**
+ * ============================================================================
+ * workingMemory.ts — format past steps + order plan steps for execution
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Two jobs for the agent loop. (1) Format "working memory" — the recent tool
+ *   calls and their results — into a compact text block the planner can read, so
+ *   it knows what's already been tried. (2) Order the planner's steps for safe
+ *   execution: sort them so every step runs after the steps it depends on, and
+ *   group steps that are allowed to run in parallel.
+ *
+ * WHY IT MATTERS
+ *   The planner emits steps that can reference each other ("step B needs step A
+ *   first") and can mark some as parallelizable. This file turns that flat list
+ *   into a correct, partly-parallel execution order — and detects impossible
+ *   plans (missing or circular dependencies) so the loop can reject them.
+ *
+ * KEY PIECES
+ *   - formatWorkingMemoryBlock(entries) — compact recap of the last 12 steps.
+ *   - sortPlanStepsByDependency(steps) — topological sort; returns null on a
+ *     missing or cyclic dependency.
+ *   - groupSortedStepsForExecution(sorted) — bucket consecutive same-group steps
+ *     into parallel batches (call AFTER sorting).
+ *
+ * HOW IT CONNECTS
+ *   Reads WorkingMemoryEntry / PlanStep from types.js. Re-exported via index.ts;
+ *   used by the act loop to schedule and recap steps. Pure functions, no I/O.
+ */
 import type { WorkingMemoryEntry } from "./types.js";
 import type { PlanStep } from "./types.js";
 

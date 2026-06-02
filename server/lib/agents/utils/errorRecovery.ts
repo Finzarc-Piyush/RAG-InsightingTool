@@ -1,3 +1,41 @@
+/**
+ * ============================================================================
+ * errorRecovery.ts — turn analysis failures into helpful, user-facing replies
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When something goes wrong while answering a question (bad column name, data
+ *   problem, low-confidence intent, etc.), this file builds a friendly response
+ *   instead of dumping a raw stack trace on the user. It inspects the error
+ *   message and the classified intent, then writes a plain-English explanation
+ *   plus concrete next-step suggestions (e.g. "Did you mean: <column>?" or
+ *   example questions to try). It also decides whether a failure is worth
+ *   retrying, and produces fallback question suggestions tailored to the
+ *   analysis type.
+ *
+ * WHY IT MATTERS
+ *   A good analytical assistant has to fail gracefully. These helpers keep the
+ *   chat experience usable when a query can't be answered — guiding the user
+ *   toward a question that will work, and letting the runtime quietly retry
+ *   transient problems (timeouts, rate limits) rather than giving up.
+ *
+ * KEY PIECES
+ *   - ErrorResponse — the shape of a recovery reply (answer text, optional
+ *       charts/insights, clarification flag, raw error, suggestions).
+ *   - createErrorResponse(error, intent, summary?, suggestions?) — builds the
+ *       user-facing message; treats certain "complex" questions as still-being-
+ *       processed rather than as errors so a more general handler can take over.
+ *   - shouldRetry(error, attempt, maxAttempts?) — true only for transient,
+ *       retryable error keywords (timeout, network, rate limit, …).
+ *   - getFallbackSuggestions(intent, summary) — example questions to offer when
+ *       we couldn't answer, chosen by intent type (correlation / chart / other).
+ *
+ * HOW IT CONNECTS
+ *   Uses `AnalysisIntent` (../intentClassifier.js) to read what the user wanted
+ *   and how confident we were, and `DataSummary` / `ChartSpec` / `Insight`
+ *   (../../../shared/schema.js) to mention real column names in suggestions.
+ *   Called by the agent runtime / orchestration layer when a tool or handler
+ *   throws.
+ */
 import { AnalysisIntent } from '../intentClassifier.js';
 import { DataSummary } from '../../../shared/schema.js';
 import { ChartSpec, Insight } from '../../../shared/schema.js';

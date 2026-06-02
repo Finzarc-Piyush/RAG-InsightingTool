@@ -1,3 +1,136 @@
+/**
+ * ============================================================================
+ * agentLoop.service.ts — the "brain stem" that turns one user question into one
+ *                         decision-grade answer, streamed live to the browser.
+ * ============================================================================
+ *
+ * WHAT THIS FILE DOES
+ *   This is the single orchestrator for answering an analytical question. A user
+ *   types something like "why did East-region tech sales drop in April?" and this
+ *   file runs the whole show end to end. The exported entry point `runAgentTurn`
+ *   walks through these phases, emitting progress to the UI the entire time:
+ *
+ *     1. QUICK-LOOKUP FAST PATH — If the question is a trivial lookup ("top 5
+ *        SKUs by sales", "average price"), short-circuit the whole pipeline with
+ *        one tiny planner call + one DuckDB query and return immediately. Most
+ *        questions are NOT this simple, so we fall through to the full loop.
+ *
+ *     2. PRE-PLANNING (analysis mode only) — Build an "analysis brief" (the
+ *        model's structured read of WHAT the user asked: the outcome metric, the
+ *        segments, the time window) and generate "hypotheses" (candidate
+ *        explanations to test). Also do an upfront RAG retrieval (RAG = Retrieval
+ *        Augmented Generation: pull semantically-relevant chunks from the indexed
+ *        dataset + notes so the planner has grounding) and recall prior analyses
+ *        from this session's memory journal.
+ *
+ *     3. PLAN → ACT → REFLECT LOOP — The heart of the engine:
+ *          - PLAN: the planner LLM emits a list of STEPS, each naming a TOOL
+ *            (DuckDB query, correlation, segment-driver analysis, MMM budget
+ *            optimiser, web search, chart builder, …) plus its arguments. A
+ *            registered "skill" can bypass the planner with pre-sequenced steps.
+ *          - ACT: each step runs its tool via the ToolRegistry. Independent steps
+ *            in a parallel group run concurrently. Results are recorded as
+ *            "observations" (text), "structured observations" (full payloads),
+ *            charts, tables, and "findings" on the BLACKBOARD (a shared scratch-
+ *            pad of facts/hypotheses/open-questions the agents read and write).
+ *          - REFLECT: after each step the REFLECTOR LLM decides: continue,
+ *            finish, clarify, replan, or investigate a gap. (Note the SINGLE-FLOW
+ *            policy invariant: replan/rewrite suggestions are emitted as visible
+ *            `flow_decision` events but do NOT silently override the plan.)
+ *        The loop is bounded by wall-time, max-steps, max-tool-calls, and max-LLM-
+ *        calls budgets so a runaway turn can't burn forever.
+ *
+ *     4. SYNTHESIS — Turn observations + blackboard findings into the ANSWER
+ *        ENVELOPE: a structured, decision-grade answer (body/TL;DR, key insight,
+ *        findings, implications grouped by time horizon, recommendations,
+ *        magnitudes with confidence, domain lens, caveats, follow-up CTAs).
+ *        Preferred writer is the NARRATOR; if the blackboard is thin it falls
+ *        back to a synthesizer, then to retry prompts, then to a deterministic
+ *        non-LLM render — answer quality degrades gracefully, never to a crash.
+ *
+ *     5. ENVELOPE-COMPLETENESS REPAIR — Deterministic (non-LLM-opinion) checks:
+ *        is the envelope missing required sections? does it cite a domain pack id
+ *        that wasn't supplied (hallucination)? are magnitudes fabricated vs. the
+ *        observations? Failures trigger bounded narrator repair rounds.
+ *
+ *     6. CHARTS & DASHBOARD — Promote useful intermediate query results to
+ *        charts, materialize plan-time deferred charts, let the VISUAL PLANNER
+ *        propose extra charts, and (only when the user explicitly asked for a
+ *        dashboard) run a deterministic "feature sweep" to fill coverage gaps.
+ *        All chart sources are then deduped + capped. If the turn qualifies, a
+ *        DashboardSpec is built and (on the auto-create track) persisted.
+ *
+ *     7. FINAL VERIFICATION — The VERIFIER LLM critiques the finished narrative
+ *        (groundedness, overclaimed confidence). Under single-flow it can flag
+ *        but not silently swap the answer.
+ *
+ *     8. RETURN — Assemble the AgentLoopResult (answer + charts + envelope +
+ *        trace + persistable internals + pivot artifacts + dashboard, …). A
+ *        post-answer "business actions" agent may run un-awaited.
+ *
+ *   Throughout, everything is streamed to the client over SSE (Server-Sent
+ *   Events: a one-way HTTP stream the browser subscribes to). The `emit` callback
+ *   pushes named events — `thinking`, `plan`, `tool_call`, `tool_result`,
+ *   `answer_chunk`, `critic_verdict`, `flow_decision`, `dashboard_created`, etc. —
+ *   so the UI shows the agent's reasoning live instead of one frozen spinner.
+ *
+ * WHY IT MATTERS
+ *   This is the spine of the product. Every analytical answer, chart, and
+ *   dashboard the user sees flows through `runAgentTurn`. The chat-stream HTTP
+ *   route calls it; the planner, all tools, the reflector, the narrator, and the
+ *   verifier are the muscles, but this file is the nervous system that sequences
+ *   them, enforces budgets, handles client-disconnect, and guarantees a
+ *   well-formed answer envelope no matter which sub-step fails. The `AGENTIC_LOOP`
+ *   is mandatory (invariant #1) — there is no legacy fallback path; this IS the
+ *   engine.
+ *
+ * KEY PIECES
+ *   - runAgentTurn(ctx, config, emit)  — THE exported entry point; runs the whole
+ *                                        plan→act→reflect→synthesize→verify cycle.
+ *   - synthesizeFinalAnswerEnvelope    — fallback writer (when the narrator is
+ *                                        skipped) that produces the JSON answer
+ *                                        envelope, with narrative/plain-text/dump
+ *                                        retries if JSON synthesis fails.
+ *   - runNarrativeRetry / runPlainTextRetry — stricter retry prompts that refuse
+ *                                        to emit an empty or placeholder answer.
+ *   - runPlannerWithOneRetry           — one corrective re-attempt at planning
+ *                                        when the first plan fails validation.
+ *   - finalizeMergedCharts             — final dedupe + cap across all chart
+ *                                        sources; honours exclusion intent.
+ *   - materializeDeferredBuildCharts   — builds plan-time `build_chart` specs from
+ *                                        the SAME analytical frame the answer used.
+ *   - buildAutoPivotSpec               — derives the dashboard's auto-attached
+ *                                        pivot tile so it mirrors the chat pivot.
+ *   - capAgentTrace                    — byte-caps the trace before persistence.
+ *   - finalAnswerEnvelopeSchema        — the zod shape the synthesizer must emit.
+ *
+ * HOW IT CONNECTS (concrete collaborators)
+ *   - Planner ............... ./planner.ts (+ ./runHypothesisAndBrief.ts,
+ *                             ./analysisBrief.ts, ./hypothesisPlanner.ts)
+ *   - Tools (act phase) ..... ./toolRegistry.ts + ./tools/registerTools.ts
+ *   - Skills (plan bypass) .. ./skills/index.ts, ./skills/parallelResolve.ts
+ *   - Reflector ............. ./reflector.ts
+ *   - Narrator (writer) ..... ./narratorAgent.ts
+ *   - Synth context bundle .. ./buildSynthesisContext.ts
+ *   - Verifier .............. ./verifier.ts (+ ./verifierHelpers.ts, verdicts
+ *                             from ./schemas.ts — never string literals, inv. #7)
+ *   - Blackboard ............ ./analyticalBlackboard.ts
+ *   - Memory / RAG .......... ./memoryRecall.ts, ../../rag/*, ./contextAgent.ts
+ *   - Charts ................ ./chartFromTable.ts, ./visualPlanner.ts,
+ *                             ./dashboardFeatureSweep.ts, ../../chartGenerator.ts
+ *   - Dashboards ............ ./buildDashboard.ts, ../../../models/dashboard.model.ts
+ *   - Envelope checks ....... ./checkEnvelopeCompleteness.ts and siblings
+ *   - Persistable internals . ./buildAgentInternals.ts, ../../turnCheckpoint.ts
+ *   - Budget optimiser glue . ./budgetOptimizerAdapter.ts
+ *   - Business actions ...... ./businessActionsAgent.ts
+ *
+ *   NOTE for the noob: "LLM" = Large Language Model (the AI). "envelope" = the
+ *   structured answer object. "blackboard" = shared in-memory notes. "SSE" =
+ *   live event stream to the browser. "RAG" = fetching relevant context to feed
+ *   the model. "tool" = a deterministic function (SQL query, optimiser, …) the
+ *   plan calls. The agents (planner/reflector/narrator/verifier) are just LLM
+ *   calls with specific jobs, coordinated by this file.
+ */
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import type {
@@ -200,19 +333,11 @@ function extractStatsFromNumericPayload(
   return out;
 }
 
-/** Total chart cap for a dashboard turn (planner + visualPlanner + feature sweep). */
-// DB4 · 14 → 18. The pre-DB4 cap was tight enough that the sweep frequently
-// stopped before it reached the long-tail high-cardinality dimensions that
-// DB4's top-N+Other bucketing now charts. 18 leaves headroom for the new
-// bucketed entries while keeping the dashboard legible.
-// DPF6 · 18 → 24. When the user explicitly asks for a dashboard
-// ("give me a sales dashboard", "hr dashboard", "marketing dashboard")
-// they want comprehensive coverage. 18 silently dropped any sweep-emitted
-// charts that bumped against `finalizeMergedCharts`'s parallel 14-default
-// cap (the two values were inconsistent — finalize would re-cap below
-// the sweep's headroom). 24 matches the per-sheet schema ceiling
-// (`dashboardSheetSpecSchema.charts.max(24)`), so the schema becomes the
-// single source of truth for the max — no runtime cap re-trims below it.
+/**
+ * Total chart cap for a dashboard turn (planner + visualPlanner + feature sweep).
+ * Kept equal to the per-sheet schema ceiling (`dashboardSheetSpecSchema.charts.max(24)`)
+ * so the schema is the single source of truth — no runtime cap re-trims below it.
+ */
 const DASHBOARD_CHART_HARD_CAP = 24;
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
@@ -515,7 +640,7 @@ function materializeDeferredBuildCharts(
 /**
  * Final pass over `mergedCharts`: dedupe by axis-signature and cap at
  * `AGENT_MAX_FINAL_CHARTS_PER_TURN` (default 24, matches the schema
- * ceiling and the dashboard-turn hard cap).
+ * ceiling and the dashboard-turn hard cap; operators can tighten via env var).
  * Mutates the array in place; called once at end of turn after all chart
  * sources (per-step promotion, materializeDeferredBuildCharts, visualPlanner,
  * dashboard feature sweep) have populated it.
@@ -523,14 +648,6 @@ function materializeDeferredBuildCharts(
  * Dedupe order: first-seen wins (preserves chart sources earlier in the turn).
  * Cap order: rows-count wins (more informative survives), ties broken by
  * earliest emission.
- *
- * DPF6 · default raised 14 → 24 so an explicit dashboard ask ("give me a
- * sales dashboard") doesn't silently lose charts the feature sweep
- * deliberately emitted to fill coverage gaps. The sweep budget is gated
- * by `DASHBOARD_CHART_HARD_CAP` (also 24); aligning the two means no
- * runtime cap below the schema's per-sheet ceiling
- * (`dashboardSheetSpecSchema.charts.max(24)`). Operators can still tighten
- * via the env var; the previous 14 default was the silent regression.
  */
 function finalizeMergedCharts(
   mergedCharts: ChartSpec[],
@@ -659,19 +776,17 @@ const magnitudeSchema = z.object({
   confidence: z.enum(["low", "medium", "high"]).optional(),
 });
 
-// W2 · `body` MUST be non-empty. Without `.min(1)` the LLM was free to
-// return `{ body: "", ctas: [...], magnitudes: [...] }`, which validated
-// silently and cascaded through every downstream check until the final
-// answer became the deterministic observation dump.
-// Caps mirror the loosened narrator/messageAnswerEnvelope schemas so the
-// fallback path can also produce calibrated-length output.
+// `body` MUST be non-empty (`.min(1)`): an empty body would validate silently
+// and cascade through every downstream check until the final answer degraded to
+// the deterministic observation dump. Caps mirror the narrator /
+// messageAnswerEnvelope schemas so this fallback path produces the same shape.
 const finalAnswerEnvelopeSchema = z.object({
   body: z.string().min(1),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
   magnitudes: z.array(magnitudeSchema).max(10).optional(),
   unexplained: z.string().max(1200).optional(),
-  // W8 · decision-grade extensions, mirrored from the narrator schema so the
+  // Decision-grade extensions, mirrored from the narrator schema so the
   // synthesizer fallback path produces the same envelope shape and the
   // AnswerCard renders identical sections regardless of which writer ran.
   implications: z
@@ -801,9 +916,8 @@ When the user message says "questionShape: none" you may omit magnitudes and une
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
-    // 4500 → 8000. With rigid length bands removed and per-field schema caps
-    // relaxed, the synthesizer fallback also needs headroom for richer
-    // answers when warranted. Per-call max_tokens still wins.
+    // Headroom for richer answers when the question warrants it (length bands are
+    // not enforced; the model calibrates to the question).
     maxTokens: 8000,
     temperature: getInsightTemperatureConservative(),
     model: getInsightModel(),
@@ -951,9 +1065,9 @@ async function runNarrativeRetry(
         { role: "user", content: user },
       ],
       temperature: 0.4,
-      // 1400 → 4000. The narrative retry is "2-4 sentences" but for big
-      // analytical questions those sentences carry compact prose with several
-      // numeric citations. Headroom prevents mid-sentence clipping.
+      // The narrative retry is "2-4 sentences" but for big analytical questions
+      // those sentences carry compact prose with several numeric citations.
+      // Headroom prevents mid-sentence clipping.
       max_tokens: 4000,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
@@ -988,8 +1102,8 @@ async function runPlainTextRetry(
         { role: "user", content: user },
       ],
       temperature: 0.35,
-      // 3500 → 8000. Plain-text retry is the softer fallback path that can
-      // legitimately produce a long answer for a deep analytical question.
+      // Plain-text retry is the softer fallback path that can legitimately
+      // produce a long answer for a deep analytical question.
       max_tokens: 8000,
     },
     { purpose: LLM_PURPOSE.FINAL_ANSWER }
@@ -1018,12 +1132,9 @@ function buildPreSynthesisMidTurnSummary(
   ].join("\n\n");
 }
 
-// W20 fix · `appendEnvelopeInsight` was previously only re-exported from
-// this module, which meant the local references below were unbound (TS
-// flagged this all along — the synthesis catch silently swallowed the
-// `ReferenceError` until the W20 e2e test ran the path with a real call).
-// Import explicitly so the local binding exists; keep the re-export so
-// downstream consumers continue to import via the agent loop.
+// Import explicitly so the local binding exists (the helper is used below);
+// keep the re-export so downstream consumers continue to import it via the
+// agent loop module.
 import { appendEnvelopeInsight } from "./insightHelpers.js";
 export { appendEnvelopeInsight };
 
@@ -1217,6 +1328,34 @@ export async function runAgentTurn(
   );
 
   const deadline = Date.now() + config.maxWallTimeMs;
+
+  // Wave R1 · Direct-answer front door. One LLM triage call decides whether
+  // the question can be answered with NO tools (conversational, general
+  // knowledge, or dataset metadata answerable straight from the summary). On
+  // "direct" it returns a text-only result and we short-circuit; on "escalate",
+  // any uncertainty, or any error it returns null and we fall through to the
+  // quick-lookup path and then the full loop. Runs ABOVE quick-lookup so a
+  // greeting never pays even the quick-lookup Mini planner call.
+  try {
+    const { tryDirectAnswer } = await import("./directAnswerPath.js");
+    const directResult = await tryDirectAnswer({
+      ctx,
+      turnId,
+      onLlmCall,
+      safeEmit,
+    });
+    if (directResult) {
+      trace.endedAt = Date.now();
+      return directResult;
+    }
+  } catch (err) {
+    // Front door is opt-in and best-effort: any unexpected throw falls through
+    // to the existing pipeline. Logged so prod can spot a regressing helper.
+    agentLog("direct_answer.path_threw", {
+      turnId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Wave QL1 · Quick-lookup fast path. When the question matches a simple
   // lookup shape (top-N, list, count, average, latest), bypass the full
@@ -2063,9 +2202,9 @@ export async function runAgentTurn(
             candidate += `\nSuggested columns: ${result.suggestedColumns.join(", ")}`;
           }
 
-          // WTL2 · 8_000 → 14_000. Evidence is what the verifier inspects; the
-          // narrator-side cap (AGENT_OBSERVATION_MAX_CHARS) was already 24k →
-          // 40k under WTL1, so giving the verifier a richer slice is consistent.
+          // Evidence is what the verifier inspects; kept generous (and consistent
+          // with the larger narrator-side observation cap) so the verifier sees a
+          // rich enough slice to judge groundedness.
           const evidence = `${result.summary}\n${lastNumeric || ""}`.slice(0, 14_000);
 
           if (hasNarrativeCandidate) {
@@ -2096,7 +2235,6 @@ export async function runAgentTurn(
               // Wave A2 · structured verifier-verdict record persisted via
               // agentInternals so subsequent turns / debugging can replay.
               {
-                // WTL2 · 1_800 → 3_000 (issue lines), 3_500 → 6_000 (evidence).
                 const issueLines = verdict.issues
                   .map((i) => `${i.code}: ${i.description}`)
                   .join("\n")
@@ -3625,6 +3763,31 @@ export async function runAgentTurn(
           turnId,
           observationsCount: observations.length,
           toolCallsDone,
+        });
+      }
+    }
+
+    // Wave R3 · deterministic bibliography. When this turn pulled real external
+    // web sources onto the blackboard (web_search hits, source: "web"), append a
+    // "## Sources" list parsed mechanically from those hits so external-research
+    // answers carry a verifiable bibliography. Built deterministically — never
+    // LLM-authored — so citations can't be hallucinated or dropped. Best-effort:
+    // any failure leaves the answer untouched. (No web sources → no block; the
+    // knowledge-cutoff caveat for knowledge-only answers is narrator-authored.)
+    if (answer?.trim()) {
+      try {
+        const { buildBibliographyBlock } = await import(
+          "./tools/webSearchTool.js"
+        );
+        const webContents = (blackboard.domainContext ?? [])
+          .filter((e) => e.source === "web")
+          .map((e) => e.content);
+        const biblio = buildBibliographyBlock(webContents);
+        if (biblio) answer = `${answer}\n\n${biblio}`;
+      } catch (err) {
+        agentLog("bibliography.build_failed", {
+          turnId,
+          error: err instanceof Error ? err.message : String(err),
         });
       }
     }

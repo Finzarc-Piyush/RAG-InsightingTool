@@ -1,3 +1,41 @@
+/**
+ * ============================================================================
+ * twoSegmentCompareTool.ts — compare one metric across two cohorts (`run_two_segment_compare`)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_two_segment_compare` tool, a deterministic "A vs B"
+ *   comparison. The caller defines two segments (cohorts) by supplying a set of
+ *   row filters for each — e.g. segment A = "East region", segment B =
+ *   "everything not East" — and one metric column. The tool aggregates that
+ *   metric for each segment (sum, mean, or count), then reports each segment's
+ *   value, its share of the pair's combined total ("mix"), and the A-per-B
+ *   ratio. When it makes statistical sense it also runs a Welch t-test on the
+ *   row-level values to attach a p-value (how likely the gap is just noise) and
+ *   sample size.
+ *
+ * WHY IT MATTERS
+ *   Answers explicit contrast questions ("East vs non-East", "treated vs
+ *   control", "is the difference mix or rate?"). "Deterministic" means same
+ *   inputs always give the same numbers — it does no LLM guessing, just
+ *   arithmetic over the rows, so it's a trustworthy building block the agent
+ *   can chart or cite.
+ *
+ * KEY PIECES
+ *   - twoSegmentCompareArgsSchema — validates metric column, the two segments'
+ *     labels + filters, and the aggregation mode.
+ *   - aggregateSegment — sums/means/counts the metric over one segment's rows.
+ *   - buildSegmentCompareEvidence — runs the Welch t-test and formats the
+ *     canonical evidence suffix (skipped for count aggregation or tiny samples).
+ *   - registerTwoSegmentCompareTool — registers the tool and wires it together.
+ *
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry (toolRegistry.ts). Reads
+ *   rows from `ctx.exec` (capped via diagnosticSliceRowCap), filters them with
+ *   filterRowsByDimensionFilters (../../../dataTransform.js), tests via
+ *   runSignificanceTest (../../../significanceTests.js), and formats evidence
+ *   via composeFindingDetail (../formatFindingEvidence.js). Often paired with
+ *   build_chart to visualise the A vs B bars.
+ */
 import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
@@ -63,17 +101,17 @@ function aggregateSegment(
 }
 
 /**
- * Wave WQ7 · build the canonical FindingEvidence suffix for the two-segment
- * comparison. Welch's t-test on the row-level numeric values when both
- * segments have ≥3 finite observations and the aggregation is mean or sum
- * (testing the per-row mean is the meaningful question for both — a
- * difference in sums confounds segment size with per-row magnitude, but the
- * underlying t-test on row-level values is unchanged). Skips the count
- * aggregation since the rate test there is a different shape (proportion
- * Z-test against a global baseline that the tool doesn't carry).
+ * Build the canonical FindingEvidence suffix for the two-segment comparison.
+ * Welch's t-test on the row-level numeric values when both segments have ≥3
+ * finite observations and the aggregation is mean or sum (testing the per-row
+ * mean is the meaningful question for both — a difference in sums confounds
+ * segment size with per-row magnitude, but the underlying t-test on row-level
+ * values is unchanged). Skips the count aggregation since the rate test there
+ * is a different shape (proportion Z-test against a global baseline that the
+ * tool doesn't carry).
  *
  * Returns `""` on skip / failure / insufficient n so callers can concatenate
- * safely. Same defensive shape as WV4-WV7's evidence suffixes.
+ * safely. Same defensive shape as the other tools' evidence suffixes.
  */
 function buildSegmentCompareEvidence(
   aggregation: SegmentAgg,
@@ -190,12 +228,11 @@ export function registerTwoSegmentCompareTool(registry: ToolRegistry) {
         null,
         2
       );
-      // Wave WQ7 · canonical FindingEvidence suffix (p + effective n) from
-      // Welch's t-test on row-level metric values. Closes the deterministic-
-      // floor gap on segment-comparison findings — WQ1 can now grade these
-      // by real evidence instead of the medium/no-evidence default. Empty
-      // suffix when aggregation=count (different test shape; out of scope)
-      // or either segment has <3 finite obs (test undefined).
+      // Canonical FindingEvidence suffix (p + effective n) from Welch's t-test
+      // on row-level metric values, so the confidence grader can judge these
+      // findings by real evidence instead of the medium/no-evidence default.
+      // Empty suffix when aggregation=count (different test shape; out of
+      // scope) or either segment has <3 finite obs (test undefined).
       const wq7EvidenceSuffix = buildSegmentCompareEvidence(
         aggregation,
         aggA.values,

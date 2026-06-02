@@ -1,30 +1,57 @@
 /**
- * WSE3 · detect_seasonality tool.
+ * ============================================================================
+ * detectSeasonalityTool.ts — the "detect_seasonality" tool (recurring patterns)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the tool that finds "seasonality" — a pattern that repeats every
+ *   year, like sales always peaking in Q4 or every November. It pools data by
+ *   position-within-the-year across all the years available:
+ *     • "month"   — compares each month-of-year (Jan..Dec).
+ *     • "quarter" — compares each quarter-of-year (Q1..Q4).
+ *     • "auto"    — chooses month if there are ≥2 years and ≥6 distinct months,
+ *       quarter if ≥2 years and ≥4 quarters, otherwise refuses (not enough
+ *       repeating history to trust a "seasonal" claim).
+ *   For each position it computes a "seasonality index" = that position's mean
+ *   divided by the overall mean (so 1.30 = "30% above a normal period"), plus
+ *   a "peak consistency" check (e.g. "November was in the top 3 every year for
+ *   5 years") and an overall strength tier (strong / moderate / weak / none).
  *
- * Surfaces recurring within-year patterns in a metric. Two granularities:
- *   - "month"   — month-of-year index across all years pooled
- *   - "quarter" — quarter-of-year index across all years pooled
- *   - "auto"    — picks month if ≥2 years × ≥6 distinct months;
- *                 quarter if ≥2 years × ≥4 quarters; else refuses.
+ * WHY IT MATTERS
+ *   A plain time-series can mislead: "the peak was Nov 2018" sounds like a
+ *   one-off, when the truth is "November peaks every year." Surfacing the
+ *   RECURRING pattern gives much more actionable, decision-grade findings.
  *
- * Returns:
- *   - `summary`         — one-paragraph human-readable narrative the
- *                         narrator drops directly into findings[].evidence
- *   - `numericPayload`  — full index + consistency JSON (capped 8 KB)
- *   - `table.rows`      — index rows (one per position) for chart-builder
- *   - `memorySlots`     — `seasonality_strength`, `seasonality_peak_positions`,
- *                         `seasonality_consistency_max`, `seasonality_grain`,
- *                         `seasonality_years_observed`
+ * KEY PIECES
+ *   - detectSeasonalityArgsSchema — Zod schema for the tool arguments (metric,
+ *     date/period columns, granularity, optional dimension + filters,
+ *     aggregation, how many peaks to report, consistency threshold).
+ *   - registerDetectSeasonalityTool — registers the tool as "detect_seasonality".
+ *   - detectTemporalCoverage — counts years/months/quarters to drive auto-grain.
+ *   - aggregateInMemory / toSeasonalityInput — the JS fallback aggregation.
  *
- * Routing:
- *   - DuckDB-preferred path via ColumnarStorageService when columnar
- *     storage is active. Honors active filter via `resolveSessionDataTable`.
- *   - In-memory fallback uses extractPositionFromIso (wide-format) or
- *     direct date parsing (raw-date) on `ctx.exec.data`.
+ * OUTPUTS
+ *   - summary        — one-paragraph human-readable narrative for findings.
+ *   - numericPayload — full index + consistency JSON (capped at 8 KB).
+ *   - table.rows     — one row per position, ready for the chart builder.
+ *   - memorySlots    — short key facts (strength, peak positions, consistency,
+ *                      grain, years observed) the planner/narrator can chain.
  *
- * Compound-shape Metric guard (defense-in-depth): refuses when the
- * dataset is wide-format compound shape AND the args don't carry a
- * Metric filter / Metric in dimensions, mirroring `compute_growth`.
+ * HOW IT CONNECTS
+ *   Registered into the ToolRegistry (../toolRegistry.js). Two execution paths,
+ *   same pattern as compute_growth:
+ *     • Preferred DuckDB path via ColumnarStorageService
+ *       (../../../columnarStorage.js) using SQL from
+ *       ../../../seasonality/buildSeasonalityAggSql.js; honors the active
+ *       filter via resolveSessionDataTable (../../../activeFilter/...).
+ *     • In-memory fallback over ctx.exec.data, parsing positions from
+ *       wide-format ISO labels (extractPositionFromIso) or raw dates.
+ *   The index/consistency/strength math lives in
+ *   ../../../seasonality/computeSeasonality.js; logging via agentLog.
+ *
+ * COMPOUND-SHAPE GUARD
+ *   Like compute_growth, it refuses on "compound" wide-format datasets when
+ *   the caller hasn't pinned a single Metric — otherwise summing Value across
+ *   mixed metrics is meaningless.
  */
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "../toolRegistry.js";
@@ -272,7 +299,7 @@ export function registerDetectSeasonalityTool(registry: ToolRegistry) {
         }
       }
 
-      // Compound-shape Metric guard (mirrors compute_growth WPF2 idiom).
+      // Compound-shape Metric guard (mirrors compute_growth's idiom).
       if (
         wft?.detected &&
         wft.shape === "compound" &&

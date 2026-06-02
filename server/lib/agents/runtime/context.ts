@@ -1,3 +1,55 @@
+/**
+ * ============================================================================
+ * context.ts — builds the per-turn "context" object and the prompt text blocks
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Every time the user asks a question, the agent needs a single bundle of
+ *   everything it should know for that turn: the dataset summary, the chat
+ *   history, the user's question, any standing rules ("directives"), inferred
+ *   filters, the pivot the user is currently looking at, and so on. This file's
+ *   main job (`buildAgentExecutionContext`) assembles that bundle — the
+ *   `AgentExecutionContext` object defined in types.ts — once at the start of a
+ *   turn.
+ *
+ *   The rest of the file is a set of `format…Block` functions. Each one turns a
+ *   slice of that context into a small, clearly-labelled chunk of text that
+ *   gets pasted into the prompt sent to the LLM (planner, reflector,
+ *   synthesizer). For example: a block listing the dataset's categorical
+ *   values, a block explaining a wide-format dataset's melted schema, a block
+ *   describing time-of-day columns, a block showing the user's saved pivot.
+ *   These exist because the LLM only knows what we put in the prompt, so we
+ *   surface the right facts in a digestible, capped (size-limited) form.
+ *
+ * WHY IT MATTERS
+ *   This is where raw session state becomes prompt-ready intelligence. If a
+ *   block is missing or wrong, the planner makes avoidable mistakes — e.g.
+ *   summing a non-additive period column (double-counting), comparing a
+ *   rollup/category-total row against its own members, or sorting periods
+ *   lexicographically ("Q1 24" before "Q2 23"). Several blocks encode hard-won
+ *   domain rules (FMCG wide-format shapes, dimension hierarchies, indicator
+ *   columns) as explicit warnings to the model.
+ *
+ * KEY PIECES
+ *   - buildAgentExecutionContext — assembles the per-turn context object.
+ *   - buildIntentEnvelope — gathers "leave these values OUT" exclusions from
+ *     three sources (negative filters, peer-comparison rollups, persisted
+ *     directives) into one IntentEnvelope.
+ *   - formatDirectiveBlock — renders the user's persistent rules; never truncated.
+ *   - summarizeContextForPrompt — the big composer that stitches all the blocks
+ *     into the planner's context message.
+ *   - format…Block helpers — categorical values, dimension hierarchies,
+ *     wide-format shape, time-of-day, indicator columns, inferred filters,
+ *     derived temporal facets, last-assistant pivot state.
+ *
+ * HOW IT CONNECTS
+ *   `buildAgentExecutionContext` is called by the agent-loop entry before
+ *   planning; the resulting context threads through the whole loop. The format
+ *   helpers are called by the planner/reflector prompt builders. It leans on
+ *   sibling modules: inferFiltersFromQuestion / inferPeriodFilterFromQuestion
+ *   (deterministic filter resolution), planArgRepairs.classifyHierarchyIntent,
+ *   analysisBrief, priorInvestigations, dateUtils, temporalFacetColumns, and
+ *   the shared schema types.
+ */
 import type { ChatDocument } from "../../../models/chat.model.js";
 import type {
   DataSummary,
@@ -35,15 +87,15 @@ export function buildAgentExecutionContext(params: {
   permanentContext?: string;
   domainContext?: string;
   /**
-   * Wave W-UD3 · Active user directives hydrated at session start from the
+   * Active user directives hydrated at session start from the
    * `dataset_directives` Cosmos container. Optional — the caller is expected
    * to populate this when the dataset fingerprint is known. When omitted, the
    * agent loop behaves as if no persistent directives apply for the dataset.
    */
   activeDirectives?: UserDirective[];
-  /** Wave W-UD8 · sink for prompt-budget truncation events. Optional —
-   *  when omitted, the agent runtime allocates one internally so callers
-   *  that don't care about the SSE row don't have to set up a sink. */
+  /** Sink for prompt-budget truncation events. Optional — when omitted, the
+   *  agent runtime allocates one internally so callers that don't care about
+   *  the SSE row don't have to set up a sink. */
   contextTrimmedSink?: import("./promptBudget.js").TrimmedBlockInfo[];
   sessionAnalysisContext?: SessionAnalysisContext;
   columnarStoragePath?: boolean;
@@ -63,11 +115,11 @@ export function buildAgentExecutionContext(params: {
     // across overlapping non-additive period rows (pure_period datasets only).
     ...inferPeriodFilterFromQuestion(params.question, params.summary),
   ];
-  // RD4 · build the intent envelope from THREE sources:
-  //   (a) negative inferred filters (Wave 3): "omit FSG" → not_in
+  // Build the intent envelope from THREE sources:
+  //   (a) negative inferred filters: "omit FSG" → not_in
   //   (b) declared rollup hierarchies whose intent classifies as peer-comparison
-  //       (Wave 2): the rollup is to be excluded from the answer.
-  //   (c) Wave W-UD6 · persistent UserDirectives with structured `op: 'not_in'`
+  //       — the rollup is to be excluded from the answer.
+  //   (c) persistent UserDirectives with structured `op: 'not_in'`
   //       — survive across turns and re-apply automatically.
   const intentEnvelope = buildIntentEnvelope(
     inferredFilters,
@@ -75,10 +127,9 @@ export function buildAgentExecutionContext(params: {
     params.question,
     params.activeDirectives
   );
-  // W-PivotState · find the most recent assistant message that carries a
-  // persisted pivotState. We walk from the end so an intermediate message
-  // (W41 streaming preview) without saved state doesn't shadow the prior
-  // finalized turn's view.
+  // Find the most recent assistant message that carries a persisted pivotState.
+  // We walk from the end so an intermediate streaming-preview message without
+  // saved state doesn't shadow the prior finalized turn's view.
   let lastAssistantPivotState: Message["pivotState"] | undefined;
   for (let i = params.chatHistory.length - 1; i >= 0; i--) {
     const m = params.chatHistory[i];
@@ -119,7 +170,7 @@ export function buildAgentExecutionContext(params: {
 }
 
 /**
- * RD4 · Aggregate active exclusion intents from negative inferred filters AND
+ * Aggregate active exclusion intents from negative inferred filters AND
  * declared rollup hierarchies whose user-question intent is peer-comparison.
  * Returns an envelope with `exclusions: []` when nothing applies — callers
  * either elide the field (we do) or treat empty as "no constraint".
@@ -163,9 +214,9 @@ function buildIntentEnvelope(
     }
   }
 
-  // Source (c) — Wave W-UD6 · persistent UserDirectives. Active directives
-  // whose structured projection is `op: 'not_in'` on a column contribute
-  // their values as exclusions. Survives across turns.
+  // Source (c) — persistent UserDirectives. Active directives whose structured
+  // projection is `op: 'not_in'` on a column contribute their values as
+  // exclusions. Survives across turns.
   if (activeDirectives?.length) {
     for (const d of activeDirectives) {
       if (d.status !== "active") continue;
@@ -201,10 +252,9 @@ function buildIntentEnvelope(
 }
 
 /**
- * Wave W-UD6 · render the user's active persistent directives as a compact,
- * non-truncating prompt block. Prepended to planner / reflector / verifier /
- * synthesizer / business-actions prompts so every agent role sees the same
- * directive list.
+ * Render the user's active persistent directives as a compact, non-truncating
+ * prompt block. Prepended to planner / reflector / verifier / synthesizer /
+ * business-actions prompts so every agent role sees the same directive list.
  *
  * Format: one bullet per directive with verbatim text. Superseded / revoked
  * entries are filtered out. Empty input → empty string (caller composes).
@@ -233,9 +283,9 @@ export function formatUserAndSessionJsonBlocks(
   opts: { maxUserChars: number; maxJsonChars: number; maxDomainChars?: number }
 ): string {
   let s = "";
-  // Wave W-UD6 · persistent user directives go FIRST and are NEVER truncated.
-  // They are the highest-priority signal — a user's "from now on omit X" rule
-  // must reach every agent role verbatim.
+  // Persistent user directives go FIRST and are NEVER truncated. They are the
+  // highest-priority signal — a user's "from now on omit X" rule must reach
+  // every agent role verbatim.
   const directiveBlock = formatDirectiveBlock(ctx.activeDirectives);
   if (directiveBlock) {
     s += directiveBlock;
@@ -251,9 +301,9 @@ export function formatUserAndSessionJsonBlocks(
       `RAG citations remain authoritative for any figure):\n` +
       ctx.domainContext.trim().slice(0, cap);
   }
-  // W21 · prior-turn investigation digest, emitted as a labelled block so
-  // the planner sees it as a first-class signal rather than buried inside
-  // the session-context JSON dump. Empty array → empty string.
+  // Prior-turn investigation digest, emitted as a labelled block so the planner
+  // sees it as a first-class signal rather than buried inside the
+  // session-context JSON dump. Empty array → empty string.
   const priorBlock = formatPriorInvestigationsForPlanner(ctx.sessionAnalysisContext);
   if (priorBlock) {
     s += `\n${priorBlock}`;
@@ -299,12 +349,12 @@ function formatCategoricalValuesBlock(summary: DataSummary): string {
 }
 
 /**
- * H4 / RD1 · Surface user-declared dimension hierarchies as a first-class
- * block so the planner picks the right breakdown (excludes the rollup row
- * from peer comparisons, frames metrics as "share of category" when the
- * rollup is the denominator). Per-hierarchy intent classification (RD1)
- * is appended so the LLM knows which question shape applies right now.
- * Empty array → empty string. Capped to keep the prompt tight.
+ * Surface user-declared dimension hierarchies as a first-class block so the
+ * planner picks the right breakdown (excludes the rollup row from peer
+ * comparisons, frames metrics as "share of category" when the rollup is the
+ * denominator). Per-hierarchy intent classification is appended so the LLM
+ * knows which question shape applies right now. Empty array → empty string.
+ * Capped to keep the prompt tight.
  */
 export function formatDimensionHierarchiesBlock(
   ctx: AgentExecutionContext
@@ -345,13 +395,13 @@ export function formatDimensionHierarchiesBlock(
 }
 
 /**
- * WPF1 · When the upload pipeline auto-melted a wide-format spreadsheet
- * (Nielsen / Marico-VN style with period-as-columns), surface the long-form
- * schema semantics as a labelled block. The LLM otherwise sees only a flat
- * column list (`Markets, Products, Period, PeriodIso, PeriodKind, Value,
- * Metric`) and has to guess what each column means — leading to wrong
- * sort order on Period (lexicographic Q1 24 < Q2 23) and silent SUM across
- * mixed metrics in compound shape.
+ * When the upload pipeline auto-melted a wide-format spreadsheet (Nielsen /
+ * Marico-VN style with period-as-columns), surface the long-form schema
+ * semantics as a labelled block. The LLM otherwise sees only a flat column list
+ * (`Markets, Products, Period, PeriodIso, PeriodKind, Value, Metric`) and has
+ * to guess what each column means — leading to wrong sort order on Period
+ * (lexicographic Q1 24 < Q2 23) and silent SUM across mixed metrics in compound
+ * shape.
  *
  * Empty when no melt was detected.
  */
@@ -388,9 +438,10 @@ export function formatWideFormatShapeBlock(summary: DataSummary): string {
       `If the user's question is metric-ambiguous, use clarify_user with the available metric values.`;
   }
 
-  // PA1 · pure_period shape: the Period dimension holds PRE-COMPUTED, OVERLAPPING
+  // pure_period shape: the Period dimension holds PRE-COMPUTED, OVERLAPPING
   // aggregates (L12M = sum of the latest 4 quarters; YTD overlaps quarters), so
-  // SUMming Value across PeriodKinds double/triple-counts. Mirror compoundCritical.
+  // SUMming Value across PeriodKinds double/triple-counts. Mirrors the compound
+  // shape's critical warning above.
   let periodCritical = "";
   if (wf.shape === "pure_period") {
     const kindCol = summary.columns.find((c) => c.name === wf.periodKindColumn);
@@ -449,8 +500,8 @@ export function formatWideFormatShapeBlock(summary: DataSummary): string {
 }
 
 /**
- * TOD1 · Surface time-of-day columns (HH:MM:SS strings, no calendar date) so
- * the planner reasons about them as text values, not dates. Lists the columns,
+ * Surface time-of-day columns (HH:MM:SS strings, no calendar date) so the
+ * planner reasons about them as text values, not dates. Lists the columns,
  * notes lexicographic comparison semantics for HH:MM:SS, and surfaces sentinel
  * non-time placeholders ("Absent" etc.) so the planner can exclude them with
  * `dimensionFilters` when comparing times. Empty when no TOD columns exist.
@@ -461,8 +512,8 @@ export function formatTimeOfDayBlock(summary: DataSummary): string {
   );
   if (todColumns.length === 0) return "";
 
-  // SU-DT1 · index pairings by time-column name so each TOD line can show
-  // its paired date column inline.
+  // Index pairings by time-column name so each TOD line can show its paired
+  // date column inline.
   const pairsByTime = new Map<string, string>();
   for (const p of summary.dateTimeColumnPairs ?? []) {
     pairsByTime.set(p.timeColumn, p.dateColumn);
@@ -505,10 +556,9 @@ export function formatTimeOfDayBlock(summary: DataSummary): string {
 }
 
 /**
- * SU-IC3 · Surface pre-computed "indicator" columns (Yes/No/etc. shaped
- * pre-computed answer columns) so the planner prefers them when a user
- * question matches the column's semantic intent. Empty when no
- * indicators exist on the dataset.
+ * Surface pre-computed "indicator" columns (Yes/No/etc. shaped pre-computed
+ * answer columns) so the planner prefers them when a user question matches the
+ * column's semantic intent. Empty when no indicators exist on the dataset.
  */
 export function formatIndicatorColumnsBlock(summary: DataSummary): string {
   const indicatorColumns = summary.columns.filter((c) => c.indicator);
@@ -563,10 +613,10 @@ function formatInferredFiltersBlock(ctx: AgentExecutionContext): string {
 }
 
 /**
- * W-PivotState · render the user's currently-saved pivot/chart view as a
- * compact markdown block. Surfaced into the planner and synthesis prompts so
- * follow-up questions ("now break it down by category", "switch to a line
- * chart") have an explicit baseline. Returns "" when no state is saved.
+ * Render the user's currently-saved pivot/chart view as a compact markdown
+ * block. Surfaced into the planner and synthesis prompts so follow-up questions
+ * ("now break it down by category", "switch to a line chart") have an explicit
+ * baseline. Returns "" when no state is saved.
  */
 export function formatLastAssistantPivotStateBlock(
   state: Message["pivotState"] | undefined
@@ -616,10 +666,10 @@ function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
 
 export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {
   const cols = ctx.summary.columns.map((c) => c.name).join(", ");
-  // WPF6 · When the dataset was melted from wide format, the time axis lives
-  // in PeriodIso (canonical sortable) rather than in a parseable date column.
-  // Surface it on the dateColumns line so the planner doesn't go hunting for
-  // a real date column that doesn't exist.
+  // When the dataset was melted from wide format, the time axis lives in
+  // PeriodIso (canonical sortable) rather than in a parseable date column.
+  // Surface it on the dateColumns line so the planner doesn't go hunting for a
+  // real date column that doesn't exist.
   const wfForDates = ctx.summary.wideFormatTransform;
   const dateColParts = [...ctx.summary.dateColumns];
   if (

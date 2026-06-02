@@ -1,3 +1,43 @@
+/**
+ * ============================================================================
+ * columnExtractor.ts — figure out which dataset columns a question actually needs
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Given a user's question plus everything we know about it (the classified
+ *   "intent", a parsed query plan, any chart specs, and the dataset's column
+ *   summary), this file works out the minimal set of column names the analysis
+ *   will touch. It scans the question text for column names, pulls columns out
+ *   of filters / group-bys / aggregations / sorts in the parsed query, picks up
+ *   the x/y axes from chart specs, and always throws in date columns (so any
+ *   time-based query keeps working). It can also harvest the columns referenced
+ *   in recent chat history (past charts and saved query specs).
+ *
+ * WHY IT MATTERS
+ *   Loading an entire wide dataset into the query engine for every question is
+ *   wasteful. By extracting just the columns a question needs, the agent can
+ *   fetch a narrow slice of data, which keeps queries fast and prompts small.
+ *   It also provides a safe fallback (first few numeric columns) so even a vague
+ *   question still has something to analyse.
+ *
+ * KEY PIECES
+ *   - extractRequiredColumns(...) — main entry: returns the deduped list of
+ *       column names needed for a single question/intent/query/chart bundle.
+ *   - extractColumnsFromHistory(...) — scans the last few chat messages for
+ *       columns used in prior charts and "query_spec" workbench entries,
+ *       filtered to columns that still exist in the current dataset.
+ *   - extractMentionedColumns (internal) — naive scan of the question string
+ *       for any column whose name appears in the text.
+ *   - addColumnsFromParsedQueryLike (internal) — pulls column names out of a
+ *       loosely-typed parsed-query-shaped object (used for history JSON).
+ *
+ * HOW IT CONNECTS
+ *   Consumes the shared `DataSummary` / `ChartSpec` / `Message` types
+ *   (../../../shared/schema.js), the `ParsedQuery` type
+ *   (../../../shared/queryTypes.js), the `AnalysisIntent` from the intent
+ *   classifier (../intentClassifier.js), and date-facet helpers from
+ *   ../../temporalFacetColumns.js. Callers in the agent pipeline use the output
+ *   to decide which columns to load before running tools.
+ */
 import { AnalysisIntent } from '../intentClassifier.js';
 import { ChartSpec, DataSummary, Message } from '../../../shared/schema.js';
 import { ParsedQuery } from '../../../shared/queryTypes.js';

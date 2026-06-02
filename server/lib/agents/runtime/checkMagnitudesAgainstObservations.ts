@@ -1,28 +1,37 @@
 /**
- * Wave W35 · `magnitudes` numerical fabrication check
+ * ============================================================================
+ * checkMagnitudesAgainstObservations.ts — catches made-up numbers in the answer
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The final answer carries a "magnitudes" block — 2–4 headline numbers like
+ *   `{ label: "South-MT volume drop", value: "-8% MoM" }`. The narrator is TOLD
+ *   to only use numbers it actually computed, but telling isn't enforcing — a
+ *   hallucinated "-23%" can slip through. This pure helper pulls every numeric
+ *   token out of each magnitude and verifies each one appears (within a ±2%
+ *   tolerance) somewhere in the legitimate evidence pool. The pool is built from:
+ *   the tool observations (the figures the agent actually computed), the retrieved
+ *   RAG background block, and the composed FMCG/Marico domain context (authored
+ *   industry-pack figures). All three count because a number can be legitimately
+ *   cited from background even if this turn's tools didn't produce it.
  *
- * The W8 envelope requires 2–4 `magnitudes` entries (e.g.
- * `{ label: "South-MT volume drop", value: "-8% MoM" }`) for analytical
- * questions. The narrator is *prompted* to use only observation numbers,
- * but no deterministic check fires — a hallucinated `-23%` slips through.
+ * WHY IT MATTERS
+ *   This is the anti-fabrication gate for headline figures — the numbers a reader
+ *   is most likely to quote. If too many are unsupported it asks the loop to
+ *   re-emit the magnitudes block, keeping the answer's numbers traceable.
  *
- * This helper extracts every numeric token from each magnitude's `value`
- * (and `label` as a fallback) and confirms each one appears within ±2%
- * tolerance somewhere in the supporting evidence pool. The pool spans:
- *   - Tool observations (primary — the figures the agent computed)
- *   - The W7 RAG block (legitimate cited background numbers)
- *   - The composed FMCG/Marico domain context (industry-pack figures)
+ * KEY PIECES
+ *   - checkMagnitudesAgainstObservations — the check. Returns {ok:true} or
+ *     {ok:false, code:"FABRICATED_MAGNITUDES", description, courseCorrection,
+ *     fabricated[]}, the same result shape as the other verifier checks so they
+ *     share one repair flow / budget.
+ *   - MIN_FABRICATED_TO_FLAG (= 2) — needs at least two unsupported magnitudes
+ *     before flagging; a single one is usually a harmless rounding artefact
+ *     ("8.2%" computed vs "8%" written) and not worth burning a retry on.
  *
- * Domain + RAG inclusion is critical: the narrator may cite
- * `marico-foods-edible-oils-portfolio`'s authored figures, which don't
- * appear in this turn's tool output but ARE legitimate.
- *
- * Returns the same `{ ok: true } | { ok: false, code, ... }` shape as
- * `checkEnvelopeCompleteness` (W17) and `checkDomainLensCitations` (W22)
- * so the agent loop can integrate it into the same repair flow with the
- * shared `maxVerifierRoundsFinal` budget.
- *
- * Pure-logic helper. No I/O. No LLM calls.
+ * HOW IT CONNECTS
+ *   Uses extractNumbersFromNarrative (verifyNarrativeNumbers.js) to tokenise both
+ *   the claims and the evidence. Called by the verifier stage of the agent loop.
+ *   No I/O, no LLM calls.
  */
 import {
   extractNumbersFromNarrative,
@@ -31,8 +40,8 @@ import {
 
 /**
  * Magnitude shape emitted by the narrator / synthesizer (matches the
- * `magnitudeSchema` zod type at `agentLoop.service.ts:312`). Kept as a
- * structural type here to avoid a circular import.
+ * `magnitudeSchema` zod type in agentLoop.service.ts). Kept as a structural
+ * type here to avoid a circular import.
  */
 export interface MagnitudeForCheck {
   label: string;
@@ -47,8 +56,7 @@ const DEFAULT_TOLERANCE = 0.02;
  *      (e.g. observation says "8.2%" and narrator says "8% MoM");
  *      ±2% catches most but edge cases slip.
  *   2. We don't want to retry-loop on a borderline case and burn budget.
- * Tuned conservatively — same threshold as the W7.5 narrative-numbers
- * check.
+ * Tuned conservatively — same threshold as the narrative-numbers check.
  */
 const MIN_FABRICATED_TO_FLAG = 2;
 
@@ -116,7 +124,7 @@ export function checkMagnitudesAgainstObservations(
   ]);
   if (pool.length === 0) {
     // No evidence pool to check against → can't verify. Pass through;
-    // the W7.5 narrative-vs-charts check handles the chart-data case.
+    // the narrative-vs-charts check handles the chart-data case.
     return { ok: true };
   }
 

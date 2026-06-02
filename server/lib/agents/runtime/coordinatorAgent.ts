@@ -1,18 +1,36 @@
 /**
- * Wave W6 · coordinatorAgent
+ * ============================================================================
+ * coordinatorAgent.ts — splits a big question into parallel sub-investigations
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Some questions are really several questions in one (e.g. "build a full
+ *   dashboard", "compare regions across categories and explain the drivers").
+ *   This file decides whether the user's question is COMPLEX enough to break
+ *   apart, and if so asks an LLM to decompose it into 2–4 independent
+ *   "investigation threads" that can each be researched on their own and, taken
+ *   together, fully answer the original question. Simple questions (one metric,
+ *   one dimension, one time window) return null so the normal single-turn path
+ *   runs unchanged.
  *
- * For complex questions (dashboards, multi-metric comparisons, broad analyses),
- * decomposes the root question into 2–4 parallel investigation threads. Each
- * thread becomes a root-level node in the Investigation Tree (W7+).
+ * WHY IT MATTERS
+ *   Decomposing complex asks lets the engine parallelise work and gives each
+ *   facet focused attention instead of one overloaded plan. To avoid spending an
+ *   LLM call on questions that don't need it, a cheap deterministic complexity
+ *   score gates the decomposition — only questions scoring above a threshold get
+ *   sent to the LLM coordinator.
  *
- * Simple questions (focused on one metric or one time window) return null so
- * the single-turn path proceeds unchanged.
+ * KEY PIECES
+ *   - decomposeQuestion — the main entry; scores complexity, and if high enough,
+ *     calls the LLM to return DecomposedThread[] (or null when simple/failed).
+ *   - scoreComplexity (also exported) — pure heuristic scorer: question shape,
+ *     keywords like "dashboard"/"compare"/"by region", and number of
+ *     segmentation dimensions. Exported so tests can run it without an LLM.
+ *   - DecomposedThread / CoordinatorOutput — Zod-derived shapes of the output.
  *
- * Complexity scoring:
- *  - questionShape ∈ {driver_discovery, variance_diagnostic} → high
- *  - "dashboard" or "all" in question → high
- *  - multiple distinct metrics mentioned → medium
- *  - everything else → simple (return null)
+ * HOW IT CONNECTS
+ *   Reads AgentExecutionContext (types.js) and AnalysisBrief (shared/schema.js).
+ *   Lazily imports completeJson (llmJson.js) and LLM_PURPOSE (llmCallPurpose.js).
+ *   Each returned thread is meant to become a root node in the Investigation Tree.
  */
 
 import { z } from "zod";

@@ -1,16 +1,31 @@
 /**
- * RL2 · in-process counting semaphore for outbound Anthropic /v1/messages
- * calls. Backstops the case where a dashboard turn fans out the planner +
- * 14 build_chart steps + feature sweep + narrator + chart-key-insights, all
- * issuing parallel `callAnthropic` POSTs and overwhelming the per-key rate
- * limit.
+ * ============================================================================
+ * anthropicSemaphore.ts — cap how many Anthropic calls run at once
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   An in-process "counting semaphore": a gate that lets only N outbound
+ *   Anthropic API calls run concurrently and queues the rest until a slot frees
+ *   up. (A semaphore is a classic concurrency limiter — hold a token while you
+ *   run, return it when you finish.) Default ceiling is 6.
  *
- * Combined with the per-call Retry-After backoff in `anthropicProvider.ts`
- * (RL1) and the per-session mutex around the chart-key-insight endpoint, this
- * caps instantaneous outbound pressure without literal `setTimeout` pacing.
+ * WHY IT MATTERS
+ *   A single dashboard turn can fan out into many parallel LLM calls (planner +
+ *   ~14 chart steps + feature sweep + narrator + chart insights). Without a cap
+ *   they all POST at once and trip the provider's per-key rate limit. This
+ *   smooths instantaneous pressure without literal setTimeout pacing, working
+ *   alongside the per-call Retry-After backoff in anthropicProvider.ts and the
+ *   per-session mutex on the chart-key-insight endpoint.
  *
- * In-process only (boring-first per CLAUDE.md). Multi-instance scaling would
- * need a Redis-backed limiter; not on the roadmap.
+ * KEY PIECES
+ *   - acquireAnthropicSlot() — await a slot; resolves with an idempotent
+ *     release() function.
+ *   - withAnthropicSlot(fn) — convenience: acquire, run fn, always release.
+ *   - __test__ — snapshot/reset helpers (tests only).
+ *
+ * HOW IT CONNECTS
+ *   Wrapped around callAnthropic POSTs. In-process only; multi-instance scaling
+ *   would need a Redis-backed limiter (not planned). Concurrency tunable via
+ *   ANTHROPIC_MAX_CONCURRENCY.
  */
 
 const DEFAULT_MAX_CONCURRENCY = 6;

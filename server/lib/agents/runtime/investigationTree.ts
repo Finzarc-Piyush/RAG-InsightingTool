@@ -1,8 +1,39 @@
 /**
- * Wave W7 · investigationTree
+ * ============================================================================
+ * investigationTree.ts — the data structure for a deep, branching investigation
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   For hard questions, the tool doesn't just answer once — it can break the
+ *   question into sub-questions, answer those, and spawn further sub-questions
+ *   from what it finds. This file defines the TREE that tracks all of that: a
+ *   root question, child "nodes" (each a sub-question), each node's status
+ *   (pending / running / answered / pruned), and a shared "blackboard" where
+ *   every node writes findings that all other nodes can see. It explores
+ *   breadth-first ("BFS" = answer all nodes at one level before going deeper).
+ *   It also holds the budget caps (max depth, max nodes, max LLM calls, max
+ *   wall-clock time) that stop a runaway investigation.
  *
- * Types and pure-function operations for the BFS investigation tree.
- * No I/O, no LLM calls — all state mutations are explicit arguments.
+ * WHY IT MATTERS
+ *   This is pure bookkeeping — no LLM calls, no I/O, every change passed in as
+ *   an explicit argument — which makes the deep-investigation engine easy to
+ *   test and reason about. The orchestrator (investigationOrchestrator.ts)
+ *   drives the actual thinking; this file is the safe scaffolding that keeps
+ *   it bounded and ordered. Without the budget caps a deep investigation could
+ *   loop forever or blow the cost ceiling.
+ *
+ * KEY PIECES
+ *   - InvestigationTree / InvestigationNode — the tree and its nodes.
+ *   - DeepInvestigationConfig + loadDeepInvestigationConfig — budget caps (env).
+ *   - isDeepInvestigationEnabled — feature flag (DEEP_INVESTIGATION_ENABLED).
+ *   - createTree / addChildNode / canAddNode — build and grow the tree safely.
+ *   - markNodeRunning / markNodeAnswered / pruneNode — node state transitions.
+ *   - getReadyNodes / hasPendingNodes / withinBudget — BFS scheduling helpers.
+ *   - summarizeTree — a tally (nodes, depth, LLM calls, elapsed) for telemetry.
+ *
+ * HOW IT CONNECTS
+ *   Consumed by investigationOrchestrator.ts, which runs the BFS loop. The
+ *   shared blackboard type comes from analyticalBlackboard.js. This file only
+ *   gates behind the DEEP_INVESTIGATION_ENABLED flag — it never calls models.
  */
 
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
@@ -85,7 +116,8 @@ export interface InvestigationTree {
   blackboard: AnalyticalBlackboard;
   totalBudgetUsed: { llmCalls: number; wallMs: number };
   startedAt: number;
-  /** O5: request-scoped prefix embedded in all node IDs to prevent collisions. */
+  /** Request-scoped prefix embedded in all node IDs to prevent collisions
+   *  between concurrent investigations. */
   idPrefix: string;
 }
 
@@ -99,7 +131,7 @@ function nextNodeId(prefix = ""): string {
 export function createTree(
   rootQuestion: string,
   blackboard: AnalyticalBlackboard,
-  /** O5: request-scoped prefix to prevent node ID collisions in concurrent investigations. */
+  /** Request-scoped prefix to prevent node ID collisions in concurrent investigations. */
   idPrefix = ""
 ): InvestigationTree {
   const rootId = nextNodeId(idPrefix);

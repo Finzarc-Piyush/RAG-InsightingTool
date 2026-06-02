@@ -1,16 +1,36 @@
 /**
- * PR 1.E — pre-resolve the independent steps of a parallelizable skill
- * invocation.
+ * ============================================================================
+ * parallelResolve.ts — run a skill's independent steps concurrently, up front
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   When a skill's plan is marked parallelizable, this helper runs its
+ *   "independent" steps at the same time and caches the results. "Independent"
+ *   means a step has no `dependsOn` (it does not need any other step's output
+ *   first). It fires up to `maxParallel` of those steps together with
+ *   Promise.all and returns a map of step.id -> ToolResult. The agent's main
+ *   loop later checks this map first, so each tool runs exactly once even
+ *   though the slower per-step reflection/verification passes still happen one
+ *   at a time.
  *
- * "Independent" = has no `dependsOn`. We run up to `maxParallel` such steps
- * concurrently via Promise.all and collect their `ToolResult`s into a map
- * keyed by `step.id`. The agent step loop then consumes the map before
- * falling through to `registry.execute`, so the expensive tool call
- * happens once per step even though the per-step reflector / verifier
- * pipeline stays serial.
+ * WHY IT MATTERS
+ *   Skills often emit several read-only data queries that don't depend on each
+ *   other (e.g. a correlation and two breakdowns). Running them serially wastes
+ *   time; doing them concurrently up front cuts latency on multi-step answers
+ *   without changing the serial reasoning that follows.
  *
- * Failures are contained per step: an error in one step becomes a
- * `{ ok: false, summary }` result in the map, never a thrown rejection.
+ * KEY PIECES
+ *   - ExecuteStep — function type that actually runs one step into a ToolResult.
+ *   - ParallelResolveResult — { resolved map, stepIds executed, elapsedMs }.
+ *   - preResolveParallelSteps — the worker. Returns empty (no-op) unless the
+ *     invocation is parallelizable AND has at least 2 independent steps. Each
+ *     step's failure is contained: an error becomes a { ok:false, summary }
+ *     result in the map rather than rejecting the whole batch.
+ *
+ * HOW IT CONNECTS
+ *   Called by the agent step loop after a skill is expanded (SkillInvocation
+ *   from ./types.js). PlanStep and ToolResult types come from ../types.js and
+ *   ../toolRegistry.js; the actual per-step execution is delegated back through
+ *   the passed-in `execute` callback (the registry's executor).
  */
 import type { PlanStep } from "../types.js";
 import type { ToolResult } from "../toolRegistry.js";

@@ -1,26 +1,35 @@
 /**
- * Wave D1 · Detect multi-part questions that would benefit from
- * coordinator decomposition into parallel sub-investigations.
+ * ============================================================================
+ * detectMultiPartQuestion.ts — splits "do A and also B" asks by plain text rules
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Users often pack several requests into one sentence: "show me top 10 brands
+ *   AND tell me why MARICO is leading", "compare A vs B, ALSO show the trend".
+ *   This pure function scans the question for conjunctions ("and", "also",
+ *   "then", "additionally"...) that are followed by a real second clause led by a
+ *   verb or question word, and splits it into up to 4 standalone sub-questions.
+ *   It returns null when the question is a single request (the common case).
  *
- * Examples we want to catch (and split):
- *   - "show me top 10 brands AND tell me why MARICO is leading"
- *   - "compare A vs B, ALSO show the trend over time"
- *   - "what drove the Q3 drop, AND what should we do about it"
- *   - "give me regional sales; ALSO check Q4 anomalies"
+ * WHY IT MATTERS
+ *   It's a cheap, deterministic alternative to the LLM coordinator
+ *   (coordinatorAgent.ts) for the specific shape of "two asks joined by a
+ *   conjunction". The caller can then treat each sub-question as its own
+ *   analytical request. It's deliberately CONSERVATIVE: it won't split a compound
+ *   metric phrase like "sales and growth by region" (one request, not two), and
+ *   anything ambiguous returns null so the normal single-flow path runs.
  *
- * The W11–W13 single-flow policy bypasses `coordinatorAgent.decomposeQuestion`
- * (currently dormant). D1 ships a deterministic detector that:
- *   1. Returns the sub-questions when the question matches a multi-part shape
- *   2. Returns null for single-shape questions (the common case — agent
- *      loop proceeds normally)
+ * KEY PIECES
+ *   - detectMultiPartQuestion — the entry point; returns a MultiPartIntent
+ *     (original + subQuestions[] + the trigger token) or null.
+ *   - CONJUNCTION_PATTERNS (internal) — the ordered regexes that recognise a
+ *     genuine second clause; each requires a verb/question-word after the joiner.
+ *   - normaliseClause (internal) — trims stray punctuation and capitalises each
+ *     split clause.
  *
- * Decomposition happens via simple conjunction splitting + light cleanup.
- * Each sub-question is treated as a standalone analytical request by the
- * caller. Cap at 4 sub-questions (the W11 budget) — anything beyond is
- * truncated with a log line.
- *
- * Gated by `DEEP_INVESTIGATION_ENABLED=true` at the call site; the
- * detector itself is pure logic so unit tests run unconditionally.
+ * HOW IT CONNECTS
+ *   No imports — self-contained text logic, so its unit tests run unconditionally.
+ *   The call site is gated by DEEP_INVESTIGATION_ENABLED; sub-questions are capped
+ *   at 4 to match the deep-investigation budget.
  */
 
 export interface MultiPartIntent {
@@ -51,7 +60,7 @@ const CONJUNCTION_PATTERNS: RegExp[] = [
 ];
 
 /**
- * Wave D1 · Detect multi-part questions.
+ * Detect multi-part questions.
  *
  * Returns the split intent when the question matches a multi-part
  * conjunction pattern AND each sub-question has at least 3 word
@@ -102,7 +111,7 @@ export function detectMultiPartQuestion(
     subQuestions.push(normaliseClause(right));
 
     // Look for a THIRD clause in the right side (recursive single split).
-    // Cap at 4 total per W11 budget.
+    // Cap at 4 total per the deep-investigation budget.
     let remaining = right;
     while (subQuestions.length < 4) {
       let foundNext: { left: string; right: string; trigger: string } | null = null;

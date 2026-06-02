@@ -1,5 +1,49 @@
 /**
- * LLM proposes 0–2 extra charts from schema + context (no hardcoded dimensions).
+ * ============================================================================
+ * visualPlanner.ts — decide which extra charts to add to an answer, and build
+ *                   them so they're ready to render
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   After the agent has analysed the data, this file proposes a small number of
+ *   supporting charts and produces fully-built chart specs for them. It works in
+ *   two ways. First, a deterministic fallback: if the analysis produced a simple
+ *   table (one category-ish column + one numeric measure) and no chart was made
+ *   yet, it builds one sensible chart with plain code — no LLM — so the user is
+ *   never left chart-less. Second, an LLM path: it shows the model the question,
+ *   the available columns, a sample of the result rows, and the draft answer, and
+ *   asks it to propose up to N more charts that genuinely support the answer.
+ *   Either way, every proposal is validated (columns must exist, the chart type
+ *   must fit the data), compiled, given smart axis scaling, and packaged with its
+ *   data so the client can draw it directly. Picking the chart TYPE and AXES from
+ *   the actual schema (never hardcoded column names) is the whole point — it works
+ *   for any uploaded dataset.
+ *
+ * WHY IT MATTERS
+ *   Charts and dashboards are first-class outputs of this product. This module is
+ *   what turns a text answer into a visual one, and what powers "dashboard mode"
+ *   (when the user asked for a dashboard, it allows more charts spanning
+ *   complementary angles — trend, segmentation, drivers). Without it, the agent
+ *   would return prose with at most whatever a single tool happened to chart.
+ *
+ * KEY PIECES
+ *   - proposeAndBuildExtraCharts(...) — the only public function. Runs the
+ *     deterministic fallback first, then the LLM proposal, and returns
+ *     { charts, note? } ready for the UI.
+ *   - chartProposalSchema / visualPlannerOutputSchema / VisualPlannerOutput —
+ *     zod schemas + type for what the LLM is allowed to emit.
+ *   - SYSTEM — the LLM instructions (rules: use real column names only, line/area
+ *     for time axes, cap series cardinality, prefer aggregated result columns).
+ *   - validateChartProposal — re-exported guard that a proposed chart is buildable.
+ *
+ * HOW IT CONNECTS
+ *   Calls the LLM via completeJson (./llmJson.js) under the VISUAL_PLANNER
+ *   purpose. Validates proposals with ./chartProposalValidation.js, compiles
+ *   specs with ../../chartSpecCompiler.js, shapes row data with
+ *   ../../chartGenerator.js, computes axis ranges with ../../axisScaling.js, and
+ *   picks time / metric axes with ../../periodColumnResolver.js and
+ *   ../../factsMetricResolver.js (mirroring the chart-promotion path so the two
+ *   paths agree). Output chart specs are validated against the shared
+ *   chartSpecSchema (../../../shared/schema.js).
  */
 import { z } from "zod";
 import type { AgentExecutionContext } from "./types.js";
@@ -102,8 +146,8 @@ export async function proposeAndBuildExtraCharts(
       const dimCols = columns.filter((c) => !isNumericishOnSample(c));
 
       if (numericCols.length >= 1 && dimCols.length >= 1) {
-        // Wave W-GMK3 · mirror chartFromTable's resolver-based x-axis pick.
-        // Keeps the visual-planner deterministic fallback in lockstep with the
+        // Mirror chartFromTable's resolver-based x-axis pick. Keeps the
+        // visual-planner deterministic fallback in lockstep with the
         // chart-promotion path so a Marico-style multi-period frame doesn't
         // produce two different incoherent charts from the two paths.
         const periodAxis = resolvePeriodAxis(
@@ -150,7 +194,7 @@ export async function proposeAndBuildExtraCharts(
           x = usableDim;
         }
 
-        // Wave W-GMK4 · Facts/Metric awareness (mirrored from chartFromTable).
+        // Facts/Metric awareness (mirrored from chartFromTable).
         const factsMetric = resolveFactsMetric(
           columns,
           sample,

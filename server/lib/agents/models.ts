@@ -1,9 +1,33 @@
 /**
- * Model Selection Strategy
- * 
- * Optimizes cost and performance by using appropriate models for different tasks:
- * - Faster/cheaper models for classification
- * - More powerful models for generation
+ * ============================================================================
+ * models.ts — picks WHICH AI model to use for each kind of task.
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Different jobs need different AI models. Quick classification jobs (working
+ *   out a question's intent or mode) can use a small, cheap, fast model; writing
+ *   the final answer wants a bigger, smarter one; turning text into vectors for
+ *   search ("embeddings") uses a dedicated embedding model. This tiny file holds
+ *   that mapping. The actual model names come from environment variables (so they
+ *   can be swapped per deployment) with sensible Azure OpenAI defaults baked in.
+ *
+ * WHY IT MATTERS
+ *   Centralising the choice keeps cost and latency under control — the
+ *   classifiers in this folder (complexQueryDetector, intentClassifier,
+ *   modeClassifier) all ask for the cheap "intent" tier here rather than burning
+ *   the expensive generation model on simple labelling. One place to retune.
+ *
+ * KEY PIECES
+ *   - MODELS — the lookup table: intent (cheap classifier), generation (powerful
+ *     writer), embeddings (vector model). Values resolved from env vars.
+ *   - getModelForTask(task) — returns the model name for 'intent' |
+ *     'generation' | 'embeddings'.
+ *   - shouldUseFastModel() — true when the intent and generation models actually
+ *     differ (i.e. a real cheap tier is configured).
+ *
+ * HOW IT CONNECTS
+ *   getModelForTask('intent') is called by complexQueryDetector.ts,
+ *   intentClassifier.ts, and modeClassifier.ts before each LLM call. No I/O of
+ *   its own — just reads process.env and returns strings.
  */
 
 export const MODELS = {

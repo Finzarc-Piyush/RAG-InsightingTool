@@ -1,17 +1,49 @@
 /**
- * W53 · run_budget_optimizer tool.
+ * ============================================================================
+ * budgetOptimizerTool.ts — the "run_budget_optimizer" tool (Marketing-Mix Model)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines the tool that answers "how should I split my marketing budget
+ *   across channels to get the most sales?". It fits a Marketing-Mix Model
+ *   (MMM) and then optimises the spend split. In plain terms:
+ *     • Each ad channel (TV, digital, etc.) has spend over time and a sales
+ *       outcome. The model learns how much each channel actually drives sales,
+ *       accounting for two real-world effects:
+ *         - "adstock" = ads keep working for a while after you stop paying
+ *           (the effect decays slowly, geometrically).
+ *         - "saturation" (Hill curve) = doubling spend does NOT double sales;
+ *           there are diminishing returns at high spend.
+ *     • "elasticity" = a percentage measure of how responsive sales are to a
+ *       channel's spend; high-elasticity channels deserve more money.
+ *     • An optimiser (SLSQP, a constrained math solver) then searches over the
+ *       fitted response curves for the budget split that maximises predicted
+ *       outcome, within per-channel min/max bounds and a fixed total budget.
+ *   It returns charts (current vs optimal allocation, per-channel response
+ *   curves), insight cards, and a structured payload of the recommendation.
  *
- * Wraps the W47–W51 stack (transforms + fit + optimize + Python bridge) behind
- * a single planner-callable tool. When args are omitted the heuristic
- * tagMarketingColumns fills them — so the planner can call this tool without
- * knowing column semantics ahead of time.
+ * WHY IT MATTERS
+ *   Budget reallocation is a headline use case for FMCG marketers. This tool
+ *   turns raw spend/sales data into a concrete "move X% from channel A to B"
+ *   recommendation with a projected sales lift.
  *
- * Returns:
- *   - charts:  current-vs-optimal allocation bar + per-channel response
- *              curves (with current + optimal reference lines)
- *   - insights: elasticity ranking + lift headline + caveats
- *   - operationResult: full payload for downstream tools (W54 narrator
- *              consumes this to populate answerEnvelope.recommendations)
+ * KEY PIECES
+ *   - argsSchema — Zod schema for the tool's arguments (which columns are
+ *     spend/outcome/time, total budget, bounds, bootstrap iterations). All
+ *     are optional: tagMarketingColumns auto-detects them when omitted, so the
+ *     planner can call the tool without knowing column semantics in advance.
+ *   - registerBudgetOptimizerTool — registers the tool as "run_budget_optimizer".
+ *   - buildAllocationChart / buildResponseCurveChart — build the output charts.
+ *   - buildInsightCards / buildSummaryText — write the human-readable findings
+ *     (elasticity ranking, recommended shifts, fit-quality caveats).
+ *
+ * HOW IT CONNECTS
+ *   Registered into the ToolRegistry (../toolRegistry.js). The actual model fit
+ *   and optimisation run in ../../../dataOps/mmmService.js (runBudgetRedistribute),
+ *   which bridges to the Python data-ops service for the stats/ML. Column
+ *   auto-detection comes from ../../../marketingColumnTags.js. Chart/insight
+ *   shapes come from the shared schema (../../../../shared/schema.js). The
+ *   operationResult payload is consumed downstream to populate the answer
+ *   envelope's recommendations.
  */
 import { z } from "zod";
 import type { ToolRegistry } from "../toolRegistry.js";

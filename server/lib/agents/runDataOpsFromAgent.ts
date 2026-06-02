@@ -1,3 +1,43 @@
+/**
+ * ============================================================================
+ * runDataOpsFromAgent.ts — the bridge that lets the agent actually edit the
+ * dataset (add columns, filter rows, pivot, etc.).
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   "Data ops" means changing the data itself rather than just analysing it —
+ *   adding a derived column, filtering rows, renaming, aggregating, pivoting,
+ *   reverting to the original, and so on. This file is the single entry point the
+ *   agentic runtime calls when a request has been routed to dataOps mode. It
+ *   cleans up the question (resolving "that column" etc.), guards against
+ *   questions that are really analysis in disguise, loads the session's dataset
+ *   (applying any active filter), figures out the precise operation, runs it, and
+ *   hands back a friendly answer plus a small preview table.
+ *
+ * WHY IT MATTERS
+ *   It is the modern, fully-agentic replacement for the old DataOpsHandler /
+ *   AgentOrchestrator classes — there is deliberately no dependency on that
+ *   legacy path. Without it the agent could talk about the data but never modify
+ *   it. The correlation-style guard is important: correlation/driver questions
+ *   must go to analysis mode, so this refuses them with a helpful nudge rather
+ *   than mangling them into a transformation.
+ *
+ * KEY PIECES
+ *   - runDataOpsFromAgentContext(exec) — the only export. Takes the agent's
+ *     execution context, returns { answer, charts?, insights?, table?,
+ *     operationResult? }. Handles the empty-question, clarification-needed, and
+ *     "unknown operation" cases with plain-English messages.
+ *   - isCorrelationStyleQuestion(text) — regex guard mirroring the orchestrator's
+ *     routing: anything that smells like correlation/driver analysis is bounced
+ *     back to analysis mode.
+ *
+ * HOW IT CONNECTS
+ *   Uses resolveContextReferences (contextResolver.js) to expand follow-ups;
+ *   parseDataOpsIntent + executeDataOperation (dataOps/dataOpsOrchestrator.js) to
+ *   understand and run the operation; getChatBySessionIdEfficient (chat.model.js)
+ *   to load the session document; applyActiveFilter (activeFilter/) to respect
+ *   the user's current filter. AgentExecutionContext + ChartSpec/Insight types
+ *   come from the runtime types and shared schema.
+ */
 import { resolveContextReferences } from "./contextResolver.js";
 import {
   type DataOpsIntent,
@@ -50,9 +90,9 @@ export async function runDataOpsFromAgentContext(exec: AgentExecutionContext): P
     };
   }
 
-  // Wave-FA5 · Apply active filter to whichever source we choose. `exec.data`
-  // already came through `loadLatestData` so it's filtered, but `rawData` is
-  // a direct field read and must be filtered explicitly here.
+  // Apply active filter to whichever source we choose. `exec.data` already came
+  // through `loadLatestData` so it's filtered, but `rawData` is a direct field
+  // read and must be filtered explicitly here.
   const dataset =
     Array.isArray(sessionDoc.rawData) && sessionDoc.rawData.length > 0
       ? applyActiveFilter(sessionDoc.rawData, sessionDoc.activeFilter)

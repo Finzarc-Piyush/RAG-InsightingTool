@@ -1,12 +1,41 @@
 /**
- * Skills registry — storage + selection. Kept free of side-effect
- * imports so skills (varianceDecomposer.ts, timeWindowDiff.ts, etc.)
- * can `import { registerSkill } from "./registry.js"` without forming
- * a cycle with `./index.ts`, which is the consumer entry point that
- * triggers auto-registration. The cycle caused a
- * `ReferenceError: Cannot access 'registry' before initialization` in
- * every skill-related test at module-load time — see
- * `docs/architecture/skills.md` "Known pitfalls".
+ * ============================================================================
+ * registry.ts — the in-memory catalog of skills + the picker logic
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Holds the live list of registered skills and provides the functions to
+ *   register, list, advertise, choose, and expand them. A "skill" is a named
+ *   analytical routine (driver discovery, growth analysis, etc.); this file is
+ *   the bookkeeping around them. The picker (selectSkill) asks every registered
+ *   skill "do you apply to this question?", keeps the matches, and returns the
+ *   best one — sorted by `priority` (higher = narrower/more specific wins),
+ *   with ties broken by registration order so the result is deterministic.
+ *
+ * WHY IT MATTERS
+ *   This is how the planner decides whether a canned skill should handle a
+ *   question instead of free-form tool selection. It is deliberately kept FREE
+ *   of side-effect imports: skills import { registerSkill } from here, while
+ *   index.ts imports the skills. If this file imported index.ts too, the
+ *   resulting cycle crashed every skill test with "Cannot access 'registry'
+ *   before initialization" at load time (see docs/architecture/skills.md).
+ *
+ * KEY PIECES
+ *   - registerSkill — adds/overwrites a skill in the registry (idempotent, so
+ *     hot-reload and test re-imports don't throw).
+ *   - listRegisteredSkills — current skills as an array.
+ *   - formatSkillsManifestForPlanner — one line per eligible skill for the
+ *     planner prompt; empty string when the feature flag is off (keeps the
+ *     prompt byte-identical so prompt cache holds).
+ *   - selectSkill — picks the best applicable skill (priority desc, insertion
+ *     order tiebreak), honouring the enable flag and allowlist.
+ *   - expandSkill — turns a chosen skill into a concrete SkillInvocation (the
+ *     ordered plan steps) by calling skill.plan().
+ *
+ * HOW IT CONNECTS
+ *   Imported by every skill file (for registerSkill) and by skills/index.ts
+ *   (which re-exports these and triggers registration). Feature-flag helpers
+ *   isDeepAnalysisSkillsEnabled / skillAllowlist come from ./types.js. Brief
+ *   and context types come from the shared schema and ../types.js.
  */
 import type { AgentExecutionContext } from "../types.js";
 import type { AnalysisBrief } from "../../../../shared/schema.js";

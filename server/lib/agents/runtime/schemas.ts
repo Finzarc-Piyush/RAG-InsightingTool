@@ -1,3 +1,37 @@
+/**
+ * ============================================================================
+ * schemas.ts — the data shapes (validators) for everything the agent's brain
+ * passes around
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This file defines the "shapes" of the structured messages the agentic loop
+ *   produces and consumes, using Zod (a runtime validator: you describe the
+ *   shape once and get both a TypeScript type AND a parser that rejects bad
+ *   data). It covers the planner's output (a list of tool steps), the
+ *   reflector's decision (continue / replan / finish / clarify / investigate a
+ *   gap), the verifier's verdict and issues, and the lightweight event payloads
+ *   that get streamed to the UI and saved into the turn's trace.
+ *
+ * WHY IT MATTERS
+ *   These schemas are the contracts between the LLM-driven stages. Because each
+ *   LLM reply is parsed against a schema, a malformed or hallucinated response
+ *   is caught at the boundary instead of corrupting the loop downstream. The
+ *   `VERIFIER_VERDICT` constants are the single source of truth for verdict
+ *   strings — callers must reference them (never raw string literals) so a typo
+ *   becomes a compile error rather than a silently-missed retry branch.
+ *
+ * KEY PIECES
+ *   - planStepSchema / plannerOutputSchema — a planner step (tool + args + deps) and the full plan
+ *   - reflectorOutputSchema — the reflector's next-action decision + spawned sub-questions + gap-fill
+ *   - VERIFIER_VERDICT + verifierOutputSchema — verdict constants and the verifier's structured output
+ *   - agent*EventSchema / agentTraceBlobSchema — SSE event + persisted trace shapes
+ *
+ * HOW IT CONNECTS
+ *   Imported across the runtime — the planner, reflector, verifier, and the
+ *   agent loop (agentLoop.service.ts) parse their LLM outputs and emit SSE rows
+ *   using these shapes. Keep `VERIFIER_VERDICT` and its zod enum tuple in
+ *   lockstep (the type system flags drift).
+ */
 import { z } from "zod";
 
 export const planStepSchema = z.object({
@@ -10,7 +44,7 @@ export const planStepSchema = z.object({
   dependsOn: z.string().optional(),
   /** Steps sharing the same parallelGroup execute concurrently when no dependsOn links exist. */
   parallelGroup: z.string().optional(),
-  /** O2: ID of the hypothesis (from INVESTIGATION_HYPOTHESES) this step primarily tests. */
+  /** ID of the hypothesis (from INVESTIGATION_HYPOTHESES) this step primarily tests. */
   hypothesisId: z.string().optional(),
 });
 
@@ -36,14 +70,14 @@ export const spawnedQuestionSchema = z.object({
 });
 
 /**
- * W11: Intra-node gap-fill tool call for investigate_gap action.
+ * Intra-node gap-fill tool call for the investigate_gap action.
  * Points to a specific open hypothesis and the tool to run to address it.
  */
 export const gapFillSchema = z.object({
   hypothesisId: z.string(),
   tool: z.string(),
   rationale: z.string(),
-  // W12a: real tool args (e.g. {question_override:…} for run_analytical_query).
+  // Real tool args (e.g. {question_override:…} for run_analytical_query).
   // When absent the agent loop derives a question_override from hypothesis.text.
   args: z.record(z.unknown()).optional(),
 });
@@ -53,13 +87,13 @@ export const reflectorOutputSchema = z.object({
   note: z.string().optional(),
   clarify_message: z.string().optional(),
   /**
-   * W8: sub-questions to spawn when an anomalous or surprising finding
+   * Sub-questions to spawn when an anomalous or surprising finding
    * warrants deeper investigation. Only populated when action="finish"
    * and a concrete unexpected pattern was found. Empty otherwise.
    */
   spawnedQuestions: z.array(spawnedQuestionSchema).default([]),
   /**
-   * W11: populated when action="investigate_gap" — identifies which open
+   * Populated when action="investigate_gap" — identifies which open
    * hypothesis still has no evidence and which tool should address it.
    */
   gapFill: gapFillSchema.optional(),

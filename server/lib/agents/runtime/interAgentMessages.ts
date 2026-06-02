@@ -1,3 +1,30 @@
+/**
+ * ============================================================================
+ * interAgentMessages.ts — record & format the agents' "handoffs"
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The runtime has several agent roles (planner, reflector, narrator,
+ *   verifier, ...) that pass work to each other. Each pass is a "handoff"
+ *   message (from → to, intent, artifacts, evidence, blocking questions). This
+ *   file appends those handoffs to the turn's trace and formats a compact digest
+ *   of them for prompts.
+ *
+ * WHY IT MATTERS
+ *   Lets later agents see what earlier agents decided, and powers the workbench
+ *   timeline UI. Everything here is bounded (message count, char limits) so the
+ *   trace and prompts can't balloon.
+ *
+ * KEY PIECES
+ *   - appendInterAgentMessage(trace, msg, emit?) — record a handoff (no-op
+ *     unless AGENT_INTER_AGENT_MESSAGES=true); optionally emits an SSE `handoff`.
+ *   - formatInterAgentHandoffsForPrompt(messages, maxChars) — compact digest,
+ *     keeping the tail so the most recent decisions survive truncation.
+ *
+ * HOW IT CONNECTS
+ *   Reads AgentTrace/InterAgentMessage and the feature flag from types.js. The
+ *   emitted SSE `handoff` rows are consumed by the workbench mapping
+ *   (agentWorkbench.util).
+ */
 import type { AgentTrace, InterAgentMessage } from "./types.js";
 import { isInterAgentTraceEnabled } from "./types.js";
 

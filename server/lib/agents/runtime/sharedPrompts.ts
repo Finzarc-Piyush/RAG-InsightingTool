@@ -1,4 +1,29 @@
 /**
+ * ============================================================================
+ * sharedPrompts.ts — reusable, byte-stable prompt text for the agents
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Holds big chunks of system-prompt text that several agent roles share —
+ *   mainly ANALYST_PREAMBLE, the universal rules every JSON-producing agent
+ *   must follow (valid JSON, no invented numbers, third-person voice, etc.).
+ *
+ * WHY IT MATTERS
+ *   The text is kept 100% static so the LLM provider's "prefix cache" applies:
+ *   when many calls start with the identical leading text, the provider charges
+ *   ~50% for those repeated tokens. Any edit here invalidates that cache, so
+ *   change it only for real policy changes. It also keeps the rules in one place
+ *   so individual role prompts stay short.
+ *
+ * KEY PIECES
+ *   - ANALYST_PREAMBLE — ~520 tokens of universal analyst rules to prepend to a
+ *     role's system prompt.
+ *
+ * HOW IT CONNECTS
+ *   Imported by the per-role prompt builders in server/lib/agents/runtime/
+ *   (planner, narrator, verifier, etc.) that prepend it before their own rules.
+ */
+
+/**
  * Shared prompt constants for the agent runtime.
  *
  * Each constant here MUST be 100% static — no template literals, no env reads,

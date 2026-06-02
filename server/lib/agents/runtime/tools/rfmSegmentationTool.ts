@@ -1,25 +1,39 @@
 /**
- * Wave WT3 · `run_rfm_segmentation` tool.
+ * ============================================================================
+ * rfmSegmentationTool.ts — score & label customers by RFM (the `run_rfm_segmentation` tool)
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Registers the `run_rfm_segmentation` tool. "RFM" is a classic customer-
+ *   analytics framework that scores each entity (a customer, store, or SKU) on
+ *   three things:
+ *     - Recency   — how recently they last transacted (more recent = better).
+ *     - Frequency — how often they transact (more = better).
+ *     - Monetary  — how much they spend in total (more = better).
+ *   Each of the three is rank-scored 1..B (B = number of buckets, default 5,
+ *   where 5 is the top fifth). Combining the three scores gives a code like
+ *   "555" and, via a fixed ruleset, a friendly segment label — Champions,
+ *   Loyal Customers, At Risk, Hibernating, Lost, New Customers, Potential
+ *   Loyalist, About to Sleep, Cant Lose Them, Regular.
  *
- * Recency / Frequency / Monetary scoring per entity (customer, store,
- * SKU) plus segment labels. Closes the RFM question-shape gap from the
- * 1000x master plan (Workstream 5).
+ * WHY IT MATTERS
+ *   Turns a raw transaction log into actionable customer segments ("who are my
+ *   champions? who is about to churn?") without a Python round-trip. The output
+ *   table is sorted best-first and capped at `maxEntities` so it stays
+ *   renderable; the full per-segment counts ride along in `numericPayload` for
+ *   dashboards.
  *
- * Pure-Node, no Python. For each entity we compute:
- *  - **Recency**: index of the entity's last observed period (larger ⇒ more recent).
- *  - **Frequency**: row count OR distinct-period count (caller-selectable).
- *  - **Monetary**: sum of `monetaryColumn`.
+ * KEY PIECES
+ *   - rfmSegmentationArgsSchema — validates entity/period/monetary columns,
+ *     bucket count, frequency mode, row cap, optional row filters.
+ *   - scoreByValue — quantile rank scoring (turns raw values into 1..B scores).
+ *   - classifyRfmSegment — the priority-ordered ruleset mapping (R,F,M) → label.
+ *   - registerRfmSegmentationTool / runRfmSegmentation — register the tool and
+ *     the pure transform (filter → aggregate per entity → score → label).
  *
- * Each dimension is rank-scored 1..B (default B=5) where 5 is best.
- * A combined `rfm_score` string (e.g. `"555"`) and a human-readable
- * `segment` label (Champions / Loyal / At Risk / Hibernating / Lost /
- * New Customers / Potential Loyalist / About to Sleep / Cant Lose Them /
- * Regular) are emitted per entity.
- *
- * Output table is sorted by (rfm_score desc, monetary desc) and capped
- * at `maxEntities` so the agent can hand back something renderable;
- * `numericPayload` carries segment-level counts for downstream
- * dashboards.
+ * HOW IT CONNECTS
+ *   Called by the agent act loop via the tool registry (toolRegistry.ts), runs
+ *   on `ctx.exec.data`. Pure JavaScript, no Python. Pairs with
+ *   `execute_query_plan` when the dataset needs prerequisite shaping.
  */
 
 import { z } from "zod";

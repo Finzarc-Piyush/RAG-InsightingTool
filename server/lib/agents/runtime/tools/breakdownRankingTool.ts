@@ -1,3 +1,52 @@
+/**
+ * ============================================================================
+ * breakdownRankingTool.ts — the "run_breakdown_ranking" analytical tool
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines a tool that answers "who is on top?" questions. It takes a
+ *   categorical column (e.g. Brand, Salesperson, Region) and a numeric metric
+ *   (e.g. Sales), groups the rows by category, adds up (or averages, or
+ *   counts) the metric per group, then sorts the groups into a leaderboard.
+ *   Used for "top contributors", "top N salespeople", "who has the highest X",
+ *   "who drove the decline", etc.
+ *
+ *   It has two ranking modes:
+ *     • Simple: rank by one metric + one aggregation (sum / mean / count).
+ *     • Composite: rank by a weighted FORMULA combining several aggregations,
+ *       e.g. "(growth_pct * 0.6) + (share_pct * 0.4)". The formula uses a tiny
+ *       safe arithmetic mini-language (+ - * / and parentheses and numbers and
+ *       the metric aliases — NO SQL functions), the same one used elsewhere for
+ *       computed aggregations.
+ *
+ *   It also runs a quick statistical sanity check: Welch's t-test compares the
+ *   #1 group's individual row values against everyone else combined, producing
+ *   a "(p = X; n = N)" evidence tag. (A t-test asks "is this difference likely
+ *   real, or could it be random noise?"; p is the chance it's just noise, so
+ *   small p = more convincing.)
+ *
+ * WHY IT MATTERS
+ *   Ranking/contribution analysis is one of the most common analytical asks.
+ *   The deterministic, in-Node computation gives the agent a trustworthy table
+ *   plus real statistical evidence, instead of the answer-writer guessing.
+ *
+ * KEY PIECES
+ *   - breakdownRankingArgsSchema — Zod schema for the tool arguments (metric
+ *     column OR a composite rankBy formula, breakdown column, filters, topN,
+ *     sort direction).
+ *   - registerBreakdownRankingTool — registers the tool as "run_breakdown_ranking".
+ *   - aggregate / aggregateComposite — group-and-reduce helpers (simple and
+ *     formula-based).
+ *   - buildBreakdownRankingEvidence — runs Welch's t-test (top group vs rest)
+ *     and formats the evidence suffix.
+ *
+ * HOW IT CONNECTS
+ *   Registered into the ToolRegistry (../toolRegistry.js). Filtering uses
+ *   filterRowsByDimensionFilters (../../../dataTransform.js); the formula
+ *   parser is parseComputedAggregationExpression (../../../queryPlanExecutor.js);
+ *   the t-test is runSignificanceTest (../../../significanceTests.js); the
+ *   evidence formatting comes from ../formatFindingEvidence.js. Row cap comes
+ *   from diagnosticSliceRowCap (../../../diagnosticPipelineConfig.js).
+ */
 import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
@@ -18,10 +67,10 @@ const dimensionFilterSchema = z
   .strict();
 
 /**
- * Wave W3 · Composite-ranking entry. Used inside `rankBy.metrics[]` to
- * declare each aggregation that the ranking expression references.
- * Aliases are validated against the expression's identifier list at
- * tool-arg parse time via `parseComputedAggregationExpression`.
+ * Composite-ranking entry. Used inside `rankBy.metrics[]` to declare each
+ * aggregation that the ranking expression references. Aliases are validated
+ * against the expression's identifier list at tool-arg parse time via
+ * `parseComputedAggregationExpression`.
  */
 const compositeMetricSchema = z
   .object({
@@ -32,11 +81,11 @@ const compositeMetricSchema = z
   .strict();
 
 /**
- * Wave W3 · Composite ranking. When set, overrides the simple
+ * Composite ranking. When set, overrides the simple
  * `metricColumn + aggregation` shape. The breakdown column is still
  * required for the group-by; `metrics[]` declares each aggregation,
  * `expression` combines them via the restricted arithmetic mini-language
- * (same one QL7's `computedAggregations` uses — `+ - * /` + parens +
+ * (same one `computedAggregations` uses — `+ - * /` + parens +
  * numeric literals + alias identifiers, no SQL functions, no string
  * ops). Ranking sorts groups by the expression's evaluated value.
  *
@@ -87,18 +136,18 @@ export const breakdownRankingArgsSchema = z
     dimensionFilters: z.array(dimensionFilterSchema).max(12).optional(),
     aggregation: z.enum(["sum", "mean", "count"]).default("sum"),
     /**
-     * RNK1 · the prior `max(50)` silently truncated "top 300 salespeople"
-     * questions. The cap is now lifted; safety against runaway prose comes
-     * from the observation slimmer below (only top-K=10 rows are stringified
-     * into the narrator's observation context — the full table rides on
-     * `ToolResult.table` and bypasses the 40k/20k char observation caps).
+     * No upper cap on topN so "top 300 salespeople" works. Safety against
+     * runaway prose comes from the observation slimmer below (only top-K=10
+     * rows are stringified into the narrator's observation context — the full
+     * table rides on `ToolResult.table` and bypasses the 40k/20k char
+     * observation caps).
      */
     topN: z.number().int().min(1).default(20),
     direction: z.enum(["desc", "asc"]).default("desc"),
     /**
-     * Wave W3 · Composite-ranking expression. When set, overrides the
-     * simple `metricColumn + aggregation` ranking with a multi-metric
-     * weighted formula. See `rankByCompositeSchema` above for shape.
+     * Composite-ranking expression. When set, overrides the simple
+     * `metricColumn + aggregation` ranking with a multi-metric weighted
+     * formula. See `rankByCompositeSchema` above for shape.
      */
     rankBy: rankByCompositeSchema.optional(),
   })
@@ -117,8 +166,8 @@ export const breakdownRankingArgsSchema = z
     }
   });
 
-/** RNK1 · Number of rows surfaced in the textual observation summary that
- *  the narrator and replans see. The full table is always returned on
+/** Number of rows surfaced in the textual observation summary that the
+ *  narrator and replans see. The full table is always returned on
  *  `ToolResult.table`; this only caps the JSON snippet inside `summary`. */
 const OBSERVATION_TOP_K = 10;
 
@@ -134,10 +183,10 @@ function numericValue(v: unknown): number | null {
 }
 
 /**
- * Wave WQ7 · split row-level metric values into the headline (top-ranked)
- * group vs. all other groups, then run Welch's t-test to assess whether
- * the headline group's row-level metric values differ significantly from
- * the rest of the universe.
+ * Split row-level metric values into the headline (top-ranked) group vs.
+ * all other groups, then run Welch's t-test to assess whether the headline
+ * group's row-level metric values differ significantly from the rest of the
+ * universe.
  *
  * Two-pass over the frame: the existing `aggregate` reduces sum/count per
  * group (cheap), and this collects values for exactly two buckets (top +
@@ -215,10 +264,9 @@ function aggregate(
 }
 
 /**
- * Wave W3 · Aggregate each metric per breakdown group, then evaluate
- * the composite expression once per group. Returns the per-group
- * scalar score plus the raw aggregated metrics (for the result table
- * and the narrator-facing observation).
+ * Aggregate each metric per breakdown group, then evaluate the composite
+ * expression once per group. Returns the per-group scalar score plus the raw
+ * aggregated metrics (for the result table and the narrator-facing observation).
  */
 function aggregateComposite(
   rows: Record<string, unknown>[],
@@ -347,7 +395,7 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           summary: "breakdownColumn must exist in schema.",
         };
       }
-      // Wave W3 · Composite-ranking column validation.
+      // Composite-ranking column validation.
       if (rankBy) {
         for (const m of rankBy.metrics) {
           if (m.operation === "count") continue; // count doesn't reference a numeric column
@@ -379,9 +427,9 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
       if (!frame.length) {
         return { ok: false, summary: "run_breakdown_ranking: zero rows after filters." };
       }
-      // Wave W3 · Composite-ranking branch. When `rankBy` is set, we
-      // aggregate each declared metric per group, evaluate the
-      // expression on the per-group aggregates, and rank by that score.
+      // Composite-ranking branch. When `rankBy` is set, we aggregate each
+      // declared metric per group, evaluate the expression on the per-group
+      // aggregates, and rank by that score.
       if (rankBy) {
         const compositeMap = aggregateComposite(
           frame as Record<string, unknown>[],
@@ -465,11 +513,11 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
         trimmed.length > 0 ?
           Object.keys(trimmed[0] as Record<string, unknown>)
         : [breakdownColumn, aggKey];
-      // RNK1 · slim the narrator-facing observation to top-K rows even when
-      // the user asked for top 300 — the full table rides on ToolResult.table
-      // and powers the message-level pivotDefaults (RNK2). Without this, a
-      // 300-row JSON dump would blow the 40k/20k observation char caps and
-      // truncate other tool observations from the same turn.
+      // Slim the narrator-facing observation to top-K rows even when the user
+      // asked for top 300 — the full table rides on ToolResult.table and
+      // powers the message-level pivotDefaults. Without this, a 300-row JSON
+      // dump would blow the 40k/20k observation char caps and truncate other
+      // tool observations from the same turn.
       const observationSlice = trimmed.slice(0, OBSERVATION_TOP_K);
       const sample = JSON.stringify(observationSlice, null, 2);
       const showingNote =
@@ -477,14 +525,12 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           ? ` (showing first ${OBSERVATION_TOP_K} of ${trimmed.length} ranked rows in this snippet; full table available downstream)`
           : "";
       const dirNote = sortDirection === "asc" ? " ascending" : "";
-      // Wave WQ7 · canonical FindingEvidence suffix (p + effective n) from
-      // Welch's t-test on row-level metric values: the headline (top-ranked)
-      // group's values vs. all other groups combined. Closes the
-      // deterministic-floor gap on breakdown-ranking findings — WQ1 can now
-      // grade "the top group is the leader" claims by real evidence instead
-      // of the medium/no-evidence default. Empty suffix when
-      // aggregation=count (different test shape) or insufficient n in
-      // either bucket.
+      // Canonical FindingEvidence suffix (p + effective n) from Welch's t-test
+      // on row-level metric values: the headline (top-ranked) group's values
+      // vs. all other groups combined. Lets the answer-grader judge "the top
+      // group is the leader" claims by real evidence instead of a
+      // medium/no-evidence default. Empty suffix when aggregation=count
+      // (different test shape) or insufficient n in either bucket.
       const wq7TopLabel =
         trimmed.length > 0
           ? String(

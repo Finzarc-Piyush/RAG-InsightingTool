@@ -1,3 +1,75 @@
+/**
+ * ============================================================================
+ * planner.ts — turns a user's question into a concrete, ordered list of tool calls
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   This is the "planner": the brain that decides HOW to answer an analytical
+ *   question before any work happens. Given the user's question plus a profile
+ *   of the dataset (column names, types, sample values, prior findings), it asks
+ *   the LLM to emit a small, ordered PLAN — a JSON list of "steps", where each
+ *   step names one tool (e.g. execute_query_plan for SQL-style group/aggregate,
+ *   run_correlation, build_chart, web_search) and the exact arguments to call it
+ *   with. The act loop then executes those steps in order and synthesises the
+ *   final answer. In short: planner = decide WHAT to do; act loop = DO it.
+ *
+ *   A "step" looks like: { id, tool, args, dependsOn?, parallelGroup?, hypothesisId? }.
+ *   - id           — unique label, so a later step can wait on an earlier one.
+ *   - tool         — exact tool name (must exist in the registry).
+ *   - args         — object matching that tool's strict schema (validated by Zod).
+ *   - dependsOn    — id of a step whose output this one needs (run after it).
+ *   - parallelGroup— steps sharing a group string run concurrently (saves latency).
+ *   - hypothesisId — links the step to an investigation hypothesis it tests.
+ *
+ *   This file does FOUR things, in order:
+ *     1. PROMPT CONSTRUCTION — builds a large system prompt (the tool manifest +
+ *        a long list of analyst "rules" the LLM must follow for correct query
+ *        shapes) and a user prompt that stitches together the question, hint
+ *        blocks, the semantic catalog, RAG hits, long-term memory recall,
+ *        investigation hypotheses, prior-step insights, prior observations,
+ *        working memory, the coordinator handoff log, and a dataset summary.
+ *     2. LLM CALL — sends both prompts to completeJson(), which returns JSON
+ *        validated against plannerOutputSchema ({rationale, steps[]}).
+ *     3. DETERMINISTIC REPAIR — before trusting the LLM, it runs many code-based
+ *        "normalizers", "patches" and "guards" over each step that fix common
+ *        LLM mistakes (wrong column names, missing filter operators, wrong query
+ *        shape for ranking / rate-per-X / trends, non-additive period sums, etc.)
+ *        and can even synthesize a missing aggregation step (the "QL2 floor").
+ *     4. VALIDATION — rejects the plan (with a typed reason) if a tool is unknown,
+ *        args fail their schema, a dependsOn points nowhere, the dependency graph
+ *        has a cycle, a referenced column isn't in the (cumulative) schema, or the
+ *        step list is empty. Valid plans are topo-sorted and same-shape query
+ *        steps are coalesced before returning.
+ *
+ * WHY IT MATTERS
+ *   This is the single most important decision point in the agentic engine: a
+ *   bad plan means a wrong or "not computable" answer no matter how good the
+ *   tools are. The deterministic repair/validation layer is what makes the LLM's
+ *   plan trustworthy — it catches the mistakes LLMs reliably make on strict
+ *   query schemas. Without this file there is no plan, so the act loop has
+ *   nothing to execute.
+ *
+ * KEY PIECES
+ *   - runPlanner(...) — the main entry point: build prompts → call LLM →
+ *     repair → validate → return a typed PlannerRunResult.
+ *   - PlannerRunResult / PlannerRejectReason — success ({steps,rationale}) or a
+ *     typed failure reason used by the caller to react / surface errors.
+ *   - normalize*StepArgs(...) — per-tool arg fixers that resolve fuzzy/aliased
+ *     column names back to real schema columns (via plannerColumnResolve.ts).
+ *   - validate*Step / firstInvalidColumnReference / firstInvalidQueryPlanColumn —
+ *     column- and shape-validators that produce the reject reasons.
+ *
+ * HOW IT CONNECTS
+ *   Called by the agent runtime (dataAnalyzer / the plan-act loop) once per
+ *   planning round. It reads the tool manifest from the ToolRegistry
+ *   (toolRegistry.ts) and validates args via that registry's Zod schemas.
+ *   It leans heavily on sibling helpers: plannerColumnResolve.ts (column
+ *   resolution), planArgRepairs.ts (rate/ranking/period/filter repairs),
+ *   queryPlanTemporalPatch.ts (trend/date-grain patches), coalescePlanSteps.ts,
+ *   plannerHintsBlock.ts (intent hints + externalClaimDetector recommendation),
+ *   semantic/prompt.ts (catalog block), context.ts (dataset summary), schemas.ts
+ *   (plannerOutputSchema), llmJson.ts (completeJson), and workingMemory.ts
+ *   (dependency sort). The PlanStep list it returns is consumed by the act loop.
+ */
 import type { AgentExecutionContext } from "./types.js";
 import type { PlanStep } from "./types.js";
 import { plannerOutputSchema } from "./schemas.js";
@@ -450,14 +522,14 @@ export async function runPlanner(
   priorObservationsText?: string,
   workingMemoryBlock?: string,
   handoffDigest?: string,
-  /** P-A1: upfront RAG retrieval digest for the initial planner call. */
+  /** Upfront RAG retrieval digest for the initial planner call. */
   ragHitsBlock?: string,
-  /** W60: semantic recall over the per-session Analysis Memory journal. */
+  /** Semantic recall over the per-session Analysis Memory journal. */
   memoryRecallBlock?: string,
   /**
-   * Wave B5 · structured per-step insights (W19 `buildIntermediateInsight`)
-   * formatted as a labelled block. Lets the planner build on what prior
-   * steps already learned instead of re-deriving from raw observations.
+   * Structured per-step insights (from `buildIntermediateInsight`) formatted
+   * as a labelled block. Lets the planner build on what prior steps already
+   * learned instead of re-deriving from raw observations.
    */
   stepInsightsBlock?: string
 ): Promise<PlannerRunResult> {
@@ -512,30 +584,28 @@ ${PLANNER_CONFIDENCE_DIRECTIVE}
 ${formatSkillsManifestForPlanner()}
 Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string, "args": object, "dependsOn"?: string, "parallelGroup"?: string, "hypothesisId"?: string}]}`;
 
-  // WTL2 · 12_000 → 20_000. Prior observations carry the bulk of evidence
-  // for replans; truncating them was hurting plan quality on multi-step
-  // analyses.
+  // Prior observations carry the bulk of evidence for replans; the generous
+  // truncation budget exists because trimming them hurt plan quality on
+  // multi-step analyses.
   const priorBlock =
     priorObservationsText?.trim().length ?
       `Prior tool observations (from this turn; use for planning next steps):\n${priorObservationsText.trim().slice(0, 20_000)}\n\n`
       : "";
 
-  // WTL2 · 8_000 → 14_000.
   const memoryBlock =
     workingMemoryBlock?.trim().length ?
       `Structured working memory (callId, suggestedColumns, slots — use for chained tool args):\n${workingMemoryBlock.trim().slice(0, 14_000)}\n\n`
       : "";
 
-  // WTL2 · 12_000 → 20_000.
   const handoffBlock =
     handoffDigest?.trim().length ?
       `Coordinator handoff log (this turn — use to align the new plan with prior decisions):\n${handoffDigest.trim().slice(0, 20_000)}\n\n`
       : "";
 
-  // P-A1: Inject a compact digest of upfront RAG hits so the planner has
-  // semantic grounding on the first call, rather than having to discover it
-  // via retrieve_semantic_context. WTL2 · 1_500 → 3_000 — was suspiciously
-  // tight; planners were missing relevant retrieved context.
+  // Inject a compact digest of upfront RAG hits so the planner has semantic
+  // grounding on the first call, rather than having to discover it via
+  // retrieve_semantic_context. (RAG = "retrieval-augmented generation":
+  // relevant snippets fetched from a search index and fed into the prompt.)
   const ragBlock =
     ragHitsBlock?.trim().length ?
       `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 3_000)}\n\n`
@@ -548,31 +618,29 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     ? `### INVESTIGATION_HYPOTHESES (test these; mark evidence in tool args):\n${hypothesisBlock}\n\n`
     : "";
 
-  // W60 · semantic recall block over the per-session Memory journal. Sits
-  // between RAG hits and the prior-turn observations so the planner sees
-  // long-term grounding before turn-local scratch.
-  // WTL2 · 10_000 → 16_000. W57 past-analyses surfaces here; richer
-  // long-term grounding helps the planner avoid re-asking already-answered
-  // sub-questions.
+  // Semantic recall block over the per-session Memory journal. Sits between
+  // RAG hits and the prior-turn observations so the planner sees long-term
+  // grounding (including past analyses) before turn-local scratch — this
+  // helps it avoid re-asking already-answered sub-questions.
   const memoryRecallSection =
     memoryRecallBlock?.trim().length
       ? `${memoryRecallBlock.trim().slice(0, 16_000)}\n\n`
       : "";
 
-  // Wave B5 · structured step insights from prior tool steps in this turn,
-  // surfaced as a labelled block so the planner can build on what was just
-  // learned instead of re-deriving from raw observation text.
+  // Structured step insights from prior tool steps in this turn, surfaced as a
+  // labelled block so the planner can build on what was just learned instead of
+  // re-deriving from raw observation text.
   const stepInsightsSection =
     stepInsightsBlock?.trim().length
       ? `### STEP_INSIGHTS_SO_FAR (compact insights from prior tool steps in this turn — use as the baseline for the next steps):\n${stepInsightsBlock.trim().slice(0, 5_000)}\n\n`
       : "";
 
-  // Wave WW1 · surface WT6 selectTool + WQ2 externalClaimDetector
-  // recommendations directly under the question line so the planner sees
-  // a deterministic intent-→-tool mapping BEFORE the (longer) RAG / memory
-  // / handoff blocks. The block self-suppresses when neither helper has a
-  // recommendation; in practice general_analytical always lists at least
-  // execute_query_plan so the block is rarely empty.
+  // Surface the deterministic intent-classifier (selectTool) +
+  // externalClaimDetector recommendations directly under the question line so
+  // the planner sees a deterministic intent-→-tool mapping BEFORE the (longer)
+  // RAG / memory / handoff blocks. The block self-suppresses when neither
+  // helper has a recommendation; in practice the general_analytical intent
+  // always lists at least execute_query_plan, so the block is rarely empty.
   const hintsResult = buildPlannerHintsBlock(
     ctx.question,
     ctx.summary,
@@ -588,13 +656,12 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     });
   }
 
-  // Wave W59b · semantic-layer catalog inlined right after the hints block.
-  // Empty string when the session has no model (legacy uploads or
-  // inference yielded nothing); otherwise a byte-stable manifest from
-  // `formatMetricCatalog` (W59a) so the planner sees metric labels +
-  // dimension columns + hierarchies as a first-class block. W60 will
-  // register `execute_metric_query`; until then the catalog is read-only
-  // grounding that helps the planner pick the right raw columns.
+  // Semantic-layer catalog inlined right after the hints block. Empty string
+  // when the session has no semantic model (e.g. inference yielded nothing);
+  // otherwise a byte-stable manifest from `formatMetricCatalog` so the planner
+  // sees metric labels + dimension columns + hierarchies as a first-class
+  // block. When `execute_metric_query` isn't available the catalog still acts
+  // as read-only grounding that helps the planner pick the right raw columns.
   const semanticBlock = buildSemanticCatalogPromptBlock(
     ctx.chatDocument?.semanticModel
   );
@@ -647,7 +714,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   // wrong interpretation (trend-with-breakdown instead of rate-per-group).
   const multiPerIntent = detectMultiPerIntent(ctx.question, ctx.summary);
 
-  // Wave QL2 · Aggregation-intent floor — synthesize a deterministic
+  // QL2 · Aggregation-intent floor — synthesize a deterministic
   // `execute_query_plan` step when the question matches an aggregation shape
   // AND no existing step covers it. Closes the failure mode where the planner
   // LLM emits only exploratory steps (or zero steps), leaving the narrator
@@ -739,11 +806,10 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   // (PD1 / PD3 intents are hoisted above the empty-steps check so the QL2
   // aggregation-intent floor can synthesize a step BEFORE the early reject.)
 
-  // Wave T2 · hoist per-date-column span metadata once per turn so the
-  // grain patch can pick Day / Week / Month / Quarter from the dataset's
-  // actual range instead of hard-coding "month". Missing dateRange (absent
-  // pre-T1 schema, or column with no parseable cells) → patch falls back
-  // to its prior "month" default.
+  // Hoist per-date-column span metadata once per turn so the grain patch can
+  // pick Day / Week / Month / Quarter from the dataset's actual range instead
+  // of hard-coding "month". When dateRange is missing (no parseable cells in
+  // the column), the patch falls back to its "month" default.
   const dateRangeByColumn = new Map<
     string,
     { spanDays: number; distinctDayCount: number }

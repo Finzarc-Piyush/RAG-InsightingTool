@@ -1,16 +1,43 @@
 /**
- * Wave F2 · detect_anomalies tool.
+ * ============================================================================
+ * anomalyDetectionTool.ts — the "detect_anomalies" analytical tool
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Defines a tool the AI agent can call to find unusual values ("outliers")
+ *   in one numeric column of the uploaded dataset — e.g. a sales week that is
+ *   way higher or lower than normal. It uses two classic statistics tricks:
+ *     • IQR (Inter-Quartile Range): sort the numbers, look at the middle 50%,
+ *       and flag anything far outside that band. The "1.5×" multiplier
+ *       (Tukey's fence) is the textbook default.
+ *     • z-score: how many standard deviations a value sits from the average;
+ *       big z-score = far from typical.
+ *   "both" flags anything either test catches. Each flagged row gets a
+ *   "severity" so the most extreme outliers sort to the top. This all runs in
+ *   plain Node.js (no call out to the Python service), so it is fast.
  *
- * Surfaces unusual observations in a numeric column (optionally
- * partitioned by a time / segment dimension). Uses IQR + z-score
- * statistical tests — pure-Node, no Python-service round-trip. Returns
- * the flagged rows with severity ranking so the narrator can render
- * "Q3 2024 sales spike (3.2× the median)" style findings directly.
+ * WHY IT MATTERS
+ *   Spotting spikes and dips is a core analytical question ("which weeks were
+ *   unusual?"). Returning severity-ranked rows lets the answer-writer say
+ *   things like "Q3 2024 sales spike (3.2x the median)" directly.
  *
- * Gated by `ANOMALY_DETECTION_ENABLED=true`. The tool is REGISTERED
- * unconditionally so the planner sees it; the gate is enforced inside
- * the tool body with a clear off-message — same pattern as `web_search`
- * + `run_forecast`.
+ * KEY PIECES
+ *   - anomalyDetectionArgsSchema — Zod schema validating the tool's arguments
+ *     (which column, which test, thresholds, optional row filters, how many to
+ *     return).
+ *   - registerAnomalyDetectionTool — registers the tool under the name
+ *     "detect_anomalies" so the agent's plan/act loop can invoke it.
+ *
+ * HOW IT CONNECTS
+ *   Registered into the shared ToolRegistry (../toolRegistry.js) via
+ *   registerTools.ts. The heavy lifting lives in ../../../anomalyDetection.js
+ *   (detectAnomalies). Optional row pre-filtering uses
+ *   filterRowsByDimensionFilters from ../../../dataTransform.js.
+ *
+ * NOTE ON THE FEATURE GATE
+ *   Controlled by env var ANOMALY_DETECTION_ENABLED=true. The tool is ALWAYS
+ *   registered (so the planner can see it exists), but the body returns an
+ *   "off" message when the flag is not set — same pattern as web_search and
+ *   run_forecast.
  */
 import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";

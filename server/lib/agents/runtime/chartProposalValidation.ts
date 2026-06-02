@@ -1,3 +1,31 @@
+/**
+ * ============================================================================
+ * chartProposalValidation.ts — can this proposed chart actually be drawn?
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   Before the engine renders a chart the LLM proposed, this checks that the
+ *   columns it wants (x, y, and optionally a z value or a series-split column)
+ *   really exist in the data AND that the y-axis column holds numbers. It then
+ *   picks which data to chart from: the most recent analytical result table if
+ *   it has the needed columns, otherwise the raw dataset.
+ *
+ * WHY IT MATTERS
+ *   LLMs sometimes propose charts referencing columns that don't exist or aren't
+ *   numeric, which would render as empty or broken. Validating first lets the
+ *   caller silently drop bad proposals instead of shipping a broken chart.
+ *
+ * KEY PIECES
+ *   - ChartProposalXY — the proposed chart's axis/type fields.
+ *   - validateChartProposal(ctx, p) — true only when the columns exist and y is
+ *     numeric (handles heatmap z and series-column cases too).
+ *   - chartRowsForProposal(ctx, p) — choose the analytical table vs raw data and
+ *     report which was used (useAnalyticalOnly flag).
+ *
+ * HOW IT CONNECTS
+ *   Reads AgentExecutionContext (lastAnalyticalTable, summary.columns,
+ *   numericColumns, data) from types.js. Called by the chart-building step in
+ *   the agent runtime.
+ */
 import type { AgentExecutionContext } from "./types.js";
 
 export type ChartProposalXY = {

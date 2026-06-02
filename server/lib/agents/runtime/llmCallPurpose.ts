@@ -1,18 +1,43 @@
 /**
- * Labels every chat-completion call site so the server can route classification
- * / extraction / simple-repair calls to GPT-4o-mini while keeping planner,
- * reflector, narrator, and synthesizer on the flagship model. This is the
- * biggest lever in the cost roadmap (~60% reduction in LLM spend at current
- * usage patterns — see docs/plans/enterprise_platform_overhaul.md).
+ * ============================================================================
+ * llmCallPurpose.ts — pick the right (cheap vs flagship) model for each LLM job
+ * ============================================================================
+ * WHAT THIS FILE DOES
+ *   The app makes many different LLM calls — some are easy ("classify this
+ *   question", "fix this malformed JSON") and some are hard ("plan the analysis",
+ *   "write the final answer"). This file gives every call site a named PURPOSE
+ *   (e.g. `planner`, `narrator`, `intent_classify`) and maps each purpose to a
+ *   tier: MINI (a small, cheap model like GPT-4o-mini) or PRIMARY (the flagship
+ *   model). `resolveModelFor(purpose)` then returns the actual model name to
+ *   use, reading environment variables so ops can override any choice without a
+ *   code change. It also supports a gradual "ramp" (route only X% of a purpose's
+ *   calls to MINI) so a cost-saving switch can be rolled out safely.
+ *
+ * WHY IT MATTERS
+ *   This is the single biggest lever on LLM spend: sending shallow tasks to the
+ *   cheap model while keeping reasoning/synthesis on the flagship cuts cost by
+ *   a large margin without hurting answer quality. Centralising the routing
+ *   here means there is one auditable place that decides "which model runs
+ *   this", rather than hardcoded model names scattered across the codebase.
+ *
+ * KEY PIECES
+ *   - LLM_PURPOSE — the canonical list of named call sites (use these constants,
+ *       never raw strings).
+ *   - PURPOSE_TO_CATEGORY — maps each purpose to MINI or PRIMARY.
+ *   - resolveModelFor — the main entry: purpose in, model deployment name out.
+ *   - shouldRouteToMini / rampPctForPurpose — deterministic percentage rollout.
+ *   - categoryForPurpose / envKeyForPurpose — helpers for telemetry and overrides.
+ *
+ * HOW IT CONNECTS
+ *   The LLM client wrappers (`completeJson` / `callLlm`) accept a `purpose` and
+ *   call `resolveModelFor(purpose)` to choose the model. Per the repo invariant,
+ *   provider/model is never hardcoded — every call site reads from here.
  *
  * Routing precedence (highest to lowest):
  *   1. `OPENAI_MODEL_FOR_<PURPOSE>` — per-purpose override (escape hatch)
  *   2. Category env (MINI vs PRIMARY) declared in `PURPOSE_TO_CATEGORY`
  *   3. `AZURE_OPENAI_DEPLOYMENT_NAME` (the deployment already in use)
  *   4. Hard fallback: `"gpt-4o"`
- *
- * W3.2 wires `completeJson` / `callLlm` to accept a `purpose` and call
- * `resolveModelFor(purpose)`. W3.3–3.9 migrate each call site.
  */
 
 export const LLM_PURPOSE = {
@@ -55,31 +80,31 @@ export const LLM_PURPOSE = {
   CONVERSATIONAL: "conversational",
   ML_MODEL_SUMMARY: "ml_model_summary",
   /**
-   * W-EXP-2 · Dashboard export deck-planner. Composes a `SlideDeckPlan` from
-   * the dashboard's `answerEnvelope` + chart inventory + business actions.
-   * PRIMARY-tier (Opus 4.7) because action-title quality and structural
-   * reasoning are the whole product here — Mini-tier output is the exact
-   * "shitty deck" failure mode this rewrite exists to fix.
+   * Dashboard export deck-planner. Composes a `SlideDeckPlan` from the
+   * dashboard's `answerEnvelope` + chart inventory + business actions.
+   * PRIMARY-tier because action-title quality and structural reasoning are the
+   * whole product here — Mini-tier output is the exact "shitty deck" failure
+   * mode this rewrite exists to fix.
    */
   DECK_PLANNER: "deck_planner",
   /**
-   * Wave A7 · Automation column-remap. Given a saved automation's
-   * expected column descriptors and a fresh dataset's columns, propose
-   * a saved-name → new-name mapping for any unmatched-by-name columns.
-   * MINI-tier — name-similarity reasoning is shallow + cheap.
+   * Automation column-remap. Given a saved automation's expected column
+   * descriptors and a fresh dataset's columns, propose a saved-name →
+   * new-name mapping for any unmatched-by-name columns. MINI-tier —
+   * name-similarity reasoning is shallow + cheap.
    */
   AUTOMATION_REMAP: "automation_remap",
   /**
-   * Wave SU-IC2 · Indicator-column semantic enrichment. For each indicator
-   * detected by SU-IC1 (Yes/No/etc. shaped pre-computed answer columns),
-   * the LLM emits `answersQuestions: string[]` — natural-language phrasings
-   * the column directly answers — and adjudicates positive/negative polarity
-   * when the heuristic dictionary couldn't. MINI-tier: short structured
-   * output, name + topValues input only.
+   * Indicator-column semantic enrichment. For each detected indicator
+   * (Yes/No/etc. shaped pre-computed answer columns), the LLM emits
+   * `answersQuestions: string[]` — natural-language phrasings the column
+   * directly answers — and adjudicates positive/negative polarity when the
+   * heuristic dictionary couldn't. MINI-tier: short structured output, name +
+   * topValues input only.
    */
   INDICATOR_ENRICH: "indicator_enrich",
   /**
-   * Wave QL1 · Quick-lookup planner. Single MINI-tier call that generates a
+   * Quick-lookup planner. Single MINI-tier call that generates a
    * schema-grounded `QueryPlanBody` for simple top-N / list / count / sum /
    * average style questions. Bypasses the full hypothesis/brief/planner/
    * reflector/narrator/verifier pipeline — the result table + 3 deterministic
@@ -88,21 +113,20 @@ export const LLM_PURPOSE = {
    */
   QUICK_LOOKUP_PLANNER: "quick_lookup_planner",
   /**
-   * Wave WI2-server · Per-tile dashboard insight regeneration. Single
-   * MINI-tier call that takes a chart spec + a deterministic summary of
-   * the post-filter slice and emits 1–3 sentences of plain markdown
-   * prose. Invoked from `POST /api/insight/regen`; the client caches
-   * results via the WI2-cache LRU+TTL helper.
+   * Per-tile dashboard insight regeneration. Single MINI-tier call that takes
+   * a chart spec + a deterministic summary of the post-filter slice and emits
+   * 1–3 sentences of plain markdown prose. Invoked from `POST /api/insight/regen`;
+   * the client caches results via an LRU+TTL helper.
    */
   INSIGHT_REGEN: "insight_regen",
   /**
-   * Wave W-UD5 · User-directive LLM extractor. Cheap MINI-tier call that
-   * inspects a user message + the dataset summary and emits zero-to-N
-   * structured `UserDirective` drafts with explicit supersede ids for any
-   * existing active directives the new utterance contradicts. Runs as a
-   * supplement to the deterministic extractor in `extractUserDirectives.ts`
-   * — verbose / paraphrased phrasings the regex misses. Result is cached
-   * by message hash so repeat sessions don't re-pay the LLM cost.
+   * User-directive LLM extractor. Cheap MINI-tier call that inspects a user
+   * message + the dataset summary and emits zero-to-N structured
+   * `UserDirective` drafts with explicit supersede ids for any existing active
+   * directives the new utterance contradicts. Runs as a supplement to the
+   * deterministic extractor in `extractUserDirectives.ts` — catching verbose /
+   * paraphrased phrasings the regex misses. Result is cached by message hash so
+   * repeat sessions don't re-pay the LLM cost.
    */
   DIRECTIVE_EXTRACTION: "directive_extraction",
 } as const;
@@ -264,7 +288,7 @@ export function resolveModelFor(
   return resolveCategoryModel(category);
 }
 
-/** Category lookup — exported for telemetry rollups and the W3.10 ramp. */
+/** Category lookup — exported for telemetry rollups and the rollout ramp. */
 export function categoryForPurpose(purpose: LlmCallPurpose): LlmCallCategory {
   return PURPOSE_TO_CATEGORY[purpose];
 }
