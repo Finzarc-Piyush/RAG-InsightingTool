@@ -354,8 +354,10 @@ function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string,
   // `sheet_to_json` allocates one JS object per row — the step most likely to
   // exhaust the heap. Refuse oversized sheets with actionable guidance instead
   // of crashing. (Wording avoids "memory"/"too large" so the upload pipeline's
-  // generic memory-error remap doesn't mask this message.) Phase 2 removes this
-  // guard by streaming Excel ingest.
+  // generic memory-error remap doesn't mask this message.)
+  // NOTE: this guards the `sheet_to_json` allocation, NOT the preceding
+  // `XLSX.read` itself — a pathological workbook can still OOM at read time.
+  // Phase 2 removes both risks by replacing XLSX with a streaming Excel ingest.
   const estimatedRows = estimateExcelRowsFromRef((worksheet as any)['!ref']);
   const excelRowCap = uploadLimits.maxExcelRowsInMemory;
   if (estimatedRows > excelRowCap) {

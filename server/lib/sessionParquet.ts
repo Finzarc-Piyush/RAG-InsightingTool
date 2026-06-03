@@ -140,6 +140,18 @@ export async function openSessionParquetAsView(
   const buf = await getFileFromBlob(blobName);
   const localPath = path.join(os.tmpdir(), `marico-parquet-read-${sessionId}.parquet`);
   await fs.writeFile(localPath, buf);
-  await openParquetAsDataView(storage, localPath);
+  try {
+    // Branch B already holds the full dataset locally, so materialize it into a
+    // real `data` TABLE rather than a view: a `read_parquet` view reads lazily
+    // and would dangle the moment we delete the temp file. With a table the
+    // relation is self-contained, so we can delete the file in `finally` — no
+    // leak. Drop any partial `data` view a failed Branch A may have left first.
+    await storage.executeStatement('DROP VIEW IF EXISTS "data"');
+    await storage.executeStatement(
+      `CREATE OR REPLACE TABLE "data" AS SELECT * FROM read_parquet('${sqlPathLiteral(localPath)}')`,
+    );
+  } finally {
+    await fs.unlink(localPath).catch(() => {});
+  }
   return "download";
 }
