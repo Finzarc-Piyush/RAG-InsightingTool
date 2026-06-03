@@ -2,12 +2,11 @@ import { Router } from "express";
 import multer from "multer";
 import express from "express";
 import { uploadFile, getUploadStatus, getQueueStats } from "../controllers/uploadController.js";
+import { uploadLimits } from "../config/uploadLimits.js";
 
 // P-019: cap upload size. 1 GiB in-memory was an OOM risk; realistic user
-// datasets fit comfortably under 200 MB. Operators can raise via env if needed.
-const UPLOAD_MAX_BYTES = Number(
-  process.env.UPLOAD_MAX_BYTES || 200 * 1024 * 1024
-);
+// datasets fit comfortably under 200 MB. Operators can raise via UPLOAD_MAX_BYTES.
+const UPLOAD_MAX_BYTES = uploadLimits.maxUploadBytes;
 
 const upload = multer({
   storage: multer.memoryStorage(),

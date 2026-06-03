@@ -6,6 +6,8 @@
 import type { ChartSpec, Insight, SemanticModel, SessionAnalysisContext } from '../shared/schema.js';
 import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
 import { ColumnarStorageService } from '../lib/columnarStorage.js';
+import { uploadLimits } from '../config/uploadLimits.js';
+import { logUploadTelemetry, currentRssMb, type UploadPath } from './uploadTelemetry.js';
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -16,6 +18,8 @@ export interface SnowflakeImportConfig {
   password?: string;
   warehouse?: string;
   role?: string;
+  /** Known total row count from table metadata, for a richer truncation warning. */
+  knownTotalRows?: number;
 }
 
 type UploadJobEnrichmentStep =
@@ -273,16 +277,22 @@ class UploadQueue {
       if (job.snowflakeImport) {
         job.status = 'parsing';
         job.progress = 10;
-        const { fetchTableData } = await import('../lib/snowflakeService.js');
-        data = await fetchTableData(job.snowflakeImport);
+        const { fetchTableData, snowflakeTruncationWarning } = await import('../lib/snowflakeService.js');
+        const imported = await fetchTableData(job.snowflakeImport);
+        data = imported.rows;
         if (!data || data.length === 0) {
           throw new Error('No data found in Snowflake table');
+        }
+        const truncWarn = snowflakeTruncationWarning(imported);
+        if (truncWarn) {
+          job.warnings = [...(job.warnings || []), truncWarn];
+          console.warn(`⚠️ ${truncWarn}`);
         }
         job.progress = 40;
       } else if (job.fileBuffer) {
         // File upload path
         useLargeFileProcessing = shouldUseLargeFileProcessing(job.fileBuffer.length);
-        useChunking = job.fileBuffer.length >= 10 * 1024 * 1024; // 10MB threshold for chunking
+        useChunking = job.fileBuffer.length >= uploadLimits.chunkingThresholdBytes; // default 10MB
 
       // Try chunking first for files >= 10MB (faster upload and query)
       if (useChunking) {
@@ -331,7 +341,7 @@ class UploadQueue {
           // OPTIMIZATION: For very large files, load only a sample of chunks for AI analysis
           // This dramatically speeds up processing while maintaining statistical accuracy
           const { loadChunkData } = await import('../lib/chunkingService.js');
-          const MAX_ROWS_FOR_AI = 100000; // Load max 100K rows for AI analysis
+          const MAX_ROWS_FOR_AI = uploadLimits.maxRowsForAiAnalysis; // default 100K rows for AI analysis
           const shouldSampleChunks = chunkIndex.totalRows > MAX_ROWS_FOR_AI;
           
           if (shouldSampleChunks) {
@@ -1295,6 +1305,32 @@ class UploadQueue {
         blobInfo: job.blobInfo,
         warnings: job.warnings?.length ? job.warnings : undefined,
       };
+
+      // Phase 0 · emit one structured telemetry line for scale baselining.
+      // Wrapped so instrumentation can never fail an otherwise-successful upload.
+      try {
+        const telemetryPath: UploadPath = job.snowflakeImport
+          ? 'snowflake'
+          : useChunking
+            ? 'chunking'
+            : useLargeFileProcessing
+              ? 'large-file'
+              : 'in-memory';
+        logUploadTelemetry({
+          sessionId: job.sessionId,
+          jobId: job.jobId,
+          source: job.snowflakeImport ? 'snowflake' : 'file',
+          path: telemetryPath,
+          rowCount: summary.rowCount,
+          columnCount: summary.columnCount,
+          fileBytes: job.fileBuffer?.length,
+          durationMs: Date.now() - (job.startedAt || job.createdAt),
+          rssMb: currentRssMb(),
+          warnings: job.warnings?.length ?? 0,
+        });
+      } catch {
+        /* never break an upload on telemetry */
+      }
 
       // Clean up file buffer from memory after processing (file uploads only)
       if (job.fileBuffer) {

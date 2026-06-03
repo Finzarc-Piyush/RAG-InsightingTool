@@ -5,6 +5,7 @@
  */
 
 import { ColumnarStorageService, DatasetMetadata, isDuckDBAvailable } from './columnarStorage.js';
+import { uploadLimits } from '../config/uploadLimits.js';
 import { metadataService } from './metadataService.js';
 import { DataSummary } from '../shared/schema.js';
 import { convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from './fileParser.js';
@@ -96,7 +97,7 @@ export function shouldUseLargeFileProcessing(fileSize: number): boolean {
     console.log('⚠️ DuckDB not available - large file processing disabled. Using traditional processing.');
     return false;
   }
-  return fileSize >= 50 * 1024 * 1024;
+  return fileSize >= uploadLimits.largeFileThresholdBytes;
 }
 
 /**

@@ -620,6 +620,13 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
                   value={fmtInt(ds.duplicateRowCount)}
                 />
               ) : null}
+              {data?.sampling?.sampled ? (
+                <HeroChip
+                  icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+                  label="Profiled on sample"
+                  value={`${fmtInt(data.sampling.profiledRowCount)} of ${fmtInt(data.sampling.totalRowCount)}`}
+                />
+              ) : null}
               <div className="ml-auto flex items-center gap-2 rounded-full bg-muted px-3 py-1">
                 <span className="text-xs text-muted-foreground">Complete</span>
                 <span className="text-sm font-semibold tabular-nums text-foreground">

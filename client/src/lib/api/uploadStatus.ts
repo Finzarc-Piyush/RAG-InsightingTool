@@ -34,6 +34,8 @@ export interface UploadJobStatusResponse {
   understandingReady?: boolean;
   understandingReadyAt?: number;
   suggestedQuestions?: string[];
+  /** Non-fatal processing warnings (e.g. Snowflake truncation, CSV parse quality). */
+  warnings?: string[];
   /** Optional fast-path payload for immediate preview rendering */
   previewSummary?: {
     rowCount: number;

@@ -21,6 +21,7 @@ import {
 import { loadChartsFromBlob } from "../lib/blobStorage.js";
 import { listPastAnalysesForSession } from "../models/pastAnalysis.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
+import { uploadLimits } from "../config/uploadLimits.js";
 import { buildRichDataSummary } from "../lib/richColumnProfile.js";
 import {
   chartSpecSchema,
@@ -925,12 +926,14 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     // Soft cap for very large datasets: evenly sample rows so per-column
     // profiling stays bounded. Statistics are representative; completeness is
     // near-exact at this scale.
-    const MAX_ROWS_FOR_PROFILE = 300_000;
-    if (data.length > MAX_ROWS_FOR_PROFILE) {
+    const MAX_ROWS_FOR_PROFILE = uploadLimits.maxRowsForDataSummaryProfile;
+    const totalRowCount = data.length;
+    const sampledForProfile = totalRowCount > MAX_ROWS_FOR_PROFILE;
+    if (sampledForProfile) {
       console.log(
-        `📊 Dataset has ${data.length} rows; sampling ${MAX_ROWS_FOR_PROFILE} for the profile`,
+        `📊 Dataset has ${totalRowCount} rows; sampling ${MAX_ROWS_FOR_PROFILE} for the profile`,
       );
-      const step = data.length / MAX_ROWS_FOR_PROFILE;
+      const step = totalRowCount / MAX_ROWS_FOR_PROFILE;
       const sampled: Record<string, any>[] = [];
       for (let i = 0; i < data.length && sampled.length < MAX_ROWS_FOR_PROFILE; i += step) {
         sampled.push(data[Math.floor(i)]);
@@ -939,7 +942,20 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     }
 
     const richSummary = buildRichDataSummary(data, dataSummary);
-    return res.json(richSummary);
+    // Phase 0 · large-dataset transparency: tell the client when the profile was
+    // computed on a sample so the UI can badge it instead of implying full fidelity.
+    return res.json(
+      sampledForProfile
+        ? {
+            ...richSummary,
+            sampling: {
+              sampled: true,
+              profiledRowCount: data.length,
+              totalRowCount,
+            },
+          }
+        : richSummary,
+    );
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });

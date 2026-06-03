@@ -9,6 +9,7 @@
  */
 
 import snowflake from 'snowflake-sdk';
+import { uploadLimits } from '../config/uploadLimits.js';
 
 export interface SnowflakeConnectionConfig {
   account: string;
@@ -127,7 +128,41 @@ function destroyAsync(connection: snowflake.Connection): Promise<void> {
   });
 }
 
-const MAX_IMPORT_ROWS = 500_000;
+/**
+ * Result of a Snowflake table import, including whether the row cap was hit so
+ * the upload pipeline can surface a truncation warning instead of silently
+ * dropping rows (Phase 0 · large-dataset robustness).
+ */
+export interface SnowflakeTableData {
+  rows: Record<string, any>[];
+  /** True when the table had more rows than the import cap. */
+  truncated: boolean;
+  /** The row cap that was applied (SNOWFLAKE_MAX_IMPORT_ROWS). */
+  limit: number;
+  /** Known total row count, when the caller supplied it (from table metadata). */
+  knownTotalRows?: number;
+}
+
+/**
+ * Build a user-facing warning when a Snowflake import was truncated. Pure and
+ * unit-testable. Returns null when nothing was dropped.
+ */
+export function snowflakeTruncationWarning(info: {
+  truncated: boolean;
+  limit: number;
+  knownTotalRows?: number;
+}): string | null {
+  if (!info.truncated) return null;
+  const totalLabel =
+    info.knownTotalRows && info.knownTotalRows > info.limit
+      ? info.knownTotalRows.toLocaleString('en-US')
+      : 'more';
+  return (
+    `Snowflake import was capped at ${info.limit.toLocaleString('en-US')} rows ` +
+    `(table has ${totalLabel} rows). Analysis reflects only the first ` +
+    `${info.limit.toLocaleString('en-US')} rows — raise SNOWFLAKE_MAX_IMPORT_ROWS to import more.`
+  );
+}
 
 /**
  * Escape a Snowflake identifier (db / schema / table / column name) for safe
@@ -300,8 +335,8 @@ export async function listTablesInSchema(
  * Uses shared connection; metadata queries do not load table data.
  */
 export async function fetchTableData(
-  config: Partial<SnowflakeConnectionConfig> & { tableName: string }
-): Promise<Record<string, any>[]> {
+  config: Partial<SnowflakeConnectionConfig> & { tableName: string; knownTotalRows?: number }
+): Promise<SnowflakeTableData> {
   const fullConfig = getConnectionOptions(config);
   const { tableName } = config;
   if (!fullConfig.account || !fullConfig.username || !fullConfig.password || !fullConfig.warehouse) {
@@ -324,8 +359,20 @@ export async function fetchTableData(
   const escapedSchema = sanitizeIdentifier(schema);
   const escapedTable = sanitizeIdentifier(tableName);
   const quotedTable = `"${escapedDb}"."${escapedSchema}"."${escapedTable}"`;
-  const sql = `SELECT * FROM ${quotedTable} LIMIT ${MAX_IMPORT_ROWS}`;
-  return executeAsync(connection, sql);
+  const limit = uploadLimits.snowflakeMaxImportRows;
+  // Fetch one extra row so we can distinguish "exactly at the cap" from "truncated".
+  const fetched = await executeAsync(
+    connection,
+    `SELECT * FROM ${quotedTable} LIMIT ${limit + 1}`
+  );
+  const truncated = fetched.length > limit;
+  return {
+    rows: truncated ? fetched.slice(0, limit) : fetched,
+    truncated,
+    limit,
+    knownTotalRows:
+      typeof config.knownTotalRows === 'number' ? config.knownTotalRows : undefined,
+  };
 }
 
 /**

@@ -157,6 +157,16 @@ export interface RichDataSummaryResponse {
   };
   qualityScore: number;
   columns: RichColumnProfile[];
+  /**
+   * Present (Phase 0) when the profile was computed on an evenly-spaced sample
+   * of a very large dataset, so the UI can badge it rather than imply full
+   * fidelity. Statistics are representative; completeness is near-exact.
+   */
+  sampling?: {
+    sampled: boolean;
+    profiledRowCount: number;
+    totalRowCount: number;
+  };
 }
 
 export async function pivotQuery(

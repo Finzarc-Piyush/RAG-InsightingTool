@@ -537,6 +537,14 @@ export const useHomeMutations = ({
           setIsDatasetPreviewLoading?.(false);
           setIsDatasetEnriching?.(false);
           removeEnrichmentSystemMessage();
+          // Phase 0 · surface non-fatal warnings (e.g. Snowflake 500k truncation)
+          // so large-data caveats aren't silent. Completion block runs once.
+          if (Array.isArray(st.warnings) && st.warnings.length > 0) {
+            toast({
+              title: 'Heads up about your data',
+              description: st.warnings.join(' '),
+            });
+          }
           await hydrateSessionWithRetry(sessionId, { retries: 3, syncMessages: true });
         }
       } catch (e) {
