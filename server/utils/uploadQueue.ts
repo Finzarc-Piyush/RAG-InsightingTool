@@ -8,6 +8,7 @@ import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
 import { ColumnarStorageService } from '../lib/columnarStorage.js';
 import { uploadLimits } from '../config/uploadLimits.js';
 import { logUploadTelemetry, currentRssMb, type UploadPath } from './uploadTelemetry.js';
+import { isParquetReadPathEnabled, writeAndUploadSessionParquet } from '../lib/sessionParquet.js';
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -226,6 +227,9 @@ class UploadQueue {
       let chunkIndexBlob: { blobName: string; totalChunks: number; totalRows: number } | undefined;
       let useLargeFileProcessing = false;
       let useChunking = false;
+      // Phase 2 (W2.0) · set only when USE_PARQUET_READ_PATH is on and the durable
+      // Parquet was written after materialize; otherwise stays undefined (no-op).
+      let parquetBlobInfo: { blobName: string; version: number; rowCount?: number } | undefined;
       let skipDateEnrichmentForSuspiciousCsv = false;
 
       // Keep Blob as best-effort and off the /upload critical path.
@@ -1095,6 +1099,24 @@ class UploadQueue {
         try {
           await storage.materializeAuthoritativeDataTable(data, { tableName: 'data' });
           columnarReadyMarker = storagePath || `materialized:${job.sessionId}`;
+          // Phase 2 (W2.0) · flag-gated · write the authoritative `data` table to a
+          // durable Parquet in blob so the Phase 1 read path can open it next
+          // request instead of rehydrating all rows. Non-fatal: a failure here must
+          // never fail the upload (rematerialize remains the fallback). Default OFF.
+          if (isParquetReadPathEnabled()) {
+            try {
+              const blobName = await writeAndUploadSessionParquet(storage, {
+                username: job.username,
+                sessionId: job.sessionId,
+                version: 0,
+              });
+              parquetBlobInfo = { blobName, version: 0, rowCount: summary.rowCount };
+            } catch (pqErr) {
+              console.warn(
+                `⚠️ Parquet write skipped (non-fatal): ${pqErr instanceof Error ? pqErr.message : String(pqErr)}`,
+              );
+            }
+          }
         } finally {
           await storage.close();
         }
@@ -1239,6 +1261,20 @@ class UploadQueue {
           await postEnrichmentFlush(job.sessionId, job.username);
         } catch (flushErr) {
           console.error('⚠️ postEnrichmentFlush failed:', flushErr);
+        }
+      }
+
+      // Phase 2 (W2.0) · flag-gated · persist the Parquet pointer onto the chat
+      // doc so the read path (ensureAuthoritativeDataTable) can open it. Only set
+      // when the Parquet was written above; otherwise a no-op (flag-off path is
+      // byte-identical). Non-fatal — a failed pointer write must not fail upload.
+      if (parquetBlobInfo && chatDocument) {
+        try {
+          chatDocument = await updateChatDocument({ ...chatDocument, parquetBlob: parquetBlobInfo });
+        } catch (pqDocErr) {
+          console.warn(
+            `⚠️ Failed to persist parquetBlob pointer (non-fatal): ${pqDocErr instanceof Error ? pqDocErr.message : String(pqDocErr)}`,
+          );
         }
       }
 
