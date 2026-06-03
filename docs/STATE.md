@@ -5,9 +5,10 @@
 
 ## HEAD
 
-- **Latest wave:** Wave WG2.0 (2026-06-03) — large-dataset robustness (Phase 0+1 + writer hook)
+- **Latest wave:** Wave WG2.1 (2026-06-03) — large-dataset robustness (verification + handoff)
 - **Branch:** `claude/large-dataset-robustness`
-- **Last commit:** `c57bbd28` (2026-06-03)
+- **Last commit:** `4eb0e9a5` (2026-06-03)
+- **Handoff / your next steps:** [`docs/large-dataset-NEXT-STEPS.md`](large-dataset-NEXT-STEPS.md)
 - **Working tree:** clean
 - **Server typecheck:** 98 errors (baseline, unchanged)
 - **Client typecheck:** 53 errors (baseline, unchanged)
