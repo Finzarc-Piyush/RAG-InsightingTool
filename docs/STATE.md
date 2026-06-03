@@ -5,9 +5,9 @@
 
 ## HEAD
 
-- **Latest wave:** Wave WG1.1 (2026-06-03) — large-dataset robustness (Phase 0+1)
+- **Latest wave:** Wave WG2.0 (2026-06-03) — large-dataset robustness (Phase 0+1 + writer hook)
 - **Branch:** `claude/large-dataset-robustness`
-- **Last commit:** `537d4108` (2026-06-03)
+- **Last commit:** `c57bbd28` (2026-06-03)
 - **Working tree:** clean
 - **Server typecheck:** 98 errors (baseline, unchanged)
 - **Client typecheck:** 53 errors (baseline, unchanged)
@@ -15,7 +15,7 @@
 
 ## Feature streams
 
-- **Large-dataset robustness (10M rows · multi-tenant · stay-on-serverless):** OPEN. Roadmap `/Users/tida/.claude/plans/goofy-wandering-quasar.md`. Root cause: a stateful "load all rows into a JS array" model on stateless Vercel serverless. **Shipped + verified** on branch `claude/large-dataset-robustness`: **WG0** Phase 0 guardrails (Snowflake truncation warning, Excel OOM guard, sampling transparency, env caps, telemetry); **WG1** Phase 1 Parquet/DuckDB-over-blob keystone (flag `USE_PARQUET_READ_PATH`, default OFF — production unchanged); **WG1.1** adversarial-review fixes. **Deep plans authored, not yet implemented:** Phase 2 streaming ingest (CSV/Excel/Snowflake → Parquet; wires the Phase 1 writer hook), Phase 3 streaming serve (preview pagination + streamed exports), Phase 4 multi-tenant concurrency (Cosmos ETag + durable jobs), Phase 5 scale validation. **Gated externally:** Phase 1 prod-enable needs the one-time Vercel SAS-read spike (`server/scripts/spikeParquetReadPath.ts`) — the dual-branch fallback means it works either way.
+- **Large-dataset robustness (10M rows · multi-tenant · stay-on-serverless):** OPEN. Roadmap `/Users/tida/.claude/plans/goofy-wandering-quasar.md`. Root cause: a stateful "load all rows into a JS array" model on stateless Vercel serverless. **Shipped + verified** on branch `claude/large-dataset-robustness`: **WG0** Phase 0 guardrails (Snowflake truncation warning, Excel OOM guard, sampling transparency, env caps, telemetry); **WG1** Phase 1 Parquet/DuckDB-over-blob keystone (flag `USE_PARQUET_READ_PATH`, default OFF — production unchanged); **WG1.1** adversarial-review fixes; **WG2.0** wired the Parquet writer hook into ingest (flag-gated) — the keystone read+write loop is now functionally complete behind the flag. **Deep plans authored, remaining waves not yet implemented:** Phase 2 native CSV/Excel/Snowflake streaming ingest (needs facet re-plumbing / parity fixtures / a live Snowflake connection), Phase 3 streaming serve (preview pagination + streamed exports), Phase 4 multi-tenant concurrency (Cosmos ETag + durable jobs), Phase 5 scale validation. **Gated externally:** Phase 1 prod-enable needs the one-time Vercel SAS-read spike (`server/scripts/spikeParquetReadPath.ts`) — the dual-branch fallback means it works either way.
 
 ### Prior milestone — ALL CLOSED (preserved)
 
