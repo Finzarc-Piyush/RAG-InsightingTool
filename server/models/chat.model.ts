@@ -87,6 +87,18 @@ export interface ChatDocument {
     version: number;
     lastUpdated: number;
   };
+  /**
+   * Phase 1 (large-dataset robustness) · pointer to the durable Parquet copy of
+   * the authoritative dataset in blob, keyed by dataVersion. When the
+   * USE_PARQUET_READ_PATH flag is on, the read path opens this directly as the
+   * DuckDB `data` view instead of rehydrating all rows per request. Optional /
+   * additive — absent on existing sessions; the read path falls back cleanly.
+   */
+  parquetBlob?: {
+    blobName: string;
+    version: number;
+    rowCount?: number;
+  };
   dataVersions?: Array<{ // Version history for data operations
     versionId: string;
     blobName: string;

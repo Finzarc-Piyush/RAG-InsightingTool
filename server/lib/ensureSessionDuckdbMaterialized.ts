@@ -5,6 +5,7 @@ import {
   SessionDataNotMaterializedError,
 } from "./columnarStorage.js";
 import { metadataService } from "./metadataService.js";
+import { isParquetReadPathEnabled, openSessionParquetAsView } from "./sessionParquet.js";
 
 const materializeLocks = new Map<string, Promise<void>>();
 
@@ -46,6 +47,24 @@ export async function ensureAuthoritativeDataTable(
   await withSessionMaterializeLock(sessionId, async () => {
     if (await storage.tableExists("data")) {
       return;
+    }
+
+    // Phase 1 (flag-gated, default OFF) · open the durable Parquet as the `data`
+    // view instead of rehydrating every row. Any failure falls through to the
+    // existing rematerialize below, so this can never make a session
+    // un-queryable. Inert until a Parquet writer populates chat.parquetBlob.
+    if (isParquetReadPathEnabled() && chat.parquetBlob?.blobName) {
+      try {
+        await openSessionParquetAsView(storage, chat.parquetBlob.blobName, sessionId);
+        metadataService.invalidateCache(sessionId);
+        return;
+      } catch (parquetErr) {
+        console.warn(
+          `⚠️ Parquet read path failed for ${sessionId}; falling back to rematerialize: ${
+            parquetErr instanceof Error ? parquetErr.message : String(parquetErr)
+          }`,
+        );
+      }
     }
 
     const rows = await loadLatestData(chat, undefined, undefined, {
