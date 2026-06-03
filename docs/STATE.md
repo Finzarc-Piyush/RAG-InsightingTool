@@ -1,20 +1,23 @@
 # Project state — Marico RAG Insighting Tool
 
 > Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-05-25 — **Stable milestone.** All feature streams closed. All deferred items resolved or explicitly out of scope. Test suite at 100% pass rate. Ready for new observations and features.
+> Last sync: 2026-06-03 — **Large-dataset robustness workstream opened.** Phases 0–1 shipped flag-safe on branch `claude/large-dataset-robustness`; Phases 2–5 have deep plans authored. Prior stable milestone preserved. Roadmap: `/Users/tida/.claude/plans/goofy-wandering-quasar.md`.
 
 ## HEAD
 
-- **Latest wave:** Wave WHov-area-crosshair (2026-05-25)
-- **Branch:** `claude/wide-format-classifier`
-- **Last commit:** `91ac98b1` (2026-05-25)
+- **Latest wave:** Wave WG1.1 (2026-06-03) — large-dataset robustness (Phase 0+1)
+- **Branch:** `claude/large-dataset-robustness`
+- **Last commit:** `537d4108` (2026-06-03)
 - **Working tree:** clean
-- **Server tests:** 5022/5022 (100% pass)
-- **Client vitest:** 420/420
-- **Server typecheck:** 98 errors (baseline)
-- **Client typecheck:** 53 errors (baseline)
+- **Server typecheck:** 98 errors (baseline, unchanged)
+- **Client typecheck:** 53 errors (baseline, unchanged)
+- **Tests:** Phase 0/1 unit + touched-module regression green; full server suite not re-run this session (changes are localized + flag-gated)
 
-## Feature streams — ALL CLOSED
+## Feature streams
+
+- **Large-dataset robustness (10M rows · multi-tenant · stay-on-serverless):** OPEN. Roadmap `/Users/tida/.claude/plans/goofy-wandering-quasar.md`. Root cause: a stateful "load all rows into a JS array" model on stateless Vercel serverless. **Shipped + verified** on branch `claude/large-dataset-robustness`: **WG0** Phase 0 guardrails (Snowflake truncation warning, Excel OOM guard, sampling transparency, env caps, telemetry); **WG1** Phase 1 Parquet/DuckDB-over-blob keystone (flag `USE_PARQUET_READ_PATH`, default OFF — production unchanged); **WG1.1** adversarial-review fixes. **Deep plans authored, not yet implemented:** Phase 2 streaming ingest (CSV/Excel/Snowflake → Parquet; wires the Phase 1 writer hook), Phase 3 streaming serve (preview pagination + streamed exports), Phase 4 multi-tenant concurrency (Cosmos ETag + durable jobs), Phase 5 scale validation. **Gated externally:** Phase 1 prod-enable needs the one-time Vercel SAS-read spike (`server/scripts/spikeParquetReadPath.ts`) — the dual-branch fallback means it works either way.
+
+### Prior milestone — ALL CLOSED (preserved)
 
 - **Workstream 7 — insight engine 2.0:** CLOSED at 6/6 (WI1–WI6). Per-tile insight regen, brush explain-slice, citations, recommendations, MRU history dropdown — all shipped.
 - **WD2 — dashboard cross-filter:** CLOSED. All 15 chart kinds wired (visx + echarts). Dim mechanics on all marks.
