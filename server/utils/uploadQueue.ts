@@ -1122,32 +1122,45 @@ class UploadQueue {
           // Durability · persist a durable, enrichment-exact copy of the
           // authoritative `data` rows (post-melt, temporal-faceted, numeric-
           // coerced — same array just materialized to DuckDB) as the session's
-          // currentDataBlob. On a cold /tmp (session revisit / server restart /
-          // serverless cold start) the per-session DuckDB is gone, so
-          // ensureAuthoritativeDataTable rematerializes via loadLatestData; its
-          // Priority 1 (currentDataBlob, JSON branch) now returns these exact
-          // rows verbatim — no re-parse, no re-melt — instead of falling through
-          // to the fragile original-blob re-parse that loses enrichment and
-          // silently zeroes measures. Version 1 is the upload baseline; later
-          // data ops bump from there (see dataPersistence.ts). Stored in blob,
-          // so the Cosmos 4 MB doc limit never applies — only the small pointer
-          // is persisted on the chat doc. NON-FATAL: a write failure must never
-          // fail the upload (the original-blob re-parse remains the fallback).
-          try {
-            const { updateProcessedDataBlob } = await import('../lib/blobStorage.js');
-            const enriched = await updateProcessedDataBlob(job.sessionId, data, 1, job.username);
-            enrichedDataBlobInfo = {
-              blobUrl: enriched.blobUrl,
-              blobName: enriched.blobName,
-              version: 1,
-              lastUpdated: Date.now(),
-            };
+          // currentDataBlob, so a cold /tmp (session revisit / server restart /
+          // serverless cold start) rematerializes from these EXACT rows via
+          // loadLatestData Priority 1 (currentDataBlob, JSON branch) instead of
+          // the fragile original-blob re-parse that loses enrichment.
+          //
+          // ONLY when there is no OTHER durable full-fidelity rematerialize
+          // source. loadLatestData(authoritativeRematerialize) prefers, in
+          // order: chunked storage (Priority 0, used in ALL modes) → currentDataBlob
+          // (Priority 1) → rawData (Priority 2). So for CHUNKED uploads the chunks
+          // already reload the full dataset, and for small uploads rawData is
+          // persisted inline — in both cases this copy is redundant. Writing it
+          // unconditionally adds a large JSON blob upload (~50 MB for a 10k-row
+          // wide dataset) to the critical upload path, stalling startup for no
+          // benefit. Gate on `!chunkIndexBlob`: non-chunked uploads are <10 MB
+          // (the chunking threshold), so the copy is cheap there, and that is
+          // exactly the band (>10k rows, no chunks, rawData not stored) whose
+          // rematerialize would otherwise hit the fragile re-parse.
+          // NON-FATAL: a write failure must never fail the upload.
+          if (!chunkIndexBlob) {
+            try {
+              const { updateProcessedDataBlob } = await import('../lib/blobStorage.js');
+              const enriched = await updateProcessedDataBlob(job.sessionId, data, 1, job.username);
+              enrichedDataBlobInfo = {
+                blobUrl: enriched.blobUrl,
+                blobName: enriched.blobName,
+                version: 1,
+                lastUpdated: Date.now(),
+              };
+              console.log(
+                `💾 Wrote durable enriched currentDataBlob (${data.length} rows) for ${job.sessionId}: ${enriched.blobName}`,
+              );
+            } catch (enrichedErr) {
+              console.warn(
+                `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${enrichedErr instanceof Error ? enrichedErr.message : String(enrichedErr)}`,
+              );
+            }
+          } else {
             console.log(
-              `💾 Wrote durable enriched currentDataBlob (${data.length} rows) for ${job.sessionId}: ${enriched.blobName}`,
-            );
-          } catch (enrichedErr) {
-            console.warn(
-              `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${enrichedErr instanceof Error ? enrichedErr.message : String(enrichedErr)}`,
+              `↩️ Skipping durable currentDataBlob write for ${job.sessionId}: chunked upload already has a full-fidelity rematerialize source (chunkIndexBlob).`,
             );
           }
           // Phase 2 (W2.0) · flag-gated · write the authoritative `data` table to a

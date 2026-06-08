@@ -100,8 +100,15 @@ export async function inferDatasetProfile(
     return { ...emptyDatasetProfile(), shortDescription: 'No rows to analyze.' };
   }
 
+  // Non-blocking-startup cap. This profile call sits on the critical upload
+  // path (it guides cleaning + suggestions), and on timeout it returns the
+  // DETERMINISTIC emptyDatasetProfile() — which the heuristic date/column
+  // detection downstream already handles. So a slow/unresponsive LLM
+  // deployment shouldn't stall "ready to chat" for the old 45s; cap at 15s.
+  // A healthy model returns this profile in a few seconds (well under the cap),
+  // so the common path is unchanged. Env-tunable per deployment.
   const timeoutMs =
-    options?.timeoutMs ?? (Number(process.env.DATASET_PROFILE_TIMEOUT_MS) || 45_000);
+    options?.timeoutMs ?? (Number(process.env.DATASET_PROFILE_TIMEOUT_MS) || 15_000);
   const payload = buildLlmPayload(data);
   const ambiguousCurrencyColumns: string[] = [];
   if (options?.dataSummary) {
