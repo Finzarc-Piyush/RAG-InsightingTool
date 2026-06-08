@@ -108,6 +108,8 @@ import {
   planAlreadyCoversAggregation,
 } from "./planArgRepairs.js";
 import { coalesceQueryPlanSteps } from "./coalescePlanSteps.js";
+import { repairBooleanIndicatorRatePlan } from "./booleanIndicatorRateRepair.js";
+import type { QueryPlanBody } from "../../queryPlanExecutor.js";
 import {
   PLANNER_CONFIDENCE_DIRECTIVE,
   buildPlannerHintsBlock,
@@ -414,6 +416,13 @@ function firstInvalidQueryPlanColumn(
       allowedSort.add(`${a.column}_${a.operation}`);
     }
   }
+  // Computed-ratio aliases (e.g. an adherence_rate built from countIf/countIf)
+  // are valid sort targets — a "top performers by rate" plan sorts on them.
+  for (const ca of (plan.computedAggregations as
+    | { alias?: string }[]
+    | undefined) ?? []) {
+    if (ca?.alias) allowedSort.add(ca.alias);
+  }
   for (const s of (plan.sort as { column: string }[] | undefined) ?? []) {
     if (!s?.column || !allowedSort.has(s.column)) return s.column;
   }
@@ -552,6 +561,7 @@ Rules:
 - execute_query_plan: use for exact groupBy + aggregations with args.plan JSON; column names must match the schema exactly. Prefer over NL whenever totals/sums must be correct. aggregations[].column MUST be an existing numeric column on the current frame OR a column added earlier in this plan by add_computed_columns (e.g. date_diff_days → numeric). Custom labels like Total_Revenue belong in aggregations[].alias only.
 - CMP1 — dimensionFilters supports scalar comparison + range ops alongside categorical \`in\`/\`not_in\`. Use \`{column, op: "lt"|"lte"|"gt"|"gte"|"eq"|"neq", values: ["<scalar>"]}\` for numeric thresholds (\`Sales > 100000\`) or time-of-day cutoffs (\`"Clock-In Time" < "09:30:00"\`); use \`{column, op: "between", values: ["<low>","<high>"]}\` for inclusive ranges. String values are compared lexicographically — correct for HH:MM:SS time-of-day and ISO date strings; numeric-looking strings auto-cast to DOUBLE. When comparing a time-of-day column, also exclude any sentinel non-time values ("Absent" etc.) with a separate \`not_in\` filter — see the TIME-OF-DAY block in DATA UNDERSTANDING when present.
 - PCT1 — RATE / SHARE / PERCENT questions ("what % of X are Y", "share of rows where", "proportion of"): emit ONE execute_query_plan with TWO aggregations — \`{operation: "countIf", column: "*", predicate: [<dimensionFilters>], alias: "matching"}\` AND \`{operation: "count", column: "*", alias: "total"}\`. The narrator surfaces matching/total*100 as the percentage with magnitude (n of N, x.x%). Use \`sumIf\` instead of \`countIf\` when the user asked about a numeric SHARE (e.g. "what % of revenue came from premium SKUs" → predicate filters to premium, column is the revenue measure, paired with a normal sum on the same column to get total revenue). The predicate uses the same DimensionFilter shape as plan.dimensionFilters. Worked example for "what % of clock-ins are before 9:30" against a column \`Clock-In <09:30\` (Yes/No/Absent values): plan.aggregations = [{operation: "countIf", column: "*", predicate: [{column: "Clock-In <09:30", op: "in", values: ["Yes"]}], alias: "matching"}, {operation: "countIf", column: "*", predicate: [{column: "Clock-In <09:30", op: "in", values: ["Yes","No"]}], alias: "total"}] — total excludes Absent rows because Absent isn't a clock-in. CRITICAL: predicate \`values\` MUST come from the column's ACTUAL stored values (CATEGORICAL VALUES block / topValues / PRE-COMPUTED INDICATOR COLUMNS block), NOT from this worked example. If the column shows \`{TRUE, FALSE, Absent}\` or \`{Adherent, Non-Adherent}\` or \`{Compliant, Non-Compliant}\`, use those literal strings — copying ["Yes"]/["No"] verbatim from this example into a predicate against a TRUE/FALSE-shaped column matches zero rows and produces "0 of 0" answers.
+- BIR1 — RATE OF A BOOLEAN INDICATOR ("PJP adherence rate", "compliance %", "adherence by cluster", "dashboard for <indicator>"): a boolean indicator column (kind:"boolean" in the PRE-COMPUTED INDICATOR COLUMNS block, e.g. \`PJP Adherence\` with TRUE/FALSE or Adherent/Non-Adherent values) has NO numeric \`<x>_rate\` column. NEVER reference an invented column like \`adherence_rate\` / \`compliance_rate\` in groupBy or aggregations[].column, and NEVER define such an alias in one step and reference it as a column in another — execute_query_plan steps are INDEPENDENT (they do not chain outputs). To get the rate, aggregate the indicator column DIRECTLY in EACH step using the countIf-ratio: aggregations = [{operation:"countIf", column:"*", predicate:[{column:"<indicator>", op:"in", values:[<positive values>]}], alias:"matching"}, {operation:"countIf", column:"*", predicate:[{column:"<indicator>", op:"in", values:[<positive ∪ negative values>]}], alias:"total"}], computedAggregations:[{alias:"<indicator>_rate", expression:"matching / total"}], with groupBy=[<breakdown dimension>] for a per-group rate. Take the literal positive/negative values from the indicator's stored values, NOT from this example.
 - PD1/PD3 — AVG PER (temporal) questions ("average X per day", "average X per day per cluster", "daily average X by region"): PREFER the simple ratio shape — ONE GROUP BY with SUM(metric) + COUNT(DISTINCT denom) + a computed ratio column. Worked example for "average compliance visits per day across all clusters": plan = { groupBy: ["Cluster Name"], aggregations: [{ column: "Compliance Visit", operation: "sum", alias: "total_visits" }, { column: "Date", operation: "count_distinct", alias: "num_days" }], computedAggregations: [{ alias: "avg_visits_per_day", expression: "total_visits / num_days" }] } — ONE row per cluster, the ratio column IS the answer. NEVER put the date (or any Day/Week/Month/Quarter/Year facet over it) in groupBy alongside the answer dimension — that produces a (cluster × date) trend grid, NOT the rate-per-cluster the user asked for. The COUNT(DISTINCT) MUST be on the SOURCE date column (e.g. "Date"), not on a derived facet ("Day · Date") — facets all have the same cardinality as the source for daily data and the source is the natural denominator. Use this shape for any "average per <temporal unit>" question regardless of whether the answer dimension is named or implicit. computedAggregations is a [{alias, expression}] array; expression supports + - * / ( ) and bare aggregation aliases only (no SQL functions); max 8 entries.
 - PD1/PD3 NESTED perDimension fallback — use ONLY when the user explicitly asks for "average of daily TOTALS", "median daily X", "max daily X", or non-mean outer ops over a temporal denominator (where SUM/COUNT_DISTINCT doesn't apply). Shape: { groupBy: ["Cluster Name"], aggregations: [{ column: "Visits", operation: "median", perDimension: "Day · Date", innerOperation: "sum" }] } — buckets rows by (groupBy ∪ perDimension), applies innerOperation per bucket, then operation across bucket totals. perDimension is incompatible with operation:"percent_change"/"countIf"/"sumIf". For NON-temporal per-clauses ("average X per customer"), use this shape too — count_distinct(customer) doesn't have the same physical meaning as per-row average.
 - PD1 CRITICAL — single-pass mean/avg of raw rows is WRONG when each row is already a per-day record (it returns mean-per-row, not mean-per-day-total). NEVER emit \`groupBy: ["Cluster Name", "Date"], aggregations: [{column: "Visits", operation: "mean"}]\` for an "average per day per cluster" question — that's a 2D grid; the user wanted one row per cluster. Use the QL7 ratio shape (SUM / COUNT_DISTINCT) by default; deterministic post-passes also synthesize it for you when you forget.
@@ -1044,6 +1054,21 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   const baseColNames = new Set(ctx.summary.columns.map((c) => c.name));
   const cumulative = new Set(baseColNames);
   for (const step of sorted) {
+    // Fix C · fail-forward: before validating columns, rebind an invalid
+    // `<x>_rate`-style aggregation ref (e.g. `adherence_rate`) to a countIf-ratio
+    // over the matching boolean indicator (e.g. `PJP Adherence`). Only fires on
+    // columns that would otherwise be rejected, so a "dashboard for <boolean
+    // indicator>" plan yields a real per-group rate instead of aborting the turn.
+    if (step.tool === "execute_query_plan" && step.args.plan) {
+      const rebind = repairBooleanIndicatorRatePlan(
+        step.args.plan as QueryPlanBody,
+        ctx.summary
+      );
+      if (rebind.repaired) {
+        step.args.plan = rebind.plan as unknown as PlanStep["args"]["plan"];
+        agentLog("plan.boolean_indicator_rate_repair", { turnId, stepId: step.id });
+      }
+    }
     const argKeys = Object.keys(step.args).join(",");
     const bad = firstInvalidColumnReference(step, cumulative);
     if (bad) {
