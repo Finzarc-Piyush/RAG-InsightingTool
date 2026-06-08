@@ -152,4 +152,22 @@ describe("formatForNarrator — narrator prompt block", () => {
     const bb = createBlackboard();
     assert.strictEqual(formatForNarrator(bb), "");
   });
+
+  it("surfaces a compute_growth TREND trajectory verbatim to the narrator prompt", () => {
+    // The trend trajectory lives in the finding detail (= tool summary), which
+    // is the ONLY growth signal the narrator reads (memorySlots do not reach
+    // it). WGR6/WGR7 key off this text, so it must reach the prompt intact.
+    const bb = createBlackboard();
+    const trendDetail =
+      "compute_growth (trend): Sales rose ~14.2% across 30 periods, from 2026-04-01 (41) " +
+      "to 2026-04-30 (47). Peak 2026-04-22 (52), trough 2026-04-03 (38). " +
+      "Linear fit slope +0.2/period, R²=0.62 over n=30 points (rising).";
+    addFinding(bb, { sourceRef: "c1", label: "Sales over time", detail: trendDetail });
+    const block = formatForNarrator(bb);
+    assert.ok(block.includes("rose ~14.2% across 30 periods"));
+    assert.ok(block.includes("Peak 2026-04-22"));
+    assert.ok(block.includes("(rising)"));
+    // The defeatist phrasing must NOT be what the narrator sees.
+    assert.ok(!/no prior-period pairs|cannot be shown/i.test(block));
+  });
 });

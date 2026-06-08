@@ -93,6 +93,29 @@ function multiYearMonthlyData(): Record<string, unknown>[] {
   return rows;
 }
 
+/** Multi-year daily fixture keyed by the raw "Order Date" column — exercises
+ *  the CALENDAR path (≥2 calendar periods) for summaryWithDate(). */
+function multiYearByOrderDate(): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (let y = 2023; y <= 2024; y++) {
+    for (let m = 1; m <= 12; m++) {
+      const mm = m < 10 ? `0${m}` : String(m);
+      rows.push({ Markets: "VN", "Order Date": `${y}-${mm}-15`, Sales: 100 });
+    }
+  }
+  return rows;
+}
+
+/** Single-month daily fixture keyed by "Order Date" — a single contiguous
+ *  span that must route to the sequential "trend" path. */
+function singleMonthDailyByOrderDate(): Record<string, unknown>[] {
+  return Array.from({ length: 30 }, (_, i) => ({
+    Markets: "VN",
+    "Order Date": `2026-04-${String(i + 1).padStart(2, "0")}`,
+    Sales: 100 + i,
+  }));
+}
+
 /** Single-year fixture — does NOT qualify for seasonality. */
 function singleYearMonthlyData(): Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = [];
@@ -212,10 +235,11 @@ describe("WGR4 · growthAnalysisSkill · plan emission", () => {
     assert.equal((chart!.args as any).type, "bar");
   });
 
-  it("emits series + summary + line chart for open-ended trend questions", () => {
+  it("emits series + summary + line chart for open-ended trend questions on multi-period CALENDAR data", () => {
     const plan = growthAnalysisSkill.plan(
       trendBrief(),
-      ctx("how has value sales trended over the years?", summaryWithDate())
+      // Multi-year "Order Date" data → calendar period-over-period is possible.
+      ctx("how has value sales trended over the years?", summaryWithDate(), multiYearByOrderDate())
     );
     assert.ok(plan);
     const computes = plan!.steps.filter((s) => s.tool === "compute_growth");
@@ -225,7 +249,55 @@ describe("WGR4 · growthAnalysisSkill · plan emission", () => {
     assert.deepEqual(modes, ["series", "summary"]);
     const chart = plan!.steps.find((s) => s.tool === "build_chart");
     assert.equal((chart!.args as any).type, "line");
+    assert.equal((chart!.args as any).y, "growth_pct");
     assert.equal(chart!.dependsOn, "ga_summary");
+  });
+
+  it("routes a single contiguous span (daily, one month) to trend mode + metric-level chart", () => {
+    const plan = growthAnalysisSkill.plan(
+      trendBrief(),
+      ctx(
+        "how has value sales trended over time?",
+        summaryWithDate(),
+        singleMonthDailyByOrderDate()
+      )
+    );
+    assert.ok(plan);
+    const computes = plan!.steps.filter((s) => s.tool === "compute_growth");
+    assert.ok(computes.length >= 1);
+    // Both series (dimension present) and summary go to "trend".
+    for (const c of computes) {
+      assert.equal((c.args as any).mode, "trend");
+    }
+    const chart = plan!.steps.find((s) => s.tool === "build_chart")!;
+    assert.equal((chart.args as any).type, "line");
+    assert.equal((chart.args as any).y, "value");
+    assert.equal((chart.args as any).title, "Sales over time");
+    assert.equal(chart.dependsOn, "ga_summary");
+  });
+
+  it("rankByGrowth is unaffected by a single-span dataset", () => {
+    const plan = growthAnalysisSkill.plan(
+      trendBrief(),
+      ctx(
+        "which is the fastest growing market?",
+        summaryWithDate(),
+        singleMonthDailyByOrderDate()
+      )
+    );
+    const rank = plan!.steps.find((s) => s.tool === "compute_growth")!;
+    assert.equal((rank.args as any).mode, "rankByGrowth");
+  });
+
+  it("daily grain preference maps to 'auto' (not 'wow')", () => {
+    const plan = growthAnalysisSkill.plan(
+      trendBrief({
+        timeWindow: { description: "by day", grainPreference: "daily" },
+      }),
+      ctx("daily trend", summaryWithDate(), multiYearByOrderDate())
+    );
+    const compute = plan!.steps.find((s) => s.tool === "compute_growth")!;
+    assert.equal((compute.args as any).grain, "auto");
   });
 
   it("uses PeriodIso column when wideFormatTransform is detected", () => {

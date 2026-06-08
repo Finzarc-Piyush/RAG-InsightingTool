@@ -53,6 +53,13 @@ export interface BuildGrowthSqlInput {
   /** Default "sum"; min/max/avg supported for completeness. */
   aggregation?: "sum" | "avg" | "min" | "max";
   dimensionFilters?: DimensionFilter[];
+  /**
+   * When true, ignore the grain/kind LAG offset and force LAG 1 — i.e. compare
+   * each period to its IMMEDIATE predecessor in the sorted series (consecutive
+   * delta), not a calendar prior. Used by compute_growth's "trend" mode to
+   * describe an intra-span trajectory when there is no prior-year period.
+   */
+  forceConsecutiveLag?: boolean;
   /** When emitting ORDER BY, prefer DESC on growth (rank mode). Default ASC for series. */
 }
 
@@ -140,7 +147,7 @@ function buildPeriodExpr(input: BuildGrowthSqlInput, kind: PeriodKind): string {
  */
 export function buildGrowthSql(input: BuildGrowthSqlInput): BuildGrowthSqlResult {
   const kind = inferPeriodKind(input);
-  const lag = lagOffsetFor(input.grain, kind);
+  const lag = input.forceConsecutiveLag ? 1 : lagOffsetFor(input.grain, kind);
   const periodExpr = buildPeriodExpr(input, kind);
   const where = buildDimensionFilterWhereSql(input.dimensionFilters);
   const tbl = quoteIdent(input.tableName);

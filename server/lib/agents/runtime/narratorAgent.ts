@@ -399,6 +399,36 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   pair (a 3-year dataset has TWO YoY pairs per segment, not one). For
   "fastest growing" questions, the lede in tldr should name the top segment
   and its growth rate. Never bury growth rates inside methodology or caveats.
+- WGR6 — TREND / TRAJECTORY PROMINENCE: when a compute_growth result is a
+  TREND (its summary names a within-window trajectory — "compute_growth
+  (trend ...): <metric> rose/fell/held roughly flat ... from <start> to <end>
+  ... Peak <p>, trough <t> ... R²=..."), the headline IS that trajectory.
+  In tldr and the lead finding, state the direction in plain terms ("compliance
+  visits rose ~14% across the 30 days, from 41 to 47, peaking 2026-04-22").
+  Put the start-to-end %Δ into findings[].magnitude (e.g. "+14.2% over the
+  window"). Cite slope and R² ONLY in methodology, as trend strength ("a
+  steady rise, R²≈0.6 over 30 daily points") — NEVER as a reason the trend
+  cannot be reported. A modest R² means "noisy upward/downward drift", not
+  "no trend": still report the direction and the start-to-end change. Do not
+  bury the trajectory inside caveats or methodology.
+- WGR7 — TREND ANTI-CONTRADICTION (overrides any urge to refuse): NEVER write
+  that a time trend "cannot be shown", that the metric "cannot be shown as a
+  time trend", or that "the question remains open" whenever the blackboard
+  contains an ordered time series of 3 OR MORE periods (a compute_growth
+  result reporting "N ordered period(s)" / "N periods" with N≥3, a trend
+  result, or any step whose temporal axis returned ≥3 distinct buckets). An
+  ordered series of ≥3 periods IS a trend and a time-series chart of it was
+  rendered alongside this answer — refusing to describe it contradicts what
+  the user sees. The ONLY valid temporal caveat in that case is the narrow
+  year-over-year one: if (and ONLY if) no prior comparable YEAR exists, you may
+  add a single caveat scoped to that — "a second comparable year would be
+  needed to call this a year-over-year shift" — while STILL reporting the
+  within-window direction and start-to-end change as the headline. Do NOT
+  generalise that YoY gap into "no trend can be shown." Distinguish
+  "insufficient data for a year-over-year comparison" (a narrow, valid caveat)
+  from "no trend can be shown at all" (false whenever an ordered series exists
+  — never write it). This carves the ≥3-period case out of the single-bucket
+  caveat (which applies only when there is exactly ONE distinct period).
 - WSE5 — SEASONALITY PROMINENCE: when the blackboard or tool observations
   contain seasonality output (detect_seasonality emits memorySlots
   seasonality_strength, seasonality_peak_positions, seasonality_consistency_max,

@@ -74,6 +74,12 @@ import {
   chooseAutoGrain,
   type GrowthGrain,
 } from "../../../growth/periodShift.js";
+import { linearTrend } from "../../../growth/linearTrend.js";
+import {
+  isTemporalFacetColumnKey,
+  parseTemporalFacetDisplayKey,
+} from "../../../temporalFacetColumns.js";
+import { distinctBucketsForGrain } from "../../../queryPlanTemporalPatch.js";
 import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { agentLog } from "../agentLogger.js";
 
@@ -97,7 +103,7 @@ export const computeGrowthArgsSchema = z
     grain: z.enum(["yoy", "qoq", "mom", "wow", "auto"]).default("auto"),
     /** Underlying period kind — drives YoY LAG offset (12 / 4 / 52 / 1). */
     periodKind: z.enum(["month", "quarter", "week", "year"]).optional(),
-    mode: z.enum(["series", "summary", "rankByGrowth"]).default("series"),
+    mode: z.enum(["series", "summary", "rankByGrowth", "trend"]).default("series"),
     topN: z.number().int().min(2).max(50).optional(),
     aggregation: z.enum(["sum", "avg", "min", "max"]).optional(),
     dimensionFilters: z.array(dimensionFilterSchema).max(12).optional(),
@@ -184,7 +190,13 @@ function summarizeRanked(rows: GrowthRow[], grain: GrowthGrain): string {
 function summarizeSeries(rows: GrowthRow[], grain: GrowthGrain, mode: string): string {
   const nonNull = rows.filter((r) => r.growth_pct !== null);
   if (nonNull.length === 0) {
-    return `compute_growth (${mode}, ${grain.toUpperCase()}): ${rows.length} period(s) — no prior-period pairs available (likely insufficient temporal coverage).`;
+    // No CALENDAR prior period exists (e.g. a single contiguous span). This is
+    // NOT a missing time series — the ordered periods are still a describable
+    // trajectory. Scope the limitation narrowly to the calendar comparison so
+    // the narrator describes the within-window trend instead of refusing.
+    const priorLabel = grain === "yoy" ? "year" : "period";
+    const cmpLabel = grain === "yoy" ? "year-over-year" : "period-over-period";
+    return `compute_growth (${mode}, ${grain.toUpperCase()}): ${rows.length} ordered period(s) present, but no prior-${priorLabel} calendar pair to compare against — a ${grain.toUpperCase()} change cannot be computed. This is NOT a lack of a time series: the ${rows.length} periods form an ordered within-window trajectory that can be described (direction, start-to-end change, peak/trough). Describe that within-window trend; only the ${cmpLabel} comparison is unavailable.`;
   }
   const sample = nonNull.slice(0, 4).map((r) => {
     const dim = r.dimension ? `${r.dimension} ` : "";
@@ -192,6 +204,196 @@ function summarizeSeries(rows: GrowthRow[], grain: GrowthGrain, mode: string): s
     return `${dim}${r.period}: ${pct}`;
   });
   return `compute_growth (${mode}, ${grain.toUpperCase()}): ${rows.length} period(s), ${nonNull.length} with growth pairs. Sample: ${sample.join(" · ")}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Intra-span TREND (sequential) path. Instead of pairing each period to a
+// calendar prior, it sorts the distinct periods and compares each to its
+// immediate predecessor, then describes the overall trajectory (direction,
+// start→end change, peak/trough, slope/R²). Answers "how has X trended over
+// time" for a single contiguous span (daily / weekly / irregular) where
+// calendar period-over-period growth is undefined.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface TrajectorySummary {
+  nPeriods: number;
+  startPeriod: string;
+  startValue: number;
+  endPeriod: string;
+  endValue: number;
+  pctChangeStartToEnd: number | null;
+  absChangeStartToEnd: number;
+  peakPeriod: string;
+  peakValue: number;
+  troughPeriod: string;
+  troughValue: number;
+  slope: number;
+  r2: number;
+  direction: "rising" | "falling" | "flat";
+}
+
+function distinctPeriodCount(rows: GrowthRow[]): number {
+  const s = new Set<string>();
+  for (const r of rows) {
+    if (r.period !== null && r.period !== undefined && String(r.period) !== "")
+      s.add(String(r.period));
+  }
+  return s.size;
+}
+
+function fmtNum(v: number): string {
+  const rounded = Math.round(v * 100) / 100;
+  return rounded.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/**
+ * Re-aggregate row-level data to one total per period, sort chronologically
+ * (ISO labels sort lexicographically == chronologically, matching DuckDB's
+ * VARCHAR ORDER BY), and emit consecutive (lag-1) deltas. Returns the same
+ * GrowthRow shape as summary mode so charts/tables keep working.
+ */
+function computeTrendRowsInMemory(
+  rows: Array<Record<string, unknown>>,
+  args: ComputeGrowthArgs,
+  periodCol: string
+): GrowthRow[] {
+  const filtered = applyDimensionFiltersInMemory(rows, args.dimensionFilters);
+  const periodTotals = new Map<string, number>();
+  for (const r of filtered) {
+    const period = r[periodCol];
+    if (period === null || period === undefined || period === "") continue;
+    const v = Number(r[args.metricColumn]);
+    if (!Number.isFinite(v)) continue;
+    const key = String(period);
+    periodTotals.set(key, (periodTotals.get(key) ?? 0) + v);
+  }
+  const periods = [...periodTotals.keys()].sort();
+  const out: GrowthRow[] = [];
+  for (let i = 0; i < periods.length; i++) {
+    const p = periods[i]!;
+    const value = periodTotals.get(p)!;
+    const prior = i > 0 ? periodTotals.get(periods[i - 1]!)! : null;
+    out.push({
+      period: p,
+      value,
+      prior_value: prior,
+      growth_pct: prior === null || prior === 0 ? null : (value - prior) / prior,
+      growth_abs: prior === null ? null : value - prior,
+    });
+  }
+  return out;
+}
+
+/** Build a trajectory descriptor from summary-shaped rows sorted ascending by period. */
+function computeTrajectory(rows: GrowthRow[]): TrajectorySummary | null {
+  if (rows.length < 2) return null;
+  const values = rows.map((r) => Number(r.value ?? 0));
+  const start = rows[0]!;
+  const end = rows[rows.length - 1]!;
+  const startValue = Number(start.value ?? 0);
+  const endValue = Number(end.value ?? 0);
+  let peakIdx = 0;
+  let troughIdx = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (values[i]! > values[peakIdx]!) peakIdx = i;
+    if (values[i]! < values[troughIdx]!) troughIdx = i;
+  }
+  const { slope, r2 } = linearTrend(values);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const totalDrift = Math.abs(slope) * (values.length - 1);
+  const direction: "rising" | "falling" | "flat" =
+    totalDrift / (Math.abs(mean) || 1) < 0.01
+      ? "flat"
+      : slope > 0
+        ? "rising"
+        : "falling";
+  return {
+    nPeriods: rows.length,
+    startPeriod: start.period,
+    startValue,
+    endPeriod: end.period,
+    endValue,
+    pctChangeStartToEnd: startValue === 0 ? null : (endValue - startValue) / startValue,
+    absChangeStartToEnd: endValue - startValue,
+    peakPeriod: rows[peakIdx]!.period,
+    peakValue: values[peakIdx]!,
+    troughPeriod: rows[troughIdx]!.period,
+    troughValue: values[troughIdx]!,
+    slope,
+    r2,
+    direction,
+  };
+}
+
+/** Human-readable trajectory summary — the string the narrator reads. Never refuses. */
+function summarizeTrend(t: TrajectorySummary, metric: string, auto: boolean): string {
+  const verb =
+    t.direction === "rising" ? "rose" : t.direction === "falling" ? "fell" : "held roughly flat";
+  const pct = t.pctChangeStartToEnd === null ? "n/a" : `${(t.pctChangeStartToEnd * 100).toFixed(1)}%`;
+  const tag = auto ? "trend, auto" : "trend";
+  const change =
+    t.direction === "flat"
+      ? `${verb} across ${t.nPeriods} periods (start ${fmtNum(t.startValue)}, end ${fmtNum(
+          t.endValue
+        )}; ${pct})`
+      : `${verb} ~${pct} across ${t.nPeriods} periods, from ${t.startPeriod} (${fmtNum(
+          t.startValue
+        )}) to ${t.endPeriod} (${fmtNum(t.endValue)})`;
+  // Note: the "R²=" and "n=" tokens below are intentionally in the grader's
+  // parseable form (narratorHintsBlock.extractFindingEvidence) so the trend
+  // finding is tiered on its actual fit/sample rather than defaulting to the
+  // "no evidence → medium" hedge.
+  return `compute_growth (${tag}): ${metric} ${change}. Peak ${t.peakPeriod} (${fmtNum(
+    t.peakValue
+  )}), trough ${t.troughPeriod} (${fmtNum(t.troughValue)}). Linear fit slope ${
+    t.slope >= 0 ? "+" : ""
+  }${fmtNum(t.slope)}/period, R²=${t.r2.toFixed(2)} over n=${t.nPeriods} points (${t.direction}).`;
+}
+
+/** Assemble the ToolResult for a trend computation (explicit mode OR auto-fallback). */
+function buildTrendResult(
+  rows: GrowthRow[],
+  opts: { metric: string; grain: GrowthGrain; periodKind: string; explicit: boolean }
+): ToolResult {
+  const columns = ["period", "value", "prior_value", "growth_pct", "growth_abs"];
+  const traj = computeTrajectory(rows);
+  if (!traj) {
+    const only = rows[0];
+    return {
+      ok: true,
+      summary: `compute_growth (trend): ${opts.metric} — single period${
+        only ? ` ${only.period}` : ""
+      } present; need ≥2 periods to describe a trajectory.`,
+      table: { rows, columns, rowCount: rows.length },
+      memorySlots: {
+        growth_mode: "trend",
+        growth_grain: opts.grain,
+        growth_period_kind: opts.periodKind,
+        growth_n_periods: String(rows.length),
+      },
+    };
+  }
+  return {
+    ok: true,
+    summary: summarizeTrend(traj, opts.metric, !opts.explicit),
+    numericPayload: JSON.stringify(rows.slice(0, 200), null, 2).slice(0, 8000),
+    table: { rows, columns, rowCount: rows.length },
+    memorySlots: {
+      growth_grain: opts.grain,
+      growth_mode: "trend",
+      growth_period_kind: opts.periodKind,
+      growth_direction: traj.direction,
+      growth_start_to_end_pct:
+        traj.pctChangeStartToEnd === null
+          ? "n/a"
+          : `${(traj.pctChangeStartToEnd * 100).toFixed(1)}%`,
+      growth_slope: traj.slope.toFixed(4),
+      growth_trend_r2: traj.r2.toFixed(3),
+      growth_n_periods: String(traj.nPeriods),
+      growth_peak_period: traj.peakPeriod,
+      growth_trough_period: traj.troughPeriod,
+    },
+  };
 }
 
 // In-memory fallback: aggregates rows by (dimension, period), then pairs
@@ -337,13 +539,29 @@ export function registerComputeGrowthTool(registry: ToolRegistry) {
       // Resolve the period column. Wide-format → PeriodIso. Otherwise the
       // caller's explicit periodIsoColumn or dateColumn.
       const wft = summary.wideFormatTransform;
-      const periodIsoColumn =
+      let periodIsoColumn =
         args.periodIsoColumn ??
         (wft?.detected ? wft.periodIsoColumn : undefined);
-      const dateColumn =
+      let dateColumn =
         args.dateColumn ??
         (summary.dateColumns && summary.dateColumns[0]) ??
         undefined;
+
+      // T4 guard (defense-in-depth): if a hand-crafted step passed a temporal
+      // FACET (e.g. "Month · Date") as the period axis and that grain collapses
+      // to a single bucket over the data's span, prefer the raw daily source
+      // axis so the trend has ≥2 points. Wide-format PeriodIso is NOT a facet
+      // (isTemporalFacetColumnKey → false) and is never touched here.
+      if (periodIsoColumn && isTemporalFacetColumnKey(periodIsoColumn)) {
+        const parsed = parseTemporalFacetDisplayKey(periodIsoColumn);
+        const srcRange = parsed
+          ? summary.columns.find((c) => c.name === parsed.sourceColumn)?.dateRange
+          : undefined;
+        if (parsed && srcRange && distinctBucketsForGrain(srcRange, parsed.grain) < 2) {
+          periodIsoColumn = undefined;
+          dateColumn = parsed.sourceColumn;
+        }
+      }
 
       if (!periodIsoColumn && !dateColumn) {
         return {
@@ -427,21 +645,75 @@ export function registerComputeGrowthTool(registry: ToolRegistry) {
               })
             : "data";
 
+          const isTrend = args.mode === "trend";
+          // Trend maps to the summary-shaped SQL with a forced consecutive lag;
+          // the narrowing here also satisfies BuildGrowthSqlInput["mode"].
+          const sqlMode: BuildGrowthSqlInput["mode"] =
+            args.mode === "trend" ? "summary" : args.mode;
           const buildInput: BuildGrowthSqlInput = {
             tableName,
             metricColumn: args.metricColumn,
-            dimensionColumn: args.dimensionColumn,
+            // Trend is a total trajectory — drop the dimension breakdown.
+            dimensionColumn: isTrend ? undefined : args.dimensionColumn,
             periodIsoColumn,
             dateColumn,
             grain: effectiveGrain,
             periodKind,
-            mode: args.mode,
+            mode: sqlMode,
+            forceConsecutiveLag: isTrend,
             topN: args.topN,
             aggregation: args.aggregation,
             dimensionFilters: args.dimensionFilters,
           };
           const built = buildGrowthSql(buildInput);
           const rows = (await storage.executeQuery<GrowthRow>(built.sql)) ?? [];
+
+          // Explicit trend mode → describe the trajectory.
+          if (isTrend) {
+            agentLog("compute_growth_duckdb_trend", {
+              sessionId: ctx.exec.sessionId,
+              grain: effectiveGrain,
+              kind: periodKind,
+              rowCount: rows.length,
+            });
+            return buildTrendResult(rows, {
+              metric: args.metricColumn,
+              grain: effectiveGrain,
+              periodKind,
+              explicit: true,
+            });
+          }
+
+          // Auto-fallback: calendar pairing found zero pairs but ≥2 ordered
+          // periods exist → describe the within-window trajectory instead of
+          // returning the defeatist "no prior-period pairs" string.
+          if (
+            (args.mode === "summary" || args.mode === "series") &&
+            rows.filter((r) => r.growth_pct !== null).length === 0 &&
+            distinctPeriodCount(rows) >= 2
+          ) {
+            const trendBuilt = buildGrowthSql({
+              ...buildInput,
+              dimensionColumn: undefined,
+              mode: "summary",
+              forceConsecutiveLag: true,
+            });
+            const trendRows = (await storage.executeQuery<GrowthRow>(trendBuilt.sql)) ?? [];
+            if (distinctPeriodCount(trendRows) >= 2) {
+              agentLog("compute_growth_duckdb_trend_fallback", {
+                sessionId: ctx.exec.sessionId,
+                grain: effectiveGrain,
+                kind: periodKind,
+                rowCount: trendRows.length,
+              });
+              return buildTrendResult(trendRows, {
+                metric: args.metricColumn,
+                grain: effectiveGrain,
+                periodKind,
+                explicit: false,
+              });
+            }
+          }
 
           const summaryStr =
             args.mode === "rankByGrowth"
@@ -513,7 +785,48 @@ export function registerComputeGrowthTool(registry: ToolRegistry) {
           summary: "compute_growth: no period column resolved.",
         };
       }
+      // Explicit trend mode → sequential trajectory over the available span.
+      if (args.mode === "trend") {
+        const trendRows = computeTrendRowsInMemory(dataRef, args, periodCol);
+        agentLog("compute_growth_in_memory_trend", {
+          sessionId: ctx.exec.sessionId,
+          grain: effectiveGrain,
+          kind: periodKind,
+          rowCount: trendRows.length,
+        });
+        return buildTrendResult(trendRows, {
+          metric: args.metricColumn,
+          grain: effectiveGrain,
+          periodKind,
+          explicit: true,
+        });
+      }
+
       const rows = computeGrowthInMemory(dataRef, args, effectiveGrain, periodCol);
+
+      // Auto-fallback: zero calendar pairs but ≥2 ordered periods → trajectory.
+      if (
+        (args.mode === "summary" || args.mode === "series") &&
+        rows.filter((r) => r.growth_pct !== null).length === 0 &&
+        distinctPeriodCount(rows) >= 2
+      ) {
+        const trendRows = computeTrendRowsInMemory(dataRef, args, periodCol);
+        if (distinctPeriodCount(trendRows) >= 2) {
+          agentLog("compute_growth_in_memory_trend_fallback", {
+            sessionId: ctx.exec.sessionId,
+            grain: effectiveGrain,
+            kind: periodKind,
+            rowCount: trendRows.length,
+          });
+          return buildTrendResult(trendRows, {
+            metric: args.metricColumn,
+            grain: effectiveGrain,
+            periodKind,
+            explicit: false,
+          });
+        }
+      }
+
       const summaryStr =
         args.mode === "rankByGrowth"
           ? summarizeRanked(rows, effectiveGrain)
@@ -556,9 +869,9 @@ export function registerComputeGrowthTool(registry: ToolRegistry) {
     },
     {
       description:
-        "Period-over-period growth analysis (YoY/QoQ/MoM/WoW). Three modes: 'series' (one row per dim×period with growth_pct + prior_value), 'summary' (one row per period, no dimension), 'rankByGrowth' (fastest-growing N dimension values — use this for 'fastest growing market' / 'biggest decliner' questions). Pick grain by temporal coverage: multi-year → yoy; single year multi-quarter → qoq; single year multi-month → mom; weekly → wow; uncertain → 'auto'. Wide-format datasets get PeriodIso for the period axis automatically. PREFER this over breakdown_ranking for any question about growth, change-over-time, or trend deltas.",
+        "Period-over-period growth analysis (YoY/QoQ/MoM/WoW). Four modes: 'series' (one row per dim×period with growth_pct + prior_value), 'summary' (one row per period, no dimension), 'rankByGrowth' (fastest-growing N dimension values — use this for 'fastest growing market' / 'biggest decliner' questions), 'trend' (intra-span trajectory: sorts the periods, compares each to its immediate predecessor, and reports direction/start-to-end change/peak/trough/slope+R² — use this for 'how has X trended over time' on a SINGLE contiguous span such as daily rows within one month, where there is no prior-year period to compare against). Pick grain by temporal coverage: multi-year → yoy; single year multi-quarter → qoq; single year multi-month → mom; weekly → wow; single contiguous span → trend; uncertain → 'auto'. When a 'series'/'summary' call finds no calendar prior-period pairs but ≥2 ordered periods exist, the tool auto-falls-back to the trajectory so it never refuses a within-window trend. Wide-format datasets get PeriodIso for the period axis automatically. PREFER this over breakdown_ranking for any question about growth, change-over-time, or trend deltas.",
       argsHelp:
-        '{"metricColumn": string (required), "dimensionColumn"?: string (required for rankByGrowth), "dateColumn"?: string, "periodIsoColumn"?: string (preferred — wide-format PeriodIso or temporal facet), "grain": "yoy"|"qoq"|"mom"|"wow"|"auto" (default "auto"), "periodKind"?: "month"|"quarter"|"week"|"year" (drives YoY LAG offset), "mode": "series"|"summary"|"rankByGrowth" (default "series"), "topN"?: number (rankByGrowth only, 2–50, default 10), "aggregation"?: "sum"|"avg"|"min"|"max" (default sum), "dimensionFilters"?: [{column, op:"in"|"not_in", values:[...], match?:"case_insensitive"}]}',
+        '{"metricColumn": string (required), "dimensionColumn"?: string (required for rankByGrowth), "dateColumn"?: string, "periodIsoColumn"?: string (preferred — wide-format PeriodIso or temporal facet), "grain": "yoy"|"qoq"|"mom"|"wow"|"auto" (default "auto"), "periodKind"?: "month"|"quarter"|"week"|"year" (drives YoY LAG offset), "mode": "series"|"summary"|"rankByGrowth"|"trend" (default "series"; "trend" = intra-span trajectory for a single contiguous span), "topN"?: number (rankByGrowth only, 2–50, default 10), "aggregation"?: "sum"|"avg"|"min"|"max" (default sum), "dimensionFilters"?: [{column, op:"in"|"not_in", values:[...], match?:"case_insensitive"}]}',
     }
   );
 }

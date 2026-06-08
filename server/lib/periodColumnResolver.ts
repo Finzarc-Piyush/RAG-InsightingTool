@@ -29,6 +29,13 @@ import {
   type CoarseTimeIntent,
 } from "./temporalFacetColumns.js";
 import type { DataSummary } from "../shared/schema.js";
+import { pickTrendGrainForSpan } from "./queryPlanTemporalPatch.js";
+
+/** Map `pickTrendGrainForSpan`'s SQL periods to facet grains for the resolver. */
+const PERIOD_TO_FACET_GRAIN: Record<
+  "day" | "week" | "month" | "quarter",
+  TemporalFacetGrain
+> = { day: "date", week: "week", month: "month", quarter: "quarter" };
 
 /** W-GMK5 · the classifications a column can receive during period detection. */
 export type PeriodColumnRole =
@@ -261,9 +268,45 @@ function pickByIntent(
   return null;
 }
 
+/**
+ * Span-aware grain recommendation: for the first temporal-facet candidate, look
+ * up its SOURCE date column's full-dataset span (`dateRange`, populated at
+ * upload) and map it through `pickTrendGrainForSpan`. So a single month of daily
+ * data recommends `date` (daily), not the month-first default. Returns undefined
+ * when there is no facet candidate or no span metadata (→ legacy month-first).
+ */
+function recommendGrainFromSpan(
+  classifications: ColumnClassification[],
+  summary: DataSummary
+): TemporalFacetGrain | undefined {
+  const facet = classifications.find(
+    (c) => c.type === "temporal-facet" && c.facetGrain
+  );
+  if (!facet) return undefined;
+  const parsed = parseTemporalFacetDisplayKey(facet.column);
+  if (!parsed) return undefined;
+  const range = summary.columns.find((c) => c.name === parsed.sourceColumn)?.dateRange;
+  if (!range) return undefined;
+  return PERIOD_TO_FACET_GRAIN[
+    pickTrendGrainForSpan(range.spanDays, range.distinctDayCount)
+  ];
+}
+
 function pickByDefault(
-  classifications: ColumnClassification[]
+  classifications: ColumnClassification[],
+  recommendedGrain?: TemporalFacetGrain
 ): { picked: ColumnClassification; pinKind?: PeriodKind } | null {
+  // Span-aware first choice (e.g. daily data → `Day · Date`). Keeps the
+  // cardinality≥2 guard so a collapsed facet falls through to a coarser grain.
+  if (recommendedGrain) {
+    const rec = classifications.find(
+      (c) =>
+        c.type === "temporal-facet" &&
+        c.facetGrain === recommendedGrain &&
+        c.uniqueValueCount >= 2
+    );
+    if (rec) return { picked: rec };
+  }
   for (const grain of DEFAULT_FACET_PREFERENCE) {
     const facet = classifications.find(
       (c) =>
@@ -441,9 +484,10 @@ export function resolvePeriodAxis(
     ? detectCoarseTimeIntentFromMessage(question)
     : null;
 
+  const recommendedGrain = recommendGrainFromSpan(classifications, summary);
   const picked =
     (intent ? pickByIntent(classifications, intent) : null) ??
-    pickByDefault(classifications);
+    pickByDefault(classifications, recommendedGrain);
 
   if (!picked) {
     return {

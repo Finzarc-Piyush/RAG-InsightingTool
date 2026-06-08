@@ -11,11 +11,16 @@
  *   period label like 2024-Q3 derived when each row holds many period columns).
  *   It does not do the math itself; it composes existing tools:
  *     - retrieve_semantic_context — pulls background RAG context (round 1).
- *     - compute_growth — the actual growth math. Two routes:
+ *     - compute_growth — the actual growth math. Three routes:
  *         * rankByGrowth mode for "fastest/slowest" questions (one call, the
  *           ranked segments ARE the headline).
- *         * series + summary pair for open-ended trends (per-segment AND total
- *           growth so the final answer can cite both).
+ *         * series + summary pair for open-ended trends when the data spans ≥2
+ *           CALENDAR periods (per-segment AND total YoY/QoQ/MoM/WoW growth).
+ *         * trend mode for a single contiguous span (e.g. one month of daily
+ *           rows) where calendar period-over-period is impossible — a
+ *           sequential consecutive-delta trajectory (direction, start→end
+ *           change, peak/trough, slope/R²). The chart then plots the metric
+ *           LEVEL over time ("X over time") rather than growth_pct.
  *     - detect_seasonality — auto-added only when the data has enough history
  *       (>=2 years and either >=6 months or >=4 quarters in a year), so the
  *       answer says "Q4 peaks every year" rather than "Nov 2018 was the peak".
@@ -34,8 +39,11 @@
  *     decide activation and which compute_growth mode to use.
  *   - pickPeriodColumns — finds the time axis (wide-format PeriodIso first,
  *     else first raw date column).
- *   - hasSeasonalityTemporalCoverage — heuristic scan (capped at 5000 rows)
- *     checking there is enough history for seasonality to be meaningful.
+ *   - scanCalendarCoverage / hasMultiPeriodCalendarCoverage / hasSeasonalityCoverage
+ *     (shared pure helpers in server/lib/growth/temporalCoverage.ts) — decide
+ *     trend-vs-calendar routing and whether there is enough history for
+ *     seasonality. Shared with the tool layer; cycle-safe (same tier as
+ *     periodShift.ts).
  *   - pickDimensionColumn / pickGrainFromBrief / resolveDimensionFiltersFromBrief
  *     — translate the brief into a segment dimension, a growth grain
  *     (yoy/qoq/mom/wow/auto), and tool-shaped filters.
@@ -53,6 +61,11 @@ import type { AnalysisBrief } from "../../../../shared/schema.js";
 import type { AnalysisSkill, SkillInvocation } from "./types.js";
 import { registerSkill } from "./registry.js";
 import type { GrowthGrain } from "../../../growth/periodShift.js";
+import {
+  scanCalendarCoverage,
+  hasMultiPeriodCalendarCoverage,
+  hasSeasonalityCoverage,
+} from "../../../growth/temporalCoverage.js";
 
 const SKILL_NAME = "growth_analysis";
 
@@ -76,59 +89,6 @@ function pickPeriodColumns(ctx: AgentExecutionContext): {
   return {};
 }
 
-/**
- * Detect whether the dataset has the temporal coverage required
- * to compute seasonality. We need ≥2 distinct years AND either ≥6
- * distinct months in a single year (monthly cadence) OR ≥4 distinct
- * quarters in a single year (quarterly cadence). Without that, the
- * seasonality tool refuses; emitting the step would be wasted work.
- *
- * Heuristic only — works on either wide-format PeriodIso labels or
- * raw date strings. Mirrors the in-memory `detectTemporalCoverage`
- * helper in computeGrowthTool.ts (kept inline here to avoid a new
- * import cycle through the tools layer; the shape is small).
- */
-function hasSeasonalityTemporalCoverage(ctx: AgentExecutionContext): boolean {
-  const data = ctx.data ?? [];
-  if (data.length === 0) return false;
-  const wft = ctx.summary?.wideFormatTransform;
-  const periodCol = wft?.detected ? wft.periodIsoColumn : ctx.summary?.dateColumns?.[0];
-  if (!periodCol) return false;
-  const years = new Set<string>();
-  const monthsByYear: Record<string, Set<string>> = {};
-  const quartersByYear: Record<string, Set<string>> = {};
-  // Cap scan so this never dominates plan time on huge in-memory frames.
-  const SCAN_CAP = 5000;
-  for (let i = 0; i < Math.min(data.length, SCAN_CAP); i++) {
-    const v = (data[i] as Record<string, unknown>)[periodCol];
-    if (v === null || v === undefined || v === "") continue;
-    const s = String(v);
-    const yearMatch = s.match(/^(\d{4})/);
-    if (yearMatch) years.add(yearMatch[1]);
-    if (/^\d{4}-\d{2}$/.test(s)) {
-      const y = s.slice(0, 4);
-      monthsByYear[y] ??= new Set();
-      monthsByYear[y].add(s);
-    } else if (/^\d{4}-Q[1-4]$/.test(s)) {
-      const y = s.slice(0, 4);
-      quartersByYear[y] ??= new Set();
-      quartersByYear[y].add(s);
-    } else {
-      // Raw date — try to parse first 7 chars as YYYY-MM, then bucket.
-      const ymMatch = s.match(/^(\d{4})-(\d{1,2})/);
-      if (ymMatch) {
-        const y = ymMatch[1];
-        monthsByYear[y] ??= new Set();
-        monthsByYear[y].add(`${y}-${ymMatch[2].padStart(2, "0")}`);
-      }
-    }
-  }
-  if (years.size < 2) return false;
-  const maxM = Math.max(0, ...Object.values(monthsByYear).map((s) => s.size));
-  const maxQ = Math.max(0, ...Object.values(quartersByYear).map((s) => s.size));
-  return maxM >= 6 || maxQ >= 4;
-}
-
 function pickDimensionColumn(brief: AnalysisBrief): string | undefined {
   // Prefer the first segmentation dimension the user named, then fall back
   // to the first candidate driver. Mirrors the timeWindowDiff convention.
@@ -143,8 +103,12 @@ function pickGrainFromBrief(brief: AnalysisBrief): GrowthGrain | "auto" {
   if (pref === "yearly") return "yoy";
   if (pref === "monthly") return "mom";
   if (pref === "weekly") return "wow";
-  // QoQ has no direct preference label; daily/unspecified → auto.
-  if (pref === "daily") return "wow";
+  // QoQ has no direct preference label. Daily has no calendar grain (there is
+  // no day-over-day enum), and mapping it to "wow" only produced all-null
+  // growth (priorPeriodKey can't week-shift a YYYY-MM-DD label). Defer to
+  // "auto": on multi-period data the tool picks a coarse grain; on a single
+  // contiguous daily span the skill routes to compute_growth mode "trend"
+  // (consecutive deltas, grain-free).
   return "auto";
 }
 
@@ -199,6 +163,15 @@ const skill: AnalysisSkill = {
 
     const { periodIsoColumn, dateColumn } = pickPeriodColumns(ctx);
     if (!periodIsoColumn && !dateColumn) return null;
+
+    // Decide trend-vs-calendar routing. When the data is a single contiguous
+    // span (e.g. one month of daily rows), calendar period-over-period growth
+    // is impossible — route the open-ended trend to compute_growth mode
+    // "trend" (sequential consecutive deltas) instead of summary/series, which
+    // would otherwise return all-null growth and a defeatist "no pairs" answer.
+    const periodCol = periodIsoColumn ?? dateColumn!;
+    const cov = scanCalendarCoverage(ctx.data ?? [], periodCol);
+    const useSequentialTrend = !hasMultiPeriodCalendarCoverage(cov);
 
     const dimension = pickDimensionColumn(brief);
     const grain = pickGrainFromBrief(brief);
@@ -274,7 +247,7 @@ const skill: AnalysisSkill = {
           args: {
             ...baseGrowthArgs,
             dimensionColumn: dimension,
-            mode: "series",
+            mode: useSequentialTrend ? "trend" : "series",
           },
           parallelGroup: "ga_parallel",
         });
@@ -284,7 +257,7 @@ const skill: AnalysisSkill = {
         tool: "compute_growth",
         args: {
           ...baseGrowthArgs,
-          mode: "summary",
+          mode: useSequentialTrend ? "trend" : "summary",
         },
         parallelGroup: "ga_parallel",
       });
@@ -294,7 +267,7 @@ const skill: AnalysisSkill = {
       // tool would refuse anyway. Critical for trend questions: stops
       // the narrator from reporting "Nov 2018 was the peak" when the
       // truth is "Q4 consistently peaks every year".
-      const supportsSeasonality = hasSeasonalityTemporalCoverage(ctx);
+      const supportsSeasonality = hasSeasonalityCoverage(cov);
       if (supportsSeasonality) {
         const seasonalityArgs: Record<string, unknown> = {
           metricColumn: outcome,
@@ -310,15 +283,19 @@ const skill: AnalysisSkill = {
           parallelGroup: "ga_parallel",
         });
       }
-      // Line chart of the aggregated growth series.
+      // Line chart of the time series. In trend mode plot the metric LEVEL
+      // over time (the "X over time" line the user wants); in calendar mode
+      // plot the growth_pct series. Both source the ga_summary rows, which
+      // carry both `value` and `growth_pct`.
       steps.push({
         id: "ga_chart",
         tool: "build_chart",
         args: {
           type: "line",
           x: "period",
-          y: "growth_pct",
-          title: `${outcome} — growth over time`,
+          ...(useSequentialTrend
+            ? { y: "value", title: `${outcome} over time` }
+            : { y: "growth_pct", title: `${outcome} — growth over time` }),
           aggregate: "none",
         },
         dependsOn: "ga_summary",
@@ -335,8 +312,14 @@ const skill: AnalysisSkill = {
       // of the chart (which dependsOn ga_summary). Parallel runner respects
       // dependsOn so the chart waits for its source.
       parallelizable: true,
-      rationale: `growth_analysis expanded into ${steps.length} step(s). Outcome=${outcome}, grain=${grain}, dimension=${dimension ?? "(none)"}, mode=${isRankByGrowth ? "rankByGrowth" : "series+summary"}, seasonality_emitted=${
-        !isRankByGrowth && hasSeasonalityTemporalCoverage(ctx)
+      rationale: `growth_analysis expanded into ${steps.length} step(s). Outcome=${outcome}, grain=${grain}, dimension=${dimension ?? "(none)"}, mode=${
+        isRankByGrowth
+          ? "rankByGrowth"
+          : useSequentialTrend
+            ? "trend(sequential)"
+            : "series+summary(calendar)"
+      }, calendar_coverage=${hasMultiPeriodCalendarCoverage(cov)}, seasonality_emitted=${
+        !isRankByGrowth && hasSeasonalityCoverage(cov)
       }, ${briefHasMetricFilter ? "metric_filter_present" : "no_metric_filter"}.`,
     };
   },

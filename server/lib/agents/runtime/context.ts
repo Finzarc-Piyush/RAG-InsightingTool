@@ -67,7 +67,11 @@ import type {
 } from "./types.js";
 import { formatAnalysisBriefForPrompt } from "./analysisBrief.js";
 import { detectPeriodFromQuery } from "../../dateUtils.js";
-import { temporalFacetMetadataForDateColumns } from "../../temporalFacetColumns.js";
+import {
+  temporalFacetMetadataForDateColumns,
+  facetColumnKey,
+} from "../../temporalFacetColumns.js";
+import { pickTrendGrainForSpan } from "../../queryPlanTemporalPatch.js";
 import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
 import { inferPeriodFilterFromQuestion } from "../utils/inferPeriodFilterFromQuestion.js";
 import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
@@ -649,19 +653,34 @@ export function formatLastAssistantPivotStateBlock(
   return `\n### CURRENT_USER_VIEW (pivot/chart state of the most recent assistant message — what the user is looking at right now; treat as the implicit baseline for follow-up questions like "drill into X", "switch to line chart", "remove that filter")\nrows: ${rows}\ncolumns: ${cols}\nvalues: ${vals}\nfilters: ${filters}${filterSelLine}\nview: ${view}\nchart: ${chart}`;
 }
 
-function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
+export function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
   const meta =
     summary.temporalFacetColumns?.length ?
       summary.temporalFacetColumns
     : temporalFacetMetadataForDateColumns(summary.dateColumns);
   if (!meta.length) return "";
+  // Per-source span + recommended trend grain, so the planner picks the
+  // span-appropriate facet (e.g. a single month of daily data → Day · Date,
+  // not Month · Date which collapses to one bucket). Only emitted when the
+  // source column carries dateRange (populated at upload over the full set).
+  const headerLines: string[] = [];
+  for (const src of [...new Set(meta.map((m) => m.sourceColumn))]) {
+    const range = summary.columns.find((c) => c.name === src)?.dateRange;
+    if (!range) continue;
+    const period = pickTrendGrainForSpan(range.spanDays, range.distinctDayCount);
+    const grain = period === "day" ? "date" : period;
+    headerLines.push(
+      `${src}: ${range.minIso} → ${range.maxIso}, ${range.distinctDayCount} day(s) → for an open trend prefer \`${facetColumnKey(src, grain)}\``
+    );
+  }
   const lines = meta.map(
     (m) => `${m.name} (${m.grain} of "${m.sourceColumn}")`
   );
   const cap = 80;
   const shown = lines.slice(0, cap);
   const more = lines.length > cap ? `\n... +${lines.length - cap} more` : "";
-  return `\nDerived time-bucket columns (precomputed from dateColumns; use the exact column name shown — e.g. \`Month · Order Date\` — matching the question's grain; legacy \`__tf_*\` ids are still accepted):\n${shown.join("\n")}${more}`;
+  const headerBlock = headerLines.length ? `${headerLines.join("\n")}\n` : "";
+  return `\nDerived time-bucket columns (precomputed from dateColumns; use the exact column name shown — e.g. \`Month · Order Date\` — matching the question's grain; for an open "trend / over time" question with no named grain, prefer the span-recommended grain below; legacy \`__tf_*\` ids are still accepted):\n${headerBlock}${shown.join("\n")}${more}`;
 }
 
 export function summarizeContextForPrompt(ctx: AgentExecutionContext): string {

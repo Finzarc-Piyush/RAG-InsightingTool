@@ -822,13 +822,15 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   // the column), the patch falls back to its "month" default.
   const dateRangeByColumn = new Map<
     string,
-    { spanDays: number; distinctDayCount: number }
+    { spanDays: number; distinctDayCount: number; minIso?: string; maxIso?: string }
   >();
   for (const col of ctx.summary.columns) {
     if (col.dateRange) {
       dateRangeByColumn.set(col.name, {
         spanDays: col.dateRange.spanDays,
         distinctDayCount: col.dateRange.distinctDayCount,
+        minIso: col.dateRange.minIso,
+        maxIso: col.dateRange.maxIso,
       });
     }
   }

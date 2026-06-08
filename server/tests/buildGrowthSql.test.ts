@@ -80,6 +80,22 @@ describe("WGR2 · buildGrowthSql · SQL shape", () => {
     assert.match(r.sql, /LAG\(value, 1\)/);
   });
 
+  it("forceConsecutiveLag forces LAG 1 regardless of grain/kind (trend mode)", () => {
+    const r = buildGrowthSql({
+      tableName: "data",
+      metricColumn: "Sales",
+      dateColumn: "Date",
+      grain: "yoy",
+      periodKind: "month",
+      mode: "summary",
+      forceConsecutiveLag: true,
+    });
+    // YoY-monthly would normally LAG 12; forced consecutive → LAG 1.
+    assert.match(r.sql, /LAG\(value, 1\)/);
+    assert.doesNotMatch(r.sql, /LAG\(value, 12\)/);
+    assert.equal(r.lagOffset, 1);
+  });
+
   it("rankByGrowth requires dimension and emits ORDER BY growth_pct DESC LIMIT", () => {
     const r = buildGrowthSql({
       tableName: "data",

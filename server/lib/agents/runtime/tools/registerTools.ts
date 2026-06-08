@@ -115,7 +115,13 @@ import {
   pickRowLevelDataForQueryPlan,
   promoteQueryPlanDateAggregationToFacetGroupBy,
 } from "../../../queryPlanFacetPromotion.js";
-import { migrateLegacyTemporalFacetRowKeys } from "../../../temporalFacetColumns.js";
+import {
+  migrateLegacyTemporalFacetRowKeys,
+  facetColumnKey,
+  parseTemporalFacetDisplayKey,
+  type TemporalFacetGrain,
+} from "../../../temporalFacetColumns.js";
+import type { DatePeriod } from "../../../dateUtils.js";
 import { shouldRejectWideWithoutAgg } from "../../../questionAggregationPolicy.js";
 import { findMatchingColumn } from "../../utils/columnMatcher.js";
 import type { DataSummary } from "../../../../shared/schema.js";
@@ -202,6 +208,10 @@ const chartArgs = z
     title: z.string().optional(),
     aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
     max_series: z.number().int().min(3).max(20).optional(),
+    /** Explicit time bucket for a date x-axis (day/week/month/quarter/half_year/year). "auto"/omit = let the resolver pick. */
+    grain: z
+      .enum(["day", "week", "month", "quarter", "half_year", "year", "auto"])
+      .optional(),
   })
   .strict();
 const clarifyArgs = z
@@ -1470,8 +1480,36 @@ export function registerDefaultTools(registry: ToolRegistry) {
     chartArgs,
     async (ctx, args) => {
       const a = args as z.infer<typeof chartArgs>;
+
+      // T4 · explicit grain → bucket the date x-axis at the requested grain.
+      // Prefer the precomputed facet column (e.g. "Week · Date"); if absent,
+      // keep the raw date x and pass a bucketing hint to processChartData.
+      let xCol = a.x;
+      let grainHint: DatePeriod | null = null;
+      if (a.grain && a.grain !== "auto") {
+        const facetGrain: TemporalFacetGrain =
+          a.grain === "day" ? "date" : (a.grain as TemporalFacetGrain);
+        const parsedX = parseTemporalFacetDisplayKey(a.x);
+        const sourceDate =
+          parsedX?.sourceColumn ??
+          ((ctx.exec.summary?.dateColumns ?? []).includes(a.x) ? a.x : undefined);
+        if (sourceDate) {
+          const facetKey = facetColumnKey(sourceDate, facetGrain);
+          const frameKeys =
+            Array.isArray(ctx.exec.data) && ctx.exec.data[0]
+              ? new Set(Object.keys(ctx.exec.data[0] as Record<string, unknown>))
+              : new Set<string>();
+          if (frameKeys.has(facetKey)) {
+            xCol = facetKey; // precomputed bucket column — no re-bucketing needed
+          } else {
+            xCol = sourceDate; // bucket the raw date on the fly
+            grainHint = a.grain as DatePeriod;
+          }
+        }
+      }
+
       const names = [
-        a.x,
+        xCol,
         a.y,
         ...(a.y2 ? [a.y2] : []),
         ...(a.type === "heatmap" && a.z ? [a.z] : []),
@@ -1483,7 +1521,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         a.aggregate !== undefined && a.aggregate !== null;
       const compileProposal = {
         type: a.type,
-        x: a.x,
+        x: xCol,
         y: a.y,
         ...(a.type === "heatmap" && a.z ? { z: a.z } : {}),
         seriesColumn: a.seriesColumn,
@@ -1546,7 +1584,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ctx.exec.data,
         spec,
         ctx.exec.summary?.dateColumns,
-        { chartQuestion: ctx.exec.question }
+        { chartQuestion: ctx.exec.question, grain: grainHint }
       );
       const useAnalyticalOnly =
         Boolean(ctx.exec.lastAnalyticalTable?.rows?.length) &&
@@ -1569,9 +1607,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
     },
     {
       description:
-        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). Use aggregate none when one row per x already. For breakdowns (e.g. sales by month AND region), use bar or line/area with seriesColumn = the second dimension column (long-format rows: one row per x×series with y numeric); default aggregate sum then applies per series cell. For two numeric metrics over the same x (e.g. Revenue and Profit over time), use y2 instead of seriesColumn. Heatmap: type heatmap, x=row dim, y=col dim, z=numeric measure. CRITICAL RULES: (1) ALWAYS use type 'line' or 'area' when x is a date, month, quarter, or year column — NEVER use 'bar' for temporal trends. (2) Use seriesColumn only when the column has ≤15 distinct values; if higher cardinality, either set max_series (3–20) to auto-merge excess into 'Others', or use a single-series bar sorted by y instead. (3) For geographic/state/country breakdowns with many values, prefer a single-series bar chart sorted by y rather than multi-series.",
+        "Build a chart from in-memory rows (often after run_analytical_query or execute_query_plan). After sum/mean aggregations, y must match the result column (e.g. Sales_sum), not the raw schema name Sales. x is the groupBy date column (bucket labels). Use aggregate none when one row per x already. For breakdowns (e.g. sales by month AND region), use bar or line/area with seriesColumn = the second dimension column (long-format rows: one row per x×series with y numeric); default aggregate sum then applies per series cell. For two numeric metrics over the same x (e.g. Revenue and Profit over time), use y2 instead of seriesColumn. Heatmap: type heatmap, x=row dim, y=col dim, z=numeric measure. CRITICAL RULES: (1) ALWAYS use type 'line' or 'area' when x is a date, month, quarter, or year column — NEVER use 'bar' for temporal trends. (2) Use seriesColumn only when the column has ≤15 distinct values; if higher cardinality, either set max_series (3–20) to auto-merge excess into 'Others', or use a single-series bar sorted by y instead. (3) For geographic/state/country breakdowns with many values, prefer a single-series bar chart sorted by y rather than multi-series. (4) GRAIN: for a date/time x-axis, set `grain` to day|week|month|quarter|half_year|year to control the time bucket (e.g. a follow-up 'by week'). The chart uses the matching `<Grain> · <Date>` facet column if present, otherwise buckets the raw date at that grain. Omit / 'auto' lets the resolver pick a span-appropriate grain.",
       argsHelp:
-        '{"type": "line"|"bar"|"scatter"|"pie"|"area"|"heatmap", "x": string, "y": string, "z"?: string (heatmap cell value), "seriesColumn"?: string (second category for stacked/grouped bar or multi-series line/area), "barLayout"?: "stacked"|"grouped", "y2"?: string (second numeric series, dual-axis line), "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none", "max_series"?: number (3–20, cap series count and merge remainder into Others)} — after execute_query_plan, y must match result column names (e.g. Sales_sum). With seriesColumn, omit aggregate or use sum/mean to roll up raw rows per x×series. When seriesColumn cardinality >15, set max_series to 10.',
+        '{"type": "line"|"bar"|"scatter"|"pie"|"area"|"heatmap", "x": string, "y": string, "z"?: string (heatmap cell value), "seriesColumn"?: string (second category for stacked/grouped bar or multi-series line/area), "barLayout"?: "stacked"|"grouped", "y2"?: string (second numeric series, dual-axis line), "title"?: string, "aggregate"?: "sum"|"mean"|"count"|"none", "max_series"?: number (3–20, cap series count and merge remainder into Others), "grain"?: "day"|"week"|"month"|"quarter"|"half_year"|"year"|"auto" (time bucket for a date x-axis)} — after execute_query_plan, y must match result column names (e.g. Sales_sum). With seriesColumn, omit aggregate or use sum/mean to roll up raw rows per x×series. When seriesColumn cardinality >15, set max_series to 10.',
     }
   );
 

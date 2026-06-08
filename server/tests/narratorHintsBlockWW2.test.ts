@@ -30,6 +30,17 @@ describe("Wave WW2 · extractFindingEvidence", () => {
     assert.equal(extractFindingEvidence("Across 1200 records").n, 1200);
   });
 
+  it("tiers a compute_growth TREND summary on its fit (n + R² parsed; not the no-evidence default)", () => {
+    // The exact shape summarizeTrend emits — pins the grader-compatibility contract.
+    const trendSummary =
+      "compute_growth (trend): Sales rose ~145.0% across 30 periods, from 2026-04-01 (105) " +
+      "to 2026-04-30 (250). Peak 2026-04-30 (250), trough 2026-04-01 (105). " +
+      "Linear fit slope +5/period, R²=1.00 over n=30 points (rising).";
+    const ev = extractFindingEvidence(trendSummary);
+    assert.equal(ev.n, 30);
+    assert.equal(ev.rSquared, 1);
+  });
+
   it("extracts p-value from 'p = 0.03' / 'p < 0.001' / 'p-value: 0.05'", () => {
     assert.equal(extractFindingEvidence("Significant at p = 0.03.").pValue, 0.03);
     assert.equal(extractFindingEvidence("p < 0.001").pValue, 0.001);
