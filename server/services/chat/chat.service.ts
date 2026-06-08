@@ -282,9 +282,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
     ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
   ];
+  // UX · cap suggested questions at 5 (product rule: never more than 5).
   const mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(
     0,
-    12
+    5
   );
 
   // Save messages to database

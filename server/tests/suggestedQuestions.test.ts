@@ -50,4 +50,12 @@ describe("mergeSuggestedQuestions", () => {
     assert.deepEqual(mergeSuggestedQuestions([], undefined), []);
     assert.deepEqual(mergeSuggestedQuestions(undefined, undefined), []);
   });
+
+  it("UX · default limit caps at 5 (never more than 5 suggested questions)", () => {
+    const merged = mergeSuggestedQuestions(
+      Array.from({ length: 12 }, (_, i) => `Q${i + 1}`)
+    );
+    assert.equal(merged.length, 5);
+    assert.deepEqual(merged, ["Q1", "Q2", "Q3", "Q4", "Q5"]);
+  });
 });

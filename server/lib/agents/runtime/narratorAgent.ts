@@ -134,6 +134,54 @@ const narratorOutputSchema = z.object({
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
 
 /**
+ * RNK-f6 · Remove internal blackboard finding-reference tokens (`[f1]`, `[f6]`,
+ * …) that the narrator occasionally echoes into user-facing prose. Those
+ * bracketed IDs exist only inside `formatForNarrator`'s blackboard block for the
+ * model's own reference and must never reach the rendered answer. Backtick-
+ * wrapped domain-pack citations and ordinary bracketed text are left untouched —
+ * the pattern matches only `[f<digits>]`.
+ */
+export function stripFindingReferenceTokens(s: string): string {
+  return s.replace(/\s?\[f\d+\]/gi, "");
+}
+
+function stripRef<T extends string | null | undefined>(s: T): T {
+  return (typeof s === "string" ? stripFindingReferenceTokens(s) : s) as T;
+}
+
+/** Map `stripFindingReferenceTokens` over every prose field of a NarratorOutput. */
+function stripFindingRefs(out: NarratorOutput): NarratorOutput {
+  return {
+    ...out,
+    body: stripRef(out.body),
+    keyInsight: stripRef(out.keyInsight),
+    tldr: stripRef(out.tldr),
+    methodology: stripRef(out.methodology),
+    domainLens: stripRef(out.domainLens),
+    unexplained: stripRef(out.unexplained),
+    caveats: out.caveats?.map(stripRef),
+    findings: out.findings?.map((f) => ({
+      ...f,
+      headline: stripRef(f.headline),
+      evidence: stripRef(f.evidence),
+      magnitude: stripRef(f.magnitude),
+    })),
+    implications: out.implications?.map((i) => ({
+      ...i,
+      statement: stripRef(i.statement),
+      soWhat: stripRef(i.soWhat),
+    })),
+    recommendations: out.recommendations?.map((r) => ({
+      ...r,
+      action: stripRef(r.action),
+      rationale: stripRef(r.rationale),
+    })),
+    magnitudes: out.magnitudes?.map((m) => ({ ...m, label: stripRef(m.label) })),
+    ctas: out.ctas?.map(stripRef),
+  };
+}
+
+/**
  * Narrator-repair branch.
  *
  * When the deep verifier returns `revise_narrative`, the agent loop hands the
@@ -235,9 +283,17 @@ Your job: narrate the investigation clearly in the following JSON format:
     the hypothesis", "this confirms our assumption that…"). The reader assumes the data
     was usable. If a data limitation is genuinely material, surface it inside \`caveats\`,
     not inside body prose.
+  • NEVER emit blackboard finding-reference tokens like [f1], [f2], [f6] in ANY field
+    (body, tldr, keyInsight, findings, implications, recommendations, methodology,
+    caveats, magnitudes). Those bracketed IDs are for your internal reference only —
+    weave the underlying fact into prose instead of citing the bracket.
 - "keyInsight": 1–3 sentences on what the findings imply for decisions (the "so what").
   Use null if nothing beyond the body adds value.
-- "ctas": 0 to 3 actionable follow-up prompts (empty array if none fit).
+- "ctas": 0 to 3 actionable follow-up prompts (empty array if none fit). Each MUST ask
+  exactly ONE thing and be answerable in a single query. NEVER combine clauses with
+  "and" / "or" or list multiple dimensions (BAD: "How do compliance visits and total
+  visits vary by ASM or HQ?"; GOOD: "How do compliance visits vary by ASM?"). Split any
+  compound ask into separate single questions. Keep each short.
 - Do NOT invent numbers not present in the findings. If a hypothesis has no evidence, say
   it remains open and explain why.
 
@@ -284,7 +340,7 @@ W8 · Decision-grade extensions — emit only those grounded in the findings:
   relevant. Treat domain packs as orientation only — never invent domain facts.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
-- "magnitudes": entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent. Emit zero when the answer carries no numeric backbone.
+- "magnitudes": entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent. Emit zero when the answer carries no numeric backbone. When a magnitude comes from a ranked / per-entity finding, the \`label\` MUST name the entity and its metric in the form "EntityName · metric" (e.g. "Arindam Mazumdar · GCPC"), taking the name verbatim from the finding — NEVER a generic ordinal like "Top performer" / "Second-ranked". \`value\` carries the number (e.g. "257").
 - "unexplained": one sentence on what could NOT be determined. Omit if nothing material is missing.
 When the user message says "questionShape: none" you may omit magnitudes and unexplained.
 
@@ -433,5 +489,7 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
     confidence_low: confidenceSummary.low,
   });
 
-  return result.data;
+  // RNK-f6 · defensive strip of internal `[fN]` finding refs before the draft
+  // leaves the narrator — keeps stray blackboard tokens out of the rendered answer.
+  return stripFindingRefs(result.data);
 }

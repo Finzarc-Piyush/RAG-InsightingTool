@@ -2617,7 +2617,12 @@ export async function runAgentTurn(
             step.tool === "execute_query_plan" ||
             step.tool === "derive_dimension_bucket" ||
             step.tool === "add_computed_columns" ||
-            step.tool === "run_readonly_sql")
+            step.tool === "run_readonly_sql" ||
+            // RNK-chart · ranking results are a clean entity×metric frame
+            // (already trimmed to topN by the tool). Route them through
+            // `lastAnalyticalTable` so the chart-promotion + visual-planner
+            // fallback can auto-build a bar chart for "top performers" answers.
+            step.tool === "run_breakdown_ranking")
         ) {
           const analyticalRows = stepResult.table.rows as Record<string, unknown>[];
           // Wave C1 · `AGENT_IMMUTABLE_CTX_DATA` (default ON for new turns)
@@ -2646,7 +2651,13 @@ export async function runAgentTurn(
           // Env gate: AGENT_PROMOTE_INTERMEDIATE_CHARTS (default true).
           if (
             (step.tool === "execute_query_plan" ||
-              step.tool === "run_analytical_query") &&
+              step.tool === "run_analytical_query" ||
+              // RNK-chart · promote ranking frames so "top performers" /
+              // "who has the highest X" answers lead with a bar chart. The
+              // tool already trims to topN, so cardinality stays within the
+              // chart-promotion guards; topN=1 (single entity) is rejected by
+              // the scalar guard → no awkward one-bar chart.
+              step.tool === "run_breakdown_ranking") &&
             (process.env.AGENT_PROMOTE_INTERMEDIATE_CHARTS ?? "true")
               .toLowerCase() !== "false"
           ) {

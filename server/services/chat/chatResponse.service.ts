@@ -233,6 +233,30 @@ export function alignChartKeyInsightsToChatInsights(validated: any): any {
  * Validate and enrich chat response
  */
 export function validateAndEnrichResponse(result: any, chatDocument: ChatDocument, chatLevelInsights?: any[]): any {
+  // Quick-lookup fast lane (quickAnswerPath.ts) returns a table-ONLY result by
+  // design — `answer: ""` + a populated `table` ("the preview table IS the
+  // answer; no narrator preamble"). That contract is incompatible with the
+  // empty-answer guard below, so a successful simple lookup (e.g. "top 10 X by
+  // Y") would otherwise throw "Empty answer from answerQuestion" and surface as
+  // an error to the user even though the query returned rows. Honor the
+  // contract: when the answer is empty but a non-empty table is present,
+  // synthesize a concise one-line answer from the plan rationale (the restated
+  // question the fast-lane already computed) so the response carries text +
+  // table. This does NOT change quickAnswerPath's own (tested) `answer: ""`
+  // contract — only how the shared response gate renders a table-only result.
+  if (
+    result &&
+    (typeof result.answer !== "string" || result.answer.trim().length === 0) &&
+    Array.isArray(result.table) &&
+    result.table.length > 0
+  ) {
+    const restated =
+      typeof result.agentTrace?.planRationale === "string"
+        ? result.agentTrace.planRationale.trim()
+        : "";
+    result.answer = restated.length > 0 ? restated : "Here are the results.";
+  }
+
   // Validate response has answer
   if (!result || !result.answer || result.answer.trim().length === 0) {
     throw new Error('Empty answer from answerQuestion');

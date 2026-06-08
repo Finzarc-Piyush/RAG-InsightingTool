@@ -755,288 +755,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </div>
         )}
 
-        {isDashboardMode ? (
-          <AnalyticalDashboardResponse
-            message={message}
-            sessionId={sessionId}
-            precedingUserQuestion={precedingUserQuestion}
-            onSuggestedQuestionClick={onSuggestedQuestionClick}
-            sampleRows={sampleRows}
-            columns={columns}
-            numericColumns={numericColumns}
-            dateColumns={dateColumns}
-            temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
-            temporalFacetColumns={temporalFacetColumns}
-            thinkingSteps={thinkingSteps}
-          />
-        ) : showMarkdownBlock ? (
-          <Settle
-            className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
-            data-testid={`message-content-${message.role}`}
-          >
-            {/* Wave A16 · "↻ Automation" badge when this assistant turn was
-                produced by deterministic Automation replay (vs. a live agent
-                turn). */}
-            {(message as Message & { replayedFromAutomationId?: string })
-              .replayedFromAutomationId && (
-              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
-                <span aria-hidden>↻</span> From automation
-              </div>
-            )}
-            {/* AMR5 · "Recalled from prior analysis" provenance chip when
-                this assistant message was served from the cross-session
-                `past_analyses` cache (exact or semantic ≥0.92 match). No-op
-                when the field is absent (fresh agent turns). */}
-            <RecalledFromPriorAnalysisChip
-              recalled={
-                (message as Message & {
-                  recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'];
-                }).recalledFromPriorAnalysis
-              }
-            />
-
-            {/*
-              W7 · render structured AnswerCard when the narrator emitted an
-              `answerEnvelope`; fall back to the legacy markdown-only block
-              otherwise. The supplementaryMarkdown prop carries any narrator
-              prose that shouldn't be lost when the envelope provides headlines.
-            */}
-            {(message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> }).answerEnvelope ? (
-              <AnswerCard
-                message={message as Message}
-                onSuggestedQuestionClick={onSuggestedQuestionClick}
-                supplementaryMarkdown={assistantMarkdownParts.markdownBody}
-              />
-            ) : isLegacySynthesisDump(assistantMarkdownParts.markdownBody) ? (
-              // W6 · Defence in depth: server-side W3 replaces the legacy
-              // `Summary from tool output:` dump with a clean rendered table,
-              // but if a future regression ever lets that prefix slip through
-              // we render it as a muted "Synthesis fallback" callout rather
-              // than as primary answer prose. Logs a console.warn so it shows
-              // up in client telemetry.
-              <SynthesisFallbackCallout
-                content={assistantMarkdownParts.markdownBody}
-                messageId={(message as Message & { id?: string }).id}
-              />
-            ) : (
-              <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
-                <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
-              </div>
-            )}
-            {/* UX-3 · Phase-1 magnitudes row — renders nothing when the field is empty. */}
-            <MagnitudesRow
-              items={
-                (message as Message & { magnitudes?: MagnitudeItem[] }).magnitudes
-              }
-            />
-            {/*
-              Business action items — concrete decisions the user could take
-              outside the app. Mounted alongside (not inside) AnswerCard so
-              it renders independently of the answer envelope's presence.
-              The card no-ops when `businessActions` is empty / absent.
-            */}
-            <BusinessActionsCard
-              items={message.businessActions ?? []}
-            />
-            {/*
-              Follow-up suggestion chips. AnswerCard already renders these as
-              the "Try next" section when the structured envelope provides
-              `answerEnvelope.nextSteps` — suppress this legacy "You might
-              try:" block in that case to avoid the duplicate the user saw
-              after BAI2 fixed the envelope plumbing. Block still fires for
-              synthesis-fallback / no-envelope turns where AnswerCard isn't
-              rendered, so the markdown trailer's chips don't disappear from
-              older or fallback messages.
-            */}
-            {assistantMarkdownParts.followUpChips.length > 0
-              && onSuggestedQuestionClick
-              && !(
-                (message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> })
-                  .answerEnvelope?.nextSteps?.length
-              ) && (
-              <div className="mt-4">
-                <p className="text-sm font-semibold text-foreground mb-2">You might try:</p>
-                <div className="flex flex-wrap gap-2">
-                  {assistantMarkdownParts.followUpChips.map((q, i) => (
-                    <Button
-                      key={`followup-${i}`}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="text-xs rounded-full h-auto py-1.5 px-3"
-                      aria-label={`Use suggestion: ${q}`}
-                      onClick={() => onSuggestedQuestionClick(q)}
-                    >
-                      {q}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {/* Phase-2 · Slot B (bottom of key insights / answer card). The
-                offer button (multi-chart, no explicit ask) and the post-create
-                surface (explicit ask path) are mutually exclusive. */}
-            {showBuildDashboardOffer ? (
-              <BuildDashboardCallout
-                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
-                sessionId={sessionId ?? undefined}
-                variant="below-answer"
-                message={message}
-              />
-            ) : (message as Message & { createdDashboardId?: string })
-                .createdDashboardId ? (
-              <DashboardDraftCard
-                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
-                sessionId={sessionId ?? undefined}
-                createdDashboardId={
-                  (message as Message & { createdDashboardId?: string })
-                    .createdDashboardId
-                }
-                message={message}
-              />
-            ) : null}
-            {/* W7 · message-level actions (Copy now; Regenerate added in W9). */}
-            <MessageActionsBar
-              message={message}
-              precedingUserQuestion={precedingUserQuestion ?? undefined}
-            />
-            {/* W5.5b · thumbs up/down feeds the cache invalidation + golden corpus.
-                Wave AD1 · prefer the agent-trace turnId when available; fall
-                back to the message timestamp so non-agentic / cache-hit /
-                synthesis-fallback paths still surface feedback buttons. The
-                server now always populates agentTrace.turnId, but this gate
-                is defense-in-depth against future regressions. */}
-            {(() => {
-              if (!sessionId) return null;
-              const turnId = computeFeedbackTurnId(message);
-              if (!turnId) return null;
-              return (
-                <FeedbackButtons
-                  sessionId={sessionId}
-                  turnId={turnId}
-                  initial={
-                    (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
-                  }
-                  initialComment={
-                    (message as Message & { feedbackComment?: string }).feedbackComment ?? ""
-                  }
-                  target={{ type: "answer", id: "answer" }}
-                />
-              );
-            })()}
-            {message.suggestedQuestions &&
-              message.suggestedQuestions.length > 0 &&
-              onSuggestedQuestionClick && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {message.suggestedQuestions.map((q, i) => (
-                    <Button
-                      key={i}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="text-xs rounded-full h-auto py-1.5 px-3"
-                      aria-label={`Use suggestion: ${q}`}
-                      onClick={() => onSuggestedQuestionClick(q)}
-                    >
-                      {q}
-                    </Button>
-                  ))}
-                </div>
-              )}
-          </Settle>
-        ) : null}
-
-        {!isUser && allowDatasetPreviewInAnswer && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
-          <div className="mt-3">
-            {!showDatasetPreview ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="text-xs px-2"
-                  onClick={() => {
-                    setPreviewManuallyHidden(false);
-                    setShowDatasetPreview(true);
-                  }}
-              >
-                Show data preview
-              </Button>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs px-2"
-                    onClick={() => {
-                      setPreviewManuallyHidden(true);
-                      setShowDatasetPreview(false);
-                    }}
-                  >
-                    Hide data preview
-                  </Button>
-                </div>
-                <DataPreview
-                  data={sampleRows || []}
-                  columns={columns}
-                  numericColumns={numericColumns}
-                  dateColumns={dateColumns}
-                  temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
-                  temporalFacetColumns={temporalFacetColumns}
-                  totalRows={totalRows}
-                  totalColumns={totalColumns}
-                  defaultExpanded={!(hasAggPreview || hasAggSummary)}
-                  preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
-                  postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
-                  currencyByColumn={currencyByColumn}
-                  wideFormatTransform={wideFormatTransform}
-                  dimensionHierarchies={dimensionHierarchies}
-                  sessionIdForHierarchyEdit={hierarchyEditSessionId}
-                  onHierarchiesChange={onHierarchiesChange}
-                  dateTimeColumnPairs={dateTimeColumnPairs}
-                  onDateTimePairsChange={onDateTimePairsChange}
-                  indicators={indicators}
-                  onIndicatorsChange={onIndicatorsChange}
-                />
-                {uploadPreviewThinking?.active && (
-                  <div className="mt-2">
-                    <ThinkingPanel
-                      variant="live"
-                      isStreaming
-                      steps={[
-                        {
-                          step: uploadPreviewThinking.title,
-                          status: 'active',
-                          timestamp: message.timestamp,
-                          ...(uploadPreviewThinking.details
-                            ? { details: uploadPreviewThinking.details }
-                            : {}),
-                        },
-                      ]}
-                      workbench={[]}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {!isUser && showDatasetEnrichmentLoader && (
-          <div className="mt-3">
-            <DatasetEnrichmentLoader
-              totalRows={totalRows ?? 0}
-              totalColumns={totalColumns ?? 0}
-              enrichmentPhase={enrichmentPhase}
-              enrichmentStep={enrichmentStep}
-              uploadProgress={uploadProgress}
-              startedAtMs={enrichmentStartedAtMs ?? null}
-              inline
-            />
-          </div>
-        )}
-
+        {/* RNK-order · charts lead the answer (chart → magnitudes → prose). */}
         {!isUser && !isDashboardMode && (
           <>
             {/* Show existing charts */}
@@ -1219,6 +938,290 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
           </>
         )}
 
+        {isDashboardMode ? (
+          <AnalyticalDashboardResponse
+            message={message}
+            sessionId={sessionId}
+            precedingUserQuestion={precedingUserQuestion}
+            onSuggestedQuestionClick={onSuggestedQuestionClick}
+            sampleRows={sampleRows}
+            columns={columns}
+            numericColumns={numericColumns}
+            dateColumns={dateColumns}
+            temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+            temporalFacetColumns={temporalFacetColumns}
+            thinkingSteps={thinkingSteps}
+          />
+        ) : showMarkdownBlock ? (
+          <Settle
+            className="rounded-brand-lg border border-border/60 border-l-4 border-l-primary bg-primary/5 p-6 shadow-elev-1"
+            data-testid={`message-content-${message.role}`}
+          >
+            {/* Wave A16 · "↻ Automation" badge when this assistant turn was
+                produced by deterministic Automation replay (vs. a live agent
+                turn). */}
+            {(message as Message & { replayedFromAutomationId?: string })
+              .replayedFromAutomationId && (
+              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
+                <span aria-hidden>↻</span> From automation
+              </div>
+            )}
+            {/* AMR5 · "Recalled from prior analysis" provenance chip when
+                this assistant message was served from the cross-session
+                `past_analyses` cache (exact or semantic ≥0.92 match). No-op
+                when the field is absent (fresh agent turns). */}
+            <RecalledFromPriorAnalysisChip
+              recalled={
+                (message as Message & {
+                  recalledFromPriorAnalysis?: Message['recalledFromPriorAnalysis'];
+                }).recalledFromPriorAnalysis
+              }
+            />
+
+            {/* UX-3 · Phase-1 magnitudes row — renders above the answer prose
+                (chart → magnitudes → rest). No-ops when the field is empty. */}
+            <MagnitudesRow
+              items={
+                (message as Message & { magnitudes?: MagnitudeItem[] }).magnitudes
+              }
+            />
+            {/*
+              W7 · render structured AnswerCard when the narrator emitted an
+              `answerEnvelope`; fall back to the legacy markdown-only block
+              otherwise. The supplementaryMarkdown prop carries any narrator
+              prose that shouldn't be lost when the envelope provides headlines.
+            */}
+            {(message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> }).answerEnvelope ? (
+              <AnswerCard
+                message={message as Message}
+                onSuggestedQuestionClick={onSuggestedQuestionClick}
+                supplementaryMarkdown={assistantMarkdownParts.markdownBody}
+              />
+            ) : isLegacySynthesisDump(assistantMarkdownParts.markdownBody) ? (
+              // W6 · Defence in depth: server-side W3 replaces the legacy
+              // `Summary from tool output:` dump with a clean rendered table,
+              // but if a future regression ever lets that prefix slip through
+              // we render it as a muted "Synthesis fallback" callout rather
+              // than as primary answer prose. Logs a console.warn so it shows
+              // up in client telemetry.
+              <SynthesisFallbackCallout
+                content={assistantMarkdownParts.markdownBody}
+                messageId={(message as Message & { id?: string }).id}
+              />
+            ) : (
+              <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
+                <MarkdownRenderer content={assistantMarkdownParts.markdownBody} />
+              </div>
+            )}
+            {/*
+              Business action items — concrete decisions the user could take
+              outside the app. Mounted alongside (not inside) AnswerCard so
+              it renders independently of the answer envelope's presence.
+              The card no-ops when `businessActions` is empty / absent.
+            */}
+            <BusinessActionsCard
+              items={message.businessActions ?? []}
+            />
+            {/*
+              Follow-up suggestion chips. AnswerCard already renders these as
+              the "Try next" section when the structured envelope provides
+              `answerEnvelope.nextSteps` — suppress this legacy "You might
+              try:" block in that case to avoid the duplicate the user saw
+              after BAI2 fixed the envelope plumbing. Block still fires for
+              synthesis-fallback / no-envelope turns where AnswerCard isn't
+              rendered, so the markdown trailer's chips don't disappear from
+              older or fallback messages.
+            */}
+            {assistantMarkdownParts.followUpChips.length > 0
+              && onSuggestedQuestionClick
+              && !(
+                (message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> })
+                  .answerEnvelope?.nextSteps?.length
+              ) && (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-foreground mb-2">You might try:</p>
+                <div className="flex flex-wrap gap-2">
+                  {assistantMarkdownParts.followUpChips.map((q, i) => (
+                    <Button
+                      key={`followup-${i}`}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs rounded-full h-auto py-1.5 px-3 whitespace-normal break-words text-left max-w-full"
+                      aria-label={`Use suggestion: ${q}`}
+                      onClick={() => onSuggestedQuestionClick(q)}
+                    >
+                      {q}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Phase-2 · Slot B (bottom of key insights / answer card). The
+                offer button (multi-chart, no explicit ask) and the post-create
+                surface (explicit ask path) are mutually exclusive. */}
+            {showBuildDashboardOffer ? (
+              <BuildDashboardCallout
+                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+                sessionId={sessionId ?? undefined}
+                variant="below-answer"
+                message={message}
+              />
+            ) : (message as Message & { createdDashboardId?: string })
+                .createdDashboardId ? (
+              <DashboardDraftCard
+                draft={(message as Message & { dashboardDraft?: unknown }).dashboardDraft}
+                sessionId={sessionId ?? undefined}
+                createdDashboardId={
+                  (message as Message & { createdDashboardId?: string })
+                    .createdDashboardId
+                }
+                message={message}
+              />
+            ) : null}
+            {/* W7 · message-level actions (Copy now; Regenerate added in W9). */}
+            <MessageActionsBar
+              message={message}
+              precedingUserQuestion={precedingUserQuestion ?? undefined}
+            />
+            {/* W5.5b · thumbs up/down feeds the cache invalidation + golden corpus.
+                Wave AD1 · prefer the agent-trace turnId when available; fall
+                back to the message timestamp so non-agentic / cache-hit /
+                synthesis-fallback paths still surface feedback buttons. The
+                server now always populates agentTrace.turnId, but this gate
+                is defense-in-depth against future regressions. */}
+            {(() => {
+              if (!sessionId) return null;
+              const turnId = computeFeedbackTurnId(message);
+              if (!turnId) return null;
+              return (
+                <FeedbackButtons
+                  sessionId={sessionId}
+                  turnId={turnId}
+                  initial={
+                    (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
+                  }
+                  initialComment={
+                    (message as Message & { feedbackComment?: string }).feedbackComment ?? ""
+                  }
+                  target={{ type: "answer", id: "answer" }}
+                />
+              );
+            })()}
+            {message.suggestedQuestions &&
+              message.suggestedQuestions.length > 0 &&
+              onSuggestedQuestionClick && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {/* UX · never show more than 5 suggested questions (safety
+                      net over the server-side cap). */}
+                  {message.suggestedQuestions.slice(0, 5).map((q, i) => (
+                    <Button
+                      key={i}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs rounded-full h-auto py-1.5 px-3 whitespace-normal break-words text-left max-w-full"
+                      aria-label={`Use suggestion: ${q}`}
+                      onClick={() => onSuggestedQuestionClick(q)}
+                    >
+                      {q}
+                    </Button>
+                  ))}
+                </div>
+              )}
+          </Settle>
+        ) : null}
+
+        {!isUser && allowDatasetPreviewInAnswer && columns && columns.length > 0 && !isEnrichmentSystemMessage && (
+          <div className="mt-3">
+            {!showDatasetPreview ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs px-2"
+                  onClick={() => {
+                    setPreviewManuallyHidden(false);
+                    setShowDatasetPreview(true);
+                  }}
+              >
+                Show data preview
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs px-2"
+                    onClick={() => {
+                      setPreviewManuallyHidden(true);
+                      setShowDatasetPreview(false);
+                    }}
+                  >
+                    Hide data preview
+                  </Button>
+                </div>
+                <DataPreview
+                  data={sampleRows || []}
+                  columns={columns}
+                  numericColumns={numericColumns}
+                  dateColumns={dateColumns}
+                  temporalDisplayGrainsByColumn={temporalDisplayGrainsByColumn}
+                  temporalFacetColumns={temporalFacetColumns}
+                  totalRows={totalRows}
+                  totalColumns={totalColumns}
+                  defaultExpanded={!(hasAggPreview || hasAggSummary)}
+                  preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
+                  postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
+                  currencyByColumn={currencyByColumn}
+                  wideFormatTransform={wideFormatTransform}
+                  dimensionHierarchies={dimensionHierarchies}
+                  sessionIdForHierarchyEdit={hierarchyEditSessionId}
+                  onHierarchiesChange={onHierarchiesChange}
+                  dateTimeColumnPairs={dateTimeColumnPairs}
+                  onDateTimePairsChange={onDateTimePairsChange}
+                  indicators={indicators}
+                  onIndicatorsChange={onIndicatorsChange}
+                />
+                {uploadPreviewThinking?.active && (
+                  <div className="mt-2">
+                    <ThinkingPanel
+                      variant="live"
+                      isStreaming
+                      steps={[
+                        {
+                          step: uploadPreviewThinking.title,
+                          status: 'active',
+                          timestamp: message.timestamp,
+                          ...(uploadPreviewThinking.details
+                            ? { details: uploadPreviewThinking.details }
+                            : {}),
+                        },
+                      ]}
+                      workbench={[]}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isUser && showDatasetEnrichmentLoader && (
+          <div className="mt-3">
+            <DatasetEnrichmentLoader
+              totalRows={totalRows ?? 0}
+              totalColumns={totalColumns ?? 0}
+              enrichmentPhase={enrichmentPhase}
+              enrichmentStep={enrichmentStep}
+              uploadProgress={uploadProgress}
+              startedAtMs={enrichmentStartedAtMs ?? null}
+              inline
+            />
+          </div>
+        )}
         {!isUser && !isDashboardMode && !hasAggPreview && message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />
@@ -1226,19 +1229,46 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         )}
 
         {!isUser && !message.isIntermediate && (
-          <InvestigationSummaryCard
-            summary={message.investigationSummary}
-            onSuggestedQuestionClick={onSuggestedQuestionClick}
-          />
+          // UX · match the consistent mt-3 gap every other section uses, so the
+          // Investigation summary is clearly separated from Key Insights above.
+          <div className="mt-3">
+            <InvestigationSummaryCard
+              summary={message.investigationSummary}
+              onSuggestedQuestionClick={onSuggestedQuestionClick}
+            />
+          </div>
         )}
 
         {!isUser &&
           !message.isIntermediate &&
           message.investigationSummary &&
           (message.priorInvestigationsSnapshot?.length ?? 0) > 0 && (
-            <PriorInvestigationsBanner
-              priorInvestigations={message.priorInvestigationsSnapshot}
-            />
+            <>
+              <PriorInvestigationsBanner
+                priorInvestigations={message.priorInvestigationsSnapshot}
+              />
+              {/* UX · let users rate the turn right after the "what we knew"
+                  recap too. Reuses the answer-level feedback target so it stays
+                  in sync with the top control on reload. */}
+              {(() => {
+                if (!sessionId) return null;
+                const turnId = computeFeedbackTurnId(message);
+                if (!turnId) return null;
+                return (
+                  <FeedbackButtons
+                    sessionId={sessionId}
+                    turnId={turnId}
+                    initial={
+                      (message as Message & { feedback?: "up" | "down" | "none" }).feedback ?? "none"
+                    }
+                    initialComment={
+                      (message as Message & { feedbackComment?: string }).feedbackComment ?? ""
+                    }
+                    target={{ type: "answer", id: "answer" }}
+                  />
+                );
+              })()}
+            </>
           )}
       </div>
 

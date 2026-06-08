@@ -230,6 +230,13 @@ class UploadQueue {
       // Phase 2 (W2.0) · set only when USE_PARQUET_READ_PATH is on and the durable
       // Parquet was written after materialize; otherwise stays undefined (no-op).
       let parquetBlobInfo: { blobName: string; version: number; rowCount?: number } | undefined;
+      // Durable, enrichment-exact copy of the authoritative `data` rows, written
+      // after materialize so a cold /tmp reloads the EXACT upload-time rows via
+      // loadLatestData's currentDataBlob priority instead of re-parsing the
+      // original blob (which loses enrichment and silently zeroes measures).
+      let enrichedDataBlobInfo:
+        | { blobUrl: string; blobName: string; version: number; lastUpdated: number }
+        | undefined;
       let skipDateEnrichmentForSuspiciousCsv = false;
 
       // Keep Blob as best-effort and off the /upload critical path.
@@ -574,7 +581,7 @@ class UploadQueue {
           ...emptyDatasetProfile(),
           shortDescription: shortDesc,
           dateColumns: [...summary.dateColumns],
-          suggestedQuestions: derivedFollowUps.slice(0, 8),
+          suggestedQuestions: derivedFollowUps.slice(0, 5),
         };
         const baseCtx = emptySessionAnalysisContext();
         sessionAnalysisContext = {
@@ -855,7 +862,7 @@ class UploadQueue {
           role: 'assistant' as const,
           content: initialContent,
           timestamp: Date.now(),
-          suggestedQuestions: ctxForInitial.suggestedFollowUps.slice(0, 6),
+          suggestedQuestions: ctxForInitial.suggestedFollowUps.slice(0, 5),
         };
         const existingMessages = existingDoc?.messages ?? [];
         const messages = existingMessages.length === 0 ? [initialMessage] : existingMessages;
@@ -1084,9 +1091,21 @@ class UploadQueue {
       warnSuspiciousDuplicateRowIdInSample(sampleRows, `upload_final:${job.sessionId}`);
 
       // Step 9: Materialize authoritative DuckDB table for all upload paths.
-      // Apply temporal facet columns to full data so DuckDB has Month · X, Year · X, etc.
-      // (sampleRows already received applyTemporalFacetColumns above; this mirrors that for DuckDB.)
-      if (summary.dateColumns.length > 0 && !useLargeFileProcessing) {
+      // Apply temporal facet columns to the FULL data so the authoritative DuckDB
+      // `data` table physically carries Month · X, Year · X, Quarter · X, etc.
+      //
+      // This MUST run for large files too. `processLargeFile` only applies facets
+      // to `sampleRows` (to build the summary); the full `data` it returns is the
+      // raw read_csv_auto shape. Previously an `&& !useLargeFileProcessing` guard
+      // skipped this step for large files, so their materialized `data` table was
+      // missing every facet column that `dataSummary` (and the UI column panel)
+      // advertise — and any pivot/chart GROUP BY on a facet returned empty/zero
+      // measures while dimension labels still rendered. `data` is already fully
+      // in memory here for every path (large files loaded ALL rows via
+      // getDataForAnalysis above), so applying facets in-memory adds no new
+      // materialization cost. (Deriving facets in DuckDB SQL is the Phase-2
+      // streaming follow-up.)
+      if (summary.dateColumns.length > 0) {
         const { applyTemporalFacetColumns: applyFacets } = await import('../lib/temporalFacetColumns.js');
         applyFacets(data, summary.dateColumns, facetOptsForUpload());
       }
@@ -1099,6 +1118,38 @@ class UploadQueue {
         try {
           await storage.materializeAuthoritativeDataTable(data, { tableName: 'data' });
           columnarReadyMarker = storagePath || `materialized:${job.sessionId}`;
+
+          // Durability · persist a durable, enrichment-exact copy of the
+          // authoritative `data` rows (post-melt, temporal-faceted, numeric-
+          // coerced — same array just materialized to DuckDB) as the session's
+          // currentDataBlob. On a cold /tmp (session revisit / server restart /
+          // serverless cold start) the per-session DuckDB is gone, so
+          // ensureAuthoritativeDataTable rematerializes via loadLatestData; its
+          // Priority 1 (currentDataBlob, JSON branch) now returns these exact
+          // rows verbatim — no re-parse, no re-melt — instead of falling through
+          // to the fragile original-blob re-parse that loses enrichment and
+          // silently zeroes measures. Version 1 is the upload baseline; later
+          // data ops bump from there (see dataPersistence.ts). Stored in blob,
+          // so the Cosmos 4 MB doc limit never applies — only the small pointer
+          // is persisted on the chat doc. NON-FATAL: a write failure must never
+          // fail the upload (the original-blob re-parse remains the fallback).
+          try {
+            const { updateProcessedDataBlob } = await import('../lib/blobStorage.js');
+            const enriched = await updateProcessedDataBlob(job.sessionId, data, 1, job.username);
+            enrichedDataBlobInfo = {
+              blobUrl: enriched.blobUrl,
+              blobName: enriched.blobName,
+              version: 1,
+              lastUpdated: Date.now(),
+            };
+            console.log(
+              `💾 Wrote durable enriched currentDataBlob (${data.length} rows) for ${job.sessionId}: ${enriched.blobName}`,
+            );
+          } catch (enrichedErr) {
+            console.warn(
+              `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${enrichedErr instanceof Error ? enrichedErr.message : String(enrichedErr)}`,
+            );
+          }
           // Phase 2 (W2.0) · flag-gated · write the authoritative `data` table to a
           // durable Parquet in blob so the Phase 1 read path can open it next
           // request instead of rehydrating all rows. Non-fatal: a failure here must
@@ -1192,6 +1243,10 @@ class UploadQueue {
             datasetProfile,
             selectedSheetName: job.sheetName ?? existingSession.selectedSheetName,
             columnarStoragePath: columnarReadyMarker,
+            // Durable enriched copy (upload baseline v1) so cold-/tmp reload is
+            // exact. Conditional spread: never clobber an existing currentDataBlob
+            // with undefined if the enriched-blob write failed (non-fatal).
+            ...(enrichedDataBlobInfo ? { currentDataBlob: enrichedDataBlobInfo } : {}),
             chunkIndexBlob: chunkIndexBlob,
             columnStatistics,
             dataSummaryStatistics,
@@ -1237,6 +1292,8 @@ class UploadQueue {
             enrichmentStatus: 'complete' as const,
             selectedSheetName: job.sheetName,
             columnarStoragePath: columnarReadyMarker,
+            // Durable enriched copy (upload baseline v1) so cold-/tmp reload is exact.
+            ...(enrichedDataBlobInfo ? { currentDataBlob: enrichedDataBlobInfo } : {}),
             lastUpdatedAt: Date.now(),
           });
         }

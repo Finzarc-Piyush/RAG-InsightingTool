@@ -8,7 +8,8 @@
 export function mergeSuggestedQuestions(
   primary?: string[],
   fallback?: string[],
-  limit = 12
+  // UX · product rule: never surface more than 5 suggested questions.
+  limit = 5
 ): string[] {
   const cleanPrimary = [...new Set((primary || []).filter((q) => q?.trim()))];
   if (cleanPrimary.length > 0) {

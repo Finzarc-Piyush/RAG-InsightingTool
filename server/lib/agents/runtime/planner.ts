@@ -1054,6 +1054,16 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
           : bad.startsWith("ambiguous_column_resolution:") || hasCanonical
             ? "ambiguous_column_resolution"
             : "column_not_in_schema";
+      // Diagnostic · capture the offending plan body for execute_query_plan
+      // rejects. `invalid_column_ref` aborts the whole turn, and the column
+      // name alone (e.g. "adherence_rate") doesn't reveal WHERE the planner
+      // referenced it (groupBy vs aggregations[].column vs a cross-step alias).
+      // The truncated plan JSON makes these rare, turn-killing rejects
+      // diagnosable from logs without a repro harness.
+      const planJson =
+        step.tool === "execute_query_plan"
+          ? JSON.stringify(step.args.plan).slice(0, 1500)
+          : undefined;
       logReject(
         {
           reason,
@@ -1061,6 +1071,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
           stepId: step.id,
           argKeys: argKeys.slice(0, 200),
           zod_error: `invalid_column_ref:${bad}`,
+          ...(planJson ? { plan: planJson } : {}),
         },
         turnId
       );

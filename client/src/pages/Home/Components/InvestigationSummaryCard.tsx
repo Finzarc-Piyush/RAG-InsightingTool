@@ -40,7 +40,6 @@ interface InvestigationSummaryCardProps {
 }
 
 type Status = NonNullable<InvestigationSummary["hypotheses"]>[number]["status"];
-type Significance = NonNullable<InvestigationSummary["findings"]>[number]["significance"];
 type Priority = NonNullable<InvestigationSummary["openQuestions"]>[number]["priority"];
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -64,12 +63,6 @@ function statusIcon(status: Status) {
   return <CircleDashed className="h-3 w-3" aria-hidden />;
 }
 
-const SIG_DOT: Record<Significance, string> = {
-  anomalous: "bg-destructive",
-  notable: "bg-primary",
-  routine: "bg-muted-foreground/40",
-};
-
 const PRIORITY_DOT: Record<Priority, string> = {
   high: "bg-destructive",
   medium: "bg-primary",
@@ -84,9 +77,11 @@ export function InvestigationSummaryCard({
   const [open, setOpen] = useState(defaultOpen);
   if (!summary) return null;
   const hyps = summary.hypotheses ?? [];
-  const finds = summary.findings ?? [];
   const opens = summary.openQuestions ?? [];
-  if (hyps.length === 0 && finds.length === 0 && opens.length === 0) return null;
+  // UX · the raw "Findings" list (often internal tool names like
+  // "run_breakdown_ranking:") was removed; only hypotheses + open questions
+  // surface here now, so gate visibility on those.
+  if (hyps.length === 0 && opens.length === 0) return null;
 
   // Counters for the collapsed-state header so the user can scan totals
   // without expanding the card.
@@ -121,11 +116,6 @@ export function InvestigationSummaryCard({
               {confirmed + refuted > 0
                 ? ` · ${confirmed} confirmed${refuted > 0 ? `, ${refuted} refuted` : ""}`
                 : ""}
-            </span>
-          )}
-          {finds.length > 0 && (
-            <span className="hidden sm:inline">
-              · {finds.length} finding{finds.length === 1 ? "" : "s"}
             </span>
           )}
         </span>
@@ -163,28 +153,6 @@ export function InvestigationSummaryCard({
             </div>
           )}
 
-          {finds.length > 0 && (
-            <div>
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Findings
-              </p>
-              <ul className="space-y-1">
-                {finds.map((f, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-[12.5px] leading-snug text-foreground"
-                  >
-                    <span
-                      className={`mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${SIG_DOT[f.significance]}`}
-                      aria-label={`Significance: ${f.significance}`}
-                    />
-                    <span>{f.label}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           {opens.length > 0 && (
             <div>
               <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -198,7 +166,7 @@ export function InvestigationSummaryCard({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="text-xs rounded-full h-auto py-1.5 px-3"
+                      className="text-xs rounded-full h-auto py-1.5 px-3 whitespace-normal break-words text-left max-w-full"
                       aria-label={`Investigate: ${q.question}`}
                       onClick={() => onSuggestedQuestionClick(q.question)}
                     >

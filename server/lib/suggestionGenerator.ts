@@ -73,6 +73,7 @@ GUIDELINES:
 - Use actual column names from the dataset when possible
 - Vary the question types (correlation, trends, comparisons, etc.)
 - Keep each question under 10 words
+- Each question MUST ask exactly ONE thing and be answerable in a single query. NEVER combine clauses with "and"/"or" or list multiple dimensions (BAD: "How does X vary by ASM or HQ?", "Compare A and B by cluster, ASM, or device"). Split compound asks into separate single questions.
 - Focus on the most interesting or relevant columns mentioned
 
 Output JSON only:

@@ -1724,7 +1724,8 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             ...(chatDocument.sessionAnalysisContext?.suggestedFollowUps ?? []),
             ...(chatDocument.datasetProfile?.suggestedQuestions ?? []),
           ];
-          mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(0, 12);
+          // UX · cap suggested questions at 5 (product rule: never more than 5).
+          mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(0, 5);
         } catch (error) {
           console.error('Failed to generate suggestions:', error);
         }

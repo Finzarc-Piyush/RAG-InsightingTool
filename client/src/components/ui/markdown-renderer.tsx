@@ -9,9 +9,13 @@ import { CitationHoverCard } from '@/components/CitationHoverCard';
  * Removes orphaned asterisks that aren't part of markdown formatting
  */
 export function MarkdownRenderer({ content }: { content: string }) {
+  // RNK-f6 · safety net for already-persisted messages: strip stray internal
+  // blackboard finding-reference tokens ([f1], [f6], …) the narrator may have
+  // echoed into prose. New turns are stripped server-side; this catches history.
+  const withoutFindingRefs = content.replace(/\s?\[f\d+\]/gi, "");
   // Compact large numbers (≥1000) to K/M/B/T form before markdown cleanup so
   // chat narrative prose matches the K/M/B convention used everywhere else.
-  const cleanedContent = cleanOrphanedAsterisks(compactizeNumbersInText(content));
+  const cleanedContent = cleanOrphanedAsterisks(compactizeNumbersInText(withoutFindingRefs));
 
   // Split by lines to handle line breaks
   const lines = cleanedContent.split('\n');

@@ -1233,7 +1233,8 @@ export function ChatInterface({
             <div className="mb-4">
               <h3 className="mb-3 text-center text-base font-semibold text-foreground">Try asking:</h3>
               <div className="flex flex-wrap gap-2 justify-center" data-testid="suggestion-chips">
-                {suggestions.map((suggestion, idx) => (
+                {/* UX · never show more than 5 starter suggestions. */}
+                {suggestions.slice(0, 5).map((suggestion, idx) => (
                   <Button
                     key={idx}
                     variant="outline"
@@ -1242,7 +1243,7 @@ export function ChatInterface({
                     onClick={() => applySuggestionToComposer(suggestion)}
                     aria-label={`Add to message: ${suggestion}`}
                     data-testid={`suggestion-${idx}`}
-                    className="rounded-full border-border/80 px-3 py-1.5 text-xs transition-colors hover:border-primary hover:bg-primary/5"
+                    className="rounded-full border-border/80 px-3 py-1.5 text-xs transition-colors hover:border-primary hover:bg-primary/5 whitespace-normal break-words text-left max-w-full h-auto"
                   >
                     {suggestion}
                   </Button>

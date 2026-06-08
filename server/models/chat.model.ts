@@ -1433,7 +1433,7 @@ export const updateSessionPermanentContext = async (
               {
                 ...msgs[0],
                 content: newContent,
-                suggestedQuestions: fresh.slice(0, 6),
+                suggestedQuestions: fresh.slice(0, 5),
               },
             ];
           }

@@ -112,7 +112,9 @@ export function AnswerCard({
               aria-hidden="true"
             />
             <p className="text-[15px] font-medium leading-[22px] text-foreground">
-              {env.tldr}
+              {/* RNK-f6 · tldr is plain text (not markdown-rendered), so strip
+                  stray internal [fN] finding refs here too. */}
+              {env.tldr.replace(/\s?\[f\d+\]/gi, "")}
             </p>
           </div>
         </div>
@@ -377,7 +379,7 @@ export function AnswerCard({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="text-xs rounded-full h-auto py-1.5 px-3"
+                className="text-xs rounded-full h-auto py-1.5 px-3 whitespace-normal break-words text-left max-w-full"
                 aria-label={`Try this follow-up: ${step}`}
                 onClick={() => onSuggestedQuestionClick(step)}
               >

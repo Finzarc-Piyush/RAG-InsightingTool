@@ -277,13 +277,10 @@ export function AnalyticalDashboardResponse({
         <AppliedFiltersChips filters={message.appliedFilters} />
       ) : null}
 
-      {/* 2. KPI magnitudes strip — renders nothing when empty */}
-      <MagnitudesRow items={message.magnitudes as MagnitudeItem[] | undefined} />
-
-      {/* 3. Charts / Pivot tabs — moved ABOVE the narrative so the user sees
-          visuals first. Per-chart key-insight callouts are suppressed when
-          the narrative is comprehensive (the body already references each
-          chart). */}
+      {/* 2. Charts / Pivot tabs — charts lead, then the magnitudes strip, then
+          the narrative (chart → magnitudes → rest). Per-chart key-insight
+          callouts are suppressed when the narrative is comprehensive (the body
+          already references each chart). */}
       {charts.length > 0 && (
         <Tabs defaultValue="charts">
           <TabsList className="mb-3">
@@ -338,6 +335,10 @@ export function AnalyticalDashboardResponse({
           )}
         </Tabs>
       )}
+
+      {/* 3. KPI magnitudes strip — renders nothing when empty. Sits between the
+          charts and the narrative per the chart → magnitudes → rest order. */}
+      <MagnitudesRow items={message.magnitudes as MagnitudeItem[] | undefined} />
 
       {/* 4. Narrative answer card — moved BELOW the charts so the visual
           summary leads and the prose reads as commentary on what was just
