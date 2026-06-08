@@ -158,7 +158,11 @@ export async function inferDatasetProfile(
       console.warn('⚠️ inferDatasetProfile: LLM parse failed:', result.error);
       return emptyDatasetProfile();
     }
-    return result.data;
+    // `datasetProfileSchema` now uses z.preprocess on `notes`/`currencyOverrides`
+    // (tolerant coercion), so its input type differs from its output type and
+    // completeJson<T>(ZodType<T>) surfaces the input-shaped T. The runtime value
+    // IS the validated output, so this cast is sound.
+    return result.data as DatasetProfile;
   };
 
   try {

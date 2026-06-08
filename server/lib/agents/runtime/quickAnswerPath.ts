@@ -294,8 +294,14 @@ export async function tryQuickAnswer(
   const toolCallId = `ql_tc_${randomUUID().slice(0, 8)}`;
   const toolCallStartedAt = Date.now();
   safeEmit("tool_call", {
+    // SSE tool_call schema requires `name` (sseEvents.ts) — emit it (mirrors the
+    // main agent loop's `safeEmit("tool_call", { id, name: step.tool, ... })`).
+    // Previously this sent `tool:` only, failing schema validation and rendering
+    // the workbench entry as "Tool: tool".
     id: toolCallId,
+    name: "execute_query_plan",
     tool: "execute_query_plan",
+    args_summary: JSON.stringify(normalizedPlan).slice(0, 300),
     args: { plan: normalizedPlan },
   });
 

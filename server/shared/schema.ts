@@ -869,21 +869,47 @@ export const datasetProfileSchema = z.object({
   measureColumns: z.array(z.string()).optional(),
   idColumns: z.array(z.string()).optional(),
   grainGuess: z.string().optional(),
-  notes: z.string().optional(),
+  // Tolerant of a common LLM shape drift (some deployments return `notes` as an
+  // array of caveats) — coerce array → joined string so the dataset-profile
+  // call doesn't waste a full retry round-trip on the upload critical path.
+  notes: z.preprocess(
+    (v) =>
+      Array.isArray(v)
+        ? v.filter((x) => typeof x === "string").join("; ")
+        : v,
+    z.string().optional(),
+  ),
   /** WF8: Disambiguate currency for columns whose symbol is ambiguous
    * (e.g. "$" → USD/CAD/AUD/SGD/HKD, "kr" → SEK/DKK/NOK, "¥" →
    * JPY/CNY). The LLM picks the ISO code from market values, brand
    * names, and dataset description. uploadQueue applies these
    * overrides to dataSummary.columns[i].currency.isoCode. Optional —
    * empty when no ambiguous symbols exist. */
+  // Tolerant of LLM shape drift: some deployments return `currencyOverrides` as
+  // a single object or a {columnName: isoCode} map instead of an array. Coerce
+  // to the array shape so we don't burn a retry round-trip; correct arrays pass
+  // through unchanged.
   currencyOverrides: z
-    .array(
-      z.object({
-        columnName: z.string(),
-        isoCode: z.string().min(3).max(3),
-      })
-    )
-    .optional(),
+    .preprocess((v) => {
+      if (v == null || Array.isArray(v)) return v;
+      if (typeof v === "object") {
+        const o = v as Record<string, unknown>;
+        if (typeof o.columnName === "string" && typeof o.isoCode === "string") {
+          return [o];
+        }
+        return Object.entries(o)
+          .filter(([, iso]) => typeof iso === "string")
+          .map(([columnName, isoCode]) => ({ columnName, isoCode }));
+      }
+      return v;
+    }, z
+      .array(
+        z.object({
+          columnName: z.string(),
+          isoCode: z.string().min(3).max(3),
+        })
+      )
+      .optional()),
 });
 
 export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
