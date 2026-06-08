@@ -77,7 +77,10 @@
   --input: 240 5% 84%;
   --ring: 221 83% 53%;
   /* WC1.4 · Chart palette (light mode)
-   * Qualitative (1–12): distinct hues, color-blind-friendly cycle.
+   * Qualitative (1–24): distinct hues, color-blind-friendly cycle.
+   *   1–12  = primary tier (assigned first; the original curated set).
+   *   13–24 = extension tier — fills hue gaps + adds tonal variation so
+   *           charts with up to 24 series stay fully distinguishable.
    * Sequential blue (seq-1..9): single hue, 9 lightness steps for heatmaps / choropleths.
    * Diverging red↔blue (div-1..11): neutral center, ±5 steps for variance / delta charts.
    */
@@ -93,6 +96,18 @@
   --chart-10: 290 50% 50%;
   --chart-11: 25 30% 45%;
   --chart-12: 0 0% 50%;
+  --chart-13: 243 60% 56%;  /* indigo */
+  --chart-14: 156 70% 34%;  /* emerald */
+  --chart-15: 350 78% 62%;  /* rose */
+  --chart-16: 42 95% 53%;   /* amber */
+  --chart-17: 190 82% 44%;  /* cyan */
+  --chart-18: 98 52% 42%;   /* lime */
+  --chart-19: 315 68% 56%;  /* fuchsia */
+  --chart-20: 212 35% 55%;  /* steel blue */
+  --chart-21: 16 72% 47%;   /* rust */
+  --chart-22: 262 58% 70%;  /* lavender */
+  --chart-23: 165 50% 56%;  /* jade */
+  --chart-24: 75 52% 45%;   /* chartreuse */
   --chart-seq-1: 217 50% 96%;
   --chart-seq-2: 217 60% 86%;
   --chart-seq-3: 217 70% 76%;
@@ -275,6 +290,18 @@
   --chart-10: 290 55% 65%;
   --chart-11: 25 35% 60%;
   --chart-12: 0 0% 70%;
+  --chart-13: 243 75% 70%;  /* indigo */
+  --chart-14: 156 58% 50%;  /* emerald */
+  --chart-15: 350 80% 70%;  /* rose */
+  --chart-16: 42 90% 60%;   /* amber */
+  --chart-17: 190 75% 56%;  /* cyan */
+  --chart-18: 98 50% 56%;   /* lime */
+  --chart-19: 315 70% 68%;  /* fuchsia */
+  --chart-20: 212 45% 65%;  /* steel blue */
+  --chart-21: 16 75% 60%;   /* rust */
+  --chart-22: 262 70% 78%;  /* lavender */
+  --chart-23: 165 52% 60%;  /* jade */
+  --chart-24: 75 55% 58%;   /* chartreuse */
   --chart-seq-1: 217 25% 18%;
   --chart-seq-2: 217 35% 28%;
   --chart-seq-3: 217 45% 38%;
@@ -628,6 +655,18 @@
     --chart-10: 300 80% 30%;
     --chart-11: 0 0% 20%;
     --chart-12: 0 0% 0%;
+    --chart-13: 243 90% 35%;
+    --chart-14: 156 90% 24%;
+    --chart-15: 345 85% 38%;
+    --chart-16: 42 100% 33%;
+    --chart-17: 190 100% 28%;
+    --chart-18: 98 80% 28%;
+    --chart-19: 315 85% 35%;
+    --chart-20: 212 70% 32%;
+    --chart-21: 16 90% 35%;
+    --chart-22: 262 75% 40%;
+    --chart-23: 165 85% 25%;
+    --chart-24: 75 75% 28%;
   }
   @media (prefers-reduced-motion: reduce) {
     .react-grid-item.react-draggable-dragging [data-dashboard-tile] {

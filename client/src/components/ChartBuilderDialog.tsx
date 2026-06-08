@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -206,9 +206,12 @@ export function ChartBuilderDialog({
     [selectedMark],
   );
 
-  // Build v2 spec client-side
+  // Build v2 spec client-side. v1-capable marks (bar/line/area/pie/scatter/
+  // heatmap) are NOT built as v2 — they go through the server v1 path so the
+  // spec added to chat renders reliably (v2 specs throw in the chat renderer).
   const v2Spec = useMemo(() => {
-    if (!selectedMark || !sampleRows?.length) return null;
+    if (!selectedMark || selectedMark in V1_MARKS || !sampleRows?.length)
+      return null;
     if (!fields) return null;
     if (fields.showX && !xCol) return null;
     if (fields.showY && !yCol) return null;
@@ -259,52 +262,108 @@ export function ChartBuilderDialog({
     }
   }, [selectedMark, sampleRows, fields, xCol, yCol, y2Col, colorCol, sizeCol, aggOp, title, numericColumns, dateColumns]);
 
-  // Fallback: v1 server-side preview for legacy types when no sampleRows
-  const isV1Fallback = selectedMark && selectedMark in V1_MARKS && !sampleRows?.length;
+  // v1-capable marks (bar/line/area/pie/scatter/heatmap) are previewed AND
+  // added via the server v1 chart-preview path. This guarantees the spec added
+  // to chat is a v1 ChartSpec (renders reliably) and that the preview matches
+  // what lands in chat (both aggregate the full dataset server-side).
+  const isV1CapableMark = !!selectedMark && selectedMark in V1_MARKS;
+
+  // Request a full-dataset v1 ChartSpec from the server for the selected mark.
+  const requestV1Spec = useCallback(async (): Promise<ChartSpec | null> => {
+    if (!sessionId || !xCol || !yCol || !selectedMark) return null;
+    const v1Type = V1_MARKS[selectedMark];
+    if (!v1Type) return null;
+    const body: Record<string, unknown> = {
+      title: title.trim() || 'Chart',
+      type: v1Type,
+      x: xCol,
+      y: yCol,
+      aggregate: v1Type === 'scatter' ? 'none' : aggOp,
+    };
+    if (v1Type === 'heatmap') {
+      if (colorCol) body.z = colorCol;
+    } else if (
+      (v1Type === 'bar' || v1Type === 'line' || v1Type === 'area') &&
+      colorCol
+    ) {
+      // For these marks the color well is the optional series breakdown.
+      body.seriesColumn = colorCol;
+      if (v1Type === 'bar') body.barLayout = 'grouped';
+    }
+    const res = await api.post<{ chart: ChartSpec }>(
+      `/api/sessions/${sessionId}/chart-preview`,
+      { chart: body },
+    );
+    return res.chart;
+  }, [sessionId, selectedMark, xCol, yCol, colorCol, title, aggOp]);
 
   const runV1Preview = useCallback(async () => {
-    if (!sessionId || !xCol || !yCol || !selectedMark) return;
-    const v1Type = V1_MARKS[selectedMark];
-    if (!v1Type) return;
     setV1Loading(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = {
-        title: title.trim() || 'Chart',
-        type: v1Type,
-        x: xCol,
-        y: yCol,
-        aggregate: v1Type === 'scatter' ? 'none' : aggOp,
-      };
-      if (v1Type === 'heatmap' && colorCol) {
-        body.z = colorCol;
-      }
-      const res = await api.post<{ chart: ChartSpec }>(
-        `/api/sessions/${sessionId}/chart-preview`,
-        { chart: body },
-      );
-      setV1Preview(res.chart);
+      const chart = await requestV1Spec();
+      setV1Preview(chart);
+      if (!chart) setError('Preview failed');
     } catch (e: unknown) {
       setV1Preview(null);
       setError(e instanceof Error ? e.message : 'Preview failed');
     } finally {
       setV1Loading(false);
     }
-  }, [sessionId, selectedMark, xCol, yCol, colorCol, title, aggOp]);
+  }, [requestV1Spec]);
 
-  const handleAddToChat = useCallback(() => {
-    if (v2Spec) {
-      onChartAdded(v2Spec);
-    } else if (v1Preview) {
-      onChartAdded(v1Preview);
-    }
-    handleOpenChange(false);
-  }, [v2Spec, v1Preview, onChartAdded, handleOpenChange]);
+  // Auto-refresh the v1 preview (debounced) as the user changes fields, so
+  // basic charts show a live preview without a manual click.
+  useEffect(() => {
+    if (!isV1CapableMark) return;
+    if (!sessionId || !xCol || !yCol) return;
+    const t = setTimeout(() => {
+      void runV1Preview();
+    }, 350);
+    return () => clearTimeout(t);
+  }, [isV1CapableMark, sessionId, xCol, yCol, colorCol, aggOp, runV1Preview]);
 
-  const canAdd = !!(v2Spec || v1Preview);
   const hasRequiredFields = fields
     ? (!fields.showX || !!xCol) && (!fields.showY || !!yCol)
     : false;
+
+  const handleAddToChat = useCallback(async () => {
+    // v1-capable marks add a v1 ChartSpec (renders reliably in chat). Only
+    // genuinely v2-only marks add a v2 spec.
+    if (isV1CapableMark) {
+      setV1Loading(true);
+      setError(null);
+      try {
+        const chart = v1Preview ?? (await requestV1Spec());
+        if (chart) {
+          onChartAdded(chart);
+          handleOpenChange(false);
+        } else {
+          setError('Could not build a chart from the selected columns.');
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Add to chat failed');
+      } finally {
+        setV1Loading(false);
+      }
+      return;
+    }
+    if (v2Spec) {
+      onChartAdded(v2Spec);
+      handleOpenChange(false);
+    }
+  }, [
+    isV1CapableMark,
+    v1Preview,
+    requestV1Spec,
+    v2Spec,
+    onChartAdded,
+    handleOpenChange,
+  ]);
+
+  const canAdd = isV1CapableMark
+    ? hasRequiredFields && !!sessionId
+    : !!v2Spec;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -518,7 +577,7 @@ export function ChartBuilderDialog({
             )}
 
             <div className="flex flex-wrap gap-2">
-              {isV1Fallback && (
+              {isV1CapableMark && (
                 <Button
                   type="button"
                   variant="secondary"
@@ -528,7 +587,7 @@ export function ChartBuilderDialog({
                   {v1Loading ? (
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
                   ) : null}
-                  Update preview
+                  Refresh preview
                 </Button>
               )}
               <Button
@@ -578,8 +637,8 @@ export function ChartBuilderDialog({
               {!v1Loading && !v2Spec && !v1Preview && (
                 <p className="text-sm text-muted-foreground text-center py-16">
                   {hasRequiredFields
-                    ? isV1Fallback
-                      ? 'Click "Update preview" to see your chart.'
+                    ? isV1CapableMark
+                      ? 'Building preview…'
                       : 'Preview will appear once data is available.'
                     : 'Select columns above to see a live preview.'}
                 </p>

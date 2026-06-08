@@ -7,23 +7,24 @@
  * pass these strings directly to `fill` / `stroke` props.
  *
  * Three palettes:
- *   - qualitative (1..12) — categorical series.
+ *   - qualitative (1..24) — categorical series (1–12 primary, 13–24 extension).
  *   - sequential (1..9)   — single-hue gradient (heatmaps, choropleths).
  *   - diverging  (1..11)  — neutral center, ±5 steps (variance, delta).
  *
  * Each palette is defined in client/src/index.css under `:root` and
- * `.dark` selectors. Adding/removing colors there is a CSS-only change.
+ * `.dark` selectors. Adding/removing colors there is a CSS-only change —
+ * keep QUALITATIVE_PALETTE_SIZE in sync with the number of `--chart-N` vars.
  */
 
-export const QUALITATIVE_PALETTE_SIZE = 12;
+export const QUALITATIVE_PALETTE_SIZE = 24;
 export const SEQUENTIAL_PALETTE_SIZE = 9;
 export const DIVERGING_PALETTE_SIZE = 11;
 
 /**
- * Pick the Nth qualitative series color, wrapping at 12.
+ * Pick the Nth qualitative series color, wrapping at the palette size (24).
  *   qualitativeColor(0)  → 'hsl(var(--chart-1))'
- *   qualitativeColor(11) → 'hsl(var(--chart-12))'
- *   qualitativeColor(12) → 'hsl(var(--chart-1))' (wrap)
+ *   qualitativeColor(23) → 'hsl(var(--chart-24))'
+ *   qualitativeColor(24) → 'hsl(var(--chart-1))' (wrap)
  */
 export function qualitativeColor(index: number): string {
   const i = ((index % QUALITATIVE_PALETTE_SIZE) + QUALITATIVE_PALETTE_SIZE) %

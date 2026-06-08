@@ -208,6 +208,26 @@ interface DataPreviewTableProps {
   feedbackReadOnly?: boolean;
   pivotViewRequest?: number;
   isLatestAnalysis?: boolean;
+  /**
+   * Wave PB · standalone Pivot Builder mode. When true the component is mounted
+   * with no message context and starts BLANK, in the expanded pivot portal (the
+   * same full-screen box used to expand a chat pivot), so the user can drag
+   * fields into Rows/Columns/Values/Filters and build a pivot over the dataset,
+   * then add it to chat. The launcher mounts this instance hidden, so only the
+   * portal (rendered to document.body) is visible.
+   */
+  pivotBuilderMode?: boolean;
+  /** Pivot Builder · "Add to chat" — emits the built pivot for appending as a chat message. */
+  onPivotAdded?: (payload: PivotBuilderAddPayload) => void;
+  /** Pivot Builder · close the whole builder (unmount); used by the portal's close affordances. */
+  onCloseBuilder?: () => void;
+}
+
+/** Payload emitted by the Pivot Builder's "Add to chat" action. */
+export interface PivotBuilderAddPayload {
+  config: PivotUiConfig;
+  filterSelections: Record<string, string[]>;
+  previewRows: Record<string, unknown>[];
 }
 
 function inferNumericColumns(
@@ -300,6 +320,9 @@ export function DataPreviewTable({
   feedbackReadOnly = false,
   pivotViewRequest = 0,
   isLatestAnalysis = false,
+  pivotBuilderMode = false,
+  onPivotAdded,
+  onCloseBuilder,
 }: DataPreviewTableProps) {
   const pivotViewContainerRef = useRef<HTMLDivElement>(null);
   const [downloadingFormat, setDownloadingFormat] = useState<'xlsx' | null>(null);
@@ -338,12 +361,16 @@ export function DataPreviewTable({
     () => new Set()
   );
   const [pivotPanelOpen, setPivotPanelOpen] = useState(true);
-  const [pivotExpanded, setPivotExpanded] = useState(false);
+  const [pivotExpanded, setPivotExpanded] = useState(pivotBuilderMode);
   /** Chart subview inside expanded pivot (keeps `analysisView === 'pivot'` for server pivot queries). */
-  const [expandedWorkspaceTab, setExpandedWorkspaceTab] = useState<'pivot' | 'chart'>('chart');
+  const [expandedWorkspaceTab, setExpandedWorkspaceTab] = useState<'pivot' | 'chart'>(
+    pivotBuilderMode ? 'pivot' : 'chart'
+  );
   const pivotExpandButtonRef = useRef<HTMLButtonElement>(null);
   const pivotWasExpandedRef = useRef(false);
-  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>('chart');
+  const [analysisView, setAnalysisView] = useState<'pivot' | 'flat' | 'chart'>(
+    pivotBuilderMode ? 'pivot' : 'chart'
+  );
   const pivotViewRequestHandledRef = useRef(0);
   useEffect(() => {
     if (pivotViewRequest > 0 && isLatestAnalysis && pivotViewRequest !== pivotViewRequestHandledRef.current) {
@@ -725,6 +752,22 @@ export function DataPreviewTable({
     );
   }, [variant, normalizedPivotConfig]);
 
+  // Pivot Builder · emit the freshly-built pivot so the caller can append it as
+  // a chat message (mirrors the chart "Add to chat" flow).
+  const handleAddPivotToChat = useCallback(() => {
+    if (!onPivotAdded || !canPivot) return;
+    const filterSelectionsOut: Record<string, string[]> = {};
+    for (const [k, set] of Object.entries(filterSelections)) {
+      if (set && set.size > 0) filterSelectionsOut[k] = Array.from(set);
+    }
+    const previewRows = ((pivotRows ?? []) as Record<string, unknown>[]).slice(0, 50);
+    onPivotAdded({
+      config: normalizedPivotConfig,
+      filterSelections: filterSelectionsOut,
+      previewRows,
+    });
+  }, [onPivotAdded, canPivot, filterSelections, pivotRows, normalizedPivotConfig]);
+
   const chartMeasureOptions = useMemo(() => {
     return numericColumns.filter((c) => schemaColumnKeys.includes(c));
   }, [numericColumns, schemaColumnKeys]);
@@ -952,7 +995,7 @@ export function DataPreviewTable({
       filterDistinctSnapshotRef.current = {};
       filterDistinctProvenanceRef.current = {};
       setCollapsedPivotGroups(new Set());
-      setAnalysisView('chart');
+      setAnalysisView(pivotBuilderMode ? 'pivot' : 'chart');
       setChartType('bar');
       // PV6 · No persisted state → auto-track effect should drive chartType
       // from the recommendation as soon as pivot data materializes.
@@ -965,7 +1008,7 @@ export function DataPreviewTable({
       setChartBarLayout('stacked');
       setChartRecommendationReason(null);
       setChartPreview(null);
-      setExpandedWorkspaceTab('chart');
+      setExpandedWorkspaceTab(pivotBuilderMode ? 'pivot' : 'chart');
       lastChartConfigRef.current = '';
     }
     setServerPivotModel(null);
@@ -1487,14 +1530,25 @@ export function DataPreviewTable({
     };
   }, [pivotExpanded]);
 
+  // Closing the expanded portal: in builder mode there is no inline view to
+  // return to, so we unmount the whole builder via onCloseBuilder; otherwise
+  // we just collapse back to the inline pivot card.
+  const handleClosePortal = useCallback(() => {
+    if (pivotBuilderMode) {
+      onCloseBuilder?.();
+    } else {
+      setPivotExpanded(false);
+    }
+  }, [pivotBuilderMode, onCloseBuilder]);
+
   useEffect(() => {
     if (!pivotExpanded) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPivotExpanded(false);
+      if (e.key === 'Escape') handleClosePortal();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pivotExpanded]);
+  }, [pivotExpanded, handleClosePortal]);
 
   useEffect(() => {
     if (pivotWasExpandedRef.current && !pivotExpanded) {
@@ -2333,8 +2387,9 @@ export function DataPreviewTable({
     pivotExpanded &&
     variant === 'analysis' &&
     Boolean(sessionId) &&
-    canPivot &&
-    normalizedPivotConfig.values.length > 0;
+    // Builder mode opens the box even while blank so the field panel is
+    // reachable; otherwise we require a non-empty pivot (rows + values).
+    (pivotBuilderMode || (canPivot && normalizedPivotConfig.values.length > 0));
 
   // Live pivot-derived insight (Bug 1) wins over the message-frozen `pivotInsight`
   // so the Key Insight card matches the current pivot shape after the user has
@@ -2380,6 +2435,20 @@ export function DataPreviewTable({
               The chart and answer above are correct — we just couldn&apos;t auto-generate
               a useful pivot configuration here. You can still build your own
               by dragging fields into the panel.
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (pivotBuilderMode && !canPivot) {
+      return (
+        <div className="flex flex-1 min-h-[12rem] items-center justify-center px-6 py-8">
+          <div className="max-w-md text-center space-y-2">
+            <p className="text-sm font-medium text-foreground">Build your pivot</p>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Drag fields from the <strong>Fields</strong> panel into{' '}
+              <strong>Rows</strong> and <strong>Values</strong> (and optionally
+              Columns or Filters) to start. Results compute over your full dataset.
             </p>
           </div>
         </div>
@@ -2451,7 +2520,7 @@ export function DataPreviewTable({
             aria-label="Exit expanded view"
             onClick={(e) => {
               e.stopPropagation();
-              setPivotExpanded(false);
+              handleClosePortal();
             }}
           >
             <Minimize2 className="h-4 w-4" />
@@ -3134,7 +3203,7 @@ export function DataPreviewTable({
             <div
               className="fixed inset-0 z-40 bg-[hsl(240_6%_10%/0.35)] backdrop-blur-sm"
               aria-hidden
-              onClick={() => setPivotExpanded(false)}
+              onClick={handleClosePortal}
             />
             <div
               role="dialog"
@@ -3171,6 +3240,22 @@ export function DataPreviewTable({
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {pivotBuilderMode ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="text-xs h-8"
+                      onClick={handleAddPivotToChat}
+                      disabled={!canPivot}
+                      title={
+                        canPivot
+                          ? 'Add this pivot to the chat'
+                          : 'Add fields to Rows and Values first'
+                      }
+                    >
+                      Add to chat
+                    </Button>
+                  ) : null}
                   {sessionId ? (
                     <Button
                       type="button"
@@ -3198,7 +3283,7 @@ export function DataPreviewTable({
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0"
-                    onClick={() => setPivotExpanded(false)}
+                    onClick={handleClosePortal}
                     aria-label="Close expanded pivot"
                   >
                     <X className="h-4 w-4" />

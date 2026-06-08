@@ -237,37 +237,38 @@ function CategoricalPicker({
       ) : visible.length === 0 ? (
         <p className="py-2 text-center text-xs text-muted-foreground">No values</p>
       ) : (
-        <ScrollArea className="max-h-56 pr-2">
-          <div className="space-y-1.5">
-            {visible.map((opt) => {
-              // Default state when the user hasn't touched the column: "all
-              // selected" so unchecking one value behaves like Excel. We only
-              // emit a concrete `selected` array on first interaction.
-              const checked =
-                selected === null ? true : selectedSet.has(opt);
-              return (
-                <label
-                  key={opt}
-                  className="flex cursor-pointer items-center gap-2 text-xs"
-                >
-                  <Checkbox
-                    checked={checked}
-                    onCheckedChange={(c) => {
-                      // First interaction: materialize the full list, then toggle.
-                      if (selected === null) {
-                        const next = c ? [...options] : options.filter((v) => v !== opt);
-                        onChange(next);
-                      } else {
-                        toggle(opt, c === true);
-                      }
-                    }}
-                  />
-                  <span className="truncate">{labelFor(opt) || "(blank)"}</span>
-                </label>
-              );
-            })}
-          </div>
-        </ScrollArea>
+        // Native max-height + overflow scroller. A Radix `ScrollArea` does not
+        // scroll here: its viewport is `h-full`, which can't resolve against a
+        // `max-height`-only, non-flex parent, so it grows to full content height
+        // and the thumb stays full-stretch while the overflow is merely clipped.
+        <div className="max-h-56 space-y-1.5 overflow-y-auto pr-2">
+          {visible.map((opt) => {
+            // Default state when the user hasn't touched the column: "all
+            // selected" so unchecking one value behaves like Excel. We only
+            // emit a concrete `selected` array on first interaction.
+            const checked = selected === null ? true : selectedSet.has(opt);
+            return (
+              <label
+                key={opt}
+                className="flex cursor-pointer items-center gap-2 text-xs"
+              >
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(c) => {
+                    // First interaction: materialize the full list, then toggle.
+                    if (selected === null) {
+                      const next = c ? [...options] : options.filter((v) => v !== opt);
+                      onChange(next);
+                    } else {
+                      toggle(opt, c === true);
+                    }
+                  }}
+                />
+                <span className="truncate">{labelFor(opt) || "(blank)"}</span>
+              </label>
+            );
+          })}
+        </div>
       )}
     </div>
   );

@@ -7,13 +7,15 @@ import {
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
 import { MessageBubble } from '@/pages/Home/Components/MessageBubble';
+import { PivotBuilderLauncher } from '@/pages/Home/Components/PivotBuilderLauncher';
+import type { PivotBuilderAddPayload } from '@/pages/Home/Components/DataPreviewTable';
 import { ThinkingPanel } from '@/pages/Home/Components/ThinkingPanel';
 import { PercolatingIndicator } from '@/pages/Home/Components/PercolatingIndicator';
 import { StreamingPreviewCard } from '@/pages/Home/Components/StreamingPreviewCard';
 import { ColumnSidebar } from '@/pages/Home/Components/ColumnSidebar';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download, Save, Table2 } from 'lucide-react';
+import { Send, Upload as UploadIcon, Square, Filter, Loader2, ChevronUp, ChevronDown, FileText, MessageSquarePlus, Download, Save } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Select,
@@ -128,6 +130,8 @@ interface ChatInterfaceProps {
   onRequestPivotView?: () => void;
   /** Counter incremented each time the user requests pivot view; threaded to DataPreviewTable. */
   pivotViewRequest?: number;
+  /** Wave PB · append an assistant message carrying a user-built pivot (Pivot Builder). */
+  onAppendAssistantPivot?: (payload: PivotBuilderAddPayload) => void;
   /**
    * W42 · live "Drafting answer…" preview text accumulated from
    * `answer_chunk` SSE events while the agent loop is still running.
@@ -211,7 +215,7 @@ export function ChatInterface({
   localPreviewParseStatus = 'full',
   uploadStartError = null,
   onAppendAssistantChart,
-  onRequestPivotView,
+  onAppendAssistantPivot,
   pivotViewRequest = 0,
   streamingNarratorPreview = "",
   fileNameForAutomation,
@@ -1323,17 +1327,16 @@ export function ChatInterface({
                   onChartAdded={onAppendAssistantChart}
                 />
               ) : null}
-              {columns && columns.length > 0 && onRequestPivotView ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-11 px-4 text-sm font-medium border-2 border-border bg-card hover:bg-muted/40 focus:ring-2 focus:ring-primary/40 focus:border-primary shadow-sm rounded-xl gap-2"
-                  onClick={onRequestPivotView}
-                  title="Build a pivot table"
-                >
-                  <Table2 className="w-4 h-4 text-muted-foreground" />
-                  <span>Build pivot</span>
-                </Button>
+              {columns && columns.length > 0 && onAppendAssistantPivot ? (
+                <PivotBuilderLauncher
+                  sessionId={sessionId}
+                  columns={columns}
+                  numericColumns={numericColumns}
+                  dateColumns={dateColumns}
+                  temporalFacetColumns={temporalFacetColumns}
+                  sampleRows={sampleRows}
+                  onPivotAdded={onAppendAssistantPivot}
+                />
               ) : null}
             </div>
             <div className="relative flex-1">

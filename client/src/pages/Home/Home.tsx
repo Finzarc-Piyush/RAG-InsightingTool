@@ -26,6 +26,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
 import { buildChatPivotNavEntries } from '@/pages/Home/lib/chatPivotNav';
+import { buildPivotMessage } from '@/pages/Home/lib/buildPivotMessage';
+import type { PivotBuilderAddPayload } from '@/pages/Home/Components/DataPreviewTable';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -221,6 +223,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
           timestamp: Date.now(),
         },
       ]);
+    },
+    [setMessages]
+  );
+
+  // Wave PB · append a user-built pivot (from the Pivot Builder) as an editable
+  // chat message — mirrors handleAppendAssistantChart.
+  const handleAppendAssistantPivot = useCallback(
+    (payload: PivotBuilderAddPayload) => {
+      setMessages((prev) => [...prev, buildPivotMessage(payload, Date.now())]);
     },
     [setMessages]
   );
@@ -1036,6 +1047,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         localPreviewParseStatus={localPreview?.parseStatus}
         uploadStartError={uploadStartError}
         onAppendAssistantChart={handleAppendAssistantChart}
+        onAppendAssistantPivot={handleAppendAssistantPivot}
         onRequestPivotView={handleRequestPivotView}
         pivotViewRequest={pivotViewRequest}
         fileNameForAutomation={fileName ?? undefined}

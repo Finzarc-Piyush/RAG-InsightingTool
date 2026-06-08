@@ -1,15 +1,15 @@
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 import { MAX_X_AXIS_LABELS } from '@/lib/charts/xAxisLabelCap';
+import { qualitativePalette } from '@/lib/charts/palette';
 
-/** Theme-aware series colors (see index.css --chart-1 … --chart-5) */
-export const CHART_SERIES_COLORS = [
-  'hsl(var(--chart-1))',
-  'hsl(var(--chart-2))',
-  'hsl(var(--chart-3))',
-  'hsl(var(--chart-4))',
-  'hsl(var(--chart-5))',
-  'hsl(var(--chart-1) / 0.85)',
-] as const;
+/**
+ * Theme-aware series colors for the Recharts charts (chat + dashboard modals).
+ * Single source of truth: the full qualitative palette (index.css --chart-1 …
+ * --chart-24), shared with the visx renderers via `qualitativePalette()`.
+ * Consumers index with `[i % CHART_SERIES_COLORS.length]`, so widening the
+ * palette automatically gives more series distinct colors before wrap-around.
+ */
+export const CHART_SERIES_COLORS: readonly string[] = qualitativePalette();
 
 /** Primary / secondary Y axis for dual-axis line charts */
 export const CHART_DUAL_AXIS_STROKES: readonly string[] = [

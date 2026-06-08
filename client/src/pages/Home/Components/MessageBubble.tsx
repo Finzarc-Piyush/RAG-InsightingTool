@@ -740,7 +740,14 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               }
               userQuestion={precedingUserQuestion}
               initialPivotState={message.pivotState}
-              messageTimestamp={message.timestamp}
+              messageTimestamp={
+                // Wave PB · locally-built pivots aren't persisted server-side,
+                // so withhold the timestamp to skip the pivot-state PATCH
+                // (which would 404). They still render + edit in-session.
+                (message as Message & { localPivot?: boolean }).localPivot
+                  ? undefined
+                  : message.timestamp
+              }
               streamingActive={message.isIntermediate}
               onSuggestedQuestionClick={onSuggestedQuestionClick}
               feedbackTurnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}

@@ -126,3 +126,63 @@ describe("chart → pivot integration (read-only view)", () => {
     expect(model.colKeys).not.toContain("Purite");
   });
 });
+
+/**
+ * Regression: real multi-series charts reach the client in WIDE format —
+ * `processChartData`/`pivotLongToWideBar` pivots long→wide so `chart.y`
+ * ("Sales") and `chart.seriesColumn` ("Brand") are NOT keys on the rows;
+ * the measure lives under each sanitized `seriesKeys` entry. The old config
+ * read `chart.y` and produced 0 for every cell (the reported bug). These
+ * tests use the wide shape the server actually emits.
+ */
+const wideChart: ChartSpec = {
+  type: "bar",
+  title: "Sales by quarter, by brand (wide)",
+  x: "Quarter",
+  y: "Sales", // measure name — absent from the wide rows
+  seriesColumn: "Brand", // original series column — absent from the wide rows
+  seriesKeys: ["Marico", "Purite"],
+  data: [
+    { Quarter: "Q1", Marico: 100, Purite: 60 },
+    { Quarter: "Q2", Marico: 110, Purite: 70 },
+    { Quarter: "Q3", Marico: 130, Purite: 80 },
+  ],
+};
+
+describe("chart → pivot integration (wide multi-series)", () => {
+  it("maps each series key to its own value spec (not chart.y)", () => {
+    const derived = chartSpecToPivotConfig(wideChart)!;
+    expect(derived.config.rows).toEqual(["Quarter"]);
+    expect(derived.config.columns).toEqual([]);
+    expect(derived.valueSpecs.map((v) => v.field)).toEqual([
+      "Marico",
+      "Purite",
+    ]);
+  });
+
+  it("produces real (non-zero) values from the wide columns", () => {
+    const derived = chartSpecToPivotConfig(wideChart)!;
+    const model = buildPivotModel(
+      wideChart.data as Record<string, unknown>[],
+      derived.config,
+      derived.valueSpecs,
+      {},
+    );
+    const flat = flattenPivotTree(model.tree, new Set());
+    const q1 = flat.find((r) => r.label === "Q1" && r.kind === "data");
+    expect(q1?.values?.flatValues?.["Marico"]).toBe(100);
+    expect(q1?.values?.flatValues?.["Purite"]).toBe(60);
+    // Grand totals confirm the all-zeros regression is gone.
+    expect(model.tree.grandTotal.flatValues?.["Marico"]).toBe(340);
+    expect(model.tree.grandTotal.flatValues?.["Purite"]).toBe(210);
+  });
+
+  it("falls back to numeric non-x keys when seriesKeys is absent", () => {
+    const noKeys: ChartSpec = { ...wideChart, seriesKeys: undefined };
+    const derived = chartSpecToPivotConfig(noKeys)!;
+    expect(derived.valueSpecs.map((v) => v.field).sort()).toEqual([
+      "Marico",
+      "Purite",
+    ]);
+  });
+});

@@ -16,24 +16,27 @@ describe("palette · qualitative", () => {
     expect(qualitativeColor(0)).toBe("hsl(var(--chart-1))");
     expect(qualitativeColor(1)).toBe("hsl(var(--chart-2))");
     expect(qualitativeColor(11)).toBe("hsl(var(--chart-12))");
+    expect(qualitativeColor(23)).toBe("hsl(var(--chart-24))");
   });
 
-  it("wraps at 12 (cycles)", () => {
-    expect(qualitativeColor(12)).toBe("hsl(var(--chart-1))");
-    expect(qualitativeColor(13)).toBe("hsl(var(--chart-2))");
-    expect(qualitativeColor(24)).toBe("hsl(var(--chart-1))");
+  it("wraps at the palette size (cycles)", () => {
+    expect(qualitativeColor(QUALITATIVE_PALETTE_SIZE)).toBe("hsl(var(--chart-1))");
+    expect(qualitativeColor(QUALITATIVE_PALETTE_SIZE + 1)).toBe("hsl(var(--chart-2))");
+    expect(qualitativeColor(2 * QUALITATIVE_PALETTE_SIZE)).toBe("hsl(var(--chart-1))");
   });
 
   it("handles negative indices via modulo", () => {
-    expect(qualitativeColor(-1)).toBe("hsl(var(--chart-12))");
-    expect(qualitativeColor(-12)).toBe("hsl(var(--chart-1))");
+    expect(qualitativeColor(-1)).toBe(`hsl(var(--chart-${QUALITATIVE_PALETTE_SIZE}))`);
+    expect(qualitativeColor(-QUALITATIVE_PALETTE_SIZE)).toBe("hsl(var(--chart-1))");
   });
 
-  it("qualitativePalette() returns 12 strings by default", () => {
+  it("qualitativePalette() returns one string per palette color by default", () => {
     const p = qualitativePalette();
     expect(p.length).toBe(QUALITATIVE_PALETTE_SIZE);
     expect(p[0]).toBe("hsl(var(--chart-1))");
-    expect(p[11]).toBe("hsl(var(--chart-12))");
+    expect(p[QUALITATIVE_PALETTE_SIZE - 1]).toBe(
+      `hsl(var(--chart-${QUALITATIVE_PALETTE_SIZE}))`
+    );
   });
 });
 

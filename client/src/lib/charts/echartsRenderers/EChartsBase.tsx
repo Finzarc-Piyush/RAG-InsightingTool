@@ -12,6 +12,11 @@
  */
 
 import { useEffect, useRef } from "react";
+import {
+  QUALITATIVE_PALETTE_SIZE,
+  SEQUENTIAL_PALETTE_SIZE,
+  DIVERGING_PALETTE_SIZE,
+} from "@/lib/charts/palette";
 
 export type EChartsType = typeof import("echarts");
 
@@ -40,7 +45,7 @@ export interface ChartTheme {
   foreground: string;
   mutedForeground: string;
   border: string;
-  /** chart-1..12 resolved CSS values. */
+  /** chart-1..N (qualitative palette) resolved CSS values. */
   qualitative: string[];
   /** chart-seq-1..9 resolved CSS values. */
   sequential: string[];
@@ -64,13 +69,13 @@ function readChartTheme(): ChartTheme {
     foreground: resolveCssVar("--foreground"),
     mutedForeground: resolveCssVar("--muted-foreground"),
     border: resolveCssVar("--border"),
-    qualitative: Array.from({ length: 12 }, (_, i) =>
+    qualitative: Array.from({ length: QUALITATIVE_PALETTE_SIZE }, (_, i) =>
       resolveCssVar(`--chart-${i + 1}`),
     ),
-    sequential: Array.from({ length: 9 }, (_, i) =>
+    sequential: Array.from({ length: SEQUENTIAL_PALETTE_SIZE }, (_, i) =>
       resolveCssVar(`--chart-seq-${i + 1}`),
     ),
-    diverging: Array.from({ length: 11 }, (_, i) =>
+    diverging: Array.from({ length: DIVERGING_PALETTE_SIZE }, (_, i) =>
       resolveCssVar(`--chart-div-${i + 1}`),
     ),
   };

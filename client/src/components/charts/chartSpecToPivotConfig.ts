@@ -6,10 +6,20 @@ import type { PivotUiConfig, PivotValueSpec } from "@/lib/pivot/types";
  * underlying `chart.data` rows can be rendered as either a chart
  * (existing) or a pivot table (new toggle).
  *
- * Mapping:
- *   - chart.x          → rows[0]    (the categorical axis)
- *   - chart.seriesColumn (if any) → columns[0]  (the series breakdown)
- *   - chart.y          → values[0] with sum aggregation
+ * Two row shapes exist (see `processChartData` / `pivotLongToWideBar`):
+ *
+ *   - Long / aggregated rows ({ [x]: …, [y]: number }):
+ *       chart.x          → rows[0]    (the categorical axis)
+ *       chart.seriesColumn (if any) → columns[0]  (series breakdown)
+ *       chart.y          → values[0] with sum aggregation
+ *
+ *   - WIDE multi-series rows ({ [x]: …, <sanitizedSeriesKey>: number, … }):
+ *       the server has already pivoted long→wide, so `chart.y` and
+ *       `chart.seriesColumn` are NOT keys on the rows — the measure lives
+ *       under each `chart.seriesKeys` entry. Reading `chart.y` here would
+ *       yield `undefined` → 0 for every cell (the all-zeros bug). Instead
+ *       we emit one value spec per series key, read directly from the wide
+ *       columns, so the pivot shows real numbers.
  *
  * Returns `null` when the chart can't sensibly become a pivot — no x,
  * no y, or no data array. The caller hides the toggle button in that
@@ -28,14 +38,51 @@ export function chartSpecToPivotConfig(
   if (typeof chart.y !== "string" || chart.y.trim().length === 0) return null;
   if (!Array.isArray(chart.data)) return null;
 
+  const firstRow = (chart.data[0] ?? {}) as Record<string, unknown>;
+  const yInRow = chart.y in firstRow;
+  const hasSeriesColumn =
+    typeof chart.seriesColumn === "string" &&
+    chart.seriesColumn.trim().length > 0;
+
+  // Wide multi-series detection: `chart.y` is absent from the rows and the
+  // sanitized series keys are present instead. Prefer the explicit
+  // `seriesKeys` the server sets; fall back to "every numeric non-x key" for
+  // older specs that lack it.
+  let seriesKeys: string[] = Array.isArray(chart.seriesKeys)
+    ? chart.seriesKeys.filter((k) => typeof k === "string" && k in firstRow)
+    : [];
+  if (hasSeriesColumn && !yInRow && seriesKeys.length === 0) {
+    seriesKeys = Object.keys(firstRow).filter(
+      (k) =>
+        k !== chart.x &&
+        k !== chart.seriesColumn &&
+        typeof firstRow[k] === "number",
+    );
+  }
+
+  if (hasSeriesColumn && !yInRow && seriesKeys.length > 0) {
+    const valueSpecs: PivotValueSpec[] = seriesKeys.map((k) => ({
+      id: k,
+      field: k,
+      agg: "sum" as const,
+    }));
+    const config: PivotUiConfig = {
+      filters: [],
+      rows: [chart.x],
+      columns: [],
+      values: valueSpecs,
+      unused: [],
+    };
+    return { config, valueSpecs };
+  }
+
   const valueSpecs: PivotValueSpec[] = [
     { id: "value", field: chart.y, agg: "sum" },
   ];
 
-  const columns: string[] =
-    typeof chart.seriesColumn === "string" && chart.seriesColumn.trim().length > 0
-      ? [chart.seriesColumn]
-      : [];
+  const columns: string[] = hasSeriesColumn
+    ? [chart.seriesColumn as string]
+    : [];
 
   const config: PivotUiConfig = {
     filters: [],
