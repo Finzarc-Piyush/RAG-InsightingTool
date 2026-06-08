@@ -1188,6 +1188,13 @@ export const useHomeMutations = ({
                       timestamp: ts,
                       agentTrace: (response as { agentTrace?: Message['agentTrace'] }).agentTrace,
                       preview: (response as Message & { preview?: Message['preview'] }).preview,
+                      // Honor the server's explicit pivot auto-show hint. Without
+                      // this the field was dropped, so computeAllowPivotAutoShow
+                      // fell back to row-presence heuristics and the server's
+                      // scalar-suppression / explicit-show signal was ignored.
+                      ...((response as { pivotAutoShow?: boolean }).pivotAutoShow !== undefined
+                        ? { pivotAutoShow: (response as { pivotAutoShow?: boolean }).pivotAutoShow }
+                        : {}),
                       summary: (response as Message & { summary?: Message['summary'] }).summary,
                       pivotDefaults:
                         (response as Message & { pivotDefaults?: Message['pivotDefaults'] })

@@ -35,7 +35,7 @@ const tableRows = Array.from({ length: 10 }, (_, i) => ({
 }));
 
 describe("validateAndEnrichResponse · quick-lookup table-only result", () => {
-  it("does NOT throw and synthesizes the plan rationale as the answer", () => {
+  it("does NOT throw, leads with the plan rationale, and lists the rows inline", () => {
     const result = {
       answer: "",
       table: tableRows,
@@ -44,17 +44,24 @@ describe("validateAndEnrichResponse · quick-lookup table-only result", () => {
       agentTrace: { planRationale: "Top 10 TSOE names by Compliance Visit" },
     };
     const validated = validateAndEnrichResponse(result, chatDoc);
-    assert.equal(
-      (validated as { answer?: string }).answer,
-      "Top 10 TSOE names by Compliance Visit",
-      "empty answer + table must be backfilled from the plan rationale, not rejected",
+    const answer = (validated as { answer?: string }).answer ?? "";
+    assert.ok(
+      answer.startsWith("Top 10 TSOE names by Compliance Visit"),
+      "answer must lead with the plan rationale, not be rejected as empty",
     );
+    // The actual rows must be surfaced inline as a readable list (the data the
+    // user asked for), not just a bare title.
+    assert.match(answer, /1\.\s+\*\*Rep 1\*\*/);
+    assert.match(answer, /Compliance Visit: 100/);
+    assert.match(answer, /10\.\s+\*\*Rep 10\*\*/);
   });
 
-  it("falls back to a generic answer when no plan rationale is present", () => {
+  it("falls back to a generic title but still lists the rows when no plan rationale is present", () => {
     const result = { answer: "", table: tableRows, charts: [], insights: [] };
     const validated = validateAndEnrichResponse(result, chatDoc);
-    assert.equal((validated as { answer?: string }).answer, "Here are the results.");
+    const answer = (validated as { answer?: string }).answer ?? "";
+    assert.ok(answer.startsWith("Here are the results."));
+    assert.match(answer, /1\.\s+\*\*Rep 1\*\*/);
   });
 
   it("still throws on a genuinely empty result (no answer AND no table)", () => {

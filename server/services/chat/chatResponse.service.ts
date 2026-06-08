@@ -230,6 +230,41 @@ export function alignChartKeyInsightsToChatInsights(validated: any): any {
 }
 
 /**
+ * Render a small result set (e.g. a quick-lookup top-N table) as a readable
+ * numbered list for the answer prose. The chat MarkdownRenderer supports
+ * **bold** + line breaks but NOT GFM pipe-tables, so a list is the
+ * renderer-compatible way to surface rows inline. First column is the label;
+ * up to `maxValueCols` remaining columns render as "name: value". Capped at
+ * `maxRows` so the answer never balloons.
+ */
+export function renderResultListForAnswer(
+  rows: Array<Record<string, unknown>>,
+  opts?: { maxRows?: number; maxValueCols?: number },
+): string {
+  const maxRows = opts?.maxRows ?? 15;
+  const maxValueCols = opts?.maxValueCols ?? 3;
+  if (!Array.isArray(rows) || rows.length === 0) return "";
+  const cols = Object.keys(rows[0] ?? {});
+  if (cols.length === 0) return "";
+  const labelCol = cols[0];
+  const valueCols = cols.slice(1, 1 + maxValueCols);
+  const fmt = (v: unknown): string => {
+    if (v === null || v === undefined || v === "") return "—";
+    if (typeof v === "number") return Number.isFinite(v) ? String(v) : "—";
+    return String(v).replace(/\s+/g, " ").trim();
+  };
+  const lines = rows.slice(0, maxRows).map((r, i) => {
+    const label = fmt(r[labelCol]);
+    const vals = valueCols.length
+      ? " — " + valueCols.map((c) => `${c}: ${fmt(r[c])}`).join(", ")
+      : "";
+    return `${i + 1}. **${label}**${vals}`;
+  });
+  if (rows.length > maxRows) lines.push(`…and ${rows.length - maxRows} more.`);
+  return lines.join("\n");
+}
+
+/**
  * Validate and enrich chat response
  */
 export function validateAndEnrichResponse(result: any, chatDocument: ChatDocument, chatLevelInsights?: any[]): any {
@@ -254,7 +289,14 @@ export function validateAndEnrichResponse(result: any, chatDocument: ChatDocumen
       typeof result.agentTrace?.planRationale === "string"
         ? result.agentTrace.planRationale.trim()
         : "";
-    result.answer = restated.length > 0 ? restated : "Here are the results.";
+    const title = restated.length > 0 ? restated : "Here are the results.";
+    // Surface the actual rows in the prose as a numbered list. The chat
+    // MarkdownRenderer supports **bold** + line breaks but NOT GFM pipe-tables,
+    // so a list (not a table) is the renderer-compatible way to show the result
+    // inline — guaranteeing the user sees their data in the answer bubble even
+    // if the interactive pivot/preview doesn't auto-render.
+    const list = renderResultListForAnswer(result.table);
+    result.answer = list ? `${title}\n\n${list}` : title;
   }
 
   // Validate response has answer
