@@ -2,6 +2,7 @@ import React from 'react';
 import { compactizeNumbersInText } from '@/lib/text/compactizeNumbersInText';
 import { extractCitations } from '@/lib/citationTokens';
 import { CitationHoverCard } from '@/components/CitationHoverCard';
+import { parseGfmTableBlock } from '@/lib/markdownTable';
 
 /**
  * Simple markdown renderer for chat messages
@@ -27,18 +28,83 @@ export function MarkdownRenderer({ content }: { content: string }) {
   // once per render so the per-line passes below are O(N) lookups.
   const citationIndex = buildCitationIndex(cleanedContent);
 
-  return (
-    <div className="markdown-content">
-      {lines.map((line, lineIndex) => {
-        const parts = parseMarkdownLine(line, lineIndex, citationIndex);
+  // Render line-by-line, but fold contiguous GFM pipe-table blocks into a real
+  // <table> (the renderer otherwise has no table support, so analytical results
+  // emitted as a markdown table would show as raw pipes).
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const table = parseGfmTableBlock(lines, i);
+    if (table) {
+      elements.push(
+        <MarkdownTable
+          key={`tbl-${i}`}
+          header={table.header}
+          rows={table.rows}
+          citationIndex={citationIndex}
+          baseKey={i}
+        />,
+      );
+      i = table.nextIndex;
+      continue;
+    }
+    const line = lines[i];
+    const parts = parseMarkdownLine(line, i, citationIndex);
+    const isLast = i === lines.length - 1;
+    elements.push(
+      <React.Fragment key={`ln-${i}`}>
+        {parts}
+        {!isLast && <br />}
+      </React.Fragment>,
+    );
+    i++;
+  }
 
-        return (
-          <React.Fragment key={lineIndex}>
-            {parts}
-            {lineIndex < lines.length - 1 && <br />}
-          </React.Fragment>
-        );
-      })}
+  return <div className="markdown-content">{elements}</div>;
+}
+
+/** Render a parsed GFM table block as a styled <table>; cells reuse inline markdown. */
+function MarkdownTable({
+  header,
+  rows,
+  citationIndex,
+  baseKey,
+}: {
+  header: string[];
+  rows: string[][];
+  citationIndex: Map<string, number>;
+  baseKey: number;
+}) {
+  return (
+    <div className="my-2 overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr>
+            {header.map((h, ci) => (
+              <th
+                key={`h-${ci}`}
+                className="border border-border/60 bg-muted/40 px-2.5 py-1.5 text-left font-semibold text-foreground"
+              >
+                {parseMarkdownLine(h, baseKey * 100 + ci, citationIndex)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((cells, ri) => (
+            <tr key={`r-${ri}`} className="even:bg-muted/10">
+              {header.map((_, ci) => (
+                <td
+                  key={`c-${ri}-${ci}`}
+                  className="border border-border/60 px-2.5 py-1.5 align-top"
+                >
+                  {parseMarkdownLine(cells[ci] ?? "", baseKey * 10000 + ri * 100 + ci, citationIndex)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
