@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Table2, Trash2 } from "lucide-react";
+import { AlertTriangle, BarChart3, Maximize2, Table2, Trash2 } from "lucide-react";
 import type { ChartSpec } from "@/shared/schema";
 import { applyChartFilters, type ActiveChartFilters } from "@/lib/chartFilters";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,12 +28,20 @@ import {
   deriveTileRecommendations,
   type TileRecommendation,
 } from "../lib/tileRecommendations";
+import { buildExpandModalProps } from "../lib/expandModalProps";
+import { resolveInsightFooterMode } from "../lib/insightFooterState";
 
 // Lazy load to mirror DashboardTiles' Suspense pattern.
 const ChartRenderer = lazy(() =>
   import("@/pages/Home/Components/ChartRenderer").then((m) => ({
     default: m.ChartRenderer,
   })),
+);
+
+// Wave Z2 · explicit per-chart expand modal. Lazy so the recharts-heavy modal
+// only loads when a user clicks Maximize.
+const ChartOnlyModal = lazy(() =>
+  import("./ChartOnlyModal").then((m) => ({ default: m.ChartOnlyModal })),
 );
 
 /**
@@ -103,6 +111,7 @@ export function ChartTileBody({
   insightHistoryStore,
 }: ChartTileBodyProps) {
   const { mode, toggle } = useChartTileViewMode(dashboardId, tile.id);
+  const [isExpandOpen, setIsExpandOpen] = useState(false);
   const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
   // Force chart view when this chart can't be pivoted, even if a
   // stale `pivot` value is in sessionStorage from a prior chart shape.
@@ -143,6 +152,23 @@ export function ChartTileBody({
       ) as InsightRegenRow[],
     [tile.chart.data, filters],
   );
+
+  // MW3 · distinct category count for the active breakdown. When a categorical
+  // bar chart has many categories the chart can only show a subset legibly, so
+  // we surface a "View all N records" CTA into the full sortable table (which
+  // also enables bottom-N via ascending sort). Trends ('line'/'area') excluded.
+  const categoryCount = useMemo(() => {
+    if (tile.chart.type !== "bar" || !tile.chart.x) return 0;
+    const xCol = tile.chart.x;
+    const seen = new Set<string>();
+    for (const r of filteredRows) {
+      const v = r[xCol];
+      if (v != null && v !== "") seen.add(String(v));
+    }
+    return seen.size;
+  }, [filteredRows, tile.chart.type, tile.chart.x]);
+  const showViewAllCta =
+    canPivot && effectiveMode === "chart" && categoryCount > 12;
 
   const regen = useInsightRegen({
     tileId: tile.id,
@@ -232,6 +258,21 @@ export function ChartTileBody({
 
   const titleNode = tile.title || `Chart ${tile.index + 1}`;
 
+  // Wave Z2 · always-visible Expand affordance (works in view AND edit mode,
+  // and on both the legacy and visx render paths since it owns its own modal).
+  const expandAction = (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+      aria-label="Expand chart"
+      title="Expand chart"
+      onClick={() => setIsExpandOpen(true)}
+    >
+      <Maximize2 className="h-4 w-4" />
+    </Button>
+  );
+
   const headerActions = (
     <div className="flex items-center gap-1">
       {canPivot ? (
@@ -259,7 +300,7 @@ export function ChartTileBody({
               if (effectiveMode !== "pivot") toggle();
             }}
             aria-pressed={effectiveMode === "pivot"}
-            title="View as pivot table"
+            title="View all records as a sortable table (sort ascending for worst performers)"
             className={cn(
               "px-1.5 py-1 text-xs transition-colors border-l border-border",
               effectiveMode === "pivot"
@@ -305,6 +346,7 @@ export function ChartTileBody({
           ) : undefined
         }
         actions={headerActions}
+        persistentActions={expandAction}
       />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
         <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
@@ -350,27 +392,62 @@ export function ChartTileBody({
           )}
           </DashboardTileProvider>
         </div>
-        {tile.chart.keyInsight ? (
-          <TileInsightFooter
-            insight={tile.chart.keyInsight}
-            dashboardId={dashboardId}
-            tileId={tile.id}
-            canEdit={canEdit}
-            isEditing={isEditing}
-            onEdit={onEditInsight}
-            regen={{
-              entry: regen.entry,
-              loading: regen.loading,
-              error: regen.error,
-              onRegenerate: handleRegenerate,
-            }}
-            recommendations={recommendations}
-            onRecommendationClick={handleRecommendationClick}
-            history={historyEntries}
-            onHistorySelect={handleHistorySelect}
-          />
+        {showViewAllCta ? (
+          <button
+            type="button"
+            onClick={toggle}
+            className="self-start text-xs text-primary hover:underline"
+            title="Open the full sortable table — sort ascending to see the worst performers"
+          >
+            View all {categoryCount} {tile.chart.x} as a sortable table →
+          </button>
         ) : null}
+        {/*
+         * Wave Z3 · the footer always renders now. Auto-built dashboard charts
+         * get their insight patched in asynchronously by the server (Workstream
+         * I); until that lands (or if it never does), the footer shows a
+         * "Generate insight" CTA wired to the existing regen path rather than
+         * disappearing entirely.
+         */}
+        <TileInsightFooter
+          insight={tile.chart.keyInsight ?? ""}
+          emptyState={
+            resolveInsightFooterMode(
+              tile.chart.keyInsight,
+              regen.entry?.text,
+              regen.loading,
+            ) === "empty"
+          }
+          dashboardId={dashboardId}
+          tileId={tile.id}
+          canEdit={canEdit}
+          isEditing={isEditing}
+          onEdit={onEditInsight}
+          regen={{
+            entry: regen.entry,
+            loading: regen.loading,
+            error: regen.error,
+            onRegenerate: handleRegenerate,
+          }}
+          recommendations={recommendations}
+          onRecommendationClick={handleRecommendationClick}
+          history={historyEntries}
+          onHistorySelect={handleHistorySelect}
+        />
       </CardContent>
+      {isExpandOpen ? (
+        <Suspense fallback={null}>
+          <ChartOnlyModal
+            isOpen={isExpandOpen}
+            onClose={() => setIsExpandOpen(false)}
+            {...buildExpandModalProps(
+              tile.chart,
+              filters,
+              filteredRows as Record<string, unknown>[],
+            )}
+          />
+        </Suspense>
+      ) : null}
     </Card>
   );
 }

@@ -6,6 +6,7 @@ import {
   formatPercent,
   formatDateSmart,
   formatChartValue,
+  makeAxisTickFormatter,
 } from "./format";
 
 describe("format · inferFormatHint", () => {
@@ -133,5 +134,27 @@ describe("format · formatChartValue (universal)", () => {
 
   it("custom precision", () => {
     expect(formatChartValue(1234, "Revenue", { precision: 2 })).toBe("$1.23K");
+  });
+});
+
+describe("Wave F1 · makeAxisTickFormatter (field-aware axis ticks)", () => {
+  it("renders rate columns as percentages (the dashboard axis fix)", () => {
+    const fmt = makeAxisTickFormatter("pjp_adherence_rate");
+    // The screenshot bug: 0.28 axis tick should read "28%", not "0.28".
+    expect(fmt(0.28)).toBe("28.0%");
+    expect(fmt(0.04)).toBe("4.0%");
+  });
+
+  it("renders currency columns with symbol + K/M/B", () => {
+    expect(makeAxisTickFormatter("Revenue")(1234)).toBe("$1.2K");
+  });
+
+  it("renders plain numeric measures with K/M/B", () => {
+    expect(makeAxisTickFormatter("Working Hrs")(1500)).toBe("1.5K");
+  });
+
+  it("ignores the recharts tick index argument", () => {
+    const fmt = makeAxisTickFormatter("share") as (v: unknown, i?: number) => string;
+    expect(fmt(0.5, 3)).toBe("50.0%");
   });
 });

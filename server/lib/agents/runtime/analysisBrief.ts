@@ -44,6 +44,7 @@ import {
   tagMarketingColumns,
   looksLikeMarketingMixDataset,
 } from "../../marketingColumnTags.js";
+import { collectBooleanIndicators } from "./booleanIndicatorRateRepair.js";
 
 // Exported so the merged-pre-planner path can apply the same gate the per-task
 // analysisBrief call uses, keeping behaviour identical.
@@ -202,7 +203,70 @@ comparisonPeriods (Phase-1 time_window_diff): ONLY set when the user explicitly 
     purpose: LLM_PURPOSE.ANALYSIS_BRIEF,
   });
   if (!out.ok) return;
-  ctx.analysisBrief = mergeInferredFiltersIntoBrief(out.data, ctx.inferredFilters);
+  ctx.analysisBrief = ensureDashboardOutcomeMetric(
+    mergeInferredFiltersIntoBrief(out.data, ctx.inferredFilters),
+    ctx
+  );
+}
+
+/**
+ * Part 1.3 · A dashboard request with NO named outcome metric would leave
+ * `outcomeMetricColumn` unset, and BOTH the coverage gate
+ * (dashboardCoverageGate.ts) and the feature sweep (dashboardFeatureSweep.ts)
+ * bail out when it's missing → an empty dashboard. Pick a sensible default so
+ * the deterministic completion paths can chart something: the first numeric
+ * measure, else the first boolean-indicator column. Only fills the gap — never
+ * overrides a metric the brief (or user) already chose — and is a no-op for
+ * non-dashboard briefs.
+ */
+export function ensureDashboardOutcomeMetric(
+  brief: AnalysisBrief,
+  ctx: AgentExecutionContext
+): AnalysisBrief {
+  if (!brief.requestsDashboard) return brief;
+  let out = brief;
+  if (!out.outcomeMetricColumn || !out.outcomeMetricColumn.trim()) {
+    const colNames = new Set(ctx.summary.columns.map((c) => c.name));
+    const firstNumeric = (ctx.summary.numericColumns ?? []).find((n) =>
+      colNames.has(n)
+    );
+    const firstBooleanIndicator = ctx.summary.columns.find(
+      (c) => (c as { indicator?: { kind?: string } }).indicator?.kind === "boolean"
+    )?.name;
+    const fallback = firstNumeric ?? firstBooleanIndicator;
+    if (fallback) out = { ...out, outcomeMetricColumn: fallback };
+  }
+  return ensureDashboardOutlineMetrics(out, ctx);
+}
+
+/** Max secondary KPI metrics for a multi-KPI board (schema cap is 8; keep the
+ *  dashboard legible). */
+const OUTLINE_METRICS_CAP = 5;
+
+/**
+ * W6 · For an indicator-centric dashboard (the outcome metric is a Yes/No
+ * boolean indicator), seed `outlineMetrics` with the dataset's OTHER boolean
+ * indicators so the dashboard becomes multi-KPI — e.g. a "PJP dashboard" charts
+ * adherence + compliance + attendance + punctuality, not one metric. Pure and
+ * data-derived (no LLM, no hardcoded column names). No-op when the outcome is
+ * numeric (e.g. a sales dashboard stays single-metric) or when the brief already
+ * carries an explicit `outlineMetrics`.
+ */
+export function ensureDashboardOutlineMetrics(
+  brief: AnalysisBrief,
+  ctx: AgentExecutionContext
+): AnalysisBrief {
+  if (!brief.requestsDashboard) return brief;
+  if (brief.outlineMetrics && brief.outlineMetrics.length > 0) return brief;
+  const outcome = brief.outcomeMetricColumn?.trim();
+  if (!outcome) return brief;
+  const indicatorNames = collectBooleanIndicators(ctx.summary).map((i) => i.name);
+  if (!indicatorNames.includes(outcome)) return brief; // numeric outcome → single-metric
+  const secondary = indicatorNames
+    .filter((n) => n !== outcome)
+    .slice(0, OUTLINE_METRICS_CAP);
+  if (secondary.length === 0) return brief;
+  return { ...brief, outlineMetrics: secondary };
 }
 
 /**

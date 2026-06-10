@@ -15,6 +15,14 @@ import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.j
 const AGG_SUFFIX = /_(sum|avg|mean|min|max|count)$/i;
 const AGG_SUFFIX_CAPTURE = /^(.*)_(sum|avg|mean|min|max|count)$/i;
 
+// countIf-ratio helper columns (`<base>__matching` / `<base>__total`) are the
+// numerator/denominator behind a computed rate — they exist only in the
+// analytical result set, never on the raw `data` table a pivot re-queries.
+// Mirrors the scoreMeasure guard in agents/runtime/chartFromTable.ts. Targets
+// the DOUBLE-underscore helper convention only, so a user's legitimate
+// single-underscore column (e.g. `revenue_total`, `conversion_rate`) is safe.
+const COMPUTED_HELPER_FIELD = /__matching\b|__total\b/i;
+
 /**
  * Map preview/aggregate output column names to a column that exists on the base table.
  */
@@ -39,6 +47,37 @@ export function normalizePivotValueFieldForBaseTable(
   if (numericSchema.has(resolved)) return resolved;
 
   return col;
+}
+
+/**
+ * Keep only pivot value fields that map to a REAL numeric column on the base
+ * `data` table. A dashboard pivot tile re-runs `SELECT <values> FROM data`, so
+ * any value field that is an analytical-result alias (computed rate like
+ * `pjp_adherence_rate`, or a countIf helper like `matching` / `total`) — i.e.
+ * not present in `summary.numericColumns` — would throw a DuckDB binder error
+ * at render time. This codifies, as one reusable function, the same contract
+ * the chat-side PVT2 guard enforces in pivotDefaultsFromExecution.ts.
+ *
+ * Normalises each field first (so `Sales_sum` → `Sales`), drops anything not in
+ * `numericColumns`, drops the `__matching` / `__total` helper convention
+ * outright, and de-dupes. Pure (no I/O).
+ */
+export function filterPivotValueFieldsToBaseTable(
+  values: string[],
+  summary: DataSummary
+): string[] {
+  const numericSchema = new Set(summary.numericColumns ?? []);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of values) {
+    if (COMPUTED_HELPER_FIELD.test(v)) continue;
+    const normalized = normalizePivotValueFieldForBaseTable(v, summary);
+    if (!numericSchema.has(normalized)) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 function idLikeDimensionName(col: string): boolean {
@@ -113,14 +152,10 @@ export function derivePivotDefaultsFromPreviewRows(
 
   if (rowKeys.length === 0 && valueKeys.length === 0) return undefined;
 
-  const normalizedValues: string[] = [];
-  const seenVal = new Set<string>();
-  for (const v of valueKeys) {
-    const n = normalizePivotValueFieldForBaseTable(v, summary);
-    if (seenVal.has(n)) continue;
-    seenVal.add(n);
-    normalizedValues.push(n);
-  }
+  // Normalise + drop any value field that isn't a real base-table numeric
+  // column (computed rate / countIf-helper aliases). Without this the dashboard
+  // pivot tile re-queries a nonexistent column and surfaces a binder error.
+  const normalizedValues = filterPivotValueFieldsToBaseTable(valueKeys, summary);
 
   const layout = suggestPivotColumnsFromDimensions({
     rowCandidates: rowKeys,

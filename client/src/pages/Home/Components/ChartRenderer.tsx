@@ -49,6 +49,7 @@ import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 import { formatTemporalPeriodKeyForDisplay } from '@/lib/temporalPeriodDisplay';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
+import { makeAxisTickFormatter } from '@/lib/charts/format';
 import {
   CHART_SERIES_COLORS as COLORS,
   evenlySpacedDataKeys,
@@ -200,6 +201,21 @@ export function ChartRenderer({
     barLayout,
   } = chart;
   const chartColor = COLORS[index % COLORS.length];
+
+  // Wave F2 · field-aware axis tick formatters. The legacy `formatAxisLabel`
+  // is field-blind, so a rate measure like `pjp_adherence_rate` (0–1) rendered
+  // as raw decimals ("0.28") instead of percentages ("28%"). These bind the
+  // shared `makeAxisTickFormatter` (inferFormatHint → percent/currency/KMB) to
+  // the measure fields. String category ticks pass through unchanged, so this
+  // is safe to use on any value axis. Fixes chat AND dashboard (shared
+  // renderer).
+  const yTickFormatter = useMemo(() => makeAxisTickFormatter(y), [y]);
+  const y2TickFormatter = useMemo(
+    () => makeAxisTickFormatter(chart.y2),
+    [chart.y2],
+  );
+  // Scatter plots put a numeric measure on the X axis too.
+  const xTickFormatter = useMemo(() => makeAxisTickFormatter(x), [x]);
 
   // Use IntersectionObserver to lazy load charts (only render when visible)
   // Disable lazy loading for single charts or when fillParent is true (dashboard tiles)
@@ -833,7 +849,7 @@ export function ChartRenderer({
                 <YAxis
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10, fontWeight: 500 }}
                   width={60}
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   label={{
                     value: yLabel || y,
                     angle: -90,
@@ -930,7 +946,7 @@ export function ChartRenderer({
                   <YAxis
                     tick={{ fill: leftAxisColor, fontSize: 10, fontWeight: 500 }}
                     width={60}
-                    tickFormatter={formatAxisLabel}
+                    tickFormatter={yTickFormatter}
                     label={{
                       value: yLabel || y,
                       angle: -90,
@@ -952,7 +968,7 @@ export function ChartRenderer({
                     yAxisId="right"
                     tick={{ fill: rightAxisColor, fontSize: 10, fontWeight: 500 }}
                     width={60}
-                    tickFormatter={formatAxisLabel}
+                    tickFormatter={y2TickFormatter}
                     label={{
                       value: chart.y2Label || chart.y2,
                       angle: 90,
@@ -973,7 +989,7 @@ export function ChartRenderer({
                 <YAxis
                   tick={{ fill: leftAxisColor, fontSize: 10, fontWeight: 500 }}
                   width={60}
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   label={{
                     value: yLabel || y,
                     angle: -90,
@@ -1081,7 +1097,7 @@ export function ChartRenderer({
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 width={60}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 label={{
                   value: multiKeys.length ? (yLabel || y) : yLabel || y,
                   angle: -90,
@@ -1353,7 +1369,7 @@ export function ChartRenderer({
                 type="number"
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 domain={xDomain || ['auto', 'auto']}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={xTickFormatter}
                 tickCount={getTickCount(xDomain)}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
               />
@@ -1362,7 +1378,7 @@ export function ChartRenderer({
                 type="number"
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 domain={yDomain || ['auto', 'auto']}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 tickCount={getTickCount(yDomain)}
                 width={60}
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 12, fontWeight: 600 } }}
@@ -1496,7 +1512,7 @@ export function ChartRenderer({
                 <YAxis
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                   width={60}
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   label={{
                     value: yLabel || y,
                     angle: -90,
@@ -1581,7 +1597,7 @@ export function ChartRenderer({
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
                 width={60}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 label={{
                   value: yLabel || y,
                   angle: -90,

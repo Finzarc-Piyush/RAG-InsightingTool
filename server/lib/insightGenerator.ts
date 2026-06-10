@@ -508,6 +508,8 @@ ANTI-PATTERNS — do NOT write any of these:
 
 If the data does not support a credible mechanism, propose a *diagnostic question* (a specific split or comparison) instead of a recommendation — never a generic push.
 
+NEVER META-HEDGE: do not describe your OWN reasoning or the evidence as uncertain/undefined/incomplete (banned: "HHI is undefined", "CV not informative", "cannot be stated from the supplied evidence", "the data may be mis-coded or not populated", "from this slice alone"). When a series is ALL ZERO (or every value is the same), do not analyze its (non-existent) spread — state the plain, likely DOMAIN reason for the flatness in one sentence (e.g. "Adherence is 0% for every planned type here because it is only recorded on Market-Working days — the other types are not measurement opportunities, not low performers."), then stop. A flat-zero metric is an expected structural fact, not a data-quality problem to speculate about.
+
 Never use percentile shorthand like P75 or P90 — use numeric values. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions. No markdown bold/headers in the string.`,
           },
           { role: 'user', content: prompt },

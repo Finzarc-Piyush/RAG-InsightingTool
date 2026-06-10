@@ -14,6 +14,7 @@ import { DashboardTiles } from './DashboardTiles';
 // `AnalysisSummaryPanel`. DR2 moved it to a right-side drawer triggered
 // from the header so the canvas leads the page on first paint.
 import { DashboardSummaryDrawer, hasAnySummaryContent } from './DashboardSummaryDrawer';
+import { DashboardSummaryBand } from './DashboardSummaryBand';
 import { DashboardSheetTabs } from './DashboardSheetTabs';
 import { DashboardGlobalFilterBar } from './DashboardGlobalFilterBar';
 import { AddTileMenu } from './AddTileMenu';
@@ -28,6 +29,7 @@ import { ActiveChartFilters, hasActiveFilters } from '@/lib/chartFilters';
 import {
   CROSS_FILTER_EVENT,
   applyCrossFilter,
+  dispatchCrossFilter,
   type CrossFilterEvent,
 } from '../lib/crossFilter';
 // Wave WD3-sheet · subscribe to the WD3 drill-through event family
@@ -203,7 +205,17 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const sections = useMemo<DashboardSection[]>(() => {
     if (!activeSheet) return [];
 
+    // Wave ES3 · on the first (Executive Summary) sheet the DashboardSummaryBand
+    // renders the magnitudes as "Key numbers" KPI cards, so the deterministic
+    // markdown "Headline numbers" tile would duplicate them — drop it there.
+    const isFirstSheet = sheets.length > 0 && activeSheet.id === sheets[0].id;
+    const bandShowsKpis =
+      isFirstSheet && (dashboard.answerEnvelope?.magnitudes?.length ?? 0) > 0;
+
     const narrativeTiles: DashboardTile[] = (activeSheet.narrativeBlocks ?? [])
+      .filter(
+        (block) => !(bandShowsKpis && block.title === 'Headline numbers'),
+      )
       .slice()
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .map((block) => ({
@@ -252,7 +264,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         tiles: [...narrativeTiles, ...baseTiles, ...pivotTiles, ...tableTiles],
       },
     ];
-  }, [activeSheet, dashboard.updatedAt]);
+  }, [activeSheet, dashboard.updatedAt, sheets, dashboard.answerEnvelope]);
 
   const persistGridTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePersistGrid = useCallback(
@@ -863,6 +875,20 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                     />
                   ) : null}
                 </div>
+
+                {/* Wave ES2 · self-explanatory first view — TL;DR + KPI cards +
+                    key findings, only on the Executive Summary (first) sheet. */}
+                {sheets.length > 0 && activeSection.id === sheets[0].id ? (
+                  <DashboardSummaryBand
+                    dashboardId={dashboard.id}
+                    envelope={dashboard.answerEnvelope}
+                    attentionAreas={dashboard.attentionAreas}
+                    onAttentionAreaClick={(area) =>
+                      dispatchCrossFilter({ column: area.dimension, value: area.unit })
+                    }
+                    onOpenSummary={() => setSummaryDrawerOpen(true)}
+                  />
+                ) : null}
 
                 <DashboardGlobalFilterBar
                   global={globalFilters}

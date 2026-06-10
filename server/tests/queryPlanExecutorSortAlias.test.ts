@@ -42,5 +42,25 @@ describe("executeQueryPlan sort on aggregation outputs", () => {
     if (!out.ok) return;
     assert.equal(out.data[0]?.Category, "Furniture");
   });
+
+  // Executor-layer twin of Fix C (d7e5aece): a boolean-indicator rate plan sorts
+  // by its computedAggregations alias. Before the fix this failed at runtime with
+  // "Column not in schema: <alias>" because assertPlanColumnsAllowed built
+  // allowedSort from aggregation aliases only, never computedAggregations.
+  it("accepts sort by a computedAggregations alias (rate)", () => {
+    const out = executeQueryPlan(data, summary, {
+      groupBy: ["Category"],
+      aggregations: [
+        { column: "Sales", operation: "sum", alias: "matching" },
+        { column: "Sales", operation: "max", alias: "total" },
+      ],
+      computedAggregations: [{ alias: "rate", expression: "matching / total" }],
+      sort: [{ column: "rate", direction: "desc" }],
+    });
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    // Technology: 150 / 100 = 1.5 ; Furniture: 200 / 200 = 1.0 → Technology first.
+    assert.equal(out.data[0]?.Category, "Technology");
+  });
 });
 

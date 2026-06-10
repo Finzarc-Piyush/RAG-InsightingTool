@@ -550,6 +550,14 @@ function assertPlanColumnsAllowed(
     if (a.alias) allowedSort.add(a.alias);
     allowedSort.add(`${a.column}_${a.operation}`);
   }
+  // Computed-aggregation aliases (e.g. a boolean-indicator rate
+  // `matching / total`) are valid sort targets — they exist in the result set,
+  // not the input schema. The planner-layer validator already allows them
+  // (commit d7e5aece / Fix C); this is the executor-layer twin that was missing,
+  // which produced "Column not in schema: <x>_rate" at runtime.
+  for (const ca of plan.computedAggregations ?? []) {
+    if (ca?.alias) allowedSort.add(ca.alias);
+  }
   for (const s of plan.sort ?? []) {
     if (!allowedSort.has(s.column)) {
       return formatMissingColumnError(s.column, allowedSort);

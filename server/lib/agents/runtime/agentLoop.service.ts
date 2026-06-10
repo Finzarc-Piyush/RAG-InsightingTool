@@ -194,6 +194,7 @@ import { checkTemporalTrendBuckets } from "./checkTemporalTrendBuckets.js";
 import { JsonFieldStreamExtractor } from "./jsonFieldStreamExtractor.js";
 import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workingMemory.js";
 import { runReflector } from "./reflector.js";
+import { filterSpawnedQuestions } from "./filterSpawnedQuestions.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
 import { buildFinalEvidence } from "./verifierHelpers.js";
 import { VERIFIER_VERDICT } from "./schemas.js";
@@ -239,6 +240,7 @@ import {
 import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
 import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
+import { buildAutoPivotSpecFromPreview } from "../../autoPivotSpec.js";
 import { mergePivotDefaultRowsAndValues } from "../../pivotDefaultsFromExecution.js";
 import type { QueryPlanBody } from "../../queryPlanExecutor.js";
 import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
@@ -415,51 +417,15 @@ function buildAutoPivotSpec(args: {
 }): DashboardPivotSpec | undefined {
   if (!args.summary) return undefined;
   const { rows, columns } = extractTableRowsAndColumns(args.table);
-  if (rows.length === 0) return undefined;
-
-  const defaults = derivePivotDefaultsFromPreviewRows(
+  // Pure spec assembly (incl. the base-table value-field guard) lives in
+  // ../../autoPivotSpec.js so it can be unit-tested without the agent runtime.
+  return buildAutoPivotSpecFromPreview({
     rows,
-    args.summary,
-    columns
-  );
-  if (!defaults) return undefined;
-  const pivotRows = defaults.rows ?? [];
-  const pivotValues = defaults.values ?? [];
-  const pivotColumns = defaults.columns ?? [];
-  if (pivotRows.length === 0 || pivotValues.length === 0) return undefined;
-
-  // Convert plain field names → `{id, field, agg}` shape required by the
-  // pivot config schema. Default agg is "sum" (matches the chat-side
-  // pivot panel's default).
-  const valueSpecs = pivotValues.slice(0, 6).map((field) => ({
-    id: `${field}_sum`,
-    field,
-    agg: "sum" as const,
-  }));
-
-  // Title: "<value-fields> by <rows> across <cols>" — terse, mirrors how
-  // the chat-side pivot insight describes itself. Capped to 200 chars.
-  const valuesPart = pivotValues.slice(0, 3).join(", ");
-  const rowsPart = pivotRows.slice(0, 3).join(" × ");
-  const colsPart = pivotColumns.slice(0, 2).join(" × ");
-  const titleParts: string[] = [valuesPart, `by ${rowsPart}`];
-  if (colsPart) titleParts.push(`across ${colsPart}`);
-  const title = titleParts.join(" ").slice(0, 200) || "Pivot view";
-
-  return {
-    id: `auto-pivot-${args.turnId}`,
-    title,
-    pivotConfig: {
-      rows: pivotRows.slice(0, 4),
-      columns: pivotColumns.slice(0, 2),
-      values: valueSpecs,
-      filters: [],
-      unused: [],
-    },
-    analysisView: "pivot",
-    sourceSessionId: args.sessionId,
-    createdAt: Date.now(),
-  };
+    columns,
+    summary: args.summary,
+    turnId: args.turnId,
+    sessionId: args.sessionId,
+  });
 }
 
 function toolTableColumnOrderForIntermediate(tr: ToolResult): string[] | null {
@@ -1388,6 +1354,28 @@ export async function runAgentTurn(
   }
 
   if (ctx.mode === "analysis") {
+    // Ensure each boolean metric's VALID-UNIVERSE scope is present this turn —
+    // even for sessions uploaded before scope inference shipped (their persisted
+    // summary lacks `applicabilityScope`). Cheap, idempotent, runs only when a
+    // boolean indicator is unscoped and enough rows are loaded for a reliable
+    // cross-tab. Absence stays safe (unscoped = prior behaviour). Upload-time
+    // inference (uploadQueue) remains the primary, full-data path.
+    try {
+      const needsScope = (ctx.summary.columns ?? []).some((c) => {
+        const ind = (c as { indicator?: { kind?: string; positiveValues?: string[]; applicabilityScope?: unknown[] } }).indicator;
+        return ind?.kind === "boolean" && (ind.positiveValues?.length ?? 0) > 0 && !(ind.applicabilityScope?.length);
+      });
+      if (needsScope && Array.isArray(ctx.data) && ctx.data.length >= 200) {
+        const { inferMetricApplicability, applyMetricApplicabilityToSummary } =
+          await import("../../inferMetricApplicability.js");
+        applyMetricApplicabilityToSummary(
+          ctx.summary,
+          inferMetricApplicability(ctx.summary, ctx.data as Record<string, unknown>[])
+        );
+      }
+    } catch {
+      /* best-effort — absence of scope simply falls back to unscoped rates */
+    }
     // W39 · when MERGED_PRE_PLANNER=true, fold the analysisBrief and
     // hypothesisPlanner LLM calls into a single round-trip below.
     // Otherwise keep the per-task analysisBrief call here unchanged.
@@ -2814,10 +2802,19 @@ export async function runAgentTurn(
         // O1: wire successful tool results into the shared blackboard so narrator,
         // convergence check, and context-agent Round 2 all have structured evidence.
         if (stepResult.ok && ctx.blackboard) {
+          // Small aggregated results (e.g. a 24-row ASM ranking) get a larger
+          // detail budget so the full "Sample:" JSON isn't cut mid-array — the
+          // narrator can then state the complete ranking instead of hedging
+          // "only partially shown". Larger/raw results keep the tight 800-char
+          // cap (they ride on the structured-observation rows surfaced by W1).
+          const lowCardAgg =
+            stepResult.analyticalMeta?.appliedAggregation === true &&
+            typeof stepResult.analyticalMeta?.outputRowCount === "number" &&
+            stepResult.analyticalMeta.outputRowCount <= 50;
           const finding = addFinding(ctx.blackboard, {
             sourceRef: finalCallId,
             label: `${step.tool}: ${String(step.args?.metrics ?? step.args?.groupBy ?? step.args?.columns ?? "").slice(0, 80)}`.trim(),
-            detail: (stepResult.summary ?? "").slice(0, 800),
+            detail: (stepResult.summary ?? "").slice(0, lowCardAgg ? 3000 : 800),
             significance: detectSignificance(stepResult.summary ?? ""),
             relatedColumns: stepResult.suggestedColumns ?? [],
           });
@@ -3013,10 +3010,18 @@ export async function runAgentTurn(
               : undefined,
           });
           // W8: collect sub-questions emitted by the reflector.
-          if (ref.spawnedQuestions?.length) {
+          // MW1 · the single chokepoint — drop random-sample / duplicate /
+          // per-identifier-grouping chips before they are accumulated or
+          // streamed to the UI ("Investigating further"). "Never show random
+          // samples" is a hard rule, enforced here deterministically.
+          const cleanedSpawned = filterSpawnedQuestions(ref.spawnedQuestions ?? [], {
+            priorQuestions: accumulatedSpawnedQuestions.map((q) => q.question),
+            excludedColumns: ctx.summary.columns.map((c) => c.name),
+          });
+          if (cleanedSpawned.length) {
             // Stamp a stable UUID on every spawned question so per-question
             // feedback (thumbs up/down) can target it across reorders/edits.
-            const stamped = ref.spawnedQuestions.map((sq) => ({
+            const stamped = cleanedSpawned.map((sq) => ({
               ...sq,
               id: sq.id ?? randomUUID(),
               suggestedColumns: sq.suggestedColumns ?? [],
@@ -3868,7 +3873,10 @@ export async function runAgentTurn(
         // `chatDocument.sessionAnalysisContext.sessionKnowledge.priorInvestigations`
         // still reflects what the agent knew BEFORE this turn ran (parity with
         // chatStream.service.ts:1500-1503).
-        const dashInvestigationSummary = buildInvestigationSummary(ctx.blackboard);
+        const dashInvestigationSummary = buildInvestigationSummary(
+          ctx.blackboard,
+          ctx.summary.columns.map((c) => c.name)
+        );
         const dashPriorInvestigations =
           ctx.chatDocument?.sessionAnalysisContext?.sessionKnowledge?.priorInvestigations;
         const spec = await buildDashboardFromTurn({
@@ -4236,9 +4244,11 @@ export async function runAgentTurn(
       // W13 · compact persistable digest of the analytical blackboard so
       // the client can render an "Investigation summary" card. Returns
       // undefined when blackboard has nothing material to show.
-      ...(buildInvestigationSummary(ctx.blackboard)
-        ? { investigationSummary: buildInvestigationSummary(ctx.blackboard) }
-        : {}),
+      ...((() => {
+        const cols = ctx.summary.columns.map((c) => c.name);
+        const summ = buildInvestigationSummary(ctx.blackboard, cols);
+        return summ ? { investigationSummary: summ } : {};
+      })()),
       // Wave A2 · full in-memory turn state for round-trip persistence to
       // Cosmos. Survives end-to-end: workingMemory, structured reflector +
       // verifier verdicts, blackboard snapshot, per-step tool I/O.

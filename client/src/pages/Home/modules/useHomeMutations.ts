@@ -31,6 +31,14 @@ import {
   isDatasetPreviewSystemMessage,
   normalizeDatasetSystemMessages,
 } from './uploadSystemMessages';
+import {
+  type QueuedEarlyQuestion,
+  shouldRefireEarlyQuestion,
+  shouldHoldPollForRefire,
+  persistQueuedQuestion,
+  readQueuedQuestion,
+  clearQueuedQuestion,
+} from '@/lib/chat/earlyQuestionRefire';
 
 interface UseHomeMutationsProps {
   sessionId: string | null;
@@ -168,6 +176,14 @@ export const useHomeMutations = ({
     }
   });
   const pendingUserMessageRef = useRef<{ content: string; timestamp: number } | null>(null);
+  /**
+   * A question the user asked WHILE the dataset was still enriching. The server
+   * can't answer yet (data table not materialized), so we hold it here and
+   * re-fire it as a normal streaming turn once the upload poll reports the data
+   * is truly ready (`status === 'completed'`). Survives a tab reload via
+   * sessionStorage (see Wave 4 wiring). Single slot — latest queued wins.
+   */
+  const queuedEarlyQuestionRef = useRef<QueuedEarlyQuestion | null>(null);
   const previewStateRef = useRef<{ rows: Record<string, any>[]; columns: string[] }>({
     rows: [],
     columns: [],
@@ -490,6 +506,11 @@ export const useHomeMutations = ({
           clearUploadPoll();
           setIsDatasetPreviewLoading?.(false);
           setIsDatasetEnriching?.(false);
+          // An early-queued question can never be answered now — drop it and say so.
+          if (queuedEarlyQuestionRef.current) {
+            queuedEarlyQuestionRef.current = null;
+            clearQueuedQuestion(sessionId);
+          }
           toast({
             title: 'Processing failed',
             description: st.error || 'Upload job failed.',
@@ -497,6 +518,12 @@ export const useHomeMutations = ({
           });
           return;
         }
+
+        // A question asked during enrichment is held until the data is TRULY
+        // ready (`status === 'completed'`), not the early `enrichmentStatus`
+        // signal. While holding, keep the poll alive and keep showing the
+        // "preparing" indicator so the user knows their question is pending.
+        const holdForRefire = shouldHoldPollForRefire(st, !!queuedEarlyQuestionRef.current);
 
         // previewReady stays true through analyzing/saving/completed (see GET /api/upload/status)
         if (st.previewReady || st.status === 'preview_ready') {
@@ -524,15 +551,26 @@ export const useHomeMutations = ({
             (!st.understandingReady && st.enrichmentStatus === 'in_progress') ||
             (!st.understandingReady && st.enrichmentPhase === 'enriching') ||
             (!st.understandingReady && st.enrichmentPhase === 'waiting');
-          setIsDatasetEnriching?.(enriching);
-          if (enriching) {
+          setIsDatasetEnriching?.(enriching || holdForRefire);
+          if (enriching || holdForRefire) {
             upsertEnrichmentSystemMessage();
           } else {
             removeEnrichmentSystemMessage();
           }
         }
 
-        if (st.enrichmentStatus === 'complete' || st.status === 'completed') {
+        // `holdForRefire` keeps us here (still polling) until the TRUE
+        // `status === 'completed'` lands, so we don't tear down on the early
+        // `enrichmentStatus === 'complete'` and miss the re-fire window.
+        if ((st.enrichmentStatus === 'complete' || st.status === 'completed') && !holdForRefire) {
+          const queued = queuedEarlyQuestionRef.current;
+          const wantsRefire = shouldRefireEarlyQuestion(st, queued);
+          // If a manual turn is mid-flight, keep polling and retry the re-fire
+          // on the next tick rather than dropping it.
+          if (wantsRefire && chatMutation.isPending) {
+            return;
+          }
+
           clearUploadPoll();
           setIsDatasetPreviewLoading?.(false);
           setIsDatasetEnriching?.(false);
@@ -546,6 +584,16 @@ export const useHomeMutations = ({
             });
           }
           await hydrateSessionWithRetry(sessionId, { retries: 3, syncMessages: true });
+
+          // Data is fully materialized — re-fire the early question as a normal
+          // streaming turn. `targetTimestamp` makes the mutation replace the
+          // optimistic bubble in place (no duplicate user message); the hydrate
+          // above already cleared the stale optimistic copy, so it re-appends.
+          if (wantsRefire && queued) {
+            queuedEarlyQuestionRef.current = null;
+            clearQueuedQuestion(sessionId);
+            chatMutation.mutate({ message: queued.content, targetTimestamp: queued.timestamp });
+          }
         }
       } catch (e) {
         logger.error('Upload job poll error:', e);
@@ -846,6 +894,15 @@ export const useHomeMutations = ({
               setAgentWorkbenchLive([]);
               setThinkingTargetTimestamp(null);
               setThinkingLiveAnchorTimestamp(null);
+              // Hold the question so the upload poll can re-fire it as a normal
+              // streaming turn once the data is truly ready. The optimistic user
+              // bubble + its timestamp are already in `messages` (added above) —
+              // don't add it again. Persist for reload durability.
+              const queued = pendingUserMessageRef.current;
+              if (queued) {
+                queuedEarlyQuestionRef.current = queued;
+                if (sessionId) persistQueuedQuestion(sessionId, queued);
+              }
               resolve({
                 answer: '',
                 charts: [],
@@ -1346,12 +1403,14 @@ export const useHomeMutations = ({
       logger.log('💬 Suggestions:', data.suggestions?.length || 0);
 
       if ((data as ChatResponse & { queuedUntilEnrichment?: boolean }).queuedUntilEnrichment) {
+        // Keep queuedEarlyQuestionRef — the upload poll re-fires it once the
+        // data is fully ready. Only the per-turn pending ref is cleared.
         pendingUserMessageRef.current = null;
         turnTraceRef.current = { steps: [], workbench: [] };
         toast({
-          title: 'Message queued',
+          title: 'Got your question',
           description:
-            'We are enriching data understanding and preparing suggested analysis questions. Your reply will appear when that finishes.',
+            "Your data is still being prepared. I'll answer this automatically as soon as it's ready.",
         });
         return;
       }
@@ -1654,6 +1713,75 @@ export const useHomeMutations = ({
       });
     },
   });
+
+  // Wave 4 · reload durability. If the user asked a question during enrichment
+  // and then reloaded the tab, the in-memory upload-job poll (and its
+  // `status === 'completed'` signal) is gone — but the question was persisted
+  // to sessionStorage. Restore it and re-fire once the SESSION reports its data
+  // is fully materialized. We gate on the session-level marker
+  // (enrichmentStatus complete + a materialized data pointer) rather than the
+  // early `enrichmentStatus === 'complete'` alone, so we never answer against an
+  // unmaterialized table.
+  useEffect(() => {
+    if (!sessionId) return;
+    // Same-page capture already owns the re-fire (the upload poll handles it).
+    if (queuedEarlyQuestionRef.current) return;
+    const restored = readQueuedQuestion(sessionId);
+    if (!restored) return;
+    queuedEarlyQuestionRef.current = restored;
+
+    let cancelled = false;
+    let ticks = 0;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const MAX_TICKS = 150; // ~5 min at 2s — safety cap so we don't poll forever
+    const isMaterialized = (s: Record<string, any> | null | undefined) =>
+      s?.enrichmentStatus === 'complete' && !!(s?.columnarStoragePath || s?.currentDataBlob);
+    const stop = () => {
+      cancelled = true;
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const finish = () => {
+      stop();
+      queuedEarlyQuestionRef.current = null;
+      clearQueuedQuestion(sessionId);
+    };
+    const poll = async () => {
+      if (cancelled || !isMountedRef.current) return;
+      ticks += 1;
+      try {
+        const data = await sessionsApi.getSessionDetails(sessionId);
+        const s = ((data as any)?.session ?? data) as Record<string, any>;
+        if (s?.enrichmentStatus === 'failed') {
+          finish();
+          return;
+        }
+        const ready = isMaterialized(s);
+        if (ready || ticks >= MAX_TICKS) {
+          const queued = queuedEarlyQuestionRef.current;
+          finish();
+          if (ready && queued && !chatMutation.isPending) {
+            chatMutation.mutate({ message: queued.content, targetTimestamp: queued.timestamp });
+          }
+        }
+      } catch {
+        if (ticks >= MAX_TICKS) finish();
+      }
+    };
+    interval = setInterval(() => {
+      void poll();
+    }, 2000);
+    void poll();
+
+    return () => {
+      stop();
+    };
+    // chatMutation.mutate is referentially stable (React Query); keying on
+    // sessionId only so we don't restart the poll on every mutation status tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // Function to cancel ongoing chat request
   const cancelChatRequest = () => {

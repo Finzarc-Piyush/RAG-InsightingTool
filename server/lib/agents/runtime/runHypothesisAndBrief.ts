@@ -45,7 +45,10 @@ import {
   analysisBriefSchema,
   type AnalysisBrief,
 } from "../../../shared/schema.js";
-import { mergeInferredFiltersIntoBrief } from "./analysisBrief.js";
+import {
+  mergeInferredFiltersIntoBrief,
+  ensureDashboardOutcomeMetric,
+} from "./analysisBrief.js";
 import { applyAnalysisBriefDigestToSession } from "../../sessionAnalysisContext.js";
 import type { AgentExecutionContext } from "./types.js";
 
@@ -180,9 +183,12 @@ Output STRICTLY ONE JSON object: { "hypotheses": [...], "brief": {...} | null }`
   // the same shape.
   let briefSet = false;
   if (shouldBuildBrief && result.data.brief) {
-    const merged: AnalysisBrief = mergeInferredFiltersIntoBrief(
-      result.data.brief,
-      ctx.inferredFilters
+    // W2/W6 · apply the SAME dashboard outcome-metric + multi-KPI seeding the
+    // per-task analysisBrief path uses, so the merged pre-planner lane isn't a
+    // latent gap (it previously skipped ensureDashboardOutcomeMetric entirely).
+    const merged: AnalysisBrief = ensureDashboardOutcomeMetric(
+      mergeInferredFiltersIntoBrief(result.data.brief, ctx.inferredFilters),
+      ctx
     );
     ctx.analysisBrief = merged;
     if (ctx.sessionAnalysisContext) {

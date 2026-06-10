@@ -164,6 +164,62 @@ test("formatSynthesisContextBundle emits all four section headers when populated
   assert.match(formatted, /Cite the pack id/);
 });
 
+test("W1 · surfaces COMPLETE rows for a small aggregated result (full 24-row ASM ranking, no partial-snippet hedging)", () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    ASM: `ASM_${i}`,
+    pjp_adherence_rate: Number((0.5 + i * 0.01).toFixed(2)),
+  }));
+  const block = buildSynthesisContext(baseCtx(), {
+    structuredObservations: [
+      {
+        stepId: "s1",
+        tool: "execute_query_plan",
+        args: { plan: { groupBy: ["ASM"] } },
+        metrics: { outputRowCount: 24, appliedAggregation: true },
+        result: { table: { rows, columns: ["ASM", "pjp_adherence_rate"], rowCount: 24 } },
+      },
+    ],
+  }).dataUnderstandingBlock;
+  assert.match(block, /Complete results for small aggregated steps/);
+  assert.match(block, /24 rows, COMPLETE/);
+  // All 24 ASMs reach the writer — the full ranking is stateable, not "partially shown".
+  for (let i = 0; i < 24; i++) {
+    assert.ok(block.includes(`ASM_${i}`), `ASM_${i} missing from synthesis context`);
+  }
+});
+
+test("W1 · does NOT surface full rows for a LARGE result (prompt stays bounded)", () => {
+  const rows = Array.from({ length: 200 }, (_, i) => ({ TSOE: `T_${i}`, n: i }));
+  const block = buildSynthesisContext(baseCtx(), {
+    structuredObservations: [
+      {
+        stepId: "s1",
+        tool: "execute_query_plan",
+        args: { plan: { groupBy: ["TSO_TSE Code"] } },
+        metrics: { outputRowCount: 200, appliedAggregation: true },
+        result: { table: { rows, columns: ["TSOE", "n"], rowCount: 200 } },
+      },
+    ],
+  }).dataUnderstandingBlock;
+  assert.ok(!/Complete results for small aggregated steps/.test(block));
+});
+
+test("W1 · does NOT surface full rows for an un-aggregated (raw) result", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ ASM: `ASM_${i}`, x: i }));
+  const block = buildSynthesisContext(baseCtx(), {
+    structuredObservations: [
+      {
+        stepId: "s1",
+        tool: "execute_query_plan",
+        args: {},
+        metrics: { outputRowCount: 10, appliedAggregation: false },
+        result: { table: { rows, columns: ["ASM", "x"], rowCount: 10 } },
+      },
+    ],
+  }).dataUnderstandingBlock;
+  assert.ok(!/Complete results for small aggregated steps/.test(block));
+});
+
 test("dataUnderstandingBlock truncates columnRoles to 20 with overflow note", () => {
   const ctx = baseCtx();
   const sac = ctx.sessionAnalysisContext!;

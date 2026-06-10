@@ -1,0 +1,204 @@
+import { useCallback, useEffect, useState } from "react";
+import { ArrowRight, ChevronDown, ChevronRight, Sparkles } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Eyebrow, Heading } from "@/components/ui/typography";
+import { MagnitudesRow } from "@/pages/Home/Components/MagnitudesRow";
+import type { AttentionAreaSpec, DashboardAnswerEnvelope } from "@/shared/schema";
+import { selectSummaryBandData, selectAttentionAreas } from "../lib/summaryBandData";
+
+/**
+ * Wave ES1 · the Executive-Summary band — the dashboard's self-explanatory
+ * first view.
+ *
+ * The decision-grade `answerEnvelope` already rides on the dashboard but was
+ * only reachable through a right-side drawer (DR2), so the first paint was a
+ * minimal wall of text + markdown KPI bullets. This band surfaces the headline
+ * takeaway (TL;DR), the key numbers as gold KPI cards (reusing `MagnitudesRow`,
+ * the signature gold surface), and the top findings as compact callouts — then
+ * links to the full drawer for the deep detail (methodology, caveats,
+ * recommendations, investigation).
+ *
+ * Kept COMPACT and COLLAPSIBLE (default open, persisted per dashboard) so the
+ * charts still lead the page — the balance DR2 was reaching for, but visual
+ * instead of hidden. Rendered only on the first (Executive Summary) sheet.
+ */
+
+const STORAGE_PREFIX = "dashboard-summary-band-open:";
+
+function readOpen(dashboardId: string): boolean {
+  if (typeof sessionStorage === "undefined") return true;
+  try {
+    return sessionStorage.getItem(`${STORAGE_PREFIX}${dashboardId}`) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeOpen(dashboardId: string, open: boolean): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(`${STORAGE_PREFIX}${dashboardId}`, open ? "1" : "0");
+  } catch {
+    /* quota / private mode — ignore */
+  }
+}
+
+export interface DashboardSummaryBandProps {
+  dashboardId: string;
+  envelope?: DashboardAnswerEnvelope;
+  /** MW4 · below-org-average units to surface as an "Attention areas" callout
+   *  (management-by-exception). Sourced from the DashboardSpec, not the envelope. */
+  attentionAreas?: AttentionAreaSpec[];
+  /** MW4/MW6 · click a problem area to filter/drill into it. */
+  onAttentionAreaClick?: (area: AttentionAreaSpec) => void;
+  /** Opens the full analysis-summary drawer for the deep detail. */
+  onOpenSummary?: () => void;
+}
+
+export function DashboardSummaryBand({
+  dashboardId,
+  envelope,
+  attentionAreas,
+  onAttentionAreaClick,
+  onOpenSummary,
+}: DashboardSummaryBandProps) {
+  const [open, setOpen] = useState<boolean>(() => readOpen(dashboardId));
+  useEffect(() => setOpen(readOpen(dashboardId)), [dashboardId]);
+  const toggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      writeOpen(dashboardId, next);
+      return next;
+    });
+  }, [dashboardId]);
+
+  const { tldr, magnitudes, findings } = selectSummaryBandData(envelope);
+  const attention = selectAttentionAreas(attentionAreas);
+  if (!tldr && magnitudes.length === 0 && findings.length === 0 && attention.length === 0)
+    return null;
+
+  return (
+    <Card className="mb-4 overflow-hidden border-border/60">
+      <div className="flex items-center justify-between gap-3 px-4 pt-3.5 lg:px-5">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          aria-controls={`dashboard-summary-band-${dashboardId}`}
+          className="group flex items-center gap-2 rounded-brand-sm text-left transition-colors hover:opacity-90"
+        >
+          {open ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          )}
+          <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
+          <Eyebrow>Executive summary</Eyebrow>
+          {!open && tldr ? (
+            <span className="ml-1 truncate text-sm text-muted-foreground max-w-[40vw]">
+              {tldr}
+            </span>
+          ) : null}
+        </button>
+        {onOpenSummary ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenSummary}
+            className="h-7 flex-shrink-0 px-2 text-xs text-primary hover:text-primary"
+          >
+            Full summary
+            <ArrowRight className="ml-1 h-3.5 w-3.5" aria-hidden="true" />
+          </Button>
+        ) : null}
+      </div>
+
+      {open ? (
+        <div
+          id={`dashboard-summary-band-${dashboardId}`}
+          className="px-4 pb-4 lg:px-5"
+        >
+          {tldr ? (
+            <Heading size="md" as="p" className="mt-2 max-w-4xl text-foreground/90">
+              {tldr}
+            </Heading>
+          ) : null}
+
+          <MagnitudesRow items={magnitudes} label="Key numbers" />
+
+          {attention.length > 0 ? (
+            <div className="mt-4">
+              <Eyebrow className="mb-2 block">Attention areas</Eyebrow>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {attention.map((a, i) => {
+                  const isRed = a.status === "red";
+                  const tone = isRed
+                    ? "border-destructive/40 bg-destructive/5"
+                    : "border-amber-500/40 bg-amber-500/5";
+                  const dot = isRed ? "bg-destructive" : "bg-amber-500";
+                  const clickable = Boolean(onAttentionAreaClick && attentionAreas?.[i]);
+                  return (
+                    <button
+                      key={`attn-${i}`}
+                      type="button"
+                      disabled={!clickable}
+                      onClick={
+                        clickable ? () => onAttentionAreaClick!(attentionAreas![i]) : undefined
+                      }
+                      className={`flex w-full items-start gap-2 rounded-brand-sm border ${tone} px-3 py-2 text-left shadow-elev-1 ${
+                        clickable ? "cursor-pointer hover:opacity-90" : "cursor-default"
+                      }`}
+                      title={clickable ? `Filter to ${a.unit}` : undefined}
+                    >
+                      <span
+                        className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dot}`}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium leading-snug text-foreground">
+                          {a.unit}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {a.metric}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">
+                        {a.deltaLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {findings.length > 0 ? (
+            <div className="mt-4">
+              <Eyebrow className="mb-2 block">Key findings</Eyebrow>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {findings.map((f, i) => (
+                  <div
+                    key={`band-finding-${i}`}
+                    className="rounded-brand-sm border border-border bg-card px-3 py-2 shadow-elev-1"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-medium leading-snug text-foreground">
+                        {f.headline}
+                      </span>
+                      {f.magnitude ? (
+                        <span className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary tabular-nums">
+                          {f.magnitude}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+}

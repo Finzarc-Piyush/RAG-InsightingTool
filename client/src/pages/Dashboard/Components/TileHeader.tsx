@@ -3,6 +3,7 @@ import { GripVertical } from "lucide-react";
 import { CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useDashboardEditMode } from "../context/DashboardEditModeContext";
+import { shouldShowEditActions } from "./tileHeaderChrome";
 
 /**
  * Wave DR3 · unified tile header.
@@ -28,8 +29,14 @@ import { useDashboardEditMode } from "../context/DashboardEditModeContext";
 
 interface TileHeaderProps {
   title: ReactNode;
-  /** Right-side action slot — typically edit/delete buttons. */
+  /** Right-side action slot — typically edit/delete buttons. Edit-mode only. */
   actions?: ReactNode;
+  /**
+   * Wave Z1 · always-on action slot, shown in BOTH view and edit mode (unlike
+   * `actions`). Home for affordances every viewer needs — e.g. the per-chart
+   * Expand/Maximize button (Z2). Rendered left of the edit-gated `actions`.
+   */
+  persistentActions?: ReactNode;
   /**
    * If set, renders the title with this className on the title node
    * (used by the existing chart kind which uses `text-base`). Defaults
@@ -50,12 +57,13 @@ interface TileHeaderProps {
 export function TileHeader({
   title,
   actions,
+  persistentActions,
   badge,
   titleClassName,
   className,
 }: TileHeaderProps) {
   const { mode, canToggle } = useDashboardEditMode();
-  const showActions = canToggle && mode === "edit" && !!actions;
+  const showActions = shouldShowEditActions(mode, canToggle, !!actions);
   return (
     <CardHeader
       className={cn("flex w-full items-center justify-between pb-2 pt-3 px-4", className)}
@@ -70,6 +78,11 @@ export function TileHeader({
           {title}
         </CardTitle>
         {badge ? <div className="flex-shrink-0">{badge}</div> : null}
+        {persistentActions ? (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {persistentActions}
+          </div>
+        ) : null}
         {actions ? (
           <div
             className={cn(

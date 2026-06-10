@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  shouldShowEditActions,
+  shouldShowPersistentActions,
+} from "./tileHeaderChrome";
 
 /**
  * DR3 · regression coverage for the tile chrome refactor.
@@ -109,5 +113,29 @@ describe("DashboardTiles · draggableCancel contract", () => {
       }
     }
     expect(count).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("Wave Z1 · TileHeader action-slot gating", () => {
+  it("edit actions show only in edit mode with toggle + actions present", () => {
+    expect(shouldShowEditActions("edit", true, true)).toBe(true);
+    expect(shouldShowEditActions("view", true, true)).toBe(false);
+    expect(shouldShowEditActions("edit", false, true)).toBe(false);
+    expect(shouldShowEditActions("edit", true, false)).toBe(false);
+  });
+
+  it("persistent actions show whenever provided (view AND edit mode)", () => {
+    expect(shouldShowPersistentActions(true)).toBe(true);
+    expect(shouldShowPersistentActions(false)).toBe(false);
+  });
+
+  it("TileHeader exposes a persistentActions prop rendered unconditionally", () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "src/pages/Dashboard/Components/TileHeader.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("persistentActions");
+    // The persistent slot must NOT be wrapped by the edit-mode opacity gate.
+    expect(src).toMatch(/persistentActions \? \(\s*<div className="flex items-center gap-1 flex-shrink-0">/);
   });
 });

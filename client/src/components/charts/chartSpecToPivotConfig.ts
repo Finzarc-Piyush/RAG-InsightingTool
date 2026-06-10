@@ -30,6 +30,16 @@ import type { PivotUiConfig, PivotValueSpec } from "@/lib/pivot/types";
  * `buildPivotModel` is also pure, so the entire chart→pivot pipeline
  * runs client-side without touching the session or the server.
  */
+/** A computed rate/ratio/share column (e.g. `pjp_adherence_rate`,
+ *  `Compliance Visit_rate`) is ALREADY aggregated per group in `chart.data`.
+ *  Summing it across the group's single row is wrong (and collapses
+ *  structural-zero groups to 0), so the pivot must display it as-is via the
+ *  identity ('first') agg. Suffix-based so a raw count like "Compliance Visit"
+ *  is NOT caught. */
+function pivotAggForField(field: string): "sum" | "first" {
+  return /_rate\b|_ratio\b|_share\b|_pct\b/i.test(field) ? "first" : "sum";
+}
+
 export function chartSpecToPivotConfig(
   chart: ChartSpec,
 ): { config: PivotUiConfig; valueSpecs: PivotValueSpec[] } | null {
@@ -64,7 +74,7 @@ export function chartSpecToPivotConfig(
     const valueSpecs: PivotValueSpec[] = seriesKeys.map((k) => ({
       id: k,
       field: k,
-      agg: "sum" as const,
+      agg: pivotAggForField(k),
     }));
     const config: PivotUiConfig = {
       filters: [],
@@ -77,7 +87,7 @@ export function chartSpecToPivotConfig(
   }
 
   const valueSpecs: PivotValueSpec[] = [
-    { id: "value", field: chart.y, agg: "sum" },
+    { id: "value", field: chart.y, agg: pivotAggForField(chart.y) },
   ];
 
   const columns: string[] = hasSeriesColumn

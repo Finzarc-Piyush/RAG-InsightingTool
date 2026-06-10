@@ -11,10 +11,10 @@ import {
   addMessagesBySessionId,
   updateMessageAndTruncate,
   getChatBySessionIdEfficient,
-  setPendingUserMessageForSession,
   ensureDatasetFingerprintForSession,
   ChatDocument
 } from "../../models/chat.model.js";
+import { decideEnrichmentGate } from "./enrichmentGate.js";
 import { loadChartsFromBlob } from "../../lib/blobStorage.js";
 import { enrichCharts, enrichPivotInsightFromEnvelope, validateAndEnrichResponse } from "./chatResponse.service.js";
 import { attachAutoLayers } from "../../lib/charts/autoAttachLayers.js";
@@ -724,9 +724,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     console.log('✅ Chat document found');
 
-    const enrichment = chatDocument.enrichmentStatus;
-    if (enrichment === "pending" || enrichment === "in_progress") {
-      await setPendingUserMessageForSession(sessionId, username, message);
+    const gate = decideEnrichmentGate(chatDocument.enrichmentStatus);
+    if (gate === "queued") {
+      // The client holds this question and re-fires it as a normal streaming
+      // turn once the data is fully materialized (see client
+      // `earlyQuestionRefire`). We no longer persist a server-side
+      // `pendingUserMessage` — just signal "not ready yet" and close.
       sendSSE(res, "queued", {
         reason: "enrichment",
         message:
@@ -735,7 +738,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       res.end();
       return;
     }
-    if (enrichment === "failed") {
+    if (gate === "failed") {
       sendSSE(res, "error", {
         error:
           "Data enrichment failed for this session. Please try uploading your file again.",
@@ -1731,6 +1734,57 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         }
       })(),
     ]);
+
+    // ── Wave I3 · mirror the chat answer's per-chart insights onto the
+    // dashboard ─────────────────────────────────────────────────────────
+    // The dashboard is assembled inside `answerQuestion` BEFORE `enrichCharts`
+    // runs, so its charts are bare. Now that `transformedResponse.charts`
+    // carry the enriched `keyInsight`/`businessCommentary`, copy the SAME ones
+    // onto (a) the in-memory draft — so the persisted message and the
+    // offer-track "Build Dashboard" inherit them — and (b) the already-
+    // persisted auto-created dashboard. No new LLM calls; best-effort, never
+    // blocks the turn.
+    try {
+      const enrichedCharts = (transformedResponse.charts ?? []) as ChartSpec[];
+      if (enrichedCharts.length > 0) {
+        const { applyChartInsightsBySignature } = await import(
+          "../../lib/applyChartInsightsBySignature.js"
+        );
+        const draft = (
+          transformedResponse as {
+            dashboardDraft?: { sheets?: Array<{ charts?: ChartSpec[] }> };
+          }
+        ).dashboardDraft;
+        if (draft?.sheets?.length) {
+          for (const sheet of draft.sheets) {
+            if (Array.isArray(sheet.charts) && sheet.charts.length > 0) {
+              sheet.charts = applyChartInsightsBySignature(
+                sheet.charts,
+                enrichedCharts
+              ).charts;
+            }
+          }
+        }
+        const createdId = (
+          transformedResponse as { createdDashboardId?: string }
+        ).createdDashboardId;
+        if (createdId && username) {
+          const { patchDashboardChartInsights } = await import(
+            "../../lib/patchDashboardChartInsights.js"
+          );
+          const res = await patchDashboardChartInsights({
+            dashboardId: createdId,
+            username,
+            charts: enrichedCharts,
+          });
+          if (!res.ok) {
+            console.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
+          }
+        }
+      }
+    } catch (insightPatchErr) {
+      console.warn("⚠️ dashboard chart-insight patch failed:", insightPatchErr);
+    }
 
     // ── PHASE 3: Persistence ──────────────────────────────────────────
     // Persist enriched data so reload gets the full version. Persistence

@@ -20,11 +20,30 @@ import type {
 
 type FacetMetaByField = Map<string, TemporalFacetColumnMeta> | undefined;
 
+/** Normalize a column name for matching: lowercase + drop spaces/underscores/
+ *  dashes, so "pjp_adherence_rate" ≡ "PJP Adherence_rate". */
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+/** Resolve a value field against the actual row keys, tolerant of case and
+ *  separator drift, so a spec.field like "pjp_adherence_rate" still matches a
+ *  data column aliased "PJP Adherence_rate" (rate columns flow through with
+ *  their computed alias, which can differ in casing/separators from chart.y). */
+function resolveField(rows: Record<string, unknown>[], field: string): string {
+  if (rows.length === 0 || field in rows[0]) return field;
+  const target = normKey(field);
+  for (const k of Object.keys(rows[0])) {
+    if (normKey(k) === target) return k;
+  }
+  return field;
+}
+
 function applyAgg(
   rows: Record<string, unknown>[],
   spec: PivotValueSpec
 ): number {
-  const f = spec.field;
+  const f = resolveField(rows, spec.field);
   if (spec.agg === 'count') {
     return rows.length;
   }
@@ -34,7 +53,7 @@ function applyAgg(
     if (n !== null) nums.push(n);
   }
   if (nums.length === 0) {
-    return spec.agg === 'sum' || spec.agg === 'mean' ? 0 : 0;
+    return 0;
   }
   switch (spec.agg) {
     case 'sum':
@@ -45,6 +64,10 @@ function applyAgg(
       return Math.min(...nums);
     case 'max':
       return Math.max(...nums);
+    // IDENTITY — the value is already aggregated per group (a pre-computed
+    // rate/ratio). Display the single per-group value as-is; NEVER re-sum it.
+    case 'first':
+      return nums[0];
     default:
       return 0;
   }

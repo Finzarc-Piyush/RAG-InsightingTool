@@ -103,7 +103,17 @@ export async function resolveAnswerQuestionDataLoad(params: {
     (isInformationSeekingQuery(message) || isAnalyticalQuery(message));
 
   let latestData: Record<string, any>[];
-  let columnarStoragePathOpt: boolean | undefined;
+  // The agent's analytical tools (execute_query_plan → DuckDB) must know the
+  // columnar surface exists whenever the session is materialized — NOT only
+  // when the query-shape heuristic (useDuckDBPlan) matches. Imperative commands
+  // like "give a pjp dashboard." match neither isInformationSeekingQuery nor
+  // isAnalyticalQuery, so gating the flag on useDuckDBPlan left ctx.exec
+  // .columnarStoragePath undefined and hard-failed every aggregation step with
+  // "DuckDB execution surface is not available" — even though the data was
+  // materialized. Derive the flag from materialization state directly.
+  let columnarStoragePathOpt: boolean | undefined = columnarStoragePath
+    ? true
+    : undefined;
   let loadFullDataOpt: (() => Promise<Record<string, any>[]>) | undefined;
 
   if (useDuckDBPlan) {
@@ -118,7 +128,6 @@ export async function resolveAnswerQuestionDataLoad(params: {
         periodDimension: periodDimensionFromSummary(chatDocument.dataSummary),
       });
     }
-    columnarStoragePathOpt = true;
     loadFullDataOpt = () =>
       requiredColumns.length > 0
         ? loadDataForColumns(chatDocument, requiredColumns, queryFilters)

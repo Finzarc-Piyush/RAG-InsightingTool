@@ -186,3 +186,82 @@ describe("chart → pivot integration (wide multi-series)", () => {
     ]);
   });
 });
+
+/**
+ * W1/W2 regression: a computed RATE column (e.g. pjp_adherence_rate) is already
+ * aggregated per group in chart.data. The old config summed it ('sum'), which
+ * collapsed structural-zero groups to 0 and produced a meaningless grand total.
+ * The pivot must DISPLAY the per-group rate ('first' identity agg).
+ */
+const rateChart: ChartSpec = {
+  type: "bar",
+  title: "pjp_adherence_rate by ASM",
+  x: "ASM",
+  y: "pjp_adherence_rate",
+  data: [
+    { ASM: "North UP", pjp_adherence_rate: 0.39 },
+    { ASM: "Kolkata", pjp_adherence_rate: 0.31 },
+    { ASM: "Gujarat West", pjp_adherence_rate: 0.06 },
+  ],
+};
+
+describe("chart → pivot integration (computed rate column)", () => {
+  it("uses the identity ('first') agg for a *_rate column, not sum", () => {
+    const derived = chartSpecToPivotConfig(rateChart)!;
+    expect(derived.valueSpecs[0].agg).toBe("first");
+  });
+
+  it("displays each group's computed rate as-is (no re-summing, no 0 collapse)", () => {
+    const derived = chartSpecToPivotConfig(rateChart)!;
+    const model = buildPivotModel(
+      rateChart.data as Record<string, unknown>[],
+      derived.config,
+      derived.valueSpecs,
+      {},
+    );
+    const flat = flattenPivotTree(model.tree, new Set());
+    const north = flat.find((r) => r.label === "North UP" && r.kind === "data");
+    expect(north?.values?.flatValues?.["value"]).toBeCloseTo(0.39);
+    const guj = flat.find((r) => r.label === "Gujarat West" && r.kind === "data");
+    expect(guj?.values?.flatValues?.["value"]).toBeCloseTo(0.06);
+  });
+
+  it("resolves the rate field case-insensitively (alias casing drift)", () => {
+    // chart.y is lowercase but the data column kept the original alias casing.
+    const drift: ChartSpec = {
+      ...rateChart,
+      y: "pjp_adherence_rate",
+      data: [
+        { ASM: "A", "PJP Adherence_rate": 0.5 },
+        { ASM: "B", "PJP Adherence_rate": 0.2 },
+        { ASM: "C", "PJP Adherence_rate": 0.1 },
+      ],
+    };
+    const derived = chartSpecToPivotConfig(drift)!;
+    const model = buildPivotModel(
+      drift.data as Record<string, unknown>[],
+      derived.config,
+      derived.valueSpecs,
+      {},
+    );
+    const flat = flattenPivotTree(model.tree, new Set());
+    const a = flat.find((r) => r.label === "A" && r.kind === "data");
+    expect(a?.values?.flatValues?.["value"]).toBeCloseTo(0.5);
+  });
+
+  it("a raw count column (Compliance Visit) still sums", () => {
+    const countChart: ChartSpec = {
+      type: "bar",
+      title: "Compliance Visit by ASM",
+      x: "ASM",
+      y: "Compliance Visit",
+      data: [
+        { ASM: "A", "Compliance Visit": 10 },
+        { ASM: "A", "Compliance Visit": 20 },
+        { ASM: "B", "Compliance Visit": 5 },
+      ],
+    };
+    const derived = chartSpecToPivotConfig(countChart)!;
+    expect(derived.valueSpecs[0].agg).toBe("sum");
+  });
+});

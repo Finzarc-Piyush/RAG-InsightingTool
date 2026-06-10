@@ -233,6 +233,9 @@ export async function runNarrator(
       appliedAggregation?: boolean;
       durationMs?: number;
     };
+    /** Full ToolResult — forwarded so the synthesis context can surface the
+     *  complete rows of small aggregated steps (e.g. a 24-row ASM ranking). */
+    result?: unknown;
   }>
 ): Promise<NarratorOutput | null> {
   const blackboardBlock = formatForNarrator(blackboard);
@@ -369,6 +372,18 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   listed in DATA UNDERSTANDING — do not invent channel, distribution, brand,
   competition, customer demographics, supply-chain, or pricing mechanisms unless
   those columns are in the data.
+- NEVER META-HEDGE about your own evidence. Do not write caveats like "the
+  supplied evidence does not include the full dashboard field list", "the exact
+  layout/filter cannot be finalized from this turn", "cannot be stated from the
+  supplied evidence", or "this view cannot reveal whether …". You have the
+  figures you need; answer with them. A genuine DATA limitation (single period,
+  tiny sample) belongs in \`caveats\` as a plain fact about the DATA, never a
+  hedge about your reasoning or what you were given.
+- STRUCTURAL ZEROS are expected, not anomalies. When a metric is 0 for a whole
+  category because it is only MEASURED elsewhere (e.g. PJP adherence is 0 on
+  Weekly-Off/Leave/Holiday days because no journey was planned), state that
+  plainly as the reason and scope the takeaway to where the metric is live —
+  do NOT present the structural 0 as underperformance or a data problem.
 - DIMENSION HIERARCHIES: when the user message includes a DIMENSION HIERARCHIES
   block, treat the listed rollup values as category totals — never as competing
   items. Phrase findings as "the <rollupValue> category" (or "overall <column>"

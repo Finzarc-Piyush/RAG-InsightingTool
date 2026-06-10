@@ -205,6 +205,11 @@ class UploadQueue {
         warnSuspiciousDuplicateRowIdInSample,
       } = await import('../lib/fileParser.js');
       const { inferDatasetProfile, emptyDatasetProfile } = await import('../lib/datasetProfile.js');
+      // Wave W-DPC1 · dataset-profile cache (skip the LLM call on re-uploads).
+      const { fingerprintFromSummary } = await import('../lib/datasetFingerprint.js');
+      const { readCachedProfile, writeCachedProfile, computeContextHash } = await import(
+        '../models/datasetProfileCache.model.js'
+      );
       const { processLargeFile, shouldUseLargeFileProcessing, getDataForAnalysis } = await import('../lib/largeFileProcessor.js');
       const {
         createChatDocument,
@@ -624,12 +629,42 @@ class UploadQueue {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(`B5 · domain context load for dataset profile failed: ${msg}`);
         }
-        datasetProfile = await inferDatasetProfile(data, {
-          fileName: job.fileName,
-          dataSummary: interimSummary,
-          permanentContext: datasetProfilePermanentContext,
-          domainContext: datasetProfileDomainContext,
-        });
+        // Wave W-DPC1 · The profiling LLM call is the dominant upload-critical-path
+        // cost. Re-uploads of the same workbook shape (same column names+types and
+        // unchanged permanent/domain context) reuse the cached profile and skip the
+        // call entirely. Only the DatasetProfile is cached — the pipeline below
+        // still runs on fresh data, so temporal facets / cleaning are unchanged.
+        const profileFingerprint = fingerprintFromSummary(interimSummary);
+        const profileContextHash = computeContextHash(
+          datasetProfilePermanentContext,
+          datasetProfileDomainContext
+        );
+        const cachedProfile = job.username
+          ? await readCachedProfile(job.username, profileFingerprint, profileContextHash)
+          : null;
+        if (cachedProfile) {
+          console.log(
+            `⚡ dataset-profile cache HIT (${job.username} / ${profileFingerprint}) — skipping inferDatasetProfile`
+          );
+          datasetProfile = cachedProfile;
+        } else {
+          datasetProfile = await inferDatasetProfile(data, {
+            fileName: job.fileName,
+            dataSummary: interimSummary,
+            permanentContext: datasetProfilePermanentContext,
+            domainContext: datasetProfileDomainContext,
+          });
+          // Cache only a real LLM profile — never the empty/timeout fallback (it
+          // has no shortDescription and the heuristic path already handles it).
+          if (job.username && datasetProfile.shortDescription?.trim()) {
+            void writeCachedProfile(
+              job.username,
+              profileFingerprint,
+              profileContextHash,
+              datasetProfile
+            );
+          }
+        }
         const enableDirtyDateLlm =
           process.env.ENABLE_DIRTY_DATE_LLM === 'true' ||
           process.env.ENABLE_DIRTY_DATE_LLM === '1';
@@ -773,6 +808,29 @@ class UploadQueue {
                       .map((i) => `${i.column}(${i.kind})`)
                       .join(', ')}`
                   );
+                  // Valid-measurement-universe inference: a boolean metric like
+                  // "PJP Adherence" is only meaningful on its planned-context
+                  // rows (Market Working) — other rows are structural zeros.
+                  // Stamps `indicator.applicabilityScope` so rate steps scope
+                  // their denominator, degenerate breakdowns are skipped, and
+                  // the headline/narrative use the valid universe.
+                  try {
+                    const {
+                      inferMetricApplicability,
+                      applyMetricApplicabilityToSummary,
+                    } = await import('../lib/inferMetricApplicability.js');
+                    const gates = inferMetricApplicability(summary, data);
+                    if (gates.size > 0) {
+                      applyMetricApplicabilityToSummary(summary, gates);
+                      console.log(
+                        `📐 inferMetricApplicability: ${[...gates.entries()]
+                          .map(([m, g]) => `${m}⟂${g[0]?.gateColumn}`)
+                          .join(', ')}`
+                      );
+                    }
+                  } catch (scopeErr) {
+                    console.warn('⚠️ inferMetricApplicability skipped:', scopeErr);
+                  }
                   // SU-IC2 · LLM enrichment for the indicator columns
                   // SU-IC1 just flagged. Adds answersQuestions per column +
                   // adjudicates positive/negative polarity when the heuristic

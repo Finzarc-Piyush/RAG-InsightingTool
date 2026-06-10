@@ -66,6 +66,8 @@ import {
   buildDashboardUserPrompt as buildUserPrompt,
 } from "./buildDashboardPrompt.js";
 import { buildKpiStripBlock } from "./kpiStripBlock.js";
+import { computeAttentionAreas } from "./computeAttentionAreas.js";
+import { attachOrgAverageReferenceLines } from "./attachReferenceLines.js";
 
 // Re-export the pure prompt builders so existing call sites that import them
 // from this module keep working. Tests should import directly from
@@ -279,6 +281,10 @@ async function runDashboardCompletion(
   user: string,
   args: BuildDashboardArgs
 ): Promise<DashboardSpec | null> {
+  // MW5 · attach an "Org avg" benchmark reference line to each categorical
+  // breakdown so a manager sees who is above/below average at a glance. Uses
+  // copies (dashboard-only — chat-surface charts are unaffected).
+  args = { ...args, charts: attachOrgAverageReferenceLines(args.charts ?? []) };
   try {
     const out = await completeJson(system, user, dashboardSpecSchema, {
       turnId: `${args.turnId}_dashdraft`,
@@ -371,6 +377,12 @@ async function runDashboardCompletion(
     if (args.priorInvestigationsSnapshot && args.priorInvestigationsSnapshot.length > 0) {
       spec.priorInvestigationsSnapshot = args.priorInvestigationsSnapshot;
     }
+    // MW4 · management-by-exception — flag below-org-average units from the
+    // breakdown charts so the dashboard can lead with an "Attention Areas"
+    // callout (the problem areas to act on first). Deterministic, derived from
+    // the displayed charts, so it never contradicts a tile.
+    const attentionAreas = computeAttentionAreas(args.charts ?? []);
+    if (attentionAreas.length > 0) spec.attentionAreas = attentionAreas;
 
     applyDashboardTemplateLayout(spec);
     return spec;
@@ -420,6 +432,8 @@ async function runDashboardCompletion(
       if (args.priorInvestigationsSnapshot && args.priorInvestigationsSnapshot.length > 0) {
         spec.priorInvestigationsSnapshot = args.priorInvestigationsSnapshot;
       }
+      const attentionAreasFb = computeAttentionAreas(args.charts ?? []);
+      if (attentionAreasFb.length > 0) spec.attentionAreas = attentionAreasFb;
       applyDashboardTemplateLayout(spec);
       return spec;
     } catch (fallbackErr) {

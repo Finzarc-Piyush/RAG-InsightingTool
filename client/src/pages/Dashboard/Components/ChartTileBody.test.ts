@@ -124,11 +124,15 @@ describe("WI2-wire-bind · ChartTileBody hooks + filtered-data binding", () => {
     );
   });
 
-  it("renders the footer (and thus the regen surface) only when keyInsight is present", () => {
-    // Preserves the pre-binding visual contract — footers only show on
-    // tiles that carry a keyInsight string. Mirrors the existing
-    // `tile.chart.keyInsight ? (...) : null` guard.
-    assert.match(bodySrc, /tile\.chart\.keyInsight \? \(\s*<TileInsightFooter/);
+  it("always renders the footer, driving the empty/generate state via resolveInsightFooterMode (Wave Z3)", () => {
+    // Wave Z3 superseded the pre-binding `tile.chart.keyInsight ? (...) : null`
+    // guard: the footer now ALWAYS renders so auto-built dashboard charts (whose
+    // insight is patched in asynchronously by the server) still show the
+    // collapsible chrome + a "Generate insight" CTA in the meantime. The old
+    // gate must be gone, and the empty state must be derived from the mode.
+    assert.doesNotMatch(bodySrc, /tile\.chart\.keyInsight \? \(\s*<TileInsightFooter/);
+    assert.match(bodySrc, /<TileInsightFooter/);
+    assert.match(bodySrc, /emptyState=\{[\s\S]*?resolveInsightFooterMode\(/);
   });
 });
 

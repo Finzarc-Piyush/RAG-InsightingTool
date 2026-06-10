@@ -78,3 +78,78 @@ describe("DR18A · contentDrivenHeight", () => {
     }
   });
 });
+
+const INSIGHT_BASE = { w: 4, h: 7, minW: 2, minH: 2 };
+const ACTION_BASE = { w: 4, h: 7, minW: 2, minH: 2 };
+const TABLE_BASE = { w: 4, h: 8, minW: 2, minH: 3 };
+const PIVOT_BASE = { w: 4, h: 12, minW: 3, minH: 4 };
+
+function insightTile(narrative: string): DashboardTile {
+  return { kind: "insight", id: "i1", title: "Insight", narrative } as DashboardTile;
+}
+function actionTile(recommendation: string): DashboardTile {
+  return { kind: "action", id: "a1", title: "Action", recommendation } as DashboardTile;
+}
+function tableTile(rowCount: number): DashboardTile {
+  return {
+    kind: "table",
+    id: "t1",
+    title: "Table",
+    index: 0,
+    table: {
+      columns: ["A", "B"],
+      rows: Array.from({ length: rowCount }, (_, i) => [String(i), i]),
+    },
+  } as DashboardTile;
+}
+function pivotTile(): DashboardTile {
+  return {
+    kind: "pivot",
+    id: "p1",
+    title: "Pivot",
+    index: 0,
+    pivot: { id: "p1", title: "Pivot", pivotConfig: { rows: [], columns: [], values: [], filters: [], unused: [] } },
+  } as DashboardTile;
+}
+
+describe("Wave S1 · contentDrivenHeight for text + table tiles", () => {
+  it("sizes insight tiles to their narrative length", () => {
+    expect(contentDrivenHeight(insightTile(""), INSIGHT_BASE, 4)).toBe(INSIGHT_BASE.minH);
+    // 40 chars/line at w=4 → 4 lines + 2 padding = 6 rows.
+    const out = contentDrivenHeight(insightTile("x".repeat(40 * 4)), INSIGHT_BASE, 4);
+    expect(out).toBe(6);
+  });
+
+  it("sizes action tiles to their recommendation length", () => {
+    const out = contentDrivenHeight(actionTile("x".repeat(40 * 2)), ACTION_BASE, 4);
+    expect(out).toBe(4); // 2 lines + 2 padding
+  });
+
+  it("sizes tables to header + row count", () => {
+    // 2 data rows → 3 header + 2 = 5 rows.
+    expect(contentDrivenHeight(tableTile(2), TABLE_BASE, 4)).toBe(5);
+  });
+
+  it("clamps a tiny table up to minH and a huge table to the row ceiling", () => {
+    // 0 rows → 3 header, but minH=3 floor → 3.
+    expect(contentDrivenHeight(tableTile(0), TABLE_BASE, 4)).toBe(3);
+    // 30 rows → 3 header + min(30, 8) = 11.
+    expect(contentDrivenHeight(tableTile(30), TABLE_BASE, 4)).toBe(11);
+  });
+
+  it("leaves chart and pivot tiles on their base height without grid geometry", () => {
+    expect(contentDrivenHeight(chartTile(), CHART_BASE, 4)).toBe(14);
+    expect(contentDrivenHeight(pivotTile(), PIVOT_BASE, 4)).toBe(12);
+  });
+
+  it("sizes chart tiles by aspect ratio when grid geometry is provided (S3)", () => {
+    const grid = { cols: 12, rowHeight: 32, gridMargin: [16, 16] as [number, number] };
+    const narrow = contentDrivenHeight(chartTile(), CHART_BASE, 4, grid);
+    const wide = contentDrivenHeight(chartTile(), CHART_BASE, 12, grid);
+    // No longer pinned to the fixed 14; wider charts get taller.
+    expect(narrow).not.toBe(14);
+    expect(wide).toBeGreaterThan(narrow);
+    // Pivot still ignores grid geometry (intrinsic sizing).
+    expect(contentDrivenHeight(pivotTile(), PIVOT_BASE, 4, grid)).toBe(12);
+  });
+});

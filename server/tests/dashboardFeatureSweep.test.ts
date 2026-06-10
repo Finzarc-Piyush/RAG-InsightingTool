@@ -1,9 +1,97 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { enumerateMissingDashboardCharts } from "../lib/agents/runtime/dashboardFeatureSweep.js";
+import {
+  enumerateMissingDashboardCharts,
+  __test__ as sweepTest,
+} from "../lib/agents/runtime/dashboardFeatureSweep.js";
 import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
 import type { AnalysisBrief, ChartSpec, DataSummary } from "../shared/schema.js";
+
+/** Build a ctx whose summary carries temporal-facet columns + a base date
+ *  column with `dateRange`, for the W3 grain-selection tests. */
+function makeTemporalCtx(dateRange: {
+  spanDays: number;
+  distinctDayCount: number;
+  minIso?: string;
+  maxIso?: string;
+} | null): AgentExecutionContext {
+  const columns: DataSummary["columns"] = [
+    { name: "ASM", type: "string", sampleValues: [] },
+    {
+      name: "Date",
+      type: "date",
+      sampleValues: [],
+      ...(dateRange ? { dateRange } : {}),
+    } as DataSummary["columns"][number],
+    { name: "Day · Date", type: "date", sampleValues: [] },
+    { name: "Week · Date", type: "date", sampleValues: [] },
+    { name: "Month · Date", type: "date", sampleValues: [] },
+  ];
+  const summary: DataSummary = {
+    rowCount: 100,
+    columnCount: columns.length,
+    columns,
+    numericColumns: [],
+    dateColumns: ["Date", "Day · Date", "Week · Date", "Month · Date"],
+  };
+  return {
+    sessionId: "s",
+    question: "build a pjp dashboard",
+    data: [],
+    summary,
+    chatHistory: [],
+    mode: "analysis",
+  } as AgentExecutionContext;
+}
+
+test("MW2 · numeric-outcome breakdowns are size-normalized (mean), not raw sum", () => {
+  const data = [
+    { Region: "East", Sales: 10 },
+    { Region: "East", Sales: 30 },
+    { Region: "West", Sales: 20 },
+    { Region: "West", Sales: 40 },
+  ];
+  const ctx = makeCtx(
+    makeBrief({
+      requestsDashboard: true,
+      outcomeMetricColumn: "Sales",
+      candidateDriverDimensions: ["Region"],
+    }),
+    data,
+    ["Sales"]
+  );
+  const charts = enumerateMissingDashboardCharts(ctx, []);
+  const bar = charts.find((c) => c.type === "bar" && c.x === "Region");
+  assert.ok(bar, "expected a Sales-by-Region bar breakdown");
+  assert.strictEqual(bar!.aggregate, "mean");
+  assert.match(bar!.title, /\(avg\)/);
+});
+
+test("W3 · single-month daily span falls from collapsing Month facet to the Day facet", () => {
+  const ctx = makeTemporalCtx({
+    spanDays: 29,
+    distinctDayCount: 30,
+    minIso: "2026-04-01",
+    maxIso: "2026-04-30",
+  });
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Day · Date");
+});
+
+test("W3 · multi-month span keeps the Month facet (≥2 buckets, no-op)", () => {
+  const ctx = makeTemporalCtx({
+    spanDays: 200,
+    distinctDayCount: 150,
+    minIso: "2026-01-01",
+    maxIso: "2026-07-20",
+  });
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Month · Date");
+});
+
+test("W3 · missing dateRange metadata keeps the Month facet (safe no-op)", () => {
+  const ctx = makeTemporalCtx(null);
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Month · Date");
+});
 
 function makeBrief(over: Partial<AnalysisBrief> = {}): AnalysisBrief {
   return {

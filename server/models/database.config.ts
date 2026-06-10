@@ -18,6 +18,10 @@ const COSMOS_AUTOMATIONS_CONTAINER_ID = process.env.COSMOS_AUTOMATIONS_CONTAINER
 // dataset shape — every session whose dataset has the same fingerprint
 // inherits the list at session start.
 const COSMOS_DATASET_DIRECTIVES_CONTAINER_ID = process.env.COSMOS_DATASET_DIRECTIVES_CONTAINER_ID || "dataset_directives";
+// Wave W-DPC1 · dataset-profile cache. Document id = `${username}__${datasetFingerprint}`;
+// partition key = `/username`. Caches the upload-critical-path `inferDatasetProfile`
+// result so re-uploads of the same workbook shape skip the LLM call.
+const COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID = process.env.COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID || "dataset_profiles";
 
 // Lazy CosmosDB client so we don't throw "Invalid URL" at load time when env is not yet loaded or not set
 let clientInstance: CosmosClient | null = null;
@@ -38,6 +42,7 @@ let sharedAnalysesContainer: Container;
 let sharedDashboardsContainer: Container;
 let automationsContainer: Container;
 let datasetDirectivesContainer: Container; // Wave W-UD1
+let datasetProfileCacheContainer: Container; // Wave W-DPC1
 let initializationInProgress = false;
 let initializationPromise: Promise<void> | null = null;
 
@@ -114,7 +119,8 @@ export const initializeCosmosDB = async (): Promise<void> => {
     sharedAnalysesContainer &&
     sharedDashboardsContainer &&
     automationsContainer &&
-    datasetDirectivesContainer
+    datasetDirectivesContainer &&
+    datasetProfileCacheContainer
   ) {
     return;
   }
@@ -191,6 +197,15 @@ export const initializeCosmosDB = async (): Promise<void> => {
         400
       );
       console.log(`✅ Dataset directives container ready: ${COSMOS_DATASET_DIRECTIVES_CONTAINER_ID}`);
+
+      // Wave W-DPC1 · dataset-profile cache store
+      datasetProfileCacheContainer = await createContainerSafely(
+        database,
+        COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID,
+        "/username",
+        400
+      );
+      console.log(`✅ Dataset profile cache container ready: ${COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID}`);
 
       console.log("✅ CosmosDB initialized successfully");
     } catch (error) {
@@ -462,6 +477,44 @@ export const waitForDatasetDirectivesContainer = async (
   }
 
   return datasetDirectivesContainer;
+};
+
+/**
+ * Wave W-DPC1 · Wait for the dataset_profiles cache container to be initialized.
+ * Will attempt to initialize if not already done.
+ */
+export const waitForDatasetProfileCacheContainer = async (
+  maxRetries: number = 60,
+  retryDelay: number = 500
+): Promise<Container> => {
+  if (!datasetProfileCacheContainer) {
+    try {
+      await initializeCosmosDB();
+    } catch (error) {
+      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+    }
+  }
+
+  let retries = 0;
+  while (!datasetProfileCacheContainer && retries < maxRetries) {
+    await new Promise((resolve) => setTimeout(resolve, retryDelay));
+    if (retries % 5 === 0 && !datasetProfileCacheContainer) {
+      try {
+        await initializeCosmosDB();
+      } catch (error) {
+        // Continue retrying
+      }
+    }
+    retries++;
+  }
+
+  if (!datasetProfileCacheContainer) {
+    throw new Error(
+      "CosmosDB dataset_profiles container not initialized. Please check your COSMOS_ENDPOINT and COSMOS_KEY environment variables and ensure CosmosDB is accessible."
+    );
+  }
+
+  return datasetProfileCacheContainer;
 };
 
 /**

@@ -13,6 +13,7 @@ import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CitationHoverCard } from "@/components/CitationHoverCard";
 import { cn } from "@/lib/utils";
 import type { ActiveChartFilters } from "@/lib/chartFilters";
+import { pickFooterText } from "../lib/insightFooterState";
 import type { InsightRegenEntry } from "../lib/insightRegenCache";
 import type { InsightHistoryEntry } from "../lib/insightHistory";
 import type { TileRecommendation } from "../lib/tileRecommendations";
@@ -131,6 +132,13 @@ export interface TileInsightFooterRegenProps {
 
 interface TileInsightFooterProps {
   insight: string;
+  /**
+   * Wave Z3 · when true AND there's no insight/regen text yet, the body shows
+   * a muted "no insight yet" line + the regen button relabelled "Generate
+   * insight". Lets the footer always render (so the collapsible chrome is
+   * present) while the server's async insight patch is still in flight.
+   */
+  emptyState?: boolean;
   dashboardId: string;
   tileId: string;
   /** Whether the user holds permission to edit. */
@@ -162,6 +170,7 @@ interface TileInsightFooterProps {
 
 export function TileInsightFooter({
   insight,
+  emptyState = false,
   dashboardId,
   tileId,
   canEdit,
@@ -235,7 +244,18 @@ export function TileInsightFooter({
            * `InsightRegenEntry.citations` array as a discoverable list
            * for users who want to see every cited pack at a glance.
            */}
-          <MarkdownRenderer content={regen?.entry?.text || insight} />
+          {(() => {
+            const footerText = pickFooterText(regen?.entry?.text, insight);
+            if (footerText) return <MarkdownRenderer content={footerText} />;
+            if (emptyState) {
+              return (
+                <p className="text-muted-foreground italic">
+                  No insight yet — generate one below.
+                </p>
+              );
+            }
+            return null;
+          })()}
           {regen?.entry?.regeneratedAt ? (
             <div className="mt-1 text-[11px] text-muted-foreground">
               Updated {formatRelativeShort(regen.entry.regeneratedAt)}
@@ -300,7 +320,13 @@ export function TileInsightFooter({
                 ) : (
                   <Sparkles className="mr-1 h-3 w-3" aria-hidden="true" />
                 )}
-                {regen.loading ? "Re-explaining…" : "Re-explain this view"}
+                {regen.loading
+                  ? emptyState
+                    ? "Generating…"
+                    : "Re-explaining…"
+                  : emptyState
+                    ? "Generate insight"
+                    : "Re-explain this view"}
               </Button>
               {/*
                * Wave WI6 · "Recent insights" dropdown. Surfaces the per-

@@ -1314,6 +1314,11 @@ export const createDashboardFromSpec = async (
       ) {
         dashboard.priorInvestigationsSnapshot = spec.priorInvestigationsSnapshot;
       }
+      // MW4 · persist the management-by-exception "attention areas" so the
+      // dashboard view can render the problem-areas callout on reload.
+      if (spec.attentionAreas && spec.attentionAreas.length > 0) {
+        dashboard.attentionAreas = spec.attentionAreas;
+      }
       const persisted = await updateDashboard(dashboard);
       // W59 · record `dashboard_promoted` in the per-session Memory journal so
       // resume-after-days shows the dashboard as a milestone in the timeline.

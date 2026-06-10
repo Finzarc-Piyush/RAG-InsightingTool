@@ -46,15 +46,22 @@ function subjectTokens(s: string): Set<string> {
   return new Set(tokenize(s).filter((t) => !GENERIC_RATE_TOKENS.has(t)));
 }
 
-type BooleanIndicator = {
+export type ApplicabilityGate = { gateColumn: string; inScopeValues: string[] };
+
+export type BooleanIndicator = {
   name: string;
   tokens: Set<string>;
   positives: string[];
   negatives: string[];
   sentinels: string[];
+  /** Valid-measurement-universe gates (inferMetricApplicability). When present,
+   *  the rate's numerator AND denominator are scoped to these rows so the metric
+   *  reflects only valid measurement instances (e.g. adherence on Market-Working
+   *  days), not structural zeros. */
+  applicabilityScope?: ApplicabilityGate[];
 };
 
-function collectBooleanIndicators(summary: DataSummary): BooleanIndicator[] {
+export function collectBooleanIndicators(summary: DataSummary): BooleanIndicator[] {
   const out: BooleanIndicator[] = [];
   for (const c of summary.columns ?? []) {
     const ind = (c as { indicator?: {
@@ -62,6 +69,7 @@ function collectBooleanIndicators(summary: DataSummary): BooleanIndicator[] {
       positiveValues?: string[];
       negativeValues?: string[];
       sentinelValues?: string[];
+      applicabilityScope?: ApplicabilityGate[];
     } }).indicator;
     if (ind?.kind !== "boolean") continue;
     const positives = ind.positiveValues ?? [];
@@ -72,9 +80,28 @@ function collectBooleanIndicators(summary: DataSummary): BooleanIndicator[] {
       positives,
       negatives: ind.negativeValues ?? [],
       sentinels: ind.sentinelValues ?? [],
+      ...(ind.applicabilityScope && ind.applicabilityScope.length > 0
+        ? { applicabilityScope: ind.applicabilityScope }
+        : {}),
     });
   }
   return out;
+}
+
+/** Build the extra predicate cells that scope a countIf to a metric's valid
+ *  universe (gate columns that exist in the schema). AND-ed into both numerator
+ *  and denominator predicates. Returns [] when unscoped. */
+export function scopePredicateCells(
+  indicator: Pick<BooleanIndicator, "applicabilityScope">,
+  schemaCols?: ReadonlySet<string>
+): Array<{ column: string; op: "in"; values: string[] }> {
+  const cells: Array<{ column: string; op: "in"; values: string[] }> = [];
+  for (const g of indicator.applicabilityScope ?? []) {
+    if (schemaCols && !schemaCols.has(g.gateColumn)) continue;
+    if (g.inScopeValues.length === 0) continue;
+    cells.push({ column: g.gateColumn, op: "in", values: g.inScopeValues });
+  }
+  return cells;
 }
 
 /** Best token-overlap match for a missing column among boolean indicators. */
@@ -149,16 +176,20 @@ export function repairBooleanIndicatorRatePlan(
       (v) => !ind.sentinels.includes(v)
     );
     const denomValues = denom.length > 0 ? denom : ind.positives;
+    // Scope numerator + denominator to the metric's VALID UNIVERSE so the
+    // (headline + grouped) rate reflects only valid measurement instances
+    // (e.g. PJP adherence on Market-Working days), not structural zeros.
+    const scopeCells = scopePredicateCells(ind, schemaCols);
     newAggs.push({
       operation: "countIf",
       column: "*",
-      predicate: [{ column: ind.name, op: "in", values: ind.positives }],
+      predicate: [{ column: ind.name, op: "in", values: ind.positives }, ...scopeCells],
       alias: matchAlias,
     });
     newAggs.push({
       operation: "countIf",
       column: "*",
-      predicate: [{ column: ind.name, op: "in", values: denomValues }],
+      predicate: [{ column: ind.name, op: "in", values: denomValues }, ...scopeCells],
       alias: totalAlias,
     });
     // Preserve the name the planner referenced as the computed-ratio alias so

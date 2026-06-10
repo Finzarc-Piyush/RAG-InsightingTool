@@ -135,10 +135,14 @@ const placeTilesForCols = (tiles: DashboardTile[], cols: number): Layout[] => {
     const config = TILE_CONFIG[tile.kind];
     const w = Math.min(config.w, cols);
     const minW = Math.min(config.minW, cols);
-    // DR18A · narrative tiles seed at content-aware height; other
-    // kinds stay at the fixed default. Persisted layouts are
-    // unaffected (this code only runs at fresh-seed time).
-    const h = contentDrivenHeight(tile, config, w);
+    // DR18A · content-bearing tiles seed at content-aware height; charts
+    // size by aspect ratio (S2/S3). Persisted layouts are unaffected (this
+    // code only runs at fresh-seed time).
+    const h = contentDrivenHeight(tile, config, w, {
+      cols,
+      rowHeight: ROW_HEIGHT,
+      gridMargin: GRID_MARGIN,
+    });
     const minH = config.minH;
 
     let bestX = 0;
@@ -231,8 +235,12 @@ const ensureLayoutsForTiles = (layouts: Layouts, tiles: DashboardTile[], fallbac
           w,
           // DR18A · same content-aware seed for tiles inserted by the
           // ensure-layouts path (e.g. a narrative tile freshly added
-          // via the AddTileMenu).
-          h: contentDrivenHeight(tile, config, w),
+          // via the AddTileMenu). Charts size by aspect ratio (S3).
+          h: contentDrivenHeight(tile, config, w, {
+            cols: COLS[key],
+            rowHeight: ROW_HEIGHT,
+            gridMargin: GRID_MARGIN,
+          }),
           minW: Math.min(config.minW, COLS[key]),
           minH: config.minH,
         });

@@ -144,6 +144,48 @@ test("chartFromTable: prefers _sum > _avg > _count when scoring measures", () =>
   assert.equal(out!.y, "Sales_sum");
 });
 
+test("chartFromTable: boolean-indicator rate breakdown charts the rate, not matching/total", () => {
+  // The planner's BIR1 rate breakdown returns [dim, matching, total, <x>_rate].
+  // Before the scoreMeasure fix, the y-axis picked a count (matching/total) over
+  // the rate — so the tile plotted visit counts, not the adherence rate.
+  const out = buildChartFromAnalyticalTable({
+    table: {
+      rows: [
+        { "Cluster Name": "North", matching: 70, total: 90, "PJP Adherence_rate": 0.78 },
+        { "Cluster Name": "South", matching: 40, total: 100, "PJP Adherence_rate": 0.4 },
+        { "Cluster Name": "West", matching: 55, total: 70, "PJP Adherence_rate": 0.79 },
+      ],
+      columns: ["Cluster Name", "matching", "total", "PJP Adherence_rate"],
+    },
+    summary: makeSummary({
+      numericColumns: ["matching", "total", "PJP Adherence_rate"],
+    }),
+    question: "pjp adherence by cluster",
+  });
+  assert.notEqual(out, null);
+  assert.equal(out!.x, "Cluster Name");
+  assert.equal(out!.y, "PJP Adherence_rate");
+});
+
+test("chartFromTable: repair-style __matching/__total helpers never win the y-axis", () => {
+  const out = buildChartFromAnalyticalTable({
+    table: {
+      rows: [
+        { Region: "East", adherence__matching: 70, adherence__total: 90, adherence_rate: 0.78 },
+        { Region: "West", adherence__matching: 40, adherence__total: 100, adherence_rate: 0.4 },
+        { Region: "South", adherence__matching: 55, adherence__total: 70, adherence_rate: 0.79 },
+      ],
+      columns: ["Region", "adherence__matching", "adherence__total", "adherence_rate"],
+    },
+    summary: makeSummary({
+      numericColumns: ["adherence__matching", "adherence__total", "adherence_rate"],
+    }),
+    question: "?",
+  });
+  assert.notEqual(out, null);
+  assert.equal(out!.y, "adherence_rate");
+});
+
 test("chartAxisSignature: same axes => same signature regardless of title", () => {
   const a = chartAxisSignature({ type: "bar", x: "Category", y: "Sales" });
   const b = chartAxisSignature({ type: "bar", x: "Category", y: "Sales" });

@@ -125,7 +125,8 @@ describe("assertDashboardCoverage", () => {
       const args = ext.args as { type: string; x: string; y: string; aggregate: string };
       assert.strictEqual(args.type, "bar");
       assert.strictEqual(args.y, "Sales");
-      assert.strictEqual(args.aggregate, "sum");
+      // MW2 · numeric breakdowns are size-normalized (mean), not raw sum.
+      assert.strictEqual(args.aggregate, "mean");
       assert.ok(["Category", "Segment"].includes(args.x));
     }
   });
@@ -180,6 +181,216 @@ describe("assertDashboardCoverage", () => {
     const plan: PlanStep[] = [];
     const out = assertDashboardCoverage(plan, brief, makeSummary());
     assert.deepStrictEqual(out.missingDimensions, ["Region"]);
+  });
+});
+
+describe("assertDashboardCoverage · boolean-indicator outcome", () => {
+  // PJP Adherence is a boolean indicator (Yes/No/No PJP Available) — no numeric
+  // form. Its per-dimension breakdown must be a countIf-RATE execute_query_plan
+  // step, NOT a build_chart sum-of-strings (which renders empty/garbage).
+  function makeIndicatorSummary(): DataSummary {
+    const base = makeSummary();
+    return {
+      ...base,
+      columnCount: base.columns.length + 1,
+      columns: [
+        ...base.columns,
+        {
+          name: "PJP Adherence",
+          type: "string",
+          sampleValues: ["Yes"],
+          topValues: [
+            { value: "Yes", count: 70 },
+            { value: "No", count: 20 },
+            { value: "No PJP Available", count: 10 },
+          ],
+          indicator: {
+            kind: "boolean",
+            positiveValues: ["Yes"],
+            negativeValues: ["No"],
+            sentinelValues: ["No PJP Available"],
+            source: "auto",
+          },
+        },
+      ],
+    };
+  }
+
+  const indicatorBrief = makeBrief({
+    outcomeMetricColumn: "PJP Adherence",
+    candidateDriverDimensions: ["Region", "Category"],
+  });
+
+  it("emits execute_query_plan rate steps (not build_chart sum) for a boolean indicator", () => {
+    const out = assertDashboardCoverage([], indicatorBrief, makeIndicatorSummary());
+    assert.strictEqual(out.ok, false);
+    assert.deepStrictEqual(out.missingDimensions.sort(), ["Category", "Region"]);
+    assert.strictEqual(out.extensions.length, 2);
+    for (const ext of out.extensions) {
+      assert.strictEqual(ext.tool, "execute_query_plan");
+      const plan = (ext.args as { plan: any }).plan;
+      assert.deepStrictEqual(plan.groupBy.length, 1);
+      assert.ok(["Region", "Category"].includes(plan.groupBy[0]));
+      // countIf matching/total + computed rate alias, sorted by the rate.
+      assert.strictEqual(plan.aggregations.length, 2);
+      assert.deepStrictEqual(
+        plan.aggregations.map((a: any) => a.operation),
+        ["countIf", "countIf"]
+      );
+      assert.strictEqual(plan.computedAggregations[0].alias, "PJP Adherence_rate");
+      assert.strictEqual(plan.sort[0].column, "PJP Adherence_rate");
+      // positive predicate uses the indicator's actual stored values
+      assert.deepStrictEqual(plan.aggregations[0].predicate[0].values, ["Yes"]);
+      // denominator excludes the sentinel "No PJP Available"
+      assert.deepStrictEqual(
+        plan.aggregations[1].predicate[0].values.sort(),
+        ["No", "Yes"]
+      );
+    }
+  });
+
+  it("treats a planner execute_query_plan rate breakdown as covering its groupBy dim", () => {
+    // Planner already broke PJP Adherence down by Region via execute_query_plan;
+    // the gate must not duplicate it. Only Category remains uncovered.
+    const plannerStep: PlanStep = {
+      id: "region_rate",
+      tool: "execute_query_plan",
+      args: { plan: { groupBy: ["Region"], aggregations: [] } },
+    };
+    const out = assertDashboardCoverage([plannerStep], indicatorBrief, makeIndicatorSummary());
+    assert.deepStrictEqual(out.missingDimensions, ["Category"]);
+    assert.strictEqual(out.extensions.length, 1);
+    assert.strictEqual(out.extensions[0].tool, "execute_query_plan");
+  });
+
+  it("MW2 · numeric-outcome dashboards use size-normalized mean build_chart steps", () => {
+    // Same plan, numeric outcome → build_chart steps, now aggregate=mean.
+    const out = assertDashboardCoverage([], makeBrief(), makeIndicatorSummary());
+    assert.strictEqual(out.extensions.length, 3);
+    for (const ext of out.extensions) {
+      assert.strictEqual(ext.tool, "build_chart");
+      assert.strictEqual((ext.args as { aggregate: string }).aggregate, "mean");
+    }
+  });
+
+  // W5 · high-cardinality entity dims (TSOE) are otherwise dropped for a boolean
+  // outcome; emit a TOP-N rate leaderboard so "give me TSOE info" is answered.
+  function makeTsoeSummary(): DataSummary {
+    const base = makeIndicatorSummary();
+    const tsoe = {
+      name: "TSO_TSE Name",
+      type: "string",
+      sampleValues: ["A"],
+      topValues: Array.from({ length: 48 }, (_, i) => ({ value: `T${i}`, count: 1 })),
+    } as DataSummary["columns"][number];
+    return { ...base, columnCount: base.columns.length + 1, columns: [...base.columns, tsoe] };
+  }
+
+  it("W5 · emits a TOP-N rate leaderboard for a high-cardinality entity dim (boolean outcome)", () => {
+    const brief = makeBrief({
+      outcomeMetricColumn: "PJP Adherence",
+      candidateDriverDimensions: ["Region", "TSO_TSE Name"],
+    });
+    const out = assertDashboardCoverage([], brief, makeTsoeSummary());
+    assert.deepStrictEqual(out.highCardinalityDimensions, ["TSO_TSE Name"]);
+    const tsoeStep = out.extensions.find(
+      (e) => (e.args as { plan?: { groupBy?: string[] } }).plan?.groupBy?.[0] === "TSO_TSE Name"
+    );
+    assert.ok(tsoeStep, "expected a TSO_TSE Name ranking extension");
+    assert.strictEqual(tsoeStep!.tool, "execute_query_plan");
+    const plan = (tsoeStep!.args as { plan: any }).plan;
+    assert.strictEqual(plan.limit, 15);
+    assert.strictEqual(plan.computedAggregations[0].alias, "PJP Adherence_rate");
+    assert.strictEqual(plan.sort[0].column, "PJP Adherence_rate");
+  });
+
+  it("W5 · numeric-outcome high-card dims stay deferred to the feature sweep (no gate ranking)", () => {
+    const brief = makeBrief({ candidateDriverDimensions: ["Region", "TSO_TSE Name"] }); // outcome "Sales"
+    const out = assertDashboardCoverage([], brief, makeTsoeSummary());
+    assert.deepStrictEqual(out.highCardinalityDimensions, ["TSO_TSE Name"]);
+    const refsTsoe = out.extensions.some((e) => {
+      const a = e.args as { x?: string; plan?: { groupBy?: string[] } };
+      return a.x === "TSO_TSE Name" || a.plan?.groupBy?.[0] === "TSO_TSE Name";
+    });
+    assert.ok(!refsTsoe, "numeric high-card dim must not get a gate ranking");
+  });
+});
+
+describe("assertDashboardCoverage · valid-universe scoping (W5/W6)", () => {
+  // PJP Adherence gated to Market-Working days; a "PJP Planned Type" dim exists.
+  function makeScopedSummary(): DataSummary {
+    const base = makeSummary();
+    return {
+      ...base,
+      columnCount: base.columns.length + 2,
+      columns: [
+        ...base.columns,
+        {
+          name: "PJP Adherence",
+          type: "string",
+          sampleValues: ["Yes"],
+          topValues: [
+            { value: "Yes", count: 70 },
+            { value: "No", count: 20 },
+            { value: "No PJP Available", count: 10 },
+          ],
+          indicator: {
+            kind: "boolean",
+            positiveValues: ["Yes"],
+            negativeValues: ["No"],
+            sentinelValues: ["No PJP Available"],
+            source: "auto",
+            applicabilityScope: [
+              { gateColumn: "PJP Planned Type", inScopeValues: ["Market Working"] },
+            ],
+          },
+        },
+        {
+          name: "PJP Planned Type",
+          type: "string",
+          sampleValues: ["Market Working"],
+          topValues: [
+            { value: "Market Working", count: 60 },
+            { value: "Weekly Off", count: 20 },
+            { value: "Leave", count: 20 },
+          ],
+        },
+      ],
+    };
+  }
+
+  const scopedBrief = makeBrief({
+    outcomeMetricColumn: "PJP Adherence",
+    candidateDriverDimensions: ["Region", "PJP Planned Type"],
+  });
+
+  it("W5 · scopes numerator AND denominator to the valid universe (Market Working)", () => {
+    const out = assertDashboardCoverage([], scopedBrief, makeScopedSummary());
+    const regionStep = out.extensions.find(
+      (e) => (e.args as { plan?: { groupBy?: string[] } }).plan?.groupBy?.[0] === "Region"
+    );
+    assert.ok(regionStep, "expected a Region rate step");
+    const aggs = (regionStep!.args as { plan: any }).plan.aggregations;
+    for (const a of aggs) {
+      const scoped = a.predicate.some(
+        (p: any) => p.column === "PJP Planned Type" && p.values.includes("Market Working")
+      );
+      assert.ok(scoped, "both countIf predicates must be scoped to Market Working");
+    }
+  });
+
+  it("W6 · skips the degenerate breakdown by the metric's own gate column", () => {
+    const out = assertDashboardCoverage([], scopedBrief, makeScopedSummary());
+    const refsGate = out.extensions.some(
+      (e) => (e.args as { plan?: { groupBy?: string[] } }).plan?.groupBy?.[0] === "PJP Planned Type"
+    );
+    assert.ok(!refsGate, "must not chart adherence by its own gate column (all-zero-except-one)");
+    // Region (a real dimension) is still charted.
+    assert.ok(
+      out.extensions.some(
+        (e) => (e.args as { plan?: { groupBy?: string[] } }).plan?.groupBy?.[0] === "Region"
+      )
+    );
   });
 });
 

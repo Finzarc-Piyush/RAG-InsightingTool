@@ -523,5 +523,6 @@ changes.
 
 ### Recent changes
 
+- Dashboard day-grain trend (2026-06-10) — `dashboardFeatureSweep.pickStrongestDateColumn` no longer returns a Month facet unconditionally: it validates the facet's distinct-bucket count for the dataset's actual span (`distinctBucketsForGrain`) and falls to the span-appropriate finer facet (Day on a single-month daily span) so a real multi-point trend is charted instead of a flat 1-bucket "no trend". Companion planner-side fix (`patchExecuteQueryPlanTrendGrain` `isDashboard` opt) in `docs/architecture/agent-runtime.md`.
 - Wave WHov-area-crosshair (2026-05-25) — add hover tooltip + vertical cross-hair indicator to AreaRenderer, mirroring LineRenderer's WHov-line-crosshair pattern; promotes the hover-crosshair convention to documented status. See `docs/WAVES.md`.
 - Wave WHov-line-crosshair (2026-05-22) — add hover-time vertical cross-hair indicator to LineRenderer; first instance of the hover-crosshair pattern. See `docs/WAVES.md`.

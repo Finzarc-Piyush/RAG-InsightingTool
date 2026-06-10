@@ -3,16 +3,16 @@
  * Main business logic for chat operations
  */
 import { randomUUID } from "node:crypto";
-import { Message } from "../../shared/schema.js";
+import { Message, type ChartSpec } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
-import { 
-  getChatBySessionIdForUser, 
-  addMessagesBySessionId, 
+import {
+  getChatBySessionIdForUser,
+  addMessagesBySessionId,
   updateMessageAndTruncate,
-  setPendingUserMessageForSession,
-  ChatDocument 
+  ChatDocument
 } from "../../models/chat.model.js";
+import { decideEnrichmentGate } from "./enrichmentGate.js";
 import { enrichCharts, validateAndEnrichResponse } from "./chatResponse.service.js";
 import { extractRequiredColumns, extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { classifyIntent } from "../../lib/agents/intentClassifier.js";
@@ -51,12 +51,13 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     throw new Error('Session not found. Please upload a file first.');
   }
 
-  const enrichment = chatDocument.enrichmentStatus;
-  if (enrichment === 'pending' || enrichment === 'in_progress') {
-    await setPendingUserMessageForSession(sessionId, username, message);
+  const gate = decideEnrichmentGate(chatDocument.enrichmentStatus);
+  if (gate === 'queued') {
+    // The client holds + re-fires this once the data is ready (see client
+    // `earlyQuestionRefire`); no server-side queue is persisted.
     return { queuedUntilEnrichment: true as const };
   }
-  if (enrichment === 'failed') {
+  if (gate === 'failed') {
     throw new Error(
       'Data enrichment failed for this session. Please try uploading your file again.'
     );
@@ -209,6 +210,45 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         domainContext: perTurnDomainContext,
       }
     );
+  }
+
+  // Wave I3 · mirror chat insights onto the dashboard (non-streaming path).
+  // Parity with chatStream.service.ts: copy the now-enriched per-chart
+  // insights onto the in-memory draft and the auto-created dashboard. No new
+  // LLM calls; best-effort.
+  try {
+    const enrichedCharts = (answerResult.charts ?? []) as ChartSpec[];
+    if (enrichedCharts.length > 0) {
+      const { applyChartInsightsBySignature } = await import(
+        "../../lib/applyChartInsightsBySignature.js"
+      );
+      const draft = (
+        answerResult as { dashboardDraft?: { sheets?: Array<{ charts?: ChartSpec[] }> } }
+      ).dashboardDraft;
+      if (draft?.sheets?.length) {
+        for (const sheet of draft.sheets) {
+          if (Array.isArray(sheet.charts) && sheet.charts.length > 0) {
+            sheet.charts = applyChartInsightsBySignature(sheet.charts, enrichedCharts).charts;
+          }
+        }
+      }
+      const createdId = (answerResult as { createdDashboardId?: string }).createdDashboardId;
+      if (createdId && username) {
+        const { patchDashboardChartInsights } = await import(
+          "../../lib/patchDashboardChartInsights.js"
+        );
+        const res = await patchDashboardChartInsights({
+          dashboardId: createdId,
+          username,
+          charts: enrichedCharts,
+        });
+        if (!res.ok) {
+          console.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
+        }
+      }
+    }
+  } catch (insightPatchErr) {
+    console.warn("⚠️ dashboard chart-insight patch (non-streaming) failed:", insightPatchErr);
   }
 
   // W25 · per-step LLM-enriched insights on the non-streaming path. Same
@@ -443,24 +483,18 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
  * After upload enrichment completes: answer queued user message, or post suggested questions only.
  */
 export async function postEnrichmentFlush(sessionId: string, username: string): Promise<void> {
+  // The CLIENT now owns answering an early question: it holds the question and
+  // re-fires it as a normal streaming turn once the data is fully materialized
+  // (see client `earlyQuestionRefire`). The server no longer auto-answers here
+  // (that produced a non-streaming reply the client never displayed, and relied
+  // on an unlocked `pendingUserMessage` RMW that could be lost). We only
+  // best-effort clear any legacy/stale `pendingUserMessage` so old docs don't
+  // carry a vestigial queue field.
   const { getChatBySessionIdForUser, clearPendingUserMessage } = await import(
     "../../models/chat.model.js"
   );
-
   const doc = await getChatBySessionIdForUser(sessionId, username);
-  if (!doc) return;
-
-  const pending = doc.pendingUserMessage;
-  if (pending?.content?.trim()) {
+  if (doc?.pendingUserMessage) {
     await clearPendingUserMessage(sessionId, username);
-    await processChatMessage({
-      sessionId,
-      message: pending.content.trim(),
-      username,
-    });
-    return;
   }
-
-  // No pending user turn: starter questions are exposed through session/poll state.
-  // We intentionally avoid adding an assistant-only suggestion message here.
 }

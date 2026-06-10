@@ -23,6 +23,8 @@ export interface MagnitudeItem {
 export interface MagnitudesRowProps {
   items?: MagnitudeItem[];
   className?: string;
+  /** Eyebrow label above the row. Defaults to "Magnitudes" (chat surface). */
+  label?: string;
 }
 
 function confidenceVariant(
@@ -33,12 +35,12 @@ function confidenceVariant(
   return "secondary";
 }
 
-export function MagnitudesRow({ items, className }: MagnitudesRowProps) {
+export function MagnitudesRow({ items, className, label = "Magnitudes" }: MagnitudesRowProps) {
   if (!Array.isArray(items) || items.length === 0) return null;
 
   return (
     <div className={cn("mt-4", className)}>
-      <Eyebrow className="mb-2 block">Magnitudes</Eyebrow>
+      <Eyebrow className="mb-2 block">{label}</Eyebrow>
       <div className="flex flex-wrap gap-3">
         {items.slice(0, 6).map((m, idx) => (
           <div

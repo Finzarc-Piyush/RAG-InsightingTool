@@ -145,6 +145,43 @@ describe("Wave T4 · facet-grain refinement", () => {
   });
 });
 
+describe("W3 · dashboard turns refine a collapsing facet even without trend wording", () => {
+  it("refines Month → Day for a dashboard request (no 'trend'/'over time' wording)", () => {
+    const s = step(["Month · Date"]);
+    patchExecuteQueryPlanTrendGrain(
+      s,
+      "build a pjp dashboard",
+      ["Date"],
+      new Map([["Date", MARICO_RANGE]]),
+      { isDashboard: true },
+    );
+    assert.deepEqual(planOf(s).groupBy, ["Day · Date"]);
+  });
+
+  it("leaves the facet untouched for a non-dashboard, non-trend question (no isDashboard)", () => {
+    const s = step(["Month · Date"]);
+    patchExecuteQueryPlanTrendGrain(
+      s,
+      "build a pjp dashboard", // same words, but isDashboard not set
+      ["Date"],
+      new Map([["Date", MARICO_RANGE]]),
+    );
+    assert.deepEqual(planOf(s).groupBy, ["Month · Date"]);
+  });
+
+  it("dashboard refinement still respects explicit grain wording (monthly)", () => {
+    const s = step(["Month · Date"]);
+    patchExecuteQueryPlanTrendGrain(
+      s,
+      "build a monthly pjp dashboard",
+      ["Date"],
+      new Map([["Date", MARICO_RANGE]]),
+      { isDashboard: true },
+    );
+    assert.deepEqual(planOf(s).groupBy, ["Month · Date"]);
+  });
+});
+
 describe("Wave T4 · raw-date behavior preserved (T2 regression via alias)", () => {
   it("alias still binds the span grain on a lone raw-date group-by", () => {
     const s = step(["Date"]);

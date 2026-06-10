@@ -43,6 +43,12 @@ import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import {
+  distinctBucketsForGrain,
+  pickTrendGrainForSpan,
+  PERIOD_TO_FACET_GRAIN,
+} from "../../queryPlanTemporalPatch.js";
+import { facetColumnKey, parseTemporalFacetDisplayKey } from "../../temporalFacetColumns.js";
 
 /**
  * Cardinality regime (how many distinct values a dimension has):
@@ -202,6 +208,7 @@ function bucketRowsTopN(
 // Exposed for tests so the bucketing helper can be pinned independently.
 export const __test__ = {
   bucketRowsTopN,
+  pickStrongestDateColumn,
   LOW_CARDINALITY_MAX,
   MEDIUM_CARDINALITY_MAX,
   TOP_N_BUCKET,
@@ -211,13 +218,48 @@ export const __test__ = {
 function pickStrongestDateColumn(ctx: AgentExecutionContext): string | null {
   const dates = ctx.summary.dateColumns ?? [];
   if (!dates.length) return null;
+  const colNames = ctx.summary.columns.map((c) => c.name);
   // Prefer a derived month/quarter facet when present — already aggregated
   // into clean buckets, which line/area charts read more cleanly.
-  const monthLike = ctx.summary.columns
-    .map((c) => c.name)
-    .find((n) => /^Month · /.test(n));
-  if (monthLike) return monthLike;
-  return dates[0]!;
+  const monthLike = colNames.find((n) => /^Month · /.test(n));
+  if (!monthLike) return dates[0]!;
+
+  // W3 · a Month facet collapses to ONE bucket on a single-month (daily) span,
+  // which renders a flat 1-point "trend" and triggers the "only one temporal
+  // bucket" caveat. When that happens, fall to the span-appropriate finer grain
+  // (Month → Week → Day) so a real multi-point trend is charted. No-op (keeps
+  // Month) when the span genuinely yields ≥2 monthly buckets or when per-column
+  // dateRange metadata is unavailable.
+  const parsed = parseTemporalFacetDisplayKey(monthLike);
+  const source = parsed?.sourceColumn;
+  const dateRange = source
+    ? (
+        ctx.summary.columns.find((c) => c.name === source) as
+          | {
+              dateRange?: {
+                spanDays: number;
+                distinctDayCount: number;
+                minIso?: string;
+                maxIso?: string;
+              };
+            }
+          | undefined
+      )?.dateRange
+    : undefined;
+  if (!source || !dateRange) return monthLike;
+  if (distinctBucketsForGrain(dateRange, "month") >= 2) return monthLike;
+
+  // Month collapsed — pick the grain appropriate to the span (Day for ≤90 days,
+  // Week for ≤1y, …) and use its facet if it exists and yields ≥2 buckets.
+  const period = pickTrendGrainForSpan(dateRange.spanDays, dateRange.distinctDayCount);
+  const preferredGrain = PERIOD_TO_FACET_GRAIN[period] ?? "date";
+  const candidateGrains = [preferredGrain, "week", "date"] as const;
+  for (const grain of candidateGrains) {
+    if (distinctBucketsForGrain(dateRange, grain) < 2) continue;
+    const facet = facetColumnKey(source, grain);
+    if (colNames.includes(facet)) return facet;
+  }
+  return monthLike;
 }
 
 function countUniqueValuesUpTo(
@@ -249,13 +291,18 @@ function tryBuildChart(
         numericColumns: ctx.summary.numericColumns,
         dateColumns: ctx.summary.dateColumns,
       },
-      { type, x, y },
+      // MW2 · size-normalized comparison for dimension breakdowns — a per-record
+      // AVERAGE de-confounds unit size (a raw SUM rewards big ASMs/clusters and
+      // is not comparable). Trends (line) keep their default so totals-over-time
+      // read naturally.
+      { type, x, y, ...(type === "bar" ? { aggregate: "mean" as const } : {}) },
       {
         columnOrder: ctx.summary.columns.map((c) => c.name),
         // Each feature-sweep chart is a single (outcome × dim) breakdown.
         // Suppress the bar → heatmap upgrade so wide schemas (3+ dims)
         // don't collapse every dim into a 2D heatmap.
         disallowHeatmapUpgrade: true,
+        ...(type === "bar" ? { preserveAggregate: true } : {}),
       }
     );
     const spec = chartSpecSchema.parse({
@@ -263,7 +310,9 @@ function tryBuildChart(
       title:
         mp.type === "heatmap" && mp.z
           ? `${mp.z} (${mp.x} × ${mp.y})`
-          : `${mp.y} by ${mp.x}`,
+          : mp.aggregate === "mean"
+            ? `${mp.y} (avg) by ${mp.x}`
+            : `${mp.y} by ${mp.x}`,
       x: mp.x,
       y: mp.y,
       ...(mp.z ? { z: mp.z } : {}),

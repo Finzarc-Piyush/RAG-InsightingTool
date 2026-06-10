@@ -126,7 +126,13 @@ export function calculateSmartDomain(
   // Filter out invalid values
   const validValues = values.filter(v => typeof v === 'number' && isFinite(v) && !isNaN(v));
   if (validValues.length === 0) return null;
-  
+
+  // All-zero series → sane non-negative domain. Without this, the range-0
+  // padding below yields [-1, 1] — negative ticks that render as nonsensical
+  // labels (e.g. -100%..100% on a rate chart). A flat-zero metric should read
+  // as 0 along a 0-baseline axis.
+  if (validValues.every(v => v === 0)) return [0, 1];
+
   // Calculate statistics
   const mean = calculateMean(validValues);
   const median = calculateMedian(validValues);

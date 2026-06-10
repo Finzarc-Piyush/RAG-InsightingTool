@@ -1,9 +1,24 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
+  calculateSmartDomain,
   multiSeriesYDomainKind,
   yDomainForMultiSeriesRows,
 } from "../lib/axisScaling.js";
+
+describe("W3 · calculateSmartDomain all-zero guard", () => {
+  it("returns a sane [0,1] domain for an all-zero series (no negative ticks)", () => {
+    assert.deepEqual(calculateSmartDomain([0, 0, 0, 0]), [0, 1]);
+  });
+  it("still produces a normal domain for non-zero data", () => {
+    const d = calculateSmartDomain([10, 20, 30, 40]);
+    assert.ok(d && d[0] < d[1] && d[1] >= 40 - 1);
+  });
+  it("returns null for empty / all-invalid input", () => {
+    assert.equal(calculateSmartDomain([]), null);
+    assert.equal(calculateSmartDomain([NaN, Infinity]), null);
+  });
+});
 
 describe("yDomainForMultiSeriesRows", () => {
   const rows = [

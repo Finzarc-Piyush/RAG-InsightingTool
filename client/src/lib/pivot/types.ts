@@ -1,4 +1,7 @@
-export type PivotAgg = 'sum' | 'mean' | 'count' | 'min' | 'max';
+// 'first' is an IDENTITY agg: the value is already aggregated per group (e.g. a
+// pre-computed rate/ratio from a countIf-ratio query) — summing it across the
+// single per-group row is wrong, so we display it as-is.
+export type PivotAgg = 'sum' | 'mean' | 'count' | 'min' | 'max' | 'first';
 
 export type PivotValueSpec = {
   id: string;

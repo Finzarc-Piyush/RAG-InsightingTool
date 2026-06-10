@@ -25,6 +25,7 @@
  */
 import type { AnalyticalBlackboard, Finding } from "./analyticalBlackboard.js";
 import type { InvestigationSummary } from "../../../shared/schema.js";
+import { filterSpawnedQuestions } from "./filterSpawnedQuestions.js";
 
 const MAX_HYPOTHESES = 8;
 const MAX_FINDINGS = 8;
@@ -46,7 +47,11 @@ function clip(s: string | undefined, max: number): string {
 }
 
 export function buildInvestigationSummary(
-  blackboard: AnalyticalBlackboard | undefined
+  blackboard: AnalyticalBlackboard | undefined,
+  /** Dataset column names — used to drop low-value open questions (random
+   *  samples, identifier-grouping, duplicates) at the display surface, the same
+   *  gate the reflector spawn chokepoint applies. */
+  excludedColumns?: readonly string[]
 ): InvestigationSummary | undefined {
   if (!blackboard) return undefined;
 
@@ -70,8 +75,15 @@ export function buildInvestigationSummary(
     }))
     .filter((f) => f.label.length > 0);
 
-  const openQuestions = blackboard.openQuestions
-    .filter((q) => !q.actionedByNodeId)
+  // Defensive second-pass filter (same gate as the reflector spawn chokepoint):
+  // the openQuestions surface reads the blackboard directly, so random-sample /
+  // duplicate / identifier-grouping noise that slipped in from any addOpenQuestion
+  // caller is dropped here before the user sees it.
+  const cleanedOpen = filterSpawnedQuestions(
+    blackboard.openQuestions.filter((q) => !q.actionedByNodeId),
+    { excludedColumns: excludedColumns ?? [] }
+  );
+  const openQuestions = cleanedOpen
     .slice(0, MAX_OPEN_QUESTIONS)
     .map((q) => ({
       question: clip(q.question, MAX_QUESTION_TEXT),

@@ -478,6 +478,19 @@ async function fetchFilteredRows(
   return await storage.executeQuery<Record<string, unknown>>(sql);
 }
 
+/**
+ * P3 · Keep only the value specs whose `field` is a real column on the
+ * resolved table. Used to defend `executePivotQuery` against stale/computed
+ * alias fields that would otherwise throw a DuckDB binder error. Pure.
+ */
+export function pickRenderableValueSpecs<T extends { field: string }>(
+  valueSpecs: T[],
+  availableColumns: Iterable<string>
+): T[] {
+  const cols = new Set(availableColumns);
+  return valueSpecs.filter((v) => cols.has(v.field));
+}
+
 export async function executePivotQuery(
   sessionId: string,
   rawBody: unknown,
@@ -593,28 +606,52 @@ export async function executePivotQuery(
     const tableName = opts?.chat
       ? await resolveSessionDataTable(storage, opts.chat)
       : "data";
-    const filteredRows = await fetchFilteredRows(storage, request, tableName);
+    // P3 · Defense-in-depth: drop value specs whose field isn't a real column
+    // on the resolved table before building the SELECT. A dashboard pivot
+    // persisted before the base-table value guard (or any legacy doc) may
+    // reference a computed alias (`pjp_adherence_rate`, `matching`, …) absent
+    // from `data`; selecting it throws a DuckDB binder error surfaced to the
+    // user as "Couldn't load pivot". Dropping unknown measures degrades to a
+    // rows-only pivot instead of a hard failure. Best-effort — if DESCRIBE
+    // fails we fall back to the original request unchanged.
+    let effectiveRequest = request;
+    try {
+      const described = await storage.executeQuery<{ column_name: string }>(
+        `DESCRIBE ${quoteIdent(tableName)}`
+      );
+      const renderable = pickRenderableValueSpecs(
+        request.valueSpecs,
+        described.map((r) => r.column_name)
+      );
+      if (renderable.length !== request.valueSpecs.length) {
+        effectiveRequest = { ...request, valueSpecs: renderable };
+      }
+    } catch {
+      /* DESCRIBE failed — keep the original request (best-effort guard). */
+    }
 
-    const colField = request.colFields[0] ?? null;
+    const filteredRows = await fetchFilteredRows(storage, effectiveRequest, tableName);
+
+    const colField = effectiveRequest.colFields[0] ?? null;
     const colKeys = colField ? collectColKeys(filteredRows, colField) : [];
 
     const treeObj = buildPivotTree(
       filteredRows,
-      request.rowFields,
+      effectiveRequest.rowFields,
       colField,
       colKeys,
-      request.valueSpecs,
-      request.rowSort
+      effectiveRequest.valueSpecs,
+      effectiveRequest.rowSort
     );
 
     const model: PivotModel = {
-      rowFields: request.rowFields,
+      rowFields: effectiveRequest.rowFields,
       colField,
-      columnFields: [...request.colFields],
+      columnFields: [...effectiveRequest.colFields],
       colKeys,
-      valueSpecs: request.valueSpecs,
+      valueSpecs: effectiveRequest.valueSpecs,
       tree: treeObj,
-      columnFieldTruncated: request.colFields.length > 1,
+      columnFieldTruncated: effectiveRequest.colFields.length > 1,
     };
 
     const response: PivotQueryResponse = {

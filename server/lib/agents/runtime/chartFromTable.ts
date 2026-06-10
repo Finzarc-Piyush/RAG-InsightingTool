@@ -83,7 +83,17 @@ function isNumericishOnSample(
 
 function scoreMeasure(col: string): number {
   const n = col.toLowerCase();
+  // countIf-ratio helper columns (`<base>__matching` / `<base>__total`) are the
+  // numerator/denominator behind a computed rate — never the measure to chart.
+  // Force them below everything so the rate alias wins the y-axis. (Targets the
+  // double-underscore helper convention only, so single-underscore aliases like
+  // a user's `revenue_total` are unaffected.)
+  if (/__matching\b|__total\b/.test(n)) return -1;
   return (
+    // A computed rate/share alias (e.g. `pjp_adherence_rate`) outranks raw
+    // aggregates: for a boolean-indicator breakdown the RATE is the measure,
+    // not the underlying matching/total counts.
+    (/_rate\b|_ratio\b|_share\b|_pct\b/.test(n) ? 6 : 0) +
     (/_sum\b/.test(n) ? 5 : 0) +
     (/_avg\b/.test(n) || /_mean\b/.test(n) ? 4 : 0) +
     (/_count\b/.test(n) ? 3 : 0) +

@@ -105,6 +105,19 @@ export const chartSpecSchema = z.object({
   y2Label: z.string().optional(),
   zLabel: z.string().optional(),
   aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
+  /**
+   * MW3 · category sort direction for categorical bar charts. "desc" (default)
+   * shows best-first; "asc" surfaces the WORST performers first (bottom-N, for
+   * management-by-exception). Honoured by processChartData (server) and the
+   * client renderer's top↔bottom toggle.
+   */
+  sortDirection: z.enum(["asc", "desc"]).optional(),
+  /**
+   * MW3 · optional cap on charted categories (e.g. a "Worst 10" view). Omitted
+   * = ALL categories — a manager must be able to reach every record, so the
+   * primary dashboard breakdowns never silently truncate.
+   */
+  maxRows: z.number().int().positive().max(10_000).optional(),
   data: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).optional(),
   xDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for X-axis
   yDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for Y-axis
@@ -913,6 +926,28 @@ export const datasetProfileSchema = z.object({
 });
 
 export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
+
+/**
+ * Wave W-DPC1 · Cached dataset-profile doc (Cosmos `dataset_profiles`).
+ *
+ * Keyed by `(username, datasetFingerprint)` so re-uploads of the same workbook
+ * shape reuse a prior profile instead of re-running the upload-critical-path
+ * `inferDatasetProfile` LLM call. `contextHash` captures the permanent + domain
+ * context that also feed the call, so a context change invalidates the entry;
+ * `schemaVersion` invalidates everything when the profile prompt/shape changes.
+ * Only the `DatasetProfile` is cached — never the materialized data table.
+ */
+export const datasetProfileCacheDocSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  datasetFingerprint: z.string(),
+  contextHash: z.string(),
+  schemaVersion: z.number().int().nonnegative(),
+  profile: datasetProfileSchema,
+  updatedAt: z.number(),
+});
+
+export type DatasetProfileCacheDoc = z.infer<typeof datasetProfileCacheDocSchema>;
 
 /** Rolling LLM-maintained session context (Cosmos). All content produced by merge/seed LLM calls. */
 export const sessionAnalysisColumnRoleSchema = z.object({
@@ -1902,6 +1937,25 @@ export const dataSummarySchema = z.object({
         negativeValues: z.array(z.string()).optional(),
         sentinelValues: z.array(z.string()).optional(),
         source: z.enum(["auto", "llm", "user"]).default("auto"),
+        /**
+         * The metric's VALID MEASUREMENT UNIVERSE — the rows where this metric
+         * is even applicable. Auto-inferred at upload (inferMetricApplicability):
+         * a boolean indicator like "PJP Adherence" is only meaningful where
+         * `PJP Planned Type ∈ ["Market Working"]`; off-days/absent rows are
+         * structural zeros, not low scores. Rate steps AND these predicates into
+         * numerator+denominator; degenerate breakdowns by `gateColumn` are
+         * skipped; the headline scopes to this universe. Absent = no scoping.
+         */
+        applicabilityScope: z
+          .array(
+            z.object({
+              gateColumn: z.string().max(200),
+              inScopeValues: z.array(z.string().max(200)).max(48),
+              rationale: z.string().max(300).optional(),
+            })
+          )
+          .max(4)
+          .optional(),
       })
       .optional(),
     /** SU-IC2 · natural-language phrasings the column directly answers
@@ -2284,6 +2338,15 @@ export const analysisBriefSchema = z.object({
   /** Phase-2: user asked to turn this turn into a dashboard. */
   requestsDashboard: z.boolean().optional(),
   /**
+   * W6 · secondary KPI metrics for a MULTI-KPI dashboard. The dashboard charts
+   * `outcomeMetricColumn` PLUS each of these by the key dimensions, so a "PJP
+   * dashboard" surfaces adherence + compliance + attendance + punctuality, not
+   * one metric. Populated deterministically (data-derived from the dataset's
+   * boolean-indicator cluster) for indicator-centric dashboards; empty/absent
+   * leaves the single-outcome behaviour unchanged.
+   */
+  outlineMetrics: z.array(z.string().max(200)).max(8).optional(),
+  /**
    * Phase-1 time_window_diff: two explicit filter sets the user named
    * for a period-A vs period-B comparison (e.g. "Mar-22" filters vs
    * "Apr-25" filters on a temporal facet column). Both sides required
@@ -2493,6 +2556,23 @@ export const activeFilterSpecSchema = z.object({
 });
 export type ActiveFilterSpec = z.infer<typeof activeFilterSpecSchema>;
 
+/**
+ * MW4 · one below-org-average unit flagged for a manager's attention
+ * (management-by-exception). Derived deterministically from the dashboard's
+ * breakdown charts by computeAttentionAreas. Defined here (before both the
+ * dashboard document and spec schemas that reference it).
+ */
+export const attentionAreaSchema = z.object({
+  dimension: z.string().max(200),
+  unit: z.string().max(200),
+  metric: z.string().max(240),
+  value: z.number(),
+  benchmark: z.number(),
+  variancePct: z.number(),
+  status: z.enum(["red", "amber"]),
+});
+export type AttentionAreaSpec = z.infer<typeof attentionAreaSchema>;
+
 export const dashboardSchema = z.object({
   id: z.string(),
   username: z.string(),
@@ -2533,6 +2613,8 @@ export const dashboardSchema = z.object({
     .array(priorInvestigationItemSchema)
     .max(5)
     .optional(),
+  /** MW4 · management-by-exception attention areas (mirrors DashboardSpec). */
+  attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
   /**
    * Wave DR15 · Session this dashboard was created from. Optional —
    * existing Cosmos documents (and dashboards created via the bare
@@ -2687,6 +2769,13 @@ export const dashboardSpecSchema = z.object({
     .array(priorInvestigationItemSchema)
     .max(5)
     .optional(),
+  /**
+   * MW4 · management-by-exception. Below-org-average units derived
+   * deterministically from the breakdown charts (computeAttentionAreas) so the
+   * dashboard leads with the problem areas a manager should act on first.
+   * Empty/absent = nothing flagged.
+   */
+  attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
 });
 
 export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;

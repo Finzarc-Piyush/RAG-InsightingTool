@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { __test__ } from "../lib/agents/runtime/analysisBrief.js";
+import {
+  __test__,
+  ensureDashboardOutcomeMetric,
+} from "../lib/agents/runtime/analysisBrief.js";
 import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
+import type { AnalysisBrief } from "../shared/schema.js";
 
 const { columnListForBrief, describeColumnForBrief, looksLikeDashboardOrReport } = __test__;
 
@@ -143,5 +147,49 @@ describe("columnListForBrief", () => {
     assert.strictEqual(names.length, 120);
     assert.strictEqual(names[0], "c0");
     assert.strictEqual(names[119], "c119");
+  });
+});
+
+describe("ensureDashboardOutcomeMetric (Part 1.3)", () => {
+  const brief = (over: Partial<AnalysisBrief> = {}): AnalysisBrief =>
+    ({ requestsDashboard: true, ...over }) as AnalysisBrief;
+
+  it("fills the first numeric measure when a dashboard brief has no outcome", () => {
+    const ctx = makeCtx({ question: "build me a dashboard" });
+    const out = ensureDashboardOutcomeMetric(brief(), ctx);
+    assert.strictEqual(out.outcomeMetricColumn, "Sales");
+  });
+
+  it("falls back to a boolean indicator when there is no numeric column", () => {
+    const cols = [
+      {
+        name: "PJP Adherence",
+        type: "string",
+        sampleValues: ["Yes"],
+        indicator: { kind: "boolean", positiveValues: ["Yes"], source: "auto" },
+      },
+      { name: "Region", type: "string", sampleValues: ["West"] },
+    ];
+    const ctx = makeCtx({ question: "build me a dashboard", cols });
+    const out = ensureDashboardOutcomeMetric(brief(), ctx);
+    assert.strictEqual(out.outcomeMetricColumn, "PJP Adherence");
+  });
+
+  it("never overrides an outcome the brief already chose", () => {
+    const ctx = makeCtx({ question: "build me a dashboard" });
+    const out = ensureDashboardOutcomeMetric(
+      brief({ outcomeMetricColumn: "Region" }),
+      ctx
+    );
+    assert.strictEqual(out.outcomeMetricColumn, "Region");
+  });
+
+  it("is a no-op for non-dashboard briefs", () => {
+    const ctx = makeCtx({ question: "what are sales by region?" });
+    const out = ensureDashboardOutcomeMetric(
+      brief({ requestsDashboard: false }),
+      ctx
+    );
+    assert.strictEqual(out.outcomeMetricColumn, undefined);
   });
 });

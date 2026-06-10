@@ -98,7 +98,38 @@ export interface BuildSynthesisContextInput {
       appliedAggregation?: boolean;
       durationMs?: number;
     };
+    /**
+     * The full ToolResult (typed `unknown` on StructuredObservation). When the
+     * step is a SMALL aggregated result (e.g. a 24-row ASM ranking), its complete
+     * `result.table.rows` are surfaced verbatim to the writer so it can state a
+     * full ranking instead of hedging "only partially shown in the snippet".
+     */
+    result?: unknown;
   }>;
+}
+
+// Full result rows are surfaced ONLY for small aggregated steps — a 24-row ASM
+// ranking should reach the writer intact, but a 5k-row raw projection must keep
+// riding on the (capped) observation text so the prompt doesn't balloon.
+const QUERY_RESULTS_MAX_ROWS_PER_STEP = 50;
+const QUERY_RESULTS_PER_STEP_CHAR_CAP = 8_000;
+const QUERY_RESULTS_BLOCK_CHAR_CAP = 24_000;
+
+/** Defensively pull `{rows, columns}` from an unknown ToolResult. */
+function extractTableRowsAndColumns(
+  result: unknown
+): { rows: Record<string, unknown>[]; columns: string[] } | null {
+  if (!result || typeof result !== "object") return null;
+  const t = (result as { table?: unknown }).table;
+  if (!t || typeof t !== "object") return null;
+  const rawRows = (t as { rows?: unknown }).rows;
+  if (!Array.isArray(rawRows) || rawRows.length === 0) return null;
+  const rows = rawRows as Record<string, unknown>[];
+  const rawCols = (t as { columns?: unknown }).columns;
+  const columns = Array.isArray(rawCols)
+    ? rawCols.filter((c): c is string => typeof c === "string")
+    : Object.keys(rows[0] ?? {});
+  return { rows, columns };
 }
 
 /**
@@ -278,6 +309,32 @@ function buildDataUnderstandingBlock(
       "Tool calls run this turn (use these to judge whether each step covered the whole dataset or a filtered subset — do not infer 'data is incomplete' from a single filtered step's output):"
     );
     lines.push(...stepLines);
+  }
+
+  // Complete result rows for SMALL aggregated steps. Without this, the writer
+  // only sees the (top-K, char-capped) observation snippet and wrongly hedges
+  // that "a full ranking cannot be stated from the supplied evidence" — even for
+  // a 24-row ASM breakdown that fits easily. These rows are authoritative.
+  const fullRowsLines: string[] = [];
+  let fullRowsChars = 0;
+  for (const o of obs.slice(-12)) {
+    if (!o.metrics.appliedAggregation) continue;
+    const outN = o.metrics.outputRowCount;
+    if (typeof outN === "number" && outN > QUERY_RESULTS_MAX_ROWS_PER_STEP) continue;
+    const extracted = extractTableRowsAndColumns(o.result);
+    if (!extracted || extracted.rows.length > QUERY_RESULTS_MAX_ROWS_PER_STEP) continue;
+    const scope = formatToolScope(o.tool, o.args);
+    const json = JSON.stringify(extracted.rows).slice(0, QUERY_RESULTS_PER_STEP_CHAR_CAP);
+    const entry = `  • ${o.stepId} ${o.tool}${scope ? ` — ${scope}` : ""} (${extracted.rows.length} rows, COMPLETE):\n    ${json}`;
+    if (fullRowsChars + entry.length > QUERY_RESULTS_BLOCK_CHAR_CAP) break;
+    fullRowsChars += entry.length;
+    fullRowsLines.push(entry);
+  }
+  if (fullRowsLines.length > 0) {
+    lines.push(
+      "Complete results for small aggregated steps (authoritative — state full rankings/lists directly from these rows; do NOT claim a result is 'only partially shown' or 'cannot be stated from the supplied evidence'):"
+    );
+    lines.push(...fullRowsLines);
   }
 
   return lines.join("\n").trim();

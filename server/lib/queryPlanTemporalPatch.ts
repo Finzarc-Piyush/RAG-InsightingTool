@@ -61,8 +61,11 @@ const GRAIN_RANK: Record<TemporalFacetGrain, number> = {
   year: 5,
 };
 
-/** `pickTrendGrainForSpan` returns SQL periods; map them to facet grains. */
-const PERIOD_TO_FACET_GRAIN: Record<
+/** `pickTrendGrainForSpan` returns SQL periods; map them to facet grains.
+ *  Exported (W3) so the dashboard feature sweep can pick a span-appropriate
+ *  trend facet (e.g. Day on a single-month span) instead of an unconditional
+ *  Month facet that collapses to one bucket. */
+export const PERIOD_TO_FACET_GRAIN: Record<
   "day" | "week" | "month" | "quarter",
   TemporalFacetGrain
 > = { day: "date", week: "week", month: "month", quarter: "quarter" };
@@ -146,12 +149,19 @@ export function patchExecuteQueryPlanTrendGrain(
   question: string,
   dateColumns: readonly string[],
   dateRangeByColumn?: DateRangeByColumn,
+  opts?: { isDashboard?: boolean },
 ): void {
   if (step.tool !== "execute_query_plan") return;
   const q = question.trim();
   if (!q) return;
   if (/\b(daily|per\s+day|each\s+day|day\s+by\s+day)\b/i.test(q)) return;
-  if (!TREND_OVER_TIME_RE.test(q)) return;
+  // W3 · a dashboard request ("build a pjp dashboard") rarely says "trend"/"over
+  // time", yet the planner still emits a primary trend step. Without this, that
+  // step keeps a Month facet that collapses to ONE bucket on a single-month span
+  // → the "only one temporal bucket" caveat. For dashboards we therefore allow
+  // grain refinement regardless of trend wording (the refinement below is purely
+  // defensive — it only acts when a facet actually collapses to <2 buckets).
+  if (!opts?.isDashboard && !TREND_OVER_TIME_RE.test(q)) return;
   // Explicit grain wording from the user wins — never override "monthly"/"by week"/etc.
   if (detectCoarseTimeIntentFromMessage(q)) return;
 

@@ -229,6 +229,14 @@ const retrieveSemanticArgs = z
     query: z.string().min(1).max(2000),
   })
   .strict();
+
+// Part 3.2 · recall a prior turn's FULL analytical result so a follow-up can
+// build on it instead of re-deriving.
+const retrievePriorResultArgs = z
+  .object({
+    query: z.string().min(1).max(2000),
+  })
+  .strict();
 const readonlySqlArgs = z
   .object({
     sql: z.string().min(1).max(READONLY_SQL_MAX_LENGTH),
@@ -383,6 +391,70 @@ export function registerDefaultTools(registry: ToolRegistry) {
       description:
         "Vector search over indexed session chunks (themes, wording, narrative text).",
       argsHelp: '{"query": string} required — natural-language search text; not SQL.',
+    }
+  );
+
+  // Part 3.2 · Full-fidelity recall of a prior turn's analytical RESULT TABLE.
+  // Use for follow-ups that build on an earlier answer ("now break that down by
+  // X", "of those…", "compare to the last result") — recall the stored rows
+  // instead of re-deriving or guessing. Distinct from retrieve_semantic_context
+  // (which returns narrative passages, not result rows).
+  registry.register(
+    "retrieve_prior_result",
+    retrievePriorResultArgs,
+    async (ctx, args) => {
+      let match;
+      try {
+        const { findRelevantPriorResult } = await import(
+          "../../../pastAnalysisRecall.js"
+        );
+        match = await findRelevantPriorResult(
+          ctx.exec.sessionId,
+          args.query as string
+        );
+      } catch (err) {
+        return {
+          ok: false,
+          summary: `Prior-result recall failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+      if (!match) {
+        return {
+          ok: false,
+          summary:
+            "No prior analytical result in this session matched that description. Compute it fresh with execute_query_plan.",
+        };
+      }
+      const PREVIEW = 200;
+      const preview = match.rows.slice(0, PREVIEW);
+      const header = match.columns.join(" | ");
+      const body = preview
+        .map((r) =>
+          match.columns
+            .map((c) => String((r as Record<string, unknown>)[c] ?? ""))
+            .join(" | ")
+        )
+        .join("\n");
+      const more =
+        match.rowCount > preview.length
+          ? `\n… (${match.rowCount - preview.length} more rows available)`
+          : "";
+      const text =
+        `PRIOR RESULT — recalled from an earlier turn that asked: "${match.question.slice(0, 200)}"\n` +
+        `${match.rowCount} rows · columns: ${header}\n${body}${more}`;
+      return {
+        ok: true,
+        summary: text.slice(0, 6000),
+        numericPayload: text,
+      };
+    },
+    {
+      description:
+        "Recall the FULL result table the agent computed in an EARLIER turn of this session (stored durably server-side), so a follow-up builds on it instead of re-deriving. Returns the prior result's rows + columns + the question it answered.",
+      argsHelp:
+        '{"query": string} required — describe the prior result to recall (e.g. "top 10 products by sales from earlier").',
     }
   );
 
@@ -942,7 +1014,12 @@ export function registerDefaultTools(registry: ToolRegistry) {
       // brushed the 40k observation cap and truncated unrelated tool output
       // from the same turn. The full result still rides on `table.rows` below
       // and powers downstream pivot/leaderboard surfacing.
-      const OBSERVATION_TOP_K = 30;
+      // W2 · but a SMALL aggregated result (e.g. a 24-row ASM ranking) must be
+      // shown IN FULL so the narrator can state the complete ranking instead of
+      // hedging "only partially shown in the snippet"; only large results get
+      // the 30-row cap.
+      const OBSERVATION_TOP_K = resultRows.length <= 50 ? resultRows.length : 30;
+      const SAMPLE_CHAR_CAP = resultRows.length <= 50 ? 8_000 : 3_500;
       const formattedResults = JSON.stringify(
         resultRows.slice(0, OBSERVATION_TOP_K),
         null,
@@ -967,7 +1044,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
 
       return {
         ok: true,
-        summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}${showingNote}\nSample:\n${formattedResults.length > 3500 ? formattedResults.slice(0, 3500) + "…" : formattedResults}`,
+        summary: `${rs}\nRows: ${outputRowCount}. Columns: ${cols.join(", ")}${showingNote}\nSample:\n${formattedResults.length > SAMPLE_CHAR_CAP ? formattedResults.slice(0, SAMPLE_CHAR_CAP) + "…" : formattedResults}`,
         numericPayload: formattedResults.slice(0, 8_000),
         analyticalMeta,
         queryPlanParsed: parsed,

@@ -16,8 +16,20 @@ export const emptyDatasetProfile = (): DatasetProfile => ({
   suggestedQuestions: [],
 });
 
-/** Smaller sample = faster profile LLM; 60 rows usually enough for header/date inference */
-const MAX_SAMPLE_ROWS = 60;
+/**
+ * Sample rows sent to the profiling LLM. Smaller = fewer input tokens = a
+ * modestly faster call, at some risk to dirty-date / format detection (which
+ * needs value variety). Env-tunable per deployment via
+ * `DATASET_PROFILE_SAMPLE_ROWS`; default 60 is the proven value.
+ *
+ * NOTE (Wave W-DPC2): the profiling call already runs on the deployment's only
+ * / fastest model (e.g. gpt-5.4-mini — PRIMARY and MINI tiers point at the same
+ * deployment), so there is no faster model to route to. The dataset-profile
+ * CACHE (Wave W-DPC1) — which skips this call entirely on re-uploads — is the
+ * primary cold-path latency lever; this sample knob and `DATASET_PROFILE_TIMEOUT_MS`
+ * are the only secondary, quality-trading knobs for the first-ever upload.
+ */
+const MAX_SAMPLE_ROWS = Number(process.env.DATASET_PROFILE_SAMPLE_ROWS) || 60;
 const MAX_CELL_CHARS = 200;
 
 function buildLlmPayload(data: Record<string, any>[]) {
