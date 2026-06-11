@@ -30,6 +30,7 @@ import type {
   ChartAggOp,
 } from "@/shared/schema";
 import { isTemporalFacetFieldId } from "@/lib/temporalFacetDisplay";
+import { isDateFieldName } from "@/lib/charts/format";
 
 const TYPE_TO_MARK: Record<ChartSpec["type"], ChartV2Mark> = {
   line: "line",
@@ -60,22 +61,20 @@ function inferType(
   if (channel === "x" && fieldName && isTemporalFacetFieldId(fieldName)) {
     return "n";
   }
+  // Shared date-by-name test (format.ts). Excludes the standalone token `day`,
+  // so a `Day` ordinal x-axis becomes an ordered category (scalePoint) rather
+  // than a time scale — `new Date(15)` would otherwise collapse every x to the
+  // epoch. Real `Date`/`…_at`/`Order Date` columns still type as temporal.
   if (
     (mark === "line" || mark === "area") &&
     channel === "x" &&
     fieldName &&
-    looksLikeDateField(fieldName)
+    isDateFieldName(fieldName)
   ) {
     return "t";
   }
   if (mark === "point" && channel === "x") return "q";
   return "n";
-}
-
-const DATE_FIELD_RE =
-  /\b(date|day|month|quarter|year|week|time|timestamp|created_at|updated_at|period)\b/i;
-function looksLikeDateField(name: string): boolean {
-  return DATE_FIELD_RE.test(name);
 }
 
 /** Map v1 `aggregate` enum to v2's wider aggregate set. */

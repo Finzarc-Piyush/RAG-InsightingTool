@@ -48,6 +48,17 @@ describe("v1ToV2 · core encodings", () => {
   it("infers temporal x type for line over a date-named field", () => {
     const r = convertV1ToV2(v1({ type: "line", x: "Date", y: "Revenue" }));
     expect(r.spec.encoding.x?.type).toBe("t");
+    // …but "Order Date" / "created_at" also stay temporal.
+    expect(convertV1ToV2(v1({ type: "line", x: "Order Date", y: "Revenue" })).spec.encoding.x?.type).toBe("t");
+    expect(convertV1ToV2(v1({ type: "line", x: "created_at", y: "Revenue" })).spec.encoding.x?.type).toBe("t");
+  });
+
+  it("does NOT infer temporal x for an ordinal 'Day' counter (no epoch collapse)", () => {
+    // Regression: a `Day` ordinal x on a line/area chart was typed "t" → run
+    // through a time scale → `new Date(15)` collapsed every point to the epoch.
+    // It must be an ordered category instead.
+    expect(convertV1ToV2(v1({ type: "line", x: "Day", y: "Revenue" })).spec.encoding.x?.type).toBe("n");
+    expect(convertV1ToV2(v1({ type: "area", x: "Day", y: "Revenue" })).spec.encoding.x?.type).toBe("n");
   });
 
   it("infers quantitative x for scatter (point)", () => {

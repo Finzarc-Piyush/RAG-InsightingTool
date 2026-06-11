@@ -19,7 +19,12 @@ import {
 const CURRENCY_RE =
   /\b(revenue|sales|price|cost|margin|profit|spend|amount|cash|usd|inr|gbp|eur)\b/i;
 const PERCENT_RE = /\b(rate|percent|pct|share|ratio|conversion|growth)\b/i;
-const DATE_RE = /\b(date|day|month|quarter|year|week|time|timestamp|period)\b/i;
+// NOTE: the standalone token `day` is deliberately EXCLUDED. A column literally
+// named "Day" in these datasets is an ordinal counter (1..N), not a calendar
+// date — inferring "date" sent its numeric value through `new Date(15)` →
+// "1 Jan 1970". Real date columns are named "Date"/"…_at"/"…Date…" and still
+// match. ("monday"/"weekday" never matched anyway — no `\bday\b` boundary.)
+const DATE_RE = /\b(date|month|quarter|year|week|time|timestamp|period)\b/i;
 /** SQL audit-column convention: `created_at`, `updated_on`, etc. */
 const DATE_SUFFIX_RE = /(_at|_on)$/i;
 
@@ -43,13 +48,28 @@ function normalizeFieldName(s: string): string {
     .toLowerCase();
 }
 
+/**
+ * True when a column name looks like a calendar date/time column.
+ *
+ * Single source of truth for date-by-name detection — `inferFormatHint` (this
+ * file) and the v1→v2 x-axis type inference (`v1ToV2.ts`) both call this so the
+ * two can never drift. Note the standalone token `day` is excluded on purpose
+ * (see `DATE_RE`): a "Day" ordinal counter must format/scale as a number, never
+ * a date.
+ */
+export function isDateFieldName(name: string | undefined): boolean {
+  if (!name) return false;
+  const normalized = normalizeFieldName(name);
+  return DATE_SUFFIX_RE.test(name) || DATE_RE.test(normalized);
+}
+
 /** Detect the implicit format from a column name. */
 export function inferFormatHint(
   fieldName: string | undefined,
 ): "currency" | "percent" | "date" | "kmb" | "raw" {
   if (!fieldName) return "raw";
+  if (isDateFieldName(fieldName)) return "date";
   const normalized = normalizeFieldName(fieldName);
-  if (DATE_SUFFIX_RE.test(fieldName) || DATE_RE.test(normalized)) return "date";
   if (CURRENCY_RE.test(normalized)) return "currency";
   if (PERCENT_RE.test(normalized)) return "percent";
   return "kmb";
