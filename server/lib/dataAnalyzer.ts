@@ -472,6 +472,11 @@ export async function answerQuestion(
   // W13 · compact blackboard digest persisted onto the assistant message
   // for the Investigation summary card.
   investigationSummary?: import('../shared/schema.js').InvestigationSummary;
+  // C6 · the reflector's "Investigating further" sub-questions. agentLoop
+  // returns these and chatStream persists them, but answerQuestion used to
+  // drop them here — so chips were live-SSE-only and vanished on reload.
+  // Forwarding closes that persistence gap.
+  spawnedQuestions?: import('./agents/runtime/types.js').AgentLoopResult['spawnedQuestions'];
   // AMR3 · raw pivot captures from execute_query_plan steps; the chatStream
   // service materializes (inline-vs-blob policy) and patches them onto the
   // past_analyses doc for cross-session recall.
@@ -580,6 +585,10 @@ export async function answerQuestion(
           ...(loopResult.analysisBrief ? { analysisBrief: loopResult.analysisBrief } : {}),
           ...(loopResult.appliedFilters?.length ? { appliedFilters: loopResult.appliedFilters } : {}),
           ...(loopResult.investigationSummary ? { investigationSummary: loopResult.investigationSummary } : {}),
+          // C6 · forward the spawned "Investigating further" sub-questions so
+          // chatStream persists them onto the assistant message (they survive
+          // reload instead of being live-SSE-only).
+          ...(loopResult.spawnedQuestions?.length ? { spawnedQuestions: loopResult.spawnedQuestions } : {}),
           // Carry through the structured envelope and the post-verifier
           // business-actions promise. Declaring them explicitly here makes
           // the data flow traceable end-to-end (agentLoop → answerQuestion

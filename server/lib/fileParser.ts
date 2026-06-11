@@ -18,6 +18,7 @@ import { inferTemporalGrainFromDates } from './temporalGrain.js';
 import {
   applyTemporalFacetColumns,
   isTemporalFacetColumnKey,
+  stripTemporalFacetColumns,
   temporalFacetMetadataForDateColumns,
 } from './temporalFacetColumns.js';
 import {
@@ -952,6 +953,10 @@ export function resolveApprovedDateColumns(
   };
 
   for (const col of columns) {
+    // Never re-approve one of our own derived facet columns ("Month · Date")
+    // as a date source — that is what nests into "Day · Month · Date". Mirrors
+    // the createDataSummary filter above.
+    if (isTemporalFacetColumnKey(col)) continue;
     if (isLikelyIdentifierColumnName(col)) continue;
     if (!isTemporalWhitelistColumnName(col)) continue;
     // SU-FU1 · refuse the whitelist approval when the column's values
@@ -967,6 +972,7 @@ export function resolveApprovedDateColumns(
   const llmThresholdRatio = Number(process.env.LLM_DATE_OVERRIDE_PARSE_THRESHOLD) || 0.7;
   for (const col of llmCols) {
     if (approved.includes(col)) continue;
+    if (isTemporalFacetColumnKey(col)) continue;
     if (isLikelyIdentifierColumnName(col)) continue;
     if (!columns.includes(col)) continue;
     // SU-FU1 · refuse time-of-day columns even when the LLM dataset
@@ -1018,6 +1024,14 @@ export function applyUploadPipelineWithProfile(
   opts?: ApplyUploadPipelineOptions
 ): { data: Record<string, any>[]; summary: DataSummary } {
   if (data.length === 0) throw new Error('No data');
+  // Idempotency guard: a re-uploaded enriched (or already-exploded) dataset
+  // carries our own temporal-facet columns — "Month · Date" and even nested
+  // "Day · Day · Date". Remove them up-front so they are neither summarised,
+  // re-approved as new date sources, nor re-derived into a fresh nested
+  // generation. Real source columns ("Date", "Day", "TSOE-Date Combo") do not
+  // match isTemporalFacetColumnKey and survive; exactly one clean facet
+  // generation is then produced below from the genuine date columns.
+  stripTemporalFacetColumns(data);
   const interim = createDataSummary(data);
   const approvedDateCols = resolveApprovedDateColumns(data, profile, opts);
   const withDash = convertDashToZeroForNumericColumns(data, interim.numericColumns);

@@ -75,6 +75,27 @@ const DEFAULT_MAX_SWEEP_CHARTS = 24;
 export interface FeatureSweepOptions {
   /** Hard cap on net-new charts the sweep will emit. */
   maxAdds?: number;
+  /**
+   * Override for the outcome metric. On a plain analytical turn there is no
+   * `analysisBrief`, so the caller resolves the metric (e.g. from the charts
+   * the turn already built) and passes it here. Falls back to
+   * `brief.outcomeMetricColumn` when omitted.
+   */
+  outcomeOverride?: string;
+  /**
+   * EXHAUSTIVE BREADTH. When true, after the brief's segmentation/driver lists
+   * the sweep also enumerates EVERY categorical column in the dataset, so
+   * coverage no longer depends on the LLM brief naming each dimension (the root
+   * cause of "Android/iOS and TSOE-name got ignored"). Also lifts the
+   * `requestsDashboard` precondition — the caller decides when to run it.
+   */
+  exhaustiveDimensions?: boolean;
+  /**
+   * When true, a dimension with uniques > MEDIUM_CARDINALITY_MAX is top-N+Other
+   * bucketed (a leaderboard) instead of hard-skipped — so high-cardinality name
+   * columns (e.g. TSO_TSE Name) still surface their top performers.
+   */
+  bucketHighCardinality?: boolean;
 }
 
 export interface FeatureSweepReport {
@@ -94,8 +115,10 @@ export function enumerateMissingDashboardCharts(
   report?: FeatureSweepReport
 ): ChartSpec[] {
   const brief = ctx.analysisBrief;
-  if (!brief?.requestsDashboard) return [];
-  const outcome = brief.outcomeMetricColumn?.trim();
+  // Exhaustive breadth lifts the requestsDashboard precondition — the caller
+  // gates it (flag + analysis turn) and supplies the outcome via outcomeOverride.
+  if (!opts.exhaustiveDimensions && !brief?.requestsDashboard) return [];
+  const outcome = (opts.outcomeOverride ?? brief?.outcomeMetricColumn)?.trim();
   if (!outcome) return [];
   if (!ctx.summary.numericColumns.includes(outcome)) return [];
 
@@ -104,6 +127,7 @@ export function enumerateMissingDashboardCharts(
 
   const colNames = new Set(ctx.summary.columns.map((c) => c.name));
   const dateCols = new Set(ctx.summary.dateColumns);
+  const numericCols = new Set(ctx.summary.numericColumns);
 
   const orderedDims: string[] = [];
   const seenDims = new Set<string>();
@@ -116,8 +140,18 @@ export function enumerateMissingDashboardCharts(
     seenDims.add(t);
     orderedDims.push(t);
   };
-  for (const d of brief.segmentationDimensions ?? []) pushDim(d);
-  for (const d of brief.candidateDriverDimensions ?? []) pushDim(d);
+  for (const d of brief?.segmentationDimensions ?? []) pushDim(d);
+  for (const d of brief?.candidateDriverDimensions ?? []) pushDim(d);
+  // Exhaustive: append EVERY remaining categorical column (non-numeric,
+  // non-date) so a dimension is charted even when the LLM brief omitted it (or
+  // when there is no brief at all on a plain analysis turn). Numeric columns are
+  // excluded — they are measures/ordinals (e.g. "Day"), not breakdown axes.
+  if (opts.exhaustiveDimensions) {
+    for (const c of ctx.summary.columns) {
+      if (numericCols.has(c.name)) continue;
+      pushDim(c.name);
+    }
+  }
 
   const coveredX = new Set<string>();
   const yMatchesOutcome = (y: string | undefined): boolean => {
@@ -149,6 +183,17 @@ export function enumerateMissingDashboardCharts(
     if (uniques < 2) continue;
     if (uniques > MEDIUM_CARDINALITY_MAX) {
       report?.skippedHighCardinality.push({ dimension: dim, uniques });
+      // Default: hard-skip for legibility. With bucketHighCardinality the dim is
+      // top-N+Other bucketed into a leaderboard instead — so a high-card name
+      // column (e.g. TSO_TSE Name) still surfaces its top performers rather than
+      // vanishing silently.
+      if (!opts.bucketHighCardinality) continue;
+      const bucketed = bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
+      const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
+      if (built) {
+        out.push(built);
+        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_N_BUCKET });
+      }
       continue;
     }
     if (uniques > LOW_CARDINALITY_MAX) {
@@ -351,4 +396,121 @@ function tryBuildChart(
   } catch {
     return null;
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Exhaustive breadth — deterministic per-dimension coverage on analysis turns
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Flag (invariant #6). Default OFF in code; the Marico deploy sets
+ * EXHAUSTIVE_BREADTH_ENABLED=true in server.env. When on, a plain analysis turn
+ * gets one "outcome by <dim>" chart for EVERY categorical dimension (not just
+ * the LLM-brief's lists, and not only on explicit dashboard asks).
+ */
+export function isExhaustiveBreadthEnabled(): boolean {
+  const v = process.env.EXHAUSTIVE_BREADTH_ENABLED;
+  return v === "true" || v === "1";
+}
+
+/**
+ * Columns whose NAME marks them as a temporal ordinal / counter (Day, Week,
+ * Month, Year, …). Numeric, so they sneak into numericColumns and become
+ * eligible as an outcome metric — producing meaningless "Day (avg) by X"
+ * charts. Guarded out of outcome selection.
+ */
+export function isOrdinalLikeColumnName(name: string): boolean {
+  const n = name.trim().toLowerCase().replace(/[_-]+/g, " ");
+  return /\b(day|days|week|weeks|wk|month|months|year|years|quarter|quarters|qtr|day num|week num|month num|auto day)\b/.test(
+    n
+  );
+}
+
+const RATE_METRIC_RX = /\b(rate|adher|adherence|compliance|pct|percent|percentage|ratio|share|score|index)\b/i;
+
+/**
+ * Resolve the outcome metric to break down, deterministically, WITHOUT relying
+ * on the LLM brief (which doesn't exist on plain analytical turns):
+ *   1. brief.outcomeMetricColumn (when present, numeric, non-ordinal),
+ *   2. the dominant numeric Y across the charts the turn already built
+ *      (i.e. the metric the user is actually analysing), excluding ordinals,
+ *   3. a rate/score-named numeric column (pjp_adherence_rate-shaped),
+ *   4. null → caller skips the breadth sweep.
+ */
+export function resolveBreadthOutcomeMetric(
+  ctx: AgentExecutionContext,
+  builtCharts: ReadonlyArray<{ y?: string | null }>
+): string | null {
+  const numeric = new Set(ctx.summary.numericColumns);
+  const ok = (c: string | undefined | null): c is string =>
+    !!c && numeric.has(c) && !isOrdinalLikeColumnName(c);
+
+  const briefOutcome = ctx.analysisBrief?.outcomeMetricColumn?.trim();
+  if (ok(briefOutcome)) return briefOutcome;
+
+  // Dominant numeric Y among already-built charts.
+  const tally = new Map<string, number>();
+  for (const c of builtCharts) {
+    const y = c.y?.trim();
+    if (ok(y)) tally.set(y, (tally.get(y) ?? 0) + 1);
+  }
+  if (tally.size > 0) {
+    return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+  }
+
+  // Rate/score-shaped numeric column, in dataset column order. Normalise
+  // snake/kebab case first so `\brate\b` matches "pjp_adherence_rate".
+  const rateCol = ctx.summary.columns.find(
+    (c) =>
+      numeric.has(c.name) &&
+      !isOrdinalLikeColumnName(c.name) &&
+      RATE_METRIC_RX.test(c.name.replace(/[_-]+/g, " "))
+  );
+  return rateCol?.name ?? null;
+}
+
+export interface DimensionLeaders {
+  dimension: string;
+  best: { key: string; value: number };
+  worst: { key: string; value: number };
+  /** Number of distinct groups compared (≥2). */
+  groupCount: number;
+}
+
+/**
+ * Compute the best and worst performing group within one dimension, ranked by
+ * the MEAN of the outcome (size-normalised — correct for a rate metric, where a
+ * raw SUM would just reward the biggest group). Returns null when there are
+ * fewer than 2 comparable groups. Pure.
+ */
+export function computeDimensionLeaders(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  dimension: string,
+  outcome: string
+): DimensionLeaders | null {
+  const agg = new Map<string, { sum: number; n: number }>();
+  for (const r of rows) {
+    const raw = r?.[dimension];
+    if (raw == null || raw === "") continue;
+    const yRaw = r?.[outcome];
+    const y = typeof yRaw === "number" ? yRaw : Number(yRaw);
+    if (!Number.isFinite(y)) continue;
+    const key = String(raw);
+    const cur = agg.get(key) ?? { sum: 0, n: 0 };
+    cur.sum += y;
+    cur.n += 1;
+    agg.set(key, cur);
+  }
+  const means: Array<{ key: string; value: number }> = [];
+  for (const [key, { sum, n }] of agg) {
+    if (n > 0) means.push({ key, value: sum / n });
+  }
+  if (means.length < 2) return null;
+  means.sort((a, b) => b.value - a.value);
+  return {
+    dimension,
+    best: means[0]!,
+    worst: means[means.length - 1]!,
+    groupCount: means.length,
+  };
 }

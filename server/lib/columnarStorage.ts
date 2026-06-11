@@ -229,6 +229,20 @@ export class ColumnarStorageService {
     });
   }
 
+  /**
+   * Drop the given columns from a table (default `data`). Used to remove our own
+   * derived temporal-facet columns that a re-uploaded enriched file carries, so
+   * they are not re-typed as DATE and re-faceted into a nested generation. Names
+   * are quoted; unknown columns are tolerated via `IF EXISTS`.
+   */
+  async dropColumns(names: string[], tableName: string = 'data'): Promise<void> {
+    for (const name of names) {
+      await this.runStatement(
+        `ALTER TABLE ${this.quoteIdent(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdent(name)}`
+      );
+    }
+  }
+
   private csvCell(value: unknown): string {
     if (value === null || value === undefined) return '';
     if (value instanceof Date) return value.toISOString();

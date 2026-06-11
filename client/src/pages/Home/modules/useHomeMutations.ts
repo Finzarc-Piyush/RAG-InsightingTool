@@ -205,6 +205,12 @@ export const useHomeMutations = ({
   const [spawnedSubQuestions, setSpawnedSubQuestions] = useState<
     { id: string; question: string }[]
   >([]);
+  // Which spawned sub-questions have been INVESTIGATED by the follow-up pass
+  // (keyed by id), with the number of charts each produced. Lets the
+  // "Investigating further" chips flip from pending to investigated.
+  const [investigatedSubQuestions, setInvestigatedSubQuestions] = useState<
+    Record<string, { chartCount: number }>
+  >({});
   // W38 · accumulating "drafting answer…" text from server streaming
   // narrator (`answer_chunk` SSE events). Empty until streaming starts;
   // reset between turns. The future UX surface for this preview lives in
@@ -835,6 +841,7 @@ export const useHomeMutations = ({
       setThinkingSteps([]);
       setAgentWorkbenchLive([]);
       setSpawnedSubQuestions([]);
+      setInvestigatedSubQuestions({});
       setThinkingTargetTimestamp(null);
       setThinkingLiveAnchorTimestamp(null);
       // W38 · reset the streaming-narrator preview between turns.
@@ -1086,6 +1093,18 @@ export const useHomeMutations = ({
                     return { id: `legacy-${(h >>> 0).toString(36)}`, question: q };
                   });
                   setSpawnedSubQuestions((prev) => [...prev, ...next]);
+                }
+              } else if (event === 'sub_question_investigated') {
+                // The follow-up pass investigated a spawned sub-question — flip
+                // its chip from pending to investigated (with its chart count).
+                const payload = data as { id?: string; chartCount?: number };
+                if (typeof payload.id === 'string') {
+                  const id = payload.id;
+                  const chartCount = payload.chartCount ?? 0;
+                  setInvestigatedSubQuestions((prev) => ({
+                    ...prev,
+                    [id]: { chartCount },
+                  }));
                 }
               } else if (event === 'persist_status') {
                 // Wave A5 · server emits this when the chat-message Cosmos
@@ -1930,6 +1949,7 @@ export const useHomeMutations = ({
     thinkingSteps,
     agentWorkbenchLive,
     spawnedSubQuestions,
+    investigatedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
     // W38 · accumulating live narrator preview text. Empty when streaming

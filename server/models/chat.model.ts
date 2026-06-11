@@ -11,6 +11,7 @@ import {
   SessionAnalysisContext,
   ActiveFilterSpec,
   SemanticModel,
+  chartIdentityKey,
 } from "../shared/schema.js";
 import type { SemanticModelAuditEntry } from "../lib/semantic/semanticModelAuditLog.js";
 import { waitForContainer } from "./database.config.js";
@@ -741,9 +742,10 @@ export const addMessageToChat = async (
     // Add any new charts from the message to the main charts array
     if (message.charts && message.charts.length > 0) {
       const newCharts = message.charts.filter(chart => {
-        const exists = chatDocument.charts.find(c => 
-          c.title === chart.title && c.type === chart.type
-        );
+        // Axis-aware identity (not just title+type) so two charts that share a
+        // title but differ in breakdown both persist their data for reload.
+        const key = chartIdentityKey(chart);
+        const exists = chatDocument.charts.find(c => chartIdentityKey(c) === key);
         return !exists;
       });
 
@@ -859,9 +861,12 @@ export const addMessagesBySessionId = async (
     messages.forEach((msg) => {
       if (msg.charts && msg.charts.length > 0) {
         msg.charts.forEach((chart) => {
-          const exists = chatDocument.charts.find(
-            (c) => c.title === chart.title && c.type === chart.type
-          );
+          // Axis-aware identity (not just title+type): an investigated
+          // follow-up chart that re-uses a primary chart's title but breaks the
+          // metric down differently must persist its OWN data, or it re-hydrates
+          // empty on reload (visible on the dashboard, blank in chat).
+          const key = chartIdentityKey(chart);
+          const exists = chatDocument.charts.find((c) => chartIdentityKey(c) === key);
           if (!exists) {
             newCharts.push(chart); // Keep full chart with data
           }

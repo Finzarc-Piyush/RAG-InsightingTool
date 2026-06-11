@@ -78,6 +78,8 @@ interface ChatInterfaceProps {
   agentWorkbenchLive?: AgentWorkbenchEntry[];
   /** W12: sub-questions spawned during deep investigation (streamed live). */
   spawnedSubQuestions?: { id: string; question: string }[];
+  /** Which spawned sub-questions have been investigated (id → chart count). */
+  investigatedSubQuestions?: Record<string, { chartCount: number }>;
   thinkingTargetTimestamp?: number | null;
   /** Message timestamp after which the live thinking strip is rendered while streaming. */
   thinkingLiveAnchorTimestamp?: number | null;
@@ -187,6 +189,7 @@ export function ChatInterface({
   thinkingSteps,
   agentWorkbenchLive = [],
   spawnedSubQuestions = [],
+  investigatedSubQuestions = {},
   thinkingTargetTimestamp,
   thinkingLiveAnchorTimestamp = null,
   aiSuggestions,
@@ -1199,6 +1202,7 @@ export function ChatInterface({
                       steps={thinkingSteps ?? []}
                       workbench={agentWorkbenchLive}
                       spawnedSubQuestions={spawnedSubQuestions}
+                      investigatedSubQuestions={investigatedSubQuestions}
                       isStreaming
                       sessionId={sessionId ?? null}
                     />

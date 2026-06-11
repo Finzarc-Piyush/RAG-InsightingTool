@@ -319,6 +319,7 @@ function dispatchEvent(
       break;
     // W12: deep investigation tree events
     case "sub_question_spawned":
+    case "sub_question_investigated":
     case "investigation_progress":
     case "node_started":
     case "node_answered":

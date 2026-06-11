@@ -243,6 +243,27 @@ export const chartSpecSchema = z.object({
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
 
+/**
+ * Stable identity for a chart across persistence (storage dedup) and
+ * re-hydration (re-attaching stripped `data` on session reload). Keys on the
+ * fields that SURVIVE the message-chart strip (`type`, `title`, `x`, `y`,
+ * `seriesColumn`) — i.e. everything except `data`/`trendLine`. Using the full
+ * axis identity (not just `type::title`) is what lets two charts that share a
+ * title but differ in breakdown — e.g. a primary "Adherence Rate" by Cluster
+ * and an investigated follow-up "Adherence Rate" by ASM — each persist and
+ * re-hydrate their OWN data instead of colliding and rendering empty on reload.
+ * Backward-compatible: derived from metadata both old and new docs retain.
+ */
+export function chartIdentityKey(
+  c: Pick<ChartSpec, "type" | "title"> & {
+    x?: string | null;
+    y?: string | null;
+    seriesColumn?: string | null;
+  }
+): string {
+  return `${c.type ?? ""}::${c.title ?? ""}::${c.x ?? ""}::${c.y ?? ""}::${c.seriesColumn ?? ""}`;
+}
+
 // =====================================================================
 // ChartSpec v2 (grammar of graphics)
 // =====================================================================
@@ -1647,7 +1668,6 @@ export const messageSchema = z.object({
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(10)
     .optional(),
   /** Phase-1: one-line note on what the tools could not determine. */
   unexplained: z.string().max(1200).optional(),
@@ -2190,7 +2210,6 @@ export const chatResponseSchema = z.object({
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(10)
     .optional(),
   unexplained: z.string().max(1200).optional(),
   /** Phase-2 agent-emitted dashboard draft (chat preview before commit). */
@@ -2507,7 +2526,6 @@ export const dashboardAnswerEnvelopeSchema = z.object({
         confidence: z.enum(["low", "medium", "high"]).optional(),
       })
     )
-    .max(10)
     .optional(),
 });
 

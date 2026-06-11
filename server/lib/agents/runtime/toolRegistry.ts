@@ -39,6 +39,7 @@ import type { AgentWorkbenchEntry } from "../../../shared/schema.js";
 import type { AgentConfig } from "./types.js";
 import type { AgentExecutionContext } from "./types.js";
 import { agentLog } from "./agentLogger.js";
+import { repairArgsBySchema } from "./repairArgsBySchema.js";
 
 export interface ToolRunContext {
   exec: AgentExecutionContext;
@@ -165,6 +166,20 @@ export class ToolRegistry {
 
   getArgsHelpForTool(name: string): string | undefined {
     return this.tools.get(name)?.argsHelp;
+  }
+
+  /**
+   * Deterministically repair planner-supplied args that fail this tool's schema
+   * (drop unknown keys / bad optional-enum values). Returns repaired args only if
+   * they now validate, else `args: null`. Keeps the tool's Zod schema private.
+   */
+  repairArgs(
+    name: string,
+    rawArgs: Record<string, unknown>
+  ): { args: Record<string, unknown> | null; changes: string[] } {
+    const t = this.tools.get(name);
+    if (!t) return { args: null, changes: [] };
+    return repairArgsBySchema(t.input, rawArgs);
   }
 
   async execute(

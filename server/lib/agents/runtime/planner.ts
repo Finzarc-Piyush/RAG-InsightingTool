@@ -1009,24 +1009,39 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     }
     const zodErr = registry.getArgsParseError(step.tool, step.args);
     if (zodErr) {
-      logReject(
-        {
+      // Fail-forward: try a deterministic, schema-driven repair (drop unknown
+      // keys / bad optional-enum values) before rejecting the whole plan. Only
+      // returns args that NOW validate, so the worst case is unchanged (reject).
+      const repair = registry.repairArgs(step.tool, step.args);
+      if (repair.args) {
+        step.args = repair.args;
+        agentLog("plan.repair", {
+          turnId,
+          stepId: step.id,
+          tool: step.tool,
+          changes: repair.changes.join("; "),
+        });
+        // fall through — step args are now schema-valid
+      } else {
+        logReject(
+          {
+            reason: "invalid_tool_args",
+            tool: step.tool,
+            stepId: step.id,
+            argKeys: argKeys.slice(0, 200),
+            zod_error: zodErr,
+          },
+          turnId
+        );
+        return {
+          ok: false,
           reason: "invalid_tool_args",
           tool: step.tool,
           stepId: step.id,
           argKeys: argKeys.slice(0, 200),
           zod_error: zodErr,
-        },
-        turnId
-      );
-      return {
-        ok: false,
-        reason: "invalid_tool_args",
-        tool: step.tool,
-        stepId: step.id,
-        argKeys: argKeys.slice(0, 200),
-        zod_error: zodErr,
-      };
+        };
+      }
     }
     if (step.dependsOn && !stepIds.has(step.dependsOn)) {
       logReject(

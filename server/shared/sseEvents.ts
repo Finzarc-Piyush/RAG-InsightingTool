@@ -33,6 +33,7 @@ export const SSE_EVENT_KIND = {
   SKILL_EXECUTION: "skill_execution",
   SKILL_PARALLEL_BATCH: "skill_parallel_batch",
   SUB_QUESTION_SPAWNED: "sub_question_spawned",
+  SUB_QUESTION_INVESTIGATED: "sub_question_investigated",
   MAGNITUDES: "magnitudes",
   UNEXPLAINED: "unexplained",
   DASHBOARD_DRAFT: "dashboard_draft",
@@ -141,6 +142,17 @@ const subQuestionSpawnedSchema = z
   })
   .passthrough();
 
+// Emitted by the spawned-question follow-up pass once a sub-question has been
+// investigated, so the "Investigating further" chip can flip from pending to
+// investigated (with its chart count). One per investigated sub-question.
+const subQuestionInvestigatedSchema = z
+  .object({
+    id: z.string().optional(),
+    question: z.string(),
+    chartCount: z.number().int().nonnegative().optional(),
+  })
+  .passthrough();
+
 const magnitudesSchema = z
   .object({
     items: z
@@ -225,6 +237,7 @@ export const sseEventSchemas: Record<SseEventKind, z.ZodTypeAny> = {
   [SSE_EVENT_KIND.SKILL_EXECUTION]: skillExecutionSchema,
   [SSE_EVENT_KIND.SKILL_PARALLEL_BATCH]: skillParallelBatchSchema,
   [SSE_EVENT_KIND.SUB_QUESTION_SPAWNED]: subQuestionSpawnedSchema,
+  [SSE_EVENT_KIND.SUB_QUESTION_INVESTIGATED]: subQuestionInvestigatedSchema,
   [SSE_EVENT_KIND.MAGNITUDES]: magnitudesSchema,
   [SSE_EVENT_KIND.UNEXPLAINED]: unexplainedSchema,
   [SSE_EVENT_KIND.DASHBOARD_DRAFT]: dashboardDraftSchema,

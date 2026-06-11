@@ -327,6 +327,12 @@ export interface AgentExecutionContext {
   lastAssistantPivotState?: Message["pivotState"];
   /** Shared evidence store for all agents in this turn / investigation node. */
   blackboard?: AnalyticalBlackboard;
+  /**
+   * Recursion guard for the spawned-question follow-up pass. Set true on every
+   * sub-investigation context so a sub-turn never triggers its OWN follow-up
+   * pass (which would recurse). Checked by the guarded block in runAgentTurn.
+   */
+  suppressSpawnedFollowUp?: boolean;
   /** Emit a preliminary table to the chat stream (segmented thinking UX). */
   onIntermediateArtifact?: (payload: {
     preview: Record<string, unknown>[];

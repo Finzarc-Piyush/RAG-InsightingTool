@@ -88,6 +88,23 @@ describe("W6 · validateSseEvent · current emit shapes", () => {
     });
     assert.strictEqual(v.ok, true);
   });
+
+  it("sub_question_investigated (id + question + chartCount)", () => {
+    const v = validateSseEvent(SSE_EVENT_KIND.SUB_QUESTION_INVESTIGATED, {
+      id: "sq_1",
+      question: "Which TSOE has highest compliance?",
+      chartCount: 2,
+    });
+    assert.strictEqual(v.ok, true);
+  });
+
+  it("sub_question_investigated rejects a payload missing `question`", () => {
+    const v = validateSseEvent(SSE_EVENT_KIND.SUB_QUESTION_INVESTIGATED, {
+      id: "sq_1",
+      chartCount: 2,
+    });
+    assert.strictEqual(v.ok, false);
+  });
 });
 
 describe("W6 · validateSseEvent · drift detection", () => {

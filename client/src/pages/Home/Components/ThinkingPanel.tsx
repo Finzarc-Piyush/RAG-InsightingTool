@@ -29,6 +29,8 @@ interface ThinkingPanelProps {
   /** live = collapsible stream panel; archived = saved segment, starts collapsed. */
   variant?: "live" | "archived";
   spawnedSubQuestions?: { id: string; question: string }[];
+  /** Which spawned sub-questions have been investigated (id → chart count). */
+  investigatedSubQuestions?: Record<string, { chartCount: number }>;
   sessionId?: string | null;
   turnId?: string | null;
   readOnly?: boolean;
@@ -121,6 +123,7 @@ export function ThinkingPanel({
   isStreaming,
   variant = "live",
   spawnedSubQuestions = [],
+  investigatedSubQuestions = {},
   sessionId,
   turnId,
   readOnly = false,
@@ -224,13 +227,30 @@ export function ThinkingPanel({
               {spawnedSubQuestions.map((q) => {
                 const fb = spawnedQuestionFeedback?.[q.id];
                 const target: FeedbackTarget = { type: "subanswer", id: q.id };
+                const investigated = investigatedSubQuestions[q.id];
                 return (
                   <div
                     key={q.id}
-                    className="flex items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground/80"
+                    className={cn(
+                      "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs text-foreground/80",
+                      investigated
+                        ? "border-emerald-500/30 bg-emerald-500/5"
+                        : "border-primary/20 bg-primary/5"
+                    )}
                   >
-                    <GitBranch className="h-3.5 w-3.5 shrink-0 text-primary/60" />
+                    {investigated ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500/70" />
+                    ) : (
+                      <GitBranch className="h-3.5 w-3.5 shrink-0 text-primary/60" />
+                    )}
                     <span className="flex-1 min-w-0">{q.question}</span>
+                    {investigated && (
+                      <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        {investigated.chartCount > 0
+                          ? `Investigated · ${investigated.chartCount} chart${investigated.chartCount === 1 ? "" : "s"}`
+                          : "Investigated"}
+                      </span>
+                    )}
                     {sessionId && turnId && (
                       <FeedbackButtons
                         sessionId={sessionId}

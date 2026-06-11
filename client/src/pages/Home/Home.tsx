@@ -157,6 +157,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     thinkingSteps,
     agentWorkbenchLive,
     spawnedSubQuestions,
+    investigatedSubQuestions,
     thinkingTargetTimestamp,
     thinkingLiveAnchorTimestamp,
     streamingNarratorPreview,
@@ -1027,6 +1028,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         thinkingSteps={thinkingSteps}
         agentWorkbenchLive={agentWorkbenchLive}
         spawnedSubQuestions={spawnedSubQuestions}
+        investigatedSubQuestions={investigatedSubQuestions}
         thinkingTargetTimestamp={thinkingTargetTimestamp}
         thinkingLiveAnchorTimestamp={thinkingLiveAnchorTimestamp}
         streamingNarratorPreview={streamingNarratorPreview}

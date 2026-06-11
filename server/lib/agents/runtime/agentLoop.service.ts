@@ -161,6 +161,10 @@ import {
 import { createBlackboard, addFinding, addOpenQuestion, resolveHypothesis, formatForNarrator } from "./analyticalBlackboard.js";
 import type { Finding } from "./analyticalBlackboard.js";
 import { runContextAgentRound2 } from "./contextAgent.js";
+import {
+  isSpawnedFollowUpEnabled,
+  shouldRunSpawnedFollowUp,
+} from "./investigationTree.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import { runBusinessActions } from "./businessActionsAgent.js";
 import {
@@ -750,7 +754,7 @@ const finalAnswerEnvelopeSchema = z.object({
   body: z.string().min(1),
   keyInsight: z.string().nullable().optional(),
   ctas: z.array(z.string()).max(3),
-  magnitudes: z.array(magnitudeSchema).max(10).optional(),
+  magnitudes: z.array(magnitudeSchema).optional(),
   unexplained: z.string().max(1200).optional(),
   // Decision-grade extensions, mirrored from the narrator schema so the
   // synthesizer fallback path produces the same envelope shape and the
@@ -1152,8 +1156,13 @@ async function runPlannerWithOneRetry(
     stepInsightsBlock
   );
   if (first.ok) return first;
-  const hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
+  let hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
   if (!hint) return first;
+  // Make the retry self-correcting: append the SPECIFIC tool + Zod error so the
+  // LLM fixes exactly the field that failed, not just the generic category.
+  if (first.reason === "invalid_tool_args" && first.zod_error) {
+    hint += `\n\nThe tool "${first.tool}" rejected its args with this exact error: ${first.zod_error}\nFix precisely that — use only the allowed keys and exact enum values for that tool.`;
+  }
   agentLog("planner.retry", { turnId, reason: first.reason });
   const ctxRetry: AgentExecutionContext = {
     ...ctx,
@@ -3161,6 +3170,82 @@ export async function runAgentTurn(
       break;
     }
 
+    // Spawned-question follow-up pass (flag-gated · invariant #6). The plan loop
+    // is done, so the reflector's "Investigating further" sub-questions are known.
+    // With SPAWNED_FOLLOWUP_ENABLED on, investigate each as a bounded sub-turn
+    // that SHARES this blackboard (findings flow into the one synthesis below) and
+    // whose charts join mergedCharts (→ response chart cards AND dashboard tiles).
+    // No cap on the number of sub-questions — only an aggregate LLM/wall budget.
+    // The recursion guard (ctx.suppressSpawnedFollowUp, set on every sub-turn)
+    // stops a sub-turn from spawning its own pass. Runs BEFORE RAG Round 2 so
+    // Round 2 derives queries from the combined (incl. sub-investigation) findings.
+    if (
+      shouldRunSpawnedFollowUp(isSpawnedFollowUpEnabled(), {
+        suppress: ctx.suppressSpawnedFollowUp,
+        mode: ctx.mode,
+        questionCount: accumulatedSpawnedQuestions.length,
+      })
+    ) {
+      try {
+        safeEmit("flow_decision", {
+          layer: "spawned-followup",
+          chosen: "investigate",
+          overriddenBy: "SPAWNED_FOLLOWUP_ENABLED",
+          reason: `Auto-investigating ${accumulatedSpawnedQuestions.length} spawned sub-question(s); folding their charts + findings into one coherent answer.`.slice(
+            0,
+            500
+          ),
+          candidates: accumulatedSpawnedQuestions
+            .slice(0, 8)
+            .map((q) => q.question.slice(0, 200)),
+        });
+        const { runSpawnedFollowUpPass } = await import("./spawnedFollowUpPass.js");
+        const pass = await runSpawnedFollowUpPass(
+          ctx,
+          accumulatedSpawnedQuestions,
+          safeEmit
+        );
+        // Primary charts were pushed first (above); append sub-charts so the
+        // dedupe/cap in finalizeMergedCharts keeps primary charts on collision.
+        if (pass.charts.length) mergedCharts.push(...pass.charts);
+        // B5 — weave each investigated sub-question's answer into the SHARED
+        // blackboard as a provenance-tagged finding, BEFORE the narrator runs
+        // below. Previously `pass.investigated[]` was only logged (a count), so
+        // the investigation was invisible in the answer prose: the sub-turn's
+        // raw tool findings reached the blackboard but carried no "this came
+        // from an Investigating-further chip" signal, so the narrator never
+        // mentioned it. This gives the ONE final synthesis an explicit,
+        // attributed record of each sub-investigation's conclusion.
+        if (ctx.blackboard) {
+          for (const inv of pass.investigated) {
+            const summary = (inv.answer ?? "").trim();
+            if (!summary) continue;
+            addFinding(ctx.blackboard, {
+              sourceRef: `investigated_${inv.id ?? "sub"}`,
+              label: `Investigated follow-up: ${inv.question}`.slice(0, 120),
+              detail: summary.slice(0, 1200),
+              // "notable" so it ranks above routine tool findings in
+              // formatForNarrator without masquerading as an anomaly.
+              significance: "notable",
+            });
+          }
+        }
+        agentLog("spawnedFollowUp.merged", {
+          turnId,
+          investigated: pass.investigated.length,
+          chartsAdded: pass.charts.length,
+          llmCalls: pass.llmCalls,
+          budgetHalted: pass.budgetHalted,
+        });
+      } catch (e) {
+        // Best-effort — a failed follow-up pass must never break the main answer.
+        agentLog("spawnedFollowUp.pass_failed", {
+          turnId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
     // W4: RAG Round 2 — derive queries from blackboard findings and retrieve
     // additional domain context before synthesis. Non-fatal; runs once per turn.
     if (ctx.blackboard && ctx.mode === "analysis") {
@@ -3690,16 +3775,41 @@ export async function runAgentTurn(
     const isExplicitDashboardAsk =
       DASHBOARD_EXPLICIT_RX.test(ctx.question) ||
       ctx.analysisBrief?.requestsDashboard === true;
-    if (isExplicitDashboardAsk) {
+    // EXHAUSTIVE BREADTH (flag-gated · invariant #6). When on, ANALYSIS turns —
+    // not just explicit dashboard asks — get one metric-sorted "outcome by
+    // <dim>" chart for EVERY categorical dimension, plus a best/worst finding
+    // per dimension. This is the engine behind "go full fledged: top & worst
+    // performers at every level, all columns considered."
+    const {
+      enumerateMissingDashboardCharts,
+      isExhaustiveBreadthEnabled,
+      resolveBreadthOutcomeMetric,
+      computeDimensionLeaders,
+    } = await import("./dashboardFeatureSweep.js");
+    const breadthEnabled = isExhaustiveBreadthEnabled();
+    const runFeatureSweep =
+      isExplicitDashboardAsk || (breadthEnabled && ctx.mode === "analysis");
+    if (runFeatureSweep) {
       try {
-        const { enumerateMissingDashboardCharts } = await import(
-          "./dashboardFeatureSweep.js"
+        // Breadth ties its ceiling to the configured final-chart cap (40 in the
+        // Marico deploy) so ~one chart per dimension survives finalize; the
+        // narrower dashboard-only path keeps the legacy 24 hard cap.
+        const finalCap = parseInt(
+          process.env.AGENT_MAX_FINAL_CHARTS_PER_TURN || "24",
+          10
         );
-        const remaining = Math.max(
-          0,
-          DASHBOARD_CHART_HARD_CAP - mergedCharts.length
-        );
-        if (remaining > 0) {
+        const sweepCeil =
+          breadthEnabled && Number.isFinite(finalCap) && finalCap > 0
+            ? finalCap
+            : DASHBOARD_CHART_HARD_CAP;
+        // On a plain analysis turn there is no brief — resolve the metric to
+        // break down from the charts the turn already produced (or a rate-shaped
+        // column). Null ⇒ nothing meaningful to break down ⇒ skip the sweep.
+        const breadthOutcome = breadthEnabled
+          ? resolveBreadthOutcomeMetric(ctx, mergedCharts)
+          : null;
+        const remaining = Math.max(0, sweepCeil - mergedCharts.length);
+        if (remaining > 0 && (!breadthEnabled || breadthOutcome)) {
           // DB4 · pass a report sink so the loop can emit telemetry for
           // bucketed (top-N+Other) dims and high-cardinality skips. Both are
           // user-actionable: bucketed dims may need a derive_dimension_bucket
@@ -3712,7 +3822,16 @@ export async function runAgentTurn(
           const swept = enumerateMissingDashboardCharts(
             ctx,
             mergedCharts,
-            { maxAdds: remaining },
+            {
+              maxAdds: remaining,
+              ...(breadthEnabled
+                ? {
+                    exhaustiveDimensions: true,
+                    bucketHighCardinality: true,
+                    ...(breadthOutcome ? { outcomeOverride: breadthOutcome } : {}),
+                  }
+                : {}),
+            },
             sweepReport
           );
           if (sweepReport.bucketedDimensions.length || sweepReport.skippedHighCardinality.length) {
@@ -3744,6 +3863,46 @@ export async function runAgentTurn(
               addedCount: swept.length,
               totalCharts: mergedCharts.length,
             });
+
+            // Top/worst at every level: write a deterministic best-vs-worst
+            // finding per swept dimension so the ONE narrator states the leaders
+            // in prose (not only as a chart the user must read off). Bounded so
+            // the narrator prompt stays sane; charts cover the rest. Ranks by
+            // MEAN (size-normalised — correct for a rate metric).
+            if (breadthEnabled && breadthOutcome && ctx.blackboard) {
+              const breadthRows = (ctx.turnStartDataRef ?? ctx.data) as
+                | Record<string, unknown>[]
+                | undefined;
+              if (breadthRows?.length) {
+                const MAX_BREADTH_FINDINGS = 16;
+                const seenDimFinding = new Set<string>();
+                let added = 0;
+                for (const c of swept) {
+                  if (added >= MAX_BREADTH_FINDINGS) break;
+                  const dim = c.x;
+                  if (!dim || seenDimFinding.has(dim)) continue;
+                  seenDimFinding.add(dim);
+                  const leaders = computeDimensionLeaders(breadthRows, dim, breadthOutcome);
+                  if (!leaders) continue;
+                  const fmt = (v: number) =>
+                    Math.abs(v) < 1 ? v.toFixed(3) : v.toFixed(1);
+                  addFinding(ctx.blackboard, {
+                    sourceRef: `breadth_${dim}`,
+                    label: `Top vs bottom ${breadthOutcome} by ${dim}`.slice(0, 120),
+                    detail:
+                      `Best ${dim}: "${leaders.best.key}" (${breadthOutcome} ≈ ${fmt(leaders.best.value)}); ` +
+                      `worst: "${leaders.worst.key}" (≈ ${fmt(leaders.worst.value)}) ` +
+                      `across ${leaders.groupCount} ${dim} values.`,
+                    significance: "notable",
+                    relatedColumns: [dim, breadthOutcome],
+                  });
+                  added++;
+                }
+                if (added > 0) {
+                  agentLog("breadth_leader_findings", { turnId, added });
+                }
+              }
+            }
           }
         }
       } catch (sweepErr) {

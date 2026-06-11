@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import { loadLatestData } from "../utils/dataLoader.js";
+import { withoutTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
 import type { ChatDocument } from "../models/chat.model.js";
 
 /**
@@ -89,24 +90,33 @@ test("downloadWorkingDataset · workbook has Sheet1 with full unfiltered row cou
   assert.strictEqual(parsed.length, 4, "all four canonical rows present");
 });
 
-test("downloadWorkingDataset · header includes temporal facet columns when dataSummary has dateColumns", async () => {
+test("downloadWorkingDataset · export strips internal temporal facet columns, keeping only real columns", async () => {
   const chat = makeChat();
   const data = await loadLatestData(chat, undefined, undefined, { skipActiveFilter: true });
-  const buf = buildXlsxBuffer(data);
+
+  // Sanity: loadLatestData materializes facet columns onto the rows…
+  const loadedHeader = Object.keys(data[0] ?? {});
+  const hasFacetBeforeStrip = loadedHeader.some(
+    (h) => typeof h === "string" && /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(h)
+  );
+  assert.ok(hasFacetBeforeStrip, "loadLatestData should materialize facet columns before the export strip");
+
+  // …the controller projects them out via withoutTemporalFacetColumns before writing.
+  const buf = buildXlsxBuffer(withoutTemporalFacetColumns(data));
 
   const wb = XLSX.read(buf);
   // header_only via sheet_to_json with header:1 returns the first row as the header array
   const grid = XLSX.utils.sheet_to_json<any[]>(wb.Sheets["Sheet1"], { header: 1 });
   const header = (grid[0] as string[]) ?? [];
+  // Real columns survive…
   assert.ok(header.includes("Region"));
   assert.ok(header.includes("OrderDate"));
   assert.ok(header.includes("Revenue"));
-  // applyTemporalFacetColumns runs inside loadLatestData → grain columns must
-  // be present whenever dataSummary.dateColumns is non-empty.
-  const hasYearFacet = header.some((h) => typeof h === "string" && h.startsWith("Year ") && h.includes("OrderDate"));
-  const hasMonthFacet = header.some((h) => typeof h === "string" && h.startsWith("Month ") && h.includes("OrderDate"));
-  assert.ok(hasYearFacet, `expected a 'Year · OrderDate'-style facet column in header: ${JSON.stringify(header)}`);
-  assert.ok(hasMonthFacet, `expected a 'Month · OrderDate'-style facet column in header: ${JSON.stringify(header)}`);
+  // …and NO derived temporal-facet column (e.g. "Year · OrderDate") leaks into the file.
+  const facetLeak = header.filter(
+    (h) => typeof h === "string" && /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(h)
+  );
+  assert.deepStrictEqual(facetLeak, [], `no facet columns should be exported, found: ${JSON.stringify(facetLeak)}`);
 });
 
 test("downloadWorkingDataset · CSV format produces RFC4180 output with header + escaped cells", async () => {

@@ -10,6 +10,7 @@ import { sendError, sendValidationError, sendNotFound } from "../utils/responseF
 import { getChatBySessionIdEfficient } from "../models/chat.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { downloadFilenameTimestamp } from "../utils/downloadFilenameTimestamp.js";
+import { withoutTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
 import * as XLSX from 'xlsx';
 
 function sanitizeDownloadFileStem(stem: string, fallback: string): string {
@@ -113,10 +114,14 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
 
     // Load the latest modified data
     const data = await loadLatestData(chatDocument);
-    
+
     if (!data || data.length === 0) {
       return sendError(res, 'No data available to download');
     }
+
+    // Strip internal temporal-facet helper columns so the user's file contains
+    // only their real columns (non-mutating — does not touch cached rows).
+    const exportData = withoutTemporalFacetColumns(data);
 
     const originalFileName = chatDocument.fileName || "dataset";
     const stem = originalFileName.replace(/\.[^/.]+$/, "");
@@ -125,13 +130,13 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
 
     if (format === 'xlsx') {
       // Convert to Excel
-      const worksheet = XLSX.utils.json_to_sheet(data);
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-      
+
       // Generate buffer
       const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-      
+
       // Set headers
       res.setHeader('Content-Disposition', `attachment; filename="${baseFileName}_modified_${timestamp}.xlsx"`);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -140,18 +145,18 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
       res.send(excelBuffer);
     } else {
       // Convert to CSV
-      if (data.length === 0) {
+      if (exportData.length === 0) {
         return sendError(res, 'No data to export');
       }
 
       // Get all column names
-      const columns = Object.keys(data[0] || {});
-      
+      const columns = Object.keys(exportData[0] || {});
+
       // Create CSV header
       const csvHeader = columns.map(col => `"${String(col).replace(/"/g, '""')}"`).join(',');
-      
+
       // Create CSV rows
-      const csvRows = data.map(row => {
+      const csvRows = exportData.map(row => {
         return columns.map(col => {
           const value = row[col];
           if (value === null || value === undefined) {
@@ -234,6 +239,10 @@ export const downloadWorkingDataset = async (req: Request, res: Response) => {
       return sendError(res, 'No data available to download');
     }
 
+    // Strip internal temporal-facet helper columns so the user's file contains
+    // only their real columns (non-mutating — does not touch cached rows).
+    const exportData = withoutTemporalFacetColumns(data);
+
     const format = (req.query.format as string) === 'csv' ? 'csv' : 'xlsx';
     const originalFileName = chatDocument.fileName || 'dataset';
     const stem = originalFileName.replace(/\.[^/.]+$/, '');
@@ -244,7 +253,7 @@ export const downloadWorkingDataset = async (req: Request, res: Response) => {
     res.setHeader('X-Working-Dataset-Row-Count', String(data.length));
 
     if (format === 'xlsx') {
-      const worksheet = XLSX.utils.json_to_sheet(data);
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
       const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -255,7 +264,7 @@ export const downloadWorkingDataset = async (req: Request, res: Response) => {
       res.setHeader('Content-Length', excelBuffer.length);
       res.send(excelBuffer);
     } else {
-      const csvBuffer = buildCsvBuffer(data);
+      const csvBuffer = buildCsvBuffer(exportData);
       const filename = `${baseFileName}_working_${timestamp}.csv`;
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');

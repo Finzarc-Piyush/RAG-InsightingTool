@@ -22,7 +22,9 @@ import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import {
   getChatBySessionIdForUser,
   updateChatDocument,
+  type ChatDocument,
 } from "../models/chat.model.js";
+import { SessionDataNotMaterializedError } from "../lib/columnarStorage.js";
 import {
   activeFilterSpecSchema,
   type ActiveFilterSpec,
@@ -76,15 +78,69 @@ async function buildResponse(
     err.statusCode = 404;
     throw err;
   }
+  return buildResponseFromDoc(doc, full);
+}
+
+/**
+ * Empty-shape response for a session whose data is not yet materialized.
+ * `effectiveConditionCount` still reflects any persisted filter spec so the UI
+ * can render the filter chip even before the dataset lands.
+ */
+function emptyResponse(spec: ActiveFilterSpec | null): ActiveFilterResponse {
+  return {
+    ok: true,
+    activeFilter: spec,
+    totalRows: 0,
+    filteredRows: 0,
+    preview: [],
+    previewTruncated: false,
+    effectiveConditionCount: effectiveConditionCount(spec),
+  };
+}
+
+/**
+ * Build the active-filter response from an already-fetched chat document.
+ * Exported so the placeholder/not-materialized degradation is unit-testable
+ * without a Cosmos round trip.
+ *
+ * Graceful-empty: while a session is still a placeholder (upload in flight),
+ * `dataSummary.rowCount` is 0 and every data source is empty, so
+ * `loadLatestData` would throw "No data found". The client polls this endpoint
+ * on mount (before the upload finishes), so we must return a clean empty-shape
+ * 200 instead of a 500 — mirroring the `data-summary` endpoint's empty handling
+ * in sessionController.ts. The defensive try/catch additionally covers the
+ * narrow window where metadata reports rows but the durable data is mid-write.
+ */
+export async function buildResponseFromDoc(
+  doc: ChatDocument,
+  full = false
+): Promise<ActiveFilterResponse> {
   const spec = doc.activeFilter ?? null;
   // Canonical row count from the session metadata (cheap; doesn't trigger a
   // blob fetch). dataSummary.rowCount is authoritative post-upload.
   const totalRows = doc.dataSummary?.rowCount ?? 0;
+  // Not-yet-materialized (placeholder) session — no data to load or filter.
+  if (totalRows === 0) {
+    return emptyResponse(spec);
+  }
   // Filtered row count + preview rows. Use loadLatestData (filter-aware) for
   // the preview and a separate canonical load for the count to avoid a second
   // blob fetch — actually one round trip suffices because loadLatestData
   // returns filtered rows already.
-  const filteredAll = await loadLatestData(doc);
+  let filteredAll: Record<string, unknown>[];
+  try {
+    filteredAll = await loadLatestData(doc);
+  } catch (err: unknown) {
+    // Data not materialized yet (metadata present, durable rows mid-write).
+    // Degrade to empty-shape rather than 500; re-throw anything unexpected.
+    const notMaterialized =
+      err instanceof SessionDataNotMaterializedError ||
+      (err instanceof Error && err.message.startsWith("No data found"));
+    if (notMaterialized) {
+      return emptyResponse(spec);
+    }
+    throw err;
+  }
   const { preview, previewTruncated } = selectPreviewRows(filteredAll, full);
   return {
     ok: true,

@@ -40,6 +40,38 @@ describe("MW1 · filterSpawnedQuestions", () => {
     );
   });
 
+  it("collapses paraphrased duplicates that differ only in framing/ranking words", () => {
+    // The two pairs a user saw repeated under "Investigating further": same
+    // analytical intent, different wording. Each pair must reduce to ONE chip.
+    const out = filterSpawnedQuestions([
+      q("Which 10 TSOEs have the highest Compliance Visit count?"),
+      q("What are the top 10 TSOE names by Compliance Visit?"), // paraphrase of #1
+      q("What is Android./iOS usage by ASM?"),
+      q("How does Android./iOS usage vary by ASM?"), // paraphrase of #3
+    ]);
+    assert.deepEqual(out.map((x) => x.question), [
+      "Which 10 TSOEs have the highest Compliance Visit count?",
+      "What is Android./iOS usage by ASM?",
+    ]);
+  });
+
+  it("collapses a paraphrase against a prior-question (cross-step dedup)", () => {
+    const out = filterSpawnedQuestions(
+      [q("What are the top 10 TSOE names by Compliance Visit?")],
+      { priorQuestions: ["Which 10 TSOEs have the highest Compliance Visit count?"] }
+    );
+    assert.deepEqual(out.map((x) => x.question), []);
+  });
+
+  it("does NOT collapse questions that differ by aggregation (average vs total)", () => {
+    // Aggregation qualifiers carry meaning — these are genuinely different.
+    const out = filterSpawnedQuestions([
+      q("What is average PJP Adherence by ASM?"),
+      q("What is total PJP Adherence by ASM?"),
+    ]);
+    assert.equal(out.length, 2);
+  });
+
   it("drops questions grouping by an identifier-shaped column, keeps real dimensions", () => {
     const out = filterSpawnedQuestions(
       [

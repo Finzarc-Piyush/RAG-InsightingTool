@@ -59,15 +59,69 @@ import { decomposeQuestion } from "./coordinatorAgent.js";
 import { runNarrator, shouldUseNarrator } from "./narratorAgent.js";
 import { runAgentTurn } from "./agentLoop.service.js";
 import { loadAgentConfigFromEnv } from "./types.js";
-import type { AgentExecutionContext, AgentLoopResult } from "./types.js";
+import type { AgentConfig, AgentExecutionContext, AgentLoopResult } from "./types.js";
 import { evaluateBudgetExhaustion } from "./investigationBudget.js";
 
 type OnAgentEvent = NonNullable<Parameters<typeof runAgentTurn>[2]>;
+type ChartSpecList = NonNullable<AgentLoopResult["charts"]>;
 
 export { isDeepInvestigationEnabled };
 
+/** Result of one bounded sub-investigation turn (shared with the follow-up pass). */
+export interface SubInvestigationResult {
+  answer: string;
+  /** B3 fix — charts produced by the sub-turn, forwarded (not discarded). */
+  charts: ChartSpecList;
+  spawnedQuestions: SpawnedQuestion[];
+  llmCalls: number;
+  wallMs: number;
+}
+
 /**
- * Run a single investigation node: one bounded runAgentTurn call with the
+ * Run ONE sub-question as a single bounded runAgentTurn that SHARES the parent
+ * blackboard (so its findings land in the parent store the narrator reads) and
+ * FORWARDS its charts (B3 — previously discarded). The sub-turn context carries
+ * `suppressSpawnedFollowUp` so it never triggers its own follow-up pass
+ * (recursion guard). Caller owns the budget via `perTurnConfig`.
+ *
+ * Reused by (a) investigateNode in the deep-investigation BFS and (b) the
+ * single-flow spawned-question follow-up pass (spawnedFollowUpPass.ts).
+ */
+export async function runSubInvestigation(
+  baseCtx: AgentExecutionContext,
+  question: string,
+  perTurnConfig: AgentConfig,
+  onAgentEvent?: OnAgentEvent,
+  /** Injectable for tests; defaults to the real agent loop in production. */
+  runTurn: typeof runAgentTurn = runAgentTurn
+): Promise<SubInvestigationResult> {
+  const nodeCtx: AgentExecutionContext = {
+    ...baseCtx,
+    question,
+    blackboard: baseCtx.blackboard,
+    // Recursion guard — a sub-turn must never spawn its own follow-up pass.
+    suppressSpawnedFollowUp: true,
+  };
+
+  const t0 = Date.now();
+  let llmCalls = 0;
+
+  const result = await runTurn(nodeCtx, perTurnConfig, (event, payload) => {
+    if (event === "llm_call") llmCalls++;
+    onAgentEvent?.(event, payload);
+  });
+
+  return {
+    answer: result?.answer ?? "",
+    charts: result?.charts ?? [],
+    spawnedQuestions: result?.spawnedQuestions ?? [],
+    llmCalls,
+    wallMs: Date.now() - t0,
+  };
+}
+
+/**
+ * Run a single investigation node: one bounded runSubInvestigation with the
  * node's sub-question, shared blackboard, and a per-node budget.
  */
 async function investigateNode(
@@ -75,13 +129,13 @@ async function investigateNode(
   tree: InvestigationTree,
   baseCtx: AgentExecutionContext,
   onAgentEvent?: OnAgentEvent
-): Promise<{ nodeId: string; answer: string; spawnedQuestions: SpawnedQuestion[]; llmCalls: number; wallMs: number }> {
+): Promise<{ nodeId: string } & SubInvestigationResult> {
   const node = tree.nodes[nodeId];
   const config = loadAgentConfigFromEnv();
   const deepCfg = loadDeepInvestigationConfig();
 
   // Override per-node budget caps
-  const perNodeConfig = {
+  const perNodeConfig: AgentConfig = {
     ...config,
     maxTotalLlmCallsPerTurn: deepCfg.perNodeLlmCalls,
     maxWallTimeMs: deepCfg.perNodeWallMs,
@@ -89,31 +143,15 @@ async function investigateNode(
     maxToolCalls: Math.min(config.maxToolCalls, 20),
   };
 
-  const nodeCtx: AgentExecutionContext = {
-    ...baseCtx,
-    question: node.question,
-    blackboard: tree.blackboard,
-  };
-
-  const t0 = Date.now();
-  let llmCalls = 0;
-
-  const result = await runAgentTurn(
-    nodeCtx,
+  // Share the tree blackboard (== baseCtx.blackboard in runDeepInvestigation).
+  const sub = await runSubInvestigation(
+    { ...baseCtx, blackboard: tree.blackboard },
+    node.question,
     perNodeConfig,
-    (event, payload) => {
-      if (event === "llm_call") llmCalls++;
-      onAgentEvent?.(event, payload);
-    }
+    onAgentEvent
   );
 
-  return {
-    nodeId,
-    answer: result?.answer ?? "",
-    spawnedQuestions: result?.spawnedQuestions ?? [],
-    llmCalls,
-    wallMs: Date.now() - t0,
-  };
+  return { nodeId, ...sub };
 }
 
 /**
@@ -177,6 +215,10 @@ export async function runDeepInvestigation(
     nodes: Object.keys(tree.nodes).length,
   });
 
+  // B4 fix — aggregate charts produced by every investigated node so the
+  // orchestrator return is no longer chart-less.
+  const collectedCharts: ChartSpecList = [];
+
   // BFS loop
   while (hasPendingNodes(tree) && withinBudget(tree, config)) {
     const batch = getReadyNodes(tree).slice(0, config.maxParallelNodes);
@@ -190,6 +232,9 @@ export async function runDeepInvestigation(
 
     for (const r of results) {
       markNodeAnswered(tree, r.nodeId, r.answer, { llmCalls: r.llmCalls, wallMs: r.wallMs });
+
+      // B4 — keep each node's charts; the narrator answer alone is chart-less.
+      if (r.charts.length) collectedCharts.push(...r.charts);
 
       // Spawn child nodes from anomalous findings
       for (const sq of r.spawnedQuestions) {
@@ -271,6 +316,9 @@ export async function runDeepInvestigation(
 
   return {
     answer,
+    // B4 — surface the charts produced across all investigated nodes so the
+    // caller (dataAnalyzer.answerQuestion) and the UI actually receive them.
+    ...(collectedCharts.length ? { charts: collectedCharts } : {}),
     blackboard,
     agentSuggestionHints: [],
   };

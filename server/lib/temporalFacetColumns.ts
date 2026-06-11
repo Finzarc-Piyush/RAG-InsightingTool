@@ -439,6 +439,34 @@ export function stripTemporalFacetColumns(data: Record<string, any>[]): void {
   }
 }
 
+/**
+ * Non-mutating sibling of `stripTemporalFacetColumns`: returns a new row array
+ * with every temporal-facet column projected out, leaving the input untouched.
+ * Returns the SAME array reference when there are no facet columns to drop.
+ *
+ * Use this for exports/downloads: the rows handed back by `loadLatestData` can
+ * be shared/cached session state (e.g. the `sampleRows` fallback returns
+ * `chatDocument.sampleRows` by reference), so deleting keys in place would
+ * corrupt that state. Temporal facets are internal aggregation helpers that the
+ * server re-derives from the source date columns on every load, so omitting
+ * them from a downloaded file is lossless.
+ */
+export function withoutTemporalFacetColumns(
+  data: Record<string, any>[]
+): Record<string, any>[] {
+  if (data.length === 0) return data;
+  const facetKeys = Object.keys(data[0]).filter(isTemporalFacetColumnKey);
+  if (facetKeys.length === 0) return data;
+  const drop = new Set(facetKeys);
+  return data.map((row) => {
+    const out: Record<string, any> = {};
+    for (const k of Object.keys(row)) {
+      if (!drop.has(k)) out[k] = row[k];
+    }
+    return out;
+  });
+}
+
 const MS_PER_DAY = 86400000;
 
 /** Excel serial days (approx. 1980–2035) vs epoch ms / unix seconds. */

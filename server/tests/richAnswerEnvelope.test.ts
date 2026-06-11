@@ -35,15 +35,19 @@ describe("Phase-1 rich envelope — chatResponseSchema", () => {
     assert.equal(out.success, false);
   });
 
-  it("caps magnitudes at 10", () => {
+  it("does NOT cap magnitudes (dashboards can carry many KPIs)", () => {
+    // The former `.max(10)` cap was removed: a "build a dashboard" turn legitimately
+    // produces a KPI strip with more than 10 magnitudes, and the cap rejected the
+    // whole envelope ("Array must contain at most 10 element(s)").
     const out = chatResponseSchema.safeParse({
       ...base,
-      magnitudes: Array.from({ length: 11 }, (_, i) => ({
+      magnitudes: Array.from({ length: 24 }, (_, i) => ({
         label: `m${i}`,
         value: `${i}%`,
       })),
     });
-    assert.equal(out.success, false);
+    assert.equal(out.success, true);
+    assert.equal(out.success && out.data.magnitudes?.length, 24);
   });
 });
 

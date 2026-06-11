@@ -6,7 +6,11 @@
 import { ColumnarStorageService, DatasetMetadata } from './columnarStorage.js';
 import { DataSummary } from '../shared/schema.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
-import { temporalFacetMetadataForDateColumns } from './temporalFacetColumns.js';
+import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
+import {
+  isTemporalFacetColumnKey,
+  temporalFacetMetadataForDateColumns,
+} from './temporalFacetColumns.js';
 
 export interface CachedMetadata {
   metadata: DatasetMetadata;
@@ -51,6 +55,14 @@ export class MetadataService {
         numericColumns.push(col.name);
       } else if (
         col.type &&
+        // Never classify one of our own derived facet columns as a date source.
+        // read_csv_auto re-types "Day · Date" as DATE on a re-uploaded enriched
+        // file; treating it as a date would nest it into "Day · Day · Date".
+        !isTemporalFacetColumnKey(col.name) &&
+        // Never classify a composite/identifier key (e.g. "TSOE-Date Combo") as a
+        // date — mirrors the in-memory createDataSummary gate so the two ingest
+        // paths agree.
+        !isLikelyIdentifierColumnName(col.name) &&
         (/\bDATE\b/i.test(col.type) ||
           /\bTIMESTAMP\b/i.test(col.type) ||
           /\bDATETIME\b/i.test(col.type) ||

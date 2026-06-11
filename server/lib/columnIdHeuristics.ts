@@ -33,6 +33,11 @@ export function isLikelyIdentifierColumnName(columnName: string): boolean {
   if (norm === "sku" || norm.endsWith(" sku")) return true;
   // "code" suffix covers postal code, zip code, pin code, product code, area code, etc.
   if (/\bcode\b/.test(stripped)) return true;
+  // "combo" marks a composite/concatenated key (e.g. "TSOE-Date Combo" = a TSOE
+  // code joined to a date → values like "20176-01-01"). Even though the name
+  // contains "date", it is NOT a calendar date: never date-enrich or facet it,
+  // so its unreadable grain facets are never surfaced to the user.
+  if (/\bcombo\b/.test(stripped)) return true;
   return false;
 }
 

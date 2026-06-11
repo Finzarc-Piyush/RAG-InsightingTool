@@ -11,6 +11,7 @@ import { DataSummary } from '../shared/schema.js';
 import { convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from './fileParser.js';
 import {
   applyTemporalFacetColumns,
+  isTemporalFacetColumnKey,
   periodDimensionFromSummary,
 } from './temporalFacetColumns.js';
 
@@ -51,7 +52,22 @@ export async function processLargeFile(
 
     // Compute metadata (rowCount, columns, stats)
     onProgress?.({ stage: 'computing', progress: 50, message: 'Computing dataset metadata...' });
-    const metadata = await storage.computeMetadata();
+    let metadata = await storage.computeMetadata();
+
+    // Idempotency: a re-uploaded enriched file carries our own derived facet
+    // columns ("Month · Date", even nested "Day · Day · Date"). DuckDB re-types
+    // some as DATE, so leaving them in the table would re-nest them on enrich
+    // AND re-export them on download. Drop them up-front and recompute, so the
+    // table holds only real columns + exactly one clean facet generation
+    // (re-derived from the genuine date columns below).
+    const incomingFacetColumns = metadata.columns
+      .map((c) => c.name)
+      .filter(isTemporalFacetColumnKey);
+    if (incomingFacetColumns.length > 0) {
+      await storage.dropColumns(incomingFacetColumns);
+      metadata = await storage.computeMetadata();
+    }
+
     const rowCount = metadata.rowCount;
     const columns = metadata.columns.map((c) => c.name);
 

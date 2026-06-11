@@ -3,8 +3,9 @@
  * Handles streaming chat operations with SSE
  */
 import { randomUUID } from "node:crypto";
-import { AgentWorkbenchEntry, Message, ThinkingStep } from "../../shared/schema.js";
+import { AgentWorkbenchEntry, Message, ThinkingStep, chartIdentityKey } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
+import { toPersistedSpawnedQuestions } from "../../lib/agents/runtime/spawnedQuestionPersist.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
 import {
   getChatBySessionIdForUser,
@@ -1897,18 +1898,14 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         // Persist spawned sub-questions with their stable ids so per-question
         // feedback (thumbs up/down) survives reload. The agent loop ships
         // SpawnedQuestion[] under `spawnedQuestions`; we only persist the
-        // {id, question} subset since that's all the UI needs.
-        ...((result as { spawnedQuestions?: { id?: string; question?: string }[] }).spawnedQuestions?.length
-          ? {
-              spawnedQuestions: (
-                result as { spawnedQuestions: { id?: string; question?: string }[] }
-              ).spawnedQuestions
-                .filter((q): q is { id: string; question: string } =>
-                  typeof q?.id === "string" && typeof q?.question === "string"
-                )
-                .map((q) => ({ id: q.id, question: q.question })),
-            }
-          : {}),
+        // {id, question} subset since that's all the UI needs. (C6: this only
+        // populates now that answerQuestion forwards spawnedQuestions.)
+        ...((() => {
+          const persisted = toPersistedSpawnedQuestions(
+            (result as { spawnedQuestions?: { id?: unknown; question?: unknown }[] }).spawnedQuestions
+          );
+          return persisted.length ? { spawnedQuestions: persisted } : {};
+        })()),
         // W3 · structured AnswerEnvelope from narrator (TL;DR, findings,
         // methodology, caveats, nextSteps). Optional — absent on synthesizer
         // fallback turns; the client gracefully falls back to markdown.
@@ -2329,12 +2326,15 @@ export async function streamChatMessages(sessionId: string, username: string, re
 
     // Helper function to enrich messages with chart data
     const enrichMessagesWithCharts = async (messages: any[], chartsWithData: any[]): Promise<any[]> => {
-      // Build lookup map: chart title+type -> full chart with data
+      // Build lookup map: chart axis-identity -> full chart with data. Keying on
+      // the full identity (type::title::x::y::series) — not just type::title —
+      // is what lets an investigated follow-up chart that shares a primary
+      // chart's title but breaks the metric down differently re-attach its OWN
+      // data instead of colliding and rendering empty on reload.
       const chartLookup = new Map<string, any>();
       chartsWithData.forEach(chart => {
         if (chart.title && chart.type) {
-          const key = `${chart.type}::${chart.title}`;
-          chartLookup.set(key, chart);
+          chartLookup.set(chartIdentityKey(chart), chart);
         }
       });
 
@@ -2345,7 +2345,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
         }
 
         const enrichedCharts = msg.charts.map((chart: any) => {
-          const key = `${chart.type}::${chart.title}`;
+          const key = chartIdentityKey(chart);
           const fullChart = chartLookup.get(key);
           
           if (fullChart && fullChart.data) {

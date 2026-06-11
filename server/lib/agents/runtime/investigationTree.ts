@@ -81,6 +81,71 @@ export function isDeepInvestigationEnabled(): boolean {
   return v === "true" || v === "1";
 }
 
+// ─── Spawned-question follow-up pass (single-flow) ───────────────────────────
+//
+// Distinct from deep investigation: this drives the in-turn auto-investigation
+// of the reflector's "Investigating further" sub-questions. By design there is
+// **no cap on the NUMBER of sub-questions** — the pass investigates every one —
+// but it is hard-bounded by an aggregate LLM-call + wall-time budget so "no
+// count cap" can never mean "no resource cap" (the only runaway brake, since
+// each sub-turn is a full runAgentTurn with its own per-turn LLM counter).
+
+export interface SpawnedFollowUpConfig {
+  /** Aggregate LLM-call ceiling across ALL sub-investigations this turn. */
+  maxLlmCalls: number;
+  /** Aggregate wall-time ceiling (ms) across ALL sub-investigations this turn. */
+  maxWallMs: number;
+  /** How many sub-questions to investigate concurrently (small batches). */
+  parallel: number;
+  /** LLM-call budget for a single sub-investigation turn. */
+  perSubLlmCalls: number;
+  /** Wall-time budget (ms) for a single sub-investigation turn. */
+  perSubWallMs: number;
+  /** Plan-step cap for a single sub-investigation turn. */
+  perSubMaxSteps: number;
+  /** Tool-call cap for a single sub-investigation turn. */
+  perSubMaxToolCalls: number;
+}
+
+export function loadSpawnedFollowUpConfig(): SpawnedFollowUpConfig {
+  const num = (v: string | undefined, d: number) => {
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) ? n : d;
+  };
+  return {
+    maxLlmCalls: num(process.env.SPAWNED_FOLLOWUP_MAX_LLM_CALLS, 60),
+    maxWallMs: num(process.env.SPAWNED_FOLLOWUP_MAX_WALL_MS, 120_000),
+    parallel: Math.max(1, num(process.env.SPAWNED_FOLLOWUP_PARALLEL, 2)),
+    perSubLlmCalls: num(process.env.SPAWNED_FOLLOWUP_PER_SUB_LLM, 8),
+    perSubWallMs: num(process.env.SPAWNED_FOLLOWUP_PER_SUB_WALL_MS, 60_000),
+    perSubMaxSteps: num(process.env.SPAWNED_FOLLOWUP_PER_SUB_STEPS, 6),
+    perSubMaxToolCalls: num(process.env.SPAWNED_FOLLOWUP_PER_SUB_TOOL_CALLS, 15),
+  };
+}
+
+export function isSpawnedFollowUpEnabled(): boolean {
+  const v = process.env.SPAWNED_FOLLOWUP_ENABLED;
+  return v === "true" || v === "1";
+}
+
+/**
+ * Gate for the in-turn spawned-question follow-up pass. Pure (no env / no ctx
+ * import) so it stays cycle-free and unit-testable. Fires only when the flag is
+ * on, this is NOT already a sub-investigation (recursion guard), the turn is an
+ * analysis turn, and the reflector actually spawned questions.
+ */
+export function shouldRunSpawnedFollowUp(
+  enabled: boolean,
+  opts: { suppress?: boolean; mode?: string; questionCount: number }
+): boolean {
+  return (
+    enabled &&
+    !opts.suppress &&
+    opts.mode === "analysis" &&
+    opts.questionCount > 0
+  );
+}
+
 // ─── Node types ─────────────────────────────────────────────────────────────
 
 export type NodeStatus = "pending" | "running" | "answered" | "pruned";
