@@ -6,6 +6,7 @@
         "dev": "vite",
         "build": "vite build",
         "preview": "vite preview",
+        "typecheck": "tsc --noEmit",
         "theme:check": "node scripts/theme-check.mjs",
         "quality:theme": "npm run theme:check",
         "test": "vitest run --config vitest.config.ts"

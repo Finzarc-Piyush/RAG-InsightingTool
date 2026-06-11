@@ -23,6 +23,10 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
+      # Supply-chain gate — report-only until the dependency-hardening wave lands.
+      - name: npm audit (report-only until supply-chain wave)
+        run: npm audit --audit-level=high
+        continue-on-error: true
 
   client:
     runs-on: ubuntu-latest
@@ -38,8 +42,16 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - run: npm ci
       - run: npm run build
+      # Type gate — report-only until the 58 client type errors are resolved (then made blocking).
+      - name: Typecheck (report-only until type-safety wave)
+        run: npm run typecheck
+        continue-on-error: true
       - run: npm run theme:check
       - run: npm test
+      # Supply-chain gate — report-only until the dependency-hardening wave lands.
+      - name: npm audit (report-only until supply-chain wave)
+        run: npm audit --audit-level=high
+        continue-on-error: true
 
   python:
     runs-on: ubuntu-latest
