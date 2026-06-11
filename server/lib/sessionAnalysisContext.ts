@@ -531,57 +531,58 @@ export async function persistMergeAssistantSessionContext(params: {
   question?: string;
   investigationSummary?: import("../shared/schema.js").InvestigationSummary;
 }): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
-  return withSessionWriteLock(params.sessionId, () => doPersist(params));
-}
-
-async function doPersist(params: {
-  sessionId: string;
-  username: string;
-  assistantMessage: string;
-  agentTrace?: unknown;
-  analysisBrief?: AnalysisBrief;
-  question?: string;
-  investigationSummary?: import("../shared/schema.js").InvestigationSummary;
-}): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
-  // W31 · returns the new SessionAnalysisContext (or undefined when the
-  // chat doc is missing) so the streaming caller can emit it via SSE for
-  // real-time UI refresh of the W26 PriorInvestigationsBanner. Existing
-  // void-using callers ignore the return value — forward-compatible.
-  const { getChatBySessionIdForUser, updateChatDocument } = await import(
-    "../models/chat.model.js"
-  );
-  const doc = await getChatBySessionIdForUser(params.sessionId, params.username);
-  if (!doc) return undefined;
-  let agentTraceSummary: string | undefined;
-  if (params.agentTrace != null) {
-    try {
-      const s = JSON.stringify(params.agentTrace);
-      agentTraceSummary = s.length > 6000 ? s.slice(0, 6000) : s;
-    } catch {
-      /* ignore */
+  // W31 · returns the new SessionAnalysisContext (or undefined when the chat
+  // doc is missing) so the streaming caller can emit it via SSE for real-time
+  // UI refresh of the W26 PriorInvestigationsBanner.
+  //
+  // RMW through the unified lock + ETag seam. The LLM merge runs INSIDE the
+  // lock on the FRESHLY-read doc, which:
+  //   • keeps W40's append accumulation (each concurrent same-session turn
+  //     merges onto the latest SAC, never a stale base);
+  //   • is FIELD-SCOPED — only `sessionAnalysisContext` is reassigned, on a
+  //     fresh doc already carrying the current messages[], so a turn-end
+  //     message append can never be clobbered (the historical RACE-2 bug);
+  //   • is cross-instance safe — a write from another serverless instance
+  //     during the multi-second LLM merge makes the IfMatch upsert throw 412,
+  //     and `mutateChatDocument` re-reads fresh and re-runs this mutator.
+  const { mutateChatDocument } = await import("../models/chat.model.js");
+  const updated = await mutateChatDocument(params.sessionId, async (doc) => {
+    // Authorisation parity with the prior getChatBySessionIdForUser read.
+    const owner = (doc.username || "").toLowerCase();
+    const requester = (params.username || "").toLowerCase();
+    if (owner && requester && owner !== requester && !doc.collaborators?.includes(requester)) {
+      return false; // unauthorised — no write
     }
-  }
-  let next = await mergeSessionAnalysisContextAssistantLLM({
-    previous: doc.sessionAnalysisContext,
-    assistantMessage: params.assistantMessage,
-    agentTraceSummary,
+    let agentTraceSummary: string | undefined;
+    if (params.agentTrace != null) {
+      try {
+        const s = JSON.stringify(params.agentTrace);
+        agentTraceSummary = s.length > 6000 ? s.slice(0, 6000) : s;
+      } catch {
+        /* ignore */
+      }
+    }
+    let next = await mergeSessionAnalysisContextAssistantLLM({
+      previous: doc.sessionAnalysisContext,
+      assistantMessage: params.assistantMessage,
+      agentTraceSummary,
+    });
+    if (params.analysisBrief) {
+      next = applyAnalysisBriefDigestToSession(next, params.analysisBrief);
+    }
+    // W21 · push a prior-investigation digest onto sessionKnowledge so the
+    // next turn's planner sees what was confirmed / refuted / left open.
+    // Skipped silently when the question or summary is empty.
+    if (params.question && params.investigationSummary) {
+      const { appendPriorInvestigation, buildPriorInvestigationDigest } =
+        await import("./agents/runtime/priorInvestigations.js");
+      const digest = buildPriorInvestigationDigest(
+        params.question,
+        params.investigationSummary
+      );
+      if (digest) next = appendPriorInvestigation(next, digest);
+    }
+    doc.sessionAnalysisContext = next;
   });
-  if (params.analysisBrief) {
-    next = applyAnalysisBriefDigestToSession(next, params.analysisBrief);
-  }
-  // W21 · push a prior-investigation digest onto sessionKnowledge so the
-  // next turn's planner sees what was confirmed / refuted / left open.
-  // Skipped silently when the question or summary is empty.
-  if (params.question && params.investigationSummary) {
-    const { appendPriorInvestigation, buildPriorInvestigationDigest } =
-      await import("./agents/runtime/priorInvestigations.js");
-    const digest = buildPriorInvestigationDigest(
-      params.question,
-      params.investigationSummary
-    );
-    if (digest) next = appendPriorInvestigation(next, digest);
-  }
-  doc.sessionAnalysisContext = next;
-  await updateChatDocument(doc);
-  return next;
+  return updated?.sessionAnalysisContext;
 }

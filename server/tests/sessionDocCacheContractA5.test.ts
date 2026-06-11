@@ -68,9 +68,12 @@ describe("Wave A5 · sessionDocCache contract — no chat-doc write bypasses upd
     );
     // And it must be on a line that's inside updateChatDocument (cheap
     // proxy: the line content matches the known callsite).
+    // First arg must be the chatDocument from updateChatDocument. A second
+    // optional arg (the IfMatch `requestOptions` for ETag optimistic
+    // concurrency) is allowed — the cache-repopulation contract is unaffected.
     assert.match(
       hits[0],
-      /containerInstance\.items\.upsert\s*\(\s*chatDocument\s*\)/,
+      /containerInstance\.items\.upsert\s*\(\s*chatDocument\s*[,)]/,
       `the upsert call must use the chatDocument variable from updateChatDocument`
     );
   });

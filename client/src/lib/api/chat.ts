@@ -326,6 +326,19 @@ function dispatchEvent(
       callbacks.onAgentEvent?.(eventType, payload);
       break;
     default:
+      // Forward-by-default: any other named agent event reaches onAgentEvent.
+      // The server emits live-update events (business_actions,
+      // session_context_updated, workbench_enriched, persist_status,
+      // answer_chunk, directive_added, context_trimmed) whose handlers live in
+      // useHomeMutations.onAgentEvent. A curated allow-list (`default: break`)
+      // silently dropped them on the wire — the "my edits aren't reflected at
+      // runtime" bug, since editing those handlers had no effect. onAgentEvent
+      // already switches on event name and ignores unknowns, so forwarding is
+      // safe; events with a dedicated callback above are handled by their
+      // explicit case and never reach here.
+      if (eventType) {
+        callbacks.onAgentEvent?.(eventType, payload);
+      }
       break;
   }
 }

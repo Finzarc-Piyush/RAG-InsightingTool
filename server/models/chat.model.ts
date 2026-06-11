@@ -50,6 +50,9 @@ export interface ChatDocument {
   uploadedAt: number; // Upload timestamp
   createdAt: number; // Chat creation timestamp
   lastUpdatedAt: number; // Last update timestamp
+  /** Cosmos system property — optimistic-concurrency token. Present on any doc
+   *  read back from Cosmos; `mutateChatDocument` uses it for IfMatch writes. */
+  _etag?: string;
   collaborators?: string[]; // Emails with access (always includes owner)
   dataSummary: DataSummary; // Data summary from file upload
   messages: Message[]; // Chat messages with charts and insights
@@ -700,7 +703,10 @@ function assertDocSizeUnderLimit(chatDocument: ChatDocument): void {
  * `updateChatDocument` and inherits this cache freshness automatically.
  * This comment exists to keep that invariant load-bearing for future code.
  */
-export const updateChatDocument = async (chatDocument: ChatDocument): Promise<ChatDocument> => {
+export const updateChatDocument = async (
+  chatDocument: ChatDocument,
+  options?: { ifMatchEtag?: string }
+): Promise<ChatDocument> => {
   try {
     const containerInstance = await waitForContainer();
     chatDocument.username = normalizeEmail(chatDocument.username) || chatDocument.username;
@@ -709,7 +715,17 @@ export const updateChatDocument = async (chatDocument: ChatDocument): Promise<Ch
 
     chatDocument.lastUpdatedAt = Date.now();
     assertDocSizeUnderLimit(chatDocument);
-    const { resource } = await containerInstance.items.upsert(chatDocument);
+    // Optimistic concurrency: when an `_etag` is supplied the upsert becomes a
+    // conditional replace (IfMatch). A concurrent writer (e.g. another
+    // serverless instance) that already moved the doc forward makes Cosmos
+    // throw 412, which `mutateChatDocument` catches and retries against a
+    // fresh read. Plain (no-etag) callers keep the prior unconditional
+    // last-writer-wins behaviour, so existing create/blind-write paths are
+    // unchanged.
+    const requestOptions = options?.ifMatchEtag
+      ? { accessCondition: { type: "IfMatch", condition: options.ifMatchEtag } }
+      : undefined;
+    const { resource } = await containerInstance.items.upsert(chatDocument, requestOptions);
     const result = resource as unknown as ChatDocument;
     // Wave A5 · Repopulate cache with the freshly-written doc so reads
     // immediately after a write hit the cache. Load-bearing — see the
@@ -722,6 +738,68 @@ export const updateChatDocument = async (chatDocument: ChatDocument): Promise<Ch
     throw error;
   }
 };
+
+/**
+ * THE read-modify-write seam for a ChatDocument (race-hardening).
+ *
+ * Every contended RMW on the chat doc should go through this instead of a bare
+ * `getChat… → mutate → updateChatDocument`. It:
+ *   1. acquires the per-session write lock (`withSessionWriteLock`) so writers
+ *      WITHIN this process serialise — no torn cache aliasing, no last-writer-
+ *      wins between in-process writers;
+ *   2. reads the doc FRESH (bypassing the 5 s cache) so its `_etag` is current;
+ *   3. runs `mutate(doc)` (may be async — e.g. blob saves);
+ *   4. upserts with an IfMatch `_etag` precondition;
+ *   5. on a 412 (a writer on ANOTHER serverless instance moved the doc, where
+ *      the in-process lock can't reach) re-reads fresh and re-applies the
+ *      mutator, bounded by `maxRetries`.
+ *
+ * `mutate` may return `false` to abort the write (nothing changed) — the doc is
+ * returned unchanged with no upsert. Returns `null` when the doc is missing.
+ *
+ * ⚠ `mutate` MUST NOT call `mutateChatDocument` (or any other
+ * `withSessionWriteLock` writer) for the SAME session — the lock is a
+ * non-reentrant promise chain and would deadlock.
+ */
+export const mutateChatDocument = async (
+  sessionId: string,
+  mutate: (doc: ChatDocument) => boolean | void | Promise<boolean | void>,
+  opts?: { maxRetries?: number }
+): Promise<ChatDocument | null> => {
+  const { withSessionWriteLock } = await import("../lib/sessionWriteLock.js");
+  const maxRetries = Math.max(1, opts?.maxRetries ?? 3);
+  return withSessionWriteLock(sessionId, async () => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const doc = await getChatBySessionIdEfficient(sessionId, /* forceRefresh */ true);
+      if (!doc) return null;
+      const proceed = await mutate(doc);
+      if (proceed === false) return doc; // mutator aborted — no write
+      try {
+        return await updateChatDocument(doc, { ifMatchEtag: doc._etag });
+      } catch (err) {
+        if (isPreconditionFailed(err) && attempt < maxRetries) {
+          lastErr = err;
+          invalidateSessionDoc(sessionId); // force the next loop to re-read
+          console.warn(
+            `↻ mutateChatDocument: 412 on ${sessionId} (attempt ${attempt}/${maxRetries}); retrying against fresh doc`
+          );
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error(`mutateChatDocument: exhausted retries for ${sessionId}`);
+  });
+};
+
+/** True for a Cosmos 412 Precondition Failed (IfMatch `_etag` mismatch). */
+function isPreconditionFailed(err: unknown): boolean {
+  const e = err as { code?: number; statusCode?: number } | null;
+  return e?.code === 412 || e?.statusCode === 412;
+}
 
 /**
  * Add message to chat
@@ -801,11 +879,10 @@ export const addMessagesBySessionId = async (
 ): Promise<ChatDocument> => {
   try {
     console.log("📝 addMessagesBySessionId - sessionId:", sessionId, "messages:", messages.map(m => m.role));
-    const chatDocument = await getChatBySessionIdEfficient(sessionId);
-    if (!chatDocument) {
-      throw new Error("Chat document not found for sessionId");
-    }
-
+    // RMW through the unified lock + ETag seam so the message append serialises
+    // against the SAC merge / BAI patch / checkpoint writers and survives a
+    // concurrent cross-instance write (412 → retry against a fresh doc).
+    const updated = await mutateChatDocument(sessionId, async (chatDocument) => {
     // Prevent duplicate messages by checking if they already exist
     // Use a composite key: role + content + timestamp (within 5 seconds tolerance)
     const existingMessages = chatDocument.messages || [];
@@ -844,7 +921,7 @@ export const addMessagesBySessionId = async (
     
     if (uniqueMessages.length === 0) {
       console.log("⚠️ All messages were duplicates, skipping add");
-      return chatDocument;
+      return false; // abort the write — nothing new to append
     }
     
     if (uniqueMessages.length < messages.length) {
@@ -937,7 +1014,10 @@ export const addMessagesBySessionId = async (
       });
     }
 
-    const updated = await updateChatDocument(chatDocument);
+    });
+    if (!updated) {
+      throw new Error("Chat document not found for sessionId");
+    }
     console.log("✅ Upserted chat doc:", updated.id, "messages now:", updated.messages?.length || 0);
     return updated;
   } catch (error) {
@@ -1090,9 +1170,14 @@ const retryOnConnectionError = async <T>(
   throw lastError;
 };
 
-export const getChatBySessionIdEfficient = async (sessionId: string): Promise<ChatDocument | null> => {
-  const hit = sessionDocCache.get(sessionId);
-  if (hit && hit.expiresAt > Date.now()) return hit.doc;
+export const getChatBySessionIdEfficient = async (
+  sessionId: string,
+  forceRefresh = false
+): Promise<ChatDocument | null> => {
+  if (!forceRefresh) {
+    const hit = sessionDocCache.get(sessionId);
+    if (hit && hit.expiresAt > Date.now()) return hit.doc;
+  }
 
   const doc = await retryOnConnectionError(async () => {
     try {
@@ -1327,19 +1412,22 @@ export const ensureDatasetFingerprintForSession = async (
 ): Promise<string | null> => {
   if (!sessionId || !fingerprint) return null;
   try {
-    const { withSessionWriteLock } = await import(
-      "../lib/sessionWriteLock.js"
-    );
-    return await withSessionWriteLock(sessionId, async () => {
-      const doc = await getChatBySessionIdForUser(sessionId, username);
-      if (!doc) return null;
+    let result: string | null = null;
+    await mutateChatDocument(sessionId, (doc) => {
+      const owner = (doc.username || "").toLowerCase();
+      const requester = (username || "").toLowerCase();
+      if (owner && requester && owner !== requester && !doc.collaborators?.includes(requester)) {
+        return false; // unauthorised — no write (result stays null)
+      }
       const existing = (doc.datasetFingerprint ?? "").trim();
-      if (existing.length > 0) return existing;
+      if (existing.length > 0) {
+        result = existing;
+        return false; // already set — fast path, no write
+      }
       doc.datasetFingerprint = fingerprint;
-      doc.lastUpdatedAt = Date.now();
-      await updateChatDocument(doc);
-      return fingerprint;
+      result = fingerprint;
     });
+    return result;
   } catch (err) {
     console.warn(
       `⚠️ ensureDatasetFingerprintForSession failed (${sessionId}):`,

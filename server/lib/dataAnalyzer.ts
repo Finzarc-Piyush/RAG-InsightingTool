@@ -14,8 +14,6 @@ import {
   runAgentTurn,
   type StreamPreAnalysis,
 } from './agents/runtime/index.js';
-import { runDeepInvestigation } from './agents/runtime/investigationOrchestrator.js';
-import { shouldDispatchDeepInvestigation } from './agents/runtime/investigationDispatch.js';
 import type { AgentLoopResult } from './agents/runtime/types.js';
 import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 import { loadEnabledDomainContext } from './domainContext/loadEnabledDomainContext.js';
@@ -522,49 +520,18 @@ export async function answerQuestion(
         onIntermediateArtifact: agentOptions?.onIntermediateArtifact,
         abortSignal: agentOptions?.abortSignal,
       });
-      // Wave W73 · opt-in deep-investigation re-wiring. Master gate is
-      // `DEEP_INVESTIGATION_ENABLED` (preserves invariant #6 — re-wiring
-      // requires a feature flag; the flag IS the feature flag, default off).
-      // When the gate is on AND the question is multi-part (D1 detector),
-      // dispatch to `runDeepInvestigation` (existing orchestrator). The
-      // single-flow path remains the default and the fall-back on every
-      // failure mode: empty result, thrown error, deep-investigation
-      // helper returning null.
-      let loopResult: AgentLoopResult | null = null;
-      const deepDecision = shouldDispatchDeepInvestigation(question);
-      if (deepDecision.fire) {
-        agentOptions?.onAgentEvent?.("flow_decision", {
-          layer: "investigation-dispatch",
-          chosen: "deep",
-          overriddenBy: "DEEP_INVESTIGATION_ENABLED",
-          reason: deepDecision.reason.slice(0, 500),
-          ...(deepDecision.multiPart?.subQuestions?.length
-            ? {
-                candidates: deepDecision.multiPart.subQuestions.slice(0, 8),
-              }
-            : {}),
-        });
-        try {
-          loopResult = await runDeepInvestigation(execCtx, agentOptions?.onAgentEvent);
-          const deepHasContent = loopResult?.answer?.trim()
-            || (Array.isArray(loopResult?.table) && loopResult.table.length > 0);
-          if (!deepHasContent) {
-            console.warn("⚠️  Deep investigation returned empty; falling back to single-flow");
-            loopResult = null;
-          } else {
-            console.log("🔬 Deep investigation returned answer");
-          }
-        } catch (deepErr) {
-          console.warn(
-            "⚠️  Deep investigation threw; falling back to single-flow:",
-            deepErr,
-          );
-          loopResult = null;
-        }
-      }
-      if (!loopResult) {
-        loopResult = await runAgentTurn(execCtx, config, agentOptions?.onAgentEvent);
-      }
+      // Single-flow agentic loop is the one and only answer producer
+      // (invariant #6). The opt-in deep-investigation re-wiring (Wave W73)
+      // was removed: `runDeepInvestigation` was a second, divergent producer
+      // gated behind DEEP_INVESTIGATION_ENABLED (default off) that returned a
+      // minimal envelope and bypassed this synthesis. The shared
+      // `runSubInvestigation` primitive it used lives on for the spawned-
+      // question follow-up pass.
+      const loopResult: AgentLoopResult = await runAgentTurn(
+        execCtx,
+        config,
+        agentOptions?.onAgentEvent
+      );
       const hasContent = loopResult?.answer?.trim()
         || (Array.isArray(loopResult?.table) && loopResult.table.length > 0);
       if (hasContent) {

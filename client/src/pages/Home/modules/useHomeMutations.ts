@@ -166,12 +166,35 @@ export const useHomeMutations = ({
       event.kind === 'hierarchies' ||
       event.kind === 'permanent_context'
     ) {
-      // Invalidate the sessions list (carries per-session message
-      // count + lastUpdated) and the per-session fetch (carries the
-      // full chat doc).
+      // Refresh the sidebar list (live query — per-session count + lastUpdated).
       queryClient.invalidateQueries({ queryKey: ['sessions', userEmail] });
-      if (sessionId) {
-        queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      // E3-fix · The open chat's messages live in LOCAL React state, not a
+      // TanStack query — the old `invalidateQueries(['session', sessionId])`
+      // targeted a key no useQuery registers, so a peer tab never refreshed
+      // its on-screen chat (the cross-tab "changes not reflected" bug). Do a
+      // message-only refetch instead (keeps lifted preview/column state
+      // untouched). Skip while THIS tab is mid-stream so we don't clobber its
+      // in-flight answer — BroadcastChannel never echoes the sender, so every
+      // event here is from a peer tab.
+      if (sessionId && !abortControllerRef.current) {
+        void sessionsApi
+          .getSessionDetails(sessionId)
+          .then((data) => {
+            if (!isMountedRef.current || abortControllerRef.current) return;
+            const s = ((data as any)?.session ?? data) as Record<string, any>;
+            if (!Array.isArray(s?.messages)) return;
+            setMessages(
+              normalizeDatasetSystemMessages(s.messages as Message[], {
+                hasPreview: previewStateRef.current.columns.length > 0,
+                isEnriching:
+                  s.enrichmentStatus === 'pending' ||
+                  s.enrichmentStatus === 'in_progress',
+              })
+            );
+          })
+          .catch(() => {
+            /* peer-tab refresh is best-effort */
+          });
       }
     }
   });

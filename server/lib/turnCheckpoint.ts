@@ -12,10 +12,7 @@
  * not contend with the message-save serial chain. Failures swallow with a
  * console warning.
  */
-import {
-  getChatBySessionIdEfficient,
-  updateChatDocument,
-} from "../models/chat.model.js";
+import { mutateChatDocument } from "../models/chat.model.js";
 import type { AgentInternals } from "../shared/schema.js";
 
 const CHECKPOINT_DEBOUNCE_MS = Math.max(
@@ -31,6 +28,15 @@ interface CheckpointTimer {
 const timers = new Map<string, CheckpointTimer>();
 
 /**
+ * Sentinel: sessions whose current turn has already finished (clearTurnCheckpoint
+ * ran). A debounced `writeCheckpoint` that fires AFTER the turn ended checks this
+ * under the lock and aborts, so it can never resurrect `currentTurnCheckpoint` on
+ * a completed turn. `scheduleTurnCheckpoint` clears the flag when a new turn's
+ * step schedules a checkpoint.
+ */
+const finishedTurns = new Set<string>();
+
+/**
  * Schedule a debounced checkpoint write. Multiple calls within
  * `CHECKPOINT_DEBOUNCE_MS` collapse to a single write of the latest payload.
  *
@@ -44,6 +50,7 @@ export function scheduleTurnCheckpoint(opts: {
   stepsCompleted: number;
   startedAt: number;
 }): void {
+  finishedTurns.delete(opts.sessionId); // a step scheduled → this turn is active
   const slot = timers.get(opts.sessionId) ?? {
     timer: null,
     pending: null,
@@ -74,25 +81,30 @@ async function writeCheckpoint(
   slot.pending = null;
   if (!pending) return;
   try {
-    const doc = await getChatBySessionIdEfficient(sessionId);
-    if (!doc) return;
-    if (
-      doc.username &&
-      username &&
-      doc.username.toLowerCase() !== username.toLowerCase() &&
-      !doc.collaborators?.includes(username.toLowerCase())
-    ) {
-      return; // auth mismatch — silently skip
-    }
-    doc.currentTurnCheckpoint = {
-      sessionId,
-      question: pending.question.slice(0, 2000),
-      startedAt: slot.startedAt,
-      lastUpdatedAt: Date.now(),
-      agentInternals: pending.agentInternals,
-      stepsCompleted: pending.stepsCompleted,
-    };
-    await updateChatDocument(doc);
+    // Field-scoped RMW through the unified lock + ETag seam: only ever touches
+    // `currentTurnCheckpoint` on a freshly-read doc, so a debounced checkpoint
+    // write can never clobber a concurrently-persisted messages[].
+    await mutateChatDocument(sessionId, (doc) => {
+      // Sentinel: if the turn already ended, a late debounced write must NOT
+      // resurrect the checkpoint. Checked under the lock so it can't race clear.
+      if (finishedTurns.has(sessionId)) return false;
+      if (
+        doc.username &&
+        username &&
+        doc.username.toLowerCase() !== username.toLowerCase() &&
+        !doc.collaborators?.includes(username.toLowerCase())
+      ) {
+        return false; // auth mismatch — silently skip
+      }
+      doc.currentTurnCheckpoint = {
+        sessionId,
+        question: pending.question.slice(0, 2000),
+        startedAt: slot.startedAt,
+        lastUpdatedAt: Date.now(),
+        agentInternals: pending.agentInternals,
+        stepsCompleted: pending.stepsCompleted,
+      };
+    });
   } catch (err) {
     console.warn(
       `⚠️ turnCheckpoint write failed (session=${sessionId}):`,
@@ -114,20 +126,22 @@ export async function clearTurnCheckpoint(
     clearTimeout(slot.timer);
   }
   timers.delete(sessionId);
+  // Mark BEFORE the async write so any concurrent late writeCheckpoint sees the
+  // turn as finished (checked under the same lock) and aborts.
+  finishedTurns.add(sessionId);
   try {
-    const doc = await getChatBySessionIdEfficient(sessionId);
-    if (!doc) return;
-    if (
-      doc.username &&
-      username &&
-      doc.username.toLowerCase() !== username.toLowerCase() &&
-      !doc.collaborators?.includes(username.toLowerCase())
-    ) {
-      return;
-    }
-    if (!doc.currentTurnCheckpoint) return;
-    delete doc.currentTurnCheckpoint;
-    await updateChatDocument(doc);
+    await mutateChatDocument(sessionId, (doc) => {
+      if (
+        doc.username &&
+        username &&
+        doc.username.toLowerCase() !== username.toLowerCase() &&
+        !doc.collaborators?.includes(username.toLowerCase())
+      ) {
+        return false;
+      }
+      if (!doc.currentTurnCheckpoint) return false; // nothing to clear
+      delete doc.currentTurnCheckpoint;
+    });
   } catch (err) {
     console.warn(
       `⚠️ turnCheckpoint clear failed (session=${sessionId}):`,
