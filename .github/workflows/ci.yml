@@ -27,6 +27,10 @@ jobs:
       - name: npm audit (report-only until supply-chain wave)
         run: npm audit --audit-level=high
         continue-on-error: true
+      # Lint gate — report-only until the observability/lint wave clears the ~50 errors.
+      - name: ESLint (report-only until lint wave)
+        run: npm run lint
+        continue-on-error: true
 
   client:
     runs-on: ubuntu-latest
@@ -51,6 +55,10 @@ jobs:
       # Supply-chain gate — report-only until the dependency-hardening wave lands.
       - name: npm audit (report-only until supply-chain wave)
         run: npm audit --audit-level=high
+        continue-on-error: true
+      # Lint gate — report-only until the observability/lint wave clears the errors.
+      - name: ESLint (report-only until lint wave)
+        run: npm run lint
         continue-on-error: true
 
   python:
