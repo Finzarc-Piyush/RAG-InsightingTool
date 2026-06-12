@@ -20,28 +20,26 @@ import {
   resolveApprovedDateColumns,
 } from "../lib/fileParser.js";
 import { applyTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
-function buildXlsxBufferWithBooleanCells(): Buffer {
+async function buildXlsxBufferWithBooleanCells(): Promise<Buffer> {
   // Construct a workbook whose "Clock-In <09:30" column contains native
-  // Excel boolean cells (cell type 'b'). Pairs with HH:MM:SS time strings
-  // so the time-of-day classifier picks up the time column.
-  const ws = XLSX.utils.aoa_to_sheet([
-    ["TSO_TSE Name", "Clock-In Time", "Clock-In <09:30"],
-    ["Alice", "09:18:57", true],
-    ["Bob", "09:45:34", false],
-    ["Charlie", "Absent", "Absent"],
-    ["Dave", "10:05:00", false],
-    ["Eve", "08:55:00", true],
-  ]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  // Excel boolean cells. Pairs with HH:MM:SS time strings so the time-of-day
+  // classifier picks up the time column.
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Sheet1");
+  ws.addRow(["TSO_TSE Name", "Clock-In Time", "Clock-In <09:30"]);
+  ws.addRow(["Alice", "09:18:57", true]);
+  ws.addRow(["Bob", "09:45:34", false]);
+  ws.addRow(["Charlie", "Absent", "Absent"]);
+  ws.addRow(["Dave", "10:05:00", false]);
+  ws.addRow(["Eve", "08:55:00", true]);
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
 describe("Wave SU-FU1 · boolean cell canonicalization at parse time", () => {
   it("converts XLSX native booleans to Yes/No strings", async () => {
-    const buf = buildXlsxBufferWithBooleanCells();
+    const buf = await buildXlsxBufferWithBooleanCells();
     const rows = await parseFile(buf, "fixture.xlsx");
     assert.equal(rows.length, 5);
     assert.equal(rows[0]["Clock-In <09:30"], "Yes");
@@ -52,7 +50,7 @@ describe("Wave SU-FU1 · boolean cell canonicalization at parse time", () => {
   });
 
   it("preserves the time column verbatim (not booleanised)", async () => {
-    const buf = buildXlsxBufferWithBooleanCells();
+    const buf = await buildXlsxBufferWithBooleanCells();
     const rows = await parseFile(buf, "fixture.xlsx");
     assert.equal(rows[0]["Clock-In Time"], "09:18:57");
     assert.equal(rows[1]["Clock-In Time"], "09:45:34");

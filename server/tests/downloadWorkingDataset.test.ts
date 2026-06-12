@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { withoutTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
+import { buildXlsxBufferFromRows } from "../lib/xlsxWriter.js";
 import type { ChatDocument } from "../models/chat.model.js";
 
 /**
@@ -12,8 +13,8 @@ import type { ChatDocument } from "../models/chat.model.js";
  *
  *   1. `loadLatestData(..., { skipActiveFilter: true })` returns the canonical
  *      unfiltered rows with temporal facet columns materialized.
- *   2. `XLSX.utils.json_to_sheet` + `XLSX.write({ bookType: 'xlsx' })` produces
- *      a parseable workbook whose Sheet1 carries those rows verbatim.
+ *   2. `buildXlsxBufferFromRows` (ExcelJS, the production export writer)
+ *      produces a parseable workbook whose Sheet1 carries those rows verbatim.
  *
  * Together these prove the user-visible promise: the downloaded file matches
  * what the agent's tools see, and an active filter never narrows the export.
@@ -60,17 +61,40 @@ function makeChat(overrides: Partial<ChatDocument> = {}): ChatDocument {
   } as unknown as ChatDocument;
 }
 
-function buildXlsxBuffer(data: Record<string, any>[]): Buffer {
-  const worksheet = XLSX.utils.json_to_sheet(data);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+// The controller's xlsx branch calls buildXlsxBufferFromRows — exercise the
+// real production writer here so a future change to it surfaces in this test.
+function buildXlsxBuffer(data: Record<string, any>[]): Promise<Buffer> {
+  return buildXlsxBufferFromRows(data, "Sheet1");
+}
+
+async function readWorkbook(buf: Buffer): Promise<ExcelJS.Workbook> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  return wb;
+}
+
+function sheetHeader(ws: ExcelJS.Worksheet): string[] {
+  return (ws.getRow(1).values as unknown[]).slice(1).map((v) => String(v));
+}
+
+function sheetObjects(ws: ExcelJS.Worksheet): Record<string, any>[] {
+  const header = sheetHeader(ws);
+  const out: Record<string, any>[] = [];
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const vals = ws.getRow(r).values as unknown[];
+    const rec: Record<string, any> = {};
+    header.forEach((h, i) => {
+      rec[h] = vals[i + 1] ?? null;
+    });
+    out.push(rec);
+  }
+  return out;
 }
 
 test("downloadWorkingDataset · xlsx buffer has correct ZIP magic bytes", async () => {
   const chat = makeChat();
   const data = await loadLatestData(chat, undefined, undefined, { skipActiveFilter: true });
-  const buf = buildXlsxBuffer(data);
+  const buf = await buildXlsxBuffer(data);
   assert.ok(buf.length > 0, "buffer should be non-empty");
   // PK\x03\x04 — ZIP container that XLSX uses
   assert.strictEqual(buf[0], 0x50);
@@ -82,11 +106,11 @@ test("downloadWorkingDataset · xlsx buffer has correct ZIP magic bytes", async 
 test("downloadWorkingDataset · workbook has Sheet1 with full unfiltered row count", async () => {
   const chat = makeChat();
   const data = await loadLatestData(chat, undefined, undefined, { skipActiveFilter: true });
-  const buf = buildXlsxBuffer(data);
+  const buf = await buildXlsxBuffer(data);
 
-  const wb = XLSX.read(buf);
-  assert.ok(wb.SheetNames.includes("Sheet1"));
-  const parsed = XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets["Sheet1"]);
+  const wb = await readWorkbook(buf);
+  assert.ok(wb.worksheets.some((w) => w.name === "Sheet1"));
+  const parsed = sheetObjects(wb.getWorksheet("Sheet1")!);
   assert.strictEqual(parsed.length, 4, "all four canonical rows present");
 });
 
@@ -102,12 +126,10 @@ test("downloadWorkingDataset · export strips internal temporal facet columns, k
   assert.ok(hasFacetBeforeStrip, "loadLatestData should materialize facet columns before the export strip");
 
   // …the controller projects them out via withoutTemporalFacetColumns before writing.
-  const buf = buildXlsxBuffer(withoutTemporalFacetColumns(data));
+  const buf = await buildXlsxBuffer(withoutTemporalFacetColumns(data));
 
-  const wb = XLSX.read(buf);
-  // header_only via sheet_to_json with header:1 returns the first row as the header array
-  const grid = XLSX.utils.sheet_to_json<any[]>(wb.Sheets["Sheet1"], { header: 1 });
-  const header = (grid[0] as string[]) ?? [];
+  const wb = await readWorkbook(buf);
+  const header = sheetHeader(wb.getWorksheet("Sheet1")!);
   // Real columns survive…
   assert.ok(header.includes("Region"));
   assert.ok(header.includes("OrderDate"));
@@ -174,9 +196,9 @@ test("downloadWorkingDataset · skipActiveFilter:true bypasses an active filter 
   const unfiltered = await loadLatestData(chat, undefined, undefined, { skipActiveFilter: true });
   assert.strictEqual(unfiltered.length, 4, "skipActiveFilter must return all canonical rows");
 
-  const buf = buildXlsxBuffer(unfiltered);
-  const wb = XLSX.read(buf);
-  const parsed = XLSX.utils.sheet_to_json<Record<string, any>>(wb.Sheets["Sheet1"]);
+  const buf = await buildXlsxBuffer(unfiltered);
+  const wb = await readWorkbook(buf);
+  const parsed = sheetObjects(wb.getWorksheet("Sheet1")!);
   assert.strictEqual(parsed.length, 4, "exported xlsx must contain all four rows, ignoring the filter");
   // Confirm both regions are present in the export
   const regions = new Set(parsed.map((r) => r.Region));
