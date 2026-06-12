@@ -246,6 +246,20 @@ export const generateSasUrl = async (
   }
 };
 
+/**
+ * Wave-2 tail · JSON.stringify that coerces non-finite numbers (NaN / ±Infinity)
+ * to null EXPLICITLY. `JSON.stringify` already emits `null` for these natively,
+ * but a replacer makes the contract robust to a future serializer swap and
+ * self-documents intent. Used on the non-hot paths (small datasets, chart
+ * objects that carry computed correlation/slope values); the 50k+-row hot loop
+ * deliberately relies on the native coercion to avoid a per-value JS callback.
+ */
+export function stringifyFiniteJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === "number" && !Number.isFinite(v) ? null : v,
+  );
+}
+
 // Update processed data blob (for data operations)
 export const updateProcessedDataBlob = async (
   sessionId: string,
@@ -280,6 +294,8 @@ export const updateProcessedDataBlob = async (
         
         for (let i = 0; i < data.length; i++) {
           if (i > 0) chunks.push(',');
+          // Native JSON.stringify already coerces NaN/±Infinity → null; the
+          // hot loop relies on that (no per-value replacer) for throughput.
           chunks.push(JSON.stringify(data[i]));
           
           // Log progress for very large datasets
@@ -293,8 +309,8 @@ export const updateProcessedDataBlob = async (
         buffer = Buffer.from(jsonData, 'utf-8');
         rowCount = data.length;
       } else {
-        // Small dataset - serialize normally
-        const jsonData = JSON.stringify(data);
+        // Small dataset - serialize normally (explicit non-finite → null).
+        const jsonData = stringifyFiniteJson(data);
         buffer = Buffer.from(jsonData, 'utf-8');
         rowCount = data.length;
       }
@@ -378,8 +394,9 @@ export const saveChartsToBlob = async (
       const chartId = `chart_${timestamp}_${i}`;
       const blobName = `${sanitizedUsername}/charts/${sessionId}/${chartId}.json`;
 
-      // Serialize chart data
-      const chartData = JSON.stringify(chart);
+      // Serialize chart data (explicit non-finite → null — charts carry
+      // computed correlation/slope values that can be NaN on degenerate data).
+      const chartData = stringifyFiniteJson(chart);
       const buffer = Buffer.from(chartData, 'utf-8');
 
       // Get block blob client
