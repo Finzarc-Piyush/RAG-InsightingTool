@@ -651,35 +651,11 @@ export const getChatDocument = async (
   }
 };
 
-// Cosmos's per-document hard limit is 2 MB. Warn well before, error before
-// the cliff so the failing turn doesn't disappear silently.
-const COSMOS_DOC_SIZE_WARN_BYTES = 1_600_000;
-const COSMOS_DOC_SIZE_ERROR_BYTES = 1_900_000;
-
-export class CosmosDocSizeError extends Error {
-  readonly bytes: number;
-  readonly sessionId: string;
-  constructor(bytes: number, sessionId: string) {
-    super(
-      `Chat document for session ${sessionId} is ${bytes} bytes — too large to persist (Cosmos 2 MB limit). Start a new session or remove older messages.`,
-    );
-    this.name = "CosmosDocSizeError";
-    this.bytes = bytes;
-    this.sessionId = sessionId;
-  }
-}
-
-function assertDocSizeUnderLimit(chatDocument: ChatDocument): void {
-  const bytes = Buffer.byteLength(JSON.stringify(chatDocument), "utf8");
-  if (bytes >= COSMOS_DOC_SIZE_ERROR_BYTES) {
-    throw new CosmosDocSizeError(bytes, chatDocument.sessionId);
-  }
-  if (bytes >= COSMOS_DOC_SIZE_WARN_BYTES) {
-    logger.warn(
-      `⚠️ chat doc size ${bytes} bytes (session ${chatDocument.sessionId}, messages=${chatDocument.messages?.length ?? 0}) — approaching Cosmos 2 MB limit`,
-    );
-  }
-}
+// Wave R30 · the Cosmos doc-size guard now lives in cosmosDocSizeGuard.ts.
+// CosmosDocSizeError is re-exported so existing importers (incl. the test)
+// keep their `from "../models/chat.model.js"` import path unchanged.
+import { assertDocSizeUnderLimit } from "./cosmosDocSizeGuard.js";
+export { CosmosDocSizeError } from "./cosmosDocSizeGuard.js";
 
 /**
  * Update chat document.
