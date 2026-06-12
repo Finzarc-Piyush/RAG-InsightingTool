@@ -23,10 +23,13 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm test
-      # Supply-chain gate — report-only until the dependency-hardening wave lands.
-      - name: npm audit (report-only until supply-chain wave)
+      # Supply-chain gate — BLOCKING at high+. The dependency-hardening wave
+      # (xlsx→exceljs, dead jspdf removed, vitest bump, server `tar` override
+      # clearing the duckdb→node-gyp→tar chain) brought both packages to
+      # 0 high / 0 critical. Residual advisories are dev-only/transitive
+      # MODERATES, tolerated below this threshold.
+      - name: npm audit (blocking · high+)
         run: npm audit --audit-level=high
-        continue-on-error: true
       # Lint gate — report-only until the observability/lint wave clears the ~50 errors.
       - name: ESLint (report-only until lint wave)
         run: npm run lint
@@ -50,10 +53,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run theme:check
       - run: npm test
-      # Supply-chain gate — report-only until the dependency-hardening wave lands.
-      - name: npm audit (report-only until supply-chain wave)
+      # Supply-chain gate — BLOCKING at high+. The dependency-hardening wave
+      # (xlsx→exceljs, dead jspdf removed, vitest bump, server `tar` override
+      # clearing the duckdb→node-gyp→tar chain) brought both packages to
+      # 0 high / 0 critical. Residual advisories are dev-only/transitive
+      # MODERATES, tolerated below this threshold.
+      - name: npm audit (blocking · high+)
         run: npm audit --audit-level=high
-        continue-on-error: true
       # Lint gate — report-only until the observability/lint wave clears the errors.
       - name: ESLint (report-only until lint wave)
         run: npm run lint
