@@ -1,5 +1,6 @@
 import { parse } from 'csv-parse/sync';
-import * as XLSX from 'xlsx';
+import { readExcelObjectRows, readExcelSheetNames } from './excelReader.js';
+import { estimateExcelRowsFromRef } from './excelRowEstimate.js';
 import { DataSummary } from '../shared/schema.js';
 import { uploadLimits } from '../config/uploadLimits.js';
 import {
@@ -191,9 +192,8 @@ export async function parseFile(
   }
 }
 
-export function getExcelSheetNames(buffer: Buffer): string[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
-  return workbook.SheetNames || [];
+export async function getExcelSheetNames(buffer: Buffer): Promise<string[]> {
+  return readExcelSheetNames(buffer);
 }
 
 function parseCsv(buffer: Buffer): Record<string, any>[] {
@@ -319,58 +319,33 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
   return result;
 }
 
-/**
- * Estimate an Excel worksheet's row count from its `!ref` range string
- * (e.g. "A1:Z500000") WITHOUT materializing cell data. Returns 0 when the ref
- * is missing/unparseable. Pure + unit-testable; used as a pre-parse OOM guard.
- */
-export function estimateExcelRowsFromRef(ref: string | undefined | null): number {
-  if (!ref || typeof ref !== 'string') return 0;
-  const parts = ref.split(':');
-  const rowNum = (cell: string): number => {
-    const m = /(\d+)\s*$/.exec((cell ?? '').trim());
-    return m ? parseInt(m[1], 10) : NaN;
-  };
-  if (parts.length < 2) {
-    return Number.isFinite(rowNum(parts[0] ?? '')) ? 1 : 0;
-  }
-  const start = rowNum(parts[0]);
-  const end = rowNum(parts[1]);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
-  return end - start + 1;
-}
+// Re-exported from its own module (Wave R8) so the ExcelJS reader and
+// fileParser can share it without a circular import.
+export { estimateExcelRowsFromRef } from './excelRowEstimate.js';
 
-function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Record<string, any>[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const availableSheets = workbook.SheetNames || [];
-  const sheetName = opts.sheetName || availableSheets[0];
-  if (!sheetName) {
-    throw new Error('No sheet found in workbook');
-  }
-  if (!availableSheets.includes(sheetName)) {
-    throw new Error(`Selected sheet "${sheetName}" was not found in workbook`);
-  }
-  const worksheet = workbook.Sheets[sheetName];
-  // Phase 0 · large-dataset OOM guard. SheetJS has no streaming path, and
-  // `sheet_to_json` allocates one JS object per row — the step most likely to
-  // exhaust the heap. Refuse oversized sheets with actionable guidance instead
-  // of crashing. (Wording avoids "memory"/"too large" so the upload pipeline's
-  // generic memory-error remap doesn't mask this message.)
-  // NOTE: this guards the `sheet_to_json` allocation, NOT the preceding
-  // `XLSX.read` itself — a pathological workbook can still OOM at read time.
-  // Phase 2 removes both risks by replacing XLSX with a streaming Excel ingest.
-  const estimatedRows = estimateExcelRowsFromRef((worksheet as any)['!ref']);
+async function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Promise<Record<string, any>[]> {
+  // Phase 0 · large-dataset OOM guard. ExcelJS has no zero-copy streaming on
+  // this path either, and materialising one JS object per row is the step most
+  // likely to exhaust the heap. Refuse oversized sheets with actionable
+  // guidance instead of crashing. (Wording avoids "memory"/"too large" so the
+  // upload pipeline's generic memory-error remap doesn't mask this message.)
+  // NOTE: this guards the row-object allocation, NOT the preceding workbook
+  // load — a pathological workbook can still OOM at load time. Phase 2 removes
+  // both risks with a streaming Excel ingest.
   const excelRowCap = uploadLimits.maxExcelRowsInMemory;
-  if (estimatedRows > excelRowCap) {
-    throw new Error(
-      `This Excel sheet has about ${estimatedRows.toLocaleString('en-US')} rows, above the supported ` +
-        `Excel size of ${excelRowCap.toLocaleString('en-US')} rows. Excel files this large can fail ` +
-        `during parsing — please export the sheet to CSV and upload that instead (CSV handles far larger ` +
-        `datasets). Operators can raise MAX_EXCEL_ROWS_IN_MEMORY when the server has ample RAM.`,
-    );
-  }
-  const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: null });
-  
+  const { rows: data } = await readExcelObjectRows(buffer, {
+    sheetName: opts.sheetName,
+    maxRows: excelRowCap,
+    onOversize: (estimatedRows): never => {
+      throw new Error(
+        `This Excel sheet has about ${estimatedRows.toLocaleString('en-US')} rows, above the supported ` +
+          `Excel size of ${excelRowCap.toLocaleString('en-US')} rows. Excel files this large can fail ` +
+          `during parsing — please export the sheet to CSV and upload that instead (CSV handles far larger ` +
+          `datasets). Operators can raise MAX_EXCEL_ROWS_IN_MEMORY when the server has ample RAM.`,
+      );
+    },
+  });
+
   // Normalize column names: trim whitespace from all column names
   const normalized = normalizeColumnNames(data as Record<string, any>[]);
   

@@ -37,7 +37,7 @@ export const uploadFile = async (
     const isExcel = ext === "xlsx" || ext === "xls";
 
     if (isExcel) {
-      const sheetNames = getExcelSheetNames(req.file.buffer);
+      const sheetNames = await getExcelSheetNames(req.file.buffer);
       if (sheetNames.length > 1 && !requestedSheetName) {
         return res.status(400).json({
           error: "This workbook has multiple sheets. Please select a sheet before upload.",
