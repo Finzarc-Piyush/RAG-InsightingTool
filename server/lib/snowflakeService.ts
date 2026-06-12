@@ -90,7 +90,7 @@ function executeAsync(
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText,
-      complete: (err: Error | undefined, stmt: snowflake.Statement, rows: any[] | undefined) => {
+      complete: (err: Error | undefined, stmt: snowflake.RowStatement, rows: any[] | undefined) => {
         if (err) {
           reject(err);
           return;

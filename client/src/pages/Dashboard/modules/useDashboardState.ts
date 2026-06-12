@@ -11,6 +11,7 @@ import {
   BusinessActionItem,
   InvestigationSummary,
   PriorInvestigationItem,
+  AttentionAreaSpec,
 } from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api';
 
@@ -43,6 +44,8 @@ export interface DashboardData {
   investigationSummary?: InvestigationSummary;
   /** DPF1 · W30 prior-investigations snapshot at create-time. */
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
+  /** MW4 · management-by-exception attention areas. */
+  attentionAreas?: AttentionAreaSpec[];
   /**
    * Wave DR15 · source session id. Persisted by the server's
    * `from-spec` / `from-analysis` create paths when supplied. Drives
@@ -105,6 +108,7 @@ export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boo
     followUpPrompts: (dashboard as any).followUpPrompts,
     investigationSummary: (dashboard as any).investigationSummary,
     priorInvestigationsSnapshot: (dashboard as any).priorInvestigationsSnapshot,
+    attentionAreas: (dashboard as any).attentionAreas,
     sessionId: (dashboard as any).sessionId,
   };
   

@@ -398,19 +398,21 @@ export function findRelevantChunks(
 
         // Check if chunk overlaps with filter
         if (valueFilter.operator === '>' || valueFilter.operator === '>=') {
-          if (valueFilter.value !== null && valueRange.max !== null && valueFilter.value > valueRange.max) {
+          if (valueFilter.value !== null && valueFilter.value !== undefined && valueRange.max !== null && valueFilter.value > valueRange.max) {
             isRelevant = false;
             break;
           }
         } else if (valueFilter.operator === '<' || valueFilter.operator === '<=') {
-          if (valueFilter.value !== null && valueRange.min !== null && valueFilter.value < valueRange.min) {
+          if (valueFilter.value !== null && valueFilter.value !== undefined && valueRange.min !== null && valueFilter.value < valueRange.min) {
             isRelevant = false;
             break;
           }
         } else if (valueFilter.operator === 'between') {
           if (
             valueFilter.value !== null &&
+            valueFilter.value !== undefined &&
             valueFilter.value2 !== null &&
+            valueFilter.value2 !== undefined &&
             valueRange.max !== null &&
             valueRange.min !== null
           ) {

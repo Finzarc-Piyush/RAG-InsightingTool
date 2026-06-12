@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chartTypeValidityForPivot } from "./chartTypeValidity.ts";
+import { chartTypeValidityForPivot } from "./chartTypeValidity.js";
 import type { PivotUiConfig } from "./types.ts";
 
 function configWith(

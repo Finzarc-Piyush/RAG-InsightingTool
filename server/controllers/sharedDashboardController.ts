@@ -10,7 +10,7 @@ import {
   listSharedDashboardsForOwner,
   listSharedDashboardsForUser,
 } from "../models/sharedDashboard.model.js";
-import type { Dashboard } from "../models/dashboard.model.js";
+import type { Dashboard } from "../shared/schema.js";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 
 const getUserEmailFromRequest = (req: Request): string | undefined =>

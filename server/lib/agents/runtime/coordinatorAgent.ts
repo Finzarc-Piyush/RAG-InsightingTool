@@ -40,7 +40,7 @@ import type { AnalysisBrief } from "../../../shared/schema.js";
 
 const decomposedThreadSchema = z.object({
   question: z.string(),
-  focusColumns: z.array(z.string()).default([]),
+  focusColumns: z.array(z.string()).optional().default([]),
   rationale: z.string(),
 });
 
@@ -143,7 +143,9 @@ ${ctx.analysisBrief ? `Question shape: ${ctx.analysisBrief.questionShape ?? "unk
   }
 
   agentLog("coordinatorAgent.decomposed", { turnId, threads: threads.length });
-  return threads;
+  // threads is post-validation (zod defaults applied), so focusColumns is always
+  // string[] at runtime; the parse result is typed as z.input here, hence the cast.
+  return threads as DecomposedThread[];
 }
 
 /**

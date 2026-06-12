@@ -915,7 +915,7 @@ export function DataPreviewTable({
       colFields,
       filterFields,
       filterSelections: filterSelectionsForRequest,
-      valueSpecs: normalizedPivotConfig.values,
+      valueSpecs: normalizedPivotConfig.values.filter((v) => v.agg !== 'first') as { id: string; field: string; agg: "sum" | "mean" | "count" | "min" | "max" }[],
       rowSort: normalizedPivotConfig.rowSort,
       ...(agentResultMode
         ? {
@@ -1327,7 +1327,7 @@ export function DataPreviewTable({
       config: {
         rows: normalizedPivotConfig.rows,
         columns: normalizedPivotConfig.columns,
-        values: normalizedPivotConfig.values,
+        values: normalizedPivotConfig.values.filter((v) => v.agg !== 'first') as { id: string; field: string; agg: "sum" | "mean" | "count" | "min" | "max" }[],
         filters: normalizedPivotConfig.filters,
         unused: normalizedPivotConfig.unused,
         rowSort: normalizedPivotConfig.rowSort,
@@ -2789,7 +2789,7 @@ export function DataPreviewTable({
                         pivotConfig: {
                           rows: cfg.rows,
                           columns: cfg.columns,
-                          values: cfg.values,
+                          values: cfg.values.filter((v) => v.agg !== 'first') as { id: string; field: string; agg: "sum" | "mean" | "count" | "min" | "max" }[],
                           filters: cfg.filters,
                           unused: cfg.unused,
                           ...(cfg.rowSort ? { rowSort: cfg.rowSort } : {}),

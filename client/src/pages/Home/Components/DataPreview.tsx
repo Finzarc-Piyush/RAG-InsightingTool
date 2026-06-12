@@ -319,7 +319,7 @@ export function DataPreview({
                     </td>
                     {visibleColumns.map((col, colIdx) => {
                       const value = row[col];
-                      let displayValue = value;
+                      let displayValue: string = value as string;
                       
                       if (value !== null && value !== undefined) {
                         if (displayAsDateColumns.has(col)) {

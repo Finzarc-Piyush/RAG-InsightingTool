@@ -485,8 +485,7 @@ export async function findPurgeCandidates(
     : [{ name: "@cut", value: ageCutoff }];
   const { resources: tooOld } = await container.items
     .query<{ id: string; sessionId: string; dataVersion: number; createdAt: number }>(
-      { query: ageQuery, parameters: ageParams },
-      { enableCrossPartitionQuery: !q.sessionId }
+      { query: ageQuery, parameters: ageParams }
     )
     .fetchAll();
 

@@ -394,7 +394,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
           ? { followUpPrompts: validated.followUpPrompts }
           : {}),
         ...(answerResult.appliedFilters?.length
-          ? { appliedFilters: answerResult.appliedFilters }
+          ? { appliedFilters: answerResult.appliedFilters.filter((f: { op: string }) => f.op === 'in' || f.op === 'not_in') }
           : {}),
         // W25 · persist the accumulated workbench so this code path
         // matches the streaming path. Optional + back-compat.
@@ -421,7 +421,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
                 .agentInternals,
             }
           : {}),
-      },
+        // The inline assistant message is a valid persisted Message; the object
+        // literal's optional/spread fields over-narrow under structural checks,
+        // so assert to Message (mirrors the streaming path's persisted shape).
+      } as unknown as import("../../shared/schema.js").Message,
       ],
     });
     const persistChatOutcome = await persistChatPromise;

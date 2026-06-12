@@ -558,7 +558,7 @@ export const useHomeMutations = ({
         if (st.previewReady || st.status === 'preview_ready') {
           upsertPreviewSystemMessage();
           const fastPathState = applyPreviewFromStatus(st);
-          let hydratedSession: Record<string, any> | null = null;
+          let hydratedSession: Record<string, any> | null | undefined = null;
           if (fastPathState !== 'full') {
             hydratedSession = await hydrateSessionWithRetry(sessionId, {
               retries: fastPathState === 'partial' ? 1 : 2,
@@ -1286,7 +1286,7 @@ export const useHomeMutations = ({
                       insights: response.insights ?? [],
                       timestamp: ts,
                       agentTrace: (response as { agentTrace?: Message['agentTrace'] }).agentTrace,
-                      preview: (response as Message & { preview?: Message['preview'] }).preview,
+                      preview: (response as unknown as Message & { preview?: Message['preview'] }).preview,
                       // Honor the server's explicit pivot auto-show hint. Without
                       // this the field was dropped, so computeAllowPivotAutoShow
                       // fell back to row-presence heuristics and the server's
@@ -1294,9 +1294,9 @@ export const useHomeMutations = ({
                       ...((response as { pivotAutoShow?: boolean }).pivotAutoShow !== undefined
                         ? { pivotAutoShow: (response as { pivotAutoShow?: boolean }).pivotAutoShow }
                         : {}),
-                      summary: (response as Message & { summary?: Message['summary'] }).summary,
+                      summary: (response as unknown as Message & { summary?: Message['summary'] }).summary,
                       pivotDefaults:
-                        (response as Message & { pivotDefaults?: Message['pivotDefaults'] })
+                        (response as unknown as Message & { pivotDefaults?: Message['pivotDefaults'] })
                           .pivotDefaults,
                       // PVT5 · ride the unavailable flag onto the assistant
                       // message so DataPreviewTable renders the elegant
@@ -1305,7 +1305,7 @@ export const useHomeMutations = ({
                       ...((response as { pivotUnavailable?: boolean }).pivotUnavailable
                         ? { pivotUnavailable: true }
                         : {}),
-                      thinkingBefore: (response as Message & { thinkingBefore?: Message['thinkingBefore'] })
+                      thinkingBefore: (response as unknown as Message & { thinkingBefore?: Message['thinkingBefore'] })
                         .thinkingBefore,
                       // Forward the structured answerEnvelope so AnswerCard
                       // renders the TL;DR / findings / implications /
@@ -1414,7 +1414,7 @@ export const useHomeMutations = ({
               }
             },
           },
-          abortControllerRef.current.signal,
+          abortControllerRef.current!.signal,
           targetTimestamp
         ).catch((error: any) => {
             earlyAssistantReplyTsRef.current = null;
@@ -1490,8 +1490,8 @@ export const useHomeMutations = ({
         timestamp: Date.now(),
         preview: (data as any).preview,
         summary: (data as any).summary,
-        pivotDefaults: (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
-        thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+        pivotDefaults: (data as unknown as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
+        thinkingBefore: (data as unknown as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
         // Forward the structured answerEnvelope so AnswerCard renders on the
         // active turn. Without this, message.answerEnvelope is undefined and
         // MessageBubble falls back to the markdown-only block.
@@ -1548,10 +1548,10 @@ export const useHomeMutations = ({
       });
       logger.log('📌 Pivot defaults in stream payload:', {
         hasPivotDefaults: Boolean(
-          (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults
+          (data as unknown as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults
         ),
         pivotDefaults:
-          (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
+          (data as unknown as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
       });
       
       const traceSnapshot = turnTraceRef.current;
@@ -1587,9 +1587,9 @@ export const useHomeMutations = ({
               preview: (data as any).preview,
               summary: (data as any).summary,
               pivotDefaults:
-                (data as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
+                (data as unknown as Message & { pivotDefaults?: Message['pivotDefaults'] }).pivotDefaults,
               agentTrace: (data as { agentTrace?: Message['agentTrace'] }).agentTrace,
-              thinkingBefore: (data as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
+              thinkingBefore: (data as unknown as Message & { thinkingBefore?: Message['thinkingBefore'] }).thinkingBefore,
               // Prefer the freshly-arrived envelope from the response payload;
               // keep the early-bubble envelope (if onResponse already attached
               // one) as a fallback so a missing field on the final payload

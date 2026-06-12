@@ -338,7 +338,7 @@ Prefer course_correction "revise_narrative" for completeness issues (evidence is
   return {
     verdict: j.verdict as VerdictType,
     scores: j.scores,
-    issues: j.issues.map((i) => ({
+    issues: (j.issues ?? []).map((i) => ({
       code: i.code,
       severity: i.severity,
       description: i.description,

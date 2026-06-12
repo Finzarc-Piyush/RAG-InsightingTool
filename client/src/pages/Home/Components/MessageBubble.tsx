@@ -910,7 +910,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   }
                   
                   // Create placeholder chart for loading
-                  const placeholderChart: ChartSpec = {
+                  const placeholderChart = {
                     type: 'scatter',
                     title: `Correlation Chart ${idx + 1}`,
                     x: 'x',
@@ -919,7 +919,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                     yLabel: 'y',
                     data: [],
                     _isCorrelationChart: true,
-                  };
+                  } as ChartSpec & { _isCorrelationChart?: boolean };
                   
                   return (
                     <Suspense 

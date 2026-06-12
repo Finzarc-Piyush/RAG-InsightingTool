@@ -5158,7 +5158,6 @@ export async function executeDataOperation(
       if (!intent.filterConditions || intent.filterConditions.length === 0) {
         return {
           answer: 'No filter conditions specified. Please specify what you want to filter. For example: "filter data where category is men\'s fashion" or "show only rows where revenue > 1000000".',
-          requiresClarification: true,
         };
       }
 
@@ -5179,7 +5178,6 @@ export async function executeDataOperation(
           const availableColumns = Object.keys(data[0] || {}).slice(0, 10).join(', ');
           return {
             answer: `Column "${column}" not found in dataset. Available columns: ${availableColumns}${Object.keys(data[0] || {}).length > 10 ? '...' : ''}`,
-            requiresClarification: true,
           };
         }
         
@@ -5336,7 +5334,7 @@ export async function executeDataOperation(
         answer,
         data: filteredData,
         preview: previewData,
-        saved: saveResult.saved,
+        saved: true,
       };
     }
 

@@ -156,7 +156,7 @@ function Router() {
   useEffect(() => {
     const isLegacy =
       location === '/' || location === '/data-ops' || location === '/modeling';
-    if (isLegacy && location !== '/analysis') {
+    if (isLegacy) {
       setLocation('/analysis');
     }
   }, [location, setLocation]);
@@ -258,8 +258,8 @@ function Router() {
         onNewChat={handleNewChat}
         onUploadNew={handleUploadNew}
         onLoadSession={handleLoadSession}
-        sessionId={sessionIdForLayout}
-        fileName={lastChatFileName}
+        sessionId={sessionIdForLayout ?? undefined}
+        fileName={lastChatFileName ?? undefined}
       >
         <Suspense fallback={<RouteLoadingFallback />}>
           <Switch>

@@ -145,6 +145,9 @@ export function ChartOnlyModal({
 }: ChartOnlyModalProps) {
   const [showDots, setShowDots] = useState(false);
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
+  const [pointSize, setPointSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const [pointOpacity, setPointOpacity] = useState<'low' | 'medium' | 'high'>('medium');
+  const [pointDensity, setPointDensity] = useState<'low' | 'medium' | 'high' | 'all'>('medium');
   const {
     type,
     title,
@@ -596,15 +599,17 @@ export function ChartOnlyModal({
               const slope = (n * sumXY - sumX * sumY) / denominator;
               const intercept = (sumY - slope * sumX) / n;
 
-              const xMin = xDomain[0];
-              const xMax = xDomain[1];
-              const yAtMin = slope * xMin + intercept;
-              const yAtMax = slope * xMax + intercept;
+              const xMin = xDomain?.[0];
+              const xMax = xDomain?.[1];
+              if (xMin !== undefined && xMax !== undefined) {
+                const yAtMin = slope * xMin + intercept;
+                const yAtMax = slope * xMax + intercept;
 
-              trendlineData = [
-                { [x]: xMin, [y]: yAtMin },
-                { [x]: xMax, [y]: yAtMax },
-              ];
+                trendlineData = [
+                  { [x]: xMin, [y]: yAtMin },
+                  { [x]: xMax, [y]: yAtMax },
+                ];
+              }
             }
           }
         }

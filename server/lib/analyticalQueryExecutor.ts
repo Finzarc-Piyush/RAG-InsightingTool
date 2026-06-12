@@ -175,7 +175,7 @@ export async function executeAnalyticalQuery(
       parsedQuery = await parseUserQuery(question, summary, chatHistory);
     }
     
-    if (!parsedQuery || parsedQuery.confidence < 0.3) {
+    if (!parsedQuery || (parsedQuery.confidence ?? 1) < 0.3) {
       console.log('⚠️ Low confidence in query parsing, skipping query execution');
       return {
         isAnalytical: true,

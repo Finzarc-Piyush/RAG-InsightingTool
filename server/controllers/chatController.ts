@@ -166,7 +166,7 @@ export const streamChatMessagesController = async (req: Request, res: Response) 
       return;
     }
 
-    await streamChatMessages(sessionId, username, req as ExpressRequest, res);
+    await streamChatMessages(sessionId, username, req, res);
   } catch (error) {
     console.error("streamChatMessagesController error:", error);
     // Error handling is done in the service

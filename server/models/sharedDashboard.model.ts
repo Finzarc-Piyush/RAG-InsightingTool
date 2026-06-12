@@ -2,9 +2,9 @@
  * Shared Dashboard Model
  * Handles all database operations for shared dashboard invites
  */
-import { SharedDashboardInvite } from "../shared/schema.js";
+import { SharedDashboardInvite, type Dashboard } from "../shared/schema.js";
 import { waitForSharedDashboardsContainer } from "./database.config.js";
-import { getDashboardById, Dashboard } from "./dashboard.model.js";
+import { getDashboardById } from "./dashboard.model.js";
 
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -103,7 +103,7 @@ export const createSharedDashboardInvite = async ({
   };
 
   const { resource } = await sharedContainer.items.create(invite);
-  return resource as SharedDashboardInvite;
+  return resource as unknown as SharedDashboardInvite;
 };
 
 /**
@@ -145,8 +145,7 @@ export const listSharedDashboardsForOwner = async (ownerEmail: string): Promise<
       {
         query: "SELECT * FROM c WHERE c.ownerEmail = @ownerEmail ORDER BY c.createdAt DESC",
         parameters: [{ name: "@ownerEmail", value: normalizedOwner }],
-      },
-      { enableCrossPartitionQuery: true }
+      }
     )
     .fetchAll();
 
@@ -164,7 +163,7 @@ export const getSharedDashboardInviteById = async (
     const sharedContainer = await waitForSharedDashboardsContainer();
     const normalizedTarget = normalizeEmail(targetEmail) || targetEmail;
     const { resource } = await sharedContainer.item(id, normalizedTarget).read();
-    return resource as SharedDashboardInvite;
+    return resource as unknown as SharedDashboardInvite;
   } catch (error: any) {
     if (error.code === 404) {
       return null;
@@ -243,7 +242,7 @@ export const acceptSharedDashboardInvite = async (
   const { resource } = await sharedContainer.items.upsert(updatedInvite);
 
   return {
-    invite: resource as SharedDashboardInvite,
+    invite: resource as unknown as SharedDashboardInvite,
     dashboard: savedDashboard,
   };
 };
@@ -276,5 +275,5 @@ export const declineSharedDashboardInvite = async (
   };
 
   const { resource } = await sharedContainer.items.upsert(updatedInvite);
-  return resource as SharedDashboardInvite;
+  return resource as unknown as SharedDashboardInvite;
 };

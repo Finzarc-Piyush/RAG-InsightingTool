@@ -190,7 +190,7 @@ export function normalizeDuckValueExported(value: unknown): unknown {
 }
 
 export class ColumnarStorageService {
-  private db: Database | null = null;
+  private db: typeof Database | null = null;
   private sessionId: string;
   private tempDir: string;
   private dbPath: string;
@@ -490,7 +490,7 @@ export class ColumnarStorageService {
 
             // Insert in smaller batches to avoid SQL statement size limits
             const INSERT_BATCH_SIZE = 100;
-            const insertSubBatches = [];
+            const insertSubBatches: string[] = [];
             for (let i = 0; i < values.length; i += INSERT_BATCH_SIZE) {
               const batch = values.slice(i, i + INSERT_BATCH_SIZE);
               insertSubBatches.push(`INSERT INTO ${tableName} (${escapedColumns}) VALUES ${batch.join(', ')}`);
@@ -835,7 +835,7 @@ export class ColumnarStorageService {
   async close(): Promise<void> {
     return new Promise((resolve) => {
       if (this.db) {
-        this.db.close((err) => {
+        this.db.close((err: Error | null) => {
           if (err) {
             console.error('Error closing DuckDB:', err);
           }

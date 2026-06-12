@@ -52,7 +52,7 @@ import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
 import { diagnosticSliceRowCap } from "../../../diagnosticPipelineConfig.js";
 import { parseComputedAggregationExpression } from "../../../queryPlanExecutor.js";
-import type { DimensionFilter } from "../../../shared/queryTypes.js";
+import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { runSignificanceTest } from "../../../significanceTests.js";
 import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";

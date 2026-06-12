@@ -8,6 +8,7 @@
  */
 import type { Message } from "../../shared/schema.js";
 import type { ChatDocument } from "../../models/chat.model.js";
+import type { ParsedQuery } from "../../shared/queryTypes.js";
 import { loadLatestData, loadDataForColumns } from "../../utils/dataLoader.js";
 import { extractRequiredColumns, extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { classifyIntent } from "../../lib/agents/intentClassifier.js";
@@ -66,7 +67,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
       requiredColumns = extractRequiredColumns(
         message,
         intent,
-        parsedQuery,
+        parsedQuery as ParsedQuery | null,
         null,
         chatDocument.dataSummary
       );

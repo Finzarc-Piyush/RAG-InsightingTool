@@ -22,8 +22,8 @@ import { randomUUID } from "crypto";
 import {
   addMessagesBySessionId,
   type ChatDocument,
-  type Message,
 } from "../models/chat.model.js";
+import type { Message } from "../shared/schema.js";
 
 export type PersistOutcome = "succeeded" | "failed";
 

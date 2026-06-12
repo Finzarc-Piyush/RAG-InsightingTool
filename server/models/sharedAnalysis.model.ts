@@ -200,7 +200,7 @@ export const createSharedAnalysisInvite = async ({
     }
   }
 
-  return resource as SharedAnalysisInvite;
+  return resource as unknown as SharedAnalysisInvite;
 };
 
 /**
@@ -255,8 +255,7 @@ export const listSharedAnalysesForOwner = async (ownerEmail: string): Promise<Sh
         {
           query: "SELECT * FROM c WHERE c.ownerEmail = @ownerEmail ORDER BY c.createdAt DESC",
           parameters: [{ name: "@ownerEmail", value: normalizedOwner }],
-        },
-        { enableCrossPartitionQuery: true }
+        }
       )
       .fetchAll();
 
@@ -277,7 +276,7 @@ export const getSharedAnalysisInviteById = async (
   try {
     return await retryOnConnectionError(async () => {
       const { resource } = await sharedContainer.item(id, normalizedTarget).read();
-      return resource as SharedAnalysisInvite;
+      return resource as unknown as SharedAnalysisInvite;
     }, 3, "getSharedAnalysisInviteById");
   } catch (error: any) {
     if (error.code === 404) {
@@ -333,7 +332,7 @@ export const acceptSharedAnalysisInvite = async (
   const { resource } = await sharedContainer.items.upsert(updatedInvite);
 
   return {
-    invite: resource as SharedAnalysisInvite,
+    invite: resource as unknown as SharedAnalysisInvite,
     newSession: sourceChat,
   };
 };
@@ -366,6 +365,6 @@ export const declineSharedAnalysisInvite = async (
   };
 
   const { resource } = await sharedContainer.items.upsert(updatedInvite);
-  return resource as SharedAnalysisInvite;
+  return resource as unknown as SharedAnalysisInvite;
 };
 

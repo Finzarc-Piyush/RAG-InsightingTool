@@ -45,7 +45,7 @@ import {
   extractAndPersistUserHierarchies,
 } from "../../lib/sessionAnalysisContext.js";
 import { preserveFinalPreview } from "./previewRetention.js";
-import { Response } from "express";
+import { Request, Response } from "express";
 import {
   agentSseEventToWorkbenchEntries,
   appendWorkbenchEntry,

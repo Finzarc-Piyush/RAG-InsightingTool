@@ -12,17 +12,17 @@
  * A/B harness skips gracefully. Callers can then populate manually.
  */
 
-import "../loadEnv.ts";
+import "../loadEnv.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PastAnalysisDoc } from "../shared/schema.ts";
-import { waitForPastAnalysesContainer } from "../models/pastAnalysis.model.ts";
+import type { PastAnalysisDoc } from "../shared/schema.js";
+import { waitForPastAnalysesContainer } from "../models/pastAnalysis.model.js";
 import {
   goldenCorpusSchema,
   type GoldenCorpus,
   type GoldenQuestion,
-} from "../tests/fixtures/goldenQuestions.schema.ts";
+} from "../tests/fixtures/goldenQuestions.schema.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

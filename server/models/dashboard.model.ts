@@ -94,7 +94,7 @@ export const listAllDashboardsForSuperadmin = async (): Promise<Dashboard[]> => 
     const { resources } = await dashboardsContainer.items
       .query(
         { query: "SELECT * FROM c" },
-        { enableCrossPartitionQuery: true, maxItemCount: 1000 }
+        { maxItemCount: 1000 }
       )
       .fetchAll();
     const list = (resources ?? []) as unknown as Dashboard[];
@@ -120,8 +120,7 @@ export const getDashboardByIdForSuperadmin = async (
         {
           query: "SELECT * FROM c WHERE c.id = @id OFFSET 0 LIMIT 1",
           parameters: [{ name: "@id", value: id }],
-        },
-        { enableCrossPartitionQuery: true }
+        }
       )
       .fetchAll();
     return ((resources?.[0] ?? null) as unknown) as Dashboard | null;

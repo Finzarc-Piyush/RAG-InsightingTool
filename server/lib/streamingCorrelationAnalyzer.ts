@@ -211,18 +211,6 @@ export async function generateStreamingCorrelationChart(
     xDomain,
     yDomain,
     trendLine,
-    _isCorrelationChart: true,
-    _targetVariable: targetVariable,
-    _factorVariable: factorVariable,
-    _correlationMetadata: {
-      correlation: result.correlation,
-      nPairs: result.nPairs,
-      method: result.method,
-      totalDataPoints: result.nPairs,
-      visualizationPoints: result.visualizationData.length,
-      slope: result.slope,
-      intercept: result.intercept,
-    },
   };
 }
 

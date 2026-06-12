@@ -18,14 +18,14 @@
  * + `REPLAY_USER_EMAIL` env vars for token + identity.
  */
 
-import "../loadEnv.ts";
+import "../loadEnv.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   goldenCorpusSchema,
   type GoldenQuestion,
-} from "../tests/fixtures/goldenQuestions.schema.ts";
+} from "../tests/fixtures/goldenQuestions.schema.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

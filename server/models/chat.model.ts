@@ -622,8 +622,7 @@ export const getChatDocument = async (
         {
           query: "SELECT * FROM c WHERE c.id = @chatId",
           parameters: [{ name: "@chatId", value: chatId }],
-        },
-        { enableCrossPartitionQuery: true }
+        }
       )
       .fetchAll();
 
@@ -1099,8 +1098,7 @@ export const getUserChats = async (username: string): Promise<ChatDocument[]> =>
         {
           query,
           parameters: [{ name: "@username", value: normalizedUsername }],
-        },
-        { enableCrossPartitionQuery: true }
+        }
       )
       .fetchAll();
 
@@ -1189,7 +1187,7 @@ export const getChatBySessionIdEfficient = async (
       const { resources } = await containerInstance.items.query({
         query,
         parameters: [{ name: "@sessionId", value: sessionId }]
-      }, { enableCrossPartitionQuery: true }).fetchAll();
+      }).fetchAll();
       if (resources && resources.length > 1) {
         console.warn(
           `⚠️ Multiple chat documents (${resources.length}) for sessionId ${sessionId}; using latest by lastUpdatedAt`
@@ -1691,7 +1689,6 @@ export const getAllSessions = async (username?: string): Promise<SessionListSumm
       const { resources } = await containerInstance.items
         .query(querySpec, {
           maxItemCount: 1000,
-          enableCrossPartitionQuery: true,
         })
         .fetchAll();
 
@@ -1964,7 +1961,7 @@ export const getSessionsWithFilters = async (options: {
           query,
           parameters,
         },
-        { ...queryOptions, enableCrossPartitionQuery: true }
+        queryOptions
       )
       .fetchAll();
     

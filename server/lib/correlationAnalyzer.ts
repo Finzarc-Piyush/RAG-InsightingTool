@@ -721,7 +721,7 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
           return null;
         }
       })
-      .filter((insight): insight is { id: number; text: string } => insight !== null);
+      .filter((insight: { id: number; text: string } | null): insight is { id: number; text: string } => insight !== null);
     
     console.log(`✅ Returning ${validInsights.length} valid insights`);
     

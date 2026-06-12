@@ -128,7 +128,9 @@ export async function seedSessionAnalysisContextLLM(params: {
     console.warn("⚠️ seedSessionAnalysisContextLLM failed:", out.error);
     return emptySessionAnalysisContext();
   }
-  return out.data;
+  // out.data is z.infer<typeof sessionAnalysisContextSchema> === SessionAnalysisContext;
+  // the cast restores the identity TS loses through completeJson's generic param.
+  return out.data as SessionAnalysisContext;
 }
 
 const REGENERATE_STARTER_QUESTIONS_SYSTEM = `You output only a JSON object of the exact shape { "suggestedFollowUps": ["..."] }.
@@ -201,7 +203,7 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
     console.warn("⚠️ mergeSessionAnalysisContextUserLLM failed:", out.error);
     return prev;
   }
-  return out.data;
+  return out.data as SessionAnalysisContext;
 }
 
 /**
@@ -411,7 +413,7 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     console.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);
     return prev;
   }
-  const merged = out.data;
+  const merged = out.data as SessionAnalysisContext;
   return withImmutableUserIntentFromPrevious(prev, merged);
 }
 

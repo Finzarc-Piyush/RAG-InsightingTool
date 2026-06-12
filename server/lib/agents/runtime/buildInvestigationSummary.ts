@@ -23,9 +23,9 @@
  *   Reads AnalyticalBlackboard/Finding from analyticalBlackboard.js; output type
  *   InvestigationSummary comes from shared/schema.ts. Pure function, no I/O.
  */
-import type { AnalyticalBlackboard, Finding } from "./analyticalBlackboard.js";
+import type { AnalyticalBlackboard, Finding, OpenQuestion } from "./analyticalBlackboard.js";
 import type { InvestigationSummary } from "../../../shared/schema.js";
-import { filterSpawnedQuestions } from "./filterSpawnedQuestions.js";
+import { filterSpawnedQuestions, type SpawnedQuestionLike } from "./filterSpawnedQuestions.js";
 
 const MAX_HYPOTHESES = 8;
 const MAX_FINDINGS = 8;
@@ -80,16 +80,16 @@ export function buildInvestigationSummary(
   // duplicate / identifier-grouping noise that slipped in from any addOpenQuestion
   // caller is dropped here before the user sees it.
   const cleanedOpen = filterSpawnedQuestions(
-    blackboard.openQuestions.filter((q) => !q.actionedByNodeId),
+    blackboard.openQuestions.filter((q) => !q.actionedByNodeId) as unknown as readonly SpawnedQuestionLike[],
     { excludedColumns: excludedColumns ?? [] }
   );
   const openQuestions = cleanedOpen
     .slice(0, MAX_OPEN_QUESTIONS)
     .map((q) => ({
       question: clip(q.question, MAX_QUESTION_TEXT),
-      priority: q.priority,
+      priority: (q as unknown as OpenQuestion).priority,
     }))
-    .filter((q) => q.question.length > 0);
+    .filter((q) => q.question.length > 0) as Array<{ question: string; priority: "low" | "medium" | "high" }>;
 
   if (hypotheses.length === 0 && findings.length === 0 && openQuestions.length === 0) {
     return undefined;

@@ -4,6 +4,7 @@ import {
   useReducedMotion,
   type HTMLMotionProps,
   type Transition,
+  type Easing,
 } from "framer-motion";
 
 import { cn } from "@/lib/utils";
@@ -24,7 +25,7 @@ import { cn } from "@/lib/utils";
  * (`--duration-*` and `--ease-*` in client/src/index.css).
  */
 
-const EASE_ENTRANCE: Transition["ease"] = [0.16, 1, 0.3, 1];
+const EASE_ENTRANCE: Easing | Easing[] = [0.16, 1, 0.3, 1];
 const DURATION_BASE = 0.22;
 const DURATION_SLOW = 0.32;
 
@@ -43,7 +44,7 @@ export const Settle = React.forwardRef<HTMLDivElement, SettleProps>(
     if (reduce || !animate) {
       return (
         <div ref={ref} className={className}>
-          {children}
+          {children as React.ReactNode}
         </div>
       );
     }

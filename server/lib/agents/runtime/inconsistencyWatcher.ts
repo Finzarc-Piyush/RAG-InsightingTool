@@ -101,7 +101,7 @@ export function propagatedConfidence(
     if (r < minRank) minRank = r;
   }
   if (!Number.isFinite(minRank)) return "unknown";
-  return ["low", "medium", "high"][minRank as 0 | 1 | 2];
+  return ["low", "medium", "high"][minRank as 0 | 1 | 2] as "low" | "medium" | "high";
 }
 
 /**

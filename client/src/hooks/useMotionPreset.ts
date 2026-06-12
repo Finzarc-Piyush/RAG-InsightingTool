@@ -21,10 +21,10 @@ import {
  * See docs/brand/brand-guidebook.md §6.
  */
 
-const EASE_ENTRANCE: Transition["ease"] = [0.16, 1, 0.3, 1];
-const EASE_EXIT: Transition["ease"] = [0.7, 0, 0.84, 0];
-const EASE_STANDARD: Transition["ease"] = [0.4, 0, 0.2, 1];
-const EASE_EMPHASIZED: Transition["ease"] = [0.2, 0, 0, 1];
+const EASE_ENTRANCE: [number, number, number, number] = [0.16, 1, 0.3, 1];
+const EASE_EXIT: [number, number, number, number] = [0.7, 0, 0.84, 0];
+const EASE_STANDARD: [number, number, number, number] = [0.4, 0, 0.2, 1];
+const EASE_EMPHASIZED: [number, number, number, number] = [0.2, 0, 0, 1];
 
 const DURATION_QUICK = 0.16;
 const DURATION_BASE = 0.22;

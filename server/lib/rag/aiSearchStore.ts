@@ -123,8 +123,8 @@ export async function deleteRagDocumentsBySessionId(
   const batch = 500;
   const failures: Array<{ id: string; error: string }> = [];
   for (let i = 0; i < ids.length; i += batch) {
-    const slice = ids.slice(i, i + batch).map((id) => ({ id }));
-    const result = await client.deleteDocuments(slice);
+    const idSlice = ids.slice(i, i + batch);
+    const result = await client.deleteDocuments("id", idSlice);
     // Azure SDK returns per-document results; collect any that did not succeed
     // so the caller can see orphan chunks rather than assuming success (P-022).
     for (const r of result.results ?? []) {
@@ -197,7 +197,7 @@ export async function vectorSearchSession(params: {
   };
 
   const results = await withSearchRetry("vectorSearchSession", () =>
-    client.search<RagSearchDocument>("*", {
+    client.search("*", {
       filter,
       vectorSearchOptions: {
         queries: [vectorQuery],
@@ -242,7 +242,7 @@ export async function keywordSearchSession(params: {
   }
   filter += buildChunkTypeClause(params);
   const results = await withSearchRetry("keywordSearchSession", () =>
-    client.search<RagSearchDocument>(queryText, {
+    client.search(queryText, {
       filter,
       searchFields: ["content"] as any,
       select: ["chunkId", "chunkType", "content"] as any,

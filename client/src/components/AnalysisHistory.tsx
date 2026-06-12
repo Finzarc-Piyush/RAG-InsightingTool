@@ -11,7 +11,8 @@ import {
   AnalysisSessionSummary, 
   CompleteAnalysisData, 
   ColumnStatisticsResponse,
-  RawDataResponse 
+  RawDataResponse,
+  UserAnalysisSessionsResponse 
 } from '@/shared/schema';
 
 interface AnalysisHistoryProps {

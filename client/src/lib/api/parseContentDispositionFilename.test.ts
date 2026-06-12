@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseFilenameFromContentDisposition } from "./parseContentDispositionFilename.ts";
+import { parseFilenameFromContentDisposition } from "./parseContentDispositionFilename";
 
 test("quoted filename stops at closing quote before other params", () => {
   const h = 'attachment; filename="a.xlsx"; size=123';

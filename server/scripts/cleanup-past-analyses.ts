@@ -19,12 +19,12 @@
  * Cron-friendly: prints a one-line summary at the end suitable for log parsing.
  */
 
-import "../loadEnv.ts";
+import "../loadEnv.js";
 import {
   findPurgeCandidates,
   deletePastAnalysisDoc,
-} from "../models/pastAnalysis.model.ts";
-import { deletePastAnalysisById } from "../lib/rag/pastAnalysesStore.ts";
+} from "../models/pastAnalysis.model.js";
+import { deletePastAnalysisById } from "../lib/rag/pastAnalysesStore.js";
 
 interface CliArgs {
   ttlDays: number;

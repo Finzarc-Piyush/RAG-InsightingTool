@@ -5,7 +5,7 @@ import {
   CHART_SERIES_VISIBILITY_FILTER_KEY,
   deriveChartFilterDefinitions,
   visibleSeriesKeysFromFilters,
-} from "./chartFilters.ts";
+} from "./chartFilters.js";
 
 test("applyChartFilters ignores series visibility key (no row column)", () => {
   const rows = [{ month: "2025-01", A: 1, B: 2 }];

@@ -178,7 +178,7 @@ export default function Dashboard() {
 
   const dashboardToDeleteName = dashboardToDelete
     ? dashboards.find((d) => d.id === dashboardToDelete)?.name
-    : null;
+    : undefined;
 
   const handleDeleteCancel = () => {
     setDeleteConfirmOpen(false);

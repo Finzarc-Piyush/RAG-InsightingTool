@@ -27,7 +27,9 @@ export function buildPivotMessage(
   const { config, filterSelections, previewRows } = payload;
 
   const valueAggregators: NonNullable<PivotDefaults['valueAggregators']> = {};
-  for (const v of config.values) valueAggregators[v.field] = v.agg;
+  for (const v of config.values) {
+    if (v.agg !== 'first') valueAggregators[v.field] = v.agg;
+  }
 
   const hasFilterSelections = Object.keys(filterSelections).length > 0;
 
@@ -46,7 +48,11 @@ export function buildPivotMessage(
     config: {
       rows: config.rows,
       columns: config.columns,
-      values: config.values.map((v) => ({ id: v.id, field: v.field, agg: v.agg })),
+      values: config.values.map((v) => ({
+        id: v.id,
+        field: v.field,
+        agg: v.agg as 'sum' | 'mean' | 'count' | 'min' | 'max',
+      })),
       filters: config.filters,
       unused: config.unused,
       ...(config.rowSort ? { rowSort: config.rowSort } : {}),

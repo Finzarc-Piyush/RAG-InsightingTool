@@ -229,6 +229,7 @@ import {
   type DashboardPivotSpec,
   type DataSummary,
   type Insight,
+  type PivotAggLiteral,
   PIVOT_AGENT_RESULT_MAX_ROWS,
 } from "../../../shared/schema.js";
 import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
@@ -2498,7 +2499,7 @@ export async function runAgentTurn(
               augmentedValues = next;
               // Remap valueAggregators keys to match the aliased column names.
               if (pivotDefaults?.valueAggregators && sourceToAlias.size > 0) {
-                const remapped: Record<string, string> = {};
+                const remapped: Record<string, PivotAggLiteral> = {};
                 for (const [key, val] of Object.entries(pivotDefaults.valueAggregators)) {
                   remapped[sourceToAlias.get(key) ?? key] = val;
                 }

@@ -1,3 +1,4 @@
+// @ts-expect-error papaparse has no bundled types and @types/papaparse is not installed
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 
@@ -92,9 +93,9 @@ async function parseCsv(file: File): Promise<LocalPreviewResult> {
       skipEmptyLines: "greedy",
       preview: MAX_PREVIEW_ROWS + 1,
       dynamicTyping: false,
-      complete: (result) => {
+      complete: (result: { data: unknown[]; meta: { fields?: string[] }; errors?: Array<{ message: string }> }) => {
         const columns = normalizeHeaders((result.meta.fields ?? []).slice(0, MAX_COLUMNS));
-        const rows = (result.data || []).slice(0, MAX_PREVIEW_ROWS).map((row) => {
+        const rows = (result.data || []).slice(0, MAX_PREVIEW_ROWS).map((row: unknown) => {
           const out: Record<string, any> = {};
           columns.forEach((c) => {
             out[c] = (row as any)[c] ?? null;
@@ -113,7 +114,7 @@ async function parseCsv(file: File): Promise<LocalPreviewResult> {
           parseError: result.errors?.length ? result.errors[0].message : undefined,
         });
       },
-      error: (err) => {
+      error: (err: { message?: string }) => {
         resolve(fromHeadersOnly(file.name, [], err.message || "Failed to parse CSV"));
       },
     });

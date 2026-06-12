@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   recommendPivotChart,
   recommendPivotChartForType,
-} from "./chartRecommendation.ts";
+} from "./chartRecommendation.js";
 import type { PivotUiConfig } from "./types.ts";
 
 function configWith(rows: string[], values: string[], columns: string[] = []): PivotUiConfig {

@@ -133,9 +133,11 @@ function buildUserBlock(ctx: AgentExecutionContext): string {
   const truncated = ctx.summary.columns.length > HYPOTHESIS_COLUMN_CAP
     ? ` (showing first ${HYPOTHESIS_COLUMN_CAP} of ${ctx.summary.columns.length})`
     : "";
-  const sacSnippet = ctx.sessionAnalysisContext?.sessionContext
-    ? ctx.sessionAnalysisContext.sessionContext.slice(0, 800)
-    : "";
+  // Legacy `sessionContext` string field (pre-structured SAC). Tolerant read so
+  // behavior is unchanged; the canonical SAC schema has no such field.
+  // TODO(schema-drift wave): migrate to userIntent.verbatimNotes / a digest.
+  const sacContext = (ctx.sessionAnalysisContext as { sessionContext?: string } | undefined)?.sessionContext;
+  const sacSnippet = sacContext ? sacContext.slice(0, 800) : "";
   const briefSnippet = ctx.analysisBrief
     ? `OutcomeMetric: ${ctx.analysisBrief.outcomeMetricColumn ?? "?"} | Dimensions: ${(ctx.analysisBrief.segmentationDimensions ?? []).join(", ")}`
     : "";

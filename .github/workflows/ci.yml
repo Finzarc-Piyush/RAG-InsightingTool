@@ -46,10 +46,8 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - run: npm ci
       - run: npm run build
-      # Type gate — report-only until the 58 client type errors are resolved (then made blocking).
-      - name: Typecheck (report-only until type-safety wave)
-        run: npm run typecheck
-        continue-on-error: true
+      # Type gate — now BLOCKING (client type errors resolved to zero in the type-safety wave).
+      - run: npm run typecheck
       - run: npm run theme:check
       - run: npm test
       # Supply-chain gate — report-only until the dependency-hardening wave lands.

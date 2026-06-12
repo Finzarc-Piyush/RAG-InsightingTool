@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { splitAssistantFollowUpPrompts } from "./splitAssistantFollowUpPrompts.ts";
+import { splitAssistantFollowUpPrompts } from "./splitAssistantFollowUpPrompts.js";
 
 test("no section returns full content", () => {
   const s = "Hello\n\n**Key insight:** x";

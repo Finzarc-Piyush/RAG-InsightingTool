@@ -55,19 +55,16 @@ export const ShareAnalysisDialog = ({
     queryKey: ['dashboards', 'list', userEmail],
     queryFn: async () => {
       const res = await dashboardsApi.list();
-      // Show all dashboards that are NOT explicitly shared with the user
-      // The API already filters by user, so dashboards without isShared=true are owned
-      const ownedDashboards = res.dashboards.filter(d => d.isShared !== true);
+      // The API returns dashboards owned by the user
+      const ownedDashboards = res.dashboards;
       
       logger.log('[ShareAnalysisDialog] Total dashboards from API:', res.dashboards.length);
-      logger.log('[ShareAnalysisDialog] Owned dashboards (isShared !== true):', ownedDashboards.length);
+      logger.log('[ShareAnalysisDialog] Owned dashboards:', ownedDashboards.length);
       logger.log('[ShareAnalysisDialog] User email:', userEmail);
       logger.log('[ShareAnalysisDialog] All dashboards:', res.dashboards.map(d => ({ 
         id: d.id, 
         name: d.name, 
-        isShared: d.isShared, 
-        username: d.username,
-        sharedBy: d.sharedBy
+        username: d.username
       })));
       
       return { dashboards: ownedDashboards };
@@ -182,9 +179,9 @@ export const ShareAnalysisDialog = ({
     try {
       const dashboardIds = Object.keys(selectedDashboards);
       const dashboardPermissions = dashboardIds.length > 0 
-        ? Object.fromEntries(
+        ? (Object.fromEntries(
             dashboardIds.map(id => [id, selectedDashboards[id].editable ? 'edit' : 'view'])
-          )
+          ) as Record<string, 'view' | 'edit'>)
         : undefined;
       
       // Share with each email address

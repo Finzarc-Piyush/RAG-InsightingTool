@@ -581,7 +581,7 @@ export async function executePivotQuery(
   });
   const cacheKey = `${sessionId}_${dataVersion}_${configHash}`;
 
-  const cached = pivotCache.get<PivotQueryResponse>(cacheKey);
+  const cached = pivotCache.get(cacheKey);
   if (cached) {
     const base = cached.value;
     return {

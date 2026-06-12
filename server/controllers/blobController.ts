@@ -136,10 +136,10 @@ export const getFileMetadata = async (req: Request, res: Response) => {
 
     res.json({
       blobName: file.blobName,
-      fileName: file.fileName,
+      fileName: file.metadata?.originalFileName || file.blobName.split('/').pop() || 'file',
       size: file.size,
       lastModified: file.lastModified,
-      contentType: file.contentType,
+      contentType: file.metadata?.blobContentType || 'application/octet-stream',
     });
   } catch (error) {
     if (error instanceof AuthenticationError) {

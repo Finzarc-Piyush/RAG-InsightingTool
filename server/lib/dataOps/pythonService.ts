@@ -235,6 +235,31 @@ interface TrainModelRequest {
   n_components?: number;  // PCA, t-SNE, UMAP
   perplexity?: number;  // t-SNE
   min_dist?: number;  // UMAP
+  // Time-series parameters (ARIMA / SARIMA / exponential smoothing / LSTM / GRU)
+  date_column?: string;
+  order?: number[];
+  seasonal_order?: number[];
+  trend?: string;
+  seasonal?: string;
+  seasonal_periods?: number;
+  sequence_length?: number;
+  lstm_units?: number;
+  gru_units?: number;
+  epochs?: number;
+  // Anomaly-detection parameters
+  contamination?: number;
+  nu?: number;
+  // Recommendation-system parameters (matrix factorization)
+  user_column?: string;
+  item_column?: string;
+  rating_column?: string;
+  n_factors?: number;
+  n_epochs?: number;
+  regularization?: number;
+  // Survival-analysis parameters
+  duration_column?: string;
+  event_column?: string;
+  group_column?: string;
 }
 
 interface TrainModelResponse {
@@ -332,7 +357,7 @@ export async function removeNulls(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -369,7 +394,7 @@ export async function getDataPreview(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -403,7 +428,7 @@ export async function getDataSummary(data: Record<string, any>[], column?: strin
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -433,7 +458,7 @@ export async function getInitialAnalysis(data: Record<string, any>[]): Promise<I
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
 
@@ -472,7 +497,7 @@ export async function createDerivedColumn(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -511,7 +536,7 @@ export async function convertDataType(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -558,7 +583,7 @@ export async function aggregateData(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     
@@ -604,7 +629,7 @@ export async function createPivotTable(
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      const error = (await response.json().catch(() => ({ detail: 'Unknown error' }))) as { detail?: string };
       throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
     }
     

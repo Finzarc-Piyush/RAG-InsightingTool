@@ -599,10 +599,8 @@ export function canonicalizeDateColumnValues(data: Record<string, any>[], dateCo
       if (v === null || v === undefined || v === '') continue;
       if (v instanceof Date && !isNaN(v.getTime())) {
         const out = toCanonicalDateStorage(v, v);
-        if (out !== v) {
-          row[col] = out;
-          changedByCol.set(col, (changedByCol.get(col) || 0) + 1);
-        }
+        row[col] = out;
+        changedByCol.set(col, (changedByCol.get(col) || 0) + 1);
         continue;
       }
       if (typeof v === 'string' || typeof v === 'number') {

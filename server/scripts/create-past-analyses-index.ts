@@ -7,8 +7,8 @@
  * Run:
  *   npx tsx server/scripts/create-past-analyses-index.ts
  */
-import "../loadEnv.ts";
-import { createOrUpdatePastAnalysesIndex } from "../lib/rag/createPastAnalysesIndex.ts";
+import "../loadEnv.js";
+import { createOrUpdatePastAnalysesIndex } from "../lib/rag/createPastAnalysesIndex.js";
 
 createOrUpdatePastAnalysesIndex()
   .then(() => {
