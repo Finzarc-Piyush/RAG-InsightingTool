@@ -15,6 +15,13 @@ export interface RequestContext {
   sessionId?: string;
   userId?: string;
   turnId?: string;
+  /**
+   * Wave R22 · unique id per chat turn, generated at the stream entry point and
+   * propagated across the agent loop's async boundaries via AsyncLocalStorage.
+   * Stamped onto SSE frames + LLM-usage telemetry so a single turn's events can
+   * be correlated end-to-end.
+   */
+  traceId?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

@@ -4,6 +4,7 @@
  */
 import { Response } from "express";
 import { validateSseEvent, isKnownSseEventKind } from "../shared/sseEvents.js";
+import { getRequestContext } from "../lib/telemetry/requestContext.js";
 
 /**
  * Send SSE event to client
@@ -51,7 +52,12 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
   }
 
   try {
-    const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    // Wave R22 · stamp the per-turn traceId via the SSE `id:` field (protocol-
+    // standard, exposed to the client as `event.lastEventId`). Kept OUT of the
+    // `data` JSON so it never trips the client's event-shape validation.
+    const traceId = getRequestContext().traceId;
+    const idLine = traceId ? `id: ${traceId}\n` : "";
+    const message = `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     res.write(message);
     // Force flush the response (if supported by the platform)
     if (typeof (res as any).flush === 'function') {

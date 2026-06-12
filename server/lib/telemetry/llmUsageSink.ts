@@ -72,6 +72,7 @@ function toDoc(usage: LlmCallUsage): LlmUsageDoc {
   if (usage.purpose) doc.purpose = usage.purpose;
   if (ctx.sessionId) doc.sessionId = ctx.sessionId;
   if (ctx.userId) doc.userId = ctx.userId;
+  if (ctx.traceId) doc.traceId = ctx.traceId;
   return doc;
 }
 

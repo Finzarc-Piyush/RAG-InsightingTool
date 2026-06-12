@@ -21,6 +21,8 @@ export interface LlmUsageDoc {
   /** Filled from the AsyncLocalStorage request context when available. */
   sessionId?: string;
   userId?: string;
+  /** Wave R22 · per-turn trace id for end-to-end correlation (SSE ↔ telemetry). */
+  traceId?: string;
   /** Deployment name passed to Azure OpenAI (`gpt-4o`, `gpt-4o-mini`, …). */
   model: string;
   /** Optional free-form label — W3.1 will populate with an `LlmCallPurpose`. */

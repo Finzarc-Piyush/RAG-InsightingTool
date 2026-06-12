@@ -10,6 +10,8 @@ import { processStreamChat, streamChatMessages } from "../services/chat/chatStre
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { sendError, sendValidationError, sendNotFound } from "../utils/responseFormatter.js";
 import { sendSSE, setSSEHeaders } from "../utils/sse.helper.js";
+import { withRequestContext } from "../lib/telemetry/requestContext.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * Wall-clock budget for a single streaming chat turn. Even with internal
@@ -92,16 +94,23 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
       }, STREAM_CHAT_HARD_TIMEOUT_MS);
     });
 
+    // Wave R22 · bind a per-turn traceId for the whole stream so the agent
+    // loop, SSE frames, and LLM-usage telemetry can be correlated end-to-end.
+    const traceId = randomUUID();
     try {
       await Promise.race([
-        processStreamChat({
-          sessionId,
-          message,
-          targetTimestamp,
-          username,
-          res,
-          mode: _legacyMode,
-        }),
+        withRequestContext(
+          { sessionId, userId: username, traceId },
+          () =>
+            processStreamChat({
+              sessionId,
+              message,
+              targetTimestamp,
+              username,
+              res,
+              mode: _legacyMode,
+            })
+        ),
         timeoutPromise,
       ]);
     } catch (streamErr) {

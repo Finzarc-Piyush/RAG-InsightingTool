@@ -54,7 +54,7 @@ const RATE_LIMIT_EXEMPT_SUFFIXES: ReadonlyArray<string> = [
 ];
 
 function isExemptFromRateLimit(req: import("express").Request): boolean {
-  if (req.method === "OPTIONS" || req.path === "/health") return true;
+  if (req.method === "OPTIONS" || req.path === "/health" || req.path === "/ready") return true;
   return RATE_LIMIT_EXEMPT_SUFFIXES.some((suffix) => req.path.endsWith(suffix));
 }
 
@@ -133,9 +133,35 @@ export function createApp() {
   app.use("/api", authPreflightLimiter);
   app.use("/api", requireAzureAdAuth);
 
-  // Health check endpoint
+  // Liveness probe — process is up (no dependency checks; stays fast + always
+  // 200 so load balancers never evict a healthy-but-degraded instance).
   app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', message: 'Server is running' });
+  });
+
+  // Wave R21 · Readiness probe — verifies the CRITICAL dependencies (Cosmos +
+  // Blob) are actually reachable, returning 503 until they are. A blue/green
+  // or rolling deploy can gate traffic on this so requests aren't routed to an
+  // instance that can't serve them yet. Cheap (1 attempt, short timeout) and
+  // auth/rate-limit exempt.
+  app.get('/api/ready', async (req, res) => {
+    const checks: Record<string, boolean> = { cosmos: false, blob: false };
+    try {
+      const { waitForContainer } = await import('./models/database.config.js');
+      await waitForContainer(1, 100);
+      checks.cosmos = true;
+    } catch {
+      /* dependency not ready */
+    }
+    try {
+      const { ensureBlobStorageReady } = await import('./lib/blobStorage.js');
+      await ensureBlobStorageReady();
+      checks.blob = true;
+    } catch {
+      /* dependency not ready */
+    }
+    const ready = checks.cosmos && checks.blob;
+    res.status(ready ? 200 : 503).json({ ready, checks, timestamp: Date.now() });
   });
 
   // Wave R20 · SSE ticket exchange. EventSource cannot send an Authorization

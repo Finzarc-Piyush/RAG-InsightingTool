@@ -127,7 +127,7 @@ export async function requireAzureAdAuth(
   }
 
   const path = req.path || "";
-  if (path === "/health" || path.startsWith("/health")) {
+  if (path === "/health" || path.startsWith("/health") || path === "/ready") {
     next();
     return;
   }
