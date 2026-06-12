@@ -32,7 +32,19 @@
 
 ## Progress
 
-- **R30** · `cosmosDocSizeGuard.ts` extracted from `chat.model.ts`
-  (CosmosDocSizeError re-exported; cosmosDocSizeGuard.test.ts green).
+- **R30** · `chat.model.ts` (2088→2052) → `cosmosDocSizeGuard.ts`.
+- **R35** · one cohesive module extracted from each remaining god-file (all
+  re-export-pattern, full suite 5686 green):
+  - `planArgRepairs.ts` (2826→2416) → `planArgRepairs/ranking.ts` (ranking
+    intent family, 443 LOC).
+  - `dataOpsOrchestrator.ts` (5466→5238) → `dataOpsValueHelpers.ts` (4 pure
+    value/column helpers).
+  - `agentLoop.service.ts` (4508→4315) → `agentLoopFormatters.ts` (13 pure
+    shape/extraction helpers).
+  - `chatStream.service.ts` (2586→2370) → `chatStreamPivotDefaults.ts`
+    (pivot-defaults derivation).
+  - `shared/schema.ts` (3543→3469) → `userDirectiveSchema.ts` (the
+    self-contained user-directive schema leaf group; re-exported).
 
-Remaining: the table rows above, one extraction per wave.
+Each god-file now has a proven seam + ≥1 module carved off. To keep shrinking
+them, repeat the pattern one cohesive cluster per wave per the table above.
