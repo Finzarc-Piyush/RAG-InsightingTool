@@ -25,6 +25,26 @@ export function getAuthenticatedEmail(req: Request): string | undefined {
   return undefined;
 }
 
+/**
+ * Wave R19 · The immutable Azure AD object id (`oid`) — the authoritative,
+ * non-reassignable user identity. Prefer this over email for authorization
+ * decisions: an email address can be re-aliased or reused across an account's
+ * lifecycle, while `oid` never changes. Undefined under DISABLE_AUTH (dev)
+ * unless an `X-User-Id` header is supplied.
+ */
+export function getAuthenticatedOid(req: Request): string | undefined {
+  if (req.auth?.oid) {
+    return req.auth.oid;
+  }
+  if (process.env.DISABLE_AUTH === "true") {
+    const raw = req.headers["x-user-id"];
+    if (typeof raw === "string" && raw.trim()) {
+      return raw.trim();
+    }
+  }
+  return undefined;
+}
+
 /** @deprecated Prefer getAuthenticatedEmail; kept for gradual migration */
 export function extractUsername(req: Request): string | null {
   return getAuthenticatedEmail(req) ?? null;

@@ -21,7 +21,7 @@
  */
 
 import type { Request } from "express";
-import { getAuthenticatedEmail } from "../utils/auth.helper.js";
+import { getAuthenticatedEmail, getAuthenticatedOid } from "../utils/auth.helper.js";
 
 const HARDCODED_SUPERADMIN_EMAILS: ReadonlyArray<string> = [
   "piyush@finzarc.com",
@@ -29,18 +29,42 @@ const HARDCODED_SUPERADMIN_EMAILS: ReadonlyArray<string> = [
 
 let SUPERADMIN_EMAILS = new Set<string>(HARDCODED_SUPERADMIN_EMAILS);
 
+/**
+ * Wave R19 · Optional immutable-`oid` allowlist (comma-separated `SUPERADMIN_OIDS`
+ * env). When set, the oid path is the PRIMARY, tamper-resistant superadmin
+ * check; the hardcoded email allowlist stays as a fallback so existing config
+ * keeps working. To move superadmin fully off email, set SUPERADMIN_OIDS to the
+ * operator's Azure AD oid and remove their address from the email list.
+ */
+function parseEnvIdSet(name: string): Set<string> {
+  const raw = process.env[name]?.trim();
+  if (!raw) return new Set<string>();
+  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
+}
+
+let SUPERADMIN_OIDS = parseEnvIdSet("SUPERADMIN_OIDS");
+
 export function isSuperadminEmail(email: string | undefined | null): boolean {
   if (!email) return false;
   return SUPERADMIN_EMAILS.has(email.trim().toLowerCase());
 }
 
+export function isSuperadminOid(oid: string | undefined | null): boolean {
+  if (!oid) return false;
+  return SUPERADMIN_OIDS.has(oid.trim());
+}
+
 /**
- * Wave AD2 · uses `getAuthenticatedEmail` so DISABLE_AUTH mode (tests + dev)
- * picks up the `x-user-email` header just like the rest of the auth surface.
- * In production, identity comes from the verified Azure AD JWT.
+ * Wave AD2/R19 · prefers the immutable `oid` (when SUPERADMIN_OIDS is set) and
+ * falls back to the email allowlist. Uses the auth helpers so DISABLE_AUTH mode
+ * (tests + dev) picks up the `x-user-id` / `x-user-email` headers; in
+ * production identity comes from the verified Azure AD JWT.
  */
 export function isSuperadminRequest(req: Request): boolean {
-  return isSuperadminEmail(getAuthenticatedEmail(req));
+  return (
+    isSuperadminOid(getAuthenticatedOid(req)) ||
+    isSuperadminEmail(getAuthenticatedEmail(req))
+  );
 }
 
 /**
@@ -66,4 +90,17 @@ export function __setSuperadminEmailsForTesting(emails: ReadonlyArray<string>): 
  */
 export function __resetSuperadminEmailsForTesting(): void {
   SUPERADMIN_EMAILS = new Set<string>(HARDCODED_SUPERADMIN_EMAILS);
+}
+
+/** Test-only · override the in-process oid allowlist (Wave R19). */
+export function __setSuperadminOidsForTesting(oids: ReadonlyArray<string>): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("__setSuperadminOidsForTesting must not be called in production");
+  }
+  SUPERADMIN_OIDS = new Set(oids.map((o) => o.trim()).filter(Boolean));
+}
+
+/** Test-only · restore the SUPERADMIN_OIDS env-derived allowlist. */
+export function __resetSuperadminOidsForTesting(): void {
+  SUPERADMIN_OIDS = parseEnvIdSet("SUPERADMIN_OIDS");
 }
