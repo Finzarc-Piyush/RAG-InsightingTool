@@ -391,9 +391,9 @@ export function ResizableTile({
       onPositionChange(newPosition);
     }
   };
-  const onDragStop = (_e: DraggableEvent, data: DraggableData) => {
-    setIsDragging(false);
-    const newPosition = { x: data.x, y: data.y };
+  // Commit a final position: update state, notify the parent, and persist.
+  // Shared by mouse drag-stop and keyboard movement.
+  const commitPosition = (newPosition: { x: number; y: number }) => {
     setPosition(newPosition);
     if (onPositionChange) {
       onPositionChange(newPosition);
@@ -402,8 +402,31 @@ export function ResizableTile({
       const saved = localStorage.getItem(storageKey);
       let base: any = {};
       try { base = saved ? JSON.parse(saved) : {}; } catch {}
-      localStorage.setItem(storageKey, JSON.stringify({ ...base, posX: data.x, posY: data.y }));
+      localStorage.setItem(storageKey, JSON.stringify({ ...base, posX: newPosition.x, posY: newPosition.y }));
     }
+  };
+
+  const onDragStop = (_e: DraggableEvent, data: DraggableData) => {
+    setIsDragging(false);
+    commitPosition({ x: data.x, y: data.y });
+  };
+
+  // WCAG 2.1.1 (keyboard) · the drag handle is focusable (role=button,
+  // tabIndex 0); arrow keys move the tile in 16px steps (64px with Shift), so
+  // tiles can be repositioned without a pointer.
+  const onHandleKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 64 : 16;
+    let dx = 0;
+    let dy = 0;
+    switch (e.key) {
+      case 'ArrowLeft': dx = -step; break;
+      case 'ArrowRight': dx = step; break;
+      case 'ArrowUp': dy = -step; break;
+      case 'ArrowDown': dy = step; break;
+      default: return;
+    }
+    e.preventDefault();
+    commitPosition({ x: Math.max(0, position.x + dx), y: Math.max(0, position.y + dy) });
   };
 
   // Use the bounds container element directly - react-draggable handles this better
@@ -466,8 +489,12 @@ export function ResizableTile({
         >
           <div className="h-full w-full relative flex flex-col pt-4">
             <div
-              className="drag-handle absolute left-0 top-0 w-full h-4 flex items-center gap-1 pl-2 text-muted-foreground cursor-grab active:cursor-grabbing bg-gradient-to-b from-muted/60 to-transparent z-10 flex-shrink-0"
-              aria-label="Drag tile"
+              className="drag-handle absolute left-0 top-0 w-full h-4 flex items-center gap-1 pl-2 text-muted-foreground cursor-grab active:cursor-grabbing bg-gradient-to-b from-muted/60 to-transparent z-10 flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              role="button"
+              tabIndex={0}
+              aria-label="Drag tile — focus and use arrow keys to move (hold Shift for larger steps)"
+              aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
+              onKeyDown={onHandleKeyDown}
             >
               <GripVertical className="h-4 w-4" />
               <span className="text-[10px]">Drag</span>
