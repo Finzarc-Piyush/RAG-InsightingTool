@@ -1,6 +1,6 @@
 // @ts-expect-error papaparse has no bundled types and @types/papaparse is not installed
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 export type LocalPreviewParseStatus = "full" | "headers_only" | "failed";
 
@@ -23,6 +23,67 @@ export interface LocalWorkbookSheetInfo {
 
 const MAX_PREVIEW_ROWS = 100;
 const MAX_COLUMNS = 200;
+
+/**
+ * Wave R9 · Map an ExcelJS cell to the preview value the former SheetJS
+ * `sheet_to_json({ header:1, raw:false, defval:null })` produced. The preview
+ * pipeline (`inferColumnTypes`, display grid) is STRING-heuristic based, so —
+ * unlike the server ingest path (Date objects) — dates are rendered as ISO
+ * strings that `isExplicitDateLikeForPreview` recognises. Percent-formatted
+ * cells are re-stringified ("12.34%") so the column stays non-numeric exactly
+ * as before; booleans render "TRUE"/"FALSE" as SheetJS `raw:false` did.
+ */
+function percentDecimals(numFmt: string): number {
+  const beforePct = numFmt.split("%")[0] ?? "";
+  const dot = beforePct.lastIndexOf(".");
+  if (dot < 0) return 0;
+  return (beforePct.slice(dot + 1).match(/[0#]/g) || []).length;
+}
+
+function formatPercentDisplay(value: number, numFmt: string): string {
+  const fixed = (value * 100).toFixed(percentDecimals(numFmt));
+  const beforePct = numFmt.split("%")[0] ?? "";
+  if (/[#0],[#0]/.test(beforePct)) {
+    const neg = fixed.startsWith("-");
+    const [intPart, fracPart] = (neg ? fixed.slice(1) : fixed).split(".");
+    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return `${neg ? "-" : ""}${fracPart ? `${grouped}.${fracPart}` : grouped}%`;
+  }
+  return `${fixed}%`;
+}
+
+function previewDateString(d: Date): string {
+  const iso = d.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+  // Date-only (UTC midnight) → "YYYY-MM-DD"; else "YYYY-MM-DD HH:mm".
+  return iso.endsWith("T00:00:00.000Z")
+    ? iso.slice(0, 10)
+    : `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+}
+
+function previewCellValue(
+  v: ExcelJS.CellValue,
+  numFmt: string | undefined
+): string | number | null {
+  if (v === null || v === undefined) return null;
+  if (v instanceof Date) return previewDateString(v);
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) return null;
+    if (numFmt && numFmt.includes("%")) return formatPercentDisplay(v, numFmt);
+    return v;
+  }
+  if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const o = v as unknown as Record<string, unknown>;
+    if ("result" in o) return previewCellValue(o.result as ExcelJS.CellValue, numFmt);
+    if ("error" in o) return null;
+    if (Array.isArray(o.richText)) {
+      return (o.richText as Array<{ text?: string }>).map((r) => r?.text ?? "").join("");
+    }
+    if (typeof o.text === "string") return o.text;
+  }
+  return null;
+}
 
 export function isExplicitDateLikeForPreview(value: unknown): boolean {
   const s = String(value ?? "").trim();
@@ -121,10 +182,16 @@ async function parseCsv(file: File): Promise<LocalPreviewResult> {
   });
 }
 
-export async function inspectLocalWorkbookSheets(file: File): Promise<LocalWorkbookSheetInfo> {
+async function loadWorkbook(file: File): Promise<ExcelJS.Workbook> {
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array", dense: true, cellDates: false });
-  const sheetNames = workbook.SheetNames || [];
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+  return wb;
+}
+
+export async function inspectLocalWorkbookSheets(file: File): Promise<LocalWorkbookSheetInfo> {
+  const wb = await loadWorkbook(file);
+  const sheetNames = wb.worksheets.map((w) => w.name);
   return {
     sheetNames,
     selectedSheetName: sheetNames[0],
@@ -134,8 +201,8 @@ export async function inspectLocalWorkbookSheets(file: File): Promise<LocalWorkb
 
 async function parseXlsx(file: File, selectedSheetName?: string): Promise<LocalPreviewResult> {
   try {
-    const workbookInfo = await inspectLocalWorkbookSheets(file);
-    const { sheetNames } = workbookInfo;
+    const wb = await loadWorkbook(file);
+    const sheetNames = wb.worksheets.map((w) => w.name);
     if (sheetNames.length === 0) {
       return fromHeadersOnly(file.name, [], "No sheet found in workbook");
     }
@@ -143,16 +210,27 @@ async function parseXlsx(file: File, selectedSheetName?: string): Promise<LocalP
     if (!sheetNames.includes(sheetName)) {
       return fromHeadersOnly(file.name, [], `Sheet "${sheetName}" not found in workbook`);
     }
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array", dense: true, cellDates: false });
-    const ws = workbook.Sheets[sheetName];
-    const grid = XLSX.utils.sheet_to_json<(string | number | null)[]>(ws, {
-      header: 1,
-      raw: false,
-      defval: null,
-      blankrows: false,
-    });
-    if (!grid || grid.length === 0) {
+    const ws = wb.getWorksheet(sheetName)!;
+
+    // Build a SheetJS `header:1`-equivalent AOA: skip fully-blank rows
+    // (blankrows:false), cap columns + a little past the preview window.
+    const colCount = Math.min(ws.columnCount, MAX_COLUMNS);
+    const grid: (string | number | null)[][] = [];
+    const ROW_SCAN_CAP = MAX_PREVIEW_ROWS + 2; // header + preview rows
+    for (let r = 1; r <= ws.rowCount && grid.length < ROW_SCAN_CAP; r++) {
+      const row = ws.getRow(r);
+      const arr: (string | number | null)[] = [];
+      let allEmpty = true;
+      for (let c = 1; c <= colCount; c++) {
+        const cell = row.getCell(c);
+        const val = previewCellValue(cell.value, cell.numFmt);
+        arr.push(val);
+        if (val !== null) allEmpty = false;
+      }
+      if (allEmpty) continue;
+      grid.push(arr);
+    }
+    if (grid.length === 0) {
       return fromHeadersOnly(file.name, [], "Sheet is empty");
     }
 
