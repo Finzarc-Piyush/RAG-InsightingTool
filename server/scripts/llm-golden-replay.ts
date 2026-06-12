@@ -82,7 +82,7 @@ interface ReplayMetric {
 function parseSseFrame(frame: string): Array<{ event: string; data: unknown }> {
   const out: Array<{ event: string; data: unknown }> = [];
   let event = "message";
-  let dataLines: string[] = [];
+  const dataLines: string[] = [];
   for (const line of frame.split("\n")) {
     if (line.startsWith("event:")) {
       event = line.slice(6).trim();

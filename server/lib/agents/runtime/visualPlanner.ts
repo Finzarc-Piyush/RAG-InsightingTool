@@ -431,7 +431,7 @@ export async function proposeAndBuildExtraCharts(
         aggregate: aggregateTimeSeries ?? baseAgg,
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
-      let processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
+      const processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
         chartQuestion: ctx.question,
       });
       let smartDomains: Record<string, unknown> = {};

@@ -187,7 +187,7 @@ export function sampleForVisualization(
   yColumn: string,
   maxPoints: number = 2000
 ): Promise<Array<Record<string, number | null>>> {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const validPoints: Array<{ x: number; y: number; row: Record<string, any> }> = [];
     const toNumber = (value: any): number => {
       if (value === null || value === undefined || value === '') return NaN;
@@ -196,6 +196,7 @@ export function sampleForVisualization(
       return Number(cleaned);
     };
 
+    void (async () => {
     try {
       // First pass: collect valid points (we need to sample, but can't load all)
       // Use reservoir sampling for memory efficiency
@@ -230,6 +231,7 @@ export function sampleForVisualization(
     } catch (error) {
       reject(error);
     }
+    })();
   });
 }
 

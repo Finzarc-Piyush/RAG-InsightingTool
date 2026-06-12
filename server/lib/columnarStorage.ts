@@ -404,8 +404,6 @@ export class ColumnarStorageService {
         `ALTER TABLE ${this.quoteIdent(tempTableName)} RENAME TO ${this.quoteIdent(tableName)}`
       );
       await this.runStatement(`DROP TABLE IF EXISTS ${this.quoteIdent(backupTableName)}`);
-    } catch (error) {
-      throw error;
     } finally {
       await fs.unlink(tempCsvPath).catch(() => {
         // ignore cleanup errors

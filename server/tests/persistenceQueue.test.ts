@@ -65,7 +65,7 @@ describe("persistenceQueue · A3 contract", () => {
       return {} as never;
     });
     const restoreS = __setPersistSleeper(async () => {});
-    let attemptFailures: number[] = [];
+    const attemptFailures: number[] = [];
     let okCount = 0;
     try {
       const { promise } = enqueuePersist({

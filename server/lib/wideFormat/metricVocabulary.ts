@@ -168,7 +168,7 @@ function normalize(token: string): string {
   return token
     .toLowerCase()
     .trim()
-    .replace(/[  -​]+/g, " ")
+    .replace(/[\u00A0\u2000-\u200B]+/g, " ")
     .replace(/\s+/g, " ")
     // Strip surrounding punctuation except % (meaningful for percentage metrics).
     .replace(/^[\s\-_:,;]+|[\s\-_:,;]+$/g, "");

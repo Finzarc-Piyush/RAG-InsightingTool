@@ -244,7 +244,7 @@ export function PivotFieldPanel({
     }
 
     if (activeDim) {
-      let next = stripDimension(config, activeDim);
+      const next = stripDimension(config, activeDim);
       if (destZone === 'values') {
         const spec = newValueSpec(activeDim, numericSet);
         const vals = [...next.values];

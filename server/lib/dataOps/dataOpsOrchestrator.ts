@@ -1145,7 +1145,7 @@ export async function parseDataOpsIntent(
     // "show rows 12 to 28" or "show rows 12-28" or "show rows 12 through 28"
     // "show me row from range 3 to 10 rows" or "row from range 3 to 10"
     // "range 3 to 10 rows" or "rows from range 3 to 10"
-    let rangeMatch = lowerMessage.match(/rows?\s+(\d+)\s+(?:to|through|-)\s+(\d+)/i) ||
+    const rangeMatch = lowerMessage.match(/rows?\s+(\d+)\s+(?:to|through|-)\s+(\d+)/i) ||
                      lowerMessage.match(/row\s+from\s+range\s+(\d+)\s+to\s+(\d+)/i) ||
                      lowerMessage.match(/range\s+(\d+)\s+to\s+(\d+)\s+rows?/i) ||
                      lowerMessage.match(/rows?\s+from\s+range\s+(\d+)\s+to\s+(\d+)/i) ||
@@ -1165,7 +1165,7 @@ export async function parseDataOpsIntent(
     }
     
     // Pattern 2: Specific row - "show row 12" or "show the 12th row" or "show row number 12"
-    let specificMatch = lowerMessage.match(/(?:the\s+)?(\d+)(?:st|nd|rd|th)\s+row/i) || 
+    const specificMatch = lowerMessage.match(/(?:the\s+)?(\d+)(?:st|nd|rd|th)\s+row/i) || 
                         lowerMessage.match(/row\s+(?:number\s+)?(\d+)/i) ||
                         lowerMessage.match(/show\s+(?:the\s+)?row\s+(\d+)/i);
     if (specificMatch) {
@@ -1181,7 +1181,7 @@ export async function parseDataOpsIntent(
     }
     
     // Pattern 3: Last N rows - "show last 5 rows" or "show me the last 10 rows"
-    let lastMatch = lowerMessage.match(/last\s+(\d+)\s+rows?/i) ||
+    const lastMatch = lowerMessage.match(/last\s+(\d+)\s+rows?/i) ||
                     lowerMessage.match(/show\s+(?:me\s+)?(?:the\s+)?last\s+(\d+)\s+rows?/i);
     if (lastMatch) {
       const limit = parseInt(lastMatch[1], 10);
@@ -1196,7 +1196,7 @@ export async function parseDataOpsIntent(
     }
     
     // Pattern 4: First N rows - "show first 10 rows" or "show me only first 10 rows"
-    let firstMatch = lowerMessage.match(/(?:first|top)\s+(\d+)\s+rows?/i) ||
+    const firstMatch = lowerMessage.match(/(?:first|top)\s+(\d+)\s+rows?/i) ||
                      lowerMessage.match(/show\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(?:first|top)\s+(\d+)\s+rows?/i);
     if (firstMatch) {
       const limit = parseInt(firstMatch[1], 10);
@@ -1211,7 +1211,7 @@ export async function parseDataOpsIntent(
     }
     
     // Pattern 5: Generic "show N rows" - defaults to first N
-    let genericMatch = lowerMessage.match(/show\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(\d+)\s+rows?/i);
+    const genericMatch = lowerMessage.match(/show\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(\d+)\s+rows?/i);
     if (genericMatch) {
       const limit = parseInt(genericMatch[1], 10);
       if (limit > 0) {
@@ -1225,7 +1225,7 @@ export async function parseDataOpsIntent(
     }
     
     // Pattern 6: Simple "show N" or "first N" - defaults to first N
-    let simpleMatch = lowerMessage.match(/(?:show|first|top)\s+(\d+)/i);
+    const simpleMatch = lowerMessage.match(/(?:show|first|top)\s+(\d+)/i);
     if (simpleMatch) {
       const limit = parseInt(simpleMatch[1], 10);
       if (limit > 0) {
@@ -3590,10 +3590,11 @@ export async function executeDataOperation(
                 return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
               case 'endsWith':
                 return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
-              case 'between':
+              case 'between': {
                 if (value2 === undefined || value2 === null) return false;
                 const numValue = Number(cellValue);
                 return numValue >= Number(value) && numValue <= Number(value2);
+              }
               case 'in':
                 if (!values || !Array.isArray(values)) return false;
                 return values.some(v => {
@@ -5213,20 +5214,22 @@ export async function executeDataOperation(
               return String(cellValue).toLowerCase().startsWith(String(value).toLowerCase());
             case 'endsWith':
               return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
-            case 'between':
+            case 'between': {
               if (value2 === undefined || value2 === null) {
                 console.warn(`⚠️ Between operator requires value2, skipping condition`);
                 return true;
               }
               const numValue = Number(cellValue);
               return numValue >= Number(value) && numValue <= Number(value2);
-            case 'in':
+            }
+            case 'in': {
               if (!values || !Array.isArray(values) || values.length === 0) {
                 console.warn(`⚠️ In operator requires values array, skipping condition`);
                 return true;
               }
               const cellStr = String(cellValue).toLowerCase().trim();
               return values.some(v => String(v).toLowerCase().trim() === cellStr);
+            }
             default:
               console.warn(`⚠️ Unknown filter operator: ${operator}`);
               return true;

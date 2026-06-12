@@ -544,7 +544,7 @@ export function ChartOnlyModal({
           </ResponsiveContainer>
         );
       }
-      case 'scatter':
+      case 'scatter': {
         const getTickCount = (domain: [number, number] | undefined): number => {
           if (!domain) return 8;
           const range = domain[1] - domain[0];
@@ -681,6 +681,7 @@ export function ChartOnlyModal({
             </ComposedChart>
           </ResponsiveContainer>
         );
+      }
       case 'pie':
         return (
           <ResponsiveContainer width="100%" height={480}>

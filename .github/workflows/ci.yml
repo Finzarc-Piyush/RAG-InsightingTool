@@ -60,10 +60,12 @@ jobs:
       # MODERATES, tolerated below this threshold.
       - name: npm audit (blocking · high+)
         run: npm audit --audit-level=high
-      # Lint gate — report-only until the observability/lint wave clears the errors.
-      - name: ESLint (report-only until lint wave)
+      # Lint gate — now BLOCKING. All ESLint ERRORS cleared (auto-fixes +
+      # mechanical fixes); 22 react-hooks/rules-of-hooks remain WARNINGS pending
+      # per-component QA (see client/eslint.config.js). Warnings don't fail the
+      # gate; a new error will.
+      - name: ESLint (blocking)
         run: npm run lint
-        continue-on-error: true
 
   python:
     runs-on: ubuntu-latest

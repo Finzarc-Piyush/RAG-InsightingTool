@@ -408,7 +408,7 @@ function enhanceTimeFiltersWithExtractedDates(
           console.log(`✅ Added month filter: ${monthNames[extracted.month!]}`);
         }
         break;
-      case 'date':
+      case 'date': {
         // Use dateRange with same start and end for exact date match
         const dateStr = extracted.date!.toISOString().split('T')[0];
         parsed.timeFilters.push({
@@ -419,6 +419,7 @@ function enhanceTimeFiltersWithExtractedDates(
         });
         console.log(`✅ Added date filter: ${dateStr}`);
         break;
+      }
       case 'dateRange':
         parsed.timeFilters.push({
           type: 'dateRange',

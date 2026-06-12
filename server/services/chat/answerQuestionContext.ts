@@ -112,7 +112,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
   // .columnarStoragePath undefined and hard-failed every aggregation step with
   // "DuckDB execution surface is not available" — even though the data was
   // materialized. Derive the flag from materialization state directly.
-  let columnarStoragePathOpt: boolean | undefined = columnarStoragePath
+  const columnarStoragePathOpt: boolean | undefined = columnarStoragePath
     ? true
     : undefined;
   let loadFullDataOpt: (() => Promise<Record<string, any>[]>) | undefined;

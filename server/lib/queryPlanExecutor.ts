@@ -743,7 +743,7 @@ function applyComputedAggregationsInMemory(
           const v = Number(next[id]);
           return Number.isFinite(v) ? `(${v})` : "(null)";
         });
-        // eslint-disable-next-line no-new-func
+         
         const fn = new Function(`return (${subbed});`);
         const val = fn();
         next[c.alias] = typeof val === "number" && Number.isFinite(val) ? val : null;

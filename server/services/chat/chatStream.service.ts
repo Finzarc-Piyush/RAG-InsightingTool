@@ -815,6 +815,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     };
     const pendingIntermediates: PendingIntermediate[] = [];
     let intermediateSeq = 0;
+    // `provisionalPivotDefaults` is genuinely reassigned (derivePivotDefaultsHint
+    // site below); eslint mis-sees it because its only same-scope read is inside
+    // the flushIntermediateSegment closure. `const` breaks tsc (TS2588 + the
+    // declaration has no initializer). Hence the targeted disable on the next line.
+    // eslint-disable-next-line prefer-const
     let provisionalPivotDefaults: Message["pivotDefaults"] | undefined;
     let parsedQueryForLoad: Record<string, unknown> | null = null;
 

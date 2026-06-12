@@ -1657,7 +1657,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ...(a.y2 ? { y2: a.y2 } : {}),
         aggregate: defaultAgg,
       });
-      let processed = processChartData(
+      const processed = processChartData(
         ctx.exec.data,
         spec,
         ctx.exec.summary?.dateColumns,

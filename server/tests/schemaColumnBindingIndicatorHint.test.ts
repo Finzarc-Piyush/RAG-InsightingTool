@@ -57,7 +57,7 @@ function indicatorSummary(): DataSummary {
 
 describe("Wave SU-IC3 · schemaColumnBinding indicator hint", () => {
   it("decorates indicator columns inline with [INDICATOR ...] and surfaces answersQuestions", async () => {
-    let captured: { user: string | null } = { user: null };
+    const captured: { user: string | null } = { user: null };
     installLlmStub({
       [LLM_PURPOSE.SCHEMA_BIND]: (params) => {
         const msgs = (params as { messages: Array<{ role: string; content: string }> }).messages;
@@ -92,7 +92,7 @@ describe("Wave SU-IC3 · schemaColumnBinding indicator hint", () => {
   });
 
   it("emits no INDICATOR markers on a dataset without indicators", async () => {
-    let captured: { user: string | null } = { user: null };
+    const captured: { user: string | null } = { user: null };
     installLlmStub({
       [LLM_PURPOSE.SCHEMA_BIND]: (params) => {
         const msgs = (params as { messages: Array<{ role: string; content: string }> }).messages;

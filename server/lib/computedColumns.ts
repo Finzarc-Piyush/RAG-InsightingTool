@@ -104,7 +104,7 @@ function computeCellValue(
     const b = parseRowDate(row[def.endColumn]);
     if (!a || !b) return null;
     const diffMs = b.getTime() - a.getTime();
-    let days = Math.round(diffMs / MS_PER_DAY);
+    const days = Math.round(diffMs / MS_PER_DAY);
     if (def.clampNegative && days < 0) return null;
     return days;
   }

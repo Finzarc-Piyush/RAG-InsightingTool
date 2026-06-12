@@ -83,7 +83,7 @@ function applyTimeFilter(
       case 'year':
         if (!filter.years || !filter.years.length) return true;
         return filter.years.includes(date.getFullYear());
-      case 'month':
+      case 'month': {
         if (!filter.months || !filter.months.length) return true;
         const monthName = date.toLocaleString('en-US', { month: 'long' });
         // Check full month name match
@@ -106,10 +106,12 @@ function applyTimeFilter(
           return false;
         });
         return monthMatch;
-      case 'quarter':
+      }
+      case 'quarter': {
         if (!filter.quarters || !filter.quarters.length) return true;
         const quarter = Math.floor(date.getMonth() / 3) + 1;
         return filter.quarters.includes(quarter as 1 | 2 | 3 | 4);
+      }
       case 'dateRange': {
         if (!filter.startDate && !filter.endDate) return true;
         
@@ -384,12 +386,13 @@ function applyValueFilter(
         return compareValue !== null ? value === compareValue : false;
       case '!=':
         return compareValue !== null ? value !== compareValue : true;
-      case 'between':
+      case 'between': {
         if (filter.reference) return true;
         if (filter.value === undefined || filter.value2 === undefined) return true;
         const min = Math.min(filter.value, filter.value2);
         const max = Math.max(filter.value, filter.value2);
         return value >= min && value <= max;
+      }
       default:
         return true;
     }
@@ -894,7 +897,7 @@ function applyAggregations(
   // For percent_change, we need to calculate across groups, so handle it separately
   const hasPercentChange = aggregations.some(agg => agg.operation === 'percent_change');
   
-  let aggregatedRows: Record<string, any>[] = [];
+  const aggregatedRows: Record<string, any>[] = [];
   
   if (hasPercentChange && groupBy.length === 1) {
     // For percent_change, we need to sort by the groupBy column and calculate changes

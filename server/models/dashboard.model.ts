@@ -166,33 +166,34 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
       console.log(`[getDashboardById] Dashboard resource is invalid or incomplete`);
       throw new Error('Dashboard resource is invalid');
     } catch (error: any) {
+      let resolvedError: any = error;
       // If normalized fails, try with original username (for backward compatibility)
       if (normalizedUsername !== username) {
         try {
           const { resource } = await dashboardsContainer.item(id, username).read();
           const dashboard = resource as unknown as Dashboard;
-          
+
           if (dashboard && dashboard.id && dashboard.name) {
             console.log(`[getDashboardById] Found dashboard with original username: ${dashboard.name}`);
             dashboard.lastOpenedAt = Date.now();
             return await updateDashboard(dashboard);
           }
-          
+
           // If dashboard is invalid, treat as not found
           throw new Error('Dashboard resource is invalid');
         } catch (secondError: any) {
           // Continue to shared dashboard check
-          error = secondError;
+          resolvedError = secondError;
         }
       }
       // If not found as owner, check if user has access via shared invite
       // CosmosDB errors can have code 404 or statusCode 404
       // Also check for invalid resource errors
-      const isNotFound = error.code === 404 || error.statusCode === 404 || 
-                        (error.message && (error.message.includes('NotFound') || error.message.includes('invalid'))) ||
-                        (error.code === 'NotFound');
-      
-      console.log(`[getDashboardById] Dashboard not found as owner. Error code: ${error.code}, statusCode: ${error.statusCode}, isNotFound: ${isNotFound}`);
+      const isNotFound = resolvedError.code === 404 || resolvedError.statusCode === 404 ||
+                        (resolvedError.message && (resolvedError.message.includes('NotFound') || resolvedError.message.includes('invalid'))) ||
+                        (resolvedError.code === 'NotFound');
+
+      console.log(`[getDashboardById] Dashboard not found as owner. Error code: ${resolvedError.code}, statusCode: ${resolvedError.statusCode}, isNotFound: ${isNotFound}`);
       
       if (isNotFound) {
         // First, try to get dashboard using any owner to check collaborators
@@ -267,8 +268,8 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
         }
       } else {
         // If it's not a 404 error, re-throw it
-        console.error(`[getDashboardById] Unexpected error:`, error);
-        throw error;
+        console.error(`[getDashboardById] Unexpected error:`, resolvedError);
+        throw resolvedError;
       }
       return null;
     }

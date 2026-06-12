@@ -14,8 +14,12 @@ if (typeof fetch !== 'undefined') {
   fetchFn = fetch;
 } else {
   try {
-    // Try to use node-fetch if available
-    fetchFn = require('node-fetch') as typeof fetch;
+    // Try to use node-fetch if available. The specifier is held in a variable so
+    // TypeScript does not attempt to resolve node-fetch's (absent) type
+    // declarations — matching the original `require('node-fetch')` `any` behavior.
+    const nodeFetchSpecifier = 'node-fetch';
+    const nodeFetch: { default?: unknown } = await import(nodeFetchSpecifier);
+    fetchFn = (nodeFetch.default ?? nodeFetch) as unknown as typeof fetch;
   } catch {
     // Fallback: throw error if fetch is not available
     throw new Error('fetch is not available. Please use Node.js 18+ or install node-fetch');
@@ -699,7 +703,7 @@ export async function createPivotTable(
         const fileBuffer = fs.readFileSync(tempFile);
         
         // Try to parse a preview from the beginning of the file
-        let previewRows: Record<string, any>[] = [];
+        const previewRows: Record<string, any>[] = [];
         let rowsBefore = 0;
         let rowsAfter = 0;
         
@@ -719,7 +723,7 @@ export async function createPivotTable(
           const dataStart = previewText.indexOf('"data":[');
           if (dataStart !== -1) {
             // Find the opening bracket
-            let bracketPos = dataStart + 7;
+            const bracketPos = dataStart + 7;
             let bracketCount = 0;
             let inString = false;
             let escapeNext = false;

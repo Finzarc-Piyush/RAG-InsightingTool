@@ -733,7 +733,7 @@ export function ChartModal({
         );
       }
 
-      case 'scatter':
+      case 'scatter': {
         const getTickCount = (domain: [number, number] | undefined): number => {
           if (!domain) return 8;
           const range = domain[1] - domain[0];
@@ -886,6 +886,7 @@ export function ChartModal({
           </ResponsiveContainer>
           </div>
         );
+      }
 
       case 'pie':
         return (

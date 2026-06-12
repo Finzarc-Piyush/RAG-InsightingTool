@@ -1239,7 +1239,7 @@ export async function runAgentTurn(
     }
   };
 
-  let observations: string[] = [];
+  const observations: string[] = [];
   let agentSuggestionHints: string[] = [];
   let followUpPrompts: string[] | undefined;
   // W8: accumulated sub-questions from reflector spawning decisions.
@@ -2206,7 +2206,7 @@ export async function runAgentTurn(
           const evidence = `${result.summary}\n${lastNumeric || ""}`.slice(0, 14_000);
 
           if (hasNarrativeCandidate) {
-            let vRound = 0;
+            const vRound = 0;
             while (vRound < config.maxVerifierRoundsPerStep) {
               const verdict = await runVerifier(
                 ctx,
@@ -4206,7 +4206,7 @@ export async function runAgentTurn(
       };
     }
 
-    let finalRound = 0;
+    const finalRound = 0;
     const chartTitles = mergedCharts.map((c) => `${c.title}:${c.x}/${c.y}`).join("; ");
     const finalEvidence = buildFinalEvidence(
       observations,

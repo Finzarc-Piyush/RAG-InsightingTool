@@ -1247,7 +1247,7 @@ export function ChartRenderer({
         );
       }
 
-      case 'scatter':
+      case 'scatter': {
         const getTickCount = (domain: [number, number] | undefined): number => {
           if (!domain) return 6;
           const range = domain[1] - domain[0];
@@ -1435,6 +1435,7 @@ export function ChartRenderer({
             </ComposedChart>
           </ResponsiveContainer>
         );
+      }
 
       case 'pie':
         return (

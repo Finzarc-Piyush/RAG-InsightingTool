@@ -1103,8 +1103,9 @@ export function DataPreviewTable({
             e instanceof Error ? e.message : "Failed to fetch pivot result";
           setServerPivotError(msg);
         } finally {
-          if (seq !== serverPivotRequestSeqRef.current) return;
-          setServerPivotLoading(false);
+          if (seq === serverPivotRequestSeqRef.current) {
+            setServerPivotLoading(false);
+          }
         }
       })();
     }, 180);
@@ -2066,8 +2067,9 @@ export function DataPreviewTable({
       setChartPreview(null);
       setChartPreviewError(e instanceof Error ? e.message : 'Chart preview failed');
     } finally {
-      if (seq !== chartPreviewRequestSeqRef.current) return;
-      setChartPreviewLoading(false);
+      if (seq === chartPreviewRequestSeqRef.current) {
+        setChartPreviewLoading(false);
+      }
     }
   }, [
     chartConfigValidationError,

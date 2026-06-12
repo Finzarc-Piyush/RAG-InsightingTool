@@ -73,7 +73,7 @@ describe("WI6 · empty store", () => {
 
 describe("WI6 · record + shape", () => {
   it("single record: length 1; entry exposes filterHash + filters + entry + recordedAt", () => {
-    let t = 1000;
+    const t = 1000;
     const store = createInsightHistoryStore({ now: () => t });
     store.record(TILE_A, FILTERS_REGION_A, makeEntry("insight A"));
     const list = store.get(TILE_A);

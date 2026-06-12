@@ -1014,8 +1014,8 @@ export async function generateInsights(
     // This avoids sorting millions of values
     if (data.length > 50000) {
       // Efficient O(n) approach: single pass to find top/bottom 3
-      let top3: Array<{value: number, row: number}> = [];
-      let bottom3: Array<{value: number, row: number}> = [];
+      const top3: Array<{value: number, row: number}> = [];
+      const bottom3: Array<{value: number, row: number}> = [];
       
       for (let idx = 0; idx < data.length; idx++) {
         const row = data[idx];

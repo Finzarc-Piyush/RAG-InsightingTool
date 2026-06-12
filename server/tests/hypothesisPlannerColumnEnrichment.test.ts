@@ -118,7 +118,7 @@ describe("buildUserBlock", () => {
     assert.ok(out.includes("Sales (number, sample-range≈"));
     assert.ok(out.includes("Order Date (date, range≈2020-01-01..2020-12-31)"));
     // Each column appears as a "  - " bullet line
-    assert.match(out, /Columns:\n  - Region/);
+    assert.match(out, /Columns:\n {2}- Region/);
   });
 
   it("caps at 60 columns and notes truncation", () => {

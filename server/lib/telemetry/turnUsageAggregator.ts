@@ -31,10 +31,9 @@ export interface TurnUsageTotals {
   lastSeen: number;
 }
 
-interface Entry extends TurnUsageTotals {
-  // Entry extends the public shape with no extra private fields — the
-  // `firstSeen`/`lastSeen` doubles as our TTL anchor.
-}
+// Entry extends the public shape with no extra private fields — the
+// `firstSeen`/`lastSeen` doubles as our TTL anchor.
+type Entry = TurnUsageTotals;
 
 const byTurnId = new Map<string, Entry>();
 let sweepTimer: NodeJS.Timeout | null = null;

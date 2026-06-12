@@ -100,7 +100,7 @@ describe("W18 · installLlmStub short-circuits callLlm without hitting network",
     // stub that throws if invoked, and call WITHOUT purpose → resolver
     // returns undefined → would fall through. We assert the *resolver* sees
     // undefined purpose by replacing the override with one that records calls.
-    let calledWithPurposeUndefined = false;
+    const calledWithPurposeUndefined = false;
     installLlmStub({});
     // Manually re-install with a recording resolver via a custom handler is
     // not possible (handlers are keyed by purpose). Instead exercise the

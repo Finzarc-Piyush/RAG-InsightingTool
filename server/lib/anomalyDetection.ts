@@ -123,7 +123,7 @@ export function detectAnomalies(
   const flagByIndex = new Map<number, Anomaly>();
   for (const { i, v, label } of indexed) {
     const flaggedBy: ("iqr" | "zscore")[] = [];
-    let direction: "high" | "low" = v >= med ? "high" : "low";
+    const direction: "high" | "low" = v >= med ? "high" : "low";
     let severity = 0;
 
     if (method === "iqr" || method === "both") {

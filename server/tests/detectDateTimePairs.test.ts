@@ -171,7 +171,7 @@ describe("Wave SU-DT1 · detectDateTimePairs", () => {
   });
 
   it("respects the maxPairs cap", () => {
-    const cols: Array<{ name: string; type: string; timeOfDay?: {} }> = [
+    const cols: Array<{ name: string; type: string; timeOfDay?: { sentinelValues?: string[] } }> = [
       { name: "Date", type: "date" },
     ];
     for (let i = 0; i < 15; i++) {

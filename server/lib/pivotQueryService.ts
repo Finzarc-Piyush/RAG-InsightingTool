@@ -63,7 +63,7 @@ async function warmupPivotForSession(sessionId: string, dataVersion: number | st
       };
 
       // Fire-and-forget: populate pivotCache for instant first pivot UX.
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+       
       await executePivotQuery(sessionId, warmupRequest, { dataVersion });
     } finally {
       await storage.close();

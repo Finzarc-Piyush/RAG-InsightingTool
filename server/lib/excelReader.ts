@@ -103,7 +103,7 @@ function headerLabel(cell: ExcelJS.Cell): string | null {
 function buildHeaderKeys(headerCells: (string | null)[]): string[] {
   const used = new Map<string, number>();
   return headerCells.map((raw) => {
-    let base = raw ?? '__EMPTY';
+    const base = raw ?? '__EMPTY';
     const n = used.get(base) ?? 0;
     used.set(base, n + 1);
     if (n === 0) return base;

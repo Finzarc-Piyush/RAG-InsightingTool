@@ -364,10 +364,11 @@ Output ONLY valid JSON, no markdown, no explanations:`;
               return String(rowValue).toLowerCase().startsWith(String(filter.value).toLowerCase());
             case 'ends_with':
               return String(rowValue).toLowerCase().endsWith(String(filter.value).toLowerCase());
-            case 'between':
+            case 'between': {
               if (filter.value === null || filter.value2 === null) return true;
               const num = Number(rowValue);
               return num >= Number(filter.value) && num <= Number(filter.value2);
+            }
             default:
               return true;
           }
