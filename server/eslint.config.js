@@ -7,7 +7,14 @@ import globals from "globals";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "scripts/build-domain-packs.ts"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "scripts/build-domain-packs.ts",
+      // Wave R26 · Node tooling script (.mjs); the globals block below only
+      // covers .ts/.tsx so its console/process would false-positive no-undef.
+      "scripts/runTests.mjs",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
