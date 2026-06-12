@@ -1,6 +1,11 @@
 // Main server file - load server.env first so COSMOS_*, SNOWFLAKE_*, etc. are set before any other imports
 import './loadEnv.js';
 
+// Wave R23 · initialise crash reporting before anything else can throw (no-op
+// unless @sentry/node is installed AND SENTRY_DSN is set).
+import { initCrashReporter, captureException } from './lib/observability/crashReporter.js';
+void initCrashReporter();
+
 import {
   assertAgenticRagConfiguration,
   assertDashboardAutogenConfiguration,
@@ -27,10 +32,12 @@ process.on("unhandledRejection", (reason: unknown) => {
   const msg =
     reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
   console.error("[unhandledRejection]", msg);
+  captureException(reason, { source: "unhandledRejection" });
 });
 process.on("uncaughtException", (err: unknown) => {
   const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
   console.error("[uncaughtException]", msg);
+  captureException(err, { source: "uncaughtException" });
   if (!process.env.VERCEL) process.exit(1);
 });
 
@@ -181,6 +188,18 @@ export function createApp() {
 
   // Register all routes (synchronous)
   registerRoutes(app);
+
+  // Wave R23 · terminal error handler — forward to Sentry (when active) and
+  // return a generic 500 without leaking internals. Registered AFTER all routes
+  // so thrown errors / next(err) from any handler land here.
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    console.error("[express-error]", msg);
+    captureException(err, { source: "express" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
 
   // Initialize optional services in background (non-blocking)
   // These are optional, so we don't wait for them
