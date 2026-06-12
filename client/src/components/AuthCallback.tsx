@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useMsal } from '@azure/msal-react';
 import { AppLoadingScreen } from '@/components/AppLoadingScreen';
+import { logger } from "@/lib/logger";
 
 const AuthCallback: React.FC = () => {
   const { instance } = useMsal();
@@ -11,11 +12,11 @@ const AuthCallback: React.FC = () => {
         // Handle the redirect response
         const response = await instance.handleRedirectPromise();
         if (response) {
-          console.log('Authentication successful:', response);
+          logger.log('Authentication successful:', response);
           // The AuthContext will automatically update the user state
         }
       } catch (error) {
-        console.error('Authentication failed:', error);
+        logger.error('Authentication failed:', error);
       }
     };
 

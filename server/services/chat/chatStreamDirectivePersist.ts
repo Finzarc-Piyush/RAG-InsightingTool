@@ -25,6 +25,7 @@ import {
   extractUserDirectivesLlm,
   mergeDirectiveExtractions,
 } from "../../lib/agents/runtime/extractUserDirectivesLlm.js";
+import { logger } from "../../lib/logger.js";
 
 export interface PersistDirectivesParams {
   /** Owner of the dataset_directives doc. */
@@ -98,7 +99,7 @@ export async function persistDirectivesFromUserMessage(
   const onError =
     params.onError ??
     ((err: unknown, ctx: { phase: "extract" | "llm-extract" | "append" }) => {
-      console.warn(
+      logger.warn(
         `⚠️ persistDirectivesFromUserMessage (${ctx.phase}) failed:`,
         err
       );

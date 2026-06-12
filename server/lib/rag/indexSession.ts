@@ -10,6 +10,7 @@ import {
 import { getSampleFromDuckDB } from "../duckdbPlanExecutor.js";
 import type { AnalysisMemoryEntry } from "../../shared/schema.js";
 import { withSessionWriteLock } from "../sessionWriteLock.js";
+import { logger } from "../logger.js";
 
 /**
  * Wave A6 · Locked, targeted update of `doc.ragIndex` only.
@@ -107,7 +108,7 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
       try {
         duckdbSample = await getSampleFromDuckDB(sessionId, 3000, doc);
       } catch (e) {
-        console.warn("⚠️ RAG: DuckDB sample failed for columnar session:", e);
+        logger.warn("⚠️ RAG: DuckDB sample failed for columnar session:", e);
       }
     }
 
@@ -151,10 +152,10 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
       chunkCount: docs.length,
       dataVersion: ver,
     });
-    console.log(`✅ RAG indexed session ${sessionId}: ${docs.length} chunks`);
+    logger.log(`✅ RAG indexed session ${sessionId}: ${docs.length} chunks`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("❌ RAG indexSession failed:", e);
+    logger.error("❌ RAG indexSession failed:", e);
     try {
       await updateRagIndexField(sessionId, {
         status: "error",
@@ -171,7 +172,7 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
  */
 export function scheduleIndexSessionRag(sessionId: string): void {
   setImmediate(() => {
-    indexSessionRag(sessionId).catch((e) => console.error("scheduleIndexSessionRag:", e));
+    indexSessionRag(sessionId).catch((e) => logger.error("scheduleIndexSessionRag:", e));
   });
 }
 
@@ -222,9 +223,9 @@ export async function upsertUserContextChunk(
       contentVector: v,
     };
     await upsertRagDocuments([ragDoc]);
-    console.log(`✅ RAG user_context upserted for session ${sessionId}`);
+    logger.log(`✅ RAG user_context upserted for session ${sessionId}`);
   } catch (e) {
-    console.error("❌ upsertUserContextChunk failed:", e);
+    logger.error("❌ upsertUserContextChunk failed:", e);
   }
 }
 
@@ -237,7 +238,7 @@ export function scheduleUpsertUserContextChunk(
 ): void {
   setImmediate(() => {
     upsertUserContextChunk(sessionId, permanentContext).catch((e) =>
-      console.error("scheduleUpsertUserContextChunk:", e)
+      logger.error("scheduleUpsertUserContextChunk:", e)
     );
   });
 }
@@ -290,7 +291,7 @@ export function scheduleIndexMemoryEntries(
   if (entries.length === 0) return;
   setImmediate(() => {
     indexMemoryEntries(entries).catch((e) =>
-      console.error("scheduleIndexMemoryEntries:", e)
+      logger.error("scheduleIndexMemoryEntries:", e)
     );
   });
 }

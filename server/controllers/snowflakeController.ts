@@ -3,6 +3,7 @@ import { listDatabases, listSchemas, listTablesInSchema } from '../lib/snowflake
 import { createPlaceholderSession } from '../models/chat.model.js';
 import { uploadQueue } from '../utils/uploadQueue.js';
 import { requireUsername, AuthenticationError } from '../utils/auth.helper.js';
+import { logger } from "../lib/logger.js";
 
 /**
  * GET /api/snowflake/databases
@@ -18,7 +19,7 @@ export const getSnowflakeDatabases = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Snowflake list databases error:', error);
+    logger.error('Snowflake list databases error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list databases. Check server Snowflake config (env).',
     });
@@ -43,7 +44,7 @@ export const getSnowflakeSchemas = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Snowflake list schemas error:', error);
+    logger.error('Snowflake list schemas error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list schemas.',
     });
@@ -69,7 +70,7 @@ export const getSnowflakeTables = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Snowflake list tables error:', error);
+    logger.error('Snowflake list tables error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to list tables.',
     });
@@ -107,7 +108,7 @@ export const importSnowflakeTable = async (req: Request, res: Response) => {
         undefined
       );
     } catch (placeholderError: unknown) {
-      console.error('Failed to create placeholder session for Snowflake import:', placeholderError);
+      logger.error('Failed to create placeholder session for Snowflake import:', placeholderError);
     }
 
     const jobId = await uploadQueue.enqueueSnowflakeImport(
@@ -129,7 +130,7 @@ export const importSnowflakeTable = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Snowflake import error:', error);
+    logger.error('Snowflake import error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to start Snowflake import',
     });

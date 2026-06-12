@@ -9,6 +9,7 @@ import { ColumnarStorageService } from '../lib/columnarStorage.js';
 import { uploadLimits } from '../config/uploadLimits.js';
 import { logUploadTelemetry, currentRssMb, type UploadPath } from './uploadTelemetry.js';
 import { isParquetReadPathEnabled, writeAndUploadSessionParquet } from '../lib/sessionParquet.js';
+import { logger } from "../lib/logger.js";
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -185,7 +186,7 @@ class UploadQueue {
         job.status = 'failed';
         job.error = 'Processing timeout: File processing took too long. Please try with a smaller file or contact support.';
         job.completedAt = Date.now();
-        console.error(`⏱️ Upload job ${job.jobId} timed out after ${JOB_TIMEOUT / 1000 / 60} minutes`);
+        logger.error(`⏱️ Upload job ${job.jobId} timed out after ${JOB_TIMEOUT / 1000 / 60} minutes`);
       }
     }, JOB_TIMEOUT);
     
@@ -256,7 +257,7 @@ class UploadQueue {
           job.blobPersisted = true;
         } catch (blobError) {
           job.blobPersisted = false;
-          console.warn("⚠️ Queue blob upload failed; continuing without blobInfo:", blobError);
+          logger.warn("⚠️ Queue blob upload failed; continuing without blobInfo:", blobError);
         }
       } else if (job.blobInfo) {
         job.blobPersisted = true;
@@ -283,7 +284,7 @@ class UploadQueue {
           blobInfo: job.blobInfo,
         });
       } catch (placeholderError: any) {
-        console.warn("⚠️ Queue placeholder ensure skipped (will self-heal later):", {
+        logger.warn("⚠️ Queue placeholder ensure skipped (will self-heal later):", {
           sessionId: job.sessionId,
           error: placeholderError?.message || String(placeholderError),
         });
@@ -302,7 +303,7 @@ class UploadQueue {
         const truncWarn = snowflakeTruncationWarning(imported);
         if (truncWarn) {
           job.warnings = [...(job.warnings || []), truncWarn];
-          console.warn(`⚠️ ${truncWarn}`);
+          logger.warn(`⚠️ ${truncWarn}`);
         }
         job.progress = 40;
       } else if (job.fileBuffer) {
@@ -314,7 +315,7 @@ class UploadQueue {
       if (useChunking) {
         try {
           const { chunkFile } = await import('../lib/chunkingService.js');
-          console.log(`📦 File is ${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB. Using chunking for faster processing...`);
+          logger.log(`📦 File is ${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB. Using chunking for faster processing...`);
           
           job.status = 'parsing';
           job.progress = 5;
@@ -343,7 +344,7 @@ class UploadQueue {
             (progress) => {
               job.progress = 10 + Math.floor(progress.progress * 0.3); // Use 30% of progress for chunking
               if (progress.message) {
-                console.log(`  ${progress.message}`);
+                logger.log(`  ${progress.message}`);
               }
             }
           );
@@ -366,17 +367,17 @@ class UploadQueue {
             const chunksToLoad = Math.min(targetChunks, chunkIndex.totalChunks);
             const step = Math.floor(chunkIndex.totalChunks / chunksToLoad);
             const sampledChunks = chunkIndex.chunks.filter((_, idx) => idx % step === 0).slice(0, chunksToLoad);
-            console.log(`📦 Loading ${sampledChunks.length} of ${chunkIndex.totalChunks} chunks (sampled from ${chunkIndex.totalRows} rows) for faster AI analysis...`);
+            logger.log(`📦 Loading ${sampledChunks.length} of ${chunkIndex.totalChunks} chunks (sampled from ${chunkIndex.totalRows} rows) for faster AI analysis...`);
             data = await loadChunkData(sampledChunks);
-            console.log(`✅ Loaded ${data.length} rows (sampled) from ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total) for AI analysis`);
+            logger.log(`✅ Loaded ${data.length} rows (sampled) from ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total) for AI analysis`);
           } else {
-            console.log(`📦 Loading ALL ${chunkIndex.totalChunks} chunks for full data analysis (${chunkIndex.totalRows} rows total)...`);
+            logger.log(`📦 Loading ALL ${chunkIndex.totalChunks} chunks for full data analysis (${chunkIndex.totalRows} rows total)...`);
             data = await loadChunkData(chunkIndex.chunks); // Load ALL chunks for smaller files
-            console.log(`✅ File chunked into ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total), loaded ${data.length} rows for AI analysis`);
+            logger.log(`✅ File chunked into ${chunkIndex.totalChunks} chunks (${chunkIndex.totalRows} rows total), loaded ${data.length} rows for AI analysis`);
           }
           job.progress = 40;
         } catch (chunkError) {
-          console.warn('⚠️ Chunking failed, falling back to standard processing:', chunkError);
+          logger.warn('⚠️ Chunking failed, falling back to standard processing:', chunkError);
           // Fall through to standard processing
           useChunking = false;
         }
@@ -384,7 +385,7 @@ class UploadQueue {
 
       if (!useChunking && useLargeFileProcessing) {
         // Use streaming and columnar storage for large files
-        console.log(`📦 Large file detected (${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB). Using streaming pipeline...`);
+        logger.log(`📦 Large file detected (${(job.fileBuffer.length / 1024 / 1024).toFixed(2)}MB). Using streaming pipeline...`);
         
         job.status = 'parsing';
         job.progress = 10;
@@ -397,16 +398,16 @@ class UploadQueue {
             (progress) => {
               job.progress = progress.progress;
               if (progress.message) {
-                console.log(`  ${progress.message}`);
+                logger.log(`  ${progress.message}`);
               }
             }
           );
           
           storagePath = result.storagePath;
 
-          console.log(`📊 Loading ALL ${result.rowCount} rows for enrichment...`);
+          logger.log(`📊 Loading ALL ${result.rowCount} rows for enrichment...`);
           data = await getDataForAnalysis(job.sessionId, undefined, undefined);
-          console.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows in memory`);
+          logger.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows in memory`);
         } catch (largeFileError) {
           const errorMsg = largeFileError instanceof Error ? largeFileError.message : String(largeFileError);
           throw new Error(`Failed to process large file: ${errorMsg}`);
@@ -424,7 +425,7 @@ class UploadQueue {
             job.warnings = [...(job.warnings || []), warning];
             if (parseDiagnostics.mismatchRatio >= mismatchWarnRatio) {
               skipDateEnrichmentForSuspiciousCsv = true;
-              console.warn(
+              logger.warn(
                 `⚠️ Skipping date enrichment due to suspicious CSV parse quality (${(parseDiagnostics.mismatchRatio * 100).toFixed(2)}% mismatched rows).`
               );
             }
@@ -476,7 +477,7 @@ class UploadQueue {
             metricColumn: melted.summary.metricColumn,
             detectedCurrencySymbol: melted.summary.detectedCurrencySymbol,
           };
-          console.log(
+          logger.log(
             `[upload:${job.sessionId}] wide-format auto-melt → shape=${melted.summary.shape}, ` +
               `${melted.summary.periodCount} period cols → ${data.length} long rows ` +
               `(${classification.reason})`
@@ -627,7 +628,7 @@ class UploadQueue {
           datasetProfileDomainContext = dc.text || undefined;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`B5 · domain context load for dataset profile failed: ${msg}`);
+          logger.warn(`B5 · domain context load for dataset profile failed: ${msg}`);
         }
         // Wave W-DPC1 · The profiling LLM call is the dominant upload-critical-path
         // cost. Re-uploads of the same workbook shape (same column names+types and
@@ -643,7 +644,7 @@ class UploadQueue {
           ? await readCachedProfile(job.username, profileFingerprint, profileContextHash)
           : null;
         if (cachedProfile) {
-          console.log(
+          logger.log(
             `⚡ dataset-profile cache HIT (${job.username} / ${profileFingerprint}) — skipping inferDatasetProfile`
           );
           datasetProfile = cachedProfile;
@@ -760,14 +761,14 @@ class UploadQueue {
                 });
                 if (detected.length > 0) {
                   seededCtx.dataset.dimensionHierarchies = detected;
-                  console.log(
+                  logger.log(
                     `📐 detectRollupHierarchies: ${detected
                       .map((h) => `${h.column}="${h.rollupValue}"`)
                       .join(', ')}`
                   );
                 }
               } catch (err) {
-                console.warn('⚠️ detectRollupHierarchies skipped:', err);
+                logger.warn('⚠️ detectRollupHierarchies skipped:', err);
               }
               // SU-DT1 · auto-detect (date column, time-of-day column) pairs
               // so the agent can compose a combined datetime via SU-DT2's
@@ -781,14 +782,14 @@ class UploadQueue {
                 const pairs = detectDateTimePairs({ data, summary });
                 if (pairs.length > 0) {
                   summary.dateTimeColumnPairs = pairs;
-                  console.log(
+                  logger.log(
                     `📐 detectDateTimePairs: ${pairs
                       .map((p) => `${p.timeColumn}↔${p.dateColumn}`)
                       .join(', ')}`
                   );
                 }
               } catch (err) {
-                console.warn('⚠️ detectDateTimePairs skipped:', err);
+                logger.warn('⚠️ detectDateTimePairs skipped:', err);
               }
               // SU-IC1 · auto-detect pre-computed "indicator" columns
               // (Yes/No/Absent shaped, e.g. "Clock-In <09:30") so the
@@ -803,7 +804,7 @@ class UploadQueue {
                 const indicators = detectIndicatorColumns({ data, summary });
                 if (indicators.length > 0) {
                   applyIndicatorsToSummary(summary, indicators);
-                  console.log(
+                  logger.log(
                     `📐 detectIndicatorColumns: ${indicators
                       .map((i) => `${i.column}(${i.kind})`)
                       .join(', ')}`
@@ -822,14 +823,14 @@ class UploadQueue {
                     const gates = inferMetricApplicability(summary, data);
                     if (gates.size > 0) {
                       applyMetricApplicabilityToSummary(summary, gates);
-                      console.log(
+                      logger.log(
                         `📐 inferMetricApplicability: ${[...gates.entries()]
                           .map(([m, g]) => `${m}⟂${g[0]?.gateColumn}`)
                           .join(', ')}`
                       );
                     }
                   } catch (scopeErr) {
-                    console.warn('⚠️ inferMetricApplicability skipped:', scopeErr);
+                    logger.warn('⚠️ inferMetricApplicability skipped:', scopeErr);
                   }
                   // SU-IC2 · LLM enrichment for the indicator columns
                   // SU-IC1 just flagged. Adds answersQuestions per column +
@@ -844,19 +845,19 @@ class UploadQueue {
                       shortDescription: datasetProfile?.shortDescription,
                     });
                     if (enriched > 0) {
-                      console.log(
+                      logger.log(
                         `📐 enrichIndicatorColumns: ${enriched} indicator(s) annotated with answersQuestions`
                       );
                     }
                   } catch (enrichErr) {
-                    console.warn(
+                    logger.warn(
                       '⚠️ enrichIndicatorColumns skipped:',
                       enrichErr
                     );
                   }
                 }
               } catch (err) {
-                console.warn('⚠️ detectIndicatorColumns skipped:', err);
+                logger.warn('⚠️ detectIndicatorColumns skipped:', err);
               }
               const doc = await getChatBySessionIdEfficient(job.sessionId);
               if (!doc) return;
@@ -939,7 +940,7 @@ class UploadQueue {
             modelName: `Model for ${job.fileName || "dataset"}`,
           });
         } catch (semanticErr) {
-          console.warn(
+          logger.warn(
             "W57 · semanticModel inference failed (non-fatal):",
             semanticErr,
           );
@@ -980,7 +981,7 @@ class UploadQueue {
                 })
               );
             } catch (e) {
-              console.warn(
+              logger.warn(
                 "⚠️ analysisMemory enrichment_complete hook failed:",
                 e
               );
@@ -988,7 +989,7 @@ class UploadQueue {
           })();
         }
       } catch (understandingPersistError) {
-        console.warn("⚠️ Failed to persist understanding-ready checkpoint:", understandingPersistError);
+        logger.warn("⚠️ Failed to persist understanding-ready checkpoint:", understandingPersistError);
       }
 
       // No upload-time chart/insight generation; first assistant turn uses session context + chat only.
@@ -1019,7 +1020,7 @@ class UploadQueue {
         
         // Limit data size for memory efficiency
         if (chartData.length > MAX_CHART_DATA_POINTS) {
-          console.log(`⚠️ Chart "${chart.title}" has ${chartData.length} data points, limiting to ${MAX_CHART_DATA_POINTS} for memory efficiency`);
+          logger.log(`⚠️ Chart "${chart.title}" has ${chartData.length} data points, limiting to ${MAX_CHART_DATA_POINTS} for memory efficiency`);
           // For line/area charts, sample evenly; for others, take first N
           if (chart.type === 'line' || chart.type === 'area') {
             const step = Math.ceil(chartData.length / MAX_CHART_DATA_POINTS);
@@ -1074,7 +1075,7 @@ class UploadQueue {
           let dataForSummary = data;
           const MAX_ROWS_FOR_SUMMARY = 50000;
           if (data.length > MAX_ROWS_FOR_SUMMARY) {
-            console.log(`📊 Computing data summary: sampling ${MAX_ROWS_FOR_SUMMARY} rows from ${data.length} total rows`);
+            logger.log(`📊 Computing data summary: sampling ${MAX_ROWS_FOR_SUMMARY} rows from ${data.length} total rows`);
             const step = Math.floor(data.length / MAX_ROWS_FOR_SUMMARY);
             const sampledData: Record<string, any>[] = [];
             for (let i = 0; i < data.length && sampledData.length < MAX_ROWS_FOR_SUMMARY; i += step) {
@@ -1083,7 +1084,7 @@ class UploadQueue {
             dataForSummary = sampledData;
           }
           
-          console.log(`📊 Computing detailed data summary statistics...`);
+          logger.log(`📊 Computing detailed data summary statistics...`);
           const summaryResponse = await getDataSummary(dataForSummary);
           
           // Calculate quality score
@@ -1114,9 +1115,9 @@ class UploadQueue {
             computedAt: Date.now(),
           };
           
-          console.log(`✅ Data summary statistics computed successfully (quality score: ${qualityScore})`);
+          logger.log(`✅ Data summary statistics computed successfully (quality score: ${qualityScore})`);
         } catch (summaryError) {
-          console.error('⚠️ Failed to compute data summary statistics during upload:', summaryError);
+          logger.error('⚠️ Failed to compute data summary statistics during upload:', summaryError);
           // Don't fail the upload - this is optional
         }
       }
@@ -1208,16 +1209,16 @@ class UploadQueue {
                 version: 1,
                 lastUpdated: Date.now(),
               };
-              console.log(
+              logger.log(
                 `💾 Wrote durable enriched currentDataBlob (${data.length} rows) for ${job.sessionId}: ${enriched.blobName}`,
               );
             } catch (enrichedErr) {
-              console.warn(
+              logger.warn(
                 `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${enrichedErr instanceof Error ? enrichedErr.message : String(enrichedErr)}`,
               );
             }
           } else {
-            console.log(
+            logger.log(
               `↩️ Skipping durable currentDataBlob write for ${job.sessionId}: chunked upload already has a full-fidelity rematerialize source (chunkIndexBlob).`,
             );
           }
@@ -1234,7 +1235,7 @@ class UploadQueue {
               });
               parquetBlobInfo = { blobName, version: 0, rowCount: summary.rowCount };
             } catch (pqErr) {
-              console.warn(
+              logger.warn(
                 `⚠️ Parquet write skipped (non-fatal): ${pqErr instanceof Error ? pqErr.message : String(pqErr)}`,
               );
             }
@@ -1263,7 +1264,7 @@ class UploadQueue {
         
         if (existingSession) {
           // Update existing placeholder session with full data
-          console.log(`🔄 Updating existing placeholder session: ${job.sessionId}`);
+          logger.log(`🔄 Updating existing placeholder session: ${job.sessionId}`);
           
           // Handle chart storage (same logic as createChatDocument)
           let chartsToStore = sanitizedCharts;
@@ -1277,16 +1278,16 @@ class UploadQueue {
             });
             
             if (shouldStoreChartsInBlob) {
-              console.log(`📊 Charts have large data arrays. Storing in blob storage...`);
+              logger.log(`📊 Charts have large data arrays. Storing in blob storage...`);
               try {
                 chartReferences = await saveChartsToBlob(job.sessionId, sanitizedCharts, job.username);
                 chartsToStore = sanitizedCharts.map(chart => ({
                   ...chart,
                   data: undefined, // Remove data array - stored in blob
                 })) as any;
-                console.log(`✅ Saved ${chartReferences.length} charts to blob storage`);
+                logger.log(`✅ Saved ${chartReferences.length} charts to blob storage`);
               } catch (blobError) {
-                console.error('⚠️ Failed to save charts to blob, storing in CosmosDB:', blobError);
+                logger.error('⚠️ Failed to save charts to blob, storing in CosmosDB:', blobError);
                 chartsToStore = sanitizedCharts; // Fallback
               }
             }
@@ -1299,9 +1300,9 @@ class UploadQueue {
           const shouldStoreRawData = !useLargeFileProcessing && estimatedSize < MAX_DOCUMENT_SIZE && data.length < 10000;
           
           if (useLargeFileProcessing) {
-            console.log(`📊 Large file: Data stored in columnar format at ${storagePath}. Only sampleRows stored in CosmosDB.`);
+            logger.log(`📊 Large file: Data stored in columnar format at ${storagePath}. Only sampleRows stored in CosmosDB.`);
           } else if (!shouldStoreRawData) {
-            console.log(`ℹ️ Large dataset (${data.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB): full data materialized to DuckDB columnar storage; CosmosDB holds sampleRows only (CosmosDB 4 MB limit).`);
+            logger.log(`ℹ️ Large dataset (${data.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB): full data materialized to DuckDB columnar storage; CosmosDB holds sampleRows only (CosmosDB 4 MB limit).`);
           }
           
           chatDocument = {
@@ -1334,9 +1335,9 @@ class UploadQueue {
             lastUpdatedAt: Date.now(),
           };
           chatDocument = await updateChatDocument(chatDocument);
-          console.log(`✅ Updated session with processed data: ${chatDocument.id}`);
+          logger.log(`✅ Updated session with processed data: ${chatDocument.id}`);
         } else {
-          console.log(`📝 No placeholder found, creating new session: ${job.sessionId}`);
+          logger.log(`📝 No placeholder found, creating new session: ${job.sessionId}`);
           chatDocument = await createChatDocument(
             job.username,
             job.fileName,
@@ -1370,7 +1371,7 @@ class UploadQueue {
         }
       } catch (cosmosError) {
         const errorMsg = cosmosError instanceof Error ? cosmosError.message : String(cosmosError);
-        console.error("Failed to save chat document:", cosmosError);
+        logger.error("Failed to save chat document:", cosmosError);
         
         // Provide more helpful error messages for common issues
         if (errorMsg.includes('RequestEntityTooLarge') || errorMsg.includes('413') || errorMsg.includes('too large')) {
@@ -1388,7 +1389,7 @@ class UploadQueue {
         try {
           await postEnrichmentFlush(job.sessionId, job.username);
         } catch (flushErr) {
-          console.error('⚠️ postEnrichmentFlush failed:', flushErr);
+          logger.error('⚠️ postEnrichmentFlush failed:', flushErr);
         }
       }
 
@@ -1400,7 +1401,7 @@ class UploadQueue {
         try {
           chatDocument = await updateChatDocument({ ...chatDocument, parquetBlob: parquetBlobInfo });
         } catch (pqDocErr) {
-          console.warn(
+          logger.warn(
             `⚠️ Failed to persist parquetBlob pointer (non-fatal): ${pqDocErr instanceof Error ? pqDocErr.message : String(pqDocErr)}`,
           );
         }
@@ -1438,7 +1439,7 @@ class UploadQueue {
             });
             await storage.initialize();
             await ensureAuthoritativeDataTable(storage, chatDocForMaterialize);
-            console.log(
+            logger.log(
               `🟢 eager DuckDB materialization complete for session ${sessionIdForMaterialize}`
             );
           } catch (materializeErr) {
@@ -1446,7 +1447,7 @@ class UploadQueue {
               materializeErr instanceof Error
                 ? materializeErr.message
                 : String(materializeErr);
-            console.warn(
+            logger.warn(
               `⚠️ eager DuckDB materialization failed for ${sessionIdForMaterialize}: ${msg.slice(0, 300)}`
             );
           }
@@ -1508,7 +1509,7 @@ class UploadQueue {
       job.status = 'failed';
       job.error = error instanceof Error ? error.message : 'Unknown error occurred';
       job.completedAt = Date.now();
-      console.error(`Upload job ${job.jobId} failed:`, error);
+      logger.error(`Upload job ${job.jobId} failed:`, error);
       try {
         const { getChatBySessionIdEfficient, updateChatDocument } = await import('../models/chat.model.js');
         const doc = await getChatBySessionIdEfficient(job.sessionId);

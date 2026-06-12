@@ -46,6 +46,7 @@ import {
   buildDashboardPdf,
   buildDashboardPptx,
 } from "../services/dashboardExport.service.js";
+import { logger } from "../lib/logger.js";
 
 export const createDashboardController = async (req: Request, res: Response) => {
   try {
@@ -84,7 +85,7 @@ export const listDashboardsController = async (req: Request, res: Response) => {
       acceptedInvites.map(async (invite) => {
         try {
           if (!invite.sourceDashboardId || !invite.ownerEmail) {
-            console.warn("listDashboards: skipping invite with missing sourceDashboardId or ownerEmail", invite?.id);
+            logger.warn("listDashboards: skipping invite with missing sourceDashboardId or ownerEmail", invite?.id);
             return null;
           }
           // Get dashboard using owner's username (partition key)
@@ -104,7 +105,7 @@ export const listDashboardsController = async (req: Request, res: Response) => {
           }
           return null;
         } catch (error) {
-          console.error(`Failed to fetch shared dashboard ${invite.sourceDashboardId}:`, error);
+          logger.error(`Failed to fetch shared dashboard ${invite.sourceDashboardId}:`, error);
           return null;
         }
       })
@@ -171,7 +172,7 @@ export const addChartToDashboardController = async (req: Request, res: Response)
     const { dashboardId } = req.params as { dashboardId: string };
     const parsed = addChartToDashboardRequestSchema.parse(req.body);
     
-    console.log(`[addChartToDashboard] Attempting to add chart to dashboard ${dashboardId} for user ${username}`);
+    logger.log(`[addChartToDashboard] Attempting to add chart to dashboard ${dashboardId} for user ${username}`);
     
     const updated = await addChartToDashboard(dashboardId, username, parsed.chart, parsed.sheetId);
     res.json(updated);
@@ -180,7 +181,7 @@ export const addChartToDashboardController = async (req: Request, res: Response)
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error(`[addChartToDashboard] Error:`, error);
+    logger.error(`[addChartToDashboard] Error:`, error);
     res.status(400).json({ error: error?.message || 'Failed to add chart' });
   }
 };
@@ -486,7 +487,7 @@ export const createDashboardFromSpecController = async (
           };
         }
       } catch (e) {
-        console.warn(
+        logger.warn(
           "⚠️ from-spec: failed to capture session active filter",
           e
         );

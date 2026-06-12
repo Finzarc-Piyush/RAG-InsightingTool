@@ -16,6 +16,7 @@ import {
   invalidateDomainContextCache,
 } from "../lib/domainContext/loadEnabledDomainContext.js";
 import { setPackEnabled } from "../models/domainContextToggles.model.js";
+import { logger } from "../lib/logger.js";
 
 export interface AdminDomainContextPacksResponse {
   generatedAt: number;
@@ -47,7 +48,7 @@ export async function listDomainContextPacks(req: Request, res: Response): Promi
     res.json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminDomainContext list failed: ${msg}`);
+    logger.error(`adminDomainContext list failed: ${msg}`);
     res.status(500).json({ error: "admin_domain_context_list_failed" });
   }
 }
@@ -85,7 +86,7 @@ export async function setDomainContextPackEnabled(
     res.json({ pack: updated, totalEnabledTokens: refreshed.totalEnabledTokens });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminDomainContext PATCH ${packId} failed: ${msg}`);
+    logger.error(`adminDomainContext PATCH ${packId} failed: ${msg}`);
     res.status(500).json({ error: "admin_domain_context_patch_failed", message: msg });
   }
 }

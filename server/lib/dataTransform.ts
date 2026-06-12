@@ -19,6 +19,7 @@ import {
   parseTemporalFacetDisplayKey,
   GRAIN_TO_PERIOD,
 } from './temporalFacetColumns.js';
+import { logger } from "./logger.js";
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -331,7 +332,7 @@ function applyDimensionFilter(
   const result = data.filter((row) => rowMatchesDimensionFilter(row, filter));
   const desc = describeDimensionFilter(filter);
   if (result.length === 0 && data.length > 0) {
-    console.warn(`⚠️ Dimension filter removed ALL rows: ${desc}`);
+    logger.warn(`⚠️ Dimension filter removed ALL rows: ${desc}`);
   }
   return { data: result, description: desc };
 }
@@ -355,7 +356,7 @@ function applyValueFilter(
   summary: DataSummary
 ): { data: Record<string, any>[]; description?: string } {
   if (!summary.numericColumns.includes(filter.column)) {
-    console.warn(
+    logger.warn(
       `⚠️ Skipping valueFilter on non-numeric column "${filter.column}" — use dimensionFilters for categorical filters.`
     );
     return { data, description: `(skipped valueFilter on non-numeric column ${filter.column})` };
@@ -407,11 +408,11 @@ function applyValueFilter(
     ? `${filter.reference} (${referenceVal !== null ? referenceVal.toFixed(2) : 'N/A'})` 
     : filter.value;
   
-  console.log(`   Filter result: ${result.length} rows passed filter (from ${data.length} total)`);
+  logger.log(`   Filter result: ${result.length} rows passed filter (from ${data.length} total)`);
   if (result.length === 0 && data.length > 0) {
-    console.warn(`⚠️ Filter removed ALL rows! This might indicate the filter condition is too strict.`);
-    console.warn(`   Filter: ${filter.column} ${filter.operator} ${displayValue}`);
-    console.warn(`   Sample values from first 5 rows:`, data.slice(0, 5).map(r => ({ [filter.column]: r[filter.column] })));
+    logger.warn(`⚠️ Filter removed ALL rows! This might indicate the filter condition is too strict.`);
+    logger.warn(`   Filter: ${filter.column} ${filter.operator} ${displayValue}`);
+    logger.warn(`   Sample values from first 5 rows:`, data.slice(0, 5).map(r => ({ [filter.column]: r[filter.column] })));
   }
   
   switch (filter.operator) {
@@ -735,7 +736,7 @@ function applyAggregations(
       }
       const isIdCol = isIdColumn(agg.column);
       if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
-        console.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
+        logger.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
         agg.operation = 'count';
       }
 
@@ -937,7 +938,7 @@ function applyAggregations(
         // Handle ID columns specially - always use COUNT(DISTINCT)
         const isIdCol = isIdColumn(agg.column);
         if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
-          console.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
+          logger.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
           // Switch to count for ID columns
           agg.operation = 'count';
         }
@@ -1144,7 +1145,7 @@ function applyAggregations(
         // Handle ID columns specially - always use COUNT(DISTINCT)
         const isIdCol = isIdColumn(agg.column);
         if (isIdCol && ['sum', 'avg', 'mean', 'min', 'max'].includes(agg.operation)) {
-          console.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
+          logger.warn(`⚠️ ID column "${agg.column}" cannot use ${agg.operation}. Automatically switching to COUNT(DISTINCT).`);
           // Switch to count for ID columns
           agg.operation = 'count';
         }
@@ -1270,7 +1271,7 @@ function applyFiltersStreaming(
     return applyQueryTransformations(data, summary, parsed);
   }
 
-  console.log(`📊 Processing ${data.length} rows in batches of ${batchSize} for filtering`);
+  logger.log(`📊 Processing ${data.length} rows in batches of ${batchSize} for filtering`);
   let workingData = data;
   const descriptions: string[] = [];
 
@@ -1327,7 +1328,7 @@ function applyFiltersStreaming(
 
   // Aggregations need special handling - merge results from batches
   if (parsed.aggregations && parsed.aggregations.length) {
-    console.log(`📊 Applying aggregations in streaming mode`);
+    logger.log(`📊 Applying aggregations in streaming mode`);
     if (parsed.groupBy && parsed.groupBy.length) {
       const batchResults = processBatches(workingData, batchSize, (batch) => {
         const { data: aggregated } = applyAggregations(batch, summary, parsed.groupBy!, parsed.aggregations!, parsed.dateAggregationPeriod);
@@ -1482,22 +1483,22 @@ export function applyQueryTransformations(
 
   if (parsed.dimensionFilters) {
     for (const filter of parsed.dimensionFilters) {
-      console.log(`🔍 Applying dimension filter: ${filter.column} ${filter.op} [${filter.values.join(', ')}]`);
-      console.log(`   Data before filter: ${workingData.length} rows`);
+      logger.log(`🔍 Applying dimension filter: ${filter.column} ${filter.op} [${filter.values.join(', ')}]`);
+      logger.log(`   Data before filter: ${workingData.length} rows`);
       const { data: filtered, description } = applyDimensionFilter(workingData, filter);
       workingData = filtered;
-      console.log(`   Data after filter: ${workingData.length} rows`);
+      logger.log(`   Data after filter: ${workingData.length} rows`);
       if (description) descriptions.push(description);
     }
   }
 
   if (parsed.valueFilters) {
     for (const filter of parsed.valueFilters) {
-      console.log(`🔍 Applying value filter: ${filter.column} ${filter.operator} ${filter.reference || filter.value}`);
-      console.log(`   Data before filter: ${workingData.length} rows`);
+      logger.log(`🔍 Applying value filter: ${filter.column} ${filter.operator} ${filter.reference || filter.value}`);
+      logger.log(`   Data before filter: ${workingData.length} rows`);
       const { data: filtered, description } = applyValueFilter(workingData, filter, summary);
       workingData = filtered;
-      console.log(`   Data after filter: ${workingData.length} rows`);
+      logger.log(`   Data after filter: ${workingData.length} rows`);
       if (description) descriptions.push(description);
     }
   }
@@ -1511,11 +1512,11 @@ export function applyQueryTransformations(
   }
 
   if (parsed.aggregations && parsed.aggregations.length) {
-    console.log(`📊 Applying aggregations: groupBy=[${(parsed.groupBy || []).join(', ')}], aggregations=[${parsed.aggregations.map(a => `${a.operation}(${a.column})${a.alias ? ` as ${a.alias}` : ''}`).join(', ')}]`);
-    console.log(`   Data before aggregation: ${workingData.length} rows`);
+    logger.log(`📊 Applying aggregations: groupBy=[${(parsed.groupBy || []).join(', ')}], aggregations=[${parsed.aggregations.map(a => `${a.operation}(${a.column})${a.alias ? ` as ${a.alias}` : ''}`).join(', ')}]`);
+    logger.log(`   Data before aggregation: ${workingData.length} rows`);
     
     if (workingData.length === 0) {
-      console.warn(`⚠️ Cannot aggregate: No data available (filter may have removed all rows)`);
+      logger.warn(`⚠️ Cannot aggregate: No data available (filter may have removed all rows)`);
     } else {
       const { data: aggregated, description } = applyAggregations(
         workingData,
@@ -1525,13 +1526,13 @@ export function applyQueryTransformations(
         parsed.dateAggregationPeriod
       );
       workingData = aggregated;
-      console.log(`   Data after aggregation: ${workingData.length} rows`);
+      logger.log(`   Data after aggregation: ${workingData.length} rows`);
       if (workingData.length > 0) {
         const columns = Object.keys(workingData[0]);
-        console.log(`   Aggregated columns: [${columns.join(', ')}]`);
-        console.log(`   Sample aggregated row:`, JSON.stringify(workingData[0], null, 2));
+        logger.log(`   Aggregated columns: [${columns.join(', ')}]`);
+        logger.log(`   Sample aggregated row:`, JSON.stringify(workingData[0], null, 2));
       } else {
-        console.warn(`⚠️ Aggregation produced 0 rows!`);
+        logger.warn(`⚠️ Aggregation produced 0 rows!`);
       }
       if (description) descriptions.push(description);
     }

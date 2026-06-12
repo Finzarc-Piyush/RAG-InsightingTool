@@ -5,6 +5,7 @@
 import { SharedAnalysisInvite } from "../shared/schema.js";
 import { waitForSharedAnalysesContainer } from "./database.config.js";
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from "./chat.model.js";
+import { logger } from "../lib/logger.js";
 
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -37,7 +38,7 @@ const retryOnConnectionError = async <T>(
       
       if (isRetryableError && attempt < maxRetries) {
         const delay = attempt * 1000; // Exponential backoff: 1s, 2s, 3s
-        console.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, errorMessage);
+        logger.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, errorMessage);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -189,13 +190,13 @@ export const createSharedAnalysisInvite = async ({
             });
           } catch (dashboardError: any) {
             // Log error but continue with other dashboards
-            console.error(`Failed to create dashboard share invite for ${dashboardId}:`, dashboardError);
+            logger.error(`Failed to create dashboard share invite for ${dashboardId}:`, dashboardError);
           }
         })
       );
     } catch (error: any) {
       // Log error but don't fail the analysis share if dashboard share fails
-      console.error("Failed to create dashboard share invites:", error);
+      logger.error("Failed to create dashboard share invites:", error);
       // Continue with analysis share even if dashboard share fails
     }
   }
@@ -234,7 +235,7 @@ export const listSharedAnalysesForUser = async (targetEmail: string): Promise<Sh
       (error as any)?.code === "ETIMEDOUT" ||
       (error as any)?.code === "ENOTFOUND"
     ) {
-      console.warn(`⚠️ CosmosDB unavailable for listSharedAnalysesForUser, returning empty array. Error: ${errorMessage}`);
+      logger.warn(`⚠️ CosmosDB unavailable for listSharedAnalysesForUser, returning empty array. Error: ${errorMessage}`);
       return [];
     }
     // Re-throw other errors

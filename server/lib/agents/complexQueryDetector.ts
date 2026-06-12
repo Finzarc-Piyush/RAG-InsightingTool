@@ -44,6 +44,7 @@ import { callLlm } from './runtime/callLlm.js';
 import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';
 import { getModelForTask } from './models.js';
 import { DataSummary, Message } from '../../shared/schema.js';
+import { logger } from "../logger.js";
 
 /**
  * Complex Query Detection Schema
@@ -318,24 +319,24 @@ Set confidence to 0.9+ if clearly complex, 0.7-0.9 if somewhat complex, <0.7 if 
       
       const validated = complexQuerySchema.parse(cleaned);
       
-      console.log(`🔍 Complex query detection: ${validated.isComplex ? 'COMPLEX' : 'SIMPLE'} (confidence: ${validated.confidence.toFixed(2)})`);
+      logger.log(`🔍 Complex query detection: ${validated.isComplex ? 'COMPLEX' : 'SIMPLE'} (confidence: ${validated.confidence.toFixed(2)})`);
       if (validated.complexityReasons && validated.complexityReasons.length > 0) {
-        console.log(`   Reasons: ${validated.complexityReasons.join(', ')}`);
+        logger.log(`   Reasons: ${validated.complexityReasons.join(', ')}`);
       }
       
       return validated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn(`⚠️ Complex query detection attempt ${attempt + 1} failed:`, lastError.message);
+      logger.warn(`⚠️ Complex query detection attempt ${attempt + 1} failed:`, lastError.message);
       
       if (attempt < maxRetries - 1) {
-        console.log(`🔄 Retrying complex query detection...`);
+        logger.log(`🔄 Retrying complex query detection...`);
       }
     }
   }
 
   // If all retries failed, use fallback detection
-  console.error('❌ Complex query detection failed after retries, using fallback');
+  logger.error('❌ Complex query detection failed after retries, using fallback');
   
   // Fallback: Use simple heuristics
   const questionLower = question.toLowerCase();

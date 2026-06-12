@@ -5,6 +5,7 @@ import {
   deleteChatDocument,
 } from "../models/chat.model.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { logger } from "../lib/logger.js";
 
 // Get all chats for a user
 export const getUserChatHistory = async (req: Request, res: Response) => {
@@ -35,7 +36,7 @@ export const getUserChatHistory = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Get user chats error:", error);
+    logger.error("Get user chats error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to get user chats",
     });
@@ -60,7 +61,7 @@ export const getChatDetails = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Get chat details error:", error);
+    logger.error("Get chat details error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to get chat details",
     });
@@ -81,7 +82,7 @@ export const deleteChat = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Delete chat error:", error);
+    logger.error("Delete chat error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to delete chat",
     });
@@ -115,7 +116,7 @@ export const getChatStatistics = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Get chat statistics error:", error);
+    logger.error("Get chat statistics error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to get chat statistics",
     });

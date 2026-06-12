@@ -21,6 +21,7 @@ import type { Request, Response } from "express";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { getPastAnalysisDoc } from "../models/pastAnalysis.model.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
+import { logger } from "../lib/logger.js";
 
 export async function pastAnalysisRecallPivotController(
   req: Request,
@@ -50,7 +51,7 @@ export async function pastAnalysisRecallPivotController(
     doc = await getPastAnalysisDoc(sessionId, docId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ pastAnalysisRecall: getPastAnalysisDoc failed (${msg})`);
+    logger.warn(`⚠️ pastAnalysisRecall: getPastAnalysisDoc failed (${msg})`);
     return res.status(500).json({ error: "lookup_failed" });
   }
   if (!doc) {
@@ -87,7 +88,7 @@ export async function pastAnalysisRecallPivotController(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    logger.warn(
       `⚠️ pastAnalysisRecall: blob fetch failed for ${artifact.storage.blobName} (${msg})`
     );
     return res.status(502).json({ error: "blob_fetch_failed" });

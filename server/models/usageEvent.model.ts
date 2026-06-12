@@ -17,6 +17,7 @@ import {
   type UsageEventDoc,
   type UsageEventType,
 } from "../shared/schema.js";
+import { logger } from "../lib/logger.js";
 
 export const COSMOS_USAGE_EVENTS_CONTAINER_ID =
   process.env.COSMOS_USAGE_EVENTS_CONTAINER_ID || "usage_events";
@@ -109,7 +110,7 @@ export async function recordUsageEvent(
   };
   const parsed = usageEventDocSchema.safeParse(doc);
   if (!parsed.success) {
-    console.warn(
+    logger.warn(
       `⚠️ recordUsageEvent · refusing malformed doc (${input.eventType}): ${parsed.error.message}`
     );
     return;
@@ -119,7 +120,7 @@ export async function recordUsageEvent(
     await container.items.create(parsed.data);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    logger.warn(
       `⚠️ recordUsageEvent · ${input.eventType} write failed (${msg}); event dropped`
     );
   }

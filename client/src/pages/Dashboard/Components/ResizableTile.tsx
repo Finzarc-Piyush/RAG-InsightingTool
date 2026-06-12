@@ -2,6 +2,7 @@ import React, { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Resizable, ResizeCallback } from 're-resizable';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { GripVertical } from 'lucide-react';
+import { logger } from "@/lib/logger";
 
 interface ResizableTileProps {
   id?: string;
@@ -175,7 +176,7 @@ export function ResizableTile({
         try {
           chartGroup = document.querySelector(boundsSelector) as HTMLElement;
         } catch (e) {
-          console.warn('Invalid bounds selector:', boundsSelector);
+          logger.warn('Invalid bounds selector:', boundsSelector);
         }
       }
       

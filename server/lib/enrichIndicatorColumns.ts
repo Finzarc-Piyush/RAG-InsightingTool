@@ -31,6 +31,7 @@ import { z } from "zod";
 import type { DataSummary } from "../shared/schema.js";
 import { completeJson } from "./agents/runtime/llmJson.js";
 import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
+import { logger } from "./logger.js";
 
 const indicatorEnrichmentSchema = z.object({
   enrichments: z
@@ -166,13 +167,13 @@ export async function enrichIndicatorColumns(
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
     ]);
     if (winner === null) {
-      console.warn(
+      logger.warn(
         `⚠️ enrichIndicatorColumns: timeout after ${timeoutMs}ms; keeping heuristic-only state`
       );
       return { enriched: 0 };
     }
     if (!winner.ok) {
-      console.warn(
+      logger.warn(
         "⚠️ enrichIndicatorColumns: LLM parse failed:",
         winner.error
       );
@@ -181,7 +182,7 @@ export async function enrichIndicatorColumns(
     applyEnrichment(summary, winner.data);
     return { enriched: winner.data.enrichments.length };
   } catch (err) {
-    console.warn("⚠️ enrichIndicatorColumns:", err);
+    logger.warn("⚠️ enrichIndicatorColumns:", err);
     return { enriched: 0 };
   }
 }

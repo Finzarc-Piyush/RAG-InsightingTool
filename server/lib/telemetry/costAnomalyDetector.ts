@@ -26,6 +26,7 @@ import {
   registerLlmUsageListener,
   type LlmCallUsage,
 } from "../agents/runtime/llmUsageEmitter.js";
+import { logger } from "../logger.js";
 
 export const COSMOS_COST_ALERTS_CONTAINER_ID =
   process.env.COSMOS_COST_ALERTS_CONTAINER_ID || "cost_alerts";
@@ -166,7 +167,7 @@ export async function recordAndCheckTurn(args: {
   };
 
   // Sentry-shaped console.error so a hook can capture it.
-  console.error(
+  logger.error(
     `🚨 cost-alert: per_turn_ceiling user=${args.userEmail} turn=${args.turnId} cost=$${entry.costUsd.toFixed(4)} threshold=$${threshold.toFixed(2)} calls=${entry.callCount}`
   );
 
@@ -175,7 +176,7 @@ export async function recordAndCheckTurn(args: {
     await container.items.upsert(alert);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ cost-alert persist failed: ${msg}`);
+    logger.warn(`⚠️ cost-alert persist failed: ${msg}`);
   }
 }
 

@@ -13,6 +13,7 @@ import {
 import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import { Response } from "express";
+import { logger } from "../../lib/logger.js";
 
 export interface ProcessStreamDataOpsParams {
   sessionId: string;
@@ -60,13 +61,13 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
   // Set up connection close handlers
   res.on('close', () => {
     clientDisconnected = true;
-    console.log('🚫 Client disconnected from data ops stream');
+    logger.log('🚫 Client disconnected from data ops stream');
   });
 
   res.on('error', (error: any) => {
     // ECONNRESET, EPIPE, ECONNABORTED are expected when client disconnects
     if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
-      console.error('SSE connection error:', error);
+      logger.error('SSE connection error:', error);
     }
     clientDisconnected = true;
   });
@@ -79,7 +80,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     } catch (error: any) {
       // If CosmosDB isn't initialized, we can't get the document
       if (error?.message?.includes('CosmosDB container not initialized')) {
-        console.warn('⚠️ CosmosDB not initialized, cannot proceed without session document.');
+        logger.warn('⚠️ CosmosDB not initialized, cannot proceed without session document.');
         sendSSE(res, 'error', { error: 'Database is initializing. Please wait a moment and try again.' });
         res.end();
         return;
@@ -119,7 +120,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     try {
       fullData = await loadDataForOperation(chatDocument);
     } catch (error: any) {
-      console.error('❌ Failed to load data:', error);
+      logger.error('❌ Failed to load data:', error);
       const errorMessage = error?.message || 'Failed to load data';
       sendSSE(res, 'error', {
         error: errorMessage.includes('No data found')
@@ -136,7 +137,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
       return;
     }
     
-    console.log(`✅ Using ${fullData.length} rows for data operation`);
+    logger.log(`✅ Using ${fullData.length} rows for data operation`);
 
     // Check connection before parsing
     if (!checkConnection()) {
@@ -155,7 +156,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     // Fetch last 15 messages from Cosmos DB for context
     const allMessages = chatDocument.messages || [];
     const chatHistory = allMessages.slice(-15);
-    console.log(`📚 Using ${chatHistory.length} messages from database for context`);
+    logger.log(`📚 Using ${chatHistory.length} messages from database for context`);
 
     const intent = await parseDataOpsIntent(message, chatHistory, chatDocument.dataSummary, chatDocument);
 
@@ -206,7 +207,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
 
     // Check connection before saving messages
     if (!checkConnection()) {
-      console.log('🚫 Client disconnected, skipping message save');
+      logger.log('🚫 Client disconnected, skipping message save');
       return;
     }
 
@@ -228,7 +229,7 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
         },
       ]);
     } catch (error) {
-      console.error("⚠️ Failed to save messages:", error);
+      logger.error("⚠️ Failed to save messages:", error);
     }
 
     // Check connection before sending response
@@ -253,9 +254,9 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     if (!res.writableEnded && !res.destroyed) {
     res.end();
     }
-    console.log('✅ Data Ops stream completed successfully');
+    logger.log('✅ Data Ops stream completed successfully');
   } catch (error) {
-    console.error('Data Ops stream error:', error);
+    logger.error('Data Ops stream error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process data operation';
     sendSSE(res, 'error', { error: errorMessage });
     res.end();

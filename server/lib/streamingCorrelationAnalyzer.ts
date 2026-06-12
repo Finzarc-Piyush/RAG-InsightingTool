@@ -5,6 +5,7 @@
  */
 
 import { ChartSpec } from '../shared/schema.js';
+import { logger } from "./logger.js";
 
 // Adaptive visualization point limit based on dataset size
 // For small datasets (<10k), show all points
@@ -75,7 +76,7 @@ async function computeCorrelationStreaming(
   
   // Determine max visualization points based on dataset size
   const maxVisualizationPoints = getMaxVisualizationPoints(data.length);
-  console.log(`📊 Adaptive visualization limit: ${maxVisualizationPoints.toLocaleString()} points (from ${data.length.toLocaleString()} total rows)`);
+  logger.log(`📊 Adaptive visualization limit: ${maxVisualizationPoints.toLocaleString()} points (from ${data.length.toLocaleString()} total rows)`);
   
   // Reservoir for sampling (adaptive limit based on dataset size)
   const reservoir: Array<{ x: number; y: number }> = [];
@@ -170,7 +171,7 @@ export async function generateStreamingCorrelationChart(
   factorVariable: string,
   onProgress?: (processed: number, total: number) => void
 ): Promise<ChartSpec> {
-  console.log(`📊 Computing streaming correlation (${data.length} rows): ${factorVariable} vs ${targetVariable}`);
+  logger.log(`📊 Computing streaming correlation (${data.length} rows): ${factorVariable} vs ${targetVariable}`);
   
   const result = await computeCorrelationStreaming(
     data,

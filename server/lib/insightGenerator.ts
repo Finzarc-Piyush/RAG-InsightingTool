@@ -7,6 +7,7 @@ import { formatSessionAnalysisContextForInsight } from './insightSynthesis/forma
 import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
 import { computePivotPatterns, renderPivotPatternsBlock } from './insightGenerator/pivotPatterns.js';
 import { buildPatternDrivenFallback } from './insightGenerator/deterministicNarratives.js';
+import { logger } from "./logger.js";
 
 /**
  * Break a single-paragraph keyInsight into one line per sentence so the UI
@@ -61,7 +62,7 @@ export function buildDeterministicChartInsightFallback(args: {
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
 const enforceInsightLimit = (value: string) => {
   if (value.length > KEY_INSIGHT_MAX_CHARS) {
-    console.warn(`⚠️ keyInsight exceeded ${KEY_INSIGHT_MAX_CHARS} characters`, {
+    logger.warn(`⚠️ keyInsight exceeded ${KEY_INSIGHT_MAX_CHARS} characters`, {
       length: value.length,
       preview: value,
     });
@@ -626,7 +627,7 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
       ...(businessCommentary ? { businessCommentary } : {}),
     };
   } catch (error) {
-    console.error('Error generating chart insights:', error);
+    logger.error('Error generating chart insights:', error);
     return {
       keyInsight: insertSentenceBreaks(
         `This ${chartSpec.type} chart shows ${chartData.length} data points with values ranging from ${formatCompactNumber(minY)} to ${formatCompactNumber(maxY)}`

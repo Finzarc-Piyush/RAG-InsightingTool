@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { getUserEmail } from "@/utils/userStorage";
 import { API_BASE_URL } from "@/lib/config";
 import { useEventStream } from "@/hooks/useEventStream";
+import { logger } from "@/lib/logger";
 
 interface SharedAnalysesHookState {
   pending: SharedAnalysisInvite[];
@@ -44,7 +45,7 @@ export const useSharedAnalyses = () => {
         error: null,
       });
     } catch (err) {
-      console.error("Failed to load shared analyses:", err);
+      logger.error("Failed to load shared analyses:", err);
       setState((prev) => ({
         ...prev,
         loading: false,
@@ -61,7 +62,7 @@ export const useSharedAnalyses = () => {
   }, []);
 
   const startFallbackPolling = useCallback(() => {
-    console.error("❌ Max reconnect attempts reached, falling back to polling");
+    logger.error("❌ Max reconnect attempts reached, falling back to polling");
     setState((prev) => ({
       ...prev,
       error: "Connection lost. Falling back to polling.",
@@ -122,7 +123,7 @@ export const useSharedAnalyses = () => {
   const handleUpdateEvent = useCallback((event: MessageEvent) => {
     try {
       const data = JSON.parse(event.data) as SharedAnalysesResponse;
-      console.log("📥 Shared analyses update received:", data);
+      logger.log("📥 Shared analyses update received:", data);
       setState({
         pending: data.pending,
         accepted: data.accepted,
@@ -130,7 +131,7 @@ export const useSharedAnalyses = () => {
         error: null,
       });
     } catch (err) {
-      console.error("Failed to parse SSE update data:", err);
+      logger.error("Failed to parse SSE update data:", err);
       setState((prev) => ({
         ...prev,
         error: "Failed to parse update data",
@@ -139,7 +140,7 @@ export const useSharedAnalyses = () => {
   }, []);
 
   const handleMessageEvent = useCallback((event: MessageEvent) => {
-    console.log("📨 SSE message received:", event.data);
+    logger.log("📨 SSE message received:", event.data);
   }, []);
 
   const streamHandlers = useMemo(
@@ -151,7 +152,7 @@ export const useSharedAnalyses = () => {
   );
 
   const handleStreamError = useCallback((event: Event) => {
-    console.error("❌ SSE connection error:", event);
+    logger.error("❌ SSE connection error:", event);
     setState((prev) => ({
       ...prev,
       error: "Connection error",
@@ -159,7 +160,7 @@ export const useSharedAnalyses = () => {
   }, []);
 
   const handleStreamOpen = useCallback(() => {
-    console.log("✅ SSE connection opened for shared analyses");
+    logger.log("✅ SSE connection opened for shared analyses");
     stopFallbackPolling();
     setState((prev) => ({ ...prev, loading: false, error: null }));
   }, [stopFallbackPolling]);

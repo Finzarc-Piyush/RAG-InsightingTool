@@ -5,6 +5,7 @@
 import { SharedDashboardInvite, type Dashboard } from "../shared/schema.js";
 import { waitForSharedDashboardsContainer } from "./database.config.js";
 import { getDashboardById } from "./dashboard.model.js";
+import { logger } from "../lib/logger.js";
 
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -129,7 +130,7 @@ export const listSharedDashboardsForUser = async (targetEmail: string): Promise<
     return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("listSharedDashboardsForUser failed:", errorMessage);
+    logger.error("listSharedDashboardsForUser failed:", errorMessage);
     return [];
   }
 };

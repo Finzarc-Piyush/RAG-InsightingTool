@@ -21,6 +21,7 @@ import {
   applyTemporalFacetColumns,
   periodDimensionFromSummary,
 } from "../../lib/temporalFacetColumns.js";
+import { logger } from "../../lib/logger.js";
 
 export interface AnswerQuestionDataLoadResult {
   latestData: Record<string, any>[];
@@ -46,7 +47,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
   let parsedQuery: Record<string, any> | null = precomputed?.parsedQuery ?? null;
 
   if (precomputed) {
-    console.log(
+    logger.log(
       `📊 [resolveAnswerQuestionDataLoad] using precomputed columns (${requiredColumns.length}) — skipping classifyIntent`
     );
   }
@@ -72,9 +73,9 @@ export async function resolveAnswerQuestionDataLoad(params: {
         chatDocument.dataSummary
       );
       requiredColumns = Array.from(new Set([...requiredColumns, ...historyColumns]));
-      console.log(`📊 [resolveAnswerQuestionDataLoad] ${requiredColumns.length} required columns`);
+      logger.log(`📊 [resolveAnswerQuestionDataLoad] ${requiredColumns.length} required columns`);
     } catch (error) {
-      console.warn("⚠️ Failed to extract required columns, loading full/latest data:", error);
+      logger.warn("⚠️ Failed to extract required columns, loading full/latest data:", error);
     }
   }
 
@@ -118,7 +119,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
   let loadFullDataOpt: (() => Promise<Record<string, any>[]>) | undefined;
 
   if (useDuckDBPlan) {
-    console.log(
+    logger.log(
       "📊 Columnar session + analytical/info query: DuckDB sample path (shared loader)"
     );
     latestData = await getSampleFromDuckDB(chatDocument.sessionId, 5000, chatDocument);
@@ -138,7 +139,7 @@ export async function resolveAnswerQuestionDataLoad(params: {
       requiredColumns.length > 0
         ? await loadDataForColumns(chatDocument, requiredColumns, queryFilters)
         : await loadLatestData(chatDocument, undefined, queryFilters);
-    console.log(`✅ Loaded ${latestData.length} rows for analysis (shared loader)`);
+    logger.log(`✅ Loaded ${latestData.length} rows for analysis (shared loader)`);
   }
 
   return {

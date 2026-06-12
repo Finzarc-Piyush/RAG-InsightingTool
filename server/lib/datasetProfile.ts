@@ -6,6 +6,7 @@ import {
 import { completeJson } from './agents/runtime/llmJson.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { AMBIGUOUS_SYMBOLS } from './wideFormat/currencyVocabulary.js';
+import { logger } from "./logger.js";
 
 export type { DatasetProfile };
 export { datasetProfileSchema };
@@ -167,7 +168,7 @@ export async function inferDatasetProfile(
       { maxTokens: 2048, temperature: 0.2, turnId: 'dataset_profile', purpose: LLM_PURPOSE.DATASET_PROFILE }
     );
     if (!result.ok) {
-      console.warn('⚠️ inferDatasetProfile: LLM parse failed:', result.error);
+      logger.warn('⚠️ inferDatasetProfile: LLM parse failed:', result.error);
       return emptyDatasetProfile();
     }
     // `datasetProfileSchema` now uses z.preprocess on `notes`/`currencyOverrides`
@@ -183,12 +184,12 @@ export async function inferDatasetProfile(
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
     ]);
     if (winner === null) {
-      console.warn(`⚠️ inferDatasetProfile: timeout after ${timeoutMs}ms`);
+      logger.warn(`⚠️ inferDatasetProfile: timeout after ${timeoutMs}ms`);
       return emptyDatasetProfile();
     }
     return winner;
   } catch (e) {
-    console.warn('⚠️ inferDatasetProfile:', e);
+    logger.warn('⚠️ inferDatasetProfile:', e);
     return emptyDatasetProfile();
   }
 }

@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { parsePack, PackParseError } from "./packSchema.js";
 import type { DomainPack } from "./types.js";
+import { logger } from "../logger.js";
 
 export interface DiscoverResult {
   /** Successfully parsed and validated packs, sorted by priority. */
@@ -29,7 +30,7 @@ export function discoverPacks(packsDir: string): DiscoverResult {
     entries = readdirSync(packsDir);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    console.error(`domainContext: cannot read packs dir ${packsDir} (${reason})`);
+    logger.error(`domainContext: cannot read packs dir ${packsDir} (${reason})`);
     return { packs, errors: [{ file: packsDir, reason }] };
   }
 
@@ -41,7 +42,7 @@ export function discoverPacks(packsDir: string): DiscoverResult {
       const pack = parsePack({ file, source });
       if (ids.has(pack.id)) {
         const reason = `duplicate id "${pack.id}"`;
-        console.warn(`domainContext: skipping ${file} — ${reason}`);
+        logger.warn(`domainContext: skipping ${file} — ${reason}`);
         errors.push({ file, reason });
         continue;
       }
@@ -54,7 +55,7 @@ export function discoverPacks(packsDir: string): DiscoverResult {
           : err instanceof Error
             ? err.message
             : String(err);
-      console.warn(`domainContext: skipping ${file} — ${reason}`);
+      logger.warn(`domainContext: skipping ${file} — ${reason}`);
       errors.push({ file, reason });
     }
   }

@@ -20,6 +20,7 @@ import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { logger } from "../../lib/logger.js";
 
 export interface ProcessChatMessageParams {
   sessionId: string;
@@ -44,7 +45,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
   const { sessionId, message, targetTimestamp, username } = params;
 
   // Get chat document FIRST (with full history) so processing uses complete context
-  console.log('🔍 Fetching chat document for sessionId:', sessionId);
+  logger.log('🔍 Fetching chat document for sessionId:', sessionId);
   const chatDocument = await getChatBySessionIdForUser(sessionId, username);
 
   if (!chatDocument) {
@@ -63,7 +64,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     );
   }
 
-  console.log('✅ Chat document found, loading latest data...');
+  logger.log('✅ Chat document found, loading latest data...');
   
   // Fetch last 15 messages from Cosmos DB for context
   // For edited messages, use full history from database for processing
@@ -93,9 +94,9 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       chatDocument.dataSummary
     );
     requiredColumns = Array.from(new Set([...requiredColumns, ...historyColumns]));
-    console.log(`📊 Extracted ${requiredColumns.length} required columns for optimized loading`);
+    logger.log(`📊 Extracted ${requiredColumns.length} required columns for optimized loading`);
   } catch (error) {
-    console.warn('⚠️ Failed to extract required columns, loading all data:', error);
+    logger.warn('⚠️ Failed to extract required columns, loading all data:', error);
   }
   
   // Check cache before loading data
@@ -112,13 +113,13 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       requiredColumns
     );
     if (cachedResult) {
-      console.log(`✅ Returning cached result`);
+      logger.log(`✅ Returning cached result`);
       return cachedResult;
     }
   } else if (isAgenticLoopEnabled()) {
-    console.log(`🔄 Skipping query cache (agentic loop — non-deterministic traces)`);
+    logger.log(`🔄 Skipping query cache (agentic loop — non-deterministic traces)`);
   } else {
-    console.log(`🔄 Skipping cache for aggregation query (data operation)`);
+    logger.log(`🔄 Skipping cache for aggregation query (data operation)`);
   }
   
   const { latestData, columnarStoragePathOpt, loadFullDataOpt, permanentContext, sessionAnalysisContext } =
@@ -193,7 +194,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     if (text?.trim()) perTurnDomainContext = text;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`W34 · domain context load failed: ${msg}`);
+    logger.warn(`W34 · domain context load failed: ${msg}`);
   }
 
   // Enrich charts with data and insights
@@ -243,12 +244,12 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
           charts: enrichedCharts,
         });
         if (!res.ok) {
-          console.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
+          logger.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
         }
       }
     }
   } catch (insightPatchErr) {
-    console.warn("⚠️ dashboard chart-insight patch (non-streaming) failed:", insightPatchErr);
+    logger.warn("⚠️ dashboard chart-insight patch (non-streaming) failed:", insightPatchErr);
   }
 
   // W25 · per-step LLM-enriched insights on the non-streaming path. Same
@@ -270,7 +271,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`W25 · enrichStepInsights (non-streaming) failed: ${msg}`);
+    logger.warn(`W25 · enrichStepInsights (non-streaming) failed: ${msg}`);
   }
 
   // Validate and enrich response
@@ -286,17 +287,17 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     );
     
     if (existingMessage) {
-      console.log('✏️ Editing message with targetTimestamp:', targetTimestamp);
+      logger.log('✏️ Editing message with targetTimestamp:', targetTimestamp);
       try {
         await updateMessageAndTruncate(sessionId, targetTimestamp, message);
-        console.log('✅ Message updated and messages truncated in database');
+        logger.log('✅ Message updated and messages truncated in database');
       } catch (truncateError) {
-        console.error('⚠️ Failed to update message and truncate:', truncateError);
+        logger.error('⚠️ Failed to update message and truncate:', truncateError);
         // Continue with the chat request even if truncation fails
       }
     } else {
       // This is a new message, not an edit - ignore targetTimestamp
-      console.log(`ℹ️ targetTimestamp ${targetTimestamp} provided but message not found. Treating as new message.`);
+      logger.log(`ℹ️ targetTimestamp ${targetTimestamp} provided but message not found. Treating as new message.`);
     }
   }
 
@@ -315,7 +316,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       answerResult.agentSuggestionHints
     );
   } catch (error) {
-    console.error('Failed to generate suggestions:', error);
+    logger.error('Failed to generate suggestions:', error);
   }
 
   const enrichmentFollowUps = [
@@ -429,7 +430,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     });
     const persistChatOutcome = await persistChatPromise;
     if (persistChatOutcome === "succeeded") {
-      console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+      logger.log(`✅ Messages saved to chat: ${chatDocument.id}`);
     } else {
       // Non-streaming controller currently treats this as a hard error so
       // its catch block returns 5xx to the client. Same UX as today —
@@ -460,10 +461,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
         investigationSummary: answerResult.investigationSummary,
       });
     } catch (ctxErr) {
-      console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
+      logger.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
     }
   } catch (cosmosError) {
-    console.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
+    logger.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
     // Continue without failing the chat - CosmosDB is optional
   }
 

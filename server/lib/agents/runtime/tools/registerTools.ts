@@ -163,6 +163,7 @@ import { registerPriceElasticityTool } from "./priceElasticityTool.js";
 import { registerMarketBasketTool } from "./marketBasketTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 import { registerExecuteMetricQueryTool } from "./executeMetricQueryTool.js";
+import { logger } from "../../../logger.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -1258,7 +1259,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
               })
             );
           } catch (e) {
-            console.warn(
+            logger.warn(
               "⚠️ analysisMemory computed_column_added hook failed:",
               e
             );

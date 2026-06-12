@@ -10,6 +10,7 @@
 
 import snowflake from 'snowflake-sdk';
 import { uploadLimits } from '../config/uploadLimits.js';
+import { logger } from "./logger.js";
 
 export interface SnowflakeConnectionConfig {
   account: string;
@@ -119,7 +120,7 @@ function destroyAsync(connection: snowflake.Connection): Promise<void> {
   return new Promise((resolve) => {
     try {
       connection.destroy((err) => {
-        if (err) console.warn('Snowflake connection destroy warning:', err.message);
+        if (err) logger.warn('Snowflake connection destroy warning:', err.message);
         resolve();
       });
     } catch {

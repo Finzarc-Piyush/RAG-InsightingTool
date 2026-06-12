@@ -1540,8 +1540,8 @@ export const useHomeMutations = ({
         ...(autoDashboardId ? { createdDashboardId: autoDashboardId } : {}),
       };
       
-      console.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
-      console.log('📊 Message includes:', {
+      logger.log('💬 Adding assistant message to chat:', assistantMessage.content.substring(0, 50));
+      logger.log('📊 Message includes:', {
         hasCharts: !!assistantMessage.charts?.length,
         hasInsights: !!assistantMessage.insights?.length,
         contentLength: assistantMessage.content?.length || 0
@@ -1661,7 +1661,7 @@ export const useHomeMutations = ({
                       : m
                   )
                 : next;
-            console.log('📋 Total messages now (text-first merge):', withFinalTrace.length);
+            logger.log('📋 Total messages now (text-first merge):', withFinalTrace.length);
             return withFinalTrace;
           }
         }
@@ -1685,7 +1685,7 @@ export const useHomeMutations = ({
               )
             : prev;
         const updated = [...withTrace, assistantMessage];
-        console.log('📋 Total messages now:', updated.length);
+        logger.log('📋 Total messages now:', updated.length);
         return updated;
       });
 
@@ -1866,7 +1866,7 @@ export const useHomeMutations = ({
           
           if (indexToRemove >= 0) {
             updated.splice(indexToRemove, 1);
-            console.log('🗑️ Removed cancelled user message:', pendingMessage.content);
+            logger.log('🗑️ Removed cancelled user message:', pendingMessage.content);
           }
         } else {
           // If no pending message tracked, remove the last user message (most recent)
@@ -1875,7 +1875,7 @@ export const useHomeMutations = ({
             if (updated[i].role === 'user') {
               // Only remove if there's no assistant response after it
               if (i === updated.length - 1 || updated[i + 1].role !== 'assistant') {
-                console.log('🗑️ Removed last user message (no response yet):', updated[i].content);
+                logger.log('🗑️ Removed last user message (no response yet):', updated[i].content);
                 updated.splice(i, 1);
               }
               break;

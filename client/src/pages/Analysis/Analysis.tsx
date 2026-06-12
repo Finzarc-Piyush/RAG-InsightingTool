@@ -25,6 +25,7 @@ import { useSessionFilters } from './modules/useSessionFilters';
 import { useSessionManagement } from './modules/useSessionManagement';
 import { useToast } from '@/hooks/use-toast';
 import { AnalysisProps, SessionsResponse } from './types';
+import { logger } from "@/lib/logger";
 
 /**
  * Main Analysis page component
@@ -40,9 +41,9 @@ const Analysis: React.FC<AnalysisProps> = ({ onNavigate, onNewChat, onLoadSessio
   const { data: sessionsData, isLoading, error, refetch } = useQuery<SessionsResponse>({
     queryKey: ['sessions', userEmail],
     queryFn: async () => {
-      console.log('🔍 Fetching sessions from API for user:', userEmail);
+      logger.log('🔍 Fetching sessions from API for user:', userEmail);
       const result = await sessionsApi.getAllSessions();
-      console.log('✅ Sessions API response:', result);
+      logger.log('✅ Sessions API response:', result);
       return result;
     },
     enabled: !!userEmail,

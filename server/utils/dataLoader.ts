@@ -14,6 +14,7 @@ import {
 } from "../lib/temporalFacetColumns.js";
 import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
 import { applyWideFormatMeltIfNeeded } from "../lib/wideFormat/applyWideFormatMeltIfNeeded.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Normalize data by converting string numbers to actual numbers
@@ -108,7 +109,7 @@ function filterColumns(
   
   if (matchedColumns.length === 0) {
     // No matches found, return all data (fallback)
-    console.warn(`⚠️ No matching columns found for required columns: ${requiredColumns.join(', ')}. Returning all data.`);
+    logger.warn(`⚠️ No matching columns found for required columns: ${requiredColumns.join(', ')}. Returning all data.`);
     return data;
   }
   
@@ -233,18 +234,18 @@ export async function loadLatestData(
   const skipActiveFilter = loadOptions?.skipActiveFilter === true;
   let fullData: Record<string, any>[] = [];
   
-  console.log(`🔍 Loading latest data for session ${chatDocument.sessionId}`);
-  console.log(`   - rawData: ${chatDocument.rawData?.length || 0} rows`);
-  console.log(`   - sampleRows: ${chatDocument.sampleRows?.length || 0} rows`);
-  console.log(`   - currentDataBlob: ${chatDocument.currentDataBlob?.blobName || 'none'}`);
-  console.log(`   - original blob: ${chatDocument.blobInfo?.blobName || 'none'}`);
-  console.log(`   - columnarStorage: ${(chatDocument as any).columnarStoragePath || 'none'}`);
-  console.log(`   - chunkIndex: ${chatDocument.chunkIndexBlob?.blobName || 'none'}`);
+  logger.log(`🔍 Loading latest data for session ${chatDocument.sessionId}`);
+  logger.log(`   - rawData: ${chatDocument.rawData?.length || 0} rows`);
+  logger.log(`   - sampleRows: ${chatDocument.sampleRows?.length || 0} rows`);
+  logger.log(`   - currentDataBlob: ${chatDocument.currentDataBlob?.blobName || 'none'}`);
+  logger.log(`   - original blob: ${chatDocument.blobInfo?.blobName || 'none'}`);
+  logger.log(`   - columnarStorage: ${(chatDocument as any).columnarStoragePath || 'none'}`);
+  logger.log(`   - chunkIndex: ${chatDocument.chunkIndexBlob?.blobName || 'none'}`);
   
   // Priority 0: For chunked files, use intelligent chunk loading based on query filters
   if (chatDocument.chunkIndexBlob) {
     try {
-      console.log(`📦 Loading from chunked storage (${chatDocument.chunkIndexBlob.totalChunks} chunks)...`);
+      logger.log(`📦 Loading from chunked storage (${chatDocument.chunkIndexBlob.totalChunks} chunks)...`);
       
       const { loadChunkIndex, findRelevantChunks, loadChunkData } = await import('../lib/chunkingService.js');
       const chunkIndex = await loadChunkIndex(chatDocument.sessionId);
@@ -263,11 +264,11 @@ export async function loadLatestData(
         const numericColumns = chatDocument.dataSummary?.numericColumns || [];
         fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
         
-        console.log(`✅ Loaded ${fullData.length} rows from ${relevantChunks.length} chunks`);
+        logger.log(`✅ Loaded ${fullData.length} rows from ${relevantChunks.length} chunks`);
         return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
       }
     } catch (error) {
-      console.error('⚠️ Failed to load from chunked storage, trying other sources:', error);
+      logger.error('⚠️ Failed to load from chunked storage, trying other sources:', error);
       // Fall through to other methods
     }
   }
@@ -275,7 +276,7 @@ export async function loadLatestData(
   // Priority 0.5: For large files, use columnar storage (skip when rebuilding DuckDB — same path is empty/broken)
   if ((chatDocument as any).columnarStoragePath && mode !== "authoritativeRematerialize") {
     try {
-      console.log(`📊 Loading from columnar storage for large file...`);
+      logger.log(`📊 Loading from columnar storage for large file...`);
       
       // Redis cache removed
       
@@ -288,10 +289,10 @@ export async function loadLatestData(
       const numericColumns = chatDocument.dataSummary?.numericColumns || [];
       fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
       
-      console.log(`✅ Loaded ${fullData.length} rows from columnar storage`);
+      logger.log(`✅ Loaded ${fullData.length} rows from columnar storage`);
       return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
     } catch (error) {
-      console.error('⚠️ Failed to load from columnar storage, trying other sources:', error);
+      logger.error('⚠️ Failed to load from columnar storage, trying other sources:', error);
       // Fall through to other methods
     }
   }
@@ -300,7 +301,7 @@ export async function loadLatestData(
   // This ensures we get the latest data including any transformations
   if (chatDocument.currentDataBlob?.blobName) {
     try {
-      console.log(`📦 Attempting to load from currentDataBlob: ${chatDocument.currentDataBlob.blobName}`);
+      logger.log(`📦 Attempting to load from currentDataBlob: ${chatDocument.currentDataBlob.blobName}`);
       const blobBuffer = await getFileFromBlob(chatDocument.currentDataBlob.blobName);
       
       // Try parsing as JSON first (processed data from data operations)
@@ -311,7 +312,7 @@ export async function loadLatestData(
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
           fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-          console.log(
+          logger.log(
             `✅ Loaded ${fullData.length} rows from currentDataBlob (enriched/working copy — matches session summary)`
           );
           
@@ -319,7 +320,7 @@ export async function loadLatestData(
           if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {
             const beforeFilter = fullData.length;
             fullData = filterColumns(fullData, requiredColumns);
-            console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
+            logger.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
           return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
@@ -341,7 +342,7 @@ export async function loadLatestData(
           );
           if (wfApplied.remelted) {
             parsedData = wfApplied.rows as Record<string, any>[];
-            console.log(
+            logger.log(
               `[dataLoader] re-applied wide-format melt on currentDataBlob re-parse path → ${parsedData.length} long rows`
             );
           }
@@ -349,20 +350,20 @@ export async function loadLatestData(
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
           fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-          console.log(`✅ Loaded ${fullData.length} rows from currentDataBlob (parsed file)`);
+          logger.log(`✅ Loaded ${fullData.length} rows from currentDataBlob (parsed file)`);
           
           // Apply column filtering for large datasets
           if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {
             const beforeFilter = fullData.length;
             fullData = filterColumns(fullData, requiredColumns);
-            console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
+            logger.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
           return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       }
     } catch (error) {
-      console.error('⚠️ Failed to load from currentDataBlob, trying other sources:', error);
+      logger.error('⚠️ Failed to load from currentDataBlob, trying other sources:', error);
     }
   }
   
@@ -373,13 +374,13 @@ export async function loadLatestData(
     // Convert "-" to 0 for numeric columns
     const numericColumns = chatDocument.dataSummary?.numericColumns || [];
     fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-    console.log(`✅ Using rawData from document: ${fullData.length} rows`);
+    logger.log(`✅ Using rawData from document: ${fullData.length} rows`);
     
     // Apply column filtering for large datasets
     if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {
       const beforeFilter = fullData.length;
       fullData = filterColumns(fullData, requiredColumns);
-      console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
+      logger.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
     }
     
     return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
@@ -391,7 +392,7 @@ export async function loadLatestData(
   // Priority 3: Try to load from original blob storage
   if (chatDocument.blobInfo?.blobName) {
     try {
-      console.log(`📦 Attempting to load from original blob: ${chatDocument.blobInfo.blobName}`);
+      logger.log(`📦 Attempting to load from original blob: ${chatDocument.blobInfo.blobName}`);
       const blobBuffer = await getFileFromBlob(chatDocument.blobInfo.blobName);
       
       // Try parsing as JSON first
@@ -402,13 +403,13 @@ export async function loadLatestData(
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
           fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-          console.log(`✅ Loaded ${fullData.length} rows from original blob (JSON)`);
+          logger.log(`✅ Loaded ${fullData.length} rows from original blob (JSON)`);
           
           // Apply column filtering for large datasets
           if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {
             const beforeFilter = fullData.length;
             fullData = filterColumns(fullData, requiredColumns);
-            console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
+            logger.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
           return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
@@ -430,7 +431,7 @@ export async function loadLatestData(
           );
           if (wfApplied.remelted) {
             parsedData = wfApplied.rows as Record<string, any>[];
-            console.log(
+            logger.log(
               `[dataLoader] re-applied wide-format melt on original blob re-parse path → ${parsedData.length} long rows`
             );
           }
@@ -438,20 +439,20 @@ export async function loadLatestData(
           // Convert "-" to 0 for numeric columns
           const numericColumns = chatDocument.dataSummary?.numericColumns || [];
           fullData = convertDashToZeroForNumericColumns(fullData, numericColumns);
-          console.log(`✅ Loaded ${fullData.length} rows from original blob (parsed file)`);
+          logger.log(`✅ Loaded ${fullData.length} rows from original blob (parsed file)`);
           
           // Apply column filtering for large datasets
           if (requiredColumns && requiredColumns.length > 0 && fullData.length > 10000) {
             const beforeFilter = fullData.length;
             fullData = filterColumns(fullData, requiredColumns);
-            console.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
+            logger.log(`📊 Filtered to ${requiredColumns.length} columns (${beforeFilter} rows)`);
           }
           
           return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
         }
       }
     } catch (error) {
-      console.error('⚠️ Failed to load from original blob:', error);
+      logger.error('⚠️ Failed to load from original blob:', error);
     }
   }
   
@@ -463,7 +464,7 @@ export async function loadLatestData(
     chatDocument.sampleRows.length > 0
   ) {
     fullData = chatDocument.sampleRows;
-    console.log(`⚠️ Using sampleRows as fallback: ${fullData.length} rows (limited data)`);
+    logger.log(`⚠️ Using sampleRows as fallback: ${fullData.length} rows (limited data)`);
     return finishLoadedRows(fullData, chatDocument, mode, skipActiveFilter);
   }
 

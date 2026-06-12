@@ -6,6 +6,7 @@ import {
 } from "../models/chat.model.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
+import { logger } from "../lib/logger.js";
 
 // Get all analysis sessions for a user
 export const getUserAnalysisSessions = async (req: Request, res: Response) => {
@@ -46,7 +47,7 @@ export const getUserAnalysisSessions = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Error getting user analysis sessions:', error);
+    logger.error('Error getting user analysis sessions:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to retrieve analysis sessions'
@@ -98,7 +99,7 @@ export const getAnalysisData = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Error getting analysis data:', error);
+    logger.error('Error getting analysis data:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to retrieve analysis data'
@@ -148,7 +149,7 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Error getting analysis data by session:', error);
+    logger.error('Error getting analysis data by session:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to retrieve analysis data'
@@ -180,7 +181,7 @@ export const getColumnStatistics = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Error getting column statistics:', error);
+    logger.error('Error getting column statistics:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to retrieve column statistics'
@@ -228,7 +229,7 @@ export const getRawData = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Error getting raw data:', error);
+    logger.error('Error getting raw data:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to retrieve raw data'

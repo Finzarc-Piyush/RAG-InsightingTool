@@ -16,6 +16,7 @@
 
 import { Container, PatchOperationType } from "@azure/cosmos";
 import { getDatabase, initializeCosmosDB } from "./database.config.js";
+import { logger } from "../lib/logger.js";
 
 export const COSMOS_USER_BUDGET_CONTAINER_ID =
   process.env.COSMOS_USER_BUDGET_CONTAINER_ID || "user_budget";
@@ -176,7 +177,7 @@ export async function recordTurnSpend(args: {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ recordTurnSpend failed (best-effort): ${msg}`);
+    logger.warn(`⚠️ recordTurnSpend failed (best-effort): ${msg}`);
   }
 }
 

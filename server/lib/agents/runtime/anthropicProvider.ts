@@ -52,6 +52,7 @@ import type {
   ChatCompletionCreateParamsNonStreaming,
 } from "openai/resources/chat/completions";
 import { withAnthropicSlot } from "./anthropicSemaphore.js";
+import { logger } from "../../logger.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_API_VERSION = "2023-06-01";
@@ -374,7 +375,7 @@ async function executeAnthropicCall(p: ExecuteAnthropicCallParams): Promise<Chat
         : jitteredBackoffMs(attempt, baseMs, maxMs);
 
     if (process.env.NODE_ENV !== "test") {
-      console.warn(
+      logger.warn(
         `[anthropic] retry after ${res.status} (attempt ${attempt}/${maxAttempts}, delay ${delay}ms)`
       );
     }

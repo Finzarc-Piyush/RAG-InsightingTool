@@ -5,6 +5,7 @@
 import { Response } from "express";
 import { validateSseEvent, isKnownSseEventKind } from "../shared/sseEvents.js";
 import { getRequestContext } from "../lib/telemetry/requestContext.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Send SSE event to client
@@ -43,7 +44,7 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
   if (VALIDATE_SSE_DEV && isKnownSseEventKind(event)) {
     const v = validateSseEvent(event, data);
     if (!v.ok) {
-      console.warn(
+      logger.warn(
         `⚠️  SSE event '${event}' failed schema validation. ` +
           `Update server/shared/sseEvents.ts or fix the emit site. ` +
           `Error: ${v.error.slice(0, 400)}`
@@ -65,7 +66,7 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
     }
     // Only log in development or when explicitly enabled
     if (ENABLE_SSE_LOGGING || process.env.NODE_ENV === 'development') {
-      console.log(`📤 SSE sent: ${event}`, data);
+      logger.log(`📤 SSE sent: ${event}`, data);
     }
     return true;
   } catch (error: any) {
@@ -75,7 +76,7 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
       return false;
     }
     // Log unexpected errors
-    console.error('Error sending SSE event:', error);
+    logger.error('Error sending SSE event:', error);
     closedResponses.add(res);
     return false;
   }

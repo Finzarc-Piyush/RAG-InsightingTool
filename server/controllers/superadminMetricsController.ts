@@ -32,6 +32,7 @@ import {
   type Granularity,
 } from "../lib/admin/bucketing.js";
 import { waitForPastAnalysesContainer } from "../models/pastAnalysis.model.js";
+import { logger } from "../lib/logger.js";
 
 function parseDateKey(raw: unknown, fallback: string): string {
   if (typeof raw === "string" && /^\d{8}$/.test(raw)) return raw;
@@ -209,7 +210,7 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
       series: bucketed,
     });
   } catch (err) {
-    console.error("⚠️ superadmin/metrics/overview failed:", err);
+    logger.error("⚠️ superadmin/metrics/overview failed:", err);
     return res
       .status(500)
       .json({ error: "superadmin_metrics_overview_failed", message: err instanceof Error ? err.message : String(err) });
@@ -269,7 +270,7 @@ export async function getSuperadminFeedbackStream(req: Request, res: Response) {
       .fetchAll();
     return res.json({ items: resources, count: resources.length });
   } catch (err) {
-    console.error("⚠️ superadmin/feedback failed:", err);
+    logger.error("⚠️ superadmin/feedback failed:", err);
     return res
       .status(500)
       .json({ error: "superadmin_feedback_failed" });

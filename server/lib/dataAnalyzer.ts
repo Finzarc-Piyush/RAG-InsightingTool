@@ -43,6 +43,7 @@ import {
 } from './analyticalQueryEngine.js';
 import { calculateSmartDomainsForChart } from './axisScaling.js';
 import { getInitialAnalysis, type ChartSuggestion } from './dataOps/pythonService.js';
+import { logger } from "./logger.js";
 
 /** Context for divide-and-conquer: each AI call knows which segment of the dataset it is analyzing */
 export interface DivisionContext {
@@ -95,14 +96,14 @@ export async function analyzeUpload(
   skipChartInsights: boolean = false
 ): Promise<{ charts: ChartSpec[]; insights: Insight[] }> {
   // Use AI generation for all file types (Excel and CSV)
-  console.log('📊 Using AI chart generation for all file types');
+  logger.log('📊 Using AI chart generation for all file types');
 
   // OPTIMIZATION: Always use faster model for upload-time analysis to minimize latency.
   // gpt-4o-mini is 2-3x faster and much cheaper while maintaining good quality.
   // If a higher-quality model is desired for interactive questions, that can be
   // handled separately in the question-answering path.
   const useFastModel = true;
-  console.log(`⚡ Performance optimization: Using faster AI model (gpt-4o-mini) for upload analysis`);
+  logger.log(`⚡ Performance optimization: Using faster AI model (gpt-4o-mini) for upload analysis`);
 
   // OPTIMIZATION: Divide-and-conquer for large datasets – split into 2–3 pieces, send each to AI with division reference, combine
   const useSplitStrategy = data.length > SPLIT_THRESHOLD;
@@ -112,7 +113,7 @@ export async function analyzeUpload(
 
   if (useSplitStrategy) {
     const splits = splitDataForParallelAnalysis(data, numParts);
-    console.log(`📊 Divide-and-conquer: splitting ${data.length} rows into ${splits.length} parts for parallel AI analysis`);
+    logger.log(`📊 Divide-and-conquer: splitting ${data.length} rows into ${splits.length} parts for parallel AI analysis`);
     // Chart specs: single call (summary only, no row data)
     const chartSpecsPromise = generateChartSpecs(summary, useFastModel);
     // Insights: one call per part, each with division context (Part 1 of 3, rows 1–20000 of 60000, etc.)
@@ -140,7 +141,7 @@ export async function analyzeUpload(
     // around 6. Bump combined-insight cap so split-pipeline runs aren't
     // truncated to ~7. The InsightCard's "Show more" handles long lists.
     insights = combined.slice(0, 20).map((ins, i) => ({ ...ins, id: i + 1 }));
-    console.log(`✅ Combined ${insightArrays.map((a) => a.length).join('+')} insights from ${splits.length} parts → ${insights.length} total`);
+    logger.log(`✅ Combined ${insightArrays.map((a) => a.length).join('+')} insights from ${splits.length} parts → ${insights.length} total`);
   } else {
     // Single path: chart specs and insights in parallel (no split)
     const [chartSpecsResult, insightsResult] = await Promise.all([
@@ -155,7 +156,7 @@ export async function analyzeUpload(
   // OPTIMIZATION: Skip chart insights generation during upload for faster processing
   // Chart insights can be generated lazily when charts are viewed
   if (skipChartInsights) {
-    console.log('⚡ Performance mode: Skipping chart insights generation during upload (will be generated on-demand)');
+    logger.log('⚡ Performance mode: Skipping chart insights generation during upload (will be generated on-demand)');
   }
 
   // Process data for each chart
@@ -308,7 +309,7 @@ Output valid JSON only: {"insights":[{"id":1,"text":"..."}, ...]}. Do not use P7
       text: item.text || String(item),
     }));
   } catch {
-    console.error('Failed to parse insights JSON from AI');
+    logger.error('Failed to parse insights JSON from AI');
   }
 
   const charts = await Promise.all(chartSpecs.map(async (spec) => {
@@ -481,9 +482,9 @@ export async function answerQuestion(
   pivotArtifacts?: import('./agents/runtime/types.js').AgentLoopResult['pivotArtifacts'];
 }> {
   // CRITICAL: This log should ALWAYS appear first
-  console.log('🚀 answerQuestion() CALLED with question:', question);
-  console.log('📋 SessionId:', sessionId);
-  console.log('📊 Data rows:', data?.length);
+  logger.log('🚀 answerQuestion() CALLED with question:', question);
+  logger.log('📋 SessionId:', sessionId);
+  logger.log('📊 Data rows:', data?.length);
 
   if (!isAgenticLoopEnabled()) {
     throw new Error(
@@ -535,7 +536,7 @@ export async function answerQuestion(
       const hasContent = loopResult?.answer?.trim()
         || (Array.isArray(loopResult?.table) && loopResult.table.length > 0);
       if (hasContent) {
-        console.log('✅ Agentic loop returned answer');
+        logger.log('✅ Agentic loop returned answer');
         return {
           answer: loopResult.answer,
           charts: loopResult.charts,
@@ -572,7 +573,7 @@ export async function answerQuestion(
             : {}),
         };
       }
-      console.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
+      logger.warn('⚠️ Agentic loop returned empty (no legacy fallback)');
       const trace = loopResult?.agentTrace;
       const pr = trace?.plannerRejectReason;
       let emptyAnswer =
@@ -614,7 +615,7 @@ export async function answerQuestion(
       const detail =
         agenticErr instanceof Error ? agenticErr.message : String(agenticErr);
       const safe = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
-      console.error('❌ Agentic loop error (no legacy fallback):', agenticErr);
+      logger.error('❌ Agentic loop error (no legacy fallback):', agenticErr);
       return {
         answer: `The analysis agent encountered an error (${safe}). Please try again.`,
       };
@@ -624,7 +625,7 @@ export async function answerQuestion(
 
 async function generateChartSpecs(summary: DataSummary, useFastModel: boolean = false): Promise<ChartSpec[]> {
   // Use AI generation for all file types
-  console.log('🤖 Using AI to generate charts for all file types...');
+  logger.log('🤖 Using AI to generate charts for all file types...');
   
   const prompt = `Analyze this dataset and generate EXACTLY 4-6 chart specifications. You MUST return multiple charts to provide comprehensive insights.
 
@@ -690,13 +691,13 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
   const content = response.choices[0].message.content;
   
   if (!content || content.trim() === '') {
-    console.error('Empty response from OpenAI for chart generation');
+    logger.error('Empty response from OpenAI for chart generation');
     return [];
   }
 
-  console.log('🤖 AI Response for chart generation:');
-  console.log('Raw content length:', content.length);
-  console.log('First 500 chars:', content.substring(0, 500));
+  logger.log('🤖 AI Response for chart generation:');
+  logger.log('Raw content length:', content.length);
+  logger.log('First 500 chars:', content.substring(0, 500));
 
   let parsed;
 
@@ -740,7 +741,7 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
       
       // Validate and fix column names with improved matching
       if (!availableColumns.includes(x)) {
-        console.warn(`⚠️ Invalid X column "${x}" not found in data. Available: ${availableColumns.join(', ')}`);
+        logger.warn(`⚠️ Invalid X column "${x}" not found in data. Available: ${availableColumns.join(', ')}`);
         
         // Try multiple matching strategies
         let similarX = availableColumns.find(col => 
@@ -782,11 +783,11 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
         }
         
         x = similarX || availableColumns[0];
-        console.log(`   Fixed X column to: "${x}"`);
+        logger.log(`   Fixed X column to: "${x}"`);
       }
       
       if (!availableColumns.includes(y)) {
-        console.warn(`⚠️ Invalid Y column "${y}" not found in data. Available: ${availableColumns.join(', ')}`);
+        logger.warn(`⚠️ Invalid Y column "${y}" not found in data. Available: ${availableColumns.join(', ')}`);
         
         // Try multiple matching strategies for Y column
         let similarY = availableColumns.find(col => 
@@ -828,12 +829,12 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
         }
         
         y = similarY || (numericColumns[0] || availableColumns[1]);
-        console.log(`   Fixed Y column to: "${y}"`);
+        logger.log(`   Fixed Y column to: "${y}"`);
       }
       
       // For pie charts, ensure X-axis is NOT a date column
       if (spec.type === 'pie' && dateColumns.includes(x)) {
-        console.warn(`⚠️ Pie chart "${spec.title}" incorrectly uses date column "${x}" on X-axis. Finding categorical alternative...`);
+        logger.warn(`⚠️ Pie chart "${spec.title}" incorrectly uses date column "${x}" on X-axis. Finding categorical alternative...`);
         
         // Try to find a categorical column instead
         const alternativeX = categoricalColumns.find(col => 
@@ -845,10 +846,10 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
         ) || categoricalColumns[0];
         
         if (alternativeX) {
-          console.log(`   Replacing "${x}" with "${alternativeX}" for pie chart`);
+          logger.log(`   Replacing "${x}" with "${alternativeX}" for pie chart`);
           x = alternativeX;
         } else {
-          console.warn(`   No categorical column found, skipping this pie chart`);
+          logger.warn(`   No categorical column found, skipping this pie chart`);
           return null; // Will be filtered out
         }
       }
@@ -857,7 +858,7 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
       let aggregate = spec.aggregate || 'none';
       const validAggregates = ['sum', 'mean', 'count', 'none'];
       if (!validAggregates.includes(aggregate)) {
-        console.warn(`⚠️ Invalid aggregate value "${aggregate}", defaulting to "none"`);
+        logger.warn(`⚠️ Invalid aggregate value "${aggregate}", defaulting to "none"`);
         aggregate = 'none';
       }
 
@@ -881,12 +882,12 @@ Output format: [{"type": "...", "title": "...", "x": "...", "y": "...", "aggrega
       return true;
     });
     
-    console.log('Generated charts:', sanitized.length);
-    console.log(sanitized);
+    logger.log('Generated charts:', sanitized.length);
+    logger.log(sanitized);
     return sanitized;
   } catch (error) {
-    console.error('Error parsing chart specs:', error);
-    console.error('Raw AI response (first 500 chars):', content?.substring(0, 500));
+    logger.error('Error parsing chart specs:', error);
+    logger.error('Raw AI response (first 500 chars):', content?.substring(0, 500));
     return [];
   }
 }
@@ -915,7 +916,7 @@ export async function generateInsights(
       sampleData.push(data[i]);
     }
     samplingRatio = data.length / sampleData.length;
-    console.log(`📊 Performance optimization: Sampling ${sampleData.length} rows from ${data.length} total (${(samplingRatio).toFixed(1)}x ratio) for statistics calculation`);
+    logger.log(`📊 Performance optimization: Sampling ${sampleData.length} rows from ${data.length} total (${(samplingRatio).toFixed(1)}x ratio) for statistics calculation`);
   } else {
     sampleData = data;
   }
@@ -1134,7 +1135,7 @@ Rules:
       text: item.text || item.insight || String(item),
     }));
   } catch (error) {
-    console.error('Error parsing insights:', error);
+    logger.error('Error parsing insights:', error);
     return [];
   }
 }

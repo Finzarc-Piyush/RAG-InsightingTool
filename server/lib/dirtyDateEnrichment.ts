@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DatasetProfile } from '../shared/schema.js';
 import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
+import { logger } from "./logger.js";
 
 const mappingBatchSchema = z.object({
   mappings: z.array(
@@ -135,7 +136,7 @@ async function buildColumnMap(
       values: b,
     });
     if (!res.ok) {
-      console.warn(`⚠️ dirtyDateEnrichment: batch failed for "${source}": ${res.error}`);
+      logger.warn(`⚠️ dirtyDateEnrichment: batch failed for "${source}": ${res.error}`);
       return null;
     }
     for (const [k, v] of res.map.entries()) merged.set(k, v);
@@ -193,7 +194,7 @@ export async function enrichDirtyStringDateColumns(
       mapBatch,
     });
     if (!colMap) {
-      console.warn(`⚠️ dirtyDateEnrichment: skipped Cleaned_* for "${source}" (LLM mapping failed)`);
+      logger.warn(`⚠️ dirtyDateEnrichment: skipped Cleaned_* for "${source}" (LLM mapping failed)`);
       continue;
     }
     successes.push({ source, cleaned, map: colMap });

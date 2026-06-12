@@ -7,6 +7,7 @@ import { MODEL } from "./openai.js";
 import { callLlm } from "./agents/runtime/callLlm.js";
 import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
 import { resolveToSchemaColumn } from "./agents/runtime/plannerColumnResolve.js";
+import { logger } from "./logger.js";
 
 export interface SchemaColumnBindingResult {
   /** Exact names present in `summary.columns` */
@@ -187,7 +188,7 @@ Output ONLY valid JSON.`;
           : "Columns bound to dataset schema.",
     };
   } catch (e) {
-    console.error("schemaColumnBinding: falling back to all columns", e);
+    logger.error("schemaColumnBinding: falling back to all columns", e);
     return {
       canonicalColumns: summary.columns.map((c) => c.name),
       columnMapping: {},

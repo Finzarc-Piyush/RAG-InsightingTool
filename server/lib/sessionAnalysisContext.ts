@@ -13,6 +13,7 @@ import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
 import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
 import { buildDeterministicScopeFacts } from "./datasetScopeFacts.js";
 import { withSessionWriteLock } from "./sessionWriteLock.js";
+import { logger } from "./logger.js";
 
 export { withImmutableUserIntentFromPrevious };
 
@@ -125,7 +126,7 @@ export async function seedSessionAnalysisContextLLM(params: {
     purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
-    console.warn("⚠️ seedSessionAnalysisContextLLM failed:", out.error);
+    logger.warn("⚠️ seedSessionAnalysisContextLLM failed:", out.error);
     return emptySessionAnalysisContext();
   }
   // out.data is z.infer<typeof sessionAnalysisContextSchema> === SessionAnalysisContext;
@@ -172,7 +173,7 @@ export async function regenerateStarterQuestionsLLM(params: {
     }
   );
   if (!out.ok) {
-    console.warn("⚠️ regenerateStarterQuestionsLLM failed:", out.error);
+    logger.warn("⚠️ regenerateStarterQuestionsLLM failed:", out.error);
     return [];
   }
   return out.data.suggestedFollowUps.filter((q) => q?.trim()).slice(0, 8);
@@ -200,7 +201,7 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
     purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
-    console.warn("⚠️ mergeSessionAnalysisContextUserLLM failed:", out.error);
+    logger.warn("⚠️ mergeSessionAnalysisContextUserLLM failed:", out.error);
     return prev;
   }
   return out.data as SessionAnalysisContext;
@@ -410,7 +411,7 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
   if (!out.ok) {
-    console.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);
+    logger.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);
     return prev;
   }
   const merged = out.data as SessionAnalysisContext;

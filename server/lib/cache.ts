@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { logger } from "./logger.js";
 
 /**
  * Cache entry interface
@@ -59,7 +60,7 @@ class QueryCache {
       return null;
     }
 
-    console.log(`✅ Cache hit for query: ${query.substring(0, 50)}...`);
+    logger.log(`✅ Cache hit for query: ${query.substring(0, 50)}...`);
     return entry.value as T;
   }
 
@@ -77,7 +78,7 @@ class QueryCache {
       createdAt: Date.now(),
     });
 
-    console.log(`💾 Cached result for query: ${query.substring(0, 50)}... (TTL: ${(ttl || this.defaultTTL) / 1000}s)`);
+    logger.log(`💾 Cached result for query: ${query.substring(0, 50)}... (TTL: ${(ttl || this.defaultTTL) / 1000}s)`);
   }
 
   /**
@@ -93,7 +94,7 @@ class QueryCache {
       }
     }
     if (deletedCount > 0) {
-      console.log(`🗑️ Invalidated ${deletedCount} cache entries for session: ${sessionId}`);
+      logger.log(`🗑️ Invalidated ${deletedCount} cache entries for session: ${sessionId}`);
     }
   }
 
@@ -103,7 +104,7 @@ class QueryCache {
   clear(): void {
     const size = this.cache.size;
     this.cache.clear();
-    console.log(`🗑️ Cleared ${size} cache entries`);
+    logger.log(`🗑️ Cleared ${size} cache entries`);
   }
 
   /**
@@ -135,7 +136,7 @@ class QueryCache {
       }
     }
     if (cleaned > 0) {
-      console.log(`🧹 Cleaned ${cleaned} expired cache entries`);
+      logger.log(`🧹 Cleaned ${cleaned} expired cache entries`);
     }
     return cleaned;
   }

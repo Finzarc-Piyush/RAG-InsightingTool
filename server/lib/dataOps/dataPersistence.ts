@@ -11,6 +11,7 @@ import {
 } from '../temporalFacetColumns.js';
 import { generateColumnStatistics } from '../../models/chat.model.js';
 import { withSessionWriteLock } from '../sessionWriteLock.js';
+import { logger } from "../logger.js";
 
 export interface SaveDataResult {
   version: number;
@@ -78,19 +79,19 @@ async function saveModifiedDataLocked(
   // Check if this is a large dataset
   const isLargeDataset = modifiedData.length > 50000;
   if (isLargeDataset) {
-    console.log(`📊 Large dataset detected (${modifiedData.length} rows). Saving to blob storage with streaming optimization...`);
+    logger.log(`📊 Large dataset detected (${modifiedData.length} rows). Saving to blob storage with streaming optimization...`);
   }
 
   // Save new version to blob
   // updateProcessedDataBlob handles large datasets efficiently
-  console.log(`💾 Saving aggregated data to blob storage: ${modifiedData.length} rows, version ${newVersion}`);
+  logger.log(`💾 Saving aggregated data to blob storage: ${modifiedData.length} rows, version ${newVersion}`);
   const newBlob = await updateProcessedDataBlob(
     sessionId,
     modifiedData,
     newVersion,
     username
   );
-  console.log(`✅ Saved to blob storage: ${newBlob.blobName} (${newBlob.blobUrl})`);
+  logger.log(`✅ Saved to blob storage: ${newBlob.blobName} (${newBlob.blobUrl})`);
 
   // Calculate metrics
   const rowsBefore = doc.dataSummary?.rowCount || 0;
@@ -162,10 +163,10 @@ async function saveModifiedDataLocked(
       }
       return serializedRow;
     });
-    console.log(`✅ Updated rawData in CosmosDB document (${modifiedData.length} rows)`);
+    logger.log(`✅ Updated rawData in CosmosDB document (${modifiedData.length} rows)`);
   } else {
     // Dataset too large - don't store in CosmosDB, it's already in blob storage
-    console.log(`⚠️ Dataset too large for CosmosDB (${modifiedData.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB). Keeping rawData empty - data is in blob storage.`);
+    logger.log(`⚠️ Dataset too large for CosmosDB (${modifiedData.length} rows, ~${(estimatedSize / 1024 / 1024).toFixed(2)}MB). Keeping rawData empty - data is in blob storage.`);
     doc.rawData = []; // Clear rawData - it's stored in blob
   }
 
@@ -204,7 +205,7 @@ async function saveModifiedDataLocked(
 
   // Update document
   await updateChatDocument(doc);
-  console.log(`✅ Updated CosmosDB document with blob reference: version ${newVersion}, blob: ${newBlob.blobName}`);
+  logger.log(`✅ Updated CosmosDB document with blob reference: version ${newVersion}, blob: ${newBlob.blobName}`);
 
   const { scheduleIndexSessionRag } = await import("../rag/indexSession.js");
   scheduleIndexSessionRag(sessionId);
@@ -233,7 +234,7 @@ async function saveModifiedDataLocked(
         })
       );
     } catch (e) {
-      console.warn("⚠️ analysisMemory data_op hook failed:", e);
+      logger.warn("⚠️ analysisMemory data_op hook failed:", e);
     }
   })();
 

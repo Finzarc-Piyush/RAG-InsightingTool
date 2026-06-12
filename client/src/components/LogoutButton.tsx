@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { LogOut, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { logger } from "@/lib/logger";
 
 interface LogoutButtonProps {
   /** Icon-only for narrow / collapsed layouts */
@@ -18,7 +19,7 @@ const LogoutButton: React.FC<LogoutButtonProps> = ({ iconOnly = false }) => {
       setIsLoggingOut(true);
       await logout();
     } catch (error) {
-      console.error('Logout error:', error);
+      logger.error('Logout error:', error);
       setIsLoggingOut(false);
     }
   };

@@ -46,6 +46,7 @@ import { callLlm } from './runtime/callLlm.js';
 import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';
 import { getModelForTask } from './models.js';
 import { DataSummary, Message } from '../../shared/schema.js';
+import { logger } from "../logger.js";
 
 /**
  * Mode Classification Schema
@@ -284,21 +285,21 @@ OUTPUT FORMAT (JSON only, no markdown):
       
       const validated = modeClassificationSchema.parse(cleaned);
       
-      console.log(`✅ Mode classified: ${validated.mode} (confidence: ${validated.confidence.toFixed(2)})${validated.reasoning ? ` - ${validated.reasoning}` : ''}`);
+      logger.log(`✅ Mode classified: ${validated.mode} (confidence: ${validated.confidence.toFixed(2)})${validated.reasoning ? ` - ${validated.reasoning}` : ''}`);
       
       return validated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn(`⚠️ Mode classification attempt ${attempt + 1} failed:`, lastError.message);
+      logger.warn(`⚠️ Mode classification attempt ${attempt + 1} failed:`, lastError.message);
       
       if (attempt < maxRetries - 1) {
-        console.log(`🔄 Retrying mode classification...`);
+        logger.log(`🔄 Retrying mode classification...`);
       }
     }
   }
 
   // If all retries failed, use fallback logic
-  console.error('❌ Mode classification failed after retries, using fallback');
+  logger.error('❌ Mode classification failed after retries, using fallback');
   
   const questionLower = question.toLowerCase();
   let fallbackMode: 'analysis' | 'dataOps' | 'modeling' = 'analysis';
@@ -316,11 +317,11 @@ OUTPUT FORMAT (JSON only, no markdown):
     if (recentContent.match(/\b(model|train|predict|linear|logistic|random forest|decision tree|regression|classification|machine learning|modeling|best model|which model)\b/)) {
       fallbackMode = 'modeling';
       fallbackConfidence = 0.8;
-      console.log('📌 Fallback detected modeling context from chat history');
+      logger.log('📌 Fallback detected modeling context from chat history');
     } else if (recentContent.match(/\b(add column|remove column|filter|transform|clean|data preview|data summary|show data|display data)\b/)) {
       fallbackMode = 'dataOps';
       fallbackConfidence = 0.8;
-      console.log('📌 Fallback detected dataOps context from chat history');
+      logger.log('📌 Fallback detected dataOps context from chat history');
     }
   } else {
     // Simple pattern matching for fallback

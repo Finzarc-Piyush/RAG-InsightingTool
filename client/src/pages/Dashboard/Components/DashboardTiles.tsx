@@ -54,6 +54,7 @@ import { ChartTileBody } from './ChartTileBody';
 import { chartSpecToPivotConfig } from '@/components/charts/chartSpecToPivotConfig';
 import { useChartTileViewMode } from '../hooks/useChartTileViewMode';
 import { Table2 } from 'lucide-react';
+import { logger } from "@/lib/logger";
 
 interface DashboardTilesProps {
   dashboardId: string;
@@ -196,7 +197,7 @@ const loadStoredLayouts = (dashboardId: string, sheetId?: string): Layouts | nul
       return parsed as Layouts;
     }
   } catch (error) {
-    console.warn('Failed to parse stored dashboard layout', error);
+    logger.warn('Failed to parse stored dashboard layout', error);
   }
   return null;
 };
@@ -206,7 +207,7 @@ const persistLayouts = (dashboardId: string, layouts: Layouts, sheetId?: string)
   try {
     localStorage.setItem(layoutStorageKey(dashboardId, sheetId), JSON.stringify(layouts));
   } catch (error) {
-    console.warn('Failed to persist dashboard layout', error);
+    logger.warn('Failed to persist dashboard layout', error);
   }
 };
 
@@ -263,7 +264,7 @@ const loadHiddenTiles = (dashboardId: string): Set<string> => {
       return new Set(parsed.filter((id) => typeof id === 'string'));
     }
   } catch (error) {
-    console.warn('Failed to parse hidden tile ids', error);
+    logger.warn('Failed to parse hidden tile ids', error);
   }
   return new Set();
 };
@@ -273,7 +274,7 @@ const persistHiddenTiles = (dashboardId: string, hidden: Set<string>) => {
   try {
     localStorage.setItem(`${HIDDEN_TILE_PREFIX}${dashboardId}`, JSON.stringify(Array.from(hidden)));
   } catch (error) {
-    console.warn('Failed to persist hidden tile ids', error);
+    logger.warn('Failed to persist hidden tile ids', error);
   }
 };
 

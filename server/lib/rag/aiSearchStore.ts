@@ -4,6 +4,7 @@ import { getSearchConfig, getRagTopK } from "./config.js";
 import type { RagHit } from "./ragHit.js";
 
 export type { RagHit } from "./ragHit.js";
+import { logger } from "../logger.js";
 
 // P-023: Azure Search 429 / 5xx retry with exponential backoff + jitter.
 // Reads are always safe to retry; writes (upsert / delete) are idempotent by id
@@ -26,7 +27,7 @@ async function withSearchRetry<T>(label: string, fn: () => Promise<T>): Promise<
       }
       const backoff = Math.min(2000, 200 * 2 ** (attempt - 1));
       const jitter = Math.floor(Math.random() * backoff);
-      console.warn(
+      logger.warn(
         `⚠️ Azure Search ${label} attempt ${attempt} failed (status ${statusCode}); retrying in ${backoff + jitter}ms`
       );
       await new Promise((r) => setTimeout(r, backoff + jitter));

@@ -15,6 +15,7 @@ import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { getDashboardById } from "../models/dashboard.model.js";
 import { buildDashboardXlsxBuffer } from "../services/dashboardExport/xlsxExport.service.js";
 import { buildDashboardPptxBuffer } from "../services/dashboardExport/pptxExport.service.js";
+import { logger } from "../lib/logger.js";
 
 function exportEnabled(envName: string): boolean {
   return process.env[envName] !== "false"; // default ON
@@ -60,7 +61,7 @@ export async function exportDashboardXlsxController(req: Request, res: Response)
     res.send(buf);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`xlsx export failed for ${id}: ${msg}`);
+    logger.error(`xlsx export failed for ${id}: ${msg}`);
     res.status(500).json({ error: "xlsx_export_failed" });
   }
 }
@@ -99,7 +100,7 @@ export async function exportDashboardPptxController(req: Request, res: Response)
     res.send(buf);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`pptx export failed for ${id}: ${msg}`);
+    logger.error(`pptx export failed for ${id}: ${msg}`);
     res.status(500).json({ error: "pptx_export_failed" });
   }
 }

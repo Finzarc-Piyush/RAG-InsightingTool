@@ -22,6 +22,7 @@ import {
   type AnalysisMemoryEntryType,
 } from "../shared/schema.js";
 import { searchMemoryEntries } from "../lib/rag/retrieve.js";
+import { logger } from "../lib/logger.js";
 
 function parseTypes(raw: unknown): AnalysisMemoryEntryType[] | undefined {
   if (typeof raw !== "string" || !raw.trim()) return undefined;
@@ -87,7 +88,7 @@ export const getMemoryEntriesEndpoint = async (
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }
-    console.error("getMemoryEntriesEndpoint error:", err);
+    logger.error("getMemoryEntriesEndpoint error:", err);
     return res.status(500).json({ error: "Failed to load memory entries" });
   }
 };
@@ -118,7 +119,7 @@ export const searchMemoryEndpoint = async (req: Request, res: Response) => {
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }
-    console.error("searchMemoryEndpoint error:", err);
+    logger.error("searchMemoryEndpoint error:", err);
     return res.status(500).json({ error: "Memory search failed" });
   }
 };
@@ -196,7 +197,7 @@ export const exportMemoryEndpoint = async (req: Request, res: Response) => {
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }
-    console.error("exportMemoryEndpoint error:", err);
+    logger.error("exportMemoryEndpoint error:", err);
     return res.status(500).json({ error: "Memory export failed" });
   }
 };

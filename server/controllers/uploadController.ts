@@ -5,6 +5,7 @@ import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
 import { getExcelSheetNames } from "../lib/fileParser.js";
 import { createPlaceholderSession } from "../models/chat.model.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Upload file endpoint - now uses async queue processing
@@ -71,7 +72,7 @@ export const uploadFile = async (
         undefined
       );
     } catch (placeholderErr) {
-      console.error(
+      logger.error(
         "❌ Failed to create placeholder session for upload:",
         placeholderErr
       );
@@ -92,7 +93,7 @@ export const uploadFile = async (
       requestedSheetName
     );
 
-    console.log(`📤 Upload job enqueued: ${jobId} for session ${sessionId}`);
+    logger.log(`📤 Upload job enqueued: ${jobId} for session ${sessionId}`);
 
     // Return immediately with job ID and session ID
     res.status(202).json({
@@ -107,7 +108,7 @@ export const uploadFile = async (
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Upload error:', error);
+    logger.error('Upload error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to process file',
     });
@@ -245,14 +246,14 @@ export const getUploadStatus = async (req: Request, res: Response) => {
     }
 
     if (response.previewReady) {
-      console.log(
+      logger.log(
         `[uploadStatus] job=${job.jobId} status=${job.status} previewPayloadState=${response.previewPayloadState} rows=${response.previewSampleRows?.length ?? 0}`
       );
     }
 
     res.json(response);
   } catch (error) {
-    console.error('Get upload status error:', error);
+    logger.error('Get upload status error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to get upload status',
     });
@@ -272,7 +273,7 @@ export const getQueueStats = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get queue stats error:', error);
+    logger.error('Get queue stats error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to get queue stats',
     });

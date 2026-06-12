@@ -98,6 +98,7 @@ export async function pythonServiceFetch(
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { logger } from "../logger.js";
 
 
 interface RemoveNullsRequest {
@@ -327,7 +328,7 @@ export async function checkPythonServiceHealth(): Promise<boolean> {
     clearTimeout(timeoutId);
     return response.ok;
   } catch (error) {
-    console.error('Python service health check failed:', error);
+    logger.error('Python service health check failed:', error);
     return false;
   }
 }
@@ -389,7 +390,7 @@ export async function removeNulls(
     
     return await response.json() as RemoveNullsResponse;
   } catch (error) {
-    console.error('Error calling Python service remove-nulls:', error);
+    logger.error('Error calling Python service remove-nulls:', error);
     throw error;
   }
 }
@@ -431,7 +432,7 @@ export async function getDataPreview(
       raw
     ) as PreviewResponse;
   } catch (error) {
-    console.error('Error calling Python service preview:', error);
+    logger.error('Error calling Python service preview:', error);
     throw error;
   }
 }
@@ -460,7 +461,7 @@ export async function getDataSummary(data: Record<string, any>[], column?: strin
     
     return await response.json() as SummaryResponse;
   } catch (error) {
-    console.error('Error calling Python service summary:', error);
+    logger.error('Error calling Python service summary:', error);
     throw error;
   }
 }
@@ -490,7 +491,7 @@ export async function getInitialAnalysis(data: Record<string, any>[]): Promise<I
 
     return await response.json() as InitialAnalysisResponse;
   } catch (error) {
-    console.error('Error calling Python service initial-analysis:', error);
+    logger.error('Error calling Python service initial-analysis:', error);
     throw error;
   }
 }
@@ -529,7 +530,7 @@ export async function createDerivedColumn(
     
     return await response.json() as CreateDerivedColumnResponse;
   } catch (error) {
-    console.error('Error calling Python service create-derived-column:', error);
+    logger.error('Error calling Python service create-derived-column:', error);
     throw error;
   }
 }
@@ -568,7 +569,7 @@ export async function convertDataType(
     
     return await response.json() as ConvertTypeResponse;
   } catch (error) {
-    console.error('Error calling Python service convert-type:', error);
+    logger.error('Error calling Python service convert-type:', error);
     throw error;
   }
 }
@@ -620,7 +621,7 @@ export async function aggregateData(
       raw
     ) as AggregateResponse;
   } catch (error) {
-    console.error('Error calling Python service aggregate:', error);
+    logger.error('Error calling Python service aggregate:', error);
     throw error;
   }
 }
@@ -665,7 +666,7 @@ export async function createPivotTable(
     
     // For large responses, write to temp file first to avoid string length limits
     if (contentLength && parseInt(contentLength, 10) > LARGE_RESPONSE_THRESHOLD) {
-      console.warn(`⚠️ Large pivot response detected (${(parseInt(contentLength, 10) / 1024 / 1024).toFixed(2)}MB). Writing to temp file...`);
+      logger.warn(`⚠️ Large pivot response detected (${(parseInt(contentLength, 10) / 1024 / 1024).toFixed(2)}MB). Writing to temp file...`);
       
       const tempFile = path.join(os.tmpdir(), `pivot_${Date.now()}_${Math.random().toString(36).substring(7)}.json`);
       
@@ -787,7 +788,7 @@ export async function createPivotTable(
             }
           }
         } catch (previewError) {
-          console.warn('⚠️ Could not parse preview from large file:', previewError);
+          logger.warn('⚠️ Could not parse preview from large file:', previewError);
         }
 
         // Return response with file buffer for blob storage and preview only.
@@ -818,7 +819,7 @@ export async function createPivotTable(
             fs.unlinkSync(tempFile);
           }
         } catch (unlinkError) {
-          console.warn('⚠️ Could not delete pivot temp file:', unlinkError);
+          logger.warn('⚠️ Could not delete pivot temp file:', unlinkError);
         }
       }
     }
@@ -851,7 +852,7 @@ export async function createPivotTable(
         `or 3) Specifying only specific value columns to aggregate.`
       );
     }
-    console.error('Error calling Python service pivot:', error);
+    logger.error('Error calling Python service pivot:', error);
     throw error;
   }
 }
@@ -935,7 +936,7 @@ export async function trainMLModel(
     ];
     const isUnsupervised = unsupervisedModels.includes(modelType);
     
-    console.log(`📤 Preparing train-model request: model_type="${modelType}", target="${targetVariable}", features=[${features.slice(0, 3).join(', ')}${features.length > 3 ? '...' : ''}]`);
+    logger.log(`📤 Preparing train-model request: model_type="${modelType}", target="${targetVariable}", features=[${features.slice(0, 3).join(', ')}${features.length > 3 ? '...' : ''}]`);
     
     const request: TrainModelRequest = {
       data,
@@ -950,7 +951,7 @@ export async function trainMLModel(
       throw new Error(`Invalid model type: ${modelType}`);
     }
     
-    console.log(`📋 Request payload: model_type="${request.model_type}", target_variable="${request.target_variable}", features count=${request.features.length}`);
+    logger.log(`📋 Request payload: model_type="${request.model_type}", target_variable="${request.target_variable}", features count=${request.features.length}`);
     
     // Add target_variable only for supervised models
     if (!isUnsupervised && targetVariable) {
@@ -1132,15 +1133,15 @@ export async function trainMLModel(
       } catch {
         errorDetail = errorText || `HTTP ${response.status}: ${response.statusText}`;
       }
-      console.error(`❌ Python service error (${response.status}):`, errorDetail);
+      logger.error(`❌ Python service error (${response.status}):`, errorDetail);
       throw new Error(errorDetail);
     }
     
     const result = await response.json() as TrainModelResponse;
-    console.log(`✅ Python service returned model type: ${result.model_type}`);
+    logger.log(`✅ Python service returned model type: ${result.model_type}`);
     return result;
   } catch (error) {
-    console.error('❌ Error calling Python service train-model:', {
+    logger.error('❌ Error calling Python service train-model:', {
       modelType,
       targetVariable,
       error: error instanceof Error ? error.message : String(error),
@@ -1228,13 +1229,13 @@ export async function identifyOutliers(
       } catch {
         errorDetail = errorText || `HTTP ${response.status}: ${response.statusText}`;
       }
-      console.error(`❌ Python service error (${response.status}):`, errorDetail);
+      logger.error(`❌ Python service error (${response.status}):`, errorDetail);
       throw new Error(errorDetail);
     }
     
     return await response.json() as IdentifyOutliersResponse;
   } catch (error) {
-    console.error('Error calling Python service identify-outliers:', error);
+    logger.error('Error calling Python service identify-outliers:', error);
     throw error;
   }
 }
@@ -1311,13 +1312,13 @@ export async function treatOutliers(
       } catch {
         errorDetail = errorText || `HTTP ${response.status}: ${response.statusText}`;
       }
-      console.error(`❌ Python service error (${response.status}):`, errorDetail);
+      logger.error(`❌ Python service error (${response.status}):`, errorDetail);
       throw new Error(errorDetail);
     }
     
     return await response.json() as TreatOutliersResponse;
   } catch (error) {
-    console.error('Error calling Python service treat-outliers:', error);
+    logger.error('Error calling Python service treat-outliers:', error);
     throw error;
   }
 }

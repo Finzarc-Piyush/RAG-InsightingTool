@@ -18,6 +18,7 @@ import {
   listAllDashboardsForSuperadmin,
   getDashboardByIdForSuperadmin,
 } from "../models/dashboard.model.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * GET /api/superadmin/me — single bit the client uses to decide whether to
@@ -58,7 +59,7 @@ export async function listAllSessionsForSuperadminEndpoint(
       getAllSessions(undefined),
       aggregateFeedbackCountsBySession().catch(
         (err) => {
-          console.warn(
+          logger.warn(
             `⚠️ superadmin: feedback aggregation failed (${err instanceof Error ? err.message : String(err)}); rendering with zero counts`
           );
           return new Map<string, { up: number; down: number; none: number }>();
@@ -89,7 +90,7 @@ export async function listAllSessionsForSuperadminEndpoint(
 
     return res.json({ sessions: rows, count: rows.length });
   } catch (err) {
-    console.error("⚠️ superadmin/sessions failed:", err);
+    logger.error("⚠️ superadmin/sessions failed:", err);
     return res.status(500).json({ error: "superadmin_sessions_failed" });
   }
 }
@@ -111,7 +112,7 @@ export async function getSessionForSuperadminEndpoint(
     if (!session) return res.status(404).json({ error: "session_not_found" });
     return res.json({ session, _superadmin: true });
   } catch (err) {
-    console.error("⚠️ superadmin/sessions/:id failed:", err);
+    logger.error("⚠️ superadmin/sessions/:id failed:", err);
     return res.status(500).json({ error: "superadmin_session_fetch_failed" });
   }
 }
@@ -143,7 +144,7 @@ export async function listAllDashboardsForSuperadminEndpoint(
     });
     return res.json({ dashboards: rows, count: rows.length });
   } catch (err) {
-    console.error("⚠️ superadmin/dashboards failed:", err);
+    logger.error("⚠️ superadmin/dashboards failed:", err);
     return res.status(500).json({ error: "superadmin_dashboards_failed" });
   }
 }
@@ -167,7 +168,7 @@ export async function getDashboardForSuperadminEndpoint(
     }
     return res.json({ dashboard, _superadmin: true });
   } catch (err) {
-    console.error("⚠️ superadmin/dashboards/:id failed:", err);
+    logger.error("⚠️ superadmin/dashboards/:id failed:", err);
     return res.status(500).json({ error: "superadmin_dashboard_fetch_failed" });
   }
 }

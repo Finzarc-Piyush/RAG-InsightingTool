@@ -11,6 +11,7 @@ import {
 } from "./pivotPatterns.js";
 import { buildPatternDrivenEnvelope } from "./deterministicNarratives.js";
 import { resolveTopPerfDimension } from "../insightGenerator.js";
+import { logger } from "../logger.js";
 
 export type PivotEnvelopeFinding = {
   headline: string;
@@ -269,7 +270,7 @@ Aim for 1–3 findings, 1–3 implications, 1–3 recommendations. Quality > qua
     }
     return envelope;
   } catch (error) {
-    console.error("Error generating pivot envelope:", error);
+    logger.error("Error generating pivot envelope:", error);
     return deterministicEnvelope();
   }
 }

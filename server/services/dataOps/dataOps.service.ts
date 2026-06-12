@@ -12,6 +12,7 @@ import {
 } from "../../models/chat.model.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import queryCache from "../../lib/cache.js";
+import { logger } from "../../lib/logger.js";
 
 export interface ProcessDataOpsParams {
   sessionId: string;
@@ -50,7 +51,7 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
   } catch (error: any) {
     // If CosmosDB isn't initialized, we can't get the document
     if (error?.message?.includes('CosmosDB container not initialized')) {
-      console.warn('⚠️ CosmosDB not initialized, proceeding without session document. Context may be limited.');
+      logger.warn('⚠️ CosmosDB not initialized, proceeding without session document. Context may be limited.');
       // We'll continue without chatDocument, but this means we won't have data or dataSummary
       // This is a limitation - we need CosmosDB to be initialized to work properly
       throw new Error('Database is initializing. Please wait a moment and try again.');
@@ -71,12 +72,12 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
 
   // Load data
   const fullData = await loadDataForOperation(chatDocument);
-  console.log(`✅ Using ${fullData.length} rows for data operation`);
+  logger.log(`✅ Using ${fullData.length} rows for data operation`);
 
   // Fetch last 15 messages from Cosmos DB for context
   const allMessages = chatDocument.messages || [];
   const chatHistory = allMessages.slice(-15);
-  console.log(`📚 Using ${chatHistory.length} messages from database for context`);
+  logger.log(`📚 Using ${chatHistory.length} messages from database for context`);
 
   // Parse intent
   const intent = await parseDataOpsIntent(message, chatHistory, chatDocument.dataSummary, chatDocument);
@@ -90,7 +91,7 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
   // Invalidate cache when data is modified (saved operations)
   if (result.saved) {
     queryCache.invalidateSession(sessionId);
-    console.log(`🗑️ Cache invalidated for session ${sessionId} due to data modification`);
+    logger.log(`🗑️ Cache invalidated for session ${sessionId} due to data modification`);
   }
 
   // Save messages
@@ -111,7 +112,7 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
       },
     ]);
   } catch (error) {
-    console.error("⚠️ Failed to save messages:", error);
+    logger.error("⚠️ Failed to save messages:", error);
   }
 
   return {

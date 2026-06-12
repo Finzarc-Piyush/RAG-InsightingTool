@@ -9,6 +9,7 @@ import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { DataSummary, Message } from '../shared/schema.js';
 import { checkPythonServiceHealth } from './dataOps/pythonService.js';
+import { logger } from "./logger.js";
 
 export interface ExecutionPlan {
   steps: ExecutionStep[];
@@ -290,17 +291,17 @@ Output ONLY valid JSON, no markdown, no explanations:`;
       reasoning: string;
     };
 
-    console.log('✅ Identified columns:', result.identifiedColumns);
-    console.log('📋 Column mapping:', result.columnMapping);
-    console.log('🔍 Filters identified:', result.filters?.length || 0);
-    console.log('💭 Reasoning:', result.reasoning);
+    logger.log('✅ Identified columns:', result.identifiedColumns);
+    logger.log('📋 Column mapping:', result.columnMapping);
+    logger.log('🔍 Filters identified:', result.filters?.length || 0);
+    logger.log('💭 Reasoning:', result.reasoning);
 
     // Apply filters to data
     let filteredData = data;
     const filterDescriptions: string[] = [];
 
     if (result.filters && result.filters.length > 0) {
-      console.log('🔧 Applying filters to data...');
+      logger.log('🔧 Applying filters to data...');
       
       for (const filter of result.filters) {
         const beforeCount = filteredData.length;
@@ -376,7 +377,7 @@ Output ONLY valid JSON, no markdown, no explanations:`;
 
         const afterCount = filteredData.length;
         filterDescriptions.push(`${filter.description}: ${beforeCount} → ${afterCount} rows`);
-        console.log(`  ✓ ${filter.description}: ${beforeCount} → ${afterCount} rows`);
+        logger.log(`  ✓ ${filter.description}: ${beforeCount} → ${afterCount} rows`);
       }
     }
 
@@ -388,7 +389,7 @@ Output ONLY valid JSON, no markdown, no explanations:`;
       filterDescription: filterDescriptions.join('; ') || 'No filters applied',
     };
   } catch (error) {
-    console.error('❌ Error identifying columns:', error);
+    logger.error('❌ Error identifying columns:', error);
     // Fallback: return all columns with no filtering
     return {
       identifiedColumns: summary.columns.map(c => c.name),
@@ -623,10 +624,10 @@ Output ONLY valid JSON, no markdown, no explanations:
       step.output_alias = `step_${step.step_number}`;
     });
 
-    console.log('✅ Generated execution plan:', JSON.stringify(plan, null, 2));
+    logger.log('✅ Generated execution plan:', JSON.stringify(plan, null, 2));
     return plan;
   } catch (error) {
-    console.error('❌ Error generating execution plan:', error);
+    logger.error('❌ Error generating execution plan:', error);
     throw error;
   }
 }
@@ -745,7 +746,7 @@ export async function executePlan(
       execution_log: executionLog,
     };
   } catch (error) {
-    console.error('❌ Error executing plan:', error);
+    logger.error('❌ Error executing plan:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
@@ -982,7 +983,7 @@ export async function generateQueryPlanOnly(
   summary: DataSummary,
   chatHistory: Message[] = []
 ): Promise<{ queryPlan: ExecutionPlan; columnMapping: Record<string, string> }> {
-  console.log('📋 Generating query plan only (no execution, no explanation)...');
+  logger.log('📋 Generating query plan only (no execution, no explanation)...');
   
   // Step 1: Identify relevant columns (without filtering data - we don't need actual data)
   const recentHistory = chatHistory
@@ -1096,7 +1097,7 @@ Output ONLY valid JSON, no markdown, no explanations:`;
       columnMapping: columnMapping,
     };
   } catch (error) {
-    console.error('❌ Error generating query plan:', error);
+    logger.error('❌ Error generating query plan:', error);
     throw error;
   }
 }
@@ -1166,7 +1167,7 @@ Answer:`;
 
     return response.choices[0]?.message?.content || 'Unable to generate explanation.';
   } catch (error) {
-    console.error('❌ Error generating explanation:', error);
+    logger.error('❌ Error generating explanation:', error);
     return 'Query executed successfully, but unable to generate explanation.';
   }
 }

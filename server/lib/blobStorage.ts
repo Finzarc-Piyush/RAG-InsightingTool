@@ -1,4 +1,5 @@
 import { BlobServiceClient, BlockBlobClient, StorageSharedKeyCredential, BlobSASPermissions } from "@azure/storage-blob";
+import { logger } from "./logger.js";
 
 // Azure Blob Storage configuration
 const AZURE_STORAGE_ACCOUNT_NAME = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
@@ -29,10 +30,10 @@ export const initializeBlobStorage = async (): Promise<void> => {
   initPromise = (async () => {
     try {
       await containerClient.createIfNotExists();
-      console.log("✅ Azure Blob Storage initialized successfully");
-      console.log(`📁 Container: ${AZURE_STORAGE_CONTAINER_NAME}`);
+      logger.log("✅ Azure Blob Storage initialized successfully");
+      logger.log(`📁 Container: ${AZURE_STORAGE_CONTAINER_NAME}`);
     } catch (error) {
-      console.error("❌ Failed to initialize Azure Blob Storage:", error);
+      logger.error("❌ Failed to initialize Azure Blob Storage:", error);
       // Allow a later retry rather than caching the rejection forever.
       initPromise = null;
       throw error;
@@ -83,15 +84,15 @@ export const uploadFileToBlob = async (
     // Generate the blob URL
     const blobUrl = blockBlobClient.url;
     
-    console.log(`✅ File uploaded to blob storage: ${blobName}`);
-    console.log(`🔗 Blob URL: ${blobUrl}`);
+    logger.log(`✅ File uploaded to blob storage: ${blobName}`);
+    logger.log(`🔗 Blob URL: ${blobUrl}`);
     
     return {
       blobUrl,
       blobName,
     };
   } catch (error) {
-    console.error("❌ Failed to upload file to blob storage:", error);
+    logger.error("❌ Failed to upload file to blob storage:", error);
     throw error;
   }
 };
@@ -120,11 +121,11 @@ export const uploadBufferToBlobAtExactPath = async (
     void uploadResult;
 
     const blobUrl = blockBlobClient.url;
-    console.log(`📦 Internal artifact uploaded: ${exactBlobName}`);
+    logger.log(`📦 Internal artifact uploaded: ${exactBlobName}`);
 
     return { blobUrl, blobName: exactBlobName };
   } catch (error) {
-    console.error("❌ Failed to upload internal artifact to blob storage:", error);
+    logger.error("❌ Failed to upload internal artifact to blob storage:", error);
     throw error;
   }
 };
@@ -147,7 +148,7 @@ export const getFileFromBlob = async (blobName: string): Promise<Buffer> => {
     
     return Buffer.concat(chunks);
   } catch (error) {
-    console.error("❌ Failed to get file from blob storage:", error);
+    logger.error("❌ Failed to get file from blob storage:", error);
     throw error;
   }
 };
@@ -158,9 +159,9 @@ export const deleteFileFromBlob = async (blobName: string): Promise<void> => {
     const blockBlobClient = containerClient.getBlockBlobClient(blobName);
     await blockBlobClient.delete();
     
-    console.log(`✅ File deleted from blob storage: ${blobName}`);
+    logger.log(`✅ File deleted from blob storage: ${blobName}`);
   } catch (error) {
-    console.error("❌ Failed to delete file from blob storage:", error);
+    logger.error("❌ Failed to delete file from blob storage:", error);
     throw error;
   }
 };
@@ -200,7 +201,7 @@ export const listUserFiles = async (username: string): Promise<Array<{
     
     return files;
   } catch (error) {
-    console.error("❌ Failed to list user files:", error);
+    logger.error("❌ Failed to list user files:", error);
     throw error;
   }
 };
@@ -241,7 +242,7 @@ export const generateSasUrl = async (
     
     return sasUrl;
   } catch (error) {
-    console.error("❌ Failed to generate SAS URL:", error);
+    logger.error("❌ Failed to generate SAS URL:", error);
     throw error;
   }
 };
@@ -287,7 +288,7 @@ export const updateProcessedDataBlob = async (
       const isLargeDataset = data.length > 50000;
       
       if (isLargeDataset) {
-        console.log(`📦 Large dataset detected (${data.length} rows). Serializing in chunks for blob upload...`);
+        logger.log(`📦 Large dataset detected (${data.length} rows). Serializing in chunks for blob upload...`);
         // For very large datasets, serialize in chunks to avoid memory issues
         const chunks: string[] = [];
         chunks.push('[');
@@ -300,7 +301,7 @@ export const updateProcessedDataBlob = async (
           
           // Log progress for very large datasets
           if ((i + 1) % 10000 === 0) {
-            console.log(`  Serialized ${i + 1} / ${data.length} rows...`);
+            logger.log(`  Serialized ${i + 1} / ${data.length} rows...`);
           }
         }
         
@@ -342,7 +343,7 @@ export const updateProcessedDataBlob = async (
     // Azure Blob Storage handles large files efficiently, but we log progress for very large uploads
     const sizeMB = buffer.length / (1024 * 1024);
     if (sizeMB > 50) {
-      console.log(`📤 Uploading large blob (${sizeMB.toFixed(2)} MB) to Azure Blob Storage...`);
+      logger.log(`📤 Uploading large blob (${sizeMB.toFixed(2)} MB) to Azure Blob Storage...`);
     }
     
     await blockBlobClient.upload(buffer, buffer.length, uploadOptions);
@@ -350,15 +351,15 @@ export const updateProcessedDataBlob = async (
     // Generate the blob URL
     const blobUrl = blockBlobClient.url;
     
-    console.log(`✅ Processed data uploaded to blob storage: ${blobName} (${rowCount} rows, ${sizeMB.toFixed(2)} MB)`);
-    console.log(`🔗 Blob URL: ${blobUrl}`);
+    logger.log(`✅ Processed data uploaded to blob storage: ${blobName} (${rowCount} rows, ${sizeMB.toFixed(2)} MB)`);
+    logger.log(`🔗 Blob URL: ${blobUrl}`);
     
     return {
       blobUrl,
       blobName,
     };
   } catch (error) {
-    console.error("❌ Failed to update processed data blob:", error);
+    logger.error("❌ Failed to update processed data blob:", error);
     throw error;
   }
 };
@@ -431,10 +432,10 @@ export const saveChartsToBlob = async (
       });
     }
 
-    console.log(`✅ Saved ${chartReferences.length} charts to blob storage for session ${sessionId}`);
+    logger.log(`✅ Saved ${chartReferences.length} charts to blob storage for session ${sessionId}`);
     return chartReferences;
   } catch (error) {
-    console.error("❌ Failed to save charts to blob storage:", error);
+    logger.error("❌ Failed to save charts to blob storage:", error);
     throw error;
   }
 };
@@ -457,15 +458,15 @@ export const loadChartsFromBlob = async (
         const chartData = JSON.parse(blobBuffer.toString('utf-8'));
         charts.push(chartData);
       } catch (error) {
-        console.error(`⚠️ Failed to load chart ${ref.chartId} from blob:`, error);
+        logger.error(`⚠️ Failed to load chart ${ref.chartId} from blob:`, error);
         // Continue loading other charts even if one fails
       }
     }
 
-    console.log(`✅ Loaded ${charts.length} charts from blob storage`);
+    logger.log(`✅ Loaded ${charts.length} charts from blob storage`);
     return charts;
   } catch (error) {
-    console.error("❌ Failed to load charts from blob storage:", error);
+    logger.error("❌ Failed to load charts from blob storage:", error);
     throw error;
   }
 };
@@ -483,14 +484,14 @@ export const deleteChartsFromBlob = async (
       try {
         await deleteFileFromBlob(ref.blobName);
       } catch (error) {
-        console.error(`⚠️ Failed to delete chart ${ref.chartId} from blob:`, error);
+        logger.error(`⚠️ Failed to delete chart ${ref.chartId} from blob:`, error);
         // Continue deleting other charts even if one fails
       }
     }
 
-    console.log(`✅ Deleted ${chartReferences.length} charts from blob storage`);
+    logger.log(`✅ Deleted ${chartReferences.length} charts from blob storage`);
   } catch (error) {
-    console.error("❌ Failed to delete charts from blob storage:", error);
+    logger.error("❌ Failed to delete charts from blob storage:", error);
     throw error;
   }
 };

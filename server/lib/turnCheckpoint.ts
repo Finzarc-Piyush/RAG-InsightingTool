@@ -14,6 +14,7 @@
  */
 import { mutateChatDocument } from "../models/chat.model.js";
 import type { AgentInternals } from "../shared/schema.js";
+import { logger } from "./logger.js";
 
 const CHECKPOINT_DEBOUNCE_MS = Math.max(
   1000,
@@ -106,7 +107,7 @@ async function writeCheckpoint(
       };
     });
   } catch (err) {
-    console.warn(
+    logger.warn(
       `⚠️ turnCheckpoint write failed (session=${sessionId}):`,
       err instanceof Error ? err.message : err
     );
@@ -143,7 +144,7 @@ export async function clearTurnCheckpoint(
       delete doc.currentTurnCheckpoint;
     });
   } catch (err) {
-    console.warn(
+    logger.warn(
       `⚠️ turnCheckpoint clear failed (session=${sessionId}):`,
       err instanceof Error ? err.message : err
     );

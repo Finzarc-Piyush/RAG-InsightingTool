@@ -8,6 +8,7 @@ import { MODEL } from './openai.js';
 import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { DataSummary } from '../shared/schema.js';
+import { logger } from "./logger.js";
 
 export interface ChatAnalysisResult {
   intent: string;
@@ -124,7 +125,7 @@ IMPORTANT:
       userIntent: parsed.userIntent || '',
     };
   } catch (error) {
-    console.error('Error analyzing chat with AI:', error);
+    logger.error('Error analyzing chat with AI:', error);
     // Fallback: return basic analysis
     return {
       intent: 'general',

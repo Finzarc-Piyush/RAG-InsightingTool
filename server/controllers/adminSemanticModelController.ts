@@ -54,6 +54,7 @@ import {
 import { countSemanticModelReferences } from "../lib/semantic/semanticModelReferences.js";
 import { countDashboardReferences } from "../lib/semantic/semanticModelDashboardReferences.js";
 import { onSemanticModelVersionBumped } from "../lib/semantic/semanticModelInvalidate.js";
+import { logger } from "../lib/logger.js";
 
 export interface AdminSemanticModelListResponse {
   generatedAt: number;
@@ -263,7 +264,7 @@ export async function listSemanticModels(
     res.json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel list failed: ${msg}`);
+    logger.error(`adminSemanticModel list failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_list_failed" });
   }
 }
@@ -325,7 +326,7 @@ export async function getSemanticModel(
     res.json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel detail failed: ${msg}`);
+    logger.error(`adminSemanticModel detail failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_detail_failed" });
   }
 }
@@ -458,7 +459,7 @@ export async function patchSemanticModel(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel patch failed: ${msg}`);
+    logger.error(`adminSemanticModel patch failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_patch_failed" });
   }
 }
@@ -518,7 +519,7 @@ export async function getSemanticModelAuditLog(
     res.json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel audit-log fetch failed: ${msg}`);
+    logger.error(`adminSemanticModel audit-log fetch failed: ${msg}`);
     res
       .status(500)
       .json({ error: "admin_semantic_model_audit_log_failed" });
@@ -686,7 +687,7 @@ export async function revertSemanticModel(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel revert failed: ${msg}`);
+    logger.error(`adminSemanticModel revert failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_revert_failed" });
   }
 }
@@ -786,7 +787,7 @@ export async function getSemanticModelReferences(
     res.json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel references failed: ${msg}`);
+    logger.error(`adminSemanticModel references failed: ${msg}`);
     res
       .status(500)
       .json({ error: "admin_semantic_model_references_failed" });
@@ -1005,7 +1006,7 @@ export async function deleteSemanticModelEntry(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel delete failed: ${msg}`);
+    logger.error(`adminSemanticModel delete failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_delete_failed" });
   }
 }
@@ -1219,7 +1220,7 @@ export async function addSemanticModelEntry(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`adminSemanticModel add failed: ${msg}`);
+    logger.error(`adminSemanticModel add failed: ${msg}`);
     res.status(500).json({ error: "admin_semantic_model_add_failed" });
   }
 }

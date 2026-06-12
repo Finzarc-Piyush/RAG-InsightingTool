@@ -2,6 +2,7 @@ import { MODEL } from './openai.js';
 import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { Message, DataSummary } from '../shared/schema.js';
+import { logger } from "./logger.js";
 
 function normalizeForDedup(s: string): string {
   return s
@@ -110,7 +111,7 @@ Output JSON only:
       return filterSuggestionsAgainstHints(raw, avoidOverlap ?? []);
     }
   } catch (error) {
-    console.error('Failed to generate AI suggestions:', error);
+    logger.error('Failed to generate AI suggestions:', error);
   }
 
   // Fallback to default suggestions

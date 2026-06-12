@@ -28,6 +28,7 @@ import {
   writeLlmUsageBatch,
   type LlmUsageDoc,
 } from "../../models/llmUsage.model.js";
+import { logger } from "../logger.js";
 
 const DEFAULT_MAX_BUFFER = 100;
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
@@ -83,7 +84,7 @@ export function createLlmUsageSink(config: LlmUsageSinkConfig): LlmUsageSink {
     config.onWriteError ??
     ((err, dropped) => {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`⚠️ llmUsageSink dropped ${dropped} telemetry row(s): ${msg}`);
+      logger.warn(`⚠️ llmUsageSink dropped ${dropped} telemetry row(s): ${msg}`);
     });
 
   let buffer: LlmUsageDoc[] = [];
@@ -176,7 +177,7 @@ export function startDefaultLlmUsageSink(): void {
       const container = await waitForLlmUsageContainer(10, 500);
       const { failed } = await writeLlmUsageBatch(container, docs);
       if (failed > 0) {
-        console.warn(`⚠️ llmUsageSink: ${failed}/${docs.length} rows failed to persist`);
+        logger.warn(`⚠️ llmUsageSink: ${failed}/${docs.length} rows failed to persist`);
       }
     },
   });

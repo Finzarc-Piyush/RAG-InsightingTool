@@ -25,6 +25,7 @@ import {
   getFileFromBlob,
   generateSasUrl,
 } from "./blobStorage.js";
+import { logger } from "./logger.js";
 
 /** Phase 1 feature flag. Default OFF — the existing read path is used unless set to "true". */
 export function isParquetReadPathEnabled(): boolean {
@@ -131,7 +132,7 @@ export async function openSessionParquetAsView(
     await storage.executeQuery('SELECT 1 FROM "data" LIMIT 1');
     return "remote";
   } catch (remoteErr) {
-    console.warn(
+    logger.warn(
       `⚠️ Parquet remote read unavailable, falling back to download: ${
         remoteErr instanceof Error ? remoteErr.message : String(remoteErr)
       }`,

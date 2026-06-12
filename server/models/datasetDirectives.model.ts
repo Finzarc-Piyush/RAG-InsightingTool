@@ -26,6 +26,7 @@ import {
   type UserDirectiveSource,
   type UserDirectiveStructured,
 } from "../shared/schema.js";
+import { logger } from "../lib/logger.js";
 
 const DOC_ID_SEPARATOR = "__";
 
@@ -94,7 +95,7 @@ export async function getDatasetDirectivesDoc(
     if (!resource) return emptyDoc(username, fingerprint);
     const parsed = datasetDirectivesDocSchema.safeParse(resource);
     if (!parsed.success) {
-      console.warn(
+      logger.warn(
         `⚠️ dataset_directives doc ${id} failed schema parse; returning empty`,
         parsed.error.issues.slice(0, 3)
       );
@@ -132,7 +133,7 @@ export async function hydrateDirectivesForSession(
   try {
     return await listActiveDirectives(username, datasetFingerprint);
   } catch (e) {
-    console.warn("⚠️ hydrateDirectivesForSession failed (returning []):", e);
+    logger.warn("⚠️ hydrateDirectivesForSession failed (returning []):", e);
     return [];
   }
 }

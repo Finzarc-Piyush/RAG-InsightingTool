@@ -54,6 +54,7 @@ const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ def
 // WC9 · v1→v2 shim sits inside InteractiveChartCard; chat charts route through
 // the toolbar wrapper so users can switch mark / stacked-grouped without a roundtrip.
 import { InteractiveChartCard } from '@/components/charts/InteractiveChartCard';
+import { logger } from "@/lib/logger";
 
 const PREVIEW_SIGNATURE_SLICE = 3500;
 
@@ -81,7 +82,7 @@ function SynthesisFallbackCallout({
   useEffect(() => {
     // Surfacing this in console so client telemetry can pick it up; the
     // server-side W3 renderer is the real fix, this branch is a tripwire.
-    console.warn(
+    logger.warn(
       '[MessageBubble] Legacy synthesis dump reached client',
       { messageId }
     );

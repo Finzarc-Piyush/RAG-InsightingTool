@@ -98,6 +98,7 @@ import {
   intermediatePreviewSignature,
   shouldEmitIntermediatePivotFlush,
 } from "./intermediatePivotPolicy.js";
+import { logger } from "../../lib/logger.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -147,7 +148,7 @@ async function serveCachedExactAnswer(params: {
     richDoc = await getPastAnalysisDoc(sourceSessionId, sourceDocId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    logger.warn(
       `⚠️ AMR4 · failed to fetch rich past_analyses doc on cache hit (${msg})`
     );
   }
@@ -203,7 +204,7 @@ async function serveCachedExactAnswer(params: {
     ]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ cache-hit message persist failed for ${chatDocument.id}: ${msg}`);
+    logger.warn(`⚠️ cache-hit message persist failed for ${chatDocument.id}: ${msg}`);
   }
 
   // Wave AD-CH · Count this cache-served question as a usage event so the
@@ -228,7 +229,7 @@ async function serveCachedExactAnswer(params: {
     res.end();
   }
   // Identity hint in the log for rollup dashboards.
-  console.log(
+  logger.log(
     `💡 served from ${hit.source} cache (ageMs=${hit.ageMs}, sourceTurnId=${sourceTurnId}, user=${username}, rich=${richDoc ? "yes" : "no"})`
   );
 }
@@ -404,7 +405,7 @@ function maybeWritePastAnalysisDoc(params: {
                 artifacts: materialized,
               });
               if (!patch.ok) {
-                console.warn(
+                logger.warn(
                   `⚠️ past_analyses pivotArtifacts patch skipped: ${patch.reason}`
                 );
               }
@@ -412,7 +413,7 @@ function maybeWritePastAnalysisDoc(params: {
           } catch (pivotErr) {
             const msg =
               pivotErr instanceof Error ? pivotErr.message : String(pivotErr);
-            console.warn(
+            logger.warn(
               `⚠️ past_analyses pivotArtifacts materialize/patch failed for turn ${turnId}: ${msg}`
             );
           }
@@ -420,11 +421,11 @@ function maybeWritePastAnalysisDoc(params: {
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`⚠️ past_analyses persist failed for turn ${turnId}: ${msg}`);
+        logger.warn(`⚠️ past_analyses persist failed for turn ${turnId}: ${msg}`);
       });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ past_analyses write preflight failed: ${msg}`);
+    logger.warn(`⚠️ past_analyses write preflight failed: ${msg}`);
   }
 }
 
@@ -620,7 +621,7 @@ function derivePivotDefaultsHint(params: {
     hint.filterSelections = slice.filterSelections;
   }
   if (process.env.NODE_ENV !== "production") {
-    console.debug("[chatStream] pivotDefaults hint", {
+    logger.debug("[chatStream] pivotDefaults hint", {
       groupBy,
       requiredColumns: requiredColumns.slice(0, 8),
       rows: hint.rows,
@@ -683,21 +684,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // res.writableEnded is true when the server called res.end() — that's an expected
     // close, not a client abort. Only log when the client disconnected before we finished.
     if (!res.writableEnded) {
-      console.log('🚫 Client disconnected from chat stream early');
+      logger.log('🚫 Client disconnected from chat stream early');
     }
   });
 
   res.on('error', (error: any) => {
     // ECONNRESET, EPIPE, ECONNABORTED are expected when client disconnects
     if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
-      console.error('SSE connection error:', error);
+      logger.error('SSE connection error:', error);
     }
     clientDisconnected = true;
   });
 
   try {
     // Get chat document FIRST (with full history) so processing uses complete context
-    console.log('🔍 Fetching chat document for sessionId:', sessionId);
+    logger.log('🔍 Fetching chat document for sessionId:', sessionId);
     let chatDocument: ChatDocument | null = null;
     
     try {
@@ -706,7 +707,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       // Handle CosmosDB connection errors gracefully
       const errorMessage = dbError instanceof Error ? dbError.message : String(dbError);
       if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || dbError.code === 'ECONNREFUSED') {
-        console.error('❌ CosmosDB connection error, attempting to continue with blob storage data...');
+        logger.error('❌ CosmosDB connection error, attempting to continue with blob storage data...');
         sendSSE(res, 'error', {
           error: 'Database connection issue. Please try again in a moment. If the problem persists, check your network connection.',
         });
@@ -723,7 +724,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return;
     }
 
-    console.log('✅ Chat document found');
+    logger.log('✅ Chat document found');
 
     const gate = decideEnrichmentGate(chatDocument.enrichmentStatus);
     if (gate === "queued") {
@@ -1029,7 +1030,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     });
 
     const schemaBinding = await kickoff.schemaBinding;
-    console.log(`📌 Schema binding canonical columns:`, schemaBinding.canonicalColumns);
+    logger.log(`📌 Schema binding canonical columns:`, schemaBinding.canonicalColumns);
 
     onThinkingStep({
       step: "Mapping columns from schema",
@@ -1067,11 +1068,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       );
       chatAnalysis = { ...chatAnalysis, relevantColumns: mergedRelevant };
 
-      console.log(`🤖 AI Analysis Results:`);
-      console.log(`   Intent: ${chatAnalysis.intent}`);
-      console.log(`   User Intent: ${chatAnalysis.userIntent}`);
-      console.log(`   Relevant Columns:`, chatAnalysis.relevantColumns);
-      console.log(`   Analysis: ${chatAnalysis.analysis.substring(0, 200)}...`);
+      logger.log(`🤖 AI Analysis Results:`);
+      logger.log(`   Intent: ${chatAnalysis.intent}`);
+      logger.log(`   User Intent: ${chatAnalysis.userIntent}`);
+      logger.log(`   Relevant Columns:`, chatAnalysis.relevantColumns);
+      logger.log(`   Analysis: ${chatAnalysis.analysis.substring(0, 200)}...`);
 
       onThinkingStep({
         step: "Analyzing user intent",
@@ -1080,7 +1081,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         details: `Intent: ${chatAnalysis.intent}`,
       });
     } catch (error) {
-      console.error("⚠️ Chat analysis failed:", error);
+      logger.error("⚠️ Chat analysis failed:", error);
       onThinkingStep({
         step: "Analyzing user intent",
         status: "completed",
@@ -1098,11 +1099,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       };
     }
 
-    console.log(`📊 Column binding & analysis summary:`);
-    console.log(
+    logger.log(`📊 Column binding & analysis summary:`);
+    logger.log(
       `   Canonical (schema): ${schemaBinding.canonicalColumns.join(", ") || "(none)"}`
     );
-    console.log(
+    logger.log(
       `   Final relevant: ${chatAnalysis.relevantColumns.join(", ") || "(none)"}`
     );
 
@@ -1134,7 +1135,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       dataSummary: chatDocument.dataSummary,
     });
     if (process.env.NODE_ENV !== "production") {
-      console.debug("[chatStream] pivot pre-fallback inputs", {
+      logger.debug("[chatStream] pivot pre-fallback inputs", {
         parserGroupBy: Array.isArray((parsedQueryForLoad as any)?.groupBy)
           ? (parsedQueryForLoad as any).groupBy
           : [],
@@ -1146,7 +1147,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
 
     // Routing: always classify — client `mode` is ignored (deprecated override removed).
     if (mode != null && mode !== 'general') {
-      console.debug(
+      logger.debug(
         `[chat/stream] mode_override_ignored: received ${JSON.stringify(mode)} — using classifyMode only`
       );
     }
@@ -1179,7 +1180,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`D1 · multi-part detection failed: ${msg}`);
+        logger.warn(`D1 · multi-part detection failed: ${msg}`);
       }
     }
 
@@ -1203,7 +1204,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           timestamp: Date.now(),
           details: `Detected: ${detectedMode} (confidence: ${(modeClassification.confidence * 100).toFixed(0)}%)`,
         });
-        console.log(
+        logger.log(
           `🎯 Classified mode: ${detectedMode} (confidence: ${modeClassification.confidence.toFixed(2)})`
         );
       } else {
@@ -1215,7 +1216,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         });
       }
     } catch (error) {
-      console.error('⚠️ Mode classification failed, defaulting to analysis:', error);
+      logger.error('⚠️ Mode classification failed, defaulting to analysis:', error);
       onThinkingStep({
         step: 'Detecting query type',
         status: 'completed',
@@ -1249,7 +1250,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         });
       }
     } catch (err) {
-      console.warn("⚠️ user-hierarchy extraction skipped:", err);
+      logger.warn("⚠️ user-hierarchy extraction skipped:", err);
     }
 
     onThinkingStep({
@@ -1422,12 +1423,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const transformedResponse: any = { ...validated };
     if ((result as any).table && Array.isArray((result as any).table)) {
       transformedResponse.preview = (result as any).table;
-      console.log(`📊 Transformed table to preview: ${(result as any).table.length} rows`);
+      logger.log(`📊 Transformed table to preview: ${(result as any).table.length} rows`);
     }
     if ((result as any).operationResult) {
       if ((result as any).operationResult.summary && Array.isArray((result as any).operationResult.summary)) {
         transformedResponse.summary = (result as any).operationResult.summary;
-        console.log(`📋 Transformed operationResult.summary to summary: ${(result as any).operationResult.summary.length} items`);
+        logger.log(`📋 Transformed operationResult.summary to summary: ${(result as any).operationResult.summary.length} items`);
       }
     }
     if ((result as any).agentTrace) {
@@ -1529,12 +1530,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       // Non-critical: ranking-meta enrichment failures must never break the
       // response. Log and move on — the user still sees the same answer with
       // pivot defaults; only the leaderboard hint disappears.
-      console.warn("[chatStream] rankingMeta enrichment failed", {
+      logger.warn("[chatStream] rankingMeta enrichment failed", {
         message: (err as Error)?.message?.slice(0, 200),
       });
     }
     if (process.env.NODE_ENV !== "production") {
-      console.debug("[chatStream] pivotDefaults merged", {
+      logger.debug("[chatStream] pivotDefaults merged", {
         parser: parserPivotDefaults,
         execution: executionPivotDefaults,
         value: transformedResponse.pivotDefaults,
@@ -1624,7 +1625,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       if (text?.trim()) domainContextForCharts = text;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
+      logger.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
     }
 
     let mergedSuggestedQuestions: string[] = [];
@@ -1668,7 +1669,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`W19 · enrichStepInsights failed: ${msg}`);
+          logger.warn(`W19 · enrichStepInsights failed: ${msg}`);
         }
       })(),
 
@@ -1711,7 +1712,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`W-UD-integration · directive persistence failed: ${msg}`);
+          logger.warn(`W-UD-integration · directive persistence failed: ${msg}`);
         }
       })(),
 
@@ -1736,7 +1737,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           // UX · cap suggested questions at 5 (product rule: never more than 5).
           mergedSuggestedQuestions = [...new Set([...suggestions, ...enrichmentFollowUps])].slice(0, 5);
         } catch (error) {
-          console.error('Failed to generate suggestions:', error);
+          logger.error('Failed to generate suggestions:', error);
         }
       })(),
     ]);
@@ -1784,12 +1785,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             charts: enrichedCharts,
           });
           if (!res.ok) {
-            console.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
+            logger.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
           }
         }
       }
     } catch (insightPatchErr) {
-      console.warn("⚠️ dashboard chart-insight patch failed:", insightPatchErr);
+      logger.warn("⚠️ dashboard chart-insight patch failed:", insightPatchErr);
     }
 
     // ── PHASE 3: Persistence ──────────────────────────────────────────
@@ -1806,17 +1807,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       );
       
       if (existingMessage) {
-        console.log('✏️ Editing message with targetTimestamp:', targetTimestamp);
+        logger.log('✏️ Editing message with targetTimestamp:', targetTimestamp);
         try {
           await updateMessageAndTruncate(sessionId, targetTimestamp, message);
-          console.log('✅ Message updated and messages truncated in database');
+          logger.log('✅ Message updated and messages truncated in database');
         } catch (truncateError) {
-          console.error('⚠️ Failed to update message and truncate:', truncateError);
+          logger.error('⚠️ Failed to update message and truncate:', truncateError);
           // Continue - don't fail the entire request
         }
       } else {
         // This is a new message, not an edit - ignore targetTimestamp
-        console.log(`ℹ️ targetTimestamp ${targetTimestamp} provided but message not found. Treating as new message.`);
+        logger.log(`ℹ️ targetTimestamp ${targetTimestamp} provided but message not found. Treating as new message.`);
       }
     }
 
@@ -2015,9 +2016,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       });
       const persistOutcome = await persistPromise;
       if (persistOutcome === "succeeded") {
-        console.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+        logger.log(`✅ Messages saved to chat: ${chatDocument.id}`);
       } else {
-        console.error(
+        logger.error(
           `❌ Messages persist failed for chat: ${chatDocument.id} (turn answer streamed; user-visible affordance via persist_status SSE event)`
         );
       }
@@ -2081,16 +2082,16 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           });
           if (memoryEntries.length > 0) {
             void appendMemoryEntries(memoryEntries).catch((e) =>
-              console.warn("⚠️ appendMemoryEntries fire-and-forget failed:", e)
+              logger.warn("⚠️ appendMemoryEntries fire-and-forget failed:", e)
             );
             scheduleIndexMemoryEntries(memoryEntries);
-            console.log(
+            logger.log(
               `📓 Memory: appended ${memoryEntries.length} entries for turn ${turnIdForMemory}`
             );
           }
         }
       } catch (memoryErr) {
-        console.warn("⚠️ analysisMemory turn-end write failed:", memoryErr);
+        logger.warn("⚠️ analysisMemory turn-end write failed:", memoryErr);
       }
 
       try {
@@ -2129,10 +2130,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           });
         }
       } catch (ctxErr) {
-        console.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
+        logger.warn("⚠️ sessionAnalysisContext assistant merge failed:", ctxErr);
       }
     } catch (cosmosError) {
-      console.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
+      logger.error("⚠️ Failed to save messages to CosmosDB:", cosmosError);
     }
 
     // W2.3 · fire-and-forget persist of the completed turn for the semantic
@@ -2170,7 +2171,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           ),
         ]);
         if (raced && (raced as typeof timeoutSentinel).__timeout) {
-          console.warn("⌛ businessActionsAgent timed out — skipping section");
+          logger.warn("⌛ businessActionsAgent timed out — skipping section");
         } else if (Array.isArray(raced) && raced.length > 0) {
           const items = raced as NonNullable<
             import("../../shared/schema.js").Message["businessActions"]
@@ -2190,12 +2191,12 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
               items,
             });
             if (!patchResult.ok) {
-              console.warn(
+              logger.warn(
                 `⚠️ businessActions patch skipped: ${patchResult.reason}`
               );
             }
           } catch (patchErr) {
-            console.warn("⚠️ businessActions patch failed:", patchErr);
+            logger.warn("⚠️ businessActions patch failed:", patchErr);
           }
           // AMR2 · also patch the cross-session past_analyses cache row so a
           // future cache-hit serves the same business actions. Read-modify-
@@ -2213,13 +2214,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 items,
               });
               if (!cachePatchResult.ok) {
-                console.warn(
+                logger.warn(
                   `⚠️ past_analyses businessActions patch skipped: ${cachePatchResult.reason}`
                 );
               }
             }
           } catch (cachePatchErr) {
-            console.warn(
+            logger.warn(
               "⚠️ past_analyses businessActions patch failed:",
               cachePatchErr
             );
@@ -2245,13 +2246,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
                 items,
               });
               if (!dashPatchResult.ok) {
-                console.warn(
+                logger.warn(
                   `⚠️ dashboard businessActions patch skipped: ${dashPatchResult.reason}`
                 );
               }
             }
           } catch (dashPatchErr) {
-            console.warn(
+            logger.warn(
               "⚠️ dashboard businessActions patch failed:",
               dashPatchErr
             );
@@ -2259,7 +2260,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         }
       }
     } catch (baErr) {
-      console.warn("⚠️ businessActions post-verifier hook errored:", baErr);
+      logger.warn("⚠️ businessActions post-verifier hook errored:", baErr);
     }
 
     if (!sendSSE(res, 'done', {})) {
@@ -2269,9 +2270,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if (!res.writableEnded && !res.destroyed) {
     res.end();
     }
-    console.log('✅ Stream completed successfully');
+    logger.log('✅ Stream completed successfully');
   } catch (error) {
-    console.error('Chat stream error:', error);
+    logger.error('Chat stream error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process message';
     if (checkConnection()) {
     sendSSE(res, 'error', { error: errorMessage });
@@ -2302,7 +2303,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
     } catch (accessError: any) {
       // Handle authorization errors
       if (accessError?.statusCode === 403) {
-        console.warn(`⚠️ Unauthorized SSE access attempt: ${username} tried to access session ${sessionId}`);
+        logger.warn(`⚠️ Unauthorized SSE access attempt: ${username} tried to access session ${sessionId}`);
         sendSSE(res, 'error', { error: 'Unauthorized to access this session' });
         res.end();
         return;
@@ -2311,7 +2312,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
       // Handle CosmosDB connection errors
       const errorMessage = accessError instanceof Error ? accessError.message : String(accessError);
       if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || accessError.code === 'ECONNREFUSED') {
-        console.error('❌ CosmosDB connection error in streamChatMessages:', errorMessage.substring(0, 100));
+        logger.error('❌ CosmosDB connection error in streamChatMessages:', errorMessage.substring(0, 100));
         sendSSE(res, 'error', {
           error: 'Database connection issue. Please try again in a moment.',
         });
@@ -2382,7 +2383,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
           chartsWithData = chartsFromBlob;
         }
       } catch (blobError) {
-        console.error('⚠️ Failed to load charts from blob in SSE:', blobError);
+        logger.error('⚠️ Failed to load charts from blob in SSE:', blobError);
       }
     }
 
@@ -2441,7 +2442,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
             
             // If this is not the first occurrence, it's a duplicate
             if (firstIndex !== index) {
-              console.log(`🔄 SSE: Filtering duplicate message (exact match): ${msg.content?.substring(0, 50)}`);
+              logger.log(`🔄 SSE: Filtering duplicate message (exact match): ${msg.content?.substring(0, 50)}`);
               return false;
             }
             
@@ -2454,7 +2455,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
             );
             
             if (similarIndex !== -1 && similarIndex < index) {
-              console.log(`🔄 SSE: Filtering duplicate message (similar match): ${msg.content?.substring(0, 50)}`);
+              logger.log(`🔄 SSE: Filtering duplicate message (similar match): ${msg.content?.substring(0, 50)}`);
               return false;
             }
             
@@ -2485,7 +2486,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
       } catch (error) {
         // Only try to send error if connection is still open
         if (!res.writableEnded && !res.destroyed && res.writable) {
-          console.error('Error fetching chat messages for SSE:', error);
+          logger.error('Error fetching chat messages for SSE:', error);
           sendSSE(res, 'error', {
             error: error instanceof Error ? error.message : 'Failed to fetch messages.',
           });
@@ -2508,7 +2509,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
       
       // If this is not the first occurrence, it's a duplicate
       if (firstIndex !== index) {
-        console.log(`🔄 SSE init: Filtering duplicate message (exact match): ${msg.content?.substring(0, 50)}`);
+        logger.log(`🔄 SSE init: Filtering duplicate message (exact match): ${msg.content?.substring(0, 50)}`);
         return false;
       }
       
@@ -2521,7 +2522,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
       );
       
       if (similarIndex !== -1 && similarIndex < index) {
-        console.log(`🔄 SSE init: Filtering duplicate message (similar match): ${msg.content?.substring(0, 50)}`);
+        logger.log(`🔄 SSE init: Filtering duplicate message (similar match): ${msg.content?.substring(0, 50)}`);
         return false;
       }
       
@@ -2550,7 +2551,7 @@ export async function streamChatMessages(sessionId: string, username: string, re
     try {
       if (!res.writableEnded && !res.destroyed) {
         res.end();
-        console.log('✅ SSE connection closed after initial analysis');
+        logger.log('✅ SSE connection closed after initial analysis');
       }
     } catch (e) {
       // Ignore errors when ending already closed connection
@@ -2563,19 +2564,19 @@ export async function streamChatMessages(sessionId: string, username: string, re
     const reqAsStream = req as unknown as import("http").IncomingMessage;
     reqAsStream.on('close', () => {
       // Connection already closed, just log
-      console.log('🚫 Client disconnected from SSE (initial analysis stream)');
+      logger.log('🚫 Client disconnected from SSE (initial analysis stream)');
     });
 
     // Handle errors - only log unexpected errors
     reqAsStream.on('error', (error: any) => {
       // ECONNRESET is expected when clients disconnect normally
       if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
-        console.error('SSE connection error:', error);
+        logger.error('SSE connection error:', error);
       }
     });
 
   } catch (error) {
-    console.error("streamChatMessages error:", error);
+    logger.error("streamChatMessages error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream chat messages.";
     sendSSE(res, 'error', { error: message });
     res.end();

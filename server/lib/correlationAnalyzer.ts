@@ -13,6 +13,7 @@ import {
   calculateEtaSquared,
   calculateCategoricalCorrelations,
 } from './correlationMath.js';
+import { logger } from "./logger.js";
 
 export { calculateCorrelations, calculateEtaSquared, calculateCategoricalCorrelations };
 
@@ -110,11 +111,11 @@ export async function analyzeCorrelations(
    */
   topCorrelations?: CorrelationResult[];
 }> {
-  console.log('=== CORRELATION ANALYSIS DEBUG ===');
-  console.log('Target variable:', targetVariable);
-  console.log('Numeric columns to analyze:', numericColumns);
-  console.log('Categorical columns to analyze:', categoricalColumns ?? []);
-  console.log('Data rows:', data.length);
+  logger.log('=== CORRELATION ANALYSIS DEBUG ===');
+  logger.log('Target variable:', targetVariable);
+  logger.log('Numeric columns to analyze:', numericColumns);
+  logger.log('Categorical columns to analyze:', categoricalColumns ?? []);
+  logger.log('Data rows:', data.length);
 
   const targetNonNan = targetSampleStats(data, targetVariable);
   // numericColumns includes the target itself; calculateCorrelations skips it
@@ -138,12 +139,12 @@ export async function analyzeCorrelations(
 
   const categoricalSet = new Set(categoricalColumns ?? []);
 
-  console.log('Correlations calculated:', correlations);
-  console.log('=== RAW CORRELATION VALUES DEBUG ===');
+  logger.log('Correlations calculated:', correlations);
+  logger.log('=== RAW CORRELATION VALUES DEBUG ===');
   correlations.forEach((corr, idx) => {
-    console.log(`RAW ${idx + 1}. ${corr.variable}: ${corr.correlation} (${corr.correlation > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
+    logger.log(`RAW ${idx + 1}. ${corr.variable}: ${corr.correlation} (${corr.correlation > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
   });
-  console.log('=== END RAW CORRELATION DEBUG ===');
+  logger.log('=== END RAW CORRELATION DEBUG ===');
 
   if (correlations.length === 0) {
     // W46 · classify the empty path so the tool surface can tell the agent
@@ -170,7 +171,7 @@ export async function analyzeCorrelations(
             ? `${numericTried} numeric column(s) tried but none produced valid Pearson pairs with "${targetVariable}".`
             : `${categoricalTried} categorical column(s) tried but none passed the η thresholds (≥5 pairs, ≥2 groups, non-zero variance).`,
     };
-    console.error('No correlations found!', diagnostic);
+    logger.error('No correlations found!', diagnostic);
     return { charts: [], insights: [], diagnostic };
   }
 
@@ -178,10 +179,10 @@ export async function analyzeCorrelations(
   let filteredCorrelations = correlations;
   if (filter === 'positive') {
     filteredCorrelations = correlations.filter(c => c.correlation > 0);
-    console.log(`Filtering: Showing only POSITIVE correlations (${filteredCorrelations.length} of ${correlations.length})`);
+    logger.log(`Filtering: Showing only POSITIVE correlations (${filteredCorrelations.length} of ${correlations.length})`);
   } else if (filter === 'negative') {
     filteredCorrelations = correlations.filter(c => c.correlation < 0);
-    console.log(`Filtering: Showing only NEGATIVE correlations (${filteredCorrelations.length} of ${correlations.length})`);
+    logger.log(`Filtering: Showing only NEGATIVE correlations (${filteredCorrelations.length} of ${correlations.length})`);
   }
 
   if (filteredCorrelations.length === 0) {
@@ -190,7 +191,7 @@ export async function analyzeCorrelations(
       : filter === 'negative'
       ? 'No negative correlations found.'
       : 'No correlations found.';
-    console.warn(filterMessage);
+    logger.warn(filterMessage);
     const diagnostic: CorrelationDiagnostic = {
       reason: 'filter_eliminated_all',
       frameRows: data.length,
@@ -221,7 +222,7 @@ export async function analyzeCorrelations(
     : sortedCorrelations;
   
   if (maxResults) {
-    console.log(`Limiting to top ${maxResults} correlations as requested`);
+    logger.log(`Limiting to top ${maxResults} correlations as requested`);
   }
 
   // Only generate charts if explicitly requested
@@ -250,7 +251,7 @@ export async function analyzeCorrelations(
     if (onProgress) {
       onProgress(chartTitle, 0, data.length);
     }
-    console.log(`📊 ${chartTitle}`);
+    logger.log(`📊 ${chartTitle}`);
 
     const chart = await generateStreamingCorrelationChart(
       data,
@@ -262,7 +263,7 @@ export async function analyzeCorrelations(
           onProgress(progressMessage, processed, total);
         }
         if (idx === 0) { // Only log progress for first chart to avoid spam
-          console.log(`   Progress: ${processed}/${total} rows processed`);
+          logger.log(`   Progress: ${processed}/${total} rows processed`);
         }
       }
     );
@@ -274,7 +275,7 @@ export async function analyzeCorrelations(
     // Override correlation with the one from topCorrelations (already computed)
     // This ensures consistency with the correlation ranking
     const metadata = (chart as any)._correlationMetadata || {};
-    console.log(`Scatter chart ${idx}: ${corr.variable} vs ${targetVariable}, correlation: ${corr.correlation.toFixed(2)}, total pairs: ${corr.nPairs}, visualization points: ${chart.data?.length || 0}`);
+    logger.log(`Scatter chart ${idx}: ${corr.variable} vs ${targetVariable}, correlation: ${corr.correlation.toFixed(2)}, total pairs: ${corr.nPairs}, visualization points: ${chart.data?.length || 0}`);
 
     const slopeForTitle =
       typeof metadata.slope === 'number' && Number.isFinite(metadata.slope)
@@ -299,11 +300,11 @@ export async function analyzeCorrelations(
     
     if (topCorrelations.length > 1) {
     // IMPORTANT: Do NOT modify correlation signs - show actual positive/negative values
-    console.log('=== BAR CHART CORRELATION VALUES DEBUG ===');
+    logger.log('=== BAR CHART CORRELATION VALUES DEBUG ===');
     topCorrelations.forEach((corr, idx) => {
-      console.log(`${idx + 1}. ${corr.variable}: ${corr.correlation} (${corr.correlation > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
+      logger.log(`${idx + 1}. ${corr.variable}: ${corr.correlation} (${corr.correlation > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
     });
-    console.log('=== END BAR CHART DEBUG ===');
+    logger.log('=== END BAR CHART DEBUG ===');
     
     // Sort by correlation value only if user explicitly requested a sort order
     let sortedForBar: typeof topCorrelations;
@@ -331,24 +332,24 @@ export async function analyzeCorrelations(
       })),
     };
     
-    console.log('=== FINAL BAR CHART DATA DEBUG ===');
-    console.log('Bar chart data being sent to frontend:');
+    logger.log('=== FINAL BAR CHART DATA DEBUG ===');
+    logger.log('Bar chart data being sent to frontend:');
     const barData = (correlationBarChart.data || []) as Array<{ variable: string; correlation: number }>;
     barData.forEach((item, idx) => {
       const corrVal = Number(item.correlation);
-      console.log(`FINAL ${idx + 1}. ${item.variable}: ${corrVal} (${corrVal > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
+      logger.log(`FINAL ${idx + 1}. ${item.variable}: ${corrVal} (${corrVal > 0 ? 'POSITIVE' : 'NEGATIVE'})`);
     });
-    console.log('=== END FINAL BAR CHART DEBUG ===');
+    logger.log('=== END FINAL BAR CHART DEBUG ===');
     
       charts.push(correlationBarChart);
     }
 
-    console.log('Total charts generated:', charts.length);
+    logger.log('Total charts generated:', charts.length);
   } else {
-    console.log('Charts generation skipped (user did not explicitly request charts)');
+    logger.log('Charts generation skipped (user did not explicitly request charts)');
   }
   
-  console.log('=== END CORRELATION DEBUG ===');
+  logger.log('=== END CORRELATION DEBUG ===');
 
   // Enrich each chart with keyInsight and recommendation
   try {
@@ -380,7 +381,7 @@ export async function analyzeCorrelations(
     );
     charts.splice(0, charts.length, ...chartsWithInsights);
   } catch (e) {
-    console.error('Failed to enrich correlation charts with insights:', e);
+    logger.error('Failed to enrich correlation charts with insights:', e);
   }
 
   // Generate AI insights about correlations (use the same correlations shown in charts)
@@ -661,37 +662,37 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
     );
     content = response.choices[0].message.content || '{}';
   } catch (err) {
-    console.error(
+    logger.error(
       '❌ Correlation insight LLM call failed — using deterministic fallback:',
       (err as Error)?.message ?? err
     );
     return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
   }
-  console.log('📝 Raw AI response for correlation insights (first 1000 chars):', content.substring(0, 1000));
-  console.log('📊 Expected insight count:', insightCount);
-  console.log('📋 Variables to analyze:', correlations.map(c => c.variable).join(', '));
+  logger.log('📝 Raw AI response for correlation insights (first 1000 chars):', content.substring(0, 1000));
+  logger.log('📊 Expected insight count:', insightCount);
+  logger.log('📋 Variables to analyze:', correlations.map(c => c.variable).join(', '));
 
   try {
     const parsed = JSON.parse(content);
-    console.log('✅ Parsed JSON successfully');
+    logger.log('✅ Parsed JSON successfully');
     
     // Validate that insights is an array
     if (!parsed.insights || !Array.isArray(parsed.insights)) {
-      console.error('❌ Invalid response format: insights is not an array', parsed);
+      logger.error('❌ Invalid response format: insights is not an array', parsed);
       // Try to recover - check if there's a different structure
       if (parsed.insight && Array.isArray(parsed.insight)) {
-        console.log('⚠️ Found "insight" instead of "insights", using that');
+        logger.log('⚠️ Found "insight" instead of "insights", using that');
         parsed.insights = parsed.insight;
       } else {
         // W50 · don't return empty — synthesize deterministic insights from
         // the raw correlation values so the user always sees the top drivers.
-        console.error('❌ No valid insights array found in response — using deterministic fallback');
+        logger.error('❌ No valid insights array found in response — using deterministic fallback');
         return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
       }
     }
     
     const insightArray = parsed.insights || [];
-    console.log(`📊 Found ${insightArray.length} insights in response (expected ${insightCount})`);
+    logger.log(`📊 Found ${insightArray.length} insights in response (expected ${insightCount})`);
     
     // Validate and clean insights
     const validInsights = insightArray
@@ -708,7 +709,7 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
           // If item is an object, extract text field
           const text = item.text || item.insight || item.content || item.description || '';
           if (!text || text.trim().length === 0) {
-            console.warn(`⚠️ Insight ${index + 1} has no text field, skipping`);
+            logger.warn(`⚠️ Insight ${index + 1} has no text field, skipping`);
             return null;
           }
           return {
@@ -717,29 +718,29 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
           };
         } else {
           // Skip invalid items (booleans, numbers, null, etc.)
-          console.warn(`⚠️ Insight ${index + 1} is invalid type (${typeof item}), skipping`);
+          logger.warn(`⚠️ Insight ${index + 1} is invalid type (${typeof item}), skipping`);
           return null;
         }
       })
       .filter((insight: { id: number; text: string } | null): insight is { id: number; text: string } => insight !== null);
     
-    console.log(`✅ Returning ${validInsights.length} valid insights`);
+    logger.log(`✅ Returning ${validInsights.length} valid insights`);
     
     // If we got fewer insights than expected, log a warning
     if (validInsights.length < insightCount) {
-      console.warn(`⚠️ Generated ${validInsights.length} insights but expected ${insightCount}`);
+      logger.warn(`⚠️ Generated ${validInsights.length} insights but expected ${insightCount}`);
     }
     
     // W50 · if the LLM returned a parseable but empty/garbage list, fall back
     // to deterministic insights rather than leaving the user with nothing.
     if (validInsights.length === 0) {
-      console.warn('⚠️ LLM returned 0 valid insights — using deterministic fallback');
+      logger.warn('⚠️ LLM returned 0 valid insights — using deterministic fallback');
       return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
     }
     return validInsights;
   } catch (error) {
-    console.error('❌ Error parsing correlation insights:', error);
-    console.error('Raw content that failed to parse:', content.substring(0, 1000));
+    logger.error('❌ Error parsing correlation insights:', error);
+    logger.error('Raw content that failed to parse:', content.substring(0, 1000));
     // W50 · same fallback on JSON parse failures.
     return fallbackInsightsFromRaw(targetVariable, correlations, categoricalSet);
   }

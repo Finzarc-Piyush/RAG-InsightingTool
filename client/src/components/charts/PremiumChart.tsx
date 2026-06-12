@@ -49,6 +49,7 @@ import { FacetGrid, type FacetCell } from "@/components/charts/FacetGrid";
 import { useChartGrid } from "@/components/charts/ChartGrid";
 import { asString } from "@/lib/charts/encodingResolver";
 import { chartA11ySummary } from "@/lib/charts/a11ySummary";
+import { logger } from "@/lib/logger";
 
 export interface PremiumChartProps {
   spec: ChartSpecV2;
@@ -147,9 +148,7 @@ class ChartErrorBoundary extends Component<
     return { error };
   }
   componentDidCatch(error: unknown) {
-    if (typeof console !== "undefined" && console.error) {
-      console.error("PremiumChart render error:", error);
-    }
+    logger.error("PremiumChart render error:", error);
   }
   render() {
     if (this.state.error) {

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, ReactNode } from 'react';
 import { useDashboardState, DashboardData } from '../modules/useDashboardState';
+import { logger } from "@/lib/logger";
 
 /**
  * HMR-RESILIENT CONTEXT INSTANCE.
@@ -80,7 +81,7 @@ export function useDashboardContext() {
   if (context === undefined) {
     // Surface HMR-related context-mismatch hints in dev.
     if (typeof console !== "undefined") {
-      console.error(
+      logger.error(
         "[DashboardContext] consumer saw `undefined` despite Provider in tree. " +
           "If this fired during an HMR update, do a hard refresh (Cmd+Shift+R) " +
           "to flush the stale chunk."

@@ -40,6 +40,7 @@ import {
   withSessionWriteLock,
   __resetSessionWriteChainForTesting,
 } from "../lib/sessionWriteLock.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Body for PUT — accepts a partial spec where the server fills in `version` /
@@ -246,7 +247,7 @@ function handleError(res: Response, err: unknown, fallback: string): Response {
   }
   if (e?.statusCode === 404) return res.status(404).json({ error: e.message });
   if (e?.statusCode === 403) return res.status(403).json({ error: e.message });
-  console.error(fallback, err);
+  logger.error(fallback, err);
   return res.status(500).json({
     error: err instanceof Error ? err.message : fallback,
   });

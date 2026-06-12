@@ -69,6 +69,7 @@ import { cn } from '@/lib/utils';
 import { useDashboardContext } from '../context/DashboardContext';
 import { DashboardEditModeProvider } from '../context/DashboardEditModeContext';
 import { getUserEmail } from '@/utils/userStorage';
+import { logger } from "@/lib/logger";
 // W-EXP-12 · exportTheme constants were consumed only by the deleted
 // client-side renderer; the server-side renderer has its own brand
 // palette source of truth. Keeping the file in case a future feature
@@ -279,7 +280,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           if (onRefresh) await onRefresh();
           await refetchDashboards();
         } catch (e) {
-          console.error(e);
+          logger.error(e);
           toast({
             title: 'Could not save layout',
             description: e instanceof Error ? e.message : 'Try again.',
@@ -909,7 +910,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   onNarrativeSave={handleNarrativeSave}
                   onDeleteChart={canEdit ? (chartIndex) => {
                     const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
-                    console.log('Deleting chart:', { chartIndex, sheetId: sheetIdToUse, activeSheetId, sheets });
+                    logger.log('Deleting chart:', { chartIndex, sheetId: sheetIdToUse, activeSheetId, sheets });
                     onDeleteChart(chartIndex, sheetIdToUse || undefined);
                   } : undefined}
                   onDeleteTable={canEdit ? (tableIndex) => {

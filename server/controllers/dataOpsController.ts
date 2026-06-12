@@ -12,6 +12,7 @@ import { loadLatestData } from "../utils/dataLoader.js";
 import { downloadFilenameTimestamp } from "../utils/downloadFilenameTimestamp.js";
 import { withoutTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
 import { buildXlsxBufferFromRows } from "../lib/xlsxWriter.js";
+import { logger } from "../lib/logger.js";
 
 function sanitizeDownloadFileStem(stem: string, fallback: string): string {
   let s = stem.trim().replace(/"/g, "_");
@@ -25,7 +26,7 @@ function sanitizeDownloadFileStem(stem: string, fallback: string): string {
  */
 export const dataOpsChatWithAI = async (req: Request, res: Response) => {
   try {
-    console.log('📨 dataOpsChatWithAI() called');
+    logger.log('📨 dataOpsChatWithAI() called');
     const { sessionId, message, dataOpsMode } = req.body;
     const username = requireUsername(req);
 
@@ -47,7 +48,7 @@ export const dataOpsChatWithAI = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Data Ops chat error:', error);
+    logger.error('Data Ops chat error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to process data operation';
     sendError(res, errorMessage);
   }
@@ -58,7 +59,7 @@ export const dataOpsChatWithAI = async (req: Request, res: Response) => {
  */
 export const dataOpsChatWithAIStream = async (req: Request, res: Response) => {
   try {
-    console.log('📨 dataOpsChatWithAIStream() called');
+    logger.log('📨 dataOpsChatWithAIStream() called');
     const { sessionId, message, dataOpsMode } = req.body;
     const username = requireUsername(req);
 
@@ -82,7 +83,7 @@ export const dataOpsChatWithAIStream = async (req: Request, res: Response) => {
       }
       return;
     }
-    console.error('Data Ops stream error:', error);
+    logger.error('Data Ops stream error:', error);
     // Error handling is done in the service
   }
 };
@@ -92,7 +93,7 @@ export const dataOpsChatWithAIStream = async (req: Request, res: Response) => {
  */
 export const downloadModifiedDataset = async (req: Request, res: Response) => {
   try {
-    console.log('📥 downloadModifiedDataset() called');
+    logger.log('📥 downloadModifiedDataset() called');
     const { sessionId } = req.params;
     const format = (req.query.format as string) || 'csv'; // csv or xlsx
     const username = requireUsername(req);
@@ -181,7 +182,7 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Download modified dataset error:', error);
+    logger.error('Download modified dataset error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to download dataset';
     sendError(res, errorMessage);
   }
@@ -206,7 +207,7 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
  */
 export const downloadWorkingDataset = async (req: Request, res: Response) => {
   try {
-    console.log('📥 downloadWorkingDataset() called');
+    logger.log('📥 downloadWorkingDataset() called');
     const { sessionId } = req.params;
     const username = requireUsername(req);
 
@@ -267,7 +268,7 @@ export const downloadWorkingDataset = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Download working dataset error:', error);
+    logger.error('Download working dataset error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to download working dataset';
     sendError(res, errorMessage);
   }

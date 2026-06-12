@@ -12,6 +12,7 @@ import {
 } from "../models/sharedDashboard.model.js";
 import type { Dashboard } from "../shared/schema.js";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
+import { logger } from "../lib/logger.js";
 
 const getUserEmailFromRequest = (req: Request): string | undefined =>
   getAuthenticatedEmail(req);
@@ -40,7 +41,7 @@ function sendSSE(res: Response, event: string, data: any): boolean {
       return false;
     }
     // Log unexpected errors
-    console.error('Error sending SSE event:', error);
+    logger.error('Error sending SSE event:', error);
     return false;
   }
 }
@@ -71,7 +72,7 @@ export const shareDashboardController = async (req: Request, res: Response) => {
 
     res.status(201).json({ invite });
   } catch (error) {
-    console.error("shareDashboardController error:", error);
+    logger.error("shareDashboardController error:", error);
     const message = error instanceof Error ? error.message : "Failed to share dashboard.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -95,7 +96,7 @@ export const getIncomingSharedDashboardsController = async (req: Request, res: R
     sharedDashboardsResponseSchema.parse(responsePayload);
     res.json(responsePayload);
   } catch (error) {
-    console.error("getIncomingSharedDashboardsController error:", error);
+    logger.error("getIncomingSharedDashboardsController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load shared dashboards.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -112,7 +113,7 @@ export const getSentSharedDashboardsController = async (req: Request, res: Respo
     const invitations = await listSharedDashboardsForOwner(userEmail);
     res.json({ invitations });
   } catch (error) {
-    console.error("getSentSharedDashboardsController error:", error);
+    logger.error("getSentSharedDashboardsController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load sent shared dashboards.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -138,7 +139,7 @@ export const acceptSharedDashboardController = async (req: Request, res: Respons
       dashboard,
     });
   } catch (error) {
-    console.error("acceptSharedDashboardController error:", error);
+    logger.error("acceptSharedDashboardController error:", error);
     const message = error instanceof Error ? error.message : "Failed to accept shared dashboard.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -160,7 +161,7 @@ export const declineSharedDashboardController = async (req: Request, res: Respon
     const invite = await declineSharedDashboardInvite(inviteId, userEmail);
     res.json({ invite });
   } catch (error) {
-    console.error("declineSharedDashboardController error:", error);
+    logger.error("declineSharedDashboardController error:", error);
     const message = error instanceof Error ? error.message : "Failed to decline shared dashboard.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -186,7 +187,7 @@ export const getSharedDashboardInviteController = async (req: Request, res: Resp
 
     res.json({ invite });
   } catch (error) {
-    console.error("getSharedDashboardInviteController error:", error);
+    logger.error("getSharedDashboardInviteController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load shared dashboard invite.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -237,7 +238,7 @@ export const streamIncomingSharedDashboardsController = async (req: Request, res
       } catch (error) {
         // Only try to send error if connection is still open
         if (!res.writableEnded && !res.destroyed && res.writable) {
-          console.error('Error fetching shared dashboards for SSE:', error);
+          logger.error('Error fetching shared dashboards for SSE:', error);
           sendSSE(res, 'error', { 
             message: error instanceof Error ? error.message : 'Failed to fetch shared dashboards.' 
           });
@@ -284,7 +285,7 @@ export const streamIncomingSharedDashboardsController = async (req: Request, res
     req.on('error', (error: any) => {
       // ECONNRESET is expected when clients disconnect normally
       if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
-        console.error('SSE connection error:', error);
+        logger.error('SSE connection error:', error);
       }
       clearInterval(checkInterval);
       try {
@@ -297,7 +298,7 @@ export const streamIncomingSharedDashboardsController = async (req: Request, res
     });
 
   } catch (error) {
-    console.error("streamIncomingSharedDashboardsController error:", error);
+    logger.error("streamIncomingSharedDashboardsController error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream shared dashboards.";
     sendSSE(res, 'error', { message });
     res.end();

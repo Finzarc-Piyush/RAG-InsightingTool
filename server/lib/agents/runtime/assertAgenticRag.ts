@@ -27,6 +27,7 @@
  */
 import { isAgenticLoopEnabled } from "./types.js";
 import { isRagEnabled } from "../../rag/config.js";
+import { logger } from "../../logger.js";
 
 /**
  * When the agentic loop is enabled, RAG (Azure AI Search + embeddings) must be viable.
@@ -42,7 +43,7 @@ export function assertAgenticRagConfiguration(): void {
     return;
   }
   if (!isRagEnabled()) {
-    console.error(
+    logger.error(
       "FATAL: AGENTIC_LOOP_ENABLED=true requires RAG. Set RAG_ENABLED=true and AZURE_SEARCH_ENDPOINT, AZURE_SEARCH_ADMIN_KEY, AZURE_SEARCH_INDEX_NAME (and matching AZURE_OPENAI_EMBEDDING_DIMENSIONS). For tests only, set AGENTIC_ALLOW_NO_RAG=true."
     );
     process.exit(1);
@@ -59,7 +60,7 @@ export function assertDashboardAutogenConfiguration(): void {
     return;
   }
   if (!isAgenticLoopEnabled()) {
-    console.error(
+    logger.error(
       "FATAL: DASHBOARD_AUTOGEN_ENABLED=true requires AGENTIC_LOOP_ENABLED=true (the dashboard draft is emitted from the agent loop). Either turn the agent loop on or unset DASHBOARD_AUTOGEN_ENABLED."
     );
     process.exit(1);

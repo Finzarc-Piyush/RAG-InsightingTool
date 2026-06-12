@@ -15,6 +15,7 @@ import {
   type DashboardPatch,
 } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Create a new dashboard
@@ -78,7 +79,7 @@ export const getUserDashboards = async (username: string): Promise<Dashboard[]> 
     const list = (resources ?? []) as unknown as Dashboard[];
     return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   } catch (error) {
-    console.error("Failed to get user dashboards:", error);
+    logger.error("Failed to get user dashboards:", error);
     return [];
   }
 };
@@ -100,7 +101,7 @@ export const listAllDashboardsForSuperadmin = async (): Promise<Dashboard[]> => 
     const list = (resources ?? []) as unknown as Dashboard[];
     return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   } catch (error) {
-    console.error("Failed to list all dashboards for superadmin:", error);
+    logger.error("Failed to list all dashboards for superadmin:", error);
     return [];
   }
 };
@@ -125,7 +126,7 @@ export const getDashboardByIdForSuperadmin = async (
       .fetchAll();
     return ((resources?.[0] ?? null) as unknown) as Dashboard | null;
   } catch (error) {
-    console.error("Failed to fetch dashboard for superadmin:", error);
+    logger.error("Failed to fetch dashboard for superadmin:", error);
     return null;
   }
 };
@@ -139,7 +140,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
     const dashboardsContainer = await waitForDashboardsContainer();
     const normalizedUsername = username.toLowerCase();
     
-    console.log(`[getDashboardById] Looking for dashboard ${id} for user ${normalizedUsername}`);
+    logger.log(`[getDashboardById] Looking for dashboard ${id} for user ${normalizedUsername}`);
     
     // First try to get dashboard as owner (try both original and normalized)
     try {
@@ -147,7 +148,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
       const { resource } = await dashboardsContainer.item(id, normalizedUsername).read();
       const dashboard = resource as unknown as Dashboard;
       
-      console.log(`[getDashboardById] Resource from CosmosDB:`, { 
+      logger.log(`[getDashboardById] Resource from CosmosDB:`, { 
         exists: !!resource, 
         hasId: !!dashboard?.id, 
         hasName: !!dashboard?.name,
@@ -156,14 +157,14 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
       
       // Check if dashboard is valid (has required fields)
       if (dashboard && dashboard.id && dashboard.name) {
-        console.log(`[getDashboardById] Found dashboard as owner: ${dashboard.name}`);
+        logger.log(`[getDashboardById] Found dashboard as owner: ${dashboard.name}`);
         // Update lastOpenedAt when dashboard is accessed
         dashboard.lastOpenedAt = Date.now();
         return await updateDashboard(dashboard);
       }
       
       // If dashboard is invalid, treat as not found
-      console.log(`[getDashboardById] Dashboard resource is invalid or incomplete`);
+      logger.log(`[getDashboardById] Dashboard resource is invalid or incomplete`);
       throw new Error('Dashboard resource is invalid');
     } catch (error: any) {
       let resolvedError: any = error;
@@ -174,7 +175,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
           const dashboard = resource as unknown as Dashboard;
 
           if (dashboard && dashboard.id && dashboard.name) {
-            console.log(`[getDashboardById] Found dashboard with original username: ${dashboard.name}`);
+            logger.log(`[getDashboardById] Found dashboard with original username: ${dashboard.name}`);
             dashboard.lastOpenedAt = Date.now();
             return await updateDashboard(dashboard);
           }
@@ -193,7 +194,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
                         (resolvedError.message && (resolvedError.message.includes('NotFound') || resolvedError.message.includes('invalid'))) ||
                         (resolvedError.code === 'NotFound');
 
-      console.log(`[getDashboardById] Dashboard not found as owner. Error code: ${resolvedError.code}, statusCode: ${resolvedError.statusCode}, isNotFound: ${isNotFound}`);
+      logger.log(`[getDashboardById] Dashboard not found as owner. Error code: ${resolvedError.code}, statusCode: ${resolvedError.statusCode}, isNotFound: ${isNotFound}`);
       
       if (isNotFound) {
         // First, try to get dashboard using any owner to check collaborators
@@ -213,7 +214,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
               (c) => c.userId.toLowerCase() === normalizedUsername
             );
             if (collaborator) {
-              console.log(`[getDashboardById] Found user as collaborator with permission: ${collaborator.permission}`);
+              logger.log(`[getDashboardById] Found user as collaborator with permission: ${collaborator.permission}`);
               // User is a collaborator, return the dashboard
               dashboard.lastOpenedAt = Date.now();
               return await updateDashboard(dashboard);
@@ -225,7 +226,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
         const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
         const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
         
-        console.log(`[getDashboardById] Found ${sharedInvites.length} shared invites for user ${normalizedUsername}`);
+        logger.log(`[getDashboardById] Found ${sharedInvites.length} shared invites for user ${normalizedUsername}`);
         
         // Check if there's an accepted invite for this dashboard
         const acceptedInvite = sharedInvites.find(
@@ -233,7 +234,7 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
         );
         
         if (acceptedInvite) {
-          console.log(`[getDashboardById] Found accepted invite. Owner: ${acceptedInvite.ownerEmail}, Permission: ${acceptedInvite.permission}`);
+          logger.log(`[getDashboardById] Found accepted invite. Owner: ${acceptedInvite.ownerEmail}, Permission: ${acceptedInvite.permission}`);
           
           // Get the dashboard using the owner's username (normalized)
           const ownerUsername = acceptedInvite.ownerEmail.toLowerCase();
@@ -243,32 +244,32 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
             
             // Check if dashboard is valid
             if (dashboard && dashboard.id && dashboard.name) {
-              console.log(`[getDashboardById] Successfully retrieved shared dashboard: ${dashboard.name}`);
+              logger.log(`[getDashboardById] Successfully retrieved shared dashboard: ${dashboard.name}`);
               // Update lastOpenedAt when dashboard is accessed
               dashboard.lastOpenedAt = Date.now();
               return await updateDashboard(dashboard);
             }
             
             // If dashboard is invalid, treat as not found
-            console.error(`[getDashboardById] Shared dashboard resource is invalid for owner ${ownerUsername}`);
+            logger.error(`[getDashboardById] Shared dashboard resource is invalid for owner ${ownerUsername}`);
             throw new Error('Dashboard resource is invalid');
           } catch (ownerError: any) {
             const ownerIsNotFound = ownerError.code === 404 || ownerError.statusCode === 404 ||
                                    (ownerError.message && ownerError.message.includes('NotFound')) ||
                                    (ownerError.code === 'NotFound');
             if (ownerIsNotFound) {
-              console.error(`[getDashboardById] Dashboard ${id} not found for owner ${ownerUsername}. Error:`, ownerError);
+              logger.error(`[getDashboardById] Dashboard ${id} not found for owner ${ownerUsername}. Error:`, ownerError);
               return null;
             }
             throw ownerError;
           }
         } else {
-          console.log(`[getDashboardById] No accepted invite found for dashboard ${id} and user ${normalizedUsername}`);
-          console.log(`[getDashboardById] Available invites:`, sharedInvites.map(i => ({ id: i.sourceDashboardId, status: i.status })));
+          logger.log(`[getDashboardById] No accepted invite found for dashboard ${id} and user ${normalizedUsername}`);
+          logger.log(`[getDashboardById] Available invites:`, sharedInvites.map(i => ({ id: i.sourceDashboardId, status: i.status })));
         }
       } else {
         // If it's not a 404 error, re-throw it
-        console.error(`[getDashboardById] Unexpected error:`, resolvedError);
+        logger.error(`[getDashboardById] Unexpected error:`, resolvedError);
         throw resolvedError;
       }
       return null;
@@ -278,10 +279,10 @@ export const getDashboardById = async (id: string, username: string): Promise<Da
                       (error.message && error.message.includes('NotFound')) ||
                       (error.code === 'NotFound');
     if (isNotFound) {
-      console.log(`[getDashboardById] Final check - dashboard not found`);
+      logger.log(`[getDashboardById] Final check - dashboard not found`);
       return null;
     }
-    console.error(`[getDashboardById] Unexpected error in outer catch:`, error);
+    logger.error(`[getDashboardById] Unexpected error in outer catch:`, error);
     throw error;
   }
 };
@@ -409,16 +410,16 @@ export const addChartToDashboard = async (
 ): Promise<Dashboard> => {
   const normalizedUsername = username.toLowerCase();
   
-  console.log(`[addChartToDashboard] Starting - Dashboard ID: ${id}, User: ${normalizedUsername}, SheetID: ${sheetId}`);
+  logger.log(`[addChartToDashboard] Starting - Dashboard ID: ${id}, User: ${normalizedUsername}, SheetID: ${sheetId}`);
   
   // Try to get dashboard - it will handle both owned and shared dashboards
   const dashboard = await getDashboardById(id, username);
   if (!dashboard) {
-    console.error(`[addChartToDashboard] Dashboard ${id} not found for user ${normalizedUsername}`);
+    logger.error(`[addChartToDashboard] Dashboard ${id} not found for user ${normalizedUsername}`);
     throw new Error("Dashboard not found");
   }
   
-  console.log(`[addChartToDashboard] Dashboard found: ${dashboard.name}, Owner: ${dashboard.username}`);
+  logger.log(`[addChartToDashboard] Dashboard found: ${dashboard.name}, Owner: ${dashboard.username}`);
   
   // Check if user has edit permission
   const dashboardOwner = dashboard.username?.toLowerCase();
@@ -431,7 +432,7 @@ export const addChartToDashboard = async (
     );
     
     if (collaborator) {
-      console.log(`[addChartToDashboard] User found as collaborator with permission: ${collaborator.permission}`);
+      logger.log(`[addChartToDashboard] User found as collaborator with permission: ${collaborator.permission}`);
       if (collaborator.permission !== "edit") {
         throw new Error("You do not have permission to edit this dashboard");
       }
@@ -443,7 +444,7 @@ export const addChartToDashboard = async (
         (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
       );
       
-      console.log(`[addChartToDashboard] Shared dashboard check - Invite found: ${!!acceptedInvite}, Permission: ${acceptedInvite?.permission}`);
+      logger.log(`[addChartToDashboard] Shared dashboard check - Invite found: ${!!acceptedInvite}, Permission: ${acceptedInvite?.permission}`);
       
       if (!acceptedInvite || acceptedInvite.permission !== "edit") {
         throw new Error("You do not have permission to edit this dashboard");
@@ -1341,7 +1342,7 @@ export const createDashboardFromSpec = async (
               })
             );
           } catch (e) {
-            console.warn(
+            logger.warn(
               "⚠️ analysisMemory dashboard_promoted hook failed:",
               e
             );

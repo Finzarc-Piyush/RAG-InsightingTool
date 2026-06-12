@@ -14,6 +14,7 @@ import {
 import type { ChatDocument } from "../models/chat.model.js";
 import { sharedInviteCache } from '../lib/cache.js';
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
+import { logger } from "../lib/logger.js";
 
 const getUserEmailFromRequest = (req: Request): string | undefined =>
   getAuthenticatedEmail(req);
@@ -52,7 +53,7 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
     }
     // Only log in development or when explicitly enabled
     if (ENABLE_SSE_LOGGING || process.env.NODE_ENV === 'development') {
-      console.log(`📤 SSE sent: ${event}`, data);
+      logger.log(`📤 SSE sent: ${event}`, data);
     }
     return true;
   } catch (error: any) {
@@ -62,7 +63,7 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
       return false;
     }
     // Log unexpected errors
-    console.error('Error sending SSE event:', error);
+    logger.error('Error sending SSE event:', error);
     return false;
   }
 }
@@ -102,7 +103,7 @@ export const shareAnalysisController = async (req: Request, res: Response) => {
 
     res.status(201).json({ invite });
   } catch (error) {
-    console.error("shareAnalysisController error:", error);
+    logger.error("shareAnalysisController error:", error);
     const message = error instanceof Error ? error.message : "Failed to share analysis.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -126,7 +127,7 @@ export const getIncomingSharedAnalysesController = async (req: Request, res: Res
     sharedAnalysesResponseSchema.parse(responsePayload);
     res.json(responsePayload);
   } catch (error) {
-    console.error("getIncomingSharedAnalysesController error:", error);
+    logger.error("getIncomingSharedAnalysesController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load shared analyses.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -143,7 +144,7 @@ export const getSentSharedAnalysesController = async (req: Request, res: Respons
     const invitations = await listSharedAnalysesForOwner(userEmail);
     res.json({ invitations });
   } catch (error) {
-    console.error("getSentSharedAnalysesController error:", error);
+    logger.error("getSentSharedAnalysesController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load sent shared analyses.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -170,7 +171,7 @@ export const acceptSharedAnalysisController = async (req: Request, res: Response
       acceptedSession: summary,
     });
   } catch (error) {
-    console.error("acceptSharedAnalysisController error:", error);
+    logger.error("acceptSharedAnalysisController error:", error);
     const message = error instanceof Error ? error.message : "Failed to accept shared analysis.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -192,7 +193,7 @@ export const declineSharedAnalysisController = async (req: Request, res: Respons
     const invite = await declineSharedAnalysisInvite(inviteId, userEmail);
     res.json({ invite });
   } catch (error) {
-    console.error("declineSharedAnalysisController error:", error);
+    logger.error("declineSharedAnalysisController error:", error);
     const message = error instanceof Error ? error.message : "Failed to decline shared analysis.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -218,7 +219,7 @@ export const getSharedAnalysisInviteController = async (req: Request, res: Respo
 
     res.json({ invite });
   } catch (error) {
-    console.error("getSharedAnalysisInviteController error:", error);
+    logger.error("getSharedAnalysisInviteController error:", error);
     const message = error instanceof Error ? error.message : "Failed to load shared analysis invite.";
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({ error: message });
@@ -294,7 +295,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
           (error as any)?.code === "ETIMEDOUT" ||
           (error as any)?.code === "ENOTFOUND"
         ) {
-          console.warn('⚠️ Database unavailable for shared analyses, sending empty arrays');
+          logger.warn('⚠️ Database unavailable for shared analyses, sending empty arrays');
           // Check cache for fallback
           const cached = sharedInviteCache.get(userEmail);
           const fallbackPayload = cached 
@@ -310,7 +311,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
         
         // Only try to send error if connection is still open and it's not a connection error
         if (!res.writableEnded && !res.destroyed && res.writable) {
-          console.error('Error fetching shared analyses for SSE:', error);
+          logger.error('Error fetching shared analyses for SSE:', error);
           sendSSE(res, 'error', { 
             message: error instanceof Error ? error.message : 'Failed to fetch shared analyses.' 
           });
@@ -394,7 +395,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
     req.on('error', (error: any) => {
       // ECONNRESET is expected when clients disconnect normally
       if (error.code !== 'ECONNRESET' && error.code !== 'EPIPE' && error.code !== 'ECONNABORTED') {
-        console.error('SSE connection error:', error);
+        logger.error('SSE connection error:', error);
       }
       isActive = false;
       if (timeoutId) {
@@ -410,7 +411,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
     });
 
   } catch (error) {
-    console.error("streamIncomingSharedAnalysesController error:", error);
+    logger.error("streamIncomingSharedAnalysesController error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream shared analyses.";
     sendSSE(res, 'error', { message });
     res.end();

@@ -9,6 +9,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { logger } from "./logger.js";
 
 // Dynamic import for DuckDB to handle optional dependency
 let duckdb: any;
@@ -48,9 +49,9 @@ export function isDuckDBAvailable(): boolean {
 export async function initDuckDBEager(): Promise<void> {
   try {
     await loadDuckDB();
-    console.log('✅ DuckDB ready');
+    logger.log('✅ DuckDB ready');
   } catch (err) {
-    console.warn('⚠️ DuckDB unavailable:', err instanceof Error ? err.message : String(err));
+    logger.warn('⚠️ DuckDB unavailable:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -499,7 +500,7 @@ export class ColumnarStorageService {
               if (subBatchIndex >= insertSubBatches.length) {
                 processed += chunk.length;
                 if (processed % 10000 === 0) {
-                  console.log(`  Loaded ${processed} / ${totalRows} rows into DuckDB...`);
+                  logger.log(`  Loaded ${processed} / ${totalRows} rows into DuckDB...`);
                 }
                 insertBatch(batchIndex + 1);
                 return;
@@ -820,7 +821,7 @@ export class ColumnarStorageService {
         }
       } catch (error) {
         // Column might not be numeric, skip it
-        console.warn(`Could not compute stats for column ${col}:`, error);
+        logger.warn(`Could not compute stats for column ${col}:`, error);
       }
     }
 
@@ -835,7 +836,7 @@ export class ColumnarStorageService {
       if (this.db) {
         this.db.close((err: Error | null) => {
           if (err) {
-            console.error('Error closing DuckDB:', err);
+            logger.error('Error closing DuckDB:', err);
           }
           this.db = null;
           resolve();

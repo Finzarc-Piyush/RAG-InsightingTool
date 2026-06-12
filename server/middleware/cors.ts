@@ -3,6 +3,7 @@
  * Handles cross-origin resource sharing for the API
  */
 import cors from "cors";
+import { logger } from "../lib/logger.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -66,8 +67,8 @@ export const corsConfig = cors({
       return callback(null, true);
     }
 
-    console.warn("CORS blocked origin:", origin);
-    console.warn("Allowed origins:", allowedOrigins);
+    logger.warn("CORS blocked origin:", origin);
+    logger.warn("Allowed origins:", allowedOrigins);
     callback(new Error("Not allowed by CORS"));
   },
   credentials: true,

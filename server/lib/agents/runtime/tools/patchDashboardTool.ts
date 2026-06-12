@@ -41,6 +41,7 @@ import { z } from "zod";
 import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { dashboardPatchSchema } from "../../../../shared/schema.js";
 import { chartSpecSchema } from "../../../../shared/schema.js";
+import { logger } from "../../../logger.js";
 
 // Compose the args locally so the tool can accept `dashboardId`
 // alongside the core patch fields.
@@ -144,7 +145,7 @@ export function registerPatchDashboardTool(registry: ToolRegistry): void {
               })
             );
           } catch (e) {
-            console.warn(
+            logger.warn(
               "⚠️ analysisMemory dashboard_patched hook failed:",
               e
             );

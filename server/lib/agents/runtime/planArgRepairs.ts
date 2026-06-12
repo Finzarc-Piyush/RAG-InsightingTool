@@ -110,6 +110,7 @@ import {
 } from "../../temporalFacetColumns.js";
 import type { TemporalFacetGrain } from "../../temporalFacetColumns.js";
 import { matchPeriod } from "../../wideFormat/periodVocabulary.js";
+import { logger } from "../../logger.js";
 
 /** Tools that accept `dimensionFilters` at args[plan].dimensionFilters. */
 const NESTED_PLAN_TOOLS = new Set(["execute_query_plan"]);
@@ -2736,7 +2737,7 @@ export function planAlreadyCoversAggregation(
         synthRateDenominatorAliases.has(g)
       );
       if (grabbedRateDim) {
-        console.warn(
+        logger.warn(
           `[planner] ql2_coverage_rejected reason=llm_groupby_includes_rate_denominator ` +
             `synthDenominator=${[...synthRateDenominatorAliases].join("|")} ` +
             `llmGroupBy=${groupBy.join(",")}`

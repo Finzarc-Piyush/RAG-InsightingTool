@@ -18,6 +18,7 @@ import {
   getEmbeddingDimensions,
   requireAzureSearchCredentials,
 } from "./config.js";
+import { logger } from "../logger.js";
 
 export const PAST_ANALYSES_INDEX_NAME =
   process.env.AZURE_SEARCH_PAST_ANALYSES_INDEX_NAME || "past-analyses";
@@ -113,7 +114,7 @@ export async function createOrUpdatePastAnalysesIndex(): Promise<void> {
   );
   const def = buildPastAnalysesIndexDefinition(PAST_ANALYSES_INDEX_NAME, dim);
   await client.createOrUpdateIndex(def);
-  console.log(
+  logger.log(
     `✅ Azure AI Search index ready: ${PAST_ANALYSES_INDEX_NAME} (vector dim ${dim})`
   );
 }

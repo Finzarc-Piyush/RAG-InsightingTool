@@ -15,6 +15,7 @@ import {
   DATASET_PREVIEW_LOADING_CONTENT,
   normalizeDatasetSystemMessages,
 } from './uploadSystemMessages';
+import { logger } from "@/lib/logger";
 
 interface UseSessionLoaderProps {
   loadedSessionData?: any;
@@ -82,7 +83,7 @@ export const useSessionLoader = ({
 }: UseSessionLoaderProps) => {
   useEffect(() => {
     if (!loadedSessionData) return;
-    console.log('🔄 Loading session data into Home component:', loadedSessionData);
+    logger.log('🔄 Loading session data into Home component:', loadedSessionData);
     const session = loadedSessionData.session;
     if (!session) return;
 

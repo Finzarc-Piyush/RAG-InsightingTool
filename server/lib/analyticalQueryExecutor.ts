@@ -8,6 +8,7 @@ import { parseUserQuery } from './queryParser.js';
 import { applyQueryTransformations } from './dataTransform.js';
 import { DataSummary, Message } from '../shared/schema.js';
 import type { ParsedQuery } from '../shared/queryTypes.js';
+import { logger } from "./logger.js";
 
 export interface AnalyticalQueryResult {
   isAnalytical: boolean;
@@ -166,7 +167,7 @@ export async function executeAnalyticalQuery(
   }
 
   try {
-    console.log('🔍 Detected analytical question, executing query...');
+    logger.log('🔍 Detected analytical question, executing query...');
     
     // Use pre-parsed query if available, otherwise parse
     let parsedQuery: ParsedQuery | null = preParsedQuery ?? null;
@@ -176,14 +177,14 @@ export async function executeAnalyticalQuery(
     }
     
     if (!parsedQuery || (parsedQuery.confidence ?? 1) < 0.3) {
-      console.log('⚠️ Low confidence in query parsing, skipping query execution');
+      logger.log('⚠️ Low confidence in query parsing, skipping query execution');
       return {
         isAnalytical: true,
         parsedQuery,
       };
     }
 
-    console.log('📊 Parsed query:', JSON.stringify(parsedQuery, null, 2));
+    logger.log('📊 Parsed query:', JSON.stringify(parsedQuery, null, 2));
     
     // Apply query transformations
     const { data: queryResults, descriptions } = applyQueryTransformations(
@@ -192,8 +193,8 @@ export async function executeAnalyticalQuery(
       parsedQuery
     );
     
-    console.log(`✅ Query executed: ${data.length} → ${queryResults.length} rows`);
-    console.log(`📝 Transformations: ${descriptions.join('; ')}`);
+    logger.log(`✅ Query executed: ${data.length} → ${queryResults.length} rows`);
+    logger.log(`📝 Transformations: ${descriptions.join('; ')}`);
     
     // Format results
     const { summary: resultSummary, formattedResults } = formatQueryResults(
@@ -212,7 +213,7 @@ export async function executeAnalyticalQuery(
       parsedQuery,
     };
   } catch (error) {
-    console.error('❌ Error executing analytical query:', error);
+    logger.error('❌ Error executing analytical query:', error);
     return {
       isAnalytical: true,
     };

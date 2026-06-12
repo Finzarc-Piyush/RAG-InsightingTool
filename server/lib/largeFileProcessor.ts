@@ -14,6 +14,7 @@ import {
   isTemporalFacetColumnKey,
   periodDimensionFromSummary,
 } from './temporalFacetColumns.js';
+import { logger } from "./logger.js";
 
 export interface LargeFileProcessResult {
   rowCount: number;
@@ -110,7 +111,7 @@ export async function processLargeFile(
 export function shouldUseLargeFileProcessing(fileSize: number): boolean {
   // Use large file processing for files >= 50MB, but only if DuckDB is available
   if (!isDuckDBAvailable()) {
-    console.log('⚠️ DuckDB not available - large file processing disabled. Using traditional processing.');
+    logger.log('⚠️ DuckDB not available - large file processing disabled. Using traditional processing.');
     return false;
   }
   return fileSize >= uploadLimits.largeFileThresholdBytes;
@@ -149,7 +150,7 @@ export async function getDataForAnalysis(
     try {
       await storage.close();
     } catch (closeErr) {
-      console.warn(
+      logger.warn(
         `⚠️ Failed to close columnar storage for session ${sessionId}:`,
         closeErr instanceof Error ? closeErr.message : closeErr
       );

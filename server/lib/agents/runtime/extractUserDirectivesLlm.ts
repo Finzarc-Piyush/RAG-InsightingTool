@@ -49,6 +49,7 @@ import type { DirectiveDraft } from "../../../models/datasetDirectives.model.js"
 import type { ExtractedDirective } from "./extractUserDirectives.js";
 import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
+import { logger } from "../../logger.js";
 
 // ──────────────────────────────────────────────────────────────────────────
 // Cache (per-process, message-hash keyed)
@@ -231,12 +232,12 @@ export async function extractUserDirectivesLlm(
       purpose: LLM_PURPOSE.DIRECTIVE_EXTRACTION,
     });
   } catch (err) {
-    console.warn("⚠️ extractUserDirectivesLlm completeJson threw:", err);
+    logger.warn("⚠️ extractUserDirectivesLlm completeJson threw:", err);
     cacheSet(key, []);
     return [];
   }
   if (!result.ok) {
-    console.warn("⚠️ extractUserDirectivesLlm failed:", result.error);
+    logger.warn("⚠️ extractUserDirectivesLlm failed:", result.error);
     cacheSet(key, []);
     return [];
   }

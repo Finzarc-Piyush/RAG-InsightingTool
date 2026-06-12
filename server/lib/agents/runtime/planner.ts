@@ -116,6 +116,7 @@ import {
   buildPlannerHintsBlock,
 } from "./plannerHintsBlock.js";
 import { buildSemanticCatalogPromptBlock } from "../../semantic/prompt.js";
+import { logger } from "../../logger.js";
 
 /** Args whose string values must be real column names from DataSummary. */
 const COLUMN_BOUND_ARG_KEYS = new Set(["x", "y", "y2", "targetVariable"]);
@@ -753,7 +754,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     })
   ) {
     stepsWithMeta.unshift(synthFloor.step);
-    console.warn(
+    logger.warn(
       `[planner] ql2_aggregation_floor synthesized step=${synthFloor.step.id} reason=${synthFloor.reason} groupBy=[${synthFloor.groupBy.join(",")}] metric=${synthFloor.metricColumn} outerOp=${synthFloor.outerOp}`
     );
   }
@@ -874,7 +875,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     repairExecuteQueryPlanSort(step);
     const injected = ensureInferredFiltersOnStep(step, ctx.inferredFilters);
     if (injected.length) {
-      console.warn(
+      logger.warn(
         `[planner] injected inferred filters into ${step.tool} step ${step.id}: ${injected.join(", ")}`
       );
     }
@@ -884,7 +885,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       ctx.question
     );
     if (rollupInjected.length) {
-      console.warn(
+      logger.warn(
         `[planner] auto-excluded declared rollup values from ${step.tool} step ${step.id}: ${rollupInjected.join(", ")}`
       );
     }
@@ -894,7 +895,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     // gets the topN value or the entity column wrong on these shapes.
     const rankingFix = enforceRankingPlanShape(step, rankingIntent);
     if (rankingFix.changed) {
-      console.warn(
+      logger.warn(
         `[planner] coerced ${step.tool} step ${step.id} to ranking shape: ${rankingFix.reason ?? ""}`
       );
     }
@@ -909,15 +910,15 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         distinctMetricValues
       );
       if (guard.injectedFilter?.length) {
-        console.warn(
+        logger.warn(
           `[planner] injected compound-shape Metric filter into ${step.tool} step ${step.id}: ${wideFormat.metricColumn} in [${guard.injectedFilter.join(", ")}]${guard.fallbackUsed ? " (fallback heuristic — user did not name a metric)" : ""}`
         );
       } else if (guard.expandedGroupBy) {
-        console.warn(
+        logger.warn(
           `[planner] expanded groupBy with compound-shape Metric column on ${step.tool} step ${step.id}: ${wideFormat.metricColumn} (cross-metric question)`
         );
       } else if (guard.reason === "no_metrics_known") {
-        console.warn(
+        logger.warn(
           `[planner] WARNING: compound-shape ${step.tool} step ${step.id} touches ${wideFormat.valueColumn} but no Metric values are known — values may mix incompatible metrics`
         );
       }
@@ -935,7 +936,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         periodKindValues
       );
       if (pg.injectedFilter) {
-        console.warn(
+        logger.warn(
           `[planner] injected period-additivity filter into ${step.tool} step ${step.id}: ${pg.injectedFilter.column} in [${pg.injectedFilter.values.join(", ")}] — ${pg.caveat ?? ""}`
         );
         if (pg.caveat) (ctx.deterministicCaveats ??= []).push(pg.caveat);
@@ -953,7 +954,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       const multiResult = injectMultiPerIntent(step, multiPerIntent);
       if (multiResult.rewrittenAggColumns.length) {
         multiPerHandled = true;
-        console.warn(
+        logger.warn(
           `[planner] multi_per_intent_injected step=${step.id} ` +
             `outerOp=${multiPerIntent.outerOp} rateDim="${multiPerIntent.rateDenominator.column}" ` +
             `removedFromGroupBy=${multiResult.removedFromGroupBy.join(",")} ` +
@@ -964,7 +965,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         multiResult.skipReason !== "not_execute_query_plan" &&
         multiResult.skipReason !== "rate_not_in_group_by"
       ) {
-        console.warn(
+        logger.warn(
           `[planner] multi_per_intent_skipped step=${step.id} reason=${multiResult.skipReason}`
         );
       }
@@ -978,11 +979,11 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     if (perXIntent && !multiPerHandled) {
       const perXResult = injectPerDimensionForRateIntent(step, perXIntent);
       if (perXResult.rewrittenAggColumns.length) {
-        console.warn(
+        logger.warn(
           `[planner] per_x_intent_injected step=${step.id} outerOp=${perXIntent.outerOp} perDimension="${perXIntent.perDimension}" cols=${perXResult.rewrittenAggColumns.join(",")}`
         );
       } else if (perXResult.skipReason && perXResult.skipReason !== "not_execute_query_plan") {
-        console.warn(
+        logger.warn(
           `[planner] per_x_intent_skipped step=${step.id} reason=${perXResult.skipReason}`
         );
       }

@@ -46,6 +46,7 @@ import type { AnalysisMemoryEntry } from "../../../shared/schema.js";
 import type { ComputedColumnDef } from "../../computedColumns.js";
 import { buildMemoryEntryId, appendMemoryEntries } from "../../../models/analysisMemory.model.js";
 import { scheduleIndexMemoryEntries } from "../../rag/indexSession.js";
+import { logger } from "../../logger.js";
 
 const TITLE_MAX = 200;
 const SUMMARY_MAX = 1500;
@@ -339,7 +340,7 @@ export async function persistLifecycleMemory(
 export function scheduleLifecycleMemory(entry: AnalysisMemoryEntry): void {
   setImmediate(() => {
     persistLifecycleMemory(entry).catch((e) =>
-      console.warn("⚠️ analysisMemory lifecycle write failed:", e)
+      logger.warn("⚠️ analysisMemory lifecycle write failed:", e)
     );
   });
 }

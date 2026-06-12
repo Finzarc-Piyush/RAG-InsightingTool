@@ -19,6 +19,7 @@ import {
   buildPivotFilterWhereSql,
   quoteIdent,
 } from "./pivotFilterSql.js";
+import { logger } from "./logger.js";
 
 const pivotWarmupStarted = new Set<string>();
 
@@ -70,7 +71,7 @@ async function warmupPivotForSession(sessionId: string, dataVersion: number | st
     }
   } catch (error) {
     // Best-effort: never fail the user-facing pivot request.
-    console.warn("Pivot warmup failed (non-fatal):", error);
+    logger.warn("Pivot warmup failed (non-fatal):", error);
   }
 }
 

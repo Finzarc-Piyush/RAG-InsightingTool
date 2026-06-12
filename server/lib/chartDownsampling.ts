@@ -10,6 +10,7 @@ import {
   parseFlexibleDate,
 } from './dateUtils.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
+import { logger } from "./logger.js";
 
 const MAX_CHART_POINTS = 5000;
 
@@ -399,7 +400,7 @@ export function downsampleChartData(
     const period =
       datePeriodHint ?? determineOptimalPeriod(working, matchedX);
     if (period) {
-      console.log(
+      logger.log(
         `📊 Time series: bucketing to ${period} (rows=${working.length})`
       );
       working =
@@ -420,7 +421,7 @@ export function downsampleChartData(
   if ((type === 'line' || type === 'area') && hasDatesAfter && agg === 'none') {
     const period = datePeriodHint ?? determineOptimalPeriod(working, matchedX);
     if (period) {
-      console.log(`📊 Time series detected: Resampling to ${period} periods (${working.length} → ~${Math.ceil(working.length / (period === 'day' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365))} points)`);
+      logger.log(`📊 Time series detected: Resampling to ${period} periods (${working.length} → ~${Math.ceil(working.length / (period === 'day' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 365))} points)`);
       const resampled =
         seriesKeysPresent.length > 0 ?
           resampleTimeSeriesMulti(working, matchedX, valueColumns, period, "sum")
@@ -433,7 +434,7 @@ export function downsampleChartData(
   }
 
   if (agg !== 'none') {
-    console.log(`📊 Using aggregation-based downsampling (${working.length} → ${maxPoints} points)`);
+    logger.log(`📊 Using aggregation-based downsampling (${working.length} → ${maxPoints} points)`);
     return seriesKeysPresent.length > 0 ?
         aggregateDownsampleMulti(
           working,
@@ -454,17 +455,17 @@ export function downsampleChartData(
   if ((type === 'line' || type === 'area') && !hasDatesAfter) {
     const firstX = toNumber(working[0]?.[matchedX]);
     if (!isNaN(firstX)) {
-      console.log(`📊 Using LTTB downsampling for line chart (${working.length} → ${maxPoints} points)`);
+      logger.log(`📊 Using LTTB downsampling for line chart (${working.length} → ${maxPoints} points)`);
       return downsampleLTTB(working, matchedX, primaryYForLttb, maxPoints);
     }
   }
 
   if (type === 'scatter') {
-    console.log(`📊 Using stratified sampling for scatter plot (${working.length} → ${maxPoints} points)`);
+    logger.log(`📊 Using stratified sampling for scatter plot (${working.length} → ${maxPoints} points)`);
     return aggregateDownsample(working, matchedX, matchedY, maxPoints, 'mean');
   }
 
-  console.log(`📊 Using simple decimation (${working.length} → ${maxPoints} points)`);
+  logger.log(`📊 Using simple decimation (${working.length} → ${maxPoints} points)`);
   const step = Math.floor(working.length / maxPoints);
   return working.filter((_, idx) => idx % step === 0).slice(0, maxPoints);
 }

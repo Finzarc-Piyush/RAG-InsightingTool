@@ -5,6 +5,7 @@
 import { SearchIndexClient, AzureKeyCredential } from "@azure/search-documents";
 import type { SearchIndex, SearchField } from "@azure/search-documents";
 import { getEmbeddingDimensions, requireAzureSearchCredentials } from "./config.js";
+import { logger } from "../logger.js";
 
 function buildIndexDefinition(indexName: string, dimensions: number): SearchIndex {
   const fields: SearchField[] = [
@@ -66,5 +67,5 @@ export async function createOrUpdateRagSearchIndex(): Promise<void> {
   const client = new SearchIndexClient(cfg.endpoint, new AzureKeyCredential(cfg.adminKey));
   const def = buildIndexDefinition(cfg.indexName, dim);
   await client.createOrUpdateIndex(def);
-  console.log(`✅ Azure AI Search index ready: ${cfg.indexName} (vector dim ${dim})`);
+  logger.log(`✅ Azure AI Search index ready: ${cfg.indexName} (vector dim ${dim})`);
 }

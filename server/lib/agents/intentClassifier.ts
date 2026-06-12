@@ -45,6 +45,7 @@ import { callLlm } from './runtime/callLlm.js';
 import { LLM_PURPOSE } from './runtime/llmCallPurpose.js';
 import { getModelForTask } from './models.js';
 import { DataSummary, Message } from '../../shared/schema.js';
+import { logger } from "../logger.js";
 
 /**
  * Analysis Intent Schema
@@ -444,27 +445,27 @@ OUTPUT FORMAT (JSON only, no markdown):
         }
         return value;
       }));
-      console.log('🧹 Cleaned parsed result (removed nulls):', JSON.stringify(cleanedForLog, null, 2));
+      logger.log('🧹 Cleaned parsed result (removed nulls):', JSON.stringify(cleanedForLog, null, 2));
       
       const validated = analysisIntentSchema.parse(cleaned);
       
-      console.log(`✅ Intent classified: ${validated.type} (confidence: ${validated.confidence.toFixed(2)})`);
+      logger.log(`✅ Intent classified: ${validated.type} (confidence: ${validated.confidence.toFixed(2)})`);
       
       return validated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn(`⚠️ Intent classification attempt ${attempt + 1} failed:`, lastError.message);
+      logger.warn(`⚠️ Intent classification attempt ${attempt + 1} failed:`, lastError.message);
       
       if (attempt < maxRetries - 1) {
         // Enhance prompt for retry
-        console.log(`🔄 Retrying with enhanced prompt...`);
+        logger.log(`🔄 Retrying with enhanced prompt...`);
         // Could add more context or examples here
       }
     }
   }
 
   // If all retries failed, return fallback intent
-  console.error('❌ Intent classification failed after retries, using fallback');
+  logger.error('❌ Intent classification failed after retries, using fallback');
   
   // Determine fallback type based on question content
   const questionLower = question.toLowerCase();

@@ -4,6 +4,7 @@ import { useToast } from '@/hooks/use-toast';
 import { sessionsApi } from '@/lib/api';
 import { getUserEmail } from '@/utils/userStorage';
 import { Session, SessionsResponse } from '../types';
+import { logger } from "@/lib/logger";
 
 interface UseSessionManagementProps {
   onLoadSession?: (sessionId: string, sessionData: any) => void;
@@ -42,9 +43,9 @@ export const useSessionManagement = ({
       setLoadingSessionId(session.sessionId);
 
       try {
-        console.log('🔍 Loading session details for:', session.sessionId);
+        logger.log('🔍 Loading session details for:', session.sessionId);
         const sessionDetails = await sessionsApi.getSessionDetails(session.sessionId);
-        console.log('✅ Session details loaded:', sessionDetails);
+        logger.log('✅ Session details loaded:', sessionDetails);
 
         if (onLoadSession) {
           onLoadSession(session.sessionId, sessionDetails);
@@ -60,7 +61,7 @@ export const useSessionManagement = ({
           });
         }
       } catch (error) {
-        console.error('❌ Failed to load session:', error);
+        logger.error('❌ Failed to load session:', error);
         toast({
           title: 'Error Loading Session',
           description: 'Failed to load session details. Please try again.',
@@ -97,7 +98,7 @@ export const useSessionManagement = ({
       setDeleteDialogOpen(false);
       setSessionToDelete(null);
     } catch (error) {
-      console.error('❌ Failed to delete session:', error);
+      logger.error('❌ Failed to delete session:', error);
       toast({
         title: 'Error Deleting Session',
         description:
@@ -161,7 +162,7 @@ export const useSessionManagement = ({
       setEditFileName('');
     } catch (error) {
       if (previous) queryClient.setQueryData(queryKey, previous);
-      console.error('❌ Failed to update session name:', error);
+      logger.error('❌ Failed to update session name:', error);
       toast({
         title: 'Error Updating Name',
         description:

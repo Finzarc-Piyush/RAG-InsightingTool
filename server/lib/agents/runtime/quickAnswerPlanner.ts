@@ -55,6 +55,7 @@ import {
 } from "./context.js";
 import type { AgentExecutionContext } from "./types.js";
 import type { DataSummary } from "../../../shared/schema.js";
+import { logger } from "../../logger.js";
 
 // ── LLM output sanitizers ──────────────────────────────────────────────
 // The Mini-tier LLM frequently produces JSON that fails the strict
@@ -317,10 +318,10 @@ export async function runQuickLookupPlanner(
       }
     );
     if (res.ok) return res.data as QuickLookupPlanResponse;
-    console.warn(`[quickAnswerPlanner] terminal Zod fail: ${res.error.slice(0, 400)}`);
+    logger.warn(`[quickAnswerPlanner] terminal Zod fail: ${res.error.slice(0, 400)}`);
     return null;
   } catch (err) {
-    console.warn(
+    logger.warn(
       `[quickAnswerPlanner] threw: ${err instanceof Error ? err.message : String(err)}`
     );
     return null;

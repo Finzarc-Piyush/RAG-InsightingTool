@@ -43,6 +43,7 @@
  *   no LLM calls, no I/O.
  */
 import { Message, ChartSpec } from '../../shared/schema.js';
+import { logger } from "../logger.js";
 
 /**
  * Resolved Reference
@@ -95,7 +96,7 @@ export function findLastCreatedColumn(chatHistory: Message[]): string | null {
     if (message.role === 'assistant' && message.content) {
       const columnName = extractColumnNameFromMessage(message.content);
       if (columnName) {
-        console.log(`✅ Found last created column: "${columnName}" at message index ${i}`);
+        logger.log(`✅ Found last created column: "${columnName}" at message index ${i}`);
         return columnName;
       }
     }
@@ -145,9 +146,9 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
                 targetVariable = doesMatch[2].trim(); // X is the target
               }
             }
-            console.log(`   Found original question: "${originalQuestion}"`);
+            logger.log(`   Found original question: "${originalQuestion}"`);
             if (targetVariable) {
-              console.log(`   Extracted target variable: "${targetVariable}"`);
+              logger.log(`   Extracted target variable: "${targetVariable}"`);
             }
             break;
           }
@@ -169,10 +170,10 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
               // For correlation questions, keep the correlation language and add chart request
               // This ensures proper intent classification as "correlation"
               const correlationQuery = originalQuestion.toLowerCase().replace(/\?$/, '');
-              console.log(`   Reconstructed correlation query from original question: "${correlationQuery}"`);
+              logger.log(`   Reconstructed correlation query from original question: "${correlationQuery}"`);
               // Use "show correlation chart" to make intent clear
               const chartQuery = `show correlation chart for ${correlationQuery}`;
-              console.log(`   Final query: "${chartQuery}"`);
+              logger.log(`   Final query: "${chartQuery}"`);
               return {
                 suggestion: message.content,
                 action: chartQuery,
@@ -181,7 +182,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
             } else {
               // For non-correlation questions, use generic chart visualization
               const chartQuery = `show me a chart to visualize ${originalQuestion.toLowerCase().replace(/\?$/, '')}`;
-              console.log(`   Reconstructed chart query from original question: "${chartQuery}"`);
+              logger.log(`   Reconstructed chart query from original question: "${chartQuery}"`);
               return {
                 suggestion: message.content,
                 action: chartQuery,
@@ -306,18 +307,18 @@ export function resolveContextReferences(
     // Look for AI suggestions in previous messages
     const suggestion = detectAISuggestion(chatHistory);
     if (suggestion) {
-      console.log(`✅ Detected confirmation to AI suggestion`);
-      console.log(`   Original question: "${question}"`);
-      console.log(`   AI suggestion: "${suggestion.suggestion}"`);
-      console.log(`   Extracted action: "${suggestion.action}"`);
+      logger.log(`✅ Detected confirmation to AI suggestion`);
+      logger.log(`   Original question: "${question}"`);
+      logger.log(`   AI suggestion: "${suggestion.suggestion}"`);
+      logger.log(`   Extracted action: "${suggestion.action}"`);
       
       // Use the extracted action as the new question
       // This will be processed as if the user explicitly asked for this
       const enrichedQuestion = suggestion.action;
-      console.log(`   Enriched question: "${enrichedQuestion}"`);
+      logger.log(`   Enriched question: "${enrichedQuestion}"`);
       return enrichedQuestion;
     } else {
-      console.log(`⚠️ User said "${question}" but no AI suggestion found in recent messages`);
+      logger.log(`⚠️ User said "${question}" but no AI suggestion found in recent messages`);
     }
   }
   
@@ -374,7 +375,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+previous\s+one\b/gi, `"${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+last\s+one\b/gi, `"${lastColumn}"`);
       
-      console.log(`✅ Resolved column context reference: "${question}" → "${resolvedQuestion}"`);
+      logger.log(`✅ Resolved column context reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -394,7 +395,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+previous\s+one\b/gi, chartRef);
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+last\s+one\b/gi, chartRef);
       
-      console.log(`✅ Resolved context reference: "${question}" → "${resolvedQuestion}"`);
+      logger.log(`✅ Resolved context reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -409,7 +410,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthat\b/gi, insightRef);
       resolvedQuestion = resolvedQuestion.replace(/\bit\b/gi, insightRef);
       
-      console.log(`✅ Resolved context reference to insight: "${question}" → "${resolvedQuestion}"`);
+      logger.log(`✅ Resolved context reference to insight: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -422,7 +423,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+this\b/gi, `rename "${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+that\b/gi, `rename "${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+it\b/gi, `rename "${lastColumn}"`);
-      console.log(`✅ Resolved generic action reference: "${question}" → "${resolvedQuestion}"`);
+      logger.log(`✅ Resolved generic action reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }

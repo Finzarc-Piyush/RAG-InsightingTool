@@ -52,6 +52,7 @@ import {
 import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 import { generateChartInsights } from "../lib/insightGenerator.js";
+import { logger } from "../lib/logger.js";
 
 const CHART_KEY_INSIGHT_MAX_ROWS = 800;
 
@@ -94,7 +95,7 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Get all sessions error:', error);
+    logger.error('Get all sessions error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch all sessions';
     
     // Check if it's a CosmosDB initialization error
@@ -148,7 +149,7 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get paginated sessions error:', error);
+    logger.error('Get paginated sessions error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch paginated sessions',
     });
@@ -213,7 +214,7 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get filtered sessions error:', error);
+    logger.error('Get filtered sessions error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch filtered sessions',
     });
@@ -235,7 +236,7 @@ export const getSessionStatisticsEndpoint = async (req: Request, res: Response) 
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get session statistics error:', error);
+    logger.error('Get session statistics error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch session statistics',
     });
@@ -269,10 +270,10 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
           // Use charts from blob if available, otherwise use charts from CosmosDB
           if (chartsFromBlob.length > 0) {
             chartsWithData = chartsFromBlob;
-            console.log(`✅ Loaded ${chartsFromBlob.length} charts from blob storage`);
+            logger.log(`✅ Loaded ${chartsFromBlob.length} charts from blob storage`);
           }
         } catch (blobError) {
-          console.error('⚠️ Failed to load charts from blob, using charts from CosmosDB:', blobError);
+          logger.error('⚠️ Failed to load charts from blob, using charts from CosmosDB:', blobError);
           // Continue with charts from CosmosDB (may not have data arrays)
         }
       }
@@ -328,7 +329,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
         };
       });
 
-      console.log(`✅ Enriched ${enrichedMessages.length} messages with chart data`);
+      logger.log(`✅ Enriched ${enrichedMessages.length} messages with chart data`);
 
       // Hydrate per-turn feedback (answer-level + granular target details) onto
       // assistant messages so the thumbs render the persisted state on reload.
@@ -351,7 +352,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
           ])
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `⚠️ feedback hydration failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
@@ -389,7 +390,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
     } catch (accessError: any) {
       // Handle authorization errors separately
       if (accessError?.statusCode === 403) {
-        console.warn(`⚠️ Unauthorized access attempt: ${normalizedRequesterEmail} tried to access session ${sessionId}`);
+        logger.warn(`⚠️ Unauthorized access attempt: ${normalizedRequesterEmail} tried to access session ${sessionId}`);
         return res.status(403).json({ 
           error: 'Unauthorized to access this session',
           message: 'You do not have permission to access this session'
@@ -403,7 +404,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get session details error:', error);
+    logger.error('Get session details error:', error);
     const statusCode = (error as any)?.statusCode || 500;
     res.status(statusCode).json({
       error: error instanceof Error ? error.message : 'Failed to fetch session details',
@@ -452,7 +453,7 @@ export const getSessionsByUserEndpoint = async (req: Request, res: Response) => 
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Get sessions by user error:', error);
+    logger.error('Get sessions by user error:', error);
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fetch sessions by user',
     });
@@ -511,7 +512,7 @@ export const updateSessionNameEndpoint = async (req: Request, res: Response) => 
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Update session name error:', error);
+    logger.error('Update session name error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to update session name';
     
     // Check if it's a "not found" error
@@ -594,7 +595,7 @@ export const updateSessionContextEndpoint = async (req: Request, res: Response) 
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Update session context error:', error);
+    logger.error('Update session context error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to update session context';
     
     // Check if it's a "not found" error
@@ -673,7 +674,7 @@ export const getSessionDirectivesEndpoint = async (
       return res.status(401).json({ error: error.message });
     }
     const msg = error instanceof Error ? error.message : "Failed to list directives";
-    console.error("getSessionDirectivesEndpoint failed:", error);
+    logger.error("getSessionDirectivesEndpoint failed:", error);
     res.status(500).json({ error: msg });
   }
 };
@@ -719,7 +720,7 @@ export const revokeSessionDirectiveEndpoint = async (
       return res.status(401).json({ error: error.message });
     }
     const msg = error instanceof Error ? error.message : "Failed to revoke directive";
-    console.error("revokeSessionDirectiveEndpoint failed:", error);
+    logger.error("revokeSessionDirectiveEndpoint failed:", error);
     res.status(500).json({ error: msg });
   }
 };
@@ -831,7 +832,7 @@ export const updateMessagePivotStateEndpoint = async (req: Request, res: Respons
     if (err?.statusCode === 403 || /unauthorized/i.test(String(err?.message ?? ""))) {
       return res.status(403).json({ error: err.message });
     }
-    console.error("Update message pivotState error:", err);
+    logger.error("Update message pivotState error:", err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : "Failed to update pivot state",
     });
@@ -858,7 +859,7 @@ export const getSessionAnalysisContextEndpoint = async (req: Request, res: Respo
     if (err instanceof AuthenticationError || err?.statusCode === 403) {
       return res.status(403).json({ error: "Unauthorized" });
     }
-    console.error("getSessionAnalysisContextEndpoint error:", err);
+    logger.error("getSessionAnalysisContextEndpoint error:", err);
     return res.status(500).json({ error: "Failed to load session context" });
   }
 };
@@ -871,7 +872,7 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
   res.setHeader("X-Request-Id", requestId);
 
   try {
-    console.log('📊 getDataSummaryEndpoint called', { 
+    logger.log('📊 getDataSummaryEndpoint called', { 
       requestId,
       sessionId: req.params.sessionId,
       path: req.path,
@@ -930,7 +931,7 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     const totalRowCount = data.length;
     const sampledForProfile = totalRowCount > MAX_ROWS_FOR_PROFILE;
     if (sampledForProfile) {
-      console.log(
+      logger.log(
         `📊 Dataset has ${totalRowCount} rows; sampling ${MAX_ROWS_FOR_PROFILE} for the profile`,
       );
       const step = totalRowCount / MAX_ROWS_FOR_PROFILE;
@@ -962,14 +963,14 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     }
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch data summary';
     const stack = error instanceof Error ? error.stack : undefined;
-    console.error('Get data summary error:', {
+    logger.error('Get data summary error:', {
       requestId,
       sessionId: req.params.sessionId,
       hasAuthHeader: Boolean(req.headers.authorization),
       errorMessage,
     });
     if (stack) {
-      console.error(stack);
+      logger.error(stack);
     }
     
     if (errorMessage.includes('not found') || errorMessage.includes('Session not found')) {
@@ -1231,7 +1232,7 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error("postChartPreviewEndpoint:", error);
+    logger.error("postChartPreviewEndpoint:", error);
     const msg = error instanceof Error ? error.message : "Chart preview failed";
     return res.status(400).json({ error: msg });
   }
@@ -1324,7 +1325,7 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
       if (text?.trim()) domainContext = text;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`postChartKeyInsightEndpoint · domain context load failed: ${msg}`);
+      logger.warn(`postChartKeyInsightEndpoint · domain context load failed: ${msg}`);
     }
 
     const chatLevelInsights =
@@ -1352,7 +1353,7 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error("postChartKeyInsightEndpoint:", error);
+    logger.error("postChartKeyInsightEndpoint:", error);
     const msg = error instanceof Error ? error.message : "Key insight generation failed";
     return res.status(400).json({ error: msg });
   }
@@ -1384,7 +1385,7 @@ export const deleteSessionEndpoint = async (req: Request, res: Response) => {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error('Delete session error:', error);
+    logger.error('Delete session error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to delete session';
     
     // Check if it's a "not found" error
@@ -1447,7 +1448,7 @@ export const putSessionHierarchiesEndpoint = async (req: Request, res: Response)
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error("Put session hierarchies error:", error);
+    logger.error("Put session hierarchies error:", error);
     const msg = error instanceof Error ? error.message : "Failed to update hierarchies";
     if (/not initialized/.test(msg)) {
       return res.status(503).json({ error: "Database is initializing. Please try again." });
@@ -1506,7 +1507,7 @@ export const putSessionSchemaAnnotationsEndpoint = async (
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
     }
-    console.error("Put session schema annotations error:", error);
+    logger.error("Put session schema annotations error:", error);
     const msg =
       error instanceof Error ? error.message : "Failed to update annotations";
     if (/not initialized/.test(msg)) {

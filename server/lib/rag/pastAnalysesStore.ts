@@ -15,6 +15,7 @@ import { SearchClient, AzureKeyCredential } from "@azure/search-documents";
 import { requireAzureSearchCredentials } from "./config.js";
 import { PAST_ANALYSES_INDEX_NAME } from "./createPastAnalysesIndex.js";
 import type { PastAnalysisDoc } from "../../shared/schema.js";
+import { logger } from "../logger.js";
 
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -35,7 +36,7 @@ async function withSearchRetry<T>(label: string, fn: () => Promise<T>): Promise<
       }
       const backoff = Math.min(2000, 200 * 2 ** (attempt - 1));
       const jitter = Math.floor(Math.random() * backoff);
-      console.warn(
+      logger.warn(
         `⚠️ Azure Search ${label} attempt ${attempt} failed (status ${statusCode}); retrying in ${backoff + jitter}ms`
       );
       await new Promise((r) => setTimeout(r, backoff + jitter));

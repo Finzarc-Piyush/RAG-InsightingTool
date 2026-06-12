@@ -17,6 +17,7 @@ import type {
   AutomationSummary,
 } from "../shared/schema.js";
 import { waitForAutomationsContainer } from "./database.config.js";
+import { logger } from "../lib/logger.js";
 
 const sanitiseId = (raw: string) =>
   raw
@@ -54,7 +55,7 @@ const assertAutomationSizeUnderLimit = (a: Automation): void => {
     throw new AutomationDocSizeError(bytes, a.name);
   }
   if (bytes >= COSMOS_DOC_SIZE_WARN_BYTES) {
-    console.warn(
+    logger.warn(
       `⚠️ automation doc size ${bytes} bytes (id=${a.id}, recipe=${a.recipe.length} turns) — approaching Cosmos 2 MB limit`
     );
   }
@@ -141,7 +142,7 @@ export const listAutomationsByUser = async (
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   } catch (error) {
-    console.error("[automation.model] listAutomationsByUser failed:", error);
+    logger.error("[automation.model] listAutomationsByUser failed:", error);
     return [];
   }
 };
@@ -185,7 +186,7 @@ export const touchAutomationLastRun = async (
     };
     await container.item(id, normaliseUsername(username)).replace(updated);
   } catch (error) {
-    console.warn("[automation.model] touchAutomationLastRun failed:", error);
+    logger.warn("[automation.model] touchAutomationLastRun failed:", error);
   }
 };
 

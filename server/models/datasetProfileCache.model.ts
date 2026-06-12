@@ -29,6 +29,7 @@ import {
   datasetProfileCacheDocSchema,
   type DatasetProfile,
 } from "../shared/schema.js";
+import { logger } from "../lib/logger.js";
 
 const DOC_ID_SEPARATOR = "__";
 
@@ -94,7 +95,7 @@ export async function readCachedProfile(
     return parsed.data.profile;
   } catch (err: any) {
     if (err?.code === 404) return null;
-    console.warn("⚠️ readCachedProfile failed (treating as miss):", err?.message ?? err);
+    logger.warn("⚠️ readCachedProfile failed (treating as miss):", err?.message ?? err);
     return null;
   }
 }
@@ -124,7 +125,7 @@ export async function writeCachedProfile(
     });
     await container.items.upsert(doc);
   } catch (err: any) {
-    console.warn("⚠️ writeCachedProfile failed (non-fatal):", err?.message ?? err);
+    logger.warn("⚠️ writeCachedProfile failed (non-fatal):", err?.message ?? err);
   }
 }
 

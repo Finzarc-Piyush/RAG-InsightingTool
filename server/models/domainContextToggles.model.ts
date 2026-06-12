@@ -15,6 +15,7 @@
 
 import type { Container, ItemDefinition } from "@azure/cosmos";
 import { getDatabase, initializeCosmosDB } from "./database.config.js";
+import { logger } from "../lib/logger.js";
 
 export const COSMOS_DOMAIN_CONTEXT_TOGGLES_CONTAINER_ID =
   process.env.COSMOS_DOMAIN_CONTEXT_TOGGLES_CONTAINER_ID || "domain_context_toggles";
@@ -53,7 +54,7 @@ async function getContainer(): Promise<Container | null> {
   const db = getDatabase();
   if (!db) {
     if (!unconfiguredWarned) {
-      console.warn(
+      logger.warn(
         `domainContextToggles: Cosmos not configured — using frontmatter defaults only`
       );
       unconfiguredWarned = true;
@@ -75,7 +76,7 @@ async function getContainer(): Promise<Container | null> {
       return ref;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`domainContextToggles: container init failed (${msg})`);
+      logger.warn(`domainContextToggles: container init failed (${msg})`);
       return null;
     }
   }
@@ -118,7 +119,7 @@ export async function getToggleOverrides(): Promise<Record<string, boolean>> {
     return doc?.overrides ?? {};
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`domainContextToggles: read failed (${msg}) — falling back to defaults`);
+    logger.warn(`domainContextToggles: read failed (${msg}) — falling back to defaults`);
     return {};
   }
 }

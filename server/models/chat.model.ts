@@ -16,6 +16,7 @@ import {
 import type { SemanticModelAuditEntry } from "../lib/semantic/semanticModelAuditLog.js";
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
+import { logger } from "../lib/logger.js";
 
 // ─── Short-lived CosmosDB read caches ────────────────────────────────────────
 // Each unique session document is fetched from Cosmos at most once per TTL
@@ -338,7 +339,7 @@ const generateUniqueFileName = async (baseFileName: string, username: string): P
     // Return filename with number suffix
     return `${baseNameWithoutExt} (${nextNumber})${extension}`;
   } catch (error) {
-    console.error('Error generating unique filename, using original:', error);
+    logger.error('Error generating unique filename, using original:', error);
     return baseFileName; // Fallback to original filename on error
   }
 };
@@ -388,7 +389,7 @@ export const createChatDocument = async (
   
   // Generate unique filename with number suffix if needed
   const uniqueFileName = await generateUniqueFileName(fileName, normalizedUsername);
-  console.log(`📝 Generated unique filename: "${fileName}" -> "${uniqueFileName}"`);
+  logger.log(`📝 Generated unique filename: "${fileName}" -> "${uniqueFileName}"`);
   
   const chatId = `${uniqueFileName.replace(/[^a-zA-Z0-9]/g, '_')}_${timestamp}`;
   
@@ -408,7 +409,7 @@ export const createChatDocument = async (
     });
     
     if (shouldStoreChartsInBlob) {
-      console.log(`📊 Charts have large data arrays. Storing in blob storage...`);
+      logger.log(`📊 Charts have large data arrays. Storing in blob storage...`);
       try {
         chartReferences = await saveChartsToBlob(sessionId, initialCharts, normalizedUsername);
         // Store only chart metadata (without data) in CosmosDB
@@ -416,9 +417,9 @@ export const createChatDocument = async (
           ...chart,
           data: undefined, // Remove data array
         }));
-        console.log(`✅ Saved ${chartReferences.length} charts to blob storage`);
+        logger.log(`✅ Saved ${chartReferences.length} charts to blob storage`);
       } catch (blobError) {
-        console.error('⚠️ Failed to save charts to blob, storing in CosmosDB:', blobError);
+        logger.error('⚠️ Failed to save charts to blob, storing in CosmosDB:', blobError);
         chartsToStore = initialCharts; // Fallback to storing in CosmosDB
       }
     } else {
@@ -459,12 +460,12 @@ export const createChatDocument = async (
   try {
     const containerInstance = await waitForContainer();
     const { resource } = await containerInstance.items.create(chatDocument);
-    console.log(`✅ Created chat document: ${chatId}`);
+    logger.log(`✅ Created chat document: ${chatId}`);
     return resource as ChatDocument;
   } catch (error: any) {
     // Check if error is due to document size
     if (error?.code === 400 || error?.message?.includes('Request Entity Too Large') || error?.message?.includes('413')) {
-      console.error(`❌ Document too large for CosmosDB (${rawData.length} rows). Retrying without rawData...`);
+      logger.error(`❌ Document too large for CosmosDB (${rawData.length} rows). Retrying without rawData...`);
       // Retry without rawData
       const retryDocument = {
         ...chatDocument,
@@ -473,14 +474,14 @@ export const createChatDocument = async (
       try {
         const containerInstance = await waitForContainer();
         const { resource } = await containerInstance.items.create(retryDocument);
-        console.log(`✅ Created chat document (without rawData): ${chatId}`);
+        logger.log(`✅ Created chat document (without rawData): ${chatId}`);
         return resource as ChatDocument;
       } catch (retryError) {
-        console.error("Failed to create chat document even without rawData:", retryError);
+        logger.error("Failed to create chat document even without rawData:", retryError);
         throw retryError;
       }
     }
-    console.error("Failed to create chat document:", error);
+    logger.error("Failed to create chat document:", error);
     throw error;
   }
 };
@@ -501,7 +502,7 @@ export const createPlaceholderSession = async (
   
   // Generate unique filename with number suffix if needed
   const uniqueFileName = await generateUniqueFileName(fileName, normalizedUsername);
-  console.log(`📝 Creating placeholder session: "${fileName}" -> "${uniqueFileName}"`);
+  logger.log(`📝 Creating placeholder session: "${fileName}" -> "${uniqueFileName}"`);
   
   const chatId = `${uniqueFileName.replace(/[^a-zA-Z0-9]/g, '_')}_${timestamp}`;
   
@@ -544,7 +545,7 @@ export const createPlaceholderSession = async (
     const { resource } = await containerInstance.items.create(placeholderDocument);
     invalidateSessionDoc(sessionId);
     invalidateSessionList(normalizedUsername);
-    console.log(`✅ Created placeholder session: ${chatId} for sessionId: ${sessionId}`);
+    logger.log(`✅ Created placeholder session: ${chatId} for sessionId: ${sessionId}`);
     // W59 · record `analysis_created` in the durable Memory journal.
     void (async () => {
       try {
@@ -560,12 +561,12 @@ export const createPlaceholderSession = async (
           })
         );
       } catch (e) {
-        console.warn("⚠️ analysisMemory analysis_created hook failed:", e);
+        logger.warn("⚠️ analysisMemory analysis_created hook failed:", e);
       }
     })();
     return resource as ChatDocument;
   } catch (error: any) {
-    console.error("❌ Failed to create placeholder session:", error);
+    logger.error("❌ Failed to create placeholder session:", error);
     throw error;
   }
 };
@@ -594,7 +595,7 @@ export const ensureChatDocumentForUploadJob = async (params: {
       params.blobInfo
     );
   } catch (e) {
-    console.warn(
+    logger.warn(
       "⚠️ ensureChatDocumentForUploadJob: createPlaceholderSession failed (may be race); re-fetching:",
       e instanceof Error ? e.message : e
     );
@@ -645,7 +646,7 @@ export const getChatDocument = async (
     if (error.code === 404) {
       return null;
     }
-    console.error("Failed to get chat document:", error);
+    logger.error("Failed to get chat document:", error);
     throw error;
   }
 };
@@ -674,7 +675,7 @@ function assertDocSizeUnderLimit(chatDocument: ChatDocument): void {
     throw new CosmosDocSizeError(bytes, chatDocument.sessionId);
   }
   if (bytes >= COSMOS_DOC_SIZE_WARN_BYTES) {
-    console.warn(
+    logger.warn(
       `⚠️ chat doc size ${bytes} bytes (session ${chatDocument.sessionId}, messages=${chatDocument.messages?.length ?? 0}) — approaching Cosmos 2 MB limit`,
     );
   }
@@ -730,10 +731,10 @@ export const updateChatDocument = async (
     // immediately after a write hit the cache. Load-bearing — see the
     // doc comment above for the cross-module contract.
     sessionDocCache.set(result.sessionId, { doc: result, expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS });
-    console.log(`✅ Updated chat document: ${chatDocument.id}`);
+    logger.log(`✅ Updated chat document: ${chatDocument.id}`);
     return result;
   } catch (error) {
-    console.error("❌ Failed to update chat document:", error);
+    logger.error("❌ Failed to update chat document:", error);
     throw error;
   }
 };
@@ -780,7 +781,7 @@ export const mutateChatDocument = async (
         if (isPreconditionFailed(err) && attempt < maxRetries) {
           lastErr = err;
           invalidateSessionDoc(sessionId); // force the next loop to re-read
-          console.warn(
+          logger.warn(
             `↻ mutateChatDocument: 412 on ${sessionId} (attempt ${attempt}/${maxRetries}); retrying against fresh doc`
           );
           continue;
@@ -853,7 +854,7 @@ export const addMessageToChat = async (
               });
             });
           } catch (blobError) {
-            console.error('⚠️ Failed to save charts to blob:', blobError);
+            logger.error('⚠️ Failed to save charts to blob:', blobError);
             chatDocument.charts.push(...newCharts); // Fallback
           }
         } else {
@@ -864,7 +865,7 @@ export const addMessageToChat = async (
 
     return await updateChatDocument(chatDocument);
   } catch (error) {
-    console.error("❌ Failed to add message to chat:", error);
+    logger.error("❌ Failed to add message to chat:", error);
     throw error;
   }
 };
@@ -877,7 +878,7 @@ export const addMessagesBySessionId = async (
   messages: Message[]
 ): Promise<ChatDocument> => {
   try {
-    console.log("📝 addMessagesBySessionId - sessionId:", sessionId, "messages:", messages.map(m => m.role));
+    logger.log("📝 addMessagesBySessionId - sessionId:", sessionId, "messages:", messages.map(m => m.role));
     // RMW through the unified lock + ETag seam so the message append serialises
     // against the SAC merge / BAI patch / checkpoint writers and survives a
     // concurrent cross-instance write (412 → retry against a fresh doc).
@@ -903,7 +904,7 @@ export const addMessagesBySessionId = async (
       // Check for exact match
       const exactKey = `${msg.role}|${msg.content}|${msg.timestamp}`;
       if (existingKeys.has(exactKey)) {
-        console.log(`⚠️ Duplicate message detected (exact match): ${msg.role} message with timestamp ${msg.timestamp}`);
+        logger.log(`⚠️ Duplicate message detected (exact match): ${msg.role} message with timestamp ${msg.timestamp}`);
         return false;
       }
       
@@ -911,7 +912,7 @@ export const addMessagesBySessionId = async (
       const roundedTimestamp = Math.floor(msg.timestamp / 5000) * 5000;
       const similarKey = `${msg.role}|${msg.content}|${roundedTimestamp}`;
       if (existingKeys.has(similarKey)) {
-        console.log(`⚠️ Duplicate message detected (similar match): ${msg.role} message with timestamp ${msg.timestamp}`);
+        logger.log(`⚠️ Duplicate message detected (similar match): ${msg.role} message with timestamp ${msg.timestamp}`);
         return false;
       }
       
@@ -919,15 +920,15 @@ export const addMessagesBySessionId = async (
     });
     
     if (uniqueMessages.length === 0) {
-      console.log("⚠️ All messages were duplicates, skipping add");
+      logger.log("⚠️ All messages were duplicates, skipping add");
       return false; // abort the write — nothing new to append
     }
     
     if (uniqueMessages.length < messages.length) {
-      console.log(`⚠️ Filtered out ${messages.length - uniqueMessages.length} duplicate messages`);
+      logger.log(`⚠️ Filtered out ${messages.length - uniqueMessages.length} duplicate messages`);
     }
 
-    console.log("🗂️ Appending to doc:", chatDocument.id, "partition:", chatDocument.username, "existing messages:", existingMessages.length, "new unique messages:", uniqueMessages.length);
+    logger.log("🗂️ Appending to doc:", chatDocument.id, "partition:", chatDocument.username, "existing messages:", existingMessages.length, "new unique messages:", uniqueMessages.length);
     chatDocument.messages.push(...uniqueMessages);
 
     // Collect any charts from assistant messages into top-level charts
@@ -985,9 +986,9 @@ export const addMessagesBySessionId = async (
             chatDocument.charts.push(metadata as ChartSpec);
           });
           
-          console.log(`✅ Saved ${newChartReferences.length} large charts to blob storage`);
+          logger.log(`✅ Saved ${newChartReferences.length} large charts to blob storage`);
         } catch (blobError) {
-          console.error('⚠️ Failed to save large charts to blob, storing in CosmosDB:', blobError);
+          logger.error('⚠️ Failed to save large charts to blob, storing in CosmosDB:', blobError);
           // Fallback: store in CosmosDB (might fail if too large, but we try)
           largeCharts.forEach(chart => {
             chatDocument.charts.push(chart);
@@ -998,7 +999,7 @@ export const addMessagesBySessionId = async (
       // Store small charts directly in CosmosDB (with full data)
       if (smallCharts.length > 0) {
         chatDocument.charts.push(...smallCharts);
-        console.log(`✅ Stored ${smallCharts.length} small charts directly in CosmosDB`);
+        logger.log(`✅ Stored ${smallCharts.length} small charts directly in CosmosDB`);
       }
 
       // Strip data from message-level charts to prevent CosmosDB size issues
@@ -1017,10 +1018,10 @@ export const addMessagesBySessionId = async (
     if (!updated) {
       throw new Error("Chat document not found for sessionId");
     }
-    console.log("✅ Upserted chat doc:", updated.id, "messages now:", updated.messages?.length || 0);
+    logger.log("✅ Upserted chat doc:", updated.id, "messages now:", updated.messages?.length || 0);
     return updated;
   } catch (error) {
-    console.error("❌ Failed to add messages by sessionId:", error);
+    logger.error("❌ Failed to add messages by sessionId:", error);
     throw error;
   }
 };
@@ -1048,7 +1049,7 @@ export const updateMessageAndTruncate = async (
 
     if (messageIndex === -1) {
       // Not an edit (likely a new message) — return the doc unchanged, no write.
-      console.warn(`⚠️ Message with timestamp ${targetTimestamp} not found. This might be a new message, not an edit. Skipping truncation.`);
+      logger.warn(`⚠️ Message with timestamp ${targetTimestamp} not found. This might be a new message, not an edit. Skipping truncation.`);
       return false;
     }
 
@@ -1097,7 +1098,7 @@ export const getUserChats = async (username: string): Promise<ChatDocument[]> =>
     
     return chats;
   } catch (error) {
-    console.error("❌ Failed to get user chats:", error);
+    logger.error("❌ Failed to get user chats:", error);
     throw error;
   }
 };
@@ -1155,7 +1156,7 @@ const retryOnConnectionError = async <T>(
       
       if (isRetryableError && attempt < maxRetries) {
         const delay = Math.min(attempt * 1000, 5000); // Exponential backoff: 1s, 2s, 3s (max 5s)
-        console.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, errorMessage.substring(0, 100));
+        logger.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, errorMessage.substring(0, 100));
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -1189,19 +1190,19 @@ export const getChatBySessionIdEfficient = async (
         parameters: [{ name: "@sessionId", value: sessionId }]
       }).fetchAll();
       if (resources && resources.length > 1) {
-        console.warn(
+        logger.warn(
           `⚠️ Multiple chat documents (${resources.length}) for sessionId ${sessionId}; using latest by lastUpdatedAt`
         );
       }
       const d = (resources && resources.length > 0) ? resources[0] : null;
       if (!d) {
-        console.warn("⚠️ No chat document found for sessionId:", sessionId);
+        logger.warn("⚠️ No chat document found for sessionId:", sessionId);
       } else {
         ensureCollaborators(d as ChatDocument);
       }
       return d as unknown as ChatDocument | null;
     } catch (error) {
-      console.error("❌ Failed to get chat by session ID:", error);
+      logger.error("❌ Failed to get chat by session ID:", error);
       throw error;
     }
   }, 3, "getChatBySessionIdEfficient");
@@ -1219,7 +1220,7 @@ export const getChatBySessionIdForUser = async (
 ): Promise<ChatDocument | null> => {
   const chatDocument = await getChatBySessionIdEfficient(sessionId);
   if (!chatDocument) {
-    console.log(`❌ Session not found: ${sessionId}`);
+    logger.log(`❌ Session not found: ${sessionId}`);
     return null;
   }
 
@@ -1238,7 +1239,7 @@ export const getChatBySessionIdForUser = async (
 
   const collaborators = ensureCollaborators(chatDocument);
   if (!collaborators.includes(normalizedRequester)) {
-    console.warn(`⚠️ Unauthorized access attempt: "${normalizedRequester}" not in collaborators for session ${sessionId}`);
+    logger.warn(`⚠️ Unauthorized access attempt: "${normalizedRequester}" not in collaborators for session ${sessionId}`);
     const error = new Error("Unauthorized to access this session");
     (error as any).statusCode = 403;
     throw error;
@@ -1329,9 +1330,9 @@ export const deleteChatDocument = async (chatId: string, username: string): Prom
   try {
     const containerInstance = await waitForContainer();
     await containerInstance.item(chatId, username).delete();
-    console.log(`✅ Deleted chat document: ${chatId}`);
+    logger.log(`✅ Deleted chat document: ${chatId}`);
   } catch (error) {
-    console.error("❌ Failed to delete chat document:", error);
+    logger.error("❌ Failed to delete chat document:", error);
     throw error;
   }
 };
@@ -1421,7 +1422,7 @@ export const ensureDatasetFingerprintForSession = async (
     });
     return result;
   } catch (err) {
-    console.warn(
+    logger.warn(
       `⚠️ ensureDatasetFingerprintForSession failed (${sessionId}):`,
       err
     );
@@ -1463,7 +1464,7 @@ export const updateSessionPermanentContext = async (
           userText: incoming,
         });
       } catch (e) {
-        console.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
+        logger.warn("⚠️ sessionAnalysisContext user merge skipped:", e);
       }
     }
 
@@ -1524,12 +1525,12 @@ export const updateSessionPermanentContext = async (
           }
         }
       } catch (e) {
-        console.warn("⚠️ starter-question regeneration skipped:", e);
+        logger.warn("⚠️ starter-question regeneration skipped:", e);
       }
     }
 
     const updated = await updateChatDocument(freshDoc);
-    console.log(`✅ Updated session permanent context: ${sessionId}`);
+    logger.log(`✅ Updated session permanent context: ${sessionId}`);
 
     // W59 · record the user_note in the Memory journal so resume-after-days
     // shows the note as part of the analysis timeline.
@@ -1546,7 +1547,7 @@ export const updateSessionPermanentContext = async (
           });
           if (entry) scheduleLifecycleMemory(entry);
         } catch (e) {
-          console.warn("⚠️ analysisMemory user_note hook failed:", e);
+          logger.warn("⚠️ analysisMemory user_note hook failed:", e);
         }
       })();
     }
@@ -1559,7 +1560,7 @@ export const updateSessionPermanentContext = async (
         );
         scheduleUpsertUserContextChunk(sessionId, combined);
       } catch (e) {
-        console.warn("⚠️ RAG user_context upsert scheduling failed:", e);
+        logger.warn("⚠️ RAG user_context upsert scheduling failed:", e);
       }
     }
 
@@ -1583,7 +1584,7 @@ export const updateSessionPermanentContext = async (
               sourceSessionId: sessionId,
             });
           } catch (e) {
-            console.warn("⚠️ dataset_directives upload-context write failed:", e);
+            logger.warn("⚠️ dataset_directives upload-context write failed:", e);
           }
         })();
       }
@@ -1591,7 +1592,7 @@ export const updateSessionPermanentContext = async (
 
     return updated;
   } catch (error) {
-    console.error("❌ Failed to update session permanent context:", error);
+    logger.error("❌ Failed to update session permanent context:", error);
     throw error;
   }
 };
@@ -1612,10 +1613,10 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
     
     const chatId = chatDocument.id;
     
-    console.log(`🗑️ Attempting to delete session: ${sessionId}`);
-    console.log(`   Chat ID: ${chatId}`);
-    console.log(`   Username from doc: ${chatDocument.username}`);
-    console.log(`   fsmrora from doc: ${(chatDocument as any).fsmrora || 'not found'}`);
+    logger.log(`🗑️ Attempting to delete session: ${sessionId}`);
+    logger.log(`   Chat ID: ${chatId}`);
+    logger.log(`   Username from doc: ${chatDocument.username}`);
+    logger.log(`   fsmrora from doc: ${(chatDocument as any).fsmrora || 'not found'}`);
     
     // Try different partition key values
     const possiblePartitionKeys = [
@@ -1624,7 +1625,7 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
       username
     ].filter(Boolean) as string[];
     
-    console.log(`   Trying partition keys: ${possiblePartitionKeys.join(', ')}`);
+    logger.log(`   Trying partition keys: ${possiblePartitionKeys.join(', ')}`);
     
     // Try each possible partition key value
     for (const pkValue of possiblePartitionKeys) {
@@ -1632,11 +1633,11 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
         await containerInstance.item(chatId, pkValue).delete();
         invalidateSessionDoc(sessionId);
         invalidateSessionList(chatDocument.username);
-        console.log(`✅ Successfully deleted session: ${sessionId} (chatId: ${chatId}, partitionKey: ${pkValue})`);
+        logger.log(`✅ Successfully deleted session: ${sessionId} (chatId: ${chatId}, partitionKey: ${pkValue})`);
         return;
       } catch (pkError: any) {
         if (pkError.code === 404) {
-          console.log(`   ⚠️ Partition key ${pkValue} didn't work (404), trying next...`);
+          logger.log(`   ⚠️ Partition key ${pkValue} didn't work (404), trying next...`);
           continue;
         }
         throw pkError;
@@ -1645,7 +1646,7 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
     
     throw new Error(`Could not delete document with any partition key value`);
   } catch (error: any) {
-    console.error("❌ Failed to delete session by sessionId:", error);
+    logger.error("❌ Failed to delete session by sessionId:", error);
     throw error;
   }
 };
@@ -1686,14 +1687,14 @@ export const getAllSessions = async (username?: string): Promise<SessionListSumm
         })
         .fetchAll();
 
-      console.log(
+      logger.log(
         `✅ Retrieved ${resources.length} sessions from CosmosDB${username ? ` for user: ${username}` : ""}`
       );
       return resources.map((doc) =>
         finalizeSessionListSummary(doc as Record<string, unknown>)
       );
     } catch (error) {
-      console.error("❌ Failed to get all sessions:", error);
+      logger.error("❌ Failed to get all sessions:", error);
       throw error;
     }
   }, 3, "getAllSessions");
@@ -1746,7 +1747,7 @@ export const getAllSessionsPaginated = async (
         )
         .fetchNext();
 
-    console.log(
+    logger.log(
       `✅ Retrieved ${resources.length} sessions (page size: ${pageSize})${username ? ` for user: ${username}` : ""}`
     );
 
@@ -1760,7 +1761,7 @@ export const getAllSessionsPaginated = async (
       hasMoreResults: hasMoreResults || false,
     };
   } catch (error) {
-    console.error("❌ Failed to get paginated sessions:", error);
+    logger.error("❌ Failed to get paginated sessions:", error);
     throw error;
   }
 };
@@ -1879,14 +1880,14 @@ export const getAllSessionsWithSemanticModel = async (): Promise<
             { maxItemCount: 1000 },
           )
           .fetchAll();
-        console.log(
+        logger.log(
           `✅ Retrieved ${resources.length} semantic-model sessions from CosmosDB`,
         );
         return resources.map((doc) =>
           finalizeAdminSemanticModelEntry(doc as Record<string, unknown>),
         );
       } catch (error) {
-        console.error(
+        logger.error(
           "❌ Failed to get sessions with semantic model:",
           error,
         );
@@ -1959,14 +1960,14 @@ export const getSessionsWithFilters = async (options: {
       )
       .fetchAll();
     
-    console.log(`✅ Retrieved ${resources.length} sessions with filters`);
+    logger.log(`✅ Retrieved ${resources.length} sessions with filters`);
     return resources.map((doc) => {
       const typed = doc as ChatDocument;
       ensureCollaborators(typed);
       return typed;
     });
   } catch (error) {
-    console.error("❌ Failed to get filtered sessions:", error);
+    logger.error("❌ Failed to get filtered sessions:", error);
     throw error;
   }
 };
@@ -2012,7 +2013,7 @@ export const getSessionStatistics = async (): Promise<{
       sessionsByDate[date] = (sessionsByDate[date] || 0) + 1;
     });
     
-    console.log(`✅ Generated session statistics: ${totalSessions} sessions, ${totalUsers} users`);
+    logger.log(`✅ Generated session statistics: ${totalSessions} sessions, ${totalUsers} users`);
     
     return {
       totalSessions,
@@ -2023,7 +2024,7 @@ export const getSessionStatistics = async (): Promise<{
       sessionsByDate,
     };
   } catch (error) {
-    console.error("❌ Failed to get session statistics:", error);
+    logger.error("❌ Failed to get session statistics:", error);
     throw error;
   }
 };

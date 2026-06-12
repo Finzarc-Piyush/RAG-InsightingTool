@@ -29,6 +29,7 @@ import {
   pastAnalysisFeedbackReasonSchema,
   pastAnalysisFeedbackTargetSchema,
 } from "../shared/schema.js";
+import { logger } from "../lib/logger.js";
 
 const feedbackBodySchema = z.object({
   sessionId: z.string().min(1),
@@ -65,7 +66,7 @@ export async function feedbackController(req: Request, res: Response) {
     existing = await getPastAnalysisDoc(sessionId, docId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ feedback: getPastAnalysisDoc failed (${msg})`);
+    logger.warn(`⚠️ feedback: getPastAnalysisDoc failed (${msg})`);
     return res.status(500).json({ error: "feedback_lookup_failed" });
   }
   if (!existing) {
@@ -91,7 +92,7 @@ export async function feedbackController(req: Request, res: Response) {
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ feedback: setPastAnalysisFeedback failed (${msg})`);
+    logger.warn(`⚠️ feedback: setPastAnalysisFeedback failed (${msg})`);
     return res.status(500).json({ error: "feedback_persist_failed" });
   }
 
@@ -104,7 +105,7 @@ export async function feedbackController(req: Request, res: Response) {
       await mergeFeedbackInPastAnalysisIndex(docId, feedback);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      logger.warn(
         `⚠️ feedback: AI Search merge failed for ${docId} (Cosmos updated, index will catch up later): ${msg}`
       );
     }

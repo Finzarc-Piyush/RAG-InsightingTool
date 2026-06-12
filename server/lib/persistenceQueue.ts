@@ -24,6 +24,7 @@ import {
   type ChatDocument,
 } from "../models/chat.model.js";
 import type { Message } from "../shared/schema.js";
+import { logger } from "./logger.js";
 
 export type PersistOutcome = "succeeded" | "failed";
 
@@ -146,7 +147,7 @@ async function runWithRetry(job: PersistJob): Promise<PersistOutcome> {
       try {
         job.onSuccess?.(job.id);
       } catch (cbErr) {
-        console.warn("persistenceQueue: onSuccess callback threw:", cbErr);
+        logger.warn("persistenceQueue: onSuccess callback threw:", cbErr);
       }
       return "succeeded";
     } catch (err) {
@@ -157,7 +158,7 @@ async function runWithRetry(job: PersistJob): Promise<PersistOutcome> {
         try {
           job.onAttemptFailed?.(e, job.attempts, job.id);
         } catch (cbErr) {
-          console.warn("persistenceQueue: onAttemptFailed callback threw:", cbErr);
+          logger.warn("persistenceQueue: onAttemptFailed callback threw:", cbErr);
         }
         const wait = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)];
         await sleeper(wait);
@@ -166,9 +167,9 @@ async function runWithRetry(job: PersistJob): Promise<PersistOutcome> {
       try {
         job.onFailure?.(e, job.id);
       } catch (cbErr) {
-        console.warn("persistenceQueue: onFailure callback threw:", cbErr);
+        logger.warn("persistenceQueue: onFailure callback threw:", cbErr);
       }
-      console.error(
+      logger.error(
         `❌ persistenceQueue: session=${job.sessionId} job=${job.id} ` +
           `${job.maxAttempts} attempts exhausted. Last error: ${e.message}`
       );

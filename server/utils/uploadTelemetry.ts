@@ -1,3 +1,4 @@
+import { logger } from "../lib/logger.js";
 /**
  * Phase 0 · large-dataset telemetry.
  *
@@ -38,7 +39,7 @@ export function currentRssMb(): number {
 /** Emit one structured telemetry line. Never throws (callers wrap defensively too). */
 export function logUploadTelemetry(t: UploadTelemetry): void {
   try {
-    console.log(`📈 upload-telemetry ${JSON.stringify(t)}`);
+    logger.log(`📈 upload-telemetry ${JSON.stringify(t)}`);
   } catch {
     /* telemetry must never break an upload */
   }

@@ -6,6 +6,7 @@ import {
   generateSasUrl,
 } from "../lib/blobStorage.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { logger } from "../lib/logger.js";
 
 // Get all files for a user from blob storage
 export const getUserFiles = async (req: Request, res: Response) => {
@@ -26,7 +27,7 @@ export const getUserFiles = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Get user files error:", error);
+    logger.error("Get user files error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to get user files",
     });
@@ -55,7 +56,7 @@ export const downloadFile = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Download file error:", error);
+    logger.error("Download file error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to download file",
     });
@@ -80,7 +81,7 @@ export const deleteFile = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Delete file error:", error);
+    logger.error("Delete file error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to delete file",
     });
@@ -110,7 +111,7 @@ export const generateFileAccessUrl = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Generate file access URL error:", error);
+    logger.error("Generate file access URL error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to generate file access URL",
     });
@@ -146,7 +147,7 @@ export const getFileMetadata = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error("Get file metadata error:", error);
+    logger.error("Get file metadata error:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Failed to get file metadata",
     });

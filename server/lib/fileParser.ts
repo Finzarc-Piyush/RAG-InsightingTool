@@ -164,7 +164,7 @@ export function warnSuspiciousDuplicateRowIdInSample(
   let max = 0;
   for (const c of counts.values()) max = Math.max(max, c);
   if (max / sampleRows.length >= 0.9) {
-    console.warn(
+    logger.warn(
       `[${context}] Over 90% of sample rows share the same "${idCol}" value; possible date-column misclassification or enrichment corruption.`
     );
   }
@@ -238,7 +238,7 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
       sampleRowNumbers,
       warning: `CSV rows with mismatched column counts detected: ${mismatchedRows}/${unwrappedRecords.length} (${(mismatchRatio * 100).toFixed(2)}%).`,
     };
-    console.warn(
+    logger.warn(
       `⚠️ ${lastCsvParseDiagnostics.warning} Sample rows: ${sampleRowNumbers.join(', ') || 'n/a'}`
     );
   }
@@ -312,7 +312,7 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
     
     // Log progress for very large files
     if (normalized.length > 50000 && (i + BATCH_SIZE) % 50000 === 0) {
-      console.log(`  Processed ${Math.min(i + BATCH_SIZE, normalized.length)} / ${normalized.length} rows...`);
+      logger.log(`  Processed ${Math.min(i + BATCH_SIZE, normalized.length)} / ${normalized.length} rows...`);
     }
   }
   
@@ -322,6 +322,7 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
 // Re-exported from its own module (Wave R8) so the ExcelJS reader and
 // fileParser can share it without a circular import.
 export { estimateExcelRowsFromRef } from './excelRowEstimate.js';
+import { logger } from "./logger.js";
 
 async function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Promise<Record<string, any>[]> {
   // Phase 0 · large-dataset OOM guard. ExcelJS has no zero-copy streaming on

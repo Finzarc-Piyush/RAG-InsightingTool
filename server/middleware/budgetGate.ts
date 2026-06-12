@@ -25,6 +25,7 @@ import {
   incrementQuestionsUsed,
   type UserBudgetDoc,
 } from "../models/userBudget.model.js";
+import { logger } from "../lib/logger.js";
 
 const DEFAULT_DAILY_QUOTA = 20;
 
@@ -83,7 +84,7 @@ export async function budgetGate(
     // Cosmos hiccup. Don't block the user — log and move on. Worst case we
     // skip a quota check for one request.
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`⚠️ budgetGate: increment failed (${msg}) — passing through`);
+    logger.warn(`⚠️ budgetGate: increment failed (${msg}) — passing through`);
     next();
     return;
   }
@@ -112,7 +113,7 @@ export async function budgetGate(
   }
 
   if (overQuota && m === "warn_only") {
-    console.warn(
+    logger.warn(
       `⚠️ budgetGate WARN_ONLY: ${userEmail} exceeded quota (${updated.questionsUsed}/${quota})`
     );
   }

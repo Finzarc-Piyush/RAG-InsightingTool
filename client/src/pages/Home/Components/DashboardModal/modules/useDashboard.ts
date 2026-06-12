@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChartSpec } from '@/shared/schema';
+import { logger } from "@/lib/logger";
 
 interface useDashboardProps{
     onClose: () => void;
@@ -14,7 +15,7 @@ export const useDashboard = ({onClose, chart }:useDashboardProps) => {
   const handleAddToDashboard = () => {
     if (selectedDashboard || newDashboardName.trim()) {
       // Here you would implement the logic to add chart to dashboard
-      console.log('Adding chart to dashboard:', {
+      logger.log('Adding chart to dashboard:', {
         chart,
         dashboard: selectedDashboard || newDashboardName,
         isNew: !!newDashboardName.trim()

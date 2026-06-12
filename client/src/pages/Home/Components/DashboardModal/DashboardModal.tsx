@@ -14,6 +14,7 @@ import { getUserEmail } from '@/utils/userStorage';
 import { DashboardData } from '@/pages/Dashboard/modules/useDashboardState';
 import { useContext } from 'react';
 import { composeChartForSave } from '@/pages/Home/lib/composeChartForSave';
+import { logger } from "@/lib/logger";
 
 interface DashboardModalProps {
   isOpen: boolean;
@@ -115,9 +116,9 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
   // Debug logging
   useEffect(() => {
     if (selectedDashboard) {
-      console.log('Selected dashboard:', selectedDashboardData);
-      console.log('Sheets:', sheets);
-      console.log('Selected sheet ID:', selectedSheetId);
+      logger.log('Selected dashboard:', selectedDashboardData);
+      logger.log('Sheets:', sheets);
+      logger.log('Selected sheet ID:', selectedSheetId);
     }
   }, [selectedDashboard, selectedDashboardData, sheets, selectedSheetId]);
 
@@ -303,7 +304,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                     if (newDashboardName.trim()) {
                       // Create new dashboard and add chart directly, skip confirmation step
                       try {
-                        console.log('Creating new dashboard:', newDashboardName.trim());
+                        logger.log('Creating new dashboard:', newDashboardName.trim());
                         const newDashboard = await createDashboard(newDashboardName.trim());
                         // New dashboards have a default "Overview" sheet, so we can add directly
                         await addChartToDashboard(newDashboard.id, chartToSave);
@@ -313,7 +314,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                         });
                         onClose();
                       } catch (error: any) {
-                        console.error('Failed to create dashboard:', error);
+                        logger.error('Failed to create dashboard:', error);
                         const errorMessage = error?.message || 'Failed to create dashboard';
                         toast({
                           title: 'Error',
@@ -418,7 +419,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                 <div className="flex gap-2 pt-4">
                   <Button
                     onClick={async () => {
-                      console.log('Button clicked:', { selectedDashboard, newDashboardName, chart, selectedSheetId, createNewSheet, newSheetName });
+                      logger.log('Button clicked:', { selectedDashboard, newDashboardName, chart, selectedSheetId, createNewSheet, newSheetName });
                       if (selectedDashboard) {
                         // Add to existing dashboard
                         let targetSheetId = selectedSheetId;
@@ -433,12 +434,12 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                             }
                             await refetch();
                           } catch (error) {
-                            console.error('Failed to create sheet:', error);
+                            logger.error('Failed to create sheet:', error);
                             return;
                           }
                         }
                         
-                        console.log('Adding to existing dashboard:', selectedDashboard, 'sheet:', targetSheetId);
+                        logger.log('Adding to existing dashboard:', selectedDashboard, 'sheet:', targetSheetId);
                         // If targetSheetId is 'default' but dashboard doesn't have sheets, pass undefined to let backend handle it
                         const finalSheetId = (targetSheetId === 'default' && selectedDashboardData?.sheets && selectedDashboardData.sheets.length === 0) 
                           ? undefined 
@@ -452,7 +453,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                       } else if (newDashboardName.trim()) {
                         // Create new dashboard and add chart
                         try {
-                          console.log('Creating new dashboard:', newDashboardName.trim());
+                          logger.log('Creating new dashboard:', newDashboardName.trim());
                           const newDashboard = await createDashboard(newDashboardName.trim());
                           // New dashboards have a default "Overview" sheet, so we can add directly
                           await addChartToDashboard(newDashboard.id, chartToSave);
@@ -462,7 +463,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
                           });
                           onClose();
                         } catch (error: any) {
-                          console.error('Failed to create dashboard:', error);
+                          logger.error('Failed to create dashboard:', error);
                           const errorMessage = error?.message || 'Failed to create dashboard';
                           toast({
                             title: 'Error',

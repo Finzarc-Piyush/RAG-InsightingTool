@@ -9,6 +9,7 @@ import { generatePivotEnvelope } from "../../lib/insightGenerator/pivotEnvelope.
 import { formatCompactNumber } from "../../lib/formatCompactNumber.js";
 import { ChatDocument } from "../../models/chat.model.js";
 import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
+import { logger } from "../../lib/logger.js";
 
 export type ChartEnrichmentContext = {
   userQuestion?: string;
@@ -72,7 +73,7 @@ export async function enrichCharts(
             : MAX_CHART_DATA_POINTS;
 
         if (dataForChart.length > effectiveMax) {
-          console.log(
+          logger.log(
             `⚠️ Chart "${c.title}" has ${dataForChart.length} data points, limiting to ${effectiveMax}`
           );
           if (c.type === "line" || c.type === "area") {
@@ -109,7 +110,7 @@ export async function enrichCharts(
           ...(businessCommentary ? { businessCommentary } : {}),
         });
       } catch (chartError) {
-        console.error(`Error enriching chart "${c.title}":`, chartError);
+        logger.error(`Error enriching chart "${c.title}":`, chartError);
         // Include chart without enrichment rather than failing completely
         enrichedCharts.push(c);
       }
@@ -117,7 +118,7 @@ export async function enrichCharts(
     
     return enrichedCharts;
   } catch (e) {
-    console.error('Final enrichment of chat charts failed:', e);
+    logger.error('Final enrichment of chat charts failed:', e);
     return charts;
   }
 }
@@ -425,7 +426,7 @@ export async function enrichPivotInsightFromEnvelope(
     return { ...validated, insights: newInsights };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`Wave 3 · enrichPivotInsightFromEnvelope failed: ${msg}`);
+    logger.warn(`Wave 3 · enrichPivotInsightFromEnvelope failed: ${msg}`);
     return validated;
   }
 }

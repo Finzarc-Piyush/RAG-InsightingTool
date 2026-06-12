@@ -12,6 +12,7 @@ import { sendError, sendValidationError, sendNotFound } from "../utils/responseF
 import { sendSSE, setSSEHeaders } from "../utils/sse.helper.js";
 import { withRequestContext } from "../lib/telemetry/requestContext.js";
 import { randomUUID } from "node:crypto";
+import { logger } from "../lib/logger.js";
 
 /**
  * Wall-clock budget for a single streaming chat turn. Even with internal
@@ -57,7 +58,7 @@ export const chatWithAI = async (req: Request, res: Response) => {
       res.status(401).json({ error: error.message });
       return;
     }
-    console.error('Chat error:', error);
+    logger.error('Chat error:', error);
     const errorResponse = createErrorResponse(error as Error);
     res.status(500).json(errorResponse);
   }
@@ -117,7 +118,7 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
       const timedOut =
         streamErr instanceof Error && streamErr.message === 'STREAM_CHAT_TIMEOUT';
       if (timedOut) {
-        console.warn(
+        logger.warn(
           `⏱️ chatWithAIStream exceeded ${STREAM_CHAT_HARD_TIMEOUT_MS}ms for session ${sessionId}; closing`
         );
         try {
@@ -148,7 +149,7 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
       }
       return;
     }
-    console.error('Chat stream error:', error);
+    logger.error('Chat stream error:', error);
     // Error handling is done in the service
   }
 };
@@ -177,7 +178,7 @@ export const streamChatMessagesController = async (req: Request, res: Response) 
 
     await streamChatMessages(sessionId, username, req, res);
   } catch (error) {
-    console.error("streamChatMessagesController error:", error);
+    logger.error("streamChatMessagesController error:", error);
     // Error handling is done in the service
   }
 };

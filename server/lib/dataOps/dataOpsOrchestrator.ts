@@ -93,6 +93,7 @@ async function loadActiveFilterPersistModule() {
 }
 
 export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
+import { logger } from "../logger.js";
 
 // Streaming configuration for large datasets
 const LARGE_DATASET_THRESHOLD = 50000; // 50k rows
@@ -112,7 +113,7 @@ async function getPreviewFromSavedData(sessionId: string, fallbackData: Record<s
       return updatedDoc.rawData.slice(0, 50);
     }
   } catch (error) {
-    console.error('⚠️ Failed to get preview from saved data, using fallback:', error);
+    logger.error('⚠️ Failed to get preview from saved data, using fallback:', error);
   }
   // Fallback to provided data if document not found
   return fallbackData.slice(0, 50);
@@ -158,7 +159,7 @@ async function removeNullsStreaming(
   // For delete operations, batch processing is straightforward.
   
   // Process in batches
-  console.log(`📊 Processing ${data.length} rows in batches of ${BATCH_SIZE}...`);
+  logger.log(`📊 Processing ${data.length} rows in batches of ${BATCH_SIZE}...`);
   for (let i = 0; i < data.length; i += BATCH_SIZE) {
     const batch = data.slice(i, i + BATCH_SIZE);
     const batchResult = await removeNulls(batch, column, method, customValue);
@@ -167,14 +168,14 @@ async function removeNullsStreaming(
     
     // Log progress every 5 batches
     if ((i + BATCH_SIZE) % (BATCH_SIZE * 5) === 0 || i + BATCH_SIZE >= data.length) {
-      console.log(`  Processed ${Math.min(i + BATCH_SIZE, data.length)} / ${data.length} rows...`);
+      logger.log(`  Processed ${Math.min(i + BATCH_SIZE, data.length)} / ${data.length} rows...`);
     }
   }
   
   // Combine all batches
   const result = processedBatches.flat();
   
-  console.log(`✅ Streaming operation complete: ${totalNullsRemoved} nulls removed, ${rowsBefore} → ${result.length} rows`);
+  logger.log(`✅ Streaming operation complete: ${totalNullsRemoved} nulls removed, ${rowsBefore} → ${result.length} rows`);
   
   return {
     data: result,
@@ -302,7 +303,7 @@ export async function parseDataOpsIntent(
   // STEP -1: Correlation requests are ANALYSIS, not data ops – never treat as aggregate
   // ---------------------------------------------------------------------------
   if (isCorrelationRequest(message)) {
-    console.log(`📊 Correlation request detected – returning unknown to route to analysis (not aggregate).`);
+    logger.log(`📊 Correlation request detected – returning unknown to route to analysis (not aggregate).`);
     return {
       operation: 'unknown',
       requiresClarification: false,
@@ -321,16 +322,16 @@ export async function parseDataOpsIntent(
   if (chatHistory && chatHistory.length > 0) {
     resolvedMessage = resolveContextReferences(message, chatHistory);
     if (resolvedMessage !== message) {
-      console.log(`🔄 Context resolved: "${message}" → "${resolvedMessage}"`);
+      logger.log(`🔄 Context resolved: "${message}" → "${resolvedMessage}"`);
     }
   }
 
   // Try AI detection first for ALL operations (using resolved message)
   try {
-    console.log(`🤖 Calling AI to detect intent for: "${resolvedMessage}"`);
+    logger.log(`🤖 Calling AI to detect intent for: "${resolvedMessage}"`);
     const aiIntent = await detectDataOpsIntentWithAI(resolvedMessage, availableColumns, chatHistory, sessionDoc);
     if (aiIntent) {
-      console.log(`🤖 AI returned intent:`, {
+      logger.log(`🤖 AI returned intent:`, {
         operation: aiIntent.operation,
         groupByColumn: aiIntent.groupByColumn,
         aggColumns: aiIntent.aggColumns,
@@ -340,7 +341,7 @@ export async function parseDataOpsIntent(
       });
       
       if (aiIntent.operation !== 'unknown') {
-        console.log(`✅ AI detected intent: ${aiIntent.operation}`);
+        logger.log(`✅ AI detected intent: ${aiIntent.operation}`);
         
         // If rename_column and no column specified, try to find from context
         if (aiIntent.operation === 'rename_column' && !aiIntent.column && !aiIntent.oldColumnName) {
@@ -348,7 +349,7 @@ export async function parseDataOpsIntent(
           if (lastColumn) {
             aiIntent.oldColumnName = lastColumn;
             aiIntent.column = lastColumn;
-            console.log(`📋 Using context column for rename: "${lastColumn}"`);
+            logger.log(`📋 Using context column for rename: "${lastColumn}"`);
           }
         }
         
@@ -360,7 +361,7 @@ export async function parseDataOpsIntent(
           if ((lowerResolved.includes('impute') && lowerResolved.includes('mean')) ||
               (lowerResolved.includes('replace') && lowerResolved.includes('outlier') && lowerResolved.includes('mean'))) {
             if (!aiIntent.treatmentMethod || aiIntent.treatmentMethod === 'remove') {
-              console.log(`🔧 Fixing treatment method: detected "impute with mean" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
+              logger.log(`🔧 Fixing treatment method: detected "impute with mean" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
               aiIntent.treatmentMethod = 'impute';
               aiIntent.treatmentValue = 'mean';
             }
@@ -369,7 +370,7 @@ export async function parseDataOpsIntent(
           else if ((lowerResolved.includes('impute') && lowerResolved.includes('median')) ||
                    (lowerResolved.includes('replace') && lowerResolved.includes('outlier') && lowerResolved.includes('median'))) {
             if (!aiIntent.treatmentMethod || aiIntent.treatmentMethod === 'remove') {
-              console.log(`🔧 Fixing treatment method: detected "impute with median" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
+              logger.log(`🔧 Fixing treatment method: detected "impute with median" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
               aiIntent.treatmentMethod = 'impute';
               aiIntent.treatmentValue = 'median';
             }
@@ -378,13 +379,13 @@ export async function parseDataOpsIntent(
           else if ((lowerResolved.includes('impute') && lowerResolved.includes('mode')) ||
                    (lowerResolved.includes('replace') && lowerResolved.includes('outlier') && lowerResolved.includes('mode'))) {
             if (!aiIntent.treatmentMethod || aiIntent.treatmentMethod === 'remove') {
-              console.log(`🔧 Fixing treatment method: detected "impute with mode" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
+              logger.log(`🔧 Fixing treatment method: detected "impute with mode" but AI returned "${aiIntent.treatmentMethod}", correcting to "impute"`);
               aiIntent.treatmentMethod = 'impute';
               aiIntent.treatmentValue = 'mode';
             }
           }
           
-          console.log(`📊 Final outlier treatment config:`, {
+          logger.log(`📊 Final outlier treatment config:`, {
             treatmentMethod: aiIntent.treatmentMethod,
             treatmentValue: aiIntent.treatmentValue,
             outlierMethod: aiIntent.outlierMethod
@@ -393,14 +394,14 @@ export async function parseDataOpsIntent(
         
         return aiIntent;
       } else {
-        console.log(`⚠️ AI returned 'unknown' operation, will fall back to regex`);
+        logger.log(`⚠️ AI returned 'unknown' operation, will fall back to regex`);
       }
     } else {
-      console.log(`⚠️ AI returned null, will fall back to regex`);
+      logger.log(`⚠️ AI returned null, will fall back to regex`);
     }
   } catch (error) {
-    console.error('⚠️ AI intent detection failed, falling back to regex patterns:', error);
-    console.error('⚠️ Error details:', error instanceof Error ? error.stack : String(error));
+    logger.error('⚠️ AI intent detection failed, falling back to regex patterns:', error);
+    logger.error('⚠️ Error details:', error instanceof Error ? error.stack : String(error));
   }
   
   // Fallback to regex patterns if AI didn't detect STEP 0 operations
@@ -602,7 +603,7 @@ export async function parseDataOpsIntent(
       }
 
       if (groupByColumn && aggColumns.length > 0) {
-        console.log(`✅ Matched aggregate with group by: ${aggColumns.join(', ')} grouped by ${groupByColumn}${orderByColumn ? `, ordered by ${orderByColumn} ${orderByDirection}` : ''}`);
+        logger.log(`✅ Matched aggregate with group by: ${aggColumns.join(', ')} grouped by ${groupByColumn}${orderByColumn ? `, ordered by ${orderByColumn} ${orderByDirection}` : ''}`);
         return {
           operation: 'aggregate',
           groupByColumn,
@@ -626,7 +627,7 @@ export async function parseDataOpsIntent(
     const aggColumn = findMentionedColumn(rawAggColumn, availableColumns) || rawAggColumn;
     const groupByColumn = findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
 
-    console.log(`✅ Regex matched aggregate pattern: aggregate ${aggColumn} on ${groupByColumn}`);
+    logger.log(`✅ Regex matched aggregate pattern: aggregate ${aggColumn} on ${groupByColumn}`);
     return {
       operation: 'aggregate',
       groupByColumn,
@@ -646,7 +647,7 @@ export async function parseDataOpsIntent(
         const aggColumn = findMentionedColumn(beforeOn, availableColumns) || beforeOn;
         const groupByColumn = findMentionedColumn(afterOn, availableColumns) || afterOn;
         
-        console.log(`✅ Fallback pattern matched: aggregate ${aggColumn} on ${groupByColumn}`);
+        logger.log(`✅ Fallback pattern matched: aggregate ${aggColumn} on ${groupByColumn}`);
         return {
           operation: 'aggregate',
           groupByColumn,
@@ -677,14 +678,14 @@ export async function parseDataOpsIntent(
       
       if (byIndex !== -1) {
         const betweenByAndUsing = message.substring(byIndex + 4, endIndex).trim();
-        console.log(`🔍 Searching for column in context: "${betweenByAndUsing}"`);
+        logger.log(`🔍 Searching for column in context: "${betweenByAndUsing}"`);
         
         // Try to find a column that matches this text
         for (const col of availableColumns) {
           const colLower = col.toLowerCase();
           if (betweenByAndUsing.toLowerCase().includes(colLower) || colLower.includes(betweenByAndUsing.toLowerCase())) {
             groupByColumn = col;
-            console.log(`✅ Found column "${col}" in message context`);
+            logger.log(`✅ Found column "${col}" in message context`);
             break;
           }
         }
@@ -693,8 +694,8 @@ export async function parseDataOpsIntent(
     
     groupByColumn = groupByColumn || rawGroupBy;
 
-    console.log(`✅ Regex matched aggregate all columns pattern: aggregate all columns by ${groupByColumn} using ${aggFunc}`);
-    console.log(`📋 Extracted rawGroupBy: "${rawGroupBy}", matched to: "${groupByColumn}"`);
+    logger.log(`✅ Regex matched aggregate all columns pattern: aggregate all columns by ${groupByColumn} using ${aggFunc}`);
+    logger.log(`📋 Extracted rawGroupBy: "${rawGroupBy}", matched to: "${groupByColumn}"`);
     return {
       operation: 'aggregate',
       groupByColumn,
@@ -712,7 +713,7 @@ export async function parseDataOpsIntent(
     const groupByColumn =
       findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
 
-    console.log(`✅ Regex matched aggregate over pattern: aggregate over ${groupByColumn}`);
+    logger.log(`✅ Regex matched aggregate over pattern: aggregate over ${groupByColumn}`);
     return {
       operation: 'aggregate',
       groupByColumn,
@@ -743,7 +744,7 @@ export async function parseDataOpsIntent(
       
       if (byIndex !== -1) {
         const betweenByAndUsing = message.substring(byIndex + 4, endIndex).trim();
-        console.log(`🔍 Column not found via findMentionedColumn, searching in context: "${betweenByAndUsing}"`);
+        logger.log(`🔍 Column not found via findMentionedColumn, searching in context: "${betweenByAndUsing}"`);
         
         // Try to find a column that matches this text (case-insensitive, word boundary aware)
         for (const col of availableColumns) {
@@ -755,7 +756,7 @@ export async function parseDataOpsIntent(
             // Prefer exact match or longer column name
             if (contextLower === colLower || colLower.length >= contextLower.length) {
               matchedGroupBy = col;
-              console.log(`✅ Found column "${col}" in message context`);
+              logger.log(`✅ Found column "${col}" in message context`);
               break;
             }
           }
@@ -767,8 +768,8 @@ export async function parseDataOpsIntent(
     matchedAggCol = matchedAggCol || rawAggColumn;
     matchedGroupBy = matchedGroupBy || rawGroupByColumn;
     
-    console.log(`✅ Regex matched aggregate pattern: aggregate ${matchedAggCol} by ${matchedGroupBy} using ${aggFunc}`);
-    console.log(`📋 Extracted: rawAggColumn="${rawAggColumn}", rawGroupByColumn="${rawGroupByColumn}" -> matched: "${matchedGroupBy}"`);
+    logger.log(`✅ Regex matched aggregate pattern: aggregate ${matchedAggCol} by ${matchedGroupBy} using ${aggFunc}`);
+    logger.log(`📋 Extracted: rawAggColumn="${rawAggColumn}", rawGroupByColumn="${rawGroupByColumn}" -> matched: "${matchedGroupBy}"`);
     return {
       operation: 'aggregate',
       groupByColumn: matchedGroupBy,
@@ -2143,8 +2144,8 @@ IMPORTANT PRIORITY RULES:
 
 Return ONLY valid JSON, no other text.`;
 
-    console.log(`🤖 Sending AI prompt for intent detection. Message: "${message}"`);
-    console.log(`📋 Available columns (${availableColumns.length}): ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
+    logger.log(`🤖 Sending AI prompt for intent detection. Message: "${message}"`);
+    logger.log(`📋 Available columns (${availableColumns.length}): ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
     
     const response = await callLlm(
       {
@@ -2163,22 +2164,22 @@ Return ONLY valid JSON, no other text.`;
       { purpose: LLM_PURPOSE.DATAOPS_INTENT }
     );
     
-    console.log(`🤖 AI response received, parsing...`);
+    logger.log(`🤖 AI response received, parsing...`);
 
     const content = response.choices[0]?.message?.content?.trim();
     const finishReason = response.choices[0]?.finish_reason;
     
-    console.log(`🤖 AI raw response (first 300 chars):`, content?.substring(0, 300));
-    console.log(`🤖 Finish reason: ${finishReason}`);
+    logger.log(`🤖 AI raw response (first 300 chars):`, content?.substring(0, 300));
+    logger.log(`🤖 Finish reason: ${finishReason}`);
     
     if (!content) {
-      console.log(`⚠️ AI returned empty content`);
+      logger.log(`⚠️ AI returned empty content`);
       return null;
     }
 
     // Check if response was truncated
     if (finishReason === 'length') {
-      console.warn(`⚠️ AI response was truncated (finish_reason: length). Response length: ${content.length}`);
+      logger.warn(`⚠️ AI response was truncated (finish_reason: length). Response length: ${content.length}`);
       // Try to extract JSON anyway, but log warning
     }
 
@@ -2190,21 +2191,21 @@ Return ONLY valid JSON, no other text.`;
     }
     
     if (!jsonMatch) {
-      console.log(`⚠️ No JSON found in AI response. Full response:`, content);
+      logger.log(`⚠️ No JSON found in AI response. Full response:`, content);
       return null;
     }
 
     let parsed;
     try {
       parsed = JSON.parse(jsonMatch[0]);
-      console.log(`✅ Successfully parsed AI intent JSON`);
+      logger.log(`✅ Successfully parsed AI intent JSON`);
     } catch (parseError) {
-      console.error(`❌ Failed to parse AI JSON response:`, parseError);
-      console.error(`❌ JSON string:`, jsonMatch[0].substring(0, 500));
+      logger.error(`❌ Failed to parse AI JSON response:`, parseError);
+      logger.error(`❌ JSON string:`, jsonMatch[0].substring(0, 500));
       return null;
     }
     
-    console.log(`🤖 Parsed AI intent:`, {
+    logger.log(`🤖 Parsed AI intent:`, {
       operation: parsed.operation,
       groupByColumn: parsed.groupByColumn,
       aggColumns: parsed.aggColumns,
@@ -2218,9 +2219,9 @@ Return ONLY valid JSON, no other text.`;
       const originalColumn = parsed.column;
       const matchedColumn = findMatchingColumn(parsed.column, availableColumns);
       if (matchedColumn && matchedColumn !== originalColumn) {
-        console.log(`🔍 Column matched: "${originalColumn}" → "${matchedColumn}"`);
+        logger.log(`🔍 Column matched: "${originalColumn}" → "${matchedColumn}"`);
       } else if (!matchedColumn) {
-        console.warn(`⚠️ Column "${originalColumn}" not found in available columns`);
+        logger.warn(`⚠️ Column "${originalColumn}" not found in available columns`);
       }
       parsed.column = matchedColumn || parsed.column;
     }
@@ -2230,7 +2231,7 @@ Return ONLY valid JSON, no other text.`;
       const originalColumn = parsed.oldColumnName;
       const matchedColumn = findMatchingColumn(parsed.oldColumnName, availableColumns);
       if (matchedColumn && matchedColumn !== originalColumn) {
-        console.log(`🔍 OldColumnName matched: "${originalColumn}" → "${matchedColumn}"`);
+        logger.log(`🔍 OldColumnName matched: "${originalColumn}" → "${matchedColumn}"`);
       }
       parsed.oldColumnName = matchedColumn || parsed.oldColumnName;
     }
@@ -2240,9 +2241,9 @@ Return ONLY valid JSON, no other text.`;
       const originalColumn = parsed.groupByColumn;
       const matchedColumn = findMatchingColumn(parsed.groupByColumn, availableColumns);
       if (matchedColumn && matchedColumn !== originalColumn) {
-        console.log(`🔍 groupByColumn matched: "${originalColumn}" → "${matchedColumn}"`);
+        logger.log(`🔍 groupByColumn matched: "${originalColumn}" → "${matchedColumn}"`);
       } else if (!matchedColumn) {
-        console.warn(`⚠️ groupByColumn "${originalColumn}" not found in available columns. Available: ${availableColumns.slice(0, 5).join(', ')}...`);
+        logger.warn(`⚠️ groupByColumn "${originalColumn}" not found in available columns. Available: ${availableColumns.slice(0, 5).join(', ')}...`);
       }
       parsed.groupByColumn = matchedColumn || parsed.groupByColumn;
     }
@@ -2252,7 +2253,7 @@ Return ONLY valid JSON, no other text.`;
       parsed.aggColumns = parsed.aggColumns.map((col: string) => {
         const matched = findMatchingColumn(col, availableColumns);
         if (matched && matched !== col) {
-          console.log(`🔍 aggColumn matched: "${col}" → "${matched}"`);
+          logger.log(`🔍 aggColumn matched: "${col}" → "${matched}"`);
         }
         return matched || col;
       });
@@ -2370,7 +2371,7 @@ Return ONLY valid JSON, no other text.`;
       intent.logicalOperator = parsed.logicalOperator;
     }
     
-    console.log(`✅ Final mapped intent:`, {
+    logger.log(`✅ Final mapped intent:`, {
       operation: intent.operation,
       groupByColumn: intent.groupByColumn,
       aggColumns: intent.aggColumns,
@@ -2381,7 +2382,7 @@ Return ONLY valid JSON, no other text.`;
     
     return intent;
   } catch (error) {
-    console.error('Error in AI intent detection:', error);
+    logger.error('Error in AI intent detection:', error);
     return null;
   }
 }
@@ -2882,7 +2883,7 @@ Return JSON:
     
     return null;
   } catch (error) {
-    console.error('Error extracting column details:', error);
+    logger.error('Error extracting column details:', error);
     return null;
   }
 }
@@ -2892,11 +2893,11 @@ Return JSON:
  */
 function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: string; features?: string[]; modelType?: string } | null {
   if (!chatHistory || chatHistory.length === 0) {
-    console.log('📋 No chat history provided for context extraction');
+    logger.log('📋 No chat history provided for context extraction');
     return null;
   }
   
-  console.log(`📋 Searching through ${chatHistory.length} messages for previous model context`);
+  logger.log(`📋 Searching through ${chatHistory.length} messages for previous model context`);
   
   // Look backwards through chat history for the most recent model result
   for (let i = chatHistory.length - 1; i >= 0; i--) {
@@ -2906,7 +2907,7 @@ function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: 
       
       // Check if this is a model result (contains "Model Summary" and "Target Variable")
       if (content.includes('Model Summary') && content.includes('Target Variable')) {
-        console.log(`📋 Found potential model result at message index ${i}`);
+        logger.log(`📋 Found potential model result at message index ${i}`);
         
         // Try multiple patterns for target variable (handle markdown format with dashes)
         const targetMatch = content.match(/[-*]\s*Target Variable:\s*([^\n]+)/i) || 
@@ -2950,16 +2951,16 @@ function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: 
             }
           }
           
-          console.log(`✅ Found previous model in chat history: target="${targetVariable}", features=[${features.join(', ')}], type=${modelType || 'unknown'}`);
+          logger.log(`✅ Found previous model in chat history: target="${targetVariable}", features=[${features.join(', ')}], type=${modelType || 'unknown'}`);
           return { targetVariable, features, modelType };
         } else {
-          console.log(`⚠️ Found model result but couldn't parse: targetMatch=${!!targetMatch}, featuresMatch=${!!featuresMatch}`);
+          logger.log(`⚠️ Found model result but couldn't parse: targetMatch=${!!targetMatch}, featuresMatch=${!!featuresMatch}`);
         }
       }
     }
   }
   
-  console.log('📋 No previous model found in chat history');
+  logger.log('📋 No previous model found in chat history');
   return null;
 }
 
@@ -3083,7 +3084,7 @@ Return JSON:
     
     return null;
   } catch (error) {
-    console.error('Error extracting ML model details:', error);
+    logger.error('Error extracting ML model details:', error);
     return null;
   }
 }
@@ -3346,17 +3347,17 @@ Return JSON:
         if (matchedCol) {
           // Replace all occurrences of this column reference
           expression = expression.replace(new RegExp(`\\[${colRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'g'), `[${matchedCol}]`);
-          console.log(`✅ Matched column reference "${colRef}" → "${matchedCol}"`);
+          logger.log(`✅ Matched column reference "${colRef}" → "${matchedCol}"`);
         } else {
           unmatchedColumns.push(colRef);
-          console.warn(`⚠️ Could not match column reference: "${colRef}"`);
+          logger.warn(`⚠️ Could not match column reference: "${colRef}"`);
         }
       }
       
       // If there are unmatched columns, log available columns for debugging
       if (unmatchedColumns.length > 0) {
-        console.warn(`⚠️ Unmatched columns: ${unmatchedColumns.join(', ')}`);
-        console.warn(`📋 Available columns (first 20): ${availableColumns.slice(0, 20).join(', ')}`);
+        logger.warn(`⚠️ Unmatched columns: ${unmatchedColumns.join(', ')}`);
+        logger.warn(`📋 Available columns (first 20): ${availableColumns.slice(0, 20).join(', ')}`);
       }
       
       return {
@@ -3367,7 +3368,7 @@ Return JSON:
     
     return null;
   } catch (error) {
-    console.error('Error extracting derived column details:', error);
+    logger.error('Error extracting derived column details:', error);
     return null;
   }
 }
@@ -3437,7 +3438,7 @@ export async function executeDataOperation(
   // For operations like aggregate/pivot that only return a table,
   // the table will be included in "data" and "saved" will be false.
 }> {
-  console.log(`🔍 executeDataOperation called with intent:`, {
+  logger.log(`🔍 executeDataOperation called with intent:`, {
     operation: intent.operation,
     groupByColumn: intent.groupByColumn,
     aggColumns: intent.aggColumns,
@@ -3456,11 +3457,11 @@ export async function executeDataOperation(
   // Detect large dataset
   const isLargeDataset = data.length > LARGE_DATASET_THRESHOLD;
   if (isLargeDataset) {
-    console.log(`📊 Large dataset detected (${data.length} rows). Using streaming mode for operations.`);
+    logger.log(`📊 Large dataset detected (${data.length} rows). Using streaming mode for operations.`);
   }
   
   if (intent.requiresClarification) {
-    console.log(`⚠️ Intent requires clarification: ${intent.clarificationMessage}`);
+    logger.log(`⚠️ Intent requires clarification: ${intent.clarificationMessage}`);
     // Save pending operation to context
     if (sessionDoc) {
       const context: DataOpsContext = {
@@ -3482,7 +3483,7 @@ export async function executeDataOperation(
     };
   }
   
-  console.log(`✅ Executing operation: ${intent.operation}`);
+  logger.log(`✅ Executing operation: ${intent.operation}`);
   
   switch (intent.operation) {
     case 'remove_nulls': {
@@ -3923,8 +3924,8 @@ export async function executeDataOperation(
       
       // Log the expression and available columns for debugging
       const availableColumns = sessionDoc?.dataSummary?.columns?.map(c => c.name) || Object.keys(data[0] || {});
-      console.log(`🔍 Creating derived column "${newColumnName}" with expression: ${expression}`);
-      console.log(`📋 Available columns: ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
+      logger.log(`🔍 Creating derived column "${newColumnName}" with expression: ${expression}`);
+      logger.log(`📋 Available columns: ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
       
       const result = await createDerivedColumn(data, newColumnName, expression);
       
@@ -4171,7 +4172,7 @@ export async function executeDataOperation(
         const effectiveGroupBy =
           remapped && keys.has(remappedGroupBy) ? remappedGroupBy : groupBy;
         if (remapped && effectiveGroupBy !== groupBy) {
-          console.log(
+          logger.log(
             `📅 Remapped aggregate groupBy "${groupBy}" → "${effectiveGroupBy}" (coarse calendar bucket)`
           );
         }
@@ -4179,7 +4180,7 @@ export async function executeDataOperation(
         // If aggColumns is empty array or undefined, pass undefined to Python service for auto-detection
         const aggColumnsForPython = (intent.aggColumns && intent.aggColumns.length > 0) ? intent.aggColumns : undefined;
         
-        console.log(`📊 Aggregating by "${effectiveGroupBy}". aggColumns: ${aggColumnsForPython ? JSON.stringify(aggColumnsForPython) : 'undefined (auto-detect all numeric columns)'}`);
+        logger.log(`📊 Aggregating by "${effectiveGroupBy}". aggColumns: ${aggColumnsForPython ? JSON.stringify(aggColumnsForPython) : 'undefined (auto-detect all numeric columns)'}`);
         
         // Call Python service for aggregation
         // Pass original message for semantic intent detection (average, median, highest, etc.)
@@ -4223,12 +4224,12 @@ export async function executeDataOperation(
         const previewData =
           data.length > 0 ? data.slice(0, Math.min(ROW_LEVEL_PREVIEW_MAX_ROWS, data.length)) : [];
         
-        console.log(`✅ Aggregation complete: ${rowsAfter} rows, showing preview of ${previewData.length} rows`);
+        logger.log(`✅ Aggregation complete: ${rowsAfter} rows, showing preview of ${previewData.length} rows`);
         if (previewData.length > 0) {
-          console.log(`📊 Preview columns: ${Object.keys(previewData[0]).join(', ')}`);
-          console.log(`📊 Sample row:`, JSON.stringify(previewData[0], null, 2));
+          logger.log(`📊 Preview columns: ${Object.keys(previewData[0]).join(', ')}`);
+          logger.log(`📊 Sample row:`, JSON.stringify(previewData[0], null, 2));
         } else {
-          console.warn(`⚠️ No preview data available - aggregatedData is empty`);
+          logger.warn(`⚠️ No preview data available - aggregatedData is empty`);
         }
 
         return {
@@ -4238,7 +4239,7 @@ export async function executeDataOperation(
           saved: false,
         };
       } catch (error) {
-        console.error('Error calling Python service for aggregation:', error);
+        logger.error('Error calling Python service for aggregation:', error);
         return {
           answer: `Error during aggregation: ${error instanceof Error ? error.message : String(error)}. Please try again.`,
         };
@@ -4281,11 +4282,11 @@ export async function executeDataOperation(
       }
 
       try {
-        console.log(`🔄 Starting pivot operation: indexCol="${indexCol}", valueColumns=[${valueColumns.join(', ')}]`);
-        console.log(`📊 Input data: ${data.length} rows`);
+        logger.log(`🔄 Starting pivot operation: indexCol="${indexCol}", valueColumns=[${valueColumns.join(', ')}]`);
+        logger.log(`📊 Input data: ${data.length} rows`);
         if (data.length > 0) {
-          console.log(`📊 Input columns: ${Object.keys(data[0]).join(', ')}`);
-          console.log(`📊 Sample input row:`, JSON.stringify(data[0], null, 2));
+          logger.log(`📊 Input columns: ${Object.keys(data[0]).join(', ')}`);
+          logger.log(`📊 Sample input row:`, JSON.stringify(data[0], null, 2));
         }
         
         // Call Python service for pivot table
@@ -4296,11 +4297,11 @@ export async function executeDataOperation(
           intent.pivotFuncs
         );
 
-        console.log(`✅ Python service returned pivot result:`);
-        console.log(`   - rows_before: ${result.rows_before}`);
-        console.log(`   - rows_after: ${result.rows_after}`);
-        console.log(`   - data length: ${result.data?.length || 0}`);
-        console.log(`   - has large file buffer: ${!!(result as any)._largeFileBuffer}`);
+        logger.log(`✅ Python service returned pivot result:`);
+        logger.log(`   - rows_before: ${result.rows_before}`);
+        logger.log(`   - rows_after: ${result.rows_after}`);
+        logger.log(`   - data length: ${result.data?.length || 0}`);
+        logger.log(`   - has large file buffer: ${!!(result as any)._largeFileBuffer}`);
 
         const pivotData = result.data || [];
         const rowsBefore = result.rows_before;
@@ -4309,7 +4310,7 @@ export async function executeDataOperation(
 
         // Large in-memory pivot result: do not overwrite session blob with pivoted shape (non-destructive).
         if (largeFileBuffer) {
-          console.log(
+          logger.log(
             `📊 Large pivot table (${(largeFileBuffer.length / 1024 / 1024).toFixed(2)}MB buffer). Returning pivot in response without persisting to blob.`
           );
 
@@ -4353,19 +4354,19 @@ export async function executeDataOperation(
 
         // Normal flow for smaller pivot tables
         if (!pivotData || pivotData.length === 0) {
-          console.error(`❌ Pivot returned empty data!`);
+          logger.error(`❌ Pivot returned empty data!`);
           return {
             answer: `Error: Pivot operation returned no data. Please check your data and try again.`,
           };
         }
 
-        console.log(`📊 Pivot data details:`);
-        console.log(`   - Total rows: ${pivotData.length}`);
-        console.log(`   - Columns: ${Object.keys(pivotData[0] || {}).join(', ')}`);
+        logger.log(`📊 Pivot data details:`);
+        logger.log(`   - Total rows: ${pivotData.length}`);
+        logger.log(`   - Columns: ${Object.keys(pivotData[0] || {}).join(', ')}`);
         if (pivotData.length > 0) {
-          console.log(`   - Sample pivot row:`, JSON.stringify(pivotData[0], null, 2));
+          logger.log(`   - Sample pivot row:`, JSON.stringify(pivotData[0], null, 2));
           if (pivotData.length > 1) {
-            console.log(`   - Second pivot row:`, JSON.stringify(pivotData[1], null, 2));
+            logger.log(`   - Second pivot row:`, JSON.stringify(pivotData[1], null, 2));
           }
         }
 
@@ -4402,15 +4403,15 @@ export async function executeDataOperation(
             ? data.slice(0, Math.min(ROW_LEVEL_PREVIEW_MAX_ROWS, data.length))
             : [];
 
-        console.log(`✅ Pivot complete: ${rowsAfter} rows, row-level preview ${previewData.length} rows`);
+        logger.log(`✅ Pivot complete: ${rowsAfter} rows, row-level preview ${previewData.length} rows`);
         if (previewData.length > 0) {
-          console.log(`📊 Row-level preview columns: ${Object.keys(previewData[0]).join(', ')}`);
-          console.log(`📊 Row-level sample row:`, JSON.stringify(previewData[0], null, 2));
+          logger.log(`📊 Row-level preview columns: ${Object.keys(previewData[0]).join(', ')}`);
+          logger.log(`📊 Row-level sample row:`, JSON.stringify(previewData[0], null, 2));
         } else {
-          console.warn(`⚠️ No row-level preview — input data was empty`);
+          logger.warn(`⚠️ No row-level preview — input data was empty`);
         }
 
-        console.log(`📤 Returning pivot result: answer length=${answer.length}, preview rows=${previewData.length}, saved=false`);
+        logger.log(`📤 Returning pivot result: answer length=${answer.length}, preview rows=${previewData.length}, saved=false`);
 
         return {
           answer,
@@ -4419,8 +4420,8 @@ export async function executeDataOperation(
           saved: false,
         };
       } catch (error) {
-        console.error('❌ Error calling Python service for pivot:', error);
-        console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+        logger.error('❌ Error calling Python service for pivot:', error);
+        logger.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
         return {
           answer: `Error during pivot creation: ${error instanceof Error ? error.message : String(error)}. Please try again.`,
         };
@@ -4859,16 +4860,16 @@ export async function executeDataOperation(
         chatHistoryForContext = chatHistory || sessionDoc?.messages || [];
       } catch (error) {
         // If accessing sessionDoc.messages fails (e.g., CosmosDB not initialized), use empty array
-        console.warn('⚠️ Could not access chat history, continuing without context:', error);
+        logger.warn('⚠️ Could not access chat history, continuing without context:', error);
         chatHistoryForContext = chatHistory || [];
       }
       
       const previousModelParams = extractPreviousModelParams(chatHistoryForContext);
       
       if (previousModelParams) {
-        console.log(`✅ Found previous model context: target="${previousModelParams.targetVariable}", features=[${previousModelParams.features?.join(', ')}], type=${previousModelParams.modelType || 'unknown'}`);
+        logger.log(`✅ Found previous model context: target="${previousModelParams.targetVariable}", features=[${previousModelParams.features?.join(', ')}], type=${previousModelParams.modelType || 'unknown'}`);
       } else {
-        console.log(`⚠️ No previous model context found in ${chatHistoryForContext.length} messages`);
+        logger.log(`⚠️ No previous model context found in ${chatHistoryForContext.length} messages`);
       }
       
       // Check if user wants less variance (Ridge/Lasso)
@@ -4878,20 +4879,20 @@ export async function executeDataOperation(
                                 messageLower.includes('reduce variance') || 
                                 messageLower.includes('lower variance');
       
-      console.log(`📝 Processing model request: message="${messageText}", wantsLessVariance=${wantsLessVariance}, hasPreviousParams=${!!previousModelParams}`);
+      logger.log(`📝 Processing model request: message="${messageText}", wantsLessVariance=${wantsLessVariance}, hasPreviousParams=${!!previousModelParams}`);
       
       // If user wants less variance and we have previous model, default to Ridge
       if (wantsLessVariance && previousModelParams && !intent.modelType) {
         modelType = 'ridge';
-        console.log(`🎯 User wants less variance, using Ridge model`);
+        logger.log(`🎯 User wants less variance, using Ridge model`);
         // Also use previous model params if not provided
         if (!targetVariable && previousModelParams.targetVariable) {
           targetVariable = previousModelParams.targetVariable;
-          console.log(`📋 Using previous target variable: ${targetVariable}`);
+          logger.log(`📋 Using previous target variable: ${targetVariable}`);
         }
         if (features.length === 0 && previousModelParams.features && previousModelParams.features.length > 0) {
           features = previousModelParams.features;
-          console.log(`📋 Using previous features: ${features.join(', ')}`);
+          logger.log(`📋 Using previous features: ${features.join(', ')}`);
         }
       }
       
@@ -4909,7 +4910,7 @@ export async function executeDataOperation(
         
         // If still missing and we have previous model params, use them (strong fallback)
         if ((!targetVariable || features.length === 0) && previousModelParams) {
-          console.log(`📋 Using previous model parameters from chat history as fallback`);
+          logger.log(`📋 Using previous model parameters from chat history as fallback`);
           targetVariable = targetVariable || previousModelParams.targetVariable;
           features = features.length > 0 ? features : (previousModelParams.features || []);
         }
@@ -4962,7 +4963,7 @@ export async function executeDataOperation(
         nulls: data.filter(row => row[f] === null || row[f] === undefined || row[f] === '').length
       }));
       
-      console.log(`📊 Data quality check: Total rows=${data.length}, Target nulls=${targetNulls}, Feature nulls:`, featureNulls);
+      logger.log(`📊 Data quality check: Total rows=${data.length}, Target nulls=${targetNulls}, Feature nulls:`, featureNulls);
       
       if (targetNulls === data.length) {
         return {
@@ -4994,7 +4995,7 @@ export async function executeDataOperation(
           saved: false // ML models don't modify data
         };
       } catch (error) {
-        console.error('ML model training error:', error);
+        logger.error('ML model training error:', error);
         const errorMessage = error instanceof Error ? error.message : String(error);
         
         // Provide helpful error message
@@ -5072,7 +5073,7 @@ export async function executeDataOperation(
           saved: false, // Identification doesn't modify data
         };
       } catch (error) {
-        console.error('Outlier identification error:', error);
+        logger.error('Outlier identification error:', error);
         return {
           answer: `Failed to identify outliers: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
         };
@@ -5093,7 +5094,7 @@ export async function executeDataOperation(
         const treatment = intent.treatmentMethod || 'remove';
         const treatmentValue = intent.treatmentValue;
 
-        console.log(`🔍 Outlier treatment parameters:`, {
+        logger.log(`🔍 Outlier treatment parameters:`, {
           method,
           threshold,
           treatment,
@@ -5146,7 +5147,7 @@ export async function executeDataOperation(
           saved: true,
         };
       } catch (error) {
-        console.error('Outlier treatment error:', error);
+        logger.error('Outlier treatment error:', error);
         return {
           answer: `Failed to treat outliers: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
         };
@@ -5154,7 +5155,7 @@ export async function executeDataOperation(
     }
 
     case 'filter': {
-      console.log(`🔍 Executing filter operation with ${intent.filterConditions?.length || 0} conditions`);
+      logger.log(`🔍 Executing filter operation with ${intent.filterConditions?.length || 0} conditions`);
       
       if (!intent.filterConditions || intent.filterConditions.length === 0) {
         return {
@@ -5170,7 +5171,7 @@ export async function executeDataOperation(
         const { column, operator, value, value2, values } = condition;
         
         if (!column) {
-          console.warn(`⚠️ Skipping filter condition without column:`, condition);
+          logger.warn(`⚠️ Skipping filter condition without column:`, condition);
           continue;
         }
         
@@ -5216,7 +5217,7 @@ export async function executeDataOperation(
               return String(cellValue).toLowerCase().endsWith(String(value).toLowerCase());
             case 'between': {
               if (value2 === undefined || value2 === null) {
-                console.warn(`⚠️ Between operator requires value2, skipping condition`);
+                logger.warn(`⚠️ Between operator requires value2, skipping condition`);
                 return true;
               }
               const numValue = Number(cellValue);
@@ -5224,27 +5225,27 @@ export async function executeDataOperation(
             }
             case 'in': {
               if (!values || !Array.isArray(values) || values.length === 0) {
-                console.warn(`⚠️ In operator requires values array, skipping condition`);
+                logger.warn(`⚠️ In operator requires values array, skipping condition`);
                 return true;
               }
               const cellStr = String(cellValue).toLowerCase().trim();
               return values.some(v => String(v).toLowerCase().trim() === cellStr);
             }
             default:
-              console.warn(`⚠️ Unknown filter operator: ${operator}`);
+              logger.warn(`⚠️ Unknown filter operator: ${operator}`);
               return true;
           }
         });
         
         const rowsAfterFilter = filteredData.length;
-        console.log(`  ✅ Applied filter: ${column} ${operator} ${value || (values ? `[${values.join(', ')}]` : '')}${value2 ? ` and ${value2}` : ''} → ${rowsBeforeFilter} → ${rowsAfterFilter} rows`);
+        logger.log(`  ✅ Applied filter: ${column} ${operator} ${value || (values ? `[${values.join(', ')}]` : '')}${value2 ? ` and ${value2}` : ''} → ${rowsBeforeFilter} → ${rowsAfterFilter} rows`);
         
         // If using OR operator, we need to combine results differently
         // For now, AND is the default - all conditions must match
         if (logicalOperator === 'OR') {
           // For OR, we'd need to track which rows match each condition
           // This is a simplified version - you may want to refactor for complex OR logic
-          console.log(`⚠️ OR operator not fully implemented, using AND logic`);
+          logger.log(`⚠️ OR operator not fully implemented, using AND logic`);
         }
       }
       
@@ -5252,7 +5253,7 @@ export async function executeDataOperation(
       const rowsAfter = filteredData.length;
       const rowsRemoved = rowsBefore - rowsAfter;
       
-      console.log(`✅ Filter applied: ${rowsBefore} → ${rowsAfter} rows (removed ${rowsRemoved})`);
+      logger.log(`✅ Filter applied: ${rowsBefore} → ${rowsAfter} rows (removed ${rowsRemoved})`);
       
       if (rowsAfter === 0) {
         return {
@@ -5312,7 +5313,7 @@ export async function executeDataOperation(
       const fallbackReason = translation.ok
         ? "session doc unavailable"
         : translation.reason;
-      console.warn(
+      logger.warn(
         `⚠️ Legacy filter fallback (operator(s) not modelable as active filter): ${fallbackReason}`
       );
       const saveResult = await saveModifiedData(
@@ -5384,12 +5385,12 @@ export async function executeDataOperation(
           );
           if (wfApplied.remelted) {
             originalData = wfApplied.rows as Record<string, any>[];
-            console.log(
+            logger.log(
               `[dataOps:revert] re-applied wide-format melt → ${originalData.length} long rows`
             );
           }
         } catch (e) {
-          console.warn('⚠️ dataOps:revert wide-format re-melt failed', e);
+          logger.warn('⚠️ dataOps:revert wide-format re-melt failed', e);
         }
 
         // Convert "-" to 0 for numeric columns (same as upload processing)
@@ -5412,7 +5413,7 @@ export async function executeDataOperation(
           const { translateModule } = await loadActiveFilterPersistModule();
           await translateModule.clearActiveFilter(sessionDoc);
         } catch (e) {
-          console.warn("⚠️ revert: failed to clear active filter", e);
+          logger.warn("⚠️ revert: failed to clear active filter", e);
         }
 
         // Get preview from saved data
@@ -5425,7 +5426,7 @@ export async function executeDataOperation(
           saved: true,
         };
       } catch (error) {
-        console.error('Error reverting data:', error);
+        logger.error('Error reverting data:', error);
         return {
           answer: `Failed to revert data: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again or contact support.`,
         };
@@ -5434,7 +5435,7 @@ export async function executeDataOperation(
     
     default:
       // For unknown operations, try to provide a helpful response
-      console.error(`❌ Unknown operation: "${intent.operation}". Intent details:`, {
+      logger.error(`❌ Unknown operation: "${intent.operation}". Intent details:`, {
         operation: intent.operation,
         groupByColumn: intent.groupByColumn,
         aggColumns: intent.aggColumns,

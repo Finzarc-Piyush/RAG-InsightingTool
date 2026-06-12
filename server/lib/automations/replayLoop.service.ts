@@ -69,6 +69,7 @@ import type {
   Insight,
   Message,
 } from "../../shared/schema.js";
+import { logger } from "../logger.js";
 
 export type ReplaySseEvent =
   | { type: "automation_started"; automationId: string; recipeLength: number }
@@ -312,7 +313,7 @@ const executeReplayTurn = async (args: {
   } catch (err) {
     // Narrator failures don't halt replay — we still emit a usable
     // assistant message with the tool summaries so the user sees state.
-    console.warn(
+    logger.warn(
       `[automation-replay] narrator failed for turn ${turn.ordinal + 1}:`,
       err
     );
@@ -432,7 +433,7 @@ const executeReplayTurn = async (args: {
     } catch (err) {
       // runBusinessActions catches everything internally, but defence
       // in depth — never let it derail replay.
-      console.warn("[automation-replay] businessActions failed:", err);
+      logger.warn("[automation-replay] businessActions failed:", err);
     }
   }
 
@@ -458,7 +459,7 @@ const buildReplayContext = async (
   const data = await loadLatestData(chat, undefined, undefined, {
     skipActiveFilter: true,
   }).catch((err) => {
-    console.warn("[automation-replay] loadLatestData failed:", err);
+    logger.warn("[automation-replay] loadLatestData failed:", err);
     return chat.rawData ?? [];
   });
   const { text: domainContext } = await loadEnabledDomainContext().catch(() => ({
@@ -528,7 +529,7 @@ const persistAutomationContextOntoChat = async (
       await updateChatDocument(chat);
     }
   } catch (err) {
-    console.warn("[automation-replay] context persist failed:", err);
+    logger.warn("[automation-replay] context persist failed:", err);
   }
 };
 
@@ -670,7 +671,7 @@ export async function replayAutomation(
             applyWideFormatTransformToSummary(fresh, wf);
             chat.dataSummary = fresh;
             chat.rawData = meltResult.rows;
-            console.log(
+            logger.log(
               `[automation-replay] forced wide-format remelt produced ${meltResult.rows.length} long-form rows`
             );
           }
@@ -679,7 +680,7 @@ export async function replayAutomation(
           // implies we should be aggressive here, but a cleaner UX is
           // to let the analytical step itself fail with a clear error.
           // Log loudly so ops can spot it.
-          console.warn(
+          logger.warn(
             "[automation-replay] wide-format remelt failed; continuing — analytical tools will surface the schema mismatch:",
             err
           );

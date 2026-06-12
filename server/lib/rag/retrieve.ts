@@ -8,6 +8,7 @@ import { suggestedColumnsFromHits, formatHitsForPrompt } from "./retrieveHelpers
 
 export type { RagHit } from "./ragHit.js";
 export { suggestedColumnsFromHits, formatHitsForPrompt } from "./retrieveHelpers.js";
+import { logger } from "../logger.js";
 
 /**
  * Threshold below which vector recall is considered weak enough to warrant a
@@ -94,7 +95,7 @@ export async function retrieveRagHits(params: {
         });
       } catch (kwErr) {
         // Keyword augmentation is best-effort — never block the main result.
-        console.warn("⚠️ RAG keyword fallback failed:", kwErr);
+        logger.warn("⚠️ RAG keyword fallback failed:", kwErr);
       }
     }
 
@@ -113,7 +114,7 @@ export async function retrieveRagHits(params: {
       },
     };
   } catch (e) {
-    console.error("⚠️ RAG retrieve failed:", e);
+    logger.error("⚠️ RAG retrieve failed:", e);
     const msg = e instanceof Error ? e.message : String(e);
     return { hits: [], suggestedColumns: [], retrievalError: msg };
   }
@@ -164,7 +165,7 @@ export async function searchMemoryEntries(params: {
       diagnostics: { meanSimilarity: meanScore(deduped) },
     };
   } catch (e) {
-    console.error("⚠️ Memory recall search failed:", e);
+    logger.error("⚠️ Memory recall search failed:", e);
     const msg = e instanceof Error ? e.message : String(e);
     return { hits: [], retrievalError: msg };
   }

@@ -6,6 +6,7 @@ import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 import { timingSafeEqual, createHash } from "crypto";
+import { logger } from "../lib/logger.js";
 
 const MAX_CACHE_TTL_MS = 5 * 60 * 1000; // revoked tokens valid for at most 5 min
 
@@ -41,7 +42,7 @@ function getTokenFromRequest(req: Request): string | null {
   if (process.env.REQUIRE_SSE_TICKET === "true") return null;
   const q = req.query.access_token;
   if (typeof q === "string" && q.trim()) {
-    console.warn(
+    logger.warn(
       "⚠️ access_token in query string is deprecated and leaks into logs — open SSE with a ticket from POST /api/auth/sse-ticket instead."
     );
     return q.trim();
@@ -136,7 +137,7 @@ export async function requireAzureAdAuth(
     // P-009: belt-and-braces guards against accidental production bypass.
     // (1) refuse to honour the flag in production
     if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
-      console.error(
+      logger.error(
         "DISABLE_AUTH=true is not honoured in production / Vercel; rejecting request"
       );
       res.status(500).json({ error: "Server authentication is not configured" });
@@ -163,7 +164,7 @@ export async function requireAzureAdAuth(
       return;
     }
     // (3) audit-log every bypassed request for forensic review
-    console.warn(
+    logger.warn(
       `⚠️ DISABLE_AUTH bypass: ${req.method} ${req.path} email=${email} ip=${req.ip}`
     );
     req.auth = { email, claims: {} };
@@ -191,7 +192,7 @@ export async function requireAzureAdAuth(
   const tenantId = process.env.AZURE_AD_TENANT_ID?.trim();
   const audience = process.env.AZURE_AD_CLIENT_ID?.trim();
   if (!tenantId || !audience) {
-    console.error("AZURE_AD_TENANT_ID and AZURE_AD_CLIENT_ID must be set (or use DISABLE_AUTH=true for local dev)");
+    logger.error("AZURE_AD_TENANT_ID and AZURE_AD_CLIENT_ID must be set (or use DISABLE_AUTH=true for local dev)");
     res.status(500).json({ error: "Server authentication is not configured" });
     return;
   }

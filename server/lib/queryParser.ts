@@ -16,6 +16,7 @@ import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate
 import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.js';
 import { repairMisassignedDimensionFilters } from './dimensionFilterRepair.js';
 import { sanitisePivotColumnDimensionsInput } from './pivotLayoutFromDimensions.js';
+import { logger } from "./logger.js";
 
 // W32 · exported so callers (e.g. chatStream.service.ts) can declare
 // variables with the full structural type instead of falling back to
@@ -264,7 +265,7 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
     
     if (!parsed.groupBy || parsed.groupBy.length === 0) {
       // If groupBy is not set but dateAggregationPeriod and aggregations are, automatically add date column
-      console.log(`🔧 Auto-adding date column "${dateColumn}" to groupBy for period "${parsed.dateAggregationPeriod}" (aggregation requested)`);
+      logger.log(`🔧 Auto-adding date column "${dateColumn}" to groupBy for period "${parsed.dateAggregationPeriod}" (aggregation requested)`);
       parsed.groupBy = [dateColumn];
     } else {
       // Check if groupBy contains period names instead of actual date columns
@@ -273,7 +274,7 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
       
       if (hasPeriodNameInGroupBy && !hasDateColumn) {
         // Replace period names with actual date column
-        console.log(`🔧 Fixing groupBy: replacing period names with actual date column "${dateColumn}"`);
+        logger.log(`🔧 Fixing groupBy: replacing period names with actual date column "${dateColumn}"`);
         parsed.groupBy = parsed.groupBy.map(col => 
           periodNames.includes(col.toLowerCase()) ? dateColumn : col
         );
@@ -281,13 +282,13 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
         parsed.groupBy = Array.from(new Set(parsed.groupBy));
       } else if (!hasDateColumn) {
         // If no date column in groupBy but dateAggregationPeriod is set with aggregations, add it
-        console.log(`🔧 Adding date column "${dateColumn}" to groupBy for period aggregation`);
+        logger.log(`🔧 Adding date column "${dateColumn}" to groupBy for period aggregation`);
         parsed.groupBy = [dateColumn, ...parsed.groupBy];
       }
     }
   } else if (parsed.dateAggregationPeriod && (!parsed.aggregations || parsed.aggregations.length === 0)) {
     // If dateAggregationPeriod is set but no aggregations, clear it (user didn't request aggregation)
-    console.log(`⚠️ dateAggregationPeriod set but no aggregations requested - clearing dateAggregationPeriod to return raw data`);
+    logger.log(`⚠️ dateAggregationPeriod set but no aggregations requested - clearing dateAggregationPeriod to return raw data`);
     parsed.dateAggregationPeriod = undefined;
   }
   
@@ -330,11 +331,11 @@ function enhanceTimeFiltersWithExtractedDates(
   // If dateAggregationPeriod is 'monthOnly', don't add time filters for specific dates
   // because the user wants month-only aggregation (combining all years)
   if (parsed.dateAggregationPeriod === 'monthOnly') {
-    console.log('📅 Month-only aggregation detected, skipping specific date filters');
+    logger.log('📅 Month-only aggregation detected, skipping specific date filters');
     return parsed;
   }
   
-  console.log(`📅 Extracted ${extractedDates.length} date(s) from query:`, extractedDates.map(d => d.originalText));
+  logger.log(`📅 Extracted ${extractedDates.length} date(s) from query:`, extractedDates.map(d => d.originalText));
   
   // If no time filters exist, create them
   if (!parsed.timeFilters) {
@@ -343,7 +344,7 @@ function enhanceTimeFiltersWithExtractedDates(
   
   const dateColumn = summary.dateColumns[0];
   if (!dateColumn) {
-    console.log('⚠️ No date columns available, skipping date extraction');
+    logger.log('⚠️ No date columns available, skipping date extraction');
     return parsed;
   }
   
@@ -367,7 +368,7 @@ function enhanceTimeFiltersWithExtractedDates(
     });
     
     if (existingFilter) {
-      console.log(`⏭️ Skipping duplicate date filter for: ${extracted.originalText}`);
+      logger.log(`⏭️ Skipping duplicate date filter for: ${extracted.originalText}`);
       continue; // Skip if already exists
     }
     
@@ -378,7 +379,7 @@ function enhanceTimeFiltersWithExtractedDates(
           column: dateColumn,
           years: [extracted.year!],
         });
-        console.log(`✅ Added year filter: ${extracted.year}`);
+        logger.log(`✅ Added year filter: ${extracted.year}`);
         break;
       case 'month':
         // If we have both month and year, use dateRange for precise filtering
@@ -395,7 +396,7 @@ function enhanceTimeFiltersWithExtractedDates(
           });
           const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
                              'July', 'August', 'September', 'October', 'November', 'December'];
-          console.log(`✅ Added month-year filter (dateRange): ${monthNames[extracted.month!]} ${extracted.year}`);
+          logger.log(`✅ Added month-year filter (dateRange): ${monthNames[extracted.month!]} ${extracted.year}`);
         } else {
           // Month only, no year specified
           const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -405,7 +406,7 @@ function enhanceTimeFiltersWithExtractedDates(
             column: dateColumn,
             months: [monthNames[extracted.month!]],
           });
-          console.log(`✅ Added month filter: ${monthNames[extracted.month!]}`);
+          logger.log(`✅ Added month filter: ${monthNames[extracted.month!]}`);
         }
         break;
       case 'date': {
@@ -417,7 +418,7 @@ function enhanceTimeFiltersWithExtractedDates(
           startDate: dateStr,
           endDate: dateStr,
         });
-        console.log(`✅ Added date filter: ${dateStr}`);
+        logger.log(`✅ Added date filter: ${dateStr}`);
         break;
       }
       case 'dateRange':
@@ -427,7 +428,7 @@ function enhanceTimeFiltersWithExtractedDates(
           startDate: extracted.startDate!.toISOString().split('T')[0],
           endDate: extracted.endDate!.toISOString().split('T')[0],
         });
-        console.log(`✅ Added date range filter: ${extracted.startDate!.toISOString().split('T')[0]} to ${extracted.endDate!.toISOString().split('T')[0]}`);
+        logger.log(`✅ Added date range filter: ${extracted.startDate!.toISOString().split('T')[0]} to ${extracted.endDate!.toISOString().split('T')[0]}`);
         break;
     }
   }
@@ -599,7 +600,7 @@ Ensure the JSON is strict and contains no comments.`;
     // Enhance with extracted dates from the query
     return enhanceTimeFiltersWithExtractedDates(sanitized, question, summary);
   } catch (error) {
-    console.error('❌ Failed to parse query parser response:', error, content);
+    logger.error('❌ Failed to parse query parser response:', error, content);
     return {
       rawQuestion: question,
       confidence: 0,

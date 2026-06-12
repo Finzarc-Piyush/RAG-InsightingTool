@@ -11,6 +11,7 @@ import { uploadBufferToBlobAtExactPath, getFileFromBlob } from './blobStorage.js
 import { streamParseCsv } from './streamingFileParser.js';
 import { parseFile } from './fileParser.js';
 import { DataSummary } from '../shared/schema.js';
+import { logger } from "./logger.js";
 
 export interface ChunkMetadata {
   chunkId: string;
@@ -297,10 +298,10 @@ export async function loadChunkIndex(sessionId: string): Promise<ChunkIndex | nu
     const indexBlobName = `chunks/${sessionId}/index.json`;
     const buffer = await getFileFromBlob(indexBlobName);
     const indexData = JSON.parse(buffer.toString('utf-8')) as ChunkIndex;
-    console.log(`📥 Loaded chunk artifact: ${indexBlobName}`);
+    logger.log(`📥 Loaded chunk artifact: ${indexBlobName}`);
     return indexData;
   } catch (error) {
-    console.error('Failed to load chunk index:', error);
+    logger.error('Failed to load chunk index:', error);
     return null;
   }
 }
@@ -466,7 +467,7 @@ export async function loadChunkData(
     const chunkDataPromises = chunkBatch.map(async (chunk) => {
       try {
         const buffer = await getFileFromBlob(chunk.blobName);
-        console.log(`📥 Loaded chunk artifact: ${chunk.blobName}`);
+        logger.log(`📥 Loaded chunk artifact: ${chunk.blobName}`);
         const chunkData = JSON.parse(buffer.toString('utf-8')) as Record<string, any>[];
 
         // Filter columns if required
@@ -484,7 +485,7 @@ export async function loadChunkData(
 
         return chunkData;
       } catch (error) {
-        console.error(`Failed to load chunk ${chunk.chunkId}:`, error);
+        logger.error(`Failed to load chunk ${chunk.chunkId}:`, error);
         return [];
       }
     });

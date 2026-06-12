@@ -33,6 +33,7 @@ import {
 } from '@/lib/api/data';
 import { useToast } from '@/hooks/use-toast';
 import { AvailableModelsDialog } from '@/components/AvailableModelsDialog';
+import { logger } from "@/lib/logger";
 
 interface DataSummaryModalProps {
   isOpen: boolean;
@@ -547,7 +548,7 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
       setData(res);
       setSelected(res.columns[0]?.name ?? null);
     } catch (error) {
-      console.error('Failed to load data summary:', error);
+      logger.error('Failed to load data summary:', error);
       toast({
         title: 'Error',
         description: 'Failed to load data summary. Please try again.',

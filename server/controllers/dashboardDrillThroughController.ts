@@ -37,6 +37,7 @@ import {
   resolveDrillThrough,
   type DrillThroughRequest,
 } from "../services/dashboardDrillThrough.service.js";
+import { logger } from "../lib/logger.js";
 
 export async function drillDashboardController(
   req: Request,
@@ -94,7 +95,7 @@ export async function drillDashboardController(
       res.status(404).json({ error: msg });
       return;
     }
-    console.error(`drill-through failed for ${dashboardId}: ${msg}`);
+    logger.error(`drill-through failed for ${dashboardId}: ${msg}`);
     res.status(500).json({ error: "drill_through_failed" });
   }
 }

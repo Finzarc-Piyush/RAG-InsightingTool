@@ -8,6 +8,7 @@ import { DeleteDashboardDialog } from './Components/DeleteDashboardDialog';
 import { PendingInvitesBanner } from './Components/PendingInvitesBanner';
 import { Dashboard as ServerDashboard } from '@/shared/schema';
 import { normalizeDashboard } from './modules/useDashboardState';
+import { logger } from "@/lib/logger";
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -48,7 +49,7 @@ export default function Dashboard() {
           hasCollaborators: fresh.hasCollaborators ?? listDash?.hasCollaborators,
         });
       } catch (e) {
-        console.error('Deep-link dashboard open failed:', e);
+        logger.error('Deep-link dashboard open failed:', e);
         return;
       }
       window.history.replaceState({}, '', '/dashboard');
@@ -72,7 +73,7 @@ export default function Dashboard() {
       setCurrentDashboard(dashboardWithPermission);
     } catch (error) {
       // Fallback to cached dashboard if fetch fails
-      console.error('Failed to fetch dashboard:', error);
+      logger.error('Failed to fetch dashboard:', error);
       setCurrentDashboard(dashboard);
     }
   };
@@ -95,9 +96,9 @@ export default function Dashboard() {
   };
 
   const handleDeleteChart = async (chartIndex: number, sheetId?: string) => {
-    console.log('Delete chart clicked:', { chartIndex, sheetId, currentDashboard: currentDashboard?.id });
+    logger.log('Delete chart clicked:', { chartIndex, sheetId, currentDashboard: currentDashboard?.id });
     if (currentDashboard) {
-      console.log('Proceeding with chart deletion');
+      logger.log('Proceeding with chart deletion');
       const updatedDashboard = await removeChartFromDashboard(currentDashboard.id, chartIndex, sheetId);
       setCurrentDashboard(updatedDashboard);
       await refetch();
@@ -148,7 +149,7 @@ export default function Dashboard() {
       
       setCurrentDashboard(dashboardWithPermission);
     } catch (error) {
-      console.error('Failed to load shared dashboard:', error);
+      logger.error('Failed to load shared dashboard:', error);
       // Still try to refetch even if there's an error
       await queryClient.invalidateQueries({ queryKey: ['dashboards', 'list'] });
       await refetch();
@@ -210,7 +211,7 @@ export default function Dashboard() {
                 const created = await createDashboard(`Untitled · ${stamp}`);
                 await handleViewDashboard(created);
               } catch (e) {
-                console.error('Create dashboard failed:', e);
+                logger.error('Create dashboard failed:', e);
               }
             }}
           />

@@ -13,6 +13,7 @@
 import { PACKS } from "./generatedPacks.js";
 import { getToggleOverrides } from "../../models/domainContextToggles.model.js";
 import type { DomainPack, PackSummary } from "./types.js";
+import { logger } from "../logger.js";
 
 const TOKEN_BUDGET_WARN = 12_000;
 
@@ -97,7 +98,7 @@ export function composeDomainContext(
   });
 
   if (totalEnabledTokens > TOKEN_BUDGET_WARN) {
-    console.warn(
+    logger.warn(
       `domainContext: enabled packs ~${totalEnabledTokens} tokens — exceeds ` +
         `${TOKEN_BUDGET_WARN} warn threshold (${enabledPacks.length} packs). ` +
         `Consider disabling lower-priority packs from the admin UI.`
@@ -168,11 +169,11 @@ export async function logDomainContextStartup(): Promise<void> {
   try {
     const { packs, totalEnabledTokens } = await loadEnabledDomainContext();
     const enabledCount = packs.filter((p) => p.enabled).length;
-    console.log(
+    logger.log(
       `📚 Domain context: ${enabledCount}/${packs.length} packs enabled, ~${totalEnabledTokens} tokens`
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`domainContext: startup log failed (${msg})`);
+    logger.warn(`domainContext: startup log failed (${msg})`);
   }
 }

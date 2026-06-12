@@ -11,6 +11,7 @@ import {
   type PivotModel,
   type PivotValueSpec,
 } from "../shared/schema.js";
+import { logger } from "./logger.js";
 
 type PivotTreeNode = PivotModel["tree"]["nodes"][number];
 
@@ -422,7 +423,7 @@ export async function tryProcessChartDataFromPivotQuery(
       },
     };
   } catch (e) {
-    console.warn("tryProcessChartDataFromPivotQuery (non-fatal, falling back):", e);
+    logger.warn("tryProcessChartDataFromPivotQuery (non-fatal, falling back):", e);
     return null;
   }
 }

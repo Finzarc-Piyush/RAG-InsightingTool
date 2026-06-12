@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { logger } from "./logger.js";
 
 // Azure OpenAI configuration - lazy initialization
 let openaiInstance: OpenAI | null = null;
@@ -15,7 +16,7 @@ function getOpenAIClient(): OpenAI {
     return openaiInstance;
   }
 
-  console.log("🔧 Initializing Azure OpenAI...");
+  logger.log("🔧 Initializing Azure OpenAI...");
 
   // Check for required Azure OpenAI environment variables
   const requiredEnvVars = [
@@ -28,7 +29,7 @@ function getOpenAIClient(): OpenAI {
 
   if (missingVars.length > 0) {
     const errorMsg = `Missing required Azure OpenAI environment variables: ${missingVars.join(', ')}. Please set AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, and AZURE_OPENAI_DEPLOYMENT_NAME in Vercel environment variables.`;
-    console.error("❌", errorMsg);
+    logger.error("❌", errorMsg);
     throw new Error(errorMsg);
   }
 
@@ -38,8 +39,8 @@ function getOpenAIClient(): OpenAI {
   const chatBaseURL = `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${process.env.AZURE_OPENAI_DEPLOYMENT_NAME}`;
   const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2023-05-15';
   
-  console.log(`   Chat baseURL: ${chatBaseURL}`);
-  console.log(`   API Version: ${apiVersion}`);
+  logger.log(`   Chat baseURL: ${chatBaseURL}`);
+  logger.log(`   API Version: ${apiVersion}`);
   
   openaiInstance = new OpenAI({
     apiKey: process.env.AZURE_OPENAI_API_KEY!,
@@ -61,10 +62,10 @@ function getOpenAIClient(): OpenAI {
   // Use the deployment name as the model
   modelName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME!;
 
-  console.log("✅ Azure OpenAI initialized successfully");
-  console.log(`   Endpoint: ${process.env.AZURE_OPENAI_ENDPOINT}`);
-  console.log(`   Chat Deployment: ${modelName}`);
-  console.log(`   API Version: ${apiVersion}`);
+  logger.log("✅ Azure OpenAI initialized successfully");
+  logger.log(`   Endpoint: ${process.env.AZURE_OPENAI_ENDPOINT}`);
+  logger.log(`   Chat Deployment: ${modelName}`);
+  logger.log(`   API Version: ${apiVersion}`);
 
   return openaiInstance;
 }
@@ -97,7 +98,7 @@ function getOpenAIEmbeddingsClient(): OpenAI {
 
   if (requiredEnvVars.length > 0) {
     const errorMsg = `Missing required Azure OpenAI environment variables: ${requiredEnvVars.join(', ')}. Please set these variables.`;
-    console.error("❌", errorMsg);
+    logger.error("❌", errorMsg);
     throw new Error(errorMsg);
   }
 
@@ -106,8 +107,8 @@ function getOpenAIEmbeddingsClient(): OpenAI {
 
   // Validate embedding model name
   if (embeddingDeployment.includes('gpt-4') || embeddingDeployment.includes('gpt-3.5')) {
-    console.error(`❌ Invalid embedding deployment: ${embeddingDeployment}. Chat models cannot be used for embeddings.`);
-    console.error(`   Falling back to: text-embedding-3-small`);
+    logger.error(`❌ Invalid embedding deployment: ${embeddingDeployment}. Chat models cannot be used for embeddings.`);
+    logger.error(`   Falling back to: text-embedding-3-small`);
     const fallbackDeployment = 'text-embedding-3-small';
     
     const baseURL = `${embeddingEndpoint}/openai/deployments/${fallbackDeployment}`;
@@ -140,7 +141,7 @@ function getOpenAIEmbeddingsClient(): OpenAI {
     });
   }
 
-  console.log(`✅ Azure OpenAI Embeddings client initialized (deployment: ${embeddingDeployment})`);
+  logger.log(`✅ Azure OpenAI Embeddings client initialized (deployment: ${embeddingDeployment})`);
 
   return openaiEmbeddingsInstance;
 }

@@ -1,3 +1,4 @@
+import { logger } from "../logger.js";
 /**
  * Wave W61-cache-invalidate · Observability + contract pin for every
  * semantic-model version bump.
@@ -59,14 +60,14 @@ export function onSemanticModelVersionBumped(
   event: SemanticModelInvalidationEvent,
 ): void {
   invalidationCount += 1;
-  console.log(
+  logger.log(
     `[semantic-model-invalidate] sessionId=${event.sessionId} priorVersion=${event.priorVersion} nextVersion=${event.nextVersion}`,
   );
   for (const fn of invalidators) {
     try {
       fn(event);
     } catch (err) {
-      console.error(
+      logger.error(
         `[semantic-model-invalidate] invalidator threw — ignoring`,
         err,
       );

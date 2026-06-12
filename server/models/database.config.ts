@@ -3,6 +3,7 @@
  * Handles CosmosDB client initialization and container access
  */
 import { CosmosClient, Database, Container } from "@azure/cosmos";
+import { logger } from "../lib/logger.js";
 
 // CosmosDB configuration (read at module load after loadEnv has run)
 const COSMOS_ENDPOINT = process.env.COSMOS_ENDPOINT || "";
@@ -69,7 +70,7 @@ const createContainerSafely = async (
     
     // If serverless account error, retry without throughput
     if (errorMessage.includes("serverless") || errorMessage.includes("not supported for serverless")) {
-      console.log(`ℹ️ Serverless account detected for container ${containerId}, creating without throughput...`);
+      logger.log(`ℹ️ Serverless account detected for container ${containerId}, creating without throughput...`);
       try {
         const { container } = await database.containers.createIfNotExists({
           id: containerId,
@@ -82,7 +83,7 @@ const createContainerSafely = async (
         try {
           const containerRef = database.container(containerId);
           await containerRef.read();
-          console.log(`✅ Using existing container: ${containerId}`);
+          logger.log(`✅ Using existing container: ${containerId}`);
           return containerRef;
         } catch (readError) {
           throw retryError;
@@ -92,11 +93,11 @@ const createContainerSafely = async (
     
     // If throughput limit error, try to read existing container
     if (errorMessage.includes("throughput limit") || errorMessage.includes("RU/s")) {
-      console.warn(`⚠️ Throughput limit reached for container ${containerId}, attempting to use existing container...`);
+      logger.warn(`⚠️ Throughput limit reached for container ${containerId}, attempting to use existing container...`);
       try {
         const containerRef = database.container(containerId);
         await containerRef.read();
-        console.log(`✅ Using existing container: ${containerId}`);
+        logger.log(`✅ Using existing container: ${containerId}`);
         return containerRef;
       } catch (readError) {
         // Container doesn't exist, re-throw original error
@@ -138,14 +139,14 @@ export const initializeCosmosDB = async (): Promise<void> => {
         throw new Error("CosmosDB endpoint or key not configured. Please set COSMOS_ENDPOINT and COSMOS_KEY environment variables.");
       }
 
-      console.log("🔄 Initializing CosmosDB...");
+      logger.log("🔄 Initializing CosmosDB...");
 
       // Create database if it doesn't exist
       const { database: db } = await getClient().databases.createIfNotExists({
         id: COSMOS_DATABASE_ID,
       });
       database = db;
-      console.log(`✅ Database ready: ${COSMOS_DATABASE_ID}`);
+      logger.log(`✅ Database ready: ${COSMOS_DATABASE_ID}`);
 
       // Create containers with explicit throughput (400 RU/s minimum) to avoid exceeding account limits
       // The helper function will fallback to using existing containers if throughput limit is reached
@@ -155,7 +156,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/fsmrora", // Partition by username for better performance
         400 // Minimum throughput: 400 RU/s
       );
-      console.log(`✅ Chats container ready: ${COSMOS_CONTAINER_ID}`);
+      logger.log(`✅ Chats container ready: ${COSMOS_CONTAINER_ID}`);
 
       dashboardsContainer = await createContainerSafely(
         database,
@@ -163,7 +164,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/username",
         400 // Minimum throughput: 400 RU/s
       );
-      console.log(`✅ Dashboards container ready: ${COSMOS_DASHBOARDS_CONTAINER_ID}`);
+      logger.log(`✅ Dashboards container ready: ${COSMOS_DASHBOARDS_CONTAINER_ID}`);
 
       sharedAnalysesContainer = await createContainerSafely(
         database,
@@ -171,7 +172,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/targetEmail",
         400 // Minimum throughput: 400 RU/s
       );
-      console.log(`✅ Shared analyses container ready: ${COSMOS_SHARED_ANALYSES_CONTAINER_ID}`);
+      logger.log(`✅ Shared analyses container ready: ${COSMOS_SHARED_ANALYSES_CONTAINER_ID}`);
 
       sharedDashboardsContainer = await createContainerSafely(
         database,
@@ -179,7 +180,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/targetEmail",
         400 // Minimum throughput: 400 RU/s
       );
-      console.log(`✅ Shared dashboards container ready: ${COSMOS_SHARED_DASHBOARDS_CONTAINER_ID}`);
+      logger.log(`✅ Shared dashboards container ready: ${COSMOS_SHARED_DASHBOARDS_CONTAINER_ID}`);
 
       automationsContainer = await createContainerSafely(
         database,
@@ -187,7 +188,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/username",
         400
       );
-      console.log(`✅ Automations container ready: ${COSMOS_AUTOMATIONS_CONTAINER_ID}`);
+      logger.log(`✅ Automations container ready: ${COSMOS_AUTOMATIONS_CONTAINER_ID}`);
 
       // Wave W-UD1 · per-dataset directives store
       datasetDirectivesContainer = await createContainerSafely(
@@ -196,7 +197,7 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/username",
         400
       );
-      console.log(`✅ Dataset directives container ready: ${COSMOS_DATASET_DIRECTIVES_CONTAINER_ID}`);
+      logger.log(`✅ Dataset directives container ready: ${COSMOS_DATASET_DIRECTIVES_CONTAINER_ID}`);
 
       // Wave W-DPC1 · dataset-profile cache store
       datasetProfileCacheContainer = await createContainerSafely(
@@ -205,11 +206,11 @@ export const initializeCosmosDB = async (): Promise<void> => {
         "/username",
         400
       );
-      console.log(`✅ Dataset profile cache container ready: ${COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID}`);
+      logger.log(`✅ Dataset profile cache container ready: ${COSMOS_DATASET_PROFILE_CACHE_CONTAINER_ID}`);
 
-      console.log("✅ CosmosDB initialized successfully");
+      logger.log("✅ CosmosDB initialized successfully");
     } catch (error) {
-      console.error("❌ Failed to initialize CosmosDB:", error);
+      logger.error("❌ Failed to initialize CosmosDB:", error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       
       // Check if error is related to serverless accounts (should be handled by createContainerSafely, but just in case)
@@ -255,7 +256,7 @@ export const waitForContainer = async (maxRetries: number = 60, retryDelay: numb
       await initializeCosmosDB();
     } catch (error) {
       // If initialization fails, continue to retry loop
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -294,7 +295,7 @@ export const waitForDashboardsContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -333,7 +334,7 @@ export const waitForSharedAnalysesContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -377,7 +378,7 @@ export const waitForSharedDashboardsContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -415,7 +416,7 @@ export const waitForAutomationsContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -453,7 +454,7 @@ export const waitForDatasetDirectivesContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 
@@ -491,7 +492,7 @@ export const waitForDatasetProfileCacheContainer = async (
     try {
       await initializeCosmosDB();
     } catch (error) {
-      console.warn("⚠️ Initialization attempt failed, will retry:", error);
+      logger.warn("⚠️ Initialization attempt failed, will retry:", error);
     }
   }
 

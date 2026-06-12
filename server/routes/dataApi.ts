@@ -16,6 +16,7 @@ import { sendError, sendValidationError } from '../utils/responseFormatter.js';
 import { executePivotQuery } from '../lib/pivotQueryService.js';
 import { recordUsageEvent } from '../models/usageEvent.model.js';
 import { z } from 'zod';
+import { logger } from "../lib/logger.js";
 
 // Wave AD3 · per-session in-process dedupe so the admin metrics dashboard
 // counts distinct pivot CONFIGURATIONS (one row per unique rows×cols×values
@@ -153,7 +154,7 @@ router.get('/:sessionId/sample', async (req: Request, res: Response) => {
       await storage.close();
     }
   } catch (error) {
-    console.error('Error getting sample rows:', error);
+    logger.error('Error getting sample rows:', error);
     handleDataApiError(res, error, 'Failed to get sample rows');
   }
 });
@@ -210,7 +211,7 @@ router.get('/:sessionId/metadata', async (req: Request, res: Response) => {
       await storage.close();
     }
   } catch (error) {
-    console.error('Error getting metadata:', error);
+    logger.error('Error getting metadata:', error);
     handleDataApiError(res, error, 'Failed to get metadata');
   }
 });
@@ -260,7 +261,7 @@ router.post('/:sessionId/query', async (req: Request, res: Response) => {
       await storage.close();
     }
   } catch (error) {
-    console.error('Error executing query:', error);
+    logger.error('Error executing query:', error);
     handleDataApiError(res, error, 'Failed to execute query');
   }
 });
@@ -309,7 +310,7 @@ router.get('/:sessionId/stats', async (req: Request, res: Response) => {
       await storage.close();
     }
   } catch (error) {
-    console.error('Error getting stats:', error);
+    logger.error('Error getting stats:', error);
     handleDataApiError(res, error, 'Failed to get stats');
   }
 });
@@ -357,7 +358,7 @@ router.post('/:sessionId/pivot/query', async (req: Request, res: Response) => {
     }
     res.json(out);
   } catch (error) {
-    console.error('Error executing pivot query:', error);
+    logger.error('Error executing pivot query:', error);
     handleDataApiError(res, error, 'Failed to execute pivot query');
   }
 });
@@ -474,7 +475,7 @@ router.get('/:sessionId/pivot/fields', async (req: Request, res: Response) => {
       await storage.close();
     }
   } catch (error) {
-    console.error('Error getting pivot fields:', error);
+    logger.error('Error getting pivot fields:', error);
     handleDataApiError(res, error, 'Failed to get pivot fields');
   }
 });
@@ -585,7 +586,7 @@ router.post('/:sessionId/pivot/drillthrough', async (req: Request, res: Response
       await storage.close();
     }
   } catch (error) {
-    console.error('Error drilling through pivot cell:', error);
+    logger.error('Error drilling through pivot cell:', error);
     handleDataApiError(res, error, 'Failed to drill through pivot cell');
   }
 });

@@ -27,10 +27,11 @@ import {
 } from "../shared/schema.js";
 import { sendSSE, setSSEHeaders, startSseKeepalive } from "../utils/sse.helper.js";
 import { z } from "zod";
+import { logger } from "../lib/logger.js";
 
 const handleError = (res: Response, error: unknown, fallback: number = 500) => {
   if (error instanceof Error) {
-    console.error("[automationController]", error);
+    logger.error("[automationController]", error);
     if (error.name === "AuthenticationError") {
       return res.status(401).json({ message: "Authentication required" });
     }
@@ -39,7 +40,7 @@ const handleError = (res: Response, error: unknown, fallback: number = 500) => {
     }
     return res.status(fallback).json({ message: error.message });
   }
-  console.error("[automationController] non-Error thrown:", error);
+  logger.error("[automationController] non-Error thrown:", error);
   return res.status(fallback).json({ message: "Internal server error" });
 };
 
