@@ -6,6 +6,7 @@ import {
   assertDashboardAutogenConfiguration,
 } from "./lib/agents/runtime/assertAgenticRag.js";
 import express from "express";
+import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { corsConfig } from "./middleware/index.js";
 import { requireAzureAdAuth } from "./middleware/azureAdAuth.js";
@@ -14,6 +15,24 @@ import { startDefaultLlmUsageSink } from "./lib/telemetry/llmUsageSink.js";
 import { logDomainContextStartup } from "./lib/domainContext/loadEnabledDomainContext.js";
 
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || "50mb";
+
+// Wave R4 · process-level safety net. Without these, an unhandled promise
+// rejection or uncaught exception crashes the Node process with only the
+// default (unstructured) trace — and in newer Node an unhandled rejection
+// terminates the process outright. Log with a stable prefix so alerting can
+// match; on a truly uncaught exception the process state is undefined, so exit
+// and let the platform restart it cleanly (skipped on Vercel, which owns the
+// serverless lifecycle and where exit() would tear down the whole instance).
+process.on("unhandledRejection", (reason: unknown) => {
+  const msg =
+    reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+  console.error("[unhandledRejection]", msg);
+});
+process.on("uncaughtException", (err: unknown) => {
+  const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+  console.error("[uncaughtException]", msg);
+  if (!process.env.VERCEL) process.exit(1);
+});
 
 // RL2 · `chart-preview`, `chart-key-insight`, and the `/pivot/*` family are
 // intrinsically pacing-controlled: a 500 ms client debounce on the
@@ -85,6 +104,20 @@ export function createApp() {
   if (process.env.TRUST_PROXY === "true" || process.env.VERCEL) {
     app.set("trust proxy", 1);
   }
+
+  // Wave R5 · security headers (OWASP A05 / ASVS V14.4). HSTS, X-Content-Type-
+  // Options: nosniff, X-Frame-Options, X-DNS-Prefetch-Control, and drops the
+  // X-Powered-By banner. CSP is disabled here — this tier serves JSON/SSE, not
+  // HTML, so a response CSP is pointless and risks interfering; the SPA sets
+  // its own. CORP is set cross-origin so the separate-origin SPA can still read
+  // responses (access is governed by CORS).
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      crossOriginEmbedderPolicy: false,
+    })
+  );
 
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   app.use(express.urlencoded({ extended: false, limit: JSON_BODY_LIMIT }));
