@@ -1,10 +1,18 @@
-# Default owners for every file in the repo.
-# Replace @finzarc-piyush with the GitHub handle(s) of the primary maintainer(s).
+# Code ownership — GitHub requests review from the owner(s) when a PR touches
+# matching paths. Add per-service handles as the team grows; today the primary
+# maintainer owns every service EXPLICITLY so no path falls through to an
+# implicit / unreviewed default.
+
+# Default owner for everything not matched below.
 * @finzarc-piyush
 
-# Per-service overrides (populate as ownership solidifies).
-# /client/          @client-owner
-# /server/          @server-owner
-# /python-service/  @python-owner
-# /api/             @platform-owner
-# /.github/         @platform-owner
+# Per-service ownership (explicit named reviewer for each surface).
+/client/          @finzarc-piyush
+/server/          @finzarc-piyush
+/python-service/  @finzarc-piyush
+/api/             @finzarc-piyush
+
+# Cross-cutting infrastructure + governance.
+/.github/         @finzarc-piyush
+/docs/            @finzarc-piyush
+/SECURITY.md      @finzarc-piyush

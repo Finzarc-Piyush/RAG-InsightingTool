@@ -1,0 +1,28 @@
+# Wave R25 · Python lint/type config for the FastAPI data-ops service.
+# Lenient to start (the CI gates run report-only); tighten incrementally as the
+# service is cleaned, then flip the CI steps to blocking.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["__pycache__", "tests/__pycache__"]
+
+[tool.ruff.lint]
+# pyflakes (F), pycodestyle errors/warnings (E/W), isort (I), pyupgrade (UP),
+# flake8-bugbear (B) — a pragmatic baseline that catches real bugs + dead code.
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = [
+  "E501",  # line length — not hard-enforced yet (formatter's job)
+  "B008",  # function call in default arg — common + intentional in FastAPI (Depends())
+]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+# Lenient baseline — surfaces obvious type errors without demanding full
+# annotation coverage on an existing untyped codebase. Tighten over time.
+disallow_untyped_defs = false
+check_untyped_defs = false
+warn_unused_ignores = false
+warn_redundant_casts = true
+no_implicit_optional = true

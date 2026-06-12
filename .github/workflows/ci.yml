@@ -80,6 +80,18 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Smoke import
         run: python -c "import main; print('OK')"
+      # Wave R25 · ruff + mypy gates. Report-only until the python-lint wave
+      # clears findings (mirrors the server eslint report-only pattern); flip
+      # `continue-on-error` off per tool once each is clean. Config in
+      # python-service/pyproject.toml.
+      - name: Install python lint tools
+        run: pip install ruff mypy
+      - name: ruff (report-only until python-lint wave)
+        run: ruff check .
+        continue-on-error: true
+      - name: mypy (report-only until python-lint wave)
+        run: mypy .
+        continue-on-error: true
       - name: Requirements sync gate (P-005)
         run: |
           set -euo pipefail
