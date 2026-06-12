@@ -31,7 +31,7 @@
         "csv-parse": "^6.1.0",
         "dotenv": "^16.4.5",
         "duckdb": "^1.0.0",
-        "echarts": "^5.5.1",
+        "echarts": "^6.1.0",
         "exceljs": "^4.4.0",
         "express": "^4.21.2",
         "express-rate-limit": "^8.3.1",
