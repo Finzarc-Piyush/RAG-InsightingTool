@@ -17,7 +17,6 @@ nearly linear in any single direction.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 from scipy.optimize import minimize
@@ -49,8 +48,8 @@ def _project(x: np.ndarray, bounds_seq: list[tuple[float, float]], total: float)
 
 def optimize_allocation(
     fit: FitResult,
-    total_budget: Optional[float] = None,
-    bounds: Optional[dict[str, tuple[float, float]]] = None,
+    total_budget: float | None = None,
+    bounds: dict[str, tuple[float, float]] | None = None,
     bound_multipliers: tuple[float, float] = (0.5, 2.0),
 ) -> OptimizationResult:
     if not fit.channels:

@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from mmm.fit import fit_mmm, predict_outcome_for_totals, channel_response_curve
+from mmm.fit import channel_response_curve, fit_mmm, predict_outcome_for_totals
 from mmm.transforms import transform_channel
 
 
@@ -46,7 +46,7 @@ class TestFitMMM(unittest.TestCase):
         fit = fit_mmm(spend_df, y, dates=dates, bootstrap_iters=0)
         self.assertGreaterEqual(fit.r_squared, 0.6)
         # The grid stride is 0.1 — recovered decay should land within 0.2 of truth
-        for cf, t in zip(fit.channels, truth):
+        for cf, t in zip(fit.channels, truth, strict=False):
             self.assertLessEqual(abs(cf.decay - t["decay"]), 0.2,
                                  f"channel {cf.name} decay {cf.decay} vs truth {t['decay']}")
 
@@ -73,7 +73,7 @@ class TestFitMMM(unittest.TestCase):
         curve = channel_response_curve(fit, channel=fit.channels[0].name, n_points=20)
         ys = curve["y"]
         # diminishing returns is fine, but never decrease
-        for a, b in zip(ys[:-1], ys[1:]):
+        for a, b in zip(ys[:-1], ys[1:], strict=False):
             self.assertGreaterEqual(b + 1e-6, a)
 
     def test_short_history_caveat(self):

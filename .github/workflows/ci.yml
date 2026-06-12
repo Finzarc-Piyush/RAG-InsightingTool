@@ -82,16 +82,16 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Smoke import
         run: python -c "import main; print('OK')"
-      # Wave R25 · ruff + mypy gates. Report-only until the python-lint wave
-      # clears findings (mirrors the server eslint report-only pattern); flip
-      # `continue-on-error` off per tool once each is clean. Config in
+      # ruff is now BLOCKING (all 1175 findings cleared — Wave R32). mypy stays
+      # report-only: it surfaces ~52 type findings, a tracked typing-adoption
+      # effort across the heavily dynamic pandas/sklearn service; flip its
+      # `continue-on-error` off once those are annotated. Config in
       # python-service/pyproject.toml.
       - name: Install python lint tools
         run: pip install ruff mypy
-      - name: ruff (report-only until python-lint wave)
+      - name: ruff (blocking)
         run: ruff check .
-        continue-on-error: true
-      - name: mypy (report-only until python-lint wave)
+      - name: mypy (report-only until typing-adoption wave)
         run: mypy .
         continue-on-error: true
       - name: Requirements sync gate (P-005)

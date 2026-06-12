@@ -1,60 +1,73 @@
 """FastAPI application for Data Operations Service"""
 import os
+import traceback
+from typing import Any, Literal
+
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Literal, Union
-import uvicorn
+
 from config import config
-from data_operations import remove_nulls, get_preview, get_summary, suggest_initial_charts, convert_type, create_derived_column, aggregate_data, pivot_table, identify_outliers, treat_outliers
+from data_operations import (
+    aggregate_data,
+    convert_type,
+    create_derived_column,
+    get_preview,
+    get_summary,
+    identify_outliers,
+    pivot_table,
+    remove_nulls,
+    suggest_initial_charts,
+    treat_outliers,
+)
 from ml_models import (
+    train_arima,
+    train_bayesian_regression,
+    train_catboost,
+    train_cox_proportional_hazards,
+    train_dbscan,
+    train_decision_tree,
+    train_elasticnet,
+    train_elliptic_envelope,
+    train_exponential_smoothing,
+    train_extra_trees,
+    train_gamma_regression,
+    train_gaussian_process,
+    train_gradient_boosting,
+    train_gru,
+    train_hierarchical_clustering,
+    train_isolation_forest,
+    train_kaplan_meier,
+    train_kmeans,
+    train_knn,
+    train_lasso_regression,
+    train_lda,
+    train_lightgbm,
     train_linear_regression,
+    train_local_outlier_factor,
     train_log_log_regression,
     train_logistic_regression,
-    train_ridge_regression,
-    train_lasso_regression,
-    train_random_forest,
-    train_decision_tree,
-    train_gradient_boosting,
-    train_elasticnet,
-    train_svm,
-    train_knn,
-    train_polynomial_regression,
-    train_bayesian_regression,
-    train_quantile_regression,
-    train_poisson_regression,
-    train_gamma_regression,
-    train_tweedie_regression,
-    train_extra_trees,
-    train_xgboost,
-    train_lightgbm,
-    train_catboost,
-    train_gaussian_process,
+    train_lstm,
+    train_matrix_factorization,
     train_mlp,
     train_multinomial_logistic,
     train_naive_bayes,
-    train_lda,
-    train_qda,
-    train_kmeans,
-    train_dbscan,
-    train_hierarchical_clustering,
-    train_pca,
-    train_tsne,
-    train_umap,
-    train_arima,
-    train_exponential_smoothing,
-    train_lstm,
-    train_gru,
-    train_isolation_forest,
     train_one_class_svm,
-    train_local_outlier_factor,
-    train_elliptic_envelope,
-    train_matrix_factorization,
-    train_cox_proportional_hazards,
-    train_kaplan_meier
+    train_pca,
+    train_poisson_regression,
+    train_polynomial_regression,
+    train_qda,
+    train_quantile_regression,
+    train_random_forest,
+    train_ridge_regression,
+    train_svm,
+    train_tsne,
+    train_tweedie_regression,
+    train_umap,
+    train_xgboost,
 )
-import traceback
 
 app = FastAPI(title="Data Operations Service", version="1.0.0")
 
@@ -118,7 +131,7 @@ async def body_size_limit(request: Request, call_next):
 import asyncio  # noqa: E402
 
 _TRAIN_CONCURRENCY = int(os.getenv("TRAIN_CONCURRENCY", "3"))
-_train_semaphore: Optional[asyncio.Semaphore] = (
+_train_semaphore: asyncio.Semaphore | None = (
     asyncio.Semaphore(_TRAIN_CONCURRENCY) if _TRAIN_CONCURRENCY > 0 else None
 )
 
@@ -130,8 +143,8 @@ async def _with_training_gate(coro_factory, timeout_s: int = 300):
     # Non-blocking acquire first so we can return 503 instead of hanging.
     try:
         await asyncio.wait_for(_train_semaphore.acquire(), timeout=1.0)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=503, detail="Training queue full; retry shortly")
+    except TimeoutError:
+        raise HTTPException(status_code=503, detail="Training queue full; retry shortly") from None
     try:
         return await asyncio.wait_for(coro_factory(), timeout=timeout_s)
     finally:
@@ -140,66 +153,66 @@ async def _with_training_gate(coro_factory, timeout_s: int = 300):
 
 # Request/Response models
 class RemoveNullsRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    column: Optional[str] = None
+    data: list[dict[str, Any]]
+    column: str | None = None
     method: Literal["delete", "mean", "median", "mode", "custom"] = "delete"
-    custom_value: Optional[Any] = None
+    custom_value: Any | None = None
 
 
 class PreviewRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     limit: int = Field(default=50, ge=1, le=10000)
 
 
 class CreateDerivedColumnRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     new_column_name: str
     expression: str
 
 
 class ConvertTypeRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     column: str
     target_type: Literal["numeric", "string", "date", "percentage", "boolean"]
 
 
 class AggregateRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     group_by_column: str
-    agg_columns: Optional[List[str]] = None
-    agg_funcs: Optional[Dict[str, Literal["sum", "avg", "mean", "min", "max", "count", "median", "std", "var", "p90", "p95", "p99", "any", "all"]]] = None
-    order_by_column: Optional[str] = None
+    agg_columns: list[str] | None = None
+    agg_funcs: dict[str, Literal["sum", "avg", "mean", "min", "max", "count", "median", "std", "var", "p90", "p95", "p99", "any", "all"]] | None = None
+    order_by_column: str | None = None
     order_by_direction: Literal["asc", "desc"] = "asc"
-    user_intent: Optional[str] = None  # User's original message for semantic intent detection
+    user_intent: str | None = None  # User's original message for semantic intent detection
 
 
 class PivotRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     index_column: str
-    value_columns: Optional[List[str]] = None
-    pivot_funcs: Optional[Dict[str, Literal["sum", "avg", "mean", "min", "max", "count"]]] = None
+    value_columns: list[str] | None = None
+    pivot_funcs: dict[str, Literal["sum", "avg", "mean", "min", "max", "count"]] | None = None
 
 
 class IdentifyOutliersRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    column: Optional[str] = None
+    data: list[dict[str, Any]]
+    column: str | None = None
     method: Literal["iqr", "zscore", "isolation_forest", "local_outlier_factor"] = "iqr"
-    threshold: Optional[float] = None
+    threshold: float | None = None
 
 
 class TreatOutliersRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    column: Optional[str] = None
+    data: list[dict[str, Any]]
+    column: str | None = None
     method: Literal["iqr", "zscore", "isolation_forest", "local_outlier_factor"] = "iqr"
-    threshold: Optional[float] = None
+    threshold: float | None = None
     treatment: Literal["remove", "cap", "winsorize", "transform", "impute"] = "remove"
-    treatment_value: Optional[Union[Literal["mean", "median", "mode", "min", "max"], float]] = None
+    treatment_value: Literal["mean", "median", "mode", "min", "max"] | float | None = None
 
 
 class TrainModelRequest(BaseModel):
-    data: List[Dict[str, Any]]
+    data: list[dict[str, Any]]
     model_type: Literal[
-        "linear", "log_log", "logistic", "ridge", "lasso", "random_forest", "decision_tree", 
+        "linear", "log_log", "logistic", "ridge", "lasso", "random_forest", "decision_tree",
         "gradient_boosting", "elasticnet", "svm", "knn",
         "polynomial", "bayesian", "quantile", "poisson", "gamma", "tweedie",
         "extra_trees", "xgboost", "lightgbm", "catboost", "gaussian_process", "mlp",
@@ -212,64 +225,64 @@ class TrainModelRequest(BaseModel):
         "matrix_factorization",
         "cox_proportional_hazards", "kaplan_meier"
     ]
-    target_variable: Optional[str] = None  # Optional for unsupervised models
-    features: List[str]
+    target_variable: str | None = None  # Optional for unsupervised models
+    features: list[str]
     test_size: float = Field(default=0.2, ge=0.1, le=0.5)
     random_state: int = Field(default=42)
     # Regression/Classification parameters
-    alpha: Optional[float] = Field(default=None, ge=0.0)
-    l1_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    n_estimators: Optional[int] = Field(default=None, ge=1)
-    max_depth: Optional[int] = Field(default=None, ge=1)
-    learning_rate: Optional[float] = Field(default=None, gt=0.0)
-    kernel: Optional[str] = Field(default=None)
-    C: Optional[float] = Field(default=None, gt=0.0)
-    n_neighbors: Optional[int] = Field(default=None, ge=1)
+    alpha: float | None = Field(default=None, ge=0.0)
+    l1_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    n_estimators: int | None = Field(default=None, ge=1)
+    max_depth: int | None = Field(default=None, ge=1)
+    learning_rate: float | None = Field(default=None, gt=0.0)
+    kernel: str | None = Field(default=None)
+    C: float | None = Field(default=None, gt=0.0)
+    n_neighbors: int | None = Field(default=None, ge=1)
     # Additional parameters
-    degree: Optional[int] = Field(default=None, ge=1)  # Polynomial
-    quantile: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # Quantile regression
-    power: Optional[float] = Field(default=None)  # Tweedie
-    iterations: Optional[int] = Field(default=None, ge=1)  # CatBoost
-    depth: Optional[int] = Field(default=None, ge=1)  # CatBoost
-    hidden_layer_sizes: Optional[List[int]] = Field(default=None)  # MLP
-    activation: Optional[str] = Field(default=None)  # MLP
-    solver: Optional[str] = Field(default=None)  # MLP
-    max_iter: Optional[int] = Field(default=None, ge=1)  # MLP
-    variant: Optional[str] = Field(default=None)  # Naive Bayes
+    degree: int | None = Field(default=None, ge=1)  # Polynomial
+    quantile: float | None = Field(default=None, ge=0.0, le=1.0)  # Quantile regression
+    power: float | None = Field(default=None)  # Tweedie
+    iterations: int | None = Field(default=None, ge=1)  # CatBoost
+    depth: int | None = Field(default=None, ge=1)  # CatBoost
+    hidden_layer_sizes: list[int] | None = Field(default=None)  # MLP
+    activation: str | None = Field(default=None)  # MLP
+    solver: str | None = Field(default=None)  # MLP
+    max_iter: int | None = Field(default=None, ge=1)  # MLP
+    variant: str | None = Field(default=None)  # Naive Bayes
     # Clustering parameters
-    n_clusters: Optional[int] = Field(default=None, ge=2)  # K-Means, Hierarchical
-    eps: Optional[float] = Field(default=None, gt=0.0)  # DBSCAN
-    min_samples: Optional[int] = Field(default=None, ge=1)  # DBSCAN
-    linkage: Optional[str] = Field(default=None)  # Hierarchical
+    n_clusters: int | None = Field(default=None, ge=2)  # K-Means, Hierarchical
+    eps: float | None = Field(default=None, gt=0.0)  # DBSCAN
+    min_samples: int | None = Field(default=None, ge=1)  # DBSCAN
+    linkage: str | None = Field(default=None)  # Hierarchical
     # Dimensionality reduction parameters
-    n_components: Optional[int] = Field(default=None, ge=1)  # PCA, t-SNE, UMAP
-    perplexity: Optional[float] = Field(default=None, gt=0.0)  # t-SNE
-    min_dist: Optional[float] = Field(default=None, ge=0.0)  # UMAP
+    n_components: int | None = Field(default=None, ge=1)  # PCA, t-SNE, UMAP
+    perplexity: float | None = Field(default=None, gt=0.0)  # t-SNE
+    min_dist: float | None = Field(default=None, ge=0.0)  # UMAP
     # Time series parameters
-    date_column: Optional[str] = Field(default=None)  # Time series models
-    order: Optional[List[int]] = Field(default=None)  # ARIMA order (p, d, q)
-    seasonal_order: Optional[List[int]] = Field(default=None)  # SARIMA seasonal order
-    trend: Optional[str] = Field(default=None)  # Exponential smoothing
-    seasonal: Optional[str] = Field(default=None)  # Exponential smoothing
-    seasonal_periods: Optional[int] = Field(default=None, ge=1)  # Exponential smoothing
-    sequence_length: Optional[int] = Field(default=None, ge=1)  # LSTM, GRU
-    lstm_units: Optional[int] = Field(default=None, ge=1)  # LSTM
-    gru_units: Optional[int] = Field(default=None, ge=1)  # GRU
-    epochs: Optional[int] = Field(default=None, ge=1)  # LSTM, GRU
+    date_column: str | None = Field(default=None)  # Time series models
+    order: list[int] | None = Field(default=None)  # ARIMA order (p, d, q)
+    seasonal_order: list[int] | None = Field(default=None)  # SARIMA seasonal order
+    trend: str | None = Field(default=None)  # Exponential smoothing
+    seasonal: str | None = Field(default=None)  # Exponential smoothing
+    seasonal_periods: int | None = Field(default=None, ge=1)  # Exponential smoothing
+    sequence_length: int | None = Field(default=None, ge=1)  # LSTM, GRU
+    lstm_units: int | None = Field(default=None, ge=1)  # LSTM
+    gru_units: int | None = Field(default=None, ge=1)  # GRU
+    epochs: int | None = Field(default=None, ge=1)  # LSTM, GRU
     # Anomaly detection parameters
-    contamination: Optional[float] = Field(default=None, ge=0.0, le=0.5)  # Anomaly detection
-    nu: Optional[float] = Field(default=None, ge=0.0, le=1.0)  # One-Class SVM
+    contamination: float | None = Field(default=None, ge=0.0, le=0.5)  # Anomaly detection
+    nu: float | None = Field(default=None, ge=0.0, le=1.0)  # One-Class SVM
     # Recommendation system parameters
-    user_column: Optional[str] = Field(default=None)
-    item_column: Optional[str] = Field(default=None)
-    rating_column: Optional[str] = Field(default=None)
-    n_factors: Optional[int] = Field(default=None, ge=1)  # Matrix factorization
-    n_epochs: Optional[int] = Field(default=None, ge=1)  # Matrix factorization
-    regularization: Optional[float] = Field(default=None, ge=0.0)  # Matrix factorization
+    user_column: str | None = Field(default=None)
+    item_column: str | None = Field(default=None)
+    rating_column: str | None = Field(default=None)
+    n_factors: int | None = Field(default=None, ge=1)  # Matrix factorization
+    n_epochs: int | None = Field(default=None, ge=1)  # Matrix factorization
+    regularization: float | None = Field(default=None, ge=0.0)  # Matrix factorization
     # Survival analysis parameters
-    duration_column: Optional[str] = Field(default=None)
-    event_column: Optional[str] = Field(default=None)
-    group_column: Optional[str] = Field(default=None)  # Kaplan-Meier
+    duration_column: str | None = Field(default=None)
+    event_column: str | None = Field(default=None)
+    group_column: str | None = Field(default=None)  # Kaplan-Meier
 
 
 @app.get("/health")
@@ -287,7 +300,7 @@ async def remove_nulls_endpoint(request: RemoveNullsRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = remove_nulls(
             data=request.data,
             column=request.column,
@@ -296,10 +309,10 @@ async def remove_nulls_endpoint(request: RemoveNullsRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in remove_nulls: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/preview")
@@ -311,41 +324,41 @@ async def preview_endpoint(request: PreviewRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         if request.limit > config.MAX_PREVIEW_ROWS:
             request.limit = config.MAX_PREVIEW_ROWS
-        
+
         result = get_preview(data=request.data, limit=request.limit)
         return result
     except Exception as e:
         print(f"Error in preview: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/summary")
-async def summary_endpoint(request: Dict[str, Any]):
+async def summary_endpoint(request: dict[str, Any]):
     """Get data summary statistics (all columns or a specific column)"""
     try:
         data = request.get("data", [])
         column = request.get("column")  # Optional column name
         if not isinstance(data, list):
             raise HTTPException(status_code=400, detail="Data must be a list")
-        
+
         if len(data) > config.MAX_ROWS:
             raise HTTPException(
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = get_summary(data=data, column=column)
         return result
     except Exception as e:
         print(f"Error in summary: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/initial-analysis")
-async def initial_analysis_endpoint(request: Dict[str, Any]):
+async def initial_analysis_endpoint(request: dict[str, Any]):
     """Initial analysis: summary stats + rule-based chart suggestions (no AI)."""
     try:
         data = request.get("data", [])
@@ -361,7 +374,7 @@ async def initial_analysis_endpoint(request: Dict[str, Any]):
         return {"summary": summary_response.get("summary", []), "chart_suggestions": chart_suggestions}
     except Exception as e:
         print(f"Error in initial-analysis: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/create-derived-column")
@@ -373,25 +386,25 @@ async def create_derived_column_endpoint(request: CreateDerivedColumnRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = create_derived_column(
             data=request.data,
             new_column_name=request.new_column_name,
             expression=request.expression
         )
-        
+
         if result.get("errors") and len(result["errors"]) > 0:
             raise HTTPException(
                 status_code=400,
                 detail="; ".join(result["errors"])
             )
-        
+
         return result
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error in create_derived_column: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/convert-type")
@@ -403,7 +416,7 @@ async def convert_type_endpoint(request: ConvertTypeRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = convert_type(
             data=request.data,
             column=request.column,
@@ -411,10 +424,10 @@ async def convert_type_endpoint(request: ConvertTypeRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in convert_type: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/aggregate")
@@ -426,7 +439,7 @@ async def aggregate_endpoint(request: AggregateRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = aggregate_data(
             data=request.data,
             group_by_column=request.group_by_column,
@@ -438,10 +451,10 @@ async def aggregate_endpoint(request: AggregateRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in aggregate: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/pivot")
@@ -453,7 +466,7 @@ async def pivot_endpoint(request: PivotRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = pivot_table(
             data=request.data,
             index_column=request.index_column,
@@ -462,10 +475,10 @@ async def pivot_endpoint(request: PivotRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in pivot: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/identify-outliers")
@@ -477,7 +490,7 @@ async def identify_outliers_endpoint(request: IdentifyOutliersRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = identify_outliers(
             data=request.data,
             column=request.column,
@@ -486,10 +499,10 @@ async def identify_outliers_endpoint(request: IdentifyOutliersRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in identify_outliers: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/treat-outliers")
@@ -501,7 +514,7 @@ async def treat_outliers_endpoint(request: TreatOutliersRequest):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         result = treat_outliers(
             data=request.data,
             column=request.column,
@@ -512,10 +525,10 @@ async def treat_outliers_endpoint(request: TreatOutliersRequest):
         )
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in treat_outliers: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 @app.post("/train-model")
@@ -528,31 +541,31 @@ async def train_model_endpoint(request: TrainModelRequest):
                 status_code=400,
                 detail="Data is empty or not provided"
             )
-        
+
         if len(request.data) > config.MAX_ROWS:
             raise HTTPException(
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        
+
         # Validate features list
         if not request.features or len(request.features) == 0:
             raise HTTPException(
                 status_code=400,
                 detail="At least one feature must be specified"
             )
-        
+
         # Check for duplicate features
         if len(request.features) != len(set(request.features)):
             raise HTTPException(
                 status_code=400,
                 detail="Duplicate features found in features list"
             )
-        
+
         # Validate target variable (required for supervised models, optional for unsupervised)
         unsupervised_models = ["kmeans", "dbscan", "hierarchical_clustering", "pca", "tsne", "umap"]
         is_unsupervised = request.model_type in unsupervised_models
-        
+
         if not is_unsupervised:
             if not request.target_variable or not request.target_variable.strip():
                 raise HTTPException(
@@ -565,7 +578,7 @@ async def train_model_endpoint(request: TrainModelRequest):
                     status_code=400,
                     detail="Target variable cannot be in the features list"
                 )
-        
+
         # Train model based on type
         if request.model_type == "linear":
             result = train_linear_regression(
@@ -1049,34 +1062,34 @@ async def train_model_endpoint(request: TrainModelRequest):
                 status_code=400,
                 detail=f"Unsupported model type: {request.model_type}"
             )
-        
+
         return result
     except ValueError as e:
         print(f"ValueError in train_model: {str(e)}")
         print(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error in train_model: {traceback.format_exc()}")
         print(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 class BudgetRedistributeRequest(BaseModel):
     """W50 — input contract for /mmm/budget-redistribute. See docs/architecture/mmm.md."""
-    data: List[Dict[str, Any]]
-    spend_columns: List[str] = Field(min_length=1, max_length=20)
+    data: list[dict[str, Any]]
+    spend_columns: list[str] = Field(min_length=1, max_length=20)
     outcome_column: str
     time_column: str
-    total_budget: Optional[float] = Field(default=None, gt=0)
-    per_channel_bounds: Optional[Dict[str, List[float]]] = None
-    bound_multipliers: Optional[List[float]] = None
+    total_budget: float | None = Field(default=None, gt=0)
+    per_channel_bounds: dict[str, list[float]] | None = None
+    bound_multipliers: list[float] | None = None
     bootstrap_iters: int = Field(default=50, ge=0, le=500)
     seed: int = 42
     ridge_alpha: float = Field(default=1.0, ge=1e-6, le=1e6)
     sweeps: int = Field(default=2, ge=1, le=4)
-    max_obs: Optional[int] = Field(default=None, ge=12, le=1040)
+    max_obs: int | None = Field(default=None, ge=12, le=1040)
 
 
 @app.post("/mmm/budget-redistribute")
@@ -1123,7 +1136,7 @@ async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
         y = weekly[request.outcome_column].astype(float).values
         dates = weekly.index.values
 
-        from mmm.fit import fit_mmm, channel_response_curve
+        from mmm.fit import channel_response_curve, fit_mmm
         from mmm.optimize import optimize_allocation
 
         async def _run():
@@ -1134,10 +1147,10 @@ async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         print(f"Error in budget_redistribute: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
 def _run_mmm_pipeline(spend_df, y, dates, request: BudgetRedistributeRequest, fit_mmm, channel_response_curve, optimize_allocation):
@@ -1163,13 +1176,13 @@ def _run_mmm_pipeline(spend_df, y, dates, request: BudgetRedistributeRequest, fi
         bm = (float(request.bound_multipliers[0]), float(request.bound_multipliers[1]))
     opt = optimize_allocation(fit, total_budget=request.total_budget, bounds=bounds, bound_multipliers=bm)
 
-    response_curves: Dict[str, Any] = {}
+    response_curves: dict[str, Any] = {}
     for cf in fit.channels:
         rc = channel_response_curve(fit, cf.name)
         rc["optimal_x"] = float(opt.optimal_totals[cf.name])
         response_curves[cf.name] = rc
 
-    channels_out: List[Dict[str, Any]] = []
+    channels_out: list[dict[str, Any]] = []
     for cf in fit.channels:
         cur_t = float(opt.current_totals[cf.name])
         opt_t = float(opt.optimal_totals[cf.name])

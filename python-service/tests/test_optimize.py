@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from mmm.fit import fit_mmm, predict_outcome_for_totals
+from mmm.fit import fit_mmm
 from mmm.optimize import optimize_allocation
 from mmm.transforms import transform_channel
 

@@ -1,29 +1,29 @@
 """Configuration for Python Data Ops Service"""
 import os
-from typing import Optional
+
 
 class Config:
     """Service configuration"""
     # Server configuration
     HOST: str = os.getenv("PYTHON_SERVICE_HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PYTHON_SERVICE_PORT", "8001"))
-    
+
     # CORS configuration
     # P-044: removed unused http://localhost:5173 default (the client runs on 3000).
     CORS_ORIGINS: list[str] = os.getenv(
         "CORS_ORIGINS",
         "http://localhost:3000"
     ).split(",")
-    
+
     # Timeout configuration
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "300"))  # 5 minutes
-    
+
     # Data processing limits
     MAX_ROWS: int = int(os.getenv("MAX_ROWS", "1000000"))  # 1M rows max
     MAX_PREVIEW_ROWS: int = int(os.getenv("MAX_PREVIEW_ROWS", "10000"))  # 10K for preview
 
     # Shared secret for Node -> Python calls (set on both sides). If unset, key is not enforced.
-    INTERNAL_API_KEY: Optional[str] = os.getenv("PYTHON_SERVICE_API_KEY") or None
+    INTERNAL_API_KEY: str | None = os.getenv("PYTHON_SERVICE_API_KEY") or None
 
 config = Config()
 

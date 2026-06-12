@@ -15,18 +15,18 @@ to score candidate budget allocations.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 
 from .transforms import (
-    transform_channel,
     adstock_grid,
-    hill_k_grid,
     hill_alpha_grid,
+    hill_k_grid,
+    transform_channel,
 )
 
 
@@ -55,14 +55,14 @@ class FitResult:
     # Internal — needed for predict
     _channel_names: list[str] = field(default_factory=list)
     _has_seasonality: bool = False
-    _spend_template: Optional[pd.DataFrame] = None
-    _dates_template: Optional[np.ndarray] = None
+    _spend_template: pd.DataFrame | None = None
+    _dates_template: np.ndarray | None = None
 
 
 def _build_design_matrix(
     spend: pd.DataFrame,
     channel_params: dict[str, dict],
-    dates: Optional[np.ndarray],
+    dates: np.ndarray | None,
 ) -> tuple[np.ndarray, list[str]]:
     cols: list[np.ndarray] = []
     names: list[str] = []
@@ -101,7 +101,7 @@ def _grid_search_one_channel(
     spend_df: pd.DataFrame,
     y: np.ndarray,
     params: dict[str, dict],
-    dates: Optional[np.ndarray],
+    dates: np.ndarray | None,
     ridge_alpha: float,
 ) -> dict:
     decays = adstock_grid()
@@ -142,12 +142,12 @@ def _max_pairwise_vif(spend_df: pd.DataFrame) -> float:
 def fit_mmm(
     spend_df: pd.DataFrame,
     y: np.ndarray,
-    dates: Optional[Sequence] = None,
+    dates: Sequence | None = None,
     ridge_alpha: float = 1.0,
     sweeps: int = 2,
     bootstrap_iters: int = 50,
     seed: int = 42,
-    max_obs: Optional[int] = None,
+    max_obs: int | None = None,
 ) -> FitResult:
     if max_obs is not None and len(spend_df) > max_obs:
         spend_df = spend_df.iloc[-max_obs:].reset_index(drop=True)
@@ -212,7 +212,7 @@ def fit_mmm(
         d_z_total = float(z_pert.sum() - z_base.sum())
         d_x_total = float(cur_total * 0.01) or 1e-12
 
-        def el_from_beta(b: float) -> float:
+        def el_from_beta(b: float, d_z_total: float = d_z_total, d_x_total: float = d_x_total, cur_total: float = cur_total) -> float:
             d_y_total = b * d_z_total
             return (d_y_total / d_x_total) * (cur_total / y_total)
 
