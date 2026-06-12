@@ -5,6 +5,26 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
+
+/**
+ * Wave R27 · compact in-dialog error fallback. A render error inside any dialog
+ * body shows this instead of crashing the whole app; the Close button (outside
+ * the boundary) still works so the user is never trapped. Includes a
+ * DialogTitle so Radix's a11y requirement is met even in the error state.
+ */
+function DialogErrorFallback() {
+  return (
+    <div role="alert" className="flex flex-col items-center gap-2 py-8 text-center">
+      <DialogPrimitive.Title className="text-base font-semibold">
+        Something went wrong
+      </DialogPrimitive.Title>
+      <p className="text-sm text-muted-foreground">
+        This panel hit an unexpected error. Close it and try again.
+      </p>
+    </div>
+  )
+}
 
 const Dialog = DialogPrimitive.Root
 
@@ -51,7 +71,7 @@ const DialogContent = React.forwardRef<
       )}
       {...props}
     >
-      {children}
+      <ErrorBoundary fallback={<DialogErrorFallback />}>{children}</ErrorBoundary>
       <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
