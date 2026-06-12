@@ -821,7 +821,7 @@ export function ChartRenderer({
               width="100%"
               height={fillParent ? '100%' : isSingleChart ? 400 : 250}
             >
-              <LineChart
+              <LineChart accessibilityLayer
                 data={lineAreaSortedData}
                 margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
               >
@@ -917,7 +917,7 @@ export function ChartRenderer({
             width="100%"
             height={fillParent ? '100%' : isSingleChart ? 400 : 250}
           >
-            <LineChart
+            <LineChart accessibilityLayer
               data={lineAreaSortedData}
               margin={{ left: 50, right: chart.y2 ? 50 : 10, top: 10, bottom: 52 }}
             >
@@ -1081,7 +1081,7 @@ export function ChartRenderer({
           <div className={fillParent ? "flex h-full w-full flex-col" : "w-full"}>
           <div className={fillParent ? "flex-1 min-h-0" : ""}>
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <BarChart data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 90 : isSingleChart ? 100 : 80 }}>
+            <BarChart accessibilityLayer data={visibleBarData} margin={{ left: 50, right: 10, top: 10, bottom: fillParent ? 90 : isSingleChart ? 100 : 80 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -1362,7 +1362,7 @@ export function ChartRenderer({
         // Use ComposedChart to render scatter with trendline
         return (
           <ResponsiveContainer width="100%" height={fillParent ? '100%' : isSingleChart ? 400 : 250}>
-            <ComposedChart data={optimizedScatterData} margin={{ left: 50, right: 10, top: 10, bottom: 30 }}>
+            <ComposedChart accessibilityLayer data={optimizedScatterData} margin={{ left: 50, right: 10, top: 10, bottom: 30 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -1485,7 +1485,7 @@ export function ChartRenderer({
               width="100%"
               height={fillParent ? '100%' : isSingleChart ? 400 : 250}
             >
-              <AreaChart
+              <AreaChart accessibilityLayer
                 data={lineAreaSortedData}
                 margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
               >
@@ -1571,7 +1571,7 @@ export function ChartRenderer({
             width="100%"
             height={fillParent ? '100%' : isSingleChart ? 400 : 250}
           >
-            <AreaChart
+            <AreaChart accessibilityLayer
               data={lineAreaSortedData}
               margin={{ left: 50, right: 10, top: 10, bottom: 52 }}
             >

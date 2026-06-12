@@ -285,7 +285,7 @@ export function ChartOnlyModal({
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
             <ResponsiveContainer width="100%" height={480}>
-              <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+              <LineChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
                   dataKey={x}
@@ -362,7 +362,7 @@ export function ChartOnlyModal({
 
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
+            <LineChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -483,7 +483,7 @@ export function ChartOnlyModal({
         const stacked = barLayout !== 'grouped';
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <BarChart data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
+            <BarChart accessibilityLayer data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -616,7 +616,7 @@ export function ChartOnlyModal({
 
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <ComposedChart margin={{ left: 60, right: 20, top: 20, bottom: 40 }} data={optimizedScatterData}>
+            <ComposedChart accessibilityLayer margin={{ left: 60, right: 20, top: 20, bottom: 40 }} data={optimizedScatterData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -739,7 +739,7 @@ export function ChartOnlyModal({
           const unifiedDomain = yDomain || getDynamicDomain(combinedVals);
           return (
             <ResponsiveContainer width="100%" height={480}>
-              <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+              <AreaChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
                   dataKey={x}
@@ -810,7 +810,7 @@ export function ChartOnlyModal({
 
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+            <AreaChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}

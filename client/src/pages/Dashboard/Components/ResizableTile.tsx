@@ -428,7 +428,12 @@ export function ResizableTile({
       onStop={onDragStop}
       nodeRef={nodeRef}
     >
-      <div ref={nodeRef} style={{ position: 'absolute', zIndex: isDragging ? 50 : 'auto' }}>
+      <div
+        ref={nodeRef}
+        style={{ position: 'absolute', zIndex: isDragging ? 50 : 'auto' }}
+        role="group"
+        aria-roledescription="Resizable, draggable dashboard tile"
+      >
         <Resizable
           size={size}
           onResize={handleResize}

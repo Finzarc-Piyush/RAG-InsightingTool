@@ -443,7 +443,7 @@ export function ChartModal({
             <div className="flex flex-1 min-h-0 flex-col">
             <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+              <LineChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
                   dataKey={x}
@@ -533,7 +533,7 @@ export function ChartModal({
         return (
           <div className="flex flex-1 min-h-0 flex-col">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
+            <LineChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: chart.y2 ? 60 : 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -657,7 +657,7 @@ export function ChartModal({
           <div className="flex flex-1 min-h-0 flex-col">
           <div className="flex-1 min-h-0">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
+            <BarChart accessibilityLayer data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -820,7 +820,7 @@ export function ChartModal({
         return (
           <div className="flex flex-1 min-h-0 flex-col">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart margin={{ left: 60, right: 20, top: 20, bottom: 40 }} data={optimizedScatterData}>
+            <ComposedChart accessibilityLayer margin={{ left: 60, right: 20, top: 20, bottom: 40 }} data={optimizedScatterData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -951,7 +951,7 @@ export function ChartModal({
             <div className="flex flex-1 min-h-0 flex-col">
             <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+              <AreaChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis
                   dataKey={x}
@@ -1035,7 +1035,7 @@ export function ChartModal({
         return (
           <div className="flex flex-1 min-h-0 flex-col">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
+            <AreaChart accessibilityLayer data={lineAreaSortedData as any} margin={{ left: 60, right: 20, top: 20, bottom: 90 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
