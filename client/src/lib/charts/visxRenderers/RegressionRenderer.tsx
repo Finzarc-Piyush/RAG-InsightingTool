@@ -88,18 +88,17 @@ export function RegressionRenderer({
 
   const xCh = resolveChannel(spec.encoding.x);
   const yCh = resolveChannel(spec.encoding.y);
-  if (!xCh || !yCh) {
-    throw new Error("regression mark requires x and y encodings");
-  }
 
   const points = useMemo(
     () =>
-      data
-        .map((r) => ({
-          x: asNumber(xCh.accessor(r)),
-          y: asNumber(yCh.accessor(r)),
-        }))
-        .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)),
+      !xCh || !yCh
+        ? []
+        : data
+            .map((r) => ({
+              x: asNumber(xCh.accessor(r)),
+              y: asNumber(yCh.accessor(r)),
+            }))
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)),
     [data, xCh, yCh],
   );
 
@@ -130,21 +129,13 @@ export function RegressionRenderer({
   }, [points, innerHeight]);
 
   const xTickFormat = useMemo(
-    () => makeAxisTickFormatter(xCh.field),
-    [xCh.field],
+    () => makeAxisTickFormatter(xCh?.field),
+    [xCh?.field],
   );
   const yTickFormat = useMemo(
-    () => makeAxisTickFormatter(yCh.field),
-    [yCh.field],
+    () => makeAxisTickFormatter(yCh?.field),
+    [yCh?.field],
   );
-
-  const accessibleLabel =
-    ariaLabel ??
-    spec.config?.accessibility?.ariaLabel ??
-    spec.config?.title?.text ??
-    "Regression chart";
-
-  if (innerWidth <= 0 || innerHeight <= 0) return null;
 
   const fitLineEndpoints = useMemo(() => {
     if (!fit) return null;
@@ -153,6 +144,18 @@ export function RegressionRenderer({
     const yB = fit.m * xMax + fit.b;
     return { xA: xMin, yA, xB: xMax, yB };
   }, [fit, xScale]);
+
+  const accessibleLabel =
+    ariaLabel ??
+    spec.config?.accessibility?.ariaLabel ??
+    spec.config?.title?.text ??
+    "Regression chart";
+
+  if (!xCh || !yCh) {
+    throw new Error("regression mark requires x and y encodings");
+  }
+
+  if (innerWidth <= 0 || innerHeight <= 0) return null;
 
   return (
     <svg width={width} height={height} role="img" aria-label={accessibleLabel}>

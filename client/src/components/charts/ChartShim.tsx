@@ -61,15 +61,29 @@ export function ChartShim({
   ariaLabel,
   keyInsightSessionId,
 }: ChartShimProps) {
+  // Hooks must run unconditionally (Rules of Hooks), so hoist the v1→v2
+  // conversion above every early return. When the spec is already v2 the
+  // result is simply unused — the v2 early return fires right after.
+  const isV2 = isChartSpecV2(spec);
+  const v1 = spec as ChartSpec;
+  const usePremium =
+    !isV2 && isV1Type(v1.type) ? isPremiumChartEnabled(v1.type) : false;
+
+  const converted = useMemo(() => {
+    if (!usePremium) return null;
+    return convertV1ToV2(v1);
+  }, [usePremium, v1]);
+
   // v2 always goes through PremiumChart. Suspense fallback shows the legacy
   // render so users see a chart instead of a spinner during the (rare) load.
-  if (isChartSpecV2(spec)) {
+  if (isV2) {
+    const v2 = spec as ChartSpecV2;
     const inlineRows =
-      spec.source.kind === "inline" ? (spec.source.rows as unknown[]) : [];
+      v2.source.kind === "inline" ? (v2.source.rows as unknown[]) : [];
     return (
       <Suspense fallback={<>{legacy()}</>}>
         <PremiumChart
-          spec={spec}
+          spec={v2}
           data={inlineRows as Array<Record<string, unknown>>}
           height={height}
           ariaLabel={ariaLabel}
@@ -78,15 +92,6 @@ export function ChartShim({
       </Suspense>
     );
   }
-
-  // v1: check the per-type feature flag.
-  const v1 = spec as ChartSpec;
-  const usePremium = isV1Type(v1.type) ? isPremiumChartEnabled(v1.type) : false;
-
-  const converted = useMemo(() => {
-    if (!usePremium) return null;
-    return convertV1ToV2(v1);
-  }, [usePremium, v1]);
 
   if (!usePremium || !converted) {
     return <>{legacy()}</>;

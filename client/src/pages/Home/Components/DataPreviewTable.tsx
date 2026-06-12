@@ -2360,6 +2360,17 @@ export function DataPreviewTable({
     return String(raw);
   };
 
+  const chartPreviewForRender = useMemo<ChartSpec | null>(() => {
+    if (!chartPreview) return null;
+    // PV3 · v2 specs are rendered by PremiumChart (via ChartShim) and don't
+    // share v1's `keyInsight` field. The legacy render prop never fires for
+    // v2 specs, so this memo is only ever consumed for v1.
+    if (isChartSpecV2(chartPreview)) return null;
+    const text = chartInsight?.text?.trim();
+    if (!text) return chartPreview;
+    return { ...chartPreview, keyInsight: text };
+  }, [chartPreview, chartInsight?.text]);
+
   // Early return after all hooks:
   // - For dataset preview, keep the existing "No data to display" behavior.
   // - For analysis mode, render pivot chrome even when rows are empty so the user can
@@ -2401,16 +2412,6 @@ export function DataPreviewTable({
   const trimmedAnalysisInsight =
     (analysisIntermediateInsight ?? pivotKeyInsight?.text ?? pivotInsight)?.trim() ?? "";
 
-  const chartPreviewForRender = useMemo<ChartSpec | null>(() => {
-    if (!chartPreview) return null;
-    // PV3 · v2 specs are rendered by PremiumChart (via ChartShim) and don't
-    // share v1's `keyInsight` field. The legacy render prop never fires for
-    // v2 specs, so this memo is only ever consumed for v1.
-    if (isChartSpecV2(chartPreview)) return null;
-    const text = chartInsight?.text?.trim();
-    if (!text) return chartPreview;
-    return { ...chartPreview, keyInsight: text };
-  }, [chartPreview, chartInsight?.text]);
   const toolPreviewRowCount = data.length;
   const pivotResultRowCount = serverPivotMeta?.rowCount;
   const showPivotVersusToolRowClarification =

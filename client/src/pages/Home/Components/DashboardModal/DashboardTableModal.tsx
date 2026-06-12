@@ -33,33 +33,8 @@ export function DashboardTableModal({ isOpen, onClose, table }: DashboardTableMo
 
   // Safely get context - don't throw error if not available
   const contextValue = useContext(DashboardContext);
-  if (!contextValue) {
-    return (
-      <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-2xl w-full">
-          <DialogHeader>
-            <DialogTitle>Error</DialogTitle>
-          </DialogHeader>
-          <div className="p-4">
-            <p className="text-sm text-muted-foreground">
-              Dashboard functionality is not available. Please navigate to the Dashboard page first.
-            </p>
-            <Button variant="outline" onClick={onClose} className="mt-4">
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
 
-  const {
-    dashboards,
-    createDashboard,
-    addTableToDashboard,
-    addSheet,
-    refetch,
-  } = contextValue;
+  const dashboards = contextValue?.dashboards;
 
   const [step, setStep] = useState<Step>('select');
   const [destinationMode, setDestinationMode] = useState<DestinationMode>('existing');
@@ -78,7 +53,7 @@ export function DashboardTableModal({ isOpen, onClose, table }: DashboardTableMo
 
   const editableDashboards = useMemo(() => {
     const userEmail = getUserEmail()?.toLowerCase();
-    return dashboards.filter((dashboard) => {
+    return (dashboards ?? []).filter((dashboard) => {
       if (!userEmail) return false;
       if (dashboard.isShared) {
         return dashboard.sharedPermission === 'edit';
@@ -120,6 +95,33 @@ export function DashboardTableModal({ isOpen, onClose, table }: DashboardTableMo
       setSelectedSheetId(sheets[0].id);
     }
   }, [selectedDashboard, selectedSheetId]);
+
+  if (!contextValue) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="sm:max-w-2xl w-full">
+          <DialogHeader>
+            <DialogTitle>Error</DialogTitle>
+          </DialogHeader>
+          <div className="p-4">
+            <p className="text-sm text-muted-foreground">
+              Dashboard functionality is not available. Please navigate to the Dashboard page first.
+            </p>
+            <Button variant="outline" onClick={onClose} className="mt-4">
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  const {
+    createDashboard,
+    addTableToDashboard,
+    addSheet,
+    refetch,
+  } = contextValue;
 
   const resetAndClose = () => {
     if (isSaving) return;

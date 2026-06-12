@@ -180,6 +180,12 @@ export function PremiumChart({
   loadingProgress,
   onRetry,
 }: PremiumChartProps) {
+  // Hooks first (Rules of Hooks): apply cross-filter from any surrounding
+  // <ChartGrid>. useChartGrid must run unconditionally, before any early
+  // return. applyFilter is null-safe via `data ?? []`.
+  const grid = useChartGrid();
+  const filteredData = grid.applyFilter(data ?? []);
+
   // Loading state — explicit prop wins; otherwise read from spec.
   const loading =
     isLoading ??
@@ -188,10 +194,6 @@ export function PremiumChart({
   if (loading) {
     return <ChartSkeleton height={height} progress={loadingProgress} />;
   }
-
-  // Apply cross-filter from any surrounding <ChartGrid>.
-  const grid = useChartGrid();
-  const filteredData = grid.applyFilter(data ?? []);
 
   // Empty state.
   if (!filteredData || filteredData.length === 0) {

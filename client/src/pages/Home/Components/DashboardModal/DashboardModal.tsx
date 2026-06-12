@@ -52,28 +52,12 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
   
   // Safely get context - don't throw error if not available
   const contextValue = useContext(DashboardContext);
-  
-  if (!contextValue) {
-    return (
-      <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Error</DialogTitle>
-          </DialogHeader>
-          <div className="p-4">
-            <p className="text-sm text-muted-foreground">
-              Dashboard functionality is not available. Please navigate to the Dashboard page first.
-            </p>
-            <Button variant="outline" onClick={onClose} className="mt-4">
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-  
-  const { dashboards, createDashboard, addChartToDashboard, refetch } = contextValue;
+
+  // Null-safe read so the hooks below can be hoisted above the early
+  // return without dereferencing a null context. Only `dashboards` is
+  // consumed by the hooks; the action functions are re-read after the
+  // narrowing guard (see below) where their type is non-undefined.
+  const dashboards = contextValue?.dashboards;
 
   // Helper function to check if user has edit permission on a dashboard
   const hasEditPermission = useMemo(() => {
@@ -91,7 +75,7 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
 
   // Filter dashboards to only show those with edit permission
   const editableDashboards = useMemo(() => {
-    return dashboards.filter(hasEditPermission);
+    return (dashboards ?? []).filter(hasEditPermission);
   }, [dashboards, hasEditPermission]);
 
   // Filter dashboards based on search query (only editable ones)
@@ -152,6 +136,32 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Relocated below all hooks (Rules of Hooks). Renders the same error
+  // dialog in the same condition as before — only its position moved.
+  if (!contextValue) {
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Error</DialogTitle>
+          </DialogHeader>
+          <div className="p-4">
+            <p className="text-sm text-muted-foreground">
+              Dashboard functionality is not available. Please navigate to the Dashboard page first.
+            </p>
+            <Button variant="outline" onClick={onClose} className="mt-4">
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Past the narrowing guard `contextValue` is non-null, so these action
+  // functions are guaranteed defined for the main render's event handlers.
+  const { createDashboard, addChartToDashboard, refetch } = contextValue;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
