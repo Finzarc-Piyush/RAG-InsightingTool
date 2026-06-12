@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { downloadFilenameTimestamp } from "@/lib/downloadFilenameTimestamp";
 import type { TemporalFacetColumnMeta } from "@/shared/schema";
 import { facetColumnHeaderLabelForColumn } from "@/lib/temporalFacetDisplay";
@@ -166,30 +166,37 @@ function unionKeysInOrder(rows: Record<string, unknown>[]): string[] {
   return ordered;
 }
 
+/**
+ * Populate an ExcelJS worksheet with the flat-table data. Cells are written
+ * positionally (header order) so heterogeneous rows stay column-aligned and
+ * `coerceFlatCell` empties round-trip as "". When a note is supplied it lands
+ * on A1 with a blank spacer at A2, so the header lands on A3 — matching the
+ * former SheetJS `aoa_to_sheet([[note]])` + `sheet_add_json({origin:'A3'})`.
+ */
+function populateFlatTableSheet(
+  ws: ExcelJS.Worksheet,
+  flatTableRows: Record<string, unknown>[],
+  note?: string
+): void {
+  const headers = unionKeysInOrder(flatTableRows);
+  if (note && note.length > 0) {
+    ws.addRow([note]);
+    ws.addRow([]); // blank spacer (A2) — header lands on A3
+  }
+  ws.addRow(headers);
+  for (const row of flatTableRows) {
+    ws.addRow(headers.map((k) => coerceFlatCell(row?.[k])));
+  }
+}
+
+/** Standalone single-sheet workbook for the flat table (test seam). */
 export function buildFlatTableSheet(
   flatTableRows: Record<string, unknown>[],
   note?: string
-): XLSX.WorkSheet {
-  const headers = unionKeysInOrder(flatTableRows);
-  const coerced = flatTableRows.map((row) => {
-    const out: Record<string, string | number | boolean> = {};
-    for (const k of headers) {
-      out[k] = coerceFlatCell(row?.[k]);
-    }
-    return out;
-  });
-
-  if (note && note.length > 0) {
-    const ws = XLSX.utils.aoa_to_sheet([[note]]);
-    XLSX.utils.sheet_add_json(ws, coerced, {
-      origin: "A3",
-      header: headers,
-      skipHeader: false,
-    });
-    return ws;
-  }
-
-  return XLSX.utils.json_to_sheet(coerced, { header: headers });
+): ExcelJS.Workbook {
+  const wb = new ExcelJS.Workbook();
+  populateFlatTableSheet(wb.addWorksheet("Flat Table"), flatTableRows, note);
+  return wb;
 }
 
 export function buildPivotWorkbook(
@@ -199,26 +206,33 @@ export function buildPivotWorkbook(
   showValuesAs: PivotShowValuesAsExportMode,
   flatTableRows?: Record<string, unknown>[],
   options?: { flatSheetNote?: string }
-): XLSX.WorkBook {
+): ExcelJS.Workbook {
   const rows = pivotGridToSheetRows(
     model,
     flatRows,
     temporalFacetColumns,
     showValuesAs
   );
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Pivot");
+  const header = pivotGridColumnKeys(model, temporalFacetColumns);
+  const wb = new ExcelJS.Workbook();
+  const pivot = wb.addWorksheet("Pivot");
+  pivot.addRow(header);
+  for (const rec of rows) {
+    pivot.addRow(header.map((k) => rec[k] ?? ""));
+  }
 
   if (flatTableRows && flatTableRows.length > 0) {
-    const ws2 = buildFlatTableSheet(flatTableRows, options?.flatSheetNote);
-    XLSX.utils.book_append_sheet(wb, ws2, "Flat Table");
+    populateFlatTableSheet(
+      wb.addWorksheet("Flat Table"),
+      flatTableRows,
+      options?.flatSheetNote
+    );
   }
 
   return wb;
 }
 
-export function downloadPivotGridAsXlsx(
+export async function downloadPivotGridAsXlsx(
   model: PivotModel,
   flatRows: PivotFlatRow[],
   temporalFacetColumns: TemporalFacetColumnMeta[],
@@ -226,7 +240,7 @@ export function downloadPivotGridAsXlsx(
   baseName: string | undefined | null,
   flatTableRows?: Record<string, unknown>[],
   options?: { flatSheetNote?: string }
-): void {
+): Promise<void> {
   const wb = buildPivotWorkbook(
     model,
     flatRows,
@@ -235,7 +249,7 @@ export function downloadPivotGridAsXlsx(
     flatTableRows,
     options
   );
-  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });

@@ -1882,7 +1882,7 @@ export function DataPreviewTable({
           pivotRows.length >= SAMPLE_CAP
             ? `Underlying rows used to build the pivot (sample of ${pivotRows.length} rows). For the full canonical dataset, use the 'Download Dataset' button at the top-left of the chat surface.`
             : undefined;
-        downloadPivotGridAsXlsx(
+        await downloadPivotGridAsXlsx(
           effectivePivotModel as unknown as PivotModel,
           pivotExportFlatRows,
           temporalFacetColumns ?? [],
