@@ -54,31 +54,6 @@ function targetSampleStats(
   return nonNan;
 }
 
-// Calculate linear regression (slope and intercept) for trend line
-function linearRegression(xValues: number[], yValues: number[]): { slope: number; intercept: number } | null {
-  const n = Math.min(xValues.length, yValues.length);
-  if (n === 0) return null;
-
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-  for (let i = 0; i < n; i++) {
-    const x = xValues[i];
-    const y = yValues[i];
-    if (isNaN(x) || isNaN(y)) continue;
-    sumX += x;
-    sumY += y;
-    sumXY += x * y;
-    sumX2 += x * x;
-  }
-
-  const denominator = n * sumX2 - sumX * sumX;
-  if (denominator === 0) return null;
-
-  const slope = (n * sumXY - sumX * sumY) / denominator;
-  const intercept = (sumY - slope * sumX) / n;
-
-  return { slope, intercept };
-}
-
 export async function analyzeCorrelations(
   data: Record<string, any>[],
   targetVariable: string,
