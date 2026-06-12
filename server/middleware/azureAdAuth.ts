@@ -36,14 +36,16 @@ function getTokenFromRequest(req: Request): string | null {
     const t = auth.slice(7).trim();
     if (t) return t;
   }
-  // Wave R20 · the raw JWT in ?access_token is deprecated in favour of SSE
-  // tickets (the token leaks into proxy/CDN/access logs). REQUIRE_SSE_TICKET=true
-  // closes this path entirely once clients have migrated to /api/auth/sse-ticket.
-  if (process.env.REQUIRE_SSE_TICKET === "true") return null;
+  // Wave R33 · the raw JWT in ?access_token is now REJECTED BY DEFAULT — it
+  // leaks into proxy/CDN/access logs, and all clients open SSE with a
+  // short-lived ticket (POST /api/auth/sse-ticket → ?sse_ticket). The
+  // deprecated path can be re-opened ONLY for emergency rollback by setting
+  // ALLOW_JWT_QUERY=true.
+  if (process.env.ALLOW_JWT_QUERY !== "true") return null;
   const q = req.query.access_token;
   if (typeof q === "string" && q.trim()) {
     logger.warn(
-      "⚠️ access_token in query string is deprecated and leaks into logs — open SSE with a ticket from POST /api/auth/sse-ticket instead."
+      "⚠️ access_token in query string is accepted only because ALLOW_JWT_QUERY=true — it leaks into logs; migrate to an SSE ticket and unset this flag."
     );
     return q.trim();
   }
