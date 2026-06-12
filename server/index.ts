@@ -138,6 +138,21 @@ export function createApp() {
     res.json({ status: 'OK', message: 'Server is running' });
   });
 
+  // Wave R20 · SSE ticket exchange. EventSource cannot send an Authorization
+  // header, so rather than leak the raw JWT via ?access_token (proxy/CDN logs),
+  // the client POSTs here Bearer-auth'd (requireAzureAdAuth ran above) and gets
+  // a short-lived opaque ticket to open the stream with ?sse_ticket=<ticket>.
+  app.post('/api/auth/sse-ticket', async (req, res) => {
+    const email = req.auth?.email;
+    if (!email) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const { mintSseTicket } = await import('./lib/sseTicket.js');
+    const { ticket, expiresInSeconds } = mintSseTicket({ email, oid: req.auth?.oid });
+    res.json({ ticket, expiresInSeconds });
+  });
+
   // Register all routes (synchronous)
   registerRoutes(app);
 

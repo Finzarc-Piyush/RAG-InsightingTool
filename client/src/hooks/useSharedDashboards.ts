@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { acquireIdTokenForApi } from "@/auth/msalToken";
+import { acquireSseTicket } from "@/auth/msalToken";
 import {
   SharedDashboardsResponse,
   SharedDashboardInvite,
@@ -102,12 +102,14 @@ export const useSharedDashboards = () => {
     }
     let cancelled = false;
     void (async () => {
-      const token = await acquireIdTokenForApi();
-      if (cancelled) return;
-      const params = new URLSearchParams();
-      if (token) {
-        params.set("access_token", token);
+      // Wave R20 · open SSE with a short-lived opaque ticket, never the raw JWT.
+      const ticket = await acquireSseTicket();
+      if (cancelled || !ticket) {
+        if (!cancelled) setSseUrl(null);
+        return;
       }
+      const params = new URLSearchParams();
+      params.set("sse_ticket", ticket);
       setSseUrl(
         `${API_BASE_URL}/api/shared-dashboards/incoming/stream?${params.toString()}`
       );

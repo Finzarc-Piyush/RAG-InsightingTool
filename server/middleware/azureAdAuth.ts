@@ -35,8 +35,17 @@ function getTokenFromRequest(req: Request): string | null {
     const t = auth.slice(7).trim();
     if (t) return t;
   }
+  // Wave R20 · the raw JWT in ?access_token is deprecated in favour of SSE
+  // tickets (the token leaks into proxy/CDN/access logs). REQUIRE_SSE_TICKET=true
+  // closes this path entirely once clients have migrated to /api/auth/sse-ticket.
+  if (process.env.REQUIRE_SSE_TICKET === "true") return null;
   const q = req.query.access_token;
-  if (typeof q === "string" && q.trim()) return q.trim();
+  if (typeof q === "string" && q.trim()) {
+    console.warn(
+      "⚠️ access_token in query string is deprecated and leaks into logs — open SSE with a ticket from POST /api/auth/sse-ticket instead."
+    );
+    return q.trim();
+  }
   return null;
 }
 
@@ -159,6 +168,23 @@ export async function requireAzureAdAuth(
     );
     req.auth = { email, claims: {} };
     next();
+    return;
+  }
+
+  // Wave R20 · SSE ticket path — resolve an opaque short-lived ticket to the
+  // identity it was minted for. No JWK round-trip is needed: the ticket was
+  // issued (POST /api/auth/sse-ticket) only after a Bearer JWT was verified.
+  const sseTicketParam =
+    typeof req.query.sse_ticket === "string" ? req.query.sse_ticket : undefined;
+  if (sseTicketParam) {
+    const { resolveSseTicket } = await import("../lib/sseTicket.js");
+    const identity = resolveSseTicket(sseTicketParam);
+    if (identity) {
+      req.auth = { email: identity.email, oid: identity.oid, claims: {} };
+      next();
+      return;
+    }
+    res.status(401).json({ error: "Invalid or expired SSE ticket" });
     return;
   }
 
