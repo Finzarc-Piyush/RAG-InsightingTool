@@ -1033,54 +1033,41 @@ export const updateMessageAndTruncate = async (
   targetTimestamp: number,
   updatedContent: string
 ): Promise<ChatDocument> => {
-  try {
-    console.log("✏️ updateMessageAndTruncate - sessionId:", sessionId, "targetTimestamp:", targetTimestamp);
-    const chatDocument = await getChatBySessionIdEfficient(sessionId);
-    if (!chatDocument) {
-      throw new Error("Chat document not found for sessionId");
-    }
-
-    if (!chatDocument.messages || chatDocument.messages.length === 0) {
+  // Wave-2 tail · route through the mutateChatDocument seam (per-session lock +
+  // IfMatch _etag 412-retry) so an edit-and-truncate can't clobber a concurrent
+  // cross-instance append. Reads fresh inside the lock; the prior bare
+  // getChat → mutate → updateChatDocument could lose a race.
+  const result = await mutateChatDocument(sessionId, (doc) => {
+    if (!doc.messages || doc.messages.length === 0) {
       throw new Error("No messages found in chat document");
     }
 
-    // Find the message to update by timestamp
-    const messageIndex = chatDocument.messages.findIndex(
+    const messageIndex = doc.messages.findIndex(
       (msg) => msg.timestamp === targetTimestamp && msg.role === 'user'
     );
 
     if (messageIndex === -1) {
-      // Message not found - this might be a new message, not an edit
-      // Return the document unchanged instead of throwing an error
+      // Not an edit (likely a new message) — return the doc unchanged, no write.
       console.warn(`⚠️ Message with timestamp ${targetTimestamp} not found. This might be a new message, not an edit. Skipping truncation.`);
-      return chatDocument;
+      return false;
     }
 
-    console.log(`🗂️ Found message at index ${messageIndex}, truncating all messages after it`);
-    console.log(`📊 Messages before truncation: ${chatDocument.messages.length}`);
-
     // Update the message content
-    chatDocument.messages[messageIndex] = {
-      ...chatDocument.messages[messageIndex],
+    doc.messages[messageIndex] = {
+      ...doc.messages[messageIndex],
       content: updatedContent,
     };
 
     // Remove all messages after the edited message
-    const messagesToRemove = chatDocument.messages.length - messageIndex - 1;
-    if (messagesToRemove > 0) {
-      chatDocument.messages.splice(messageIndex + 1);
-      console.log(`🗑️ Removed ${messagesToRemove} messages after the edited message`);
+    if (doc.messages.length > messageIndex + 1) {
+      doc.messages.splice(messageIndex + 1);
     }
+  });
 
-    console.log(`📊 Messages after truncation: ${chatDocument.messages.length}`);
-
-    const updated = await updateChatDocument(chatDocument);
-    console.log("✅ Updated message and truncated chat doc:", updated.id, "messages now:", updated.messages?.length || 0);
-    return updated;
-  } catch (error) {
-    console.error("❌ Failed to update message and truncate:", error);
-    throw error;
+  if (!result) {
+    throw new Error("Chat document not found for sessionId");
   }
+  return result;
 };
 
 /**
@@ -1280,13 +1267,21 @@ export const setPendingUserMessageForSession = async (
   requesterEmail: string,
   content: string
 ): Promise<ChatDocument> => {
-  const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
-  if (!doc) {
+  // Pre-auth enforces the collaborator check (throws 403). The write then
+  // re-reads fresh under the per-session lock + IfMatch _etag so it serialises
+  // against clearPendingUserMessage / the enrichment-complete consumer.
+  const authDoc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+  if (!authDoc) {
     throw new Error("Session not found");
   }
-  doc.pendingUserMessage = { content, timestamp: Date.now() };
-  doc.lastUpdatedAt = Date.now();
-  return updateChatDocument(doc);
+  const result = await mutateChatDocument(sessionId, (doc) => {
+    doc.pendingUserMessage = { content, timestamp: Date.now() };
+    doc.lastUpdatedAt = Date.now();
+  });
+  if (!result) {
+    throw new Error("Session not found");
+  }
+  return result;
 };
 
 /**
@@ -1302,11 +1297,12 @@ export const setLastCreatedDashboardForSession = async (
   dashboardId: string
 ): Promise<void> => {
   try {
-    const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
-    if (!doc) return;
-    doc.lastCreatedDashboardId = dashboardId;
-    doc.lastUpdatedAt = Date.now();
-    await updateChatDocument(doc);
+    const authDoc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+    if (!authDoc) return;
+    await mutateChatDocument(sessionId, (doc) => {
+      doc.lastCreatedDashboardId = dashboardId;
+      doc.lastUpdatedAt = Date.now();
+    });
   } catch {
     // Best-effort; memory is advisory — the dashboard already exists.
   }
@@ -1316,11 +1312,14 @@ export const clearPendingUserMessage = async (
   sessionId: string,
   requesterEmail: string
 ): Promise<void> => {
-  const doc = await getChatBySessionIdForUser(sessionId, requesterEmail);
-  if (!doc) return;
-  delete doc.pendingUserMessage;
-  doc.lastUpdatedAt = Date.now();
-  await updateChatDocument(doc);
+  // Pre-auth, then clear under the lock + IfMatch _etag so the clear serialises
+  // against a concurrent setPendingUserMessageForSession (latest-wins intact).
+  const authDoc = await getChatBySessionIdForUser(sessionId, requesterEmail);
+  if (!authDoc) return;
+  await mutateChatDocument(sessionId, (doc) => {
+    delete doc.pendingUserMessage;
+    doc.lastUpdatedAt = Date.now();
+  });
 };
 
 /**
@@ -1345,29 +1344,19 @@ export const updateSessionFileName = async (
   username: string,
   newFileName: string
 ): Promise<ChatDocument> => {
-  try {
-    const chatDocument = await getChatBySessionIdEfficient(sessionId);
-    
-    if (!chatDocument) {
-      throw new Error(`Session not found for sessionId: ${sessionId}`);
-    }
-    
-    // Verify the username matches
-    if (chatDocument.username !== username) {
+  // Auth re-checked inside the lock against the fresh doc; write carries the
+  // IfMatch _etag so it serialises against updateSessionPinned / other metadata
+  // writers on the same session.
+  const result = await mutateChatDocument(sessionId, (doc) => {
+    if (doc.username !== username) {
       throw new Error('Unauthorized: Session does not belong to this user');
     }
-    
-    // Update the fileName
-    chatDocument.fileName = newFileName.trim();
-    
-    // Update the document
-    const updated = await updateChatDocument(chatDocument);
-    console.log(`✅ Updated session fileName: ${sessionId} -> ${newFileName}`);
-    return updated;
-  } catch (error) {
-    console.error("❌ Failed to update session fileName:", error);
-    throw error;
+    doc.fileName = newFileName.trim();
+  });
+  if (!result) {
+    throw new Error(`Session not found for sessionId: ${sessionId}`);
   }
+  return result;
 };
 
 /**
@@ -1379,27 +1368,19 @@ export const updateSessionPinned = async (
   username: string,
   pinned: boolean
 ): Promise<ChatDocument> => {
-  try {
-    const chatDocument = await getChatBySessionIdEfficient(sessionId);
-
-    if (!chatDocument) {
-      throw new Error(`Session not found for sessionId: ${sessionId}`);
-    }
-
-    if (chatDocument.username !== username) {
+  // Auth re-checked inside the lock; write carries the IfMatch _etag so rapid
+  // pin/unpin toggles and concurrent metadata writers can't clobber each other.
+  const result = await mutateChatDocument(sessionId, (doc) => {
+    if (doc.username !== username) {
       throw new Error('Unauthorized: Session does not belong to this user');
     }
-
-    chatDocument.pinned = pinned;
-    chatDocument.pinnedAt = pinned ? Date.now() : undefined;
-
-    const updated = await updateChatDocument(chatDocument);
-    console.log(`✅ Updated session pinned: ${sessionId} -> ${pinned}`);
-    return updated;
-  } catch (error) {
-    console.error("❌ Failed to update session pinned:", error);
-    throw error;
+    doc.pinned = pinned;
+    doc.pinnedAt = pinned ? Date.now() : undefined;
+  });
+  if (!result) {
+    throw new Error(`Session not found for sessionId: ${sessionId}`);
   }
+  return result;
 };
 
 /**
