@@ -43,7 +43,19 @@
  * to the failed caller.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 const sessionWriteChain = new Map<string, Promise<unknown>>();
+
+/**
+ * Tracks which sessionIds are currently HELD in the running async context.
+ * Used to detect re-entrant `withSessionWriteLock(sameSession)` calls — which
+ * would otherwise await the outer call's own promise and DEADLOCK forever
+ * (CLAUDE.md invariant #9). We fail fast with a clear error instead so the
+ * offending nesting surfaces in tests/logs rather than as a silent hang.
+ * Different sessionIds may safely nest (no deadlock), so the guard is per-id.
+ */
+const heldSessions = new AsyncLocalStorage<Set<string>>();
 
 /**
  * Acquire the per-session write lock and run `fn` once the prior chained
@@ -67,6 +79,16 @@ export async function withSessionWriteLock<T>(
   sessionId: string,
   fn: () => Promise<T>
 ): Promise<T> {
+  // Reentrancy guard: a nested call for the SAME session inside an in-flight
+  // `fn` would await the outer call's own promise → permanent deadlock.
+  const held = heldSessions.getStore();
+  if (held?.has(sessionId)) {
+    throw new Error(
+      `withSessionWriteLock is non-reentrant: session ${sessionId} is already ` +
+        `locked in this async context (CLAUDE.md invariant #9). Do not nest ` +
+        `mutateChatDocument / withSessionWriteLock for the same session.`
+    );
+  }
   const previous = sessionWriteChain.get(sessionId);
   const work = (async () => {
     if (previous) {
@@ -76,7 +98,9 @@ export async function withSessionWriteLock<T>(
         // Prior caller's failure is its own concern.
       }
     }
-    return fn();
+    const nextHeld = new Set(held ?? []);
+    nextHeld.add(sessionId);
+    return heldSessions.run(nextHeld, fn);
   })();
   sessionWriteChain.set(sessionId, work);
   try {

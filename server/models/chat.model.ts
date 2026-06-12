@@ -1135,10 +1135,23 @@ const retryOnConnectionError = async <T>(
       lastError = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       
+      // 412 (precondition/ETag conflict), 409 (conflict), 404, 400 are LOGICAL
+      // errors, not transient transport failures — retrying the same stale
+      // operation just fails again. The optimistic-concurrency seam
+      // (mutateChatDocument) handles 412 via re-read + fresh ETag; this
+      // connection-retry wrapper must NOT swallow/retry it (Wave R2).
+      const statusCode = error?.statusCode ?? error?.code;
+      const isNonTransient =
+        statusCode === 412 ||
+        statusCode === 409 ||
+        statusCode === 404 ||
+        statusCode === 400;
+
       // Check if it's a connection error that might be retryable
       // Include PARSE_ERROR and query timeout errors (subStatusCode 1004)
-      const isRetryableError = 
-        error.code === "ECONNREFUSED" || 
+      const isRetryableError =
+        !isNonTransient && (
+        error.code === "ECONNREFUSED" ||
         error.code === "ETIMEDOUT" || 
         error.code === "ENOTFOUND" ||
         error.code === "ECONNRESET" ||
@@ -1151,7 +1164,7 @@ const retryOnConnectionError = async <T>(
         errorMessage.includes("ENOTFOUND") ||
         errorMessage.includes("ECONNRESET") ||
         errorMessage.includes("aborted") ||
-        errorMessage.includes("PARSE_ERROR");
+        errorMessage.includes("PARSE_ERROR"));
       
       if (isRetryableError && attempt < maxRetries) {
         const delay = Math.min(attempt * 1000, 5000); // Exponential backoff: 1s, 2s, 3s (max 5s)
