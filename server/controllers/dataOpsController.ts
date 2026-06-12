@@ -11,7 +11,7 @@ import { getChatBySessionIdEfficient } from "../models/chat.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { downloadFilenameTimestamp } from "../utils/downloadFilenameTimestamp.js";
 import { withoutTemporalFacetColumns } from "../lib/temporalFacetColumns.js";
-import * as XLSX from 'xlsx';
+import { buildXlsxBufferFromRows } from "../lib/xlsxWriter.js";
 
 function sanitizeDownloadFileStem(stem: string, fallback: string): string {
   let s = stem.trim().replace(/"/g, "_");
@@ -129,13 +129,8 @@ export const downloadModifiedDataset = async (req: Request, res: Response) => {
     const timestamp = downloadFilenameTimestamp();
 
     if (format === 'xlsx') {
-      // Convert to Excel
-      const worksheet = XLSX.utils.json_to_sheet(exportData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-
-      // Generate buffer
-      const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      // Convert to Excel (ExcelJS — see lib/xlsxWriter.ts)
+      const excelBuffer = await buildXlsxBufferFromRows(exportData, 'Sheet1');
 
       // Set headers
       res.setHeader('Content-Disposition', `attachment; filename="${baseFileName}_modified_${timestamp}.xlsx"`);
@@ -253,10 +248,7 @@ export const downloadWorkingDataset = async (req: Request, res: Response) => {
     res.setHeader('X-Working-Dataset-Row-Count', String(data.length));
 
     if (format === 'xlsx') {
-      const worksheet = XLSX.utils.json_to_sheet(exportData);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-      const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      const excelBuffer = await buildXlsxBufferFromRows(exportData, 'Sheet1');
 
       const filename = `${baseFileName}_working_${timestamp}.xlsx`;
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
