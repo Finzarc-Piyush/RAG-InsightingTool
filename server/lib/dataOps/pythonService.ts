@@ -25,6 +25,28 @@ const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8
 const REQUEST_TIMEOUT = 300000; // 5 minutes
 const PYTHON_SERVICE_API_KEY = process.env.PYTHON_SERVICE_API_KEY?.trim();
 
+/**
+ * Wave R17 · In production the internal API key is MANDATORY. The Python
+ * data-ops service authenticates callers via `X-Internal-Api-Key`; if the key
+ * is unset the server would ship an unauthenticated internal endpoint, so any
+ * party that can reach the service network could invoke pandas/sklearn/MMM
+ * ops. Fail fast at startup instead of silently degrading to open access.
+ * Dev/test (NODE_ENV !== 'production') stay optional for local runs.
+ */
+export function assertPythonServiceConfigured(
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  if (env.NODE_ENV === 'production' && !env.PYTHON_SERVICE_API_KEY?.trim()) {
+    throw new Error(
+      'PYTHON_SERVICE_API_KEY is required in production. Set the environment ' +
+        'variable before starting the server so internal Python data-ops calls ' +
+        'are authenticated.'
+    );
+  }
+}
+
+assertPythonServiceConfigured();
+
 function pythonServiceHeaders(
   base: Record<string, string> = {}
 ): Record<string, string> {

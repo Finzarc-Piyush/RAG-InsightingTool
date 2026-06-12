@@ -50,6 +50,7 @@ import { z } from "zod";
 import { completeJson, completeJsonStreaming, isStreamingNarratorEnabled } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
+import { UNTRUSTED_CONTENT_RULE } from "./untrustedContent.js";
 import { agentLog } from "./agentLogger.js";
 import {
   formatForNarrator,
@@ -262,6 +263,7 @@ substantive and decision-grade. The RELATED CONTEXT block may include open-web h
 \`[web:tavily:N]\`) — treat them identically to RAG hits: background grounding for
 interpretation and inline citation, never numeric evidence. Figures still come only from
 the blackboard / observations.
+${UNTRUSTED_CONTENT_RULE}
 
 Your job: narrate the investigation clearly in the following JSON format:
 - "body": main markdown answer. Lead with the most important finding. For each confirmed

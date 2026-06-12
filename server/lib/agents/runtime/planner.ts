@@ -74,6 +74,7 @@ import type { AgentExecutionContext } from "./types.js";
 import type { PlanStep } from "./types.js";
 import { plannerOutputSchema } from "./schemas.js";
 import { completeJson } from "./llmJson.js";
+import { wrapUntrusted, UNTRUSTED_CONTENT_RULE } from "./untrustedContent.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { summarizeContextForPrompt } from "./context.js";
 import type { ToolRegistry } from "./toolRegistry.js";
@@ -555,6 +556,7 @@ ${tools}
 
 ${modeNote}
 Rules:
+- ${UNTRUSTED_CONTENT_RULE}
 - Decide tools by what the user is trying to learn, not by exact wording. Compose multiple tools instead of a single catch-all (no "delegate" tool).
 - Tool query keys: retrieve_semantic_context.args.query (required, string) is the ONLY tool that takes "query"; never put "query" on run_analytical_query (only optional question_override).
 - get_schema_summary first when the question is broad. clarify_user only when critical info is genuinely missing.
@@ -620,7 +622,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   // relevant snippets fetched from a search index and fed into the prompt.)
   const ragBlock =
     ragHitsBlock?.trim().length ?
-      `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${ragHitsBlock.trim().slice(0, 3_000)}\n\n`
+      `### RAG HITS (upfront semantic retrieval — use for wording, themes, and column hints):\n${wrapUntrusted("RAG_HITS", ragHitsBlock.trim().slice(0, 3_000))}\n\n`
       : "";
 
   const hypothesisBlock = ctx.blackboard
@@ -678,7 +680,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     ctx.chatDocument?.semanticModel
   );
 
-  const user = `User question:\n${ctx.question}\n\n${hintsResult.block}${semanticBlock}${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
+  const user = `User question:\n${wrapUntrusted("USER_QUESTION", ctx.question)}\n\n${hintsResult.block}${semanticBlock}${ragBlock}${memoryRecallSection}${hypoSection}${stepInsightsSection}${priorBlock}${memoryBlock}${handoffBlock}${summarizeContextForPrompt(ctx)}`;
 
   const out = await completeJson(system, user, plannerOutputSchema, {
     turnId,

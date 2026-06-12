@@ -44,6 +44,7 @@
 import { z } from "zod";
 import type { ToolRegistry } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { wrapUntrusted } from "../untrustedContent.js";
 import { addDomainContext } from "../analyticalBlackboard.js";
 
 export const webSearchArgsSchema = z
@@ -328,7 +329,11 @@ function formatHitsForPrompt(hits: SearchHit[], providerLabel: string): string {
   const blocks = hits.map((h, i) => {
     const tag = `[web:${providerLabel}:${i + 1}]`;
     const cite = h.url ? `\n— ${h.url}` : "";
-    return `${tag} ${h.title}\n${h.content.trim()}${cite}`;
+    // Wave R18 · fence the untrusted external title+content (the URL/tag stay
+    // outside for citation). Prompt-injection in a web result can't pose as an
+    // instruction; the synthesizer's UNTRUSTED rule says fenced text is data.
+    const body = wrapUntrusted(`WEB_${i + 1}`, `${h.title}\n${h.content.trim()}`);
+    return `${tag}\n${body}${cite}`;
   });
   return blocks.join("\n---\n").slice(0, SUMMARY_MAX_CHARS);
 }
