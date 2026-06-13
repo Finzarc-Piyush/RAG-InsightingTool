@@ -209,7 +209,7 @@ export function runMarketBasket(
   const pairCounts = new Map<string, number>();
   function pairKey(a: string, b: string): string {
     // Order-independent canonical key for pair counting.
-    return a < b ? `${a} ${b}` : `${b} ${a}`;
+    return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
   }
   for (const basket of transactions.values()) {
     const items = Array.from(basket).filter((i) => frequentSet.has(i));
@@ -226,7 +226,7 @@ export function runMarketBasket(
   const rules: AssociationRule[] = [];
   for (const [k, count] of pairCounts) {
     if (count < minCount) continue;
-    const [a, b] = k.split(" ");
+    const [a, b] = k.split("\u0000");
     const supA = (itemCounts.get(a) ?? 0) / T;
     const supB = (itemCounts.get(b) ?? 0) / T;
     const supAB = count / T;

@@ -311,7 +311,7 @@ export function BarRenderer({
       patternKey: string;
     }
     const aggKey = (k: AggKey) =>
-      `${k.outerKey}${k.colorKey}${k.detailKey}`;
+      `${k.outerKey}\u0001${k.colorKey}\u0001${k.detailKey}`;
     const aggregated = new Map<
       string,
       AggKey & { value: number }
@@ -356,18 +356,18 @@ export function BarRenderer({
       let stackKey: string;
       switch (layout) {
         case "grouped":
-          stackKey = `${a.outerKey}${a.colorKey}${a.detailKey}`;
+          stackKey = `${a.outerKey}\u0001${a.colorKey}\u0001${a.detailKey}`;
           break;
         case "stacked":
         case "normalized":
           stackKey = a.outerKey;
           break;
         case "grouped-stacked":
-          stackKey = `${a.outerKey}${a.colorKey}`;
+          stackKey = `${a.outerKey}\u0001${a.colorKey}`;
           break;
         case "diverging": {
           const side = value >= 0 ? "+" : "-";
-          stackKey = `${a.outerKey}${side}`;
+          stackKey = `${a.outerKey}\u0001${side}`;
           break;
         }
       }

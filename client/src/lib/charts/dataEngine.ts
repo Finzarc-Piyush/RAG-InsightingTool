@@ -24,7 +24,7 @@ export type Predicate = (row: Row) => boolean;
  * Group rows by one or more key columns. Composite keys are joined
  * with a unit-separator that won't appear in user data.
  */
-const KEY_SEP = "";
+const KEY_SEP = "\u001f";
 
 export function groupBy(rows: Row[], keys: string[]): Map<string, Row[]> {
   const out = new Map<string, Row[]>();
