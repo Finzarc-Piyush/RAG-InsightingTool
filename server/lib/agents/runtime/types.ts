@@ -522,6 +522,13 @@ export interface AgentLoopResult {
   /** Sub-questions emitted by the reflector when anomalous findings warrant deeper investigation. */
   spawnedQuestions?: SpawnedQuestion[];
   /**
+   * Which spawned sub-questions the in-turn follow-up pass actually investigated,
+   * with the chart count each produced. Persisted onto the assistant message so
+   * the "Investigated · N charts" badge survives reload (the live SSE
+   * `sub_question_investigated` events are otherwise lost when the turn ends).
+   */
+  investigatedSubQuestions?: Array<{ id: string; question: string; chartCount: number }>;
+  /**
    * Filters the agent applied to this turn's analysis (mirrors
    * `ctx.inferredFilters`). Persisted onto the assistant message so the UI
    * can render "Filters: Category = Furniture" chips above the chart cards.

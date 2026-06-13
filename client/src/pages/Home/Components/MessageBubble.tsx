@@ -340,6 +340,24 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
     return Object.keys(map).length ? map : undefined;
   }, [message]);
 
+  // Persisted "which sub-questions were investigated" → the id→{chartCount} map
+  // the ThinkingPanel uses to flip a chip to the green "Investigated · N charts"
+  // badge. Survives reload (the live `sub_question_investigated` SSE events are
+  // gone once the turn ends).
+  const investigatedSubQuestionsMap = useMemo(() => {
+    const arr = (
+      message as Message & {
+        investigatedSubQuestions?: Array<{ id: string; chartCount: number }>;
+      }
+    ).investigatedSubQuestions;
+    if (!arr?.length) return undefined;
+    const map: Record<string, { chartCount: number }> = {};
+    for (const it of arr) {
+      if (it?.id) map[it.id] = { chartCount: it.chartCount ?? 0 };
+    }
+    return Object.keys(map).length ? map : undefined;
+  }, [message]);
+
   // Same derivation for the pivot target, used by DataPreviewTable's thumbs row.
   const pivotFeedback = useMemo(() => {
     const details = (
@@ -664,6 +682,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                 spawnedSubQuestions={
                   (message as Message & { spawnedQuestions?: { id: string; question: string }[] }).spawnedQuestions
                 }
+                investigatedSubQuestions={investigatedSubQuestionsMap}
                 sessionId={sessionId ?? null}
                 turnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}
                 spawnedQuestionFeedback={spawnedQuestionFeedbackMap}
@@ -683,6 +702,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
               spawnedSubQuestions={
                 (message as Message & { spawnedQuestions?: { id: string; question: string }[] }).spawnedQuestions
               }
+              investigatedSubQuestions={investigatedSubQuestionsMap}
               sessionId={sessionId ?? null}
               turnId={(message.agentTrace as { turnId?: string } | undefined)?.turnId ?? null}
               spawnedQuestionFeedback={spawnedQuestionFeedbackMap}

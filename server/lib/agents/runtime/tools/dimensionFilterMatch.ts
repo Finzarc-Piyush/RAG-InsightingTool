@@ -14,6 +14,8 @@
  * intentionally NOT consolidated.
  */
 
+import { z } from "zod";
+
 /** The categorical-only filter shape both market-basket / RFM tools accept. */
 export interface CategoricalDimensionFilter {
   column: string;
@@ -21,6 +23,38 @@ export interface CategoricalDimensionFilter {
   values: string[];
   match?: "exact" | "case_insensitive";
 }
+
+/**
+ * Strict categorical filter schema matching what `passesFilter` consumes:
+ * in/not_in with exact|case_insensitive matching, non-empty column + values.
+ * Single source of truth for the `dimensionFilters` arg in tools that prefilter
+ * rows with `passesFilter` (cohort, hierarchicalDrill, priceElasticity) plus
+ * marketBasket / rfm.
+ */
+export const categoricalDimensionFilterSchema = z
+  .object({
+    column: z.string().min(1),
+    op: z.enum(["in", "not_in"]),
+    values: z.array(z.string()).min(1),
+    match: z.enum(["exact", "case_insensitive"]).optional(),
+  })
+  .strict();
+
+/**
+ * Broader categorical filter schema that also allows a `contains` match mode
+ * (and does not require non-empty column/values). Used by tools whose filtering
+ * goes through `dataTransform.filterRowsByDimensionFilters` — which implements
+ * `contains` — i.e. anomaly, breakdownRanking, significanceTest, computeGrowth,
+ * detectSeasonality, twoSegment.
+ */
+export const dimensionFilterWithContainsSchema = z
+  .object({
+    column: z.string(),
+    op: z.enum(["in", "not_in"]),
+    values: z.array(z.string()),
+    match: z.enum(["exact", "case_insensitive", "contains"]).optional(),
+  })
+  .strict();
 
 export function passesFilter(
   row: Record<string, unknown>,

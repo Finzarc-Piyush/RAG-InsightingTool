@@ -103,6 +103,9 @@ export async function answerQuestion(
   // drop them here — so chips were live-SSE-only and vanished on reload.
   // Forwarding closes that persistence gap.
   spawnedQuestions?: import('./agents/runtime/types.js').AgentLoopResult['spawnedQuestions'];
+  // Which of those sub-questions the follow-up pass investigated (+ chart count),
+  // so the "Investigated" badge survives reload (same persistence gap as above).
+  investigatedSubQuestions?: import('./agents/runtime/types.js').AgentLoopResult['investigatedSubQuestions'];
   // AMR3 · raw pivot captures from execute_query_plan steps; the chatStream
   // service materializes (inline-vs-blob policy) and patches them onto the
   // past_analyses doc for cross-session recall.
@@ -184,6 +187,7 @@ export async function answerQuestion(
           // chatStream persists them onto the assistant message (they survive
           // reload instead of being live-SSE-only).
           ...(loopResult.spawnedQuestions?.length ? { spawnedQuestions: loopResult.spawnedQuestions } : {}),
+          ...(loopResult.investigatedSubQuestions?.length ? { investigatedSubQuestions: loopResult.investigatedSubQuestions } : {}),
           // Carry through the structured envelope and the post-verifier
           // business-actions promise. Declaring them explicitly here makes
           // the data flow traceable end-to-end (agentLoop → answerQuestion

@@ -19,6 +19,25 @@ export function toNumber(value: unknown): number {
   return Number(cleaned);
 }
 
+/**
+ * Number()-based coercion (NOT parseFloat). Trims strings, returns null for
+ * blank or non-finite input. This is the exact body that was copy-pasted as
+ * `toNumberOrNull` (cohort, rfm, hierarchicalDrill, priceElasticity) and
+ * `numericValue` (breakdownRanking, twoSegment) across the analytical tools.
+ * Distinct from `toNumberOrNull` below, which uses parseFloat (so e.g.
+ * "12px" -> null here vs 12 there, "1,000" -> null here vs 1 there).
+ */
+export function toFiniteNumber(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (!trimmed) return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 /** parseFloat-based coercion. Returns the finite number, or null. */
 export function toNumberOrNull(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;

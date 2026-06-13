@@ -61,4 +61,31 @@ describe("Phase-1 rich envelope — messageSchema", () => {
     });
     assert.equal(out.success, true);
   });
+
+  it("accepts persisted investigatedSubQuestions (durable 'Investigated' badge)", () => {
+    const out = messageSchema.safeParse({
+      role: "assistant",
+      content: "Adherence analysis.",
+      timestamp: Date.now(),
+      investigatedSubQuestions: [
+        { id: "sq1", question: "Which TSOE has lowest compliance?", chartCount: 2 },
+      ],
+    });
+    assert.equal(out.success, true);
+  });
+
+  it("rejects more than 16 investigatedSubQuestions (cap matches chatStream persist)", () => {
+    const many = Array.from({ length: 17 }, (_, i) => ({
+      id: `sq${i}`,
+      question: `q${i}`,
+      chartCount: 0,
+    }));
+    const out = messageSchema.safeParse({
+      role: "assistant",
+      content: "x",
+      timestamp: Date.now(),
+      investigatedSubQuestions: many,
+    });
+    assert.equal(out.success, false);
+  });
 });

@@ -27,6 +27,15 @@ const PERCENT_RE = /\b(rate|percent|pct|share|ratio|conversion|growth)\b/i;
 const DATE_RE = /\b(date|month|quarter|year|week|time|timestamp|period)\b/i;
 /** SQL audit-column convention: `created_at`, `updated_on`, etc. */
 const DATE_SUFFIX_RE = /(_at|_on)$/i;
+/**
+ * Smallest numeric value treated as a real epoch-millis timestamp on a
+ * date-named axis (1e8 ms ≈ 1970-01-02 — i.e. essentially the epoch). Anything
+ * smaller is an ordinal/counter (day-of-month, week #, month #, year) that must
+ * render as a plain number, never a 1-Jan-1970 date. Deliberately conservative:
+ * real business dates are ≥ ~1e12 ms and ordinals are well below 1e8, so the
+ * wide gap between never traps a legitimate value.
+ */
+const DATE_EPOCH_MS_MIN = 1e8;
 
 const CURRENCY_SYMBOLS_BY_FIELD: Record<string, string> = {
   usd: "$",
@@ -213,6 +222,15 @@ export function formatChartValue(
       : String(value);
   }
   if (hint === "date") {
+    // Magnitude guard. A date-NAMED axis ("Week", "Month", "Year", a leftover
+    // "Day") whose VALUE is a small number is an ordinal/counter (week 12,
+    // month 3, year 2025, avg-day 15), NOT a calendar instant — running it
+    // through `new Date(n)` yields "1 Jan 1970". Real calendar values arrive as
+    // ISO strings (num is NaN here) or full epoch-millis (≥ DATE_EPOCH_MS_MIN),
+    // both of which still format as dates. Render the ordinal as a plain number.
+    if (typeof value === "number" && Number.isFinite(value) && Math.abs(value) < DATE_EPOCH_MS_MIN) {
+      return Number.isInteger(value) ? String(value) : formatKMB(value, opts.precision ?? 1);
+    }
     return formatDateSmart(value as string | number | Date, opts.dateRangeMs);
   }
   if (hint === "kmb" || hint === "compact") {

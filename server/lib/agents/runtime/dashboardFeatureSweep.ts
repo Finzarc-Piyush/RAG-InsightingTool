@@ -43,6 +43,7 @@ import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import { toNumber } from "../../numberCoercion.js";
 import {
   distinctBucketsForGrain,
   pickTrendGrainForSpan,
@@ -64,6 +65,12 @@ const LOW_CARDINALITY_MAX = 60;
 const MEDIUM_CARDINALITY_MAX = 500;
 const TOP_N_BUCKET = 15;
 const OTHER_BUCKET_LABEL = "Other";
+/**
+ * Per-side count for the best+worst leaderboard used in exhaustive breadth:
+ * a bucketed dimension shows its top-K AND bottom-K groups (2·K bars), so the
+ * WORST performers are visible instead of being lumped into "Other".
+ */
+const TOP_BOTTOM_K = 8;
 // Aligned with `DASHBOARD_CHART_HARD_CAP` and the per-sheet schema ceiling
 // (`dashboardSheetSpecSchema.charts.max(24)`). This is only the FALLBACK
 // ceiling — agentLoop.service.ts always passes
@@ -188,23 +195,32 @@ export function enumerateMissingDashboardCharts(
       // column (e.g. TSO_TSE Name) still surfaces its top performers rather than
       // vanishing silently.
       if (!opts.bucketHighCardinality) continue;
-      const bucketed = bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
+      // Exhaustive breadth: show the BEST and WORST performers, not top-N+Other
+      // (which buries the worst — the exact thing the user wants for people-level
+      // dimensions like TSO_TSE Name).
+      const bucketed = bucketTopAndBottom(sourceRows, dim, TOP_BOTTOM_K, outcome);
       const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
       if (built) {
         out.push(built);
-        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_N_BUCKET });
+        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_BOTTOM_K * 2 });
       }
       continue;
     }
     if (uniques > LOW_CARDINALITY_MAX) {
-      // Top-N + Other bucketing keeps the chart legible while still surfacing
-      // the dim in the dashboard. Without this, a high-cardinality dim would
-      // be silently dropped — that's the "missed features" complaint at the root.
-      const bucketed = bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
+      // Bucket a medium-cardinality dim into a legible chart. In exhaustive
+      // breadth we keep top-K AND bottom-K (best+worst visible); the legacy
+      // dashboard-only path keeps top-N+Other (long-tail aggregate preserved).
+      const bucketed = opts.bucketHighCardinality
+        ? bucketTopAndBottom(sourceRows, dim, TOP_BOTTOM_K, outcome)
+        : bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
       const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
       if (built) {
         out.push(built);
-        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_N_BUCKET });
+        report?.bucketedDimensions.push({
+          dimension: dim,
+          uniques,
+          topN: opts.bucketHighCardinality ? TOP_BOTTOM_K * 2 : TOP_N_BUCKET,
+        });
       }
     } else {
       const built = tryBuildChart(ctx, sourceRows, "bar", dim, outcome);
@@ -250,13 +266,57 @@ function bucketRowsTopN(
   });
 }
 
+/**
+ * Keep ONLY the top-K and bottom-K groups of `dim`, ranked by the MEAN of
+ * `outcome` (size-normalised — correct for a rate; a raw SUM would just reward
+ * the biggest group), and DROP the middle. The resulting chart shows the BEST
+ * and WORST performers of a high-cardinality dimension side by side, instead of
+ * a top-N+Other view that hides the worst. Kept groups retain ALL their rows so
+ * per-group means stay exact. Pure: returns a filtered (not mutated) row array;
+ * returns the input unchanged when there are ≤ 2·K groups (already small enough).
+ */
+function bucketTopAndBottom(
+  rows: Record<string, unknown>[],
+  dim: string,
+  k: number,
+  outcome: string
+): Record<string, unknown>[] {
+  const agg = new Map<string, { sum: number; n: number }>();
+  for (const r of rows) {
+    const raw = r?.[dim];
+    if (raw == null || raw === "") continue;
+    // toNumber (not bare Number) so the ranking agrees with how the chart
+    // aggregates — handles "85%"/"1,234" string cells the same way.
+    const y = toNumber(r?.[outcome]);
+    if (!Number.isFinite(y)) continue;
+    const key = String(raw);
+    const cur = agg.get(key) ?? { sum: 0, n: 0 };
+    cur.sum += y;
+    cur.n += 1;
+    agg.set(key, cur);
+  }
+  const means = [...agg.entries()].map(([key, { sum, n }]) => ({ key, mean: sum / n }));
+  if (means.length <= 2 * k) return rows;
+  means.sort((a, b) => b.mean - a.mean);
+  const keep = new Set<string>([
+    ...means.slice(0, k).map((m) => m.key),
+    ...means.slice(means.length - k).map((m) => m.key),
+  ]);
+  return rows.filter((r) => {
+    const raw = r?.[dim];
+    return raw != null && raw !== "" && keep.has(String(raw));
+  });
+}
+
 // Exposed for tests so the bucketing helper can be pinned independently.
 export const __test__ = {
   bucketRowsTopN,
+  bucketTopAndBottom,
   pickStrongestDateColumn,
   LOW_CARDINALITY_MAX,
   MEDIUM_CARDINALITY_MAX,
   TOP_N_BUCKET,
+  TOP_BOTTOM_K,
   DEFAULT_MAX_SWEEP_CHARTS,
 };
 
@@ -492,8 +552,8 @@ export function computeDimensionLeaders(
   for (const r of rows) {
     const raw = r?.[dimension];
     if (raw == null || raw === "") continue;
-    const yRaw = r?.[outcome];
-    const y = typeof yRaw === "number" ? yRaw : Number(yRaw);
+    // toNumber so the best/worst finding agrees with the chart's aggregation.
+    const y = toNumber(r?.[outcome]);
     if (!Number.isFinite(y)) continue;
     const key = String(raw);
     const cur = agg.get(key) ?? { sum: 0, n: 0 };

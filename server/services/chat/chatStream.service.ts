@@ -1663,6 +1663,26 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           );
           return persisted.length ? { spawnedQuestions: persisted } : {};
         })()),
+        // Persist which sub-questions were investigated (+ chart count), capped
+        // and shape-guarded like the chips above, so the green "Investigated"
+        // badge survives reload instead of being live-SSE-only.
+        ...((() => {
+          const raw = (result as {
+            investigatedSubQuestions?: { id?: unknown; question?: unknown; chartCount?: unknown }[];
+          }).investigatedSubQuestions;
+          if (!Array.isArray(raw)) return {};
+          const out = raw
+            .filter(
+              (q): q is { id: string; question: string; chartCount: number } =>
+                typeof q?.id === "string" &&
+                q.id.length > 0 &&
+                typeof q?.question === "string" &&
+                typeof q?.chartCount === "number"
+            )
+            .slice(0, 16)
+            .map((q) => ({ id: q.id, question: q.question, chartCount: q.chartCount }));
+          return out.length ? { investigatedSubQuestions: out } : {};
+        })()),
         // W3 · structured AnswerEnvelope from narrator (TL;DR, findings,
         // methodology, caveats, nextSteps). Optional — absent on synthesizer
         // fallback turns; the client gracefully falls back to markdown.

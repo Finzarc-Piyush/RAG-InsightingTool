@@ -166,6 +166,19 @@ describe("format · formatChartValue (universal)", () => {
   it("custom precision", () => {
     expect(formatChartValue(1234, "Revenue", { precision: 2 })).toBe("$1.23K");
   });
+
+  it("magnitude guard: ordinal values on a date-NAMED axis render as plain numbers, not 1-Jan-1970", () => {
+    // "Week"/"Month"/"Year" still match the date-name heuristic, but a small
+    // numeric value is an ordinal — formatting it as a date gave "1 Jan 1970".
+    expect(formatChartValue(12, "Week")).toBe("12"); // week 12
+    expect(formatChartValue(3, "Month")).toBe("3"); // month 3
+    expect(formatChartValue(2025, "Year")).toBe("2025"); // year, not "1 Jan 1970"
+    // A real epoch-millis date value still formats as a date.
+    const realMs = Date.UTC(2024, 2, 15); // 2024-03-15, ~1.71e12
+    expect(formatChartValue(realMs, "Date")).toMatch(/2024/);
+    // ISO date strings still format as dates.
+    expect(formatChartValue("2024-03-15", "Date")).toMatch(/2024/);
+  });
 });
 
 describe("Wave F1 · makeAxisTickFormatter (field-aware axis ticks)", () => {

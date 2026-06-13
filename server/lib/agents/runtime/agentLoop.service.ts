@@ -1051,6 +1051,10 @@ export async function runAgentTurn(
   let followUpPrompts: string[] | undefined;
   // W8: accumulated sub-questions from reflector spawning decisions.
   const accumulatedSpawnedQuestions: import("./investigationTree.js").SpawnedQuestion[] = [];
+  // Which spawned sub-questions the follow-up pass investigated (+ chart count),
+  // captured for the return so chatStream persists them onto the message and the
+  // "Investigated" badge survives reload.
+  const investigatedSubQuestionsOut: Array<{ id: string; question: string; chartCount: number }> = [];
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
@@ -3016,6 +3020,17 @@ export async function runAgentTurn(
         // Primary charts were pushed first (above); append sub-charts so the
         // dedupe/cap in finalizeMergedCharts keeps primary charts on collision.
         if (pass.charts.length) mergedCharts.push(...pass.charts);
+        // Capture the investigated set for persistence (durable "Investigated"
+        // badge on reload). Only entries with a stable id are useful to the UI.
+        for (const inv of pass.investigated) {
+          if (typeof inv.id === "string" && inv.id) {
+            investigatedSubQuestionsOut.push({
+              id: inv.id,
+              question: inv.question,
+              chartCount: inv.chartCount,
+            });
+          }
+        }
         // B5 — weave each investigated sub-question's answer into the SHARED
         // blackboard as a provenance-tagged finding, BEFORE the narrator runs
         // below. Previously `pass.investigated[]` was only logged (a count), so
@@ -4207,6 +4222,7 @@ export async function runAgentTurn(
       ...(dashboardDraft ? { dashboardDraft } : {}),
       ...(createdDashboardId ? { createdDashboardId } : {}),
       ...(accumulatedSpawnedQuestions.length ? { spawnedQuestions: accumulatedSpawnedQuestions } : {}),
+      ...(investigatedSubQuestionsOut.length ? { investigatedSubQuestions: investigatedSubQuestionsOut } : {}),
       ...(ctx.blackboard ? { blackboard: ctx.blackboard } : {}),
       // W13 · compact persistable digest of the analytical blackboard so
       // the client can render an "Investigation summary" card. Returns

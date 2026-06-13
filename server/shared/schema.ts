@@ -1657,6 +1657,16 @@ export const messageSchema = z.object({
     .array(z.object({ id: z.string(), question: z.string() }))
     .max(16)
     .optional(),
+  /**
+   * Which spawned sub-questions were auto-investigated this turn (+ chart count).
+   * Lets the persisted message flip the "Investigating further" chips to a green
+   * "Investigated · N charts" badge on reload — otherwise that state is
+   * live-SSE-only and vanishes when the turn ends.
+   */
+  investigatedSubQuestions: z
+    .array(z.object({ id: z.string(), question: z.string(), chartCount: z.number() }))
+    .max(16)
+    .optional(),
   /** Agent synthesis CTAs; rendered as clickable follow-up chips (max 3). */
   followUpPrompts: z.array(z.string()).max(3).optional(),
   /** Phase-1: 2–4 numeric magnitudes that back the main claim. */

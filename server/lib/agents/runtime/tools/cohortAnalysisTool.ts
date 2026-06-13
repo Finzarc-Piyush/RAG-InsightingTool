@@ -51,15 +51,11 @@
 import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
-
-const dimensionFilterSchema = z
-  .object({
-    column: z.string().min(1),
-    op: z.enum(["in", "not_in"]),
-    values: z.array(z.string()).min(1),
-    match: z.enum(["exact", "case_insensitive"]).optional(),
-  })
-  .strict();
+import {
+  passesFilter,
+  categoricalDimensionFilterSchema as dimensionFilterSchema,
+} from "./dimensionFilterMatch.js";
+import { toFiniteNumber as toNumberOrNull } from "../../../numberCoercion.js";
 
 export const cohortAnalysisArgsSchema = z
   .object({
@@ -94,31 +90,6 @@ interface CellAccumulator {
   entities: Set<string>;
   sum: number;
   count: number;
-}
-
-function toNumberOrNull(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const trimmed = v.trim();
-    if (!trimmed) return null;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-function passesFilter(
-  row: Record<string, unknown>,
-  filter: { column: string; op: "in" | "not_in"; values: string[]; match?: "exact" | "case_insensitive" },
-): boolean {
-  const cell = row[filter.column];
-  const cellStr = cell === null || cell === undefined ? "" : String(cell);
-  const eq =
-    filter.match === "case_insensitive"
-      ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-      : (a: string, b: string) => a === b;
-  const matched = filter.values.some((v) => eq(cellStr, v));
-  return filter.op === "in" ? matched : !matched;
 }
 
 function cellValue(cell: CellAccumulator | undefined, agg: CohortAnalysisArgs["aggregation"]): number {

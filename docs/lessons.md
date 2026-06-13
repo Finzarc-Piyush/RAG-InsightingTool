@@ -7,6 +7,14 @@
 > Newest at top. One lesson per section. Each lesson states: the rule, why (what went wrong),
 > and how to apply it next time.
 
+## L-013 — Name-based "is this a date?" inference must be backstopped by a VALUE-magnitude guard
+
+**Rule:** Detecting a date axis from the column NAME alone is fragile: `Week`/`Month`/`Year`/`Day` columns are ordinal counters whose VALUES (1..52, 1..12, 2025, 1..31) are not calendar instants. Running such a value through `new Date(n)` renders epoch-relative garbage ("1 Jan 1970"). The robust fix is a magnitude guard at the format layer: on a date-named axis, a finite numeric value below `DATE_EPOCH_MS_MIN` (1e8 ms ≈ 1970-04-26) is an ordinal → render as a plain number, never a date. Real calendar values arrive as ISO strings (`Number(v)` is NaN) or full epoch-millis (≥ ~1e12), both of which still format as dates. See [client/src/lib/charts/format.ts](../client/src/lib/charts/format.ts) `formatChartValue`. This generalises the [[L-011]] "Day" token removal to every ordinal.
+
+**Why:** removing just the `day` token from `DATE_RE` fixed the reported "Day = 1-Jan-1970" but left `Week`/`Month`/`Year` numeric columns exposed to the identical bug. The name heuristic is the wrong layer to be authoritative — the value's magnitude is.
+
+**How to apply:** Two adjacent completions shipped alongside this guard, both extending earlier waves — (1) **best+worst leaderboard** for high-cardinality breakdown dims ([dashboardFeatureSweep.ts](../server/lib/agents/runtime/dashboardFeatureSweep.ts) `bucketTopAndBottom`): exhaustive breadth now keeps top-K AND bottom-K groups (worst no longer buried in "Other") so "top & worst at every level" holds for people-level dims like TSO_TSE Name; (2) **durable `investigatedSubQuestions`** — the "Investigated · N charts" badge is now persisted (AgentLoopResult → dataAnalyzer → messageSchema `.max(16)` → chatStream → `MessageBubble` archived `ThinkingPanel`), closing the [[L-010]] rank-3 "live-SSE-only, vanishes on reload" gap. When you "fix" a name-based heuristic, ask whether the deeper invariant is a value property, and whether a sibling surface (persistence/reload) needs the same data.
+
 ## L-012 — A literal control byte in source hides the file from ripgrep
 
 **Rule:** A source file containing a literal control byte (NUL U+0000, SOH U+0001, Unit Separator U+001F, …) is classified as *binary* by `file(1)`, and **ripgrep — hence the Grep tool, the shell `grep`/`rg` wrappers, and most editor search — silently skips it**. A "no matches" result for such a file is a false negative, not proof the symbol is absent.
