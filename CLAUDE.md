@@ -48,6 +48,8 @@ Every unit of work is ~100–200 LOC, one file class (pure fn OR schema OR one r
 
 **No top-level `package.json`.** Each service has its own.
 
+**First-time clone setup:** `git config core.hooksPath .githooks` enables the local pre-commit gate (invariants + doc-refs + registry freshness) so drift is caught at commit time, not just by CI. Per-clone (git config isn't shared); CI is the always-on backstop regardless.
+
 ## Dev loop (three terminals)
 
 ```bash

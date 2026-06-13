@@ -18,7 +18,7 @@ window.addEventListener(EVENT_NAME, (event) => {
 });
 ```
 
-The receiving panel resolves against `state.contextField` (the captured value), **NOT** against the current `activeContextValue` from React state.
+The receiving panel resolves against the captured context field on the stored state (the value frozen at dispatch time), **NOT** against the current active-context value from React state.
 
 The conditional-spread (rather than unconditional injection) preserves the pre-wave event shape verbatim when the context value is null/undefined (degenerate mid-mount cases, callers that pre-date the field) — backwards-compat for any existing event consumer.
 
@@ -33,8 +33,8 @@ Both failure modes are silent — the panel renders something plausible but wron
 
 Alternatives considered and rejected:
 
-- **Pass `activeContextValue` as a separate prop on the panel.** Two-prop drift surface: panel reads `event.x` from the event prop AND `contextValue` from a separate prop; the two can diverge if the parent mis-wires them. Also doesn't defend against the dispatch-to-render drift (the prop carries the CURRENT context value, not the dispatch-time one).
-- **Re-derive the context at render time inside the panel.** Same dispatch-to-render drift surface — render reads whatever `activeContextValue` is at render time, not at dispatch time.
+- **Pass the active-context value as a separate prop on the panel.** Two-prop drift surface: panel reads `event.x` from the event prop AND `contextValue` from a separate prop; the two can diverge if the parent mis-wires them. Also doesn't defend against the dispatch-to-render drift (the prop carries the CURRENT context value, not the dispatch-time one).
+- **Re-derive the context at render time inside the panel.** Same dispatch-to-render drift surface — render reads whatever the active context is at render time, not at dispatch time.
 - **Store the captured context in a parallel `useRef`.** Works but spreads the "what was captured" state across two slots (event detail + ref); harder to debug, easy to forget to clear the ref on event close.
 - **Always inject the context value (no conditional spread).** Forces every consumer to handle the new field, breaks backwards-compat for any handler that does `assert.match(/setEventState\(detail\)/)` source-inspection or any test that pins the pre-wave shape.
 
@@ -47,7 +47,7 @@ When dispatching a `CustomEvent` whose consumer panel needs a drift-stable conte
 1. **Add `contextField?: TYPE`** as an optional field on the event interface. JSDoc the three load-bearing invariants: (i) injected by the LISTENER, not the dispatching renderer (renderers don't have the dashboard-level context in scope); (ii) captured at dispatch time, NOT render time; (iii) undefined branch preserves backwards-compat.
 2. **At the listener** (the canonical "received the intent, decide what to do" boundary — typically a top-level `useEffect` in a dashboard host component), change `setEventState(detail)` to `setEventState(activeContext ? { ...detail, contextField: activeContext } : detail)`.
 3. **Verify the effect's deps array includes the context value.** Without this, the listener closes over a stale context from the mount-time closure and every subsequent event captures the same (wrong) value. Add a source-inspection test that pins the deps array.
-4. **At the consumer** (panel / sheet / drawer), resolve against `event.contextField` (the captured value). If the consumer needs a fallback for events without `contextField` (legacy event shape, degenerate mid-mount case), the fallback branch resolves against the current state's context value — but the JSDoc should pin that this is for backwards-compat only.
+4. **At the consumer** (panel / sheet / drawer), resolve against the captured context field on the event (the frozen value). If the consumer needs a fallback for events that lack it (legacy event shape, degenerate mid-mount case), the fallback branch resolves against the current state's context value — but the JSDoc should pin that this is for backwards-compat only.
 5. **Pin the conditional-spread shape with source-inspection tests:**
    - Positive pin: regex match `setEventState\(\s*activeContext \? \{ \.\.\.detail, contextField: activeContext \} : detail,?\s*\);`
    - Negative pin: regex doesNotMatch `setEventState\(detail\);` (defense against a future refactor that accidentally reverts the conditional spread)

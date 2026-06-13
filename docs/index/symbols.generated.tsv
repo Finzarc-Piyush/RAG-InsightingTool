@@ -2581,7 +2581,7 @@ runCohortAnalysis	function	server/lib/agents/runtime/tools/cohortAnalysisTool.ts
 runContextAgentRound2	function	server/lib/agents/runtime/contextAgent.ts	90
 runDataOpsFromAgentContext	function	server/lib/agents/runDataOpsFromAgent.ts	66
 runDeckPlanner	function	server/lib/agents/runtime/deckPlanner.ts	496
-runDocRefChecks	function	server/scripts/check-doc-refs.ts	149
+runDocRefChecks	function	server/scripts/check-doc-refs.ts	158
 runHierarchicalDrill	function	server/lib/agents/runtime/tools/hierarchicalDrillTool.ts	165
 runHypothesisAndBriefMerged	function	server/lib/agents/runtime/runHypothesisAndBrief.ts	92
 runInvariantChecks	function	server/scripts/check-invariants.ts	137

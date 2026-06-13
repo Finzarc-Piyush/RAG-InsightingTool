@@ -14,7 +14,7 @@ Do **not** add external queues or workers until there is a concrete signal:
 |--------|----------------|-----------------|
 | Multiple API instances | In-memory job map is not shared; jobs appear lost or duplicated | External queue (e.g. Redis + BullMQ, Azure Queue) + stateless workers; durable job row keyed by `jobId` in Cosmos or Redis |
 | Long enrichment blocks the event loop | CPU or I/O saturation on the API | Dedicated **worker process** for the upload pipeline; API only enqueues |
-| Chat flush lost or inconsistent | Upload completion hook fails or times out | **Outbox** pattern: persist `pendingPostEnrichment` in Cosmos; reconciler/cron retries flush |
+| Chat flush lost or inconsistent | Upload completion hook fails or times out | **Outbox** pattern: persist a pending post-enrichment flush record in Cosmos; reconciler/cron retries flush |
 | Polling `/upload/status` too chatty | Measurable cost or UX lag | Prefer existing **SSE** for chat where already used; add a **narrow** one-shot SSE for “enrichment complete” only if needed; **WebSockets** only if bidirectional streaming is required |
 
 ## Anti-patterns
@@ -73,7 +73,7 @@ independently is when the single-writer helper earns its keep.
   (e.g. `order_date *(can group by year, quarter, month)*`) read from
   `summary.temporalFacetColumns`, so the welcome message advertises the
   same aggregation surface the agent uses (the agent prompt at
-  [`dataOpsOrchestrator.ts:1755-1764`](../../server/lib/dataOps/dataOpsOrchestrator.ts)
+  [`dataOpsOrchestrator.ts`](../../server/lib/dataOps/dataOpsOrchestrator.ts)
   groups by the hidden `__tf_*` columns for "by year/quarter/month"
   requests). Internal `__tf_*` column names are never exposed in the
   user-facing message. Previously a fresh upload with a sparse heuristic
@@ -96,7 +96,7 @@ independently is when the single-writer helper earns its keep.
   `regenerateStarterQuestionsLLM` helper, and rewrites
   `messages[0].suggestedQuestions` + `content` when the initial
   welcome is still the sole assistant message. The fire-and-forget seed
-  at [`server/utils/uploadQueue.ts:554-578`](../../server/utils/uploadQueue.ts)
+  at [`server/utils/uploadQueue.ts`](../../server/utils/uploadQueue.ts)
   no-ops when `permanentContext` is now set.
 - **`user_context` RAG chunk** — `ChatDocument.permanentContext` is now
   indexed into Azure AI Search as a dedicated `user_context` chunk

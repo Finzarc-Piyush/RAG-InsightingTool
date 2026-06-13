@@ -113,6 +113,15 @@ function looksLikeIdentifier(s: string): boolean {
   return /^[A-Za-z][A-Za-z0-9]{3,}$/.test(s) && /[a-z][A-Z]|^[A-Z][a-z]/.test(s);
 }
 
+/** Library types/values legitimately named in docs but defined outside our source. */
+const EXTERNAL_LIB = new Set(["FeedOptions", "Bisector", "SqlQuerySpec", "ItemResponse"]);
+
+/** Skip phantom-symbol warnings for JS/Web builtins (on globalThis) and known
+ *  external library symbols — they're real, just not in our tree. */
+function isExternalIdentifier(s: string): boolean {
+  return s in globalThis || EXTERNAL_LIB.has(s);
+}
+
 /** True if a markdown link target resolves (doc-dir, then root/suffix-match). */
 function docLinkResolves(docRel: string, target: string): boolean {
   const clean = target.replace(/[#?].*$/, "");
@@ -162,6 +171,11 @@ export function runDocRefChecks(): { hard: DocFinding[]; warn: DocFinding[] } {
         return;
       }
       if (inFence) return; // fenced code = examples/templates, not live claims
+      // hand-typed `file.ext:NNN` line refs in prose / link text — same rot class
+      // as #L anchors (8/8 sampled were stale). Forbidden: name the symbol instead.
+      for (const m of raw.matchAll(/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py):\d+(?:-\d+)?/g)) {
+        hard.push({ doc, line, kind: "line-anchor", detail: `${m[0]} — hand-typed line number (forbidden: rots; use the symbol name + docs/index/symbols.generated.tsv)` });
+      }
       // markdown links [text](target)
       for (const m of raw.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
         const target = m[1]!.trim();
@@ -190,6 +204,7 @@ export function runDocRefChecks(): { hard: DocFinding[]; warn: DocFinding[] } {
   if (candidateSymbols.length) {
     const ids = sourceIdentifiers();
     for (const c of candidateSymbols) {
+      if (isExternalIdentifier(c.sym)) continue;
       if (!ids.has(c.sym)) {
         warn.push({ doc: c.doc, line: c.line, kind: "phantom-symbol", detail: `\`${c.sym}\` not found anywhere in source (renamed/deleted?)` });
       }

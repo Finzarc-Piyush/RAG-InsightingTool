@@ -37,8 +37,11 @@ itself; each wave below adds the files it introduces.
 - (W4) `server/lib/wideFormat/tagColumn.ts`
 - (W5) `server/lib/wideFormat/classifyDataset.ts`
 - (W6) `server/tests/fixtures/wideFormat/*.csv`
-- (W7–W8) `server/shared/schema.ts` additions (`WideFormatProposal`,
-  `ChatDocument.wideFormatProposal`, `wideFormatDecision`)
+- (W7–W8) `server/shared/schema.ts` additions — the wide-format
+  proposal type, the `ChatDocument` proposal field, and the decision
+  enum (planned/deferred; what actually shipped is the
+  `wideFormatTransform` schema (`WideFormatTransform`), consumed by the
+  client `WideFormatBanner` rather than a proposal/decision gate)
 - (W9–W10) `python-service/data_operations.py` `melt_frame` +
   `main.py` `/data-ops/melt` route
 - (W11) `server/lib/wideFormat/meltDataset.ts`
@@ -89,24 +92,31 @@ preserved untouched.
 
 ## Runtime flow
 
+> The proposal/decision-gate flow below (steps 3–6) is the **planned**
+> design from the W14–W29 plan; that phase was deferred and the
+> confirmation-gate names (proposal record, decision enum, confirm
+> modal, reshaped-context payload) are not yet shipped. What ships
+> today is the `wideFormatTransform` schema + the client
+> `WideFormatBanner`.
+
 1. Upload arrives at `server/utils/uploadQueue.ts` (`processJob` method).
 2. Preview persists (wide rows, unchanged). `enrichmentStatus: "pending"`.
-3. (W14) `classify(columns, sampleRows)` runs. If `format === "wide"` and
+3. (W14, planned) `classify(columns, sampleRows)` runs. If `format === "wide"` and
    `confidence >= proposalThreshold`:
-   - `wideFormatProposal` persisted to the chat document.
-   - `wideFormatDecision: "pending"`.
+   - the wide-format proposal is persisted to the chat document.
+   - the decision is set to `"pending"`.
    - SSE emits `wide_format_proposal_ready`.
-4. (W15) Enrichment is deferred until `wideFormatDecision !== "pending"`.
-5. (W21) Client opens `WideFormatConfirmModal`, user chooses:
+4. (W15, planned) Enrichment is deferred until the decision leaves `"pending"`.
+5. (W21, planned) Client opens the wide-format confirm modal, user chooses:
    - **reshape** → W16 runs the Python melt, replaces data, rebuilds
-     summary, sets `wideFormatDecision: "reshape"`, enrichment proceeds.
+     summary, sets the decision to `"reshape"`, enrichment proceeds.
    - **keep_wide** → W17 sets `wideKept: true`, enrichment proceeds
      on the wide data with a caveat.
    - **manual** → W18 accepts user-supplied idVars/valueVars and
      feeds them into the melt.
-6. Enrichment + session-context seeding proceed as today, with (W22)
-   `wideFormatContext` included in the LLM profile payload when the
-   data was reshaped.
+6. Enrichment + session-context seeding proceed as today, with (W22, planned)
+   the reshaped wide-format context included in the LLM profile payload
+   when the data was reshaped.
 
 ## Wave index
 

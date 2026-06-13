@@ -7,7 +7,7 @@
 When a wave adds a "history of state X" feature to `ChatDocument`, follow this shape:
 
 1. **Pure module** named `<feature>AuditLog.ts` (e.g. [`semanticModelAuditLog.ts`](../../server/lib/semantic/semanticModelAuditLog.ts)) co-located with the feature's other helpers (the W61 trail keeps audit / source-bump / inference under `server/lib/semantic/`; other features pick the matching subsystem dir).
-2. **Exported entry interface** (`<Feature>AuditEntry`) with at minimum: `savedAt: number` (ms-epoch), `savedBy: string` (admin email or `"unknown"`), and a full snapshot field (`priorModel` / `priorState` / etc).
+2. **Exported entry interface** (`<Feature>AuditEntry`) with at minimum: `savedAt: number` (ms-epoch), `savedBy: string` (admin email or `"unknown"`), and a full snapshot field (`priorModel`, or the prior-state field named for whatever the feature snapshots).
 3. **Exported cap const** (`<FEATURE>_AUDIT_LOG_MAX_ENTRIES`, typically `10`). Bounded ring buffer keeps Cosmos doc footprint predictable.
 4. **Single pure function** `append<Feature>AuditEntry(prior, entry, max = CAP): T[]` that prepends newest-first, caps at `max`, and returns a fresh array. Accepts `undefined` for `prior` to handle the first-save-ever case.
 5. **Optional field on `ChatDocument`** named `<feature>AuditLog?: <Feature>AuditEntry[]` sibling to the feature's primary field, with a doc-comment that names the introducing wave and the cap const.
