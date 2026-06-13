@@ -24,6 +24,14 @@ import {
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
+import {
+  formatDateForDisplay as formatDateForDisplayLocal,
+  determineSliderStep as determineSliderStepLocal,
+  parseNumericValue,
+  getNumericValues,
+  getDynamicDomain,
+  formatAxisLabelFieldBlind as formatAxisLabel,
+} from '@/lib/charts/chartFilterHelpers';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
@@ -34,7 +42,6 @@ import {
   effectiveCategoricalValuesForCheckbox,
   visibleSeriesKeysFromFilters,
 } from '@/lib/chartFilters';
-import { format as formatDate } from 'date-fns';
 import {
   ResponsiveContainer,
   LineChart,
@@ -84,32 +91,6 @@ interface ChartModalProps {
 
 const TABLE_V1_PREFIX = 'TABLE_V1|';
 
-// Smart number formatter for axis labels
-const formatAxisLabel = (value: number): string => {
-  // Handle very small decimals
-  if (Math.abs(value) < 0.01 && value !== 0) {
-    return value.toFixed(4);
-  }
-  
-  // Handle decimals
-  if (Math.abs(value) < 1000 && value % 1 !== 0) {
-    return value.toFixed(2);
-  }
-  
-  // Handle large numbers with K, M, B suffixes
-  const absValue = Math.abs(value);
-  if (absValue >= 1e9) {
-    return (value / 1e9).toFixed(1) + 'B';
-  } else if (absValue >= 1e6) {
-    return (value / 1e6).toFixed(1) + 'M';
-  } else if (absValue >= 1e3) {
-    return (value / 1e3).toFixed(1) + 'K';
-  }
-  
-  // Handle integers and small numbers
-  return value.toFixed(0);
-};
-
 // Splits off a trailing "Next, …" / "Next: …" investigation sentence (the
 // prompt-enforced NEXT-CHECK clause from insightGenerator) so it can be
 // rendered as a clickable suggestion chip. Returns nextStep: null when no such
@@ -122,57 +103,7 @@ function splitTrailingNextStep(text: string): { body: string; nextStep: string |
   return { body, nextStep };
 }
 
-const formatDateForDisplayLocal = (value?: string) => {
-  if (!value) return undefined;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return undefined;
-  return formatDate(parsed, 'd MMM yyyy');
-};
-
-const determineSliderStepLocal = (min: number, max: number) => {
-  const range = Math.abs(max - min);
-  if (!Number.isFinite(range) || range === 0) return 1;
-  if (range <= 0.1) return 0.001;
-  if (range <= 1) return 0.01;
-  if (range <= 10) return 0.1;
-  if (range <= 100) return 1;
-  return Math.pow(10, Math.floor(Math.log10(range)) - 1);
-};
-
-const parseNumericValue = (value: any): number => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : NaN;
-  }
-  if (typeof value === 'string') {
-    const cleaned = value.replace(/[,%]/g, '').trim();
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : NaN;
-  }
-  return NaN;
-};
-
-const getNumericValues = (rows: Record<string, any>[], key?: string | null) => {
-  if (!key) return [];
-  return rows
-    .map((row) => parseNumericValue(row?.[key]))
-    .filter((val) => Number.isFinite(val)) as number[];
-};
-
-const getDynamicDomain = (values: number[], paddingFraction: number = 0.1) => {
-  if (!values.length) return undefined;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
-  if (min === max) {
-    const pad = Math.max(Math.abs(min) * 0.1, 5);
-    return [min - pad, max + pad] as [number, number];
-  }
-  const range = max - min;
-  const padding = Math.max(range * paddingFraction, 2);
-  return [min - padding, max + padding] as [number, number];
-};
-
-export function ChartModal({ 
+export function ChartModal({
   isOpen, 
   onClose, 
   chart,

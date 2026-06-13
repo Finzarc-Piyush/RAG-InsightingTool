@@ -21,6 +21,12 @@ import {
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import { makeAxisTickFormatter } from '@/lib/charts/format';
+import {
+  formatDateForDisplay as formatDateForDisplayLocal,
+  determineSliderStep as determineSliderStepLocal,
+  getNumericValues,
+  getDynamicDomain,
+} from '@/lib/charts/chartFilterHelpers';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import {
   ChartFilterDefinition,
@@ -28,7 +34,6 @@ import {
   effectiveCategoricalValuesForCheckbox,
   visibleSeriesKeysFromFilters,
 } from '@/lib/chartFilters';
-import { format as formatDate } from 'date-fns';
 import {
   ResponsiveContainer,
   LineChart,
@@ -74,57 +79,7 @@ interface ChartOnlyModalProps {
 // the shared field-aware `makeAxisTickFormatter` (percent/currency/KMB) bound
 // per measure field — see the formatters in the component body.
 
-const formatDateForDisplayLocal = (value?: string) => {
-  if (!value) return undefined;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return undefined;
-  return formatDate(parsed, 'd MMM yyyy');
-};
-
-const determineSliderStepLocal = (min: number, max: number) => {
-  const range = Math.abs(max - min);
-  if (!Number.isFinite(range) || range === 0) return 1;
-  if (range <= 0.1) return 0.001;
-  if (range <= 1) return 0.01;
-  if (range <= 10) return 0.1;
-  if (range <= 100) return 1;
-  return Math.pow(10, Math.floor(Math.log10(range)) - 1);
-};
-
-const parseNumericValue = (value: any): number => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : NaN;
-  }
-  if (typeof value === 'string') {
-    const cleaned = value.replace(/[,%]/g, '').trim();
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : NaN;
-  }
-  return NaN;
-};
-
-const getNumericValues = (rows: Record<string, any>[], key?: string | null) => {
-  if (!key) return [];
-  return rows
-    .map((row) => parseNumericValue(row?.[key]))
-    .filter((val) => Number.isFinite(val)) as number[];
-};
-
-const getDynamicDomain = (values: number[], paddingFraction: number = 0.1) => {
-  if (!values.length) return undefined;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
-  if (min === max) {
-    const pad = Math.max(Math.abs(min) * 0.1, 5);
-    return [min - pad, max + pad] as [number, number];
-  }
-  const range = max - min;
-  const padding = Math.max(range * paddingFraction, 2);
-  return [min - padding, max + padding] as [number, number];
-};
-
-export function ChartOnlyModal({ 
+export function ChartOnlyModal({
   isOpen, 
   onClose, 
   chart,
