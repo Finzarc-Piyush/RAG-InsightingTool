@@ -11,6 +11,7 @@
  *      Bootstrap when n < 30, analytical CLT otherwise.
  */
 import type { NumericStats } from "./schemaIndex.js";
+import { toNumberOrNull as toNumber } from "./numberCoercion.js";
 
 // ─── C6 · Outlier flagging on sampled rows ─────────────────────────────────
 
@@ -152,11 +153,3 @@ export function correlationCI(r: number, n: number, confidence = 0.95): CI | und
   return [back(lowZ), back(highZ)];
 }
 
-function toNumber(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const f = parseFloat(v);
-    if (Number.isFinite(f)) return f;
-  }
-  return null;
-}

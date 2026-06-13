@@ -26,6 +26,8 @@
  *   tool calls resolveRowSet against the row-level frame. Pure functions, no I/O.
  */
 
+import { toNumberOrNull as toNumber } from "../../numberCoercion.js";
+
 export interface RowSetRef {
   kind: "rowSetRef";
   /** Filter spec describing the cohort. */
@@ -108,11 +110,3 @@ function looseEqual(a: unknown, b: unknown): boolean {
   return String(a).toLowerCase() === String(b).toLowerCase();
 }
 
-function toNumber(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const f = parseFloat(v);
-    if (Number.isFinite(f)) return f;
-  }
-  return null;
-}

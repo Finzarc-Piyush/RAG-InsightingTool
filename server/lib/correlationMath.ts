@@ -1,17 +1,14 @@
 // Pure math functions for correlation analysis — no LLM/OpenAI dependency.
 // Importable by tests without needing Azure OpenAI env vars.
 
+import { toNumber } from "./numberCoercion.js";
+
 export interface CorrelationResult {
   variable: string;
   correlation: number;
   nPairs?: number;
 }
 
-export function toNumber(value: unknown): number {
-  if (value === null || value === undefined || value === '') return NaN;
-  const cleaned = String(value).replace(/[%,]/g, '').trim();
-  return Number(cleaned);
-}
 
 function pearsonCorrelation(x: number[], y: number[]): number {
   const n = Math.min(x.length, y.length);

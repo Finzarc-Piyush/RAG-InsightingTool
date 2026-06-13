@@ -20,6 +20,7 @@ import {
   GRAIN_TO_PERIOD,
 } from './temporalFacetColumns.js';
 import { logger } from "./logger.js";
+import { toNumber } from "./numberCoercion.js";
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -53,11 +54,6 @@ const MONTH_MAP: Record<string, number> = {
   dec: 11,
 };
 
-function toNumber(value: any): number {
-  if (value === null || value === undefined || value === '') return NaN;
-  const cleaned = String(value).replace(/[%,]/g, '').trim();
-  return Number(cleaned);
-}
 
 function parseDate(value: any): Date | null {
   return value instanceof Date && !isNaN(value.getTime()) ? value : null;

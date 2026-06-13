@@ -7,12 +7,12 @@ import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/
 import { generateChartInsights } from './insightGenerator.js';
 import { generateStreamingCorrelationChart, formatSlopeForTitle } from './streamingCorrelationAnalyzer.js';
 import {
-  toNumber,
   type CorrelationResult,
   calculateCorrelations,
   calculateEtaSquared,
   calculateCategoricalCorrelations,
 } from './correlationMath.js';
+import { toNumber } from './numberCoercion.js';
 import { logger } from "./logger.js";
 
 export { calculateCorrelations, calculateEtaSquared, calculateCategoricalCorrelations };

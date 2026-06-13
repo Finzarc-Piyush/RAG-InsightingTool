@@ -14,6 +14,7 @@ import {
 } from './chartDownsampling.js';
 import { logger } from "./logger.js";
 import { KEY_SEP } from "./compositeKey.js";
+import { toNumber } from "./numberCoercion.js";
 
 export type ProcessChartDataOptions = {
   /** Used to pick date bucket (year/month/...) for aggregated line charts and downsampling. */
@@ -230,12 +231,6 @@ const MAX_POINTS_LINE_CHART = 5000;  // For line/area charts
 const MAX_POINTS_SCATTER = 5000;     // For scatter plots
 const MAX_POINTS_CORRELATION = 5000; // For correlation charts
 
-// Helper to clean numeric values (strip %, commas, etc.)
-function toNumber(value: any): number {
-  if (value === null || value === undefined || value === '') return NaN;
-  const cleaned = String(value).replace(/[%,]/g, '').trim();
-  return Number(cleaned);
-}
 
 // Helper function to convert Date objects to strings for schema validation
 function convertValueForSchema(value: any): string | number | null {

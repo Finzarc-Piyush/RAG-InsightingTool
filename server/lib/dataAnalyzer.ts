@@ -45,12 +45,6 @@ export interface DivisionContext {
 }
 
 
-// Helper to clean numeric values (strip %, commas, etc.)
-function toNumber(value: any): number {
-  if (value === null || value === undefined || value === '') return NaN;
-  const cleaned = String(value).replace(/[%,]/g, '').trim();
-  return Number(cleaned);
-}
 
 // Helper function to find matching column name (case-insensitive, handles spaces/underscores, partial matching)
 function findMatchingColumn(searchName: string, availableColumns: string[]): string | null {
