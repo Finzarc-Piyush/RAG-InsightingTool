@@ -28,20 +28,21 @@ Do **not** add external queues or workers until there is a concrete signal:
 
 ## `enrichmentStatus` writers (v1 — single function)
 
-The field has **one writer** in practice: `processUploadJob` inside
+The field has **one writer** in practice: the `processJob` method inside
 [`server/utils/uploadQueue.ts`](../../server/utils/uploadQueue.ts).
-The transitions inside that function are:
+The transitions inside that method are (grep `enrichmentStatus` in that file
+for exact lines — they move; the trigger column is the stable anchor):
 
-| Stage | Line ≈ | Target status | What else is written |
-|---|---:|---|---|
-| Preview persisted | 451 | `in_progress` | `dataSummary`, `sampleRows`, `selectedSheetName` |
-| Understanding checkpoint | 573 | `complete` | `dataSummary`, `datasetProfile`, `sessionAnalysisContext` |
-| Full enrichment (update path) | 830 | `complete` | ~15 fields: rawData, sampleRows, profile, blob info, analysisMetadata, etc. |
-| Full enrichment (create path fixup) | 867 | `complete` | `selectedSheetName`, `columnarStoragePath` |
-| Failure | 938 | `failed` | only the status + `lastUpdatedAt` |
+| Stage | Target status | What else is written |
+|---|---|---|
+| Preview persisted | `in_progress` | `dataSummary`, `sampleRows`, `selectedSheetName` |
+| Understanding checkpoint | `complete` | `dataSummary`, `datasetProfile`, `sessionAnalysisContext` |
+| Full enrichment (update path) | `complete` | ~15 fields: rawData, sampleRows, profile, blob info, analysisMetadata, etc. |
+| Full enrichment (create path fixup) | `complete` | `selectedSheetName`, `columnarStoragePath` |
+| Failure | `failed` | only the status + `lastUpdatedAt` |
 
-Plus one creation writer at `server/models/chat.model.ts:434` which
-initialises new chats at `enrichmentStatus: "pending"`.
+Plus one creation writer in [`server/models/chat.model.ts`](../../server/models/chat.model.ts)
+which initialises new chats at `enrichmentStatus: "pending"`.
 
 ### Why no single-writer helper (Wave F9 retracted)
 
@@ -53,7 +54,7 @@ runs serially in-process, so there is no concurrent-writer race to
 eliminate. The real risk is forgetting which transition is legal at
 which stage; the table above is the canonical reference.
 
-If a future change introduces a writer OUTSIDE `processUploadJob`,
+If a future change introduces a writer OUTSIDE `processJob`,
 revisit this decision: the moment two functions mutate the field
 independently is when the single-writer helper earns its keep.
 

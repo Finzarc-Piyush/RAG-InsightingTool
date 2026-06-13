@@ -1,7 +1,10 @@
-# Execution status — live
+# Execution status — ARCHIVE (point-in-time, 2026-04)
 
-Updated after every commit during the audit-driven cleanup.
-Last updated: Waves 0–5 complete on `claude/add-claude-documentation-PaA9h`.
+> ⚠ Historical audit artifact, NOT live tracking. This captured the one-time
+> audit-driven cleanup (Waves 0–5) on the long-dead branch
+> `claude/add-claude-documentation-PaA9h`. The P-0xx entries below remain a
+> useful incident catalogue, but do not read this as current status — run
+> `/orient` for where the project actually is.
 
 ## Closed
 

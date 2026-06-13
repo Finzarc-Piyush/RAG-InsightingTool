@@ -87,7 +87,7 @@ preserved untouched.
 
 ## Runtime flow
 
-1. Upload arrives at `server/utils/uploadQueue.ts` `processUploadJob`.
+1. Upload arrives at `server/utils/uploadQueue.ts` (`processJob` method).
 2. Preview persists (wide rows, unchanged). `enrichmentStatus: "pending"`.
 3. (W14) `classify(columns, sampleRows)` runs. If `format === "wide"` and
    `confidence >= proposalThreshold`:

@@ -1,5 +1,9 @@
 # Shared schemas (server ↔ client mirror)
 
+> ℹ Line numbers in this doc are indicative and known to drift (the zod *shapes*
+> stay accurate). For an exact current location of any schema symbol, grep it or
+> look it up in `docs/index/symbols.generated.tsv`.
+
 ## Purpose
 
 Every schema the wire touches is defined **twice** — once in

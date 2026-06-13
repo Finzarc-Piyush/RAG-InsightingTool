@@ -70,7 +70,7 @@ Server tests run via [`scripts/runTests.mjs`](server/scripts/runTests.mjs), whic
 
 ## Slash commands (your tools)
 
-- **`/orient`** — run this at the start of every new chat. Reads STATE.md + last 5 waves + git status + active plan. ~5 KB context, ~10 s.
+- **`/orient`** — run at the start of every new chat. Runs `npm --prefix server run orient`: live branch/HEAD/wave/dirty state + invariant-firewall verdict + recent churn + doc sizes + recent lesson titles, all generated fresh from the tree (cannot be stale). One command, ~3 KB.
 - **`/wave-commit`** — run at the end of each wave. Writes the WAVES.md entry, updates STATE.md HEAD, touches affected `docs/architecture/<sub>.md`, creates `docs/conventions/<slug>.md` if new convention introduced, stages doc updates, commits.
 - **`/load <subsystem>`** — pull a subsystem deep-doc into context. Example: `/load agent-runtime`, `/load charting`, `/load rag`, `/load mmm`, `/load wide-format`.
 
@@ -83,6 +83,7 @@ Server tests run via [`scripts/runTests.mjs`](server/scripts/runTests.mjs), whic
 | Older waves (rotated archives) | [`docs/archive/`](docs/archive/) (subagent-only) |
 | Subsystem deep-dives | [`docs/architecture/<name>.md`](docs/architecture/) — 12 files: `agent-runtime`, `tool-registry`, `skills`, `mmm`, `wide-format`, `upload_and_enrichment`, `charting`, `domain-context`, `schemas`, `brand-system`, `ci-and-env`, `overview` |
 | Conventions that bite | [`docs/conventions/`](docs/conventions/) — one file per gotcha |
+| Generated indexes (tools/routes/skills · symbol→file:line) | [`docs/index/`](docs/index/) — `registries.generated.md`, `symbols.generated.tsv` (regenerate: `npm --prefix server run gen:registries` / `gen:symbols`; never hand-edit — see [cold-start convention](docs/conventions/cold-start-generated-indexes.md)) |
 | Architectural decisions (ADRs) | [`docs/decisions/`](docs/decisions/) |
 | Cross-session lessons | [`docs/lessons.md`](docs/lessons.md) |
 | Plan files | [`/Users/tida/.claude/plans/`](file:///Users/tida/.claude/plans/) |

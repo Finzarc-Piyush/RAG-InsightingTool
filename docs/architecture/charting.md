@@ -21,7 +21,7 @@ The full plan and wave breakdown lives in
 
 ### 1.1 Public props (`ChartRendererProps`)
 
-Definition at [ChartRenderer.tsx:59-73](../../client/src/pages/Home/Components/ChartRenderer.tsx#L59-L73).
+Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../client/src/pages/Home/Components/ChartRenderer.tsx) (grep the symbol, or look it up in `docs/index/symbols.generated.tsv` — line numbers move).
 
 | Prop | Type | Purpose | v2 parity requirement |
 |------|------|---------|---|
@@ -189,11 +189,11 @@ inline (no modal needed for editing).
 
 #### Dynamic axis domain
 
-`getDynamicDomain` ([line 125](../../client/src/pages/Home/Components/ChartRenderer.tsx#L125))
+`getDynamicDomain` (local helper in [ChartRenderer.tsx](../../client/src/pages/Home/Components/ChartRenderer.tsx))
 adds 10% padding above/below the value range. Used when `yDomain` not
 explicitly set. Returns `[min - pad, max + pad]`.
 
-**v2 parity**: identical helper in `client/src/lib/charts/scales.ts`.
+**v2 parity**: still a local helper — no separate `client/src/lib/charts/scales.ts` module was extracted (that path does not exist).
 
 #### Series sort + topN
 
@@ -217,7 +217,7 @@ ordering without a server roundtrip.
 | `chartRechartsShared` | Shared Recharts config (color cycle, axis defaults). **Replaced** by `<PremiumChart>` config in v2. |
 | `LINE_AREA_MAX_X_TICKS` | Constant. **Reused as-is.** |
 | `formatDate` (date-fns) | Date formatting. **Reused as-is.** |
-| `getDynamicDomain` (local helper) | Axis padding. **Ported** to `client/src/lib/charts/scales.ts`. |
+| `getDynamicDomain` (local helper) | Axis padding. Remains local to ChartRenderer — no separate `scales.ts` module exists. |
 
 ---
 

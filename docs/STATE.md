@@ -1,18 +1,17 @@
 # Project state — Marico RAG Insighting Tool
 
-> Auto-updated by `/wave-commit`. Read this **first** in every new chat (or run `/orient`).
-> Last sync: 2026-06-03 — **Large-dataset robustness workstream opened.** Phases 0–1 shipped flag-safe on branch `claude/large-dataset-robustness`; Phases 2–5 have deep plans authored. Prior stable milestone preserved. Roadmap: `/Users/tida/.claude/plans/goofy-wandering-quasar.md`.
+> Read this for **durable context** — feature streams, prior milestones, the deferred backlog.
+> For **live state** (branch, HEAD, current wave, dirty tree, recent commits) run `/orient`
+> (`npm --prefix server run orient`): it is generated fresh from the tree each session and
+> cannot drift. This file no longer hand-tracks HEAD — that block is what fell 62 commits
+> behind on the wrong branch in June 2026, which is why the orient pack now owns it.
 
 ## HEAD
 
-- **Latest wave:** Wave WG2.1 (2026-06-03) — large-dataset robustness (verification + handoff)
-- **Branch:** `claude/large-dataset-robustness`
-- **Last commit:** `4eb0e9a5` (2026-06-03)
-- **Handoff / your next steps:** [`docs/large-dataset-NEXT-STEPS.md`](large-dataset-NEXT-STEPS.md)
-- **Working tree:** clean
-- **Server typecheck:** 98 errors (baseline, unchanged)
-- **Client typecheck:** 53 errors (baseline, unchanged)
-- **Tests:** Phase 0/1 unit + touched-module regression green; full server suite not re-run this session (changes are localized + flag-gated)
+Run `/orient` for live branch / HEAD / current wave / dirty-tree / recent-commits, plus the
+invariant-firewall verdict. Generated from the tree by
+[`server/scripts/generate-bootstrap.ts`](../server/scripts/generate-bootstrap.ts), so it is
+always current. The old hand-maintained HEAD block was removed because it drifted.
 
 ## Feature streams
 
@@ -56,12 +55,8 @@ No planned next wave. The backlog is deliberately empty. All deferred items from
 
 **Start new work from user observations and feature requests, not from this backlog.**
 
-## Last 5 waves (one line each — newest first)
+## Recent waves
 
-- **WHov-area-crosshair** (2026-05-25) · Hover tooltip + vertical cross-hair on AreaRenderer. Full tooltip infrastructure + cross-hair line mirroring LineRenderer. Convention promoted. +98 LOC + 9 tests. Commit `6f62ee59`.
-- **WHov-line-crosshair** (2026-05-22) · Vertical cross-hair indicator on LineRenderer at snapped nearest-x. +32 LOC + 7 tests. Commit `2fe54a95`.
-- **WD2-echarts-test-realign** (2026-05-22) · Realigned 4 stale source-inspection tests to current renderer code. Zero code changes, test-only. Commit `04b707c3`.
-- **WD2-line-cursor-parity** (2026-05-22) · LineRenderer cursor parity with AreaRenderer's 3-branch ternary. +17 LOC + 5 tests. Commit `0077324d`.
-- **WI4-client-sheetId-resolution** (2026-05-22) · ExplainSlicePanel chartId disambiguation for multi-sheet dashboards. 2 conventions promoted. +12 tests. Commit `fd43cca1`.
-
-For full prose entries: read `docs/WAVES.md`. For older entries: `docs/archive/`.
+Run `/orient` (it lists the last ~10 commits) or read `docs/WAVES.md` for full prose entries
+(`docs/archive/` for older). A hand-maintained "last 5" list lived here and drifted — the orient
+pack derives it live from `git log`, so it is no longer duplicated in this file.
