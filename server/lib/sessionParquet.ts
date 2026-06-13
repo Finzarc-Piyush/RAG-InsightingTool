@@ -26,6 +26,7 @@ import {
   generateSasUrl,
 } from "./blobStorage.js";
 import { logger } from "./logger.js";
+import { quoteIdent } from "./pivotFilterSql.js";
 
 /** Phase 1 feature flag. Default OFF — the existing read path is used unless set to "true". */
 export function isParquetReadPathEnabled(): boolean {
@@ -49,10 +50,6 @@ export function parquetBlobName(
 /** DuckDB single-quoted string literal: forward-slash paths + escape quotes. */
 function sqlPathLiteral(p: string): string {
   return p.replace(/\\/g, "/").replace(/'/g, "''");
-}
-
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
 }
 
 /**

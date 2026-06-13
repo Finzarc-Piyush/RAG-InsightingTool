@@ -14,6 +14,7 @@ import { getChatBySessionIdForUser, type ChatDocument } from '../models/chat.mod
 import { getAuthenticatedEmail } from '../utils/auth.helper.js';
 import { sendError, sendValidationError } from '../utils/responseFormatter.js';
 import { executePivotQuery } from '../lib/pivotQueryService.js';
+import { quoteIdent, escapeSqlStringLiteral } from '../lib/pivotFilterSql.js';
 import { recordUsageEvent } from '../models/usageEvent.model.js';
 import { z } from 'zod';
 import { logger } from "../lib/logger.js";
@@ -66,14 +67,6 @@ function handleDataApiError(res: Response, error: unknown, fallback: string): vo
     return;
   }
   sendError(res, error instanceof Error ? error.message : fallback);
-}
-
-function quoteIdent(col: string): string {
-  return `"${col.replace(/"/g, '""')}"`;
-}
-
-function escapeSqlStringLiteral(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
 }
 
 async function assertDataApiAccess(

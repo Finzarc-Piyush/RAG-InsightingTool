@@ -54,6 +54,7 @@ import {
   type MmmFetcher,
 } from "../../../dataOps/mmmService.js";
 import { tagMarketingColumns } from "../../../marketingColumnTags.js";
+import { roundTo } from "../../../numberCoercion.js";
 import type { ChartSpec, Insight } from "../../../../shared/schema.js";
 
 const argsSchema = z
@@ -176,8 +177,8 @@ export function registerBudgetOptimizerTool(
 function buildAllocationChart(r: BudgetRedistributeResponse): ChartSpec {
   const data: Array<Record<string, string | number | null>> = [];
   for (const ch of r.channels) {
-    data.push({ channel: ch.name, scenario: "current", spend: round(ch.current_total_spend) });
-    data.push({ channel: ch.name, scenario: "optimal", spend: round(ch.optimal_total_spend) });
+    data.push({ channel: ch.name, scenario: "current", spend: roundTo(ch.current_total_spend, 2) });
+    data.push({ channel: ch.name, scenario: "optimal", spend: roundTo(ch.optimal_total_spend, 2) });
   }
   return {
     type: "bar",
@@ -198,7 +199,7 @@ function buildResponseCurveChart(
   ch: ChannelFitOut,
   curve: BudgetRedistributeResponse["response_curves"][string]
 ): ChartSpec {
-  const points = curve.x.map((x, i) => ({ spend: round(x), predicted_outcome: round(curve.y[i]) }));
+  const points = curve.x.map((x, i) => ({ spend: roundTo(x, 2), predicted_outcome: roundTo(curve.y[i], 2) }));
   return {
     type: "line",
     title: `Response curve — ${ch.name}`,
@@ -206,11 +207,11 @@ function buildResponseCurveChart(
     y: "predicted_outcome",
     data: points,
     aggregate: "none",
-    keyInsight: `Elasticity ${ch.elasticity.toFixed(3)} (CI95 [${ch.elasticity_ci95[0].toFixed(3)}, ${ch.elasticity_ci95[1].toFixed(3)}]). Optimal spend: ${round(curve.optimal_x).toLocaleString()} (${signedPct(ch.delta_pct)} vs current).`,
+    keyInsight: `Elasticity ${ch.elasticity.toFixed(3)} (CI95 [${ch.elasticity_ci95[0].toFixed(3)}, ${ch.elasticity_ci95[1].toFixed(3)}]). Optimal spend: ${roundTo(curve.optimal_x, 2).toLocaleString()} (${signedPct(ch.delta_pct)} vs current).`,
     _useAnalyticalDataOnly: true,
     _autoLayers: [
-      { type: "reference-line", on: "x", value: round(curve.current_x), label: "current" },
-      { type: "reference-line", on: "x", value: round(curve.optimal_x), label: "optimal" },
+      { type: "reference-line", on: "x", value: roundTo(curve.current_x, 2), label: "current" },
+      { type: "reference-line", on: "x", value: roundTo(curve.optimal_x, 2), label: "optimal" },
     ],
   };
 }
@@ -218,7 +219,7 @@ function buildResponseCurveChart(
 function buildInsightCards(r: BudgetRedistributeResponse): Insight[] {
   const out: Insight[] = [];
   let id = 1;
-  out.push({ id: id++, text: `Projected outcome lift: ${r.projected_lift_pct.toFixed(2)}% under the SLSQP-optimal allocation, holding total budget at ${round(r.total_budget_used).toLocaleString()}.` });
+  out.push({ id: id++, text: `Projected outcome lift: ${r.projected_lift_pct.toFixed(2)}% under the SLSQP-optimal allocation, holding total budget at ${roundTo(r.total_budget_used, 2).toLocaleString()}.` });
   const rankedAbs = [...r.channels].sort((a, b) => Math.abs(b.elasticity) - Math.abs(a.elasticity));
   out.push({
     id: id++,
@@ -230,7 +231,7 @@ function buildInsightCards(r: BudgetRedistributeResponse): Insight[] {
   if (shifts.length) {
     out.push({
       id: id++,
-      text: `Recommended shifts: ${shifts.slice(0, 4).map((s) => `${s.name} ${signedPct(s.pct)} (${s.delta >= 0 ? "+" : "−"}${round(Math.abs(s.delta)).toLocaleString()})`).join(", ")}.`,
+      text: `Recommended shifts: ${shifts.slice(0, 4).map((s) => `${s.name} ${signedPct(s.pct)} (${s.delta >= 0 ? "+" : "−"}${roundTo(Math.abs(s.delta), 2).toLocaleString()})`).join(", ")}.`,
     });
   }
   if (r.model_caveats.length) {
@@ -268,9 +269,6 @@ function topShiftChannel(r: BudgetRedistributeResponse): string {
   return `${top.name}:${top.delta_pct.toFixed(1)}%`;
 }
 
-function round(x: number): number {
-  return Math.round(x * 100) / 100;
-}
 function signedPct(x: number): string {
   const sign = x >= 0 ? "+" : "";
   return `${sign}${x.toFixed(1)}%`;

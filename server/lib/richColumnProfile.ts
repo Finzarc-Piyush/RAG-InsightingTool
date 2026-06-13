@@ -1,6 +1,7 @@
 import type { DataSummary } from "../shared/schema.js";
 import { parseFlexibleDate } from "./dateUtils.js";
 import { inferTemporalGrainFromDates } from "./temporalGrain.js";
+import { roundTo } from "./numberCoercion.js";
 
 /**
  * Rich, type-aware per-column profiling for the Data Summary modal.
@@ -170,11 +171,6 @@ function sampleArray<T>(arr: T[], cap: number): T[] {
   return out;
 }
 
-function round(n: number, dp = 6): number {
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
-}
-
 /**
  * Format a Date as a calendar day using *local* components. `parseFlexibleDate`
  * builds dates via `new Date(y, m, d)` (local midnight), so `toISOString()`
@@ -213,8 +209,8 @@ function buildNumericProfile(
     datatypeLabel: "Decimal",
     totalValues: total,
     nullCount,
-    nullPct: total > 0 ? round((nullCount / total) * 100, 2) : 0,
-    completeness: total > 0 ? round((nonBlank.length / total) * 100, 2) : 100,
+    nullPct: total > 0 ? roundTo((nullCount / total) * 100, 2) : 0,
+    completeness: total > 0 ? roundTo((nonBlank.length / total) * 100, 2) : 100,
     distinctCount: new Set(nums).size,
   };
 
@@ -262,7 +258,7 @@ function buildNumericProfile(
   let skewness: number | null = null;
   if (n > 2 && std > 0) {
     const m3 = statNums.reduce((a, b) => a + ((b - sampleMean) / std) ** 3, 0) / n;
-    skewness = round((Math.sqrt(n * (n - 1)) / (n - 2)) * m3, 4);
+    skewness = roundTo((Math.sqrt(n * (n - 1)) / (n - 2)) * m3, 4);
   }
 
   const lowFence = q1 - 1.5 * iqr;
@@ -280,24 +276,24 @@ function buildNumericProfile(
     ...(base as NumericColumnProfile),
     datatypeLabel: integerLike ? "Integer" : "Decimal",
     nonNumericCount,
-    mean: round(mean),
-    median: round(median),
-    std: round(std),
-    variance: round(variance),
-    min: round(min),
-    max: round(max),
-    range: round(max - min),
-    q1: round(q1),
-    q3: round(q3),
-    iqr: round(iqr),
-    p5: round(p5),
-    p95: round(p95),
-    sum: round(sum),
+    mean: roundTo(mean),
+    median: roundTo(median),
+    std: roundTo(std),
+    variance: roundTo(variance),
+    min: roundTo(min),
+    max: roundTo(max),
+    range: roundTo(max - min),
+    q1: roundTo(q1),
+    q3: roundTo(q3),
+    iqr: roundTo(iqr),
+    p5: roundTo(p5),
+    p95: roundTo(p95),
+    sum: roundTo(sum),
     zeroCount,
     negativeCount,
     outlierCount,
     skewness,
-    cv: Math.abs(mean) > 1e-12 ? round(std / Math.abs(mean), 4) : null,
+    cv: Math.abs(mean) > 1e-12 ? roundTo(std / Math.abs(mean), 4) : null,
     integerLike,
     currencySymbol,
     histogram: buildHistogram(sorted, min, max, integerLike),
@@ -324,8 +320,8 @@ function buildHistogram(
       : Math.min(MAX_HISTOGRAM_BINS, Math.max(5, Math.ceil(Math.sqrt(distinct))));
   const width = (max - min) / binCount;
   const bins = Array.from({ length: binCount }, (_, i) => ({
-    x0: round(min + i * width),
-    x1: round(min + (i + 1) * width),
+    x0: roundTo(min + i * width),
+    x1: roundTo(min + (i + 1) * width),
     count: 0,
   }));
   for (const v of sorted) {
@@ -372,8 +368,8 @@ function buildDateProfile(name: string, values: unknown[]): DateColumnProfile {
     datatypeLabel: "Date",
     totalValues: total,
     nullCount,
-    nullPct: total > 0 ? round((nullCount / total) * 100, 2) : 0,
-    completeness: total > 0 ? round((nonBlank.length / total) * 100, 2) : 100,
+    nullPct: total > 0 ? roundTo((nullCount / total) * 100, 2) : 0,
+    completeness: total > 0 ? roundTo((nonBlank.length / total) * 100, 2) : 100,
     distinctCount: distinctDays.size,
     minIso: hasRange ? toLocalIsoDay(new Date(minMs)) : null,
     maxIso: hasRange ? toLocalIsoDay(new Date(maxMs)) : null,
@@ -452,11 +448,11 @@ function buildCategoricalProfile(
   const top = sortedEntries.slice(0, MAX_TOP_VALUES).map((e) => ({
     value: e.value,
     count: e.count,
-    pct: nonBlank > 0 ? round((e.count / nonBlank) * 100, 2) : 0,
+    pct: nonBlank > 0 ? roundTo((e.count / nonBlank) * 100, 2) : 0,
   }));
   const otherCount = nonBlank - top.reduce((s, t) => s + t.count, 0);
 
-  const cardinalityRatio = nonBlank > 0 ? round(distinctCount / nonBlank, 4) : 0;
+  const cardinalityRatio = nonBlank > 0 ? roundTo(distinctCount / nonBlank, 4) : 0;
 
   return {
     name,
@@ -464,13 +460,13 @@ function buildCategoricalProfile(
     datatypeLabel: isBoolean ? "Yes/No" : "Text",
     totalValues: total,
     nullCount,
-    nullPct: total > 0 ? round((nullCount / total) * 100, 2) : 0,
-    completeness: total > 0 ? round((nonBlank / total) * 100, 2) : 100,
+    nullPct: total > 0 ? roundTo((nullCount / total) * 100, 2) : 0,
+    completeness: total > 0 ? roundTo((nonBlank / total) * 100, 2) : 100,
     distinctCount,
     mode: sortedEntries[0]?.value ?? null,
     topValues: top,
     otherCount,
-    otherPct: nonBlank > 0 ? round((otherCount / nonBlank) * 100, 2) : 0,
+    otherPct: nonBlank > 0 ? roundTo((otherCount / nonBlank) * 100, 2) : 0,
     cardinalityRatio,
     isHighCardinality: distinctCount > 50 && cardinalityRatio > 0.5,
     isLikelyId:
@@ -478,7 +474,7 @@ function buildCategoricalProfile(
     isConstant: distinctCount <= 1,
     minLength,
     maxLength,
-    avgLength: nonBlank > 0 ? round(lenSum / nonBlank, 1) : null,
+    avgLength: nonBlank > 0 ? roundTo(lenSum / nonBlank, 1) : null,
     ...(isBoolean ? { positiveValues, negativeValues } : {}),
   };
 }
@@ -556,7 +552,7 @@ export function buildRichDataSummary(
   const columnCount = columns.length;
   const totalCells = rowCount * columnCount;
   const overallCompleteness =
-    totalCells > 0 ? round((1 - totalNulls / totalCells) * 100, 2) : 100;
+    totalCells > 0 ? roundTo((1 - totalNulls / totalCells) * 100, 2) : 100;
 
   return {
     dataset: {

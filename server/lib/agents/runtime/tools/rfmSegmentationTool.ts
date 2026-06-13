@@ -39,6 +39,7 @@
 import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { passesFilter } from "./dimensionFilterMatch.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -92,20 +93,6 @@ function toNumberOrNull(v: unknown): number | null {
     return Number.isFinite(n) ? n : null;
   }
   return null;
-}
-
-function passesFilter(
-  row: Record<string, unknown>,
-  filter: { column: string; op: "in" | "not_in"; values: string[]; match?: "exact" | "case_insensitive" },
-): boolean {
-  const cell = row[filter.column];
-  const cellStr = cell === null || cell === undefined ? "" : String(cell);
-  const eq =
-    filter.match === "case_insensitive"
-      ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-      : (a: string, b: string) => a === b;
-  const matched = filter.values.some((v) => eq(cellStr, v));
-  return filter.op === "in" ? matched : !matched;
 }
 
 /** Quantile rank scoring: larger value → higher score (1..B). */

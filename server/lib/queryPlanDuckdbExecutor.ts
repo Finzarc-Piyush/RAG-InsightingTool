@@ -20,16 +20,9 @@ import {
   duckPhysicalColumnName,
   facetColumnInlineDuckDbExpr,
 } from "./temporalFacetColumns.js";
+import { quoteIdent, escapeSqlStringLiteral } from "./pivotFilterSql.js";
 
 const DATA_TABLE = "data";
-
-function quoteIdent(col: string): string {
-  return `"${col.replace(/"/g, '""')}"`;
-}
-
-function escapeSqlStringLiteral(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
-}
 
 /** Dimension filter cell expression for SQL (exact / case_insensitive / contains). */
 function dimensionMatchExpr(column: string, match?: string): string {

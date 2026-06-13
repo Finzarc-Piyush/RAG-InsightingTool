@@ -28,3 +28,15 @@ export function toNumberOrNull(v: unknown): number | null {
   }
   return null;
 }
+
+/**
+ * Round `value` to `digits` decimal places. Non-finite inputs pass through
+ * unchanged. Consolidates the byte-identical `round` helpers previously
+ * duplicated across marketBasketTool, priceElasticityTool, richColumnProfile
+ * (default 6) and budgetOptimizerTool (hardcoded 2).
+ */
+export function roundTo(value: number, digits = 6): number {
+  if (!Number.isFinite(value)) return value;
+  const k = Math.pow(10, digits);
+  return Math.round(value * k) / k;
+}

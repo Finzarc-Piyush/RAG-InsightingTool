@@ -17,10 +17,9 @@ import {
   type PivotChartRecommendationInput,
   normalizePivotMeasureFieldForChart,
 } from './chartRecommendation.js';
+import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from './chartLimits.js';
 
 const PIE_MAX_CATEGORIES = 8;
-const HEATMAP_MAX_COL_KEYS = 24;
-const HEATMAP_MAX_ROW_KEYS = 40;
 const RADAR_MAX_SPOKES = 8;
 
 const ALL_PIVOT_CHART_KINDS = [

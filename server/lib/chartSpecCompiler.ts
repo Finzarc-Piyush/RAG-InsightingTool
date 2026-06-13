@@ -5,6 +5,8 @@
 
 import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
 import type { ChartSpec } from "../shared/schema.js";
+import { AGG_SUFFIX } from "../shared/pivot/aggregationPatterns.js";
+import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from "../shared/pivot/chartLimits.js";
 
 export type ChartCompileSummary = {
   numericColumns: string[];
@@ -25,13 +27,9 @@ export type ChartCompileProposal = {
   title?: string;
 };
 
-const HEATMAP_MAX_COL_KEYS = 24;
-const HEATMAP_MAX_ROW_KEYS = 40;
 /** Avoid binding spurious series when `rows` are wide raw fact tables with many string columns. */
 const MAX_DIMENSIONS_FOR_AUTO_BIND = 6;
 const MAX_COLUMNS_FOR_AUTO_BIND = 20;
-
-const AGG_SUFFIX = /_(sum|avg|mean|min|max|count)$/i;
 
 function toNumberLoose(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;

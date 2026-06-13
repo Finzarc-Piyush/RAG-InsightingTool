@@ -41,6 +41,8 @@ import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
 import { compositeKey, splitCompositeKey } from "../../../compositeKey.js";
+import { passesFilter } from "./dimensionFilterMatch.js";
+import { roundTo } from "../../../numberCoercion.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -79,20 +81,6 @@ export interface AssociationRule {
   lift: number;
   /** Raw count of transactions containing BOTH antecedent and consequent. */
   count: number;
-}
-
-function passesFilter(
-  row: Record<string, unknown>,
-  filter: { column: string; op: "in" | "not_in"; values: string[]; match?: "exact" | "case_insensitive" },
-): boolean {
-  const cell = row[filter.column];
-  const cellStr = cell === null || cell === undefined ? "" : String(cell);
-  const eq =
-    filter.match === "case_insensitive"
-      ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-      : (a: string, b: string) => a === b;
-  const matched = filter.values.some((v) => eq(cellStr, v));
-  return filter.op === "in" ? matched : !matched;
 }
 
 export function registerMarketBasketTool(registry: ToolRegistry) {
@@ -277,9 +265,9 @@ export function runMarketBasket(
   const tableRows = capped.map((r) => ({
     antecedent: r.antecedent,
     consequent: r.consequent,
-    support: round(r.support, 4),
-    confidence: round(r.confidence, 4),
-    lift: round(r.lift, 4),
+    support: roundTo(r.support, 4),
+    confidence: roundTo(r.confidence, 4),
+    lift: roundTo(r.lift, 4),
     count: r.count,
   }));
 
@@ -307,10 +295,4 @@ export function runMarketBasket(
       cappedTo: capped.length,
     }),
   };
-}
-
-function round(v: number, digits: number): number {
-  if (!Number.isFinite(v)) return v;
-  const k = Math.pow(10, digits);
-  return Math.round(v * k) / k;
 }

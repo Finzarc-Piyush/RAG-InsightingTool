@@ -12,6 +12,9 @@
  * is inlined below as a single regex predicate.
  */
 
+import { AGG_SUFFIX_CAPTURE } from './aggregationPatterns.js';
+import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from './chartLimits.js';
+
 /**
  * Structural pivot-config shape consumed by the recommender. Only the
  * three fields the recommender actually reads. The client's
@@ -83,13 +86,10 @@ export interface PivotChartRecommendation {
 }
 
 const PIE_MAX_CATEGORIES = 8;
-const HEATMAP_MAX_COL_KEYS = 24;
-const HEATMAP_MAX_ROW_KEYS = 40;
 const RADAR_MAX_SPOKES = 8;
 const BUBBLE_MIN_MEASURES = 3;
 const PIE_DONUT_THRESHOLD = 4;
 
-const AGG_SUFFIX_CAPTURE = /^(.*)_(sum|avg|mean|min|max|count)$/i;
 const WATERFALL_MEASURE_RE = /(_delta|_change|_diff|_var(iance)?|_contribution)$/i;
 const WATERFALL_ROW_RE = /^(driver|component|bridge|step|stage|movement)/i;
 

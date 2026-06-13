@@ -45,6 +45,7 @@
 import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { roundTo } from "../../../numberCoercion.js";
 import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 
@@ -352,13 +353,13 @@ export function runPriceElasticity(
     }
     const row: Record<string, unknown> = {
       n: fit.n,
-      elasticity: round(fit.elasticity, 4),
-      intercept: round(fit.intercept, 4),
-      r_squared: round(fit.r_squared, 4),
-      slope_se: round(fit.slope_se, 4),
-      ci_low: round(fit.ci_low, 4),
-      ci_high: round(fit.ci_high, 4),
-      t_value: round(fit.t_value, 4),
+      elasticity: roundTo(fit.elasticity, 4),
+      intercept: roundTo(fit.intercept, 4),
+      r_squared: roundTo(fit.r_squared, 4),
+      slope_se: roundTo(fit.slope_se, 4),
+      ci_low: roundTo(fit.ci_low, 4),
+      ci_high: roundTo(fit.ci_high, 4),
+      t_value: roundTo(fit.t_value, 4),
       significant: fit.significant,
       interpretation: fit.interpretation,
     };
@@ -466,10 +467,4 @@ export function runPriceElasticity(
       skipped,
     }),
   };
-}
-
-function round(v: number, digits: number): number {
-  if (!Number.isFinite(v)) return v;
-  const k = Math.pow(10, digits);
-  return Math.round(v * k) / k;
 }

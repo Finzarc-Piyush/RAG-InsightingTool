@@ -11,9 +11,7 @@ import type { DataSummary } from "../shared/schema.js";
 import { resolveMetricAliasToSchemaColumn } from "./agents/runtime/plannerColumnResolve.js";
 import { isTemporalFacetColumnKey } from "./temporalFacetColumns.js";
 import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.js";
-
-const AGG_SUFFIX = /_(sum|avg|mean|min|max|count)$/i;
-const AGG_SUFFIX_CAPTURE = /^(.*)_(sum|avg|mean|min|max|count)$/i;
+import { AGG_SUFFIX, AGG_SUFFIX_CAPTURE } from "../shared/pivot/aggregationPatterns.js";
 
 // countIf-ratio helper columns (`<base>__matching` / `<base>__total`) are the
 // numerator/denominator behind a computed rate — they exist only in the
