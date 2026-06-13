@@ -1109,6 +1109,7 @@ divergingColor	function	client/src/lib/charts/palette.ts	50
 divergingPalette	function	client/src/lib/charts/palette.ts	76
 DivisionContext	interface	server/lib/dataAnalyzer.ts	24
 DocEntry	interface	server/scripts/lib/bootstrapSections.ts	29
+DocFinding	interface	server/scripts/check-doc-refs.ts	46
 DomainContextEntry	interface	server/lib/agents/runtime/analyticalBlackboard.ts	89
 DomainContextPacksSnapshot	interface	client/src/lib/api/admin.ts	69
 DomainContextPackSummary	interface	client/src/lib/api/admin.ts	58
@@ -2580,6 +2581,7 @@ runCohortAnalysis	function	server/lib/agents/runtime/tools/cohortAnalysisTool.ts
 runContextAgentRound2	function	server/lib/agents/runtime/contextAgent.ts	90
 runDataOpsFromAgentContext	function	server/lib/agents/runDataOpsFromAgent.ts	66
 runDeckPlanner	function	server/lib/agents/runtime/deckPlanner.ts	496
+runDocRefChecks	function	server/scripts/check-doc-refs.ts	149
 runHierarchicalDrill	function	server/lib/agents/runtime/tools/hierarchicalDrillTool.ts	165
 runHypothesisAndBriefMerged	function	server/lib/agents/runtime/runHypothesisAndBrief.ts	92
 runInvariantChecks	function	server/scripts/check-invariants.ts	137
