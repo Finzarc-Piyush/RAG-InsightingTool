@@ -92,6 +92,7 @@ import {
   mergePivotDefaultsForResponse,
 } from "./chatStreamPivotDefaults.js";
 export { mergePivotDefaultsForResponse } from "./chatStreamPivotDefaults.js";
+import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
 
 export interface ProcessStreamChatParams {
@@ -1535,48 +1536,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // onto (a) the in-memory draft — so the persisted message and the
     // offer-track "Build Dashboard" inherit them — and (b) the already-
     // persisted auto-created dashboard. No new LLM calls; best-effort, never
-    // blocks the turn.
-    try {
-      const enrichedCharts = (transformedResponse.charts ?? []) as ChartSpec[];
-      if (enrichedCharts.length > 0) {
-        const { applyChartInsightsBySignature } = await import(
-          "../../lib/applyChartInsightsBySignature.js"
-        );
-        const draft = (
-          transformedResponse as {
-            dashboardDraft?: { sheets?: Array<{ charts?: ChartSpec[] }> };
-          }
-        ).dashboardDraft;
-        if (draft?.sheets?.length) {
-          for (const sheet of draft.sheets) {
-            if (Array.isArray(sheet.charts) && sheet.charts.length > 0) {
-              sheet.charts = applyChartInsightsBySignature(
-                sheet.charts,
-                enrichedCharts
-              ).charts;
-            }
-          }
-        }
-        const createdId = (
-          transformedResponse as { createdDashboardId?: string }
-        ).createdDashboardId;
-        if (createdId && username) {
-          const { patchDashboardChartInsights } = await import(
-            "../../lib/patchDashboardChartInsights.js"
-          );
-          const res = await patchDashboardChartInsights({
-            dashboardId: createdId,
-            username,
-            charts: enrichedCharts,
-          });
-          if (!res.ok) {
-            logger.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
-          }
-        }
-      }
-    } catch (insightPatchErr) {
-      logger.warn("⚠️ dashboard chart-insight patch failed:", insightPatchErr);
-    }
+    // blocks the turn. Shared logic lives in applyEnrichedChartsToDashboard.
+    await applyEnrichedChartsToDashboard({
+      response: transformedResponse as Parameters<
+        typeof applyEnrichedChartsToDashboard
+      >[0]["response"],
+      username,
+    });
 
     // ── PHASE 3: Persistence ──────────────────────────────────────────
     // Persist enriched data so reload gets the full version. Persistence

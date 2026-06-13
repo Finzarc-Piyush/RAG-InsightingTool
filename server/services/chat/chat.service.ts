@@ -3,7 +3,7 @@
  * Main business logic for chat operations
  */
 import { randomUUID } from "node:crypto";
-import { Message, type ChartSpec } from "../../shared/schema.js";
+import { Message } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
 import {
@@ -20,6 +20,7 @@ import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
 
 export interface ProcessChatMessageParams {
@@ -216,41 +217,14 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
   // Wave I3 · mirror chat insights onto the dashboard (non-streaming path).
   // Parity with chatStream.service.ts: copy the now-enriched per-chart
   // insights onto the in-memory draft and the auto-created dashboard. No new
-  // LLM calls; best-effort.
-  try {
-    const enrichedCharts = (answerResult.charts ?? []) as ChartSpec[];
-    if (enrichedCharts.length > 0) {
-      const { applyChartInsightsBySignature } = await import(
-        "../../lib/applyChartInsightsBySignature.js"
-      );
-      const draft = (
-        answerResult as { dashboardDraft?: { sheets?: Array<{ charts?: ChartSpec[] }> } }
-      ).dashboardDraft;
-      if (draft?.sheets?.length) {
-        for (const sheet of draft.sheets) {
-          if (Array.isArray(sheet.charts) && sheet.charts.length > 0) {
-            sheet.charts = applyChartInsightsBySignature(sheet.charts, enrichedCharts).charts;
-          }
-        }
-      }
-      const createdId = (answerResult as { createdDashboardId?: string }).createdDashboardId;
-      if (createdId && username) {
-        const { patchDashboardChartInsights } = await import(
-          "../../lib/patchDashboardChartInsights.js"
-        );
-        const res = await patchDashboardChartInsights({
-          dashboardId: createdId,
-          username,
-          charts: enrichedCharts,
-        });
-        if (!res.ok) {
-          logger.warn(`I3 · dashboard chart-insight patch skipped: ${res.reason}`);
-        }
-      }
-    }
-  } catch (insightPatchErr) {
-    logger.warn("⚠️ dashboard chart-insight patch (non-streaming) failed:", insightPatchErr);
-  }
+  // LLM calls; best-effort. Shared logic lives in applyEnrichedChartsToDashboard.
+  await applyEnrichedChartsToDashboard({
+    response: answerResult as Parameters<
+      typeof applyEnrichedChartsToDashboard
+    >[0]["response"],
+    username,
+    logLabel: "(non-streaming) ",
+  });
 
   // W25 · per-step LLM-enriched insights on the non-streaming path. Same
   // gate / behaviour as the streaming path (W19); failures are non-fatal
