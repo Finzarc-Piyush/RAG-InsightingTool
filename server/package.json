@@ -14,6 +14,7 @@
         "check:invariants": "node --import tsx scripts/check-invariants.ts",
         "orient": "node --import tsx scripts/generate-bootstrap.ts",
         "gen:registries": "node --import tsx scripts/generate-registries.ts",
+        "gen:symbols": "node --import tsx scripts/generate-symbols.ts",
         "create-rag-index": "node --import tsx scripts/create-rag-search-index.ts",
         "create-past-analyses-index": "node --import tsx scripts/create-past-analyses-index.ts",
         "seed-golden-questions": "node --import tsx scripts/seed-golden-questions.ts",

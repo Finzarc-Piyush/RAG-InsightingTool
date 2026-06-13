@@ -35,6 +35,15 @@ jobs:
           npm run gen:registries
           git -C .. diff --exit-code docs/index/registries.generated.md \
             || { echo "::error::registries.generated.md is stale — run 'npm --prefix server run gen:registries' and commit."; exit 1; }
+      # Symbol index freshness — WARN only. Line numbers drift on most edits, so
+      # this is regenerated at /wave-commit, not hard-gated; surfaces drift
+      # without blocking unrelated PRs.
+      - name: Symbol index drift (warn)
+        continue-on-error: true
+        run: |
+          npm run gen:symbols
+          git -C .. diff --exit-code docs/index/symbols.generated.tsv \
+            || echo "::warning::symbols.generated.tsv drifted — refresh with 'npm --prefix server run gen:symbols' at next wave."
       - run: npm test
       # Supply-chain gate — BLOCKING at high+. The dependency-hardening wave
       # (xlsx→exceljs, dead jspdf removed, vitest bump, server `tar` override
