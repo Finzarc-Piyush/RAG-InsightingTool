@@ -22,7 +22,8 @@
         "llm-golden-replay": "node --import tsx scripts/llm-golden-replay.ts",
         "llm-golden-diff": "node --import tsx scripts/llm-golden-diff.ts",
         "rag-smoke": "node --import tsx scripts/rag-smoke.ts",
-        "backfill-analysis-memory": "node --import tsx scripts/backfill-analysis-memory.ts"
+        "backfill-analysis-memory": "node --import tsx scripts/backfill-analysis-memory.ts",
+        "check:doc-refs": "node --import tsx scripts/check-doc-refs.ts"
     },
     "dependencies": {
         "@azure/cosmos": "^4.7.0",

@@ -16,7 +16,7 @@ where the contract boundaries are.
 
 - `client/src/index.css` — `:root` and `.dark` CSS custom properties
   (palette, shadows, typography, gradients, motion tokens, keyframes).
-- `client/tailwind.config.ts` — Tailwind wires the CSS vars into class
+- `client/tailwind.config.js` — Tailwind wires the CSS vars into class
   names (`bg-background`, `border-border`, `shadow-elev-1`, etc.).
 - `client/scripts/theme-check.mjs` — CI gate. Rejects hand-rolled
   `bg-white`, `text-gray-*`, raw hex colors, `from-slate-*`, `rgb()` in

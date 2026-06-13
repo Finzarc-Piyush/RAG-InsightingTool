@@ -22,7 +22,7 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
    | `server/lib/agents/runtime/tools/` | `docs/architecture/tool-registry.md` |
    | `server/lib/agents/runtime/skills/` | `docs/architecture/skills.md` |
    | `server/lib/wideFormat/` | `docs/architecture/wide-format.md` |
-   | `server/lib/rag/` | `docs/architecture/rag.md` (if absent, see `docs/agents-architecture-inventory.md`) |
+   | `server/lib/rag/` | no dedicated rag doc yet — see `docs/agents-architecture-inventory.md` |
    | `server/lib/domainContext/` | `docs/architecture/domain-context.md` |
    | `python-service/mmm/` or `server/lib/dataOps/mmmService.ts` | `docs/architecture/mmm.md` |
    | `client/src/lib/charts/` or chart renderers | `docs/architecture/charting.md` |
@@ -122,7 +122,7 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
 
 The existing `docs/WAVES.md` has dozens of entries. Read the first 2–3 (newest) before writing yours — match their voice. They:
 - Open with date, wave id, subject, and a problem statement.
-- Cite specific file paths via markdown link syntax `[path](path)`.
+- Cite specific file paths via markdown link syntax `[label](<relative-path>)`.
 - Name functions, constants, schemas, env vars by their actual identifiers.
 - Quantify ("12 new tests", "98 errors, identical to baseline", "60 K → 5 K tokens").
 - End with explicit "Out of scope" so future-Claude doesn't reopen settled scope.

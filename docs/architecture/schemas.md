@@ -17,9 +17,10 @@ us before.
 - `server/shared/schema.ts` — authoritative server-side schemas.
 - `client/src/shared/schema.ts` — client mirror, imported as
   `@shared/schema` via the `@shared/*` alias.
-- `scripts/check-shared-schemas.mjs` (if present) — the drift gate that
-  hashes both files' structural shape; CI fails on deltas beyond the
-  allowlist.
+- A drift gate (historical) hashed both files' structural shape and
+  failed CI on deltas beyond the allowlist. It is no longer present — see
+  the caveat at the end of this doc: Wave W5 collapsed the client mirror
+  into a single re-export, so the gate is no longer load-bearing.
 
 ## Mirror pairs
 

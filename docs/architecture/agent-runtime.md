@@ -47,14 +47,14 @@ live alternative.
   `assertDashboardAutogenConfiguration()`. Called inside `createApp()`;
   misconfig fails boot.
 
-**Legacy layer**
+**Legacy layer (removed)**
 
-- `server/lib/agents/orchestrator.ts` — `AgentOrchestrator.processQuery`.
-- `server/lib/agents/index.ts` — dispatcher registering 7 handlers
+- The pre-agentic orchestrator (its `AgentOrchestrator.processQuery`
+  entry point) and the dispatcher that registered 7 handlers
   (Conversational, DataOps, MLModel, Statistical, Comparison,
-  Correlation, General). Order matters. Carries a `DANGER — capability
-  gap` banner at the top of the file.
-- `server/lib/agents/handlers/**` — individual handlers.
+  Correlation, General) were both deleted in `9422bed7` (invariant #1).
+  Neither file exists today; the agentic loop is the only path, and the
+  table below is frozen history kept for context.
 
 **Capability gap (important):**
 
@@ -152,14 +152,13 @@ from `schemas.ts`) rather than string literals:
 
 ## Known pitfalls
 
-- **Legacy layer can't serve Phase-1 skills.** The handlers in
-  `server/lib/agents/handlers/**` were frozen before
+- **No fallback path exists.** The old handlers were frozen before
   `varianceDecomposer`, `driverDiscovery`, `insightExplorer`,
-  `timeWindowDiff`, or dashboard autogen existed. Disabling
-  `AGENTIC_LOOP_ENABLED` as a hotfix silently downgrades — questions
-  that expect a skill fall through to `generalDataAnalysisAgent`. The
-  banner on `server/lib/agents/index.ts` spells out the rule. Use
-  `AGENT_TOOL_TIMEOUT_MS` or `AGENTIC_MAX_STEPS` instead.
+  `timeWindowDiff`, or dashboard autogen existed, and were deleted in
+  `9422bed7` (invariant #1). There is nothing to fall through to:
+  `dataAnalyzer.answerQuestion` throws when `AGENTIC_LOOP_ENABLED` is
+  unset/false. To bound a runaway turn use `AGENT_TOOL_TIMEOUT_MS` or
+  `AGENTIC_MAX_STEPS` instead — never disable the agentic loop.
 - **Skill selection is priority-ordered (Wave F1).** Prior to F1 it was
   first-match-wins on load order, which let `varianceDecomposer` shadow
   `timeWindowDiff`. See [`skills.md`](./skills.md).
@@ -191,7 +190,7 @@ from `schemas.ts`) rather than string literals:
 - **Wave WQ2 · `externalClaimDetector` helper (2026-05-16)** — new pure module [`utils/externalClaimDetector.ts`](../../server/lib/agents/runtime/utils/externalClaimDetector.ts). Scans the user question for markers of external claims that the uploaded dataset cannot answer (competitor / market_size / industry_benchmark / external_event / demographic_shift). Each match carries a ≤120-char verbatim excerpt, a confidence tier, and the matched term. Returns a `suggestedAction` pointing the planner at the `web_search` tool. Dedup per (type + lowercased term) within a single question; regex statefulness reset between calls. Helper-only this wave; planner integration is a follow-up. 29 tests pin every claim type, multi-claim dedupe, and edge cases. See `docs/WAVES.md` for full entry.
 - **Wave W74 · investigation budget exhaustion observability (2026-05-16)** — new pure module [`investigationBudget.ts`](../../server/lib/agents/runtime/investigationBudget.ts). `evaluateBudgetExhaustion(tree, config)` returns the first triggered budget cap in priority order: `llm_calls_exhausted` → `wall_time_exhausted` → `max_nodes_reached`. [`investigationOrchestrator.ts`](../../server/lib/agents/runtime/investigationOrchestrator.ts) emits a `flow_decision` SSE row (`layer: "investigation-budget"`, `chosen: "halt"`) + agentLog `investigationOrchestrator.budget_exhausted` whenever the BFS loop terminates on a budget cap rather than converging. No behaviour change to the loop. 14 tests pin every reason branch + priority order + canonical message. See `docs/WAVES.md` for full entry.
 - **Wave WQ1 · `scaleNarrativeByConfidence` helper (2026-05-16)** — new pure module [`scaleNarrativeByConfidence.ts`](../../server/lib/agents/runtime/scaleNarrativeByConfidence.ts) decorates blackboard findings with a `ConfidenceAssessment` (`tier`, `reasons`, `hedge`) computed from per-finding evidence (sample size, p-value, CI width, R²). Caller-side decorator pattern — no auto-wiring into narrator yet (follow-up wave). Public surface: `assessConfidence`, `decorateFindings`, `summarizeConfidenceTiers`, `narratorBudget`, `hedgeFor`. 23 tests pin every tier branch. See `docs/WAVES.md` for full entry.
-- **Wave W73 · investigation mode wired into agent loop entry** — `dataAnalyzer.answerQuestion` now dispatches to [`runDeepInvestigation`](../../server/lib/agents/runtime/investigationOrchestrator.ts) before the standard `runAgentTurn` when (a) `DEEP_INVESTIGATION_ENABLED=true` AND (b) [`detectMultiPartQuestion`](../../server/lib/agents/runtime/detectMultiPartQuestion.ts) returns a multi-part intent. Decision is owned by the new pure helper [`investigationDispatch.ts`](../../server/lib/agents/runtime/investigationDispatch.ts) (`shouldDispatchDeepInvestigation`). Three fall-back paths to single-flow on any failure (gate off, throw, empty result). Emits `flow_decision` SSE row (`layer: "investigation-dispatch"`) on every fire. Default behaviour unchanged when the flag is off. See `docs/WAVES.md` for the full entry.
+- **Wave W73 · investigation mode wired into agent loop entry** — `dataAnalyzer.answerQuestion` now dispatches to [`runDeepInvestigation`](../../server/lib/agents/runtime/investigationOrchestrator.ts) before the standard `runAgentTurn` when (a) `DEEP_INVESTIGATION_ENABLED=true` AND (b) [`detectMultiPartQuestion`](../../server/lib/agents/runtime/detectMultiPartQuestion.ts) returns a multi-part intent. Decision was owned by a `shouldDispatchDeepInvestigation` pure helper (since removed along with the dead `runDeepInvestigation` path). Three fall-back paths to single-flow on any failure (gate off, throw, empty result). Emits `flow_decision` SSE row (`layer: "investigation-dispatch"`) on every fire. Default behaviour unchanged when the flag is off. See `docs/WAVES.md` for the full entry.
 - **Wave W45 · CI workflow YAML for live-LLM golden replay** —
   pre-W45 the W28 + W33 harness existed but only ran when an
   operator manually invoked it. New

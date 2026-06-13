@@ -13,7 +13,7 @@ invariants hold, where to extend, where the footguns live.
 > sentence.
 
 Reviewers reject PRs that silently mutate a subsystem without a doc
-touch. The convention ships first; a future `scripts/doc-gate.mjs` can
+touch. The convention ships first; a future doc-gate script can
 automate the check.
 
 ## Reading order
@@ -48,9 +48,9 @@ the current tree is intentionally small so nothing grows stale.
 | `server/lib/agents/**` (legacy orchestrator) | `agent-runtime.md` "Legacy layer" |
 | `server/shared/schema.ts` · `client/src/shared/schema.ts` | `schemas.md` |
 | `server/services/upload/**` · `server/utils/uploadQueue.ts` | `upload_and_enrichment.md` |
-| `client/src/index.css` · `client/tailwind.config.ts` · `client/scripts/theme-check.mjs` | `brand-system.md` |
+| `client/src/index.css` · `client/tailwind.config.js` · `client/scripts/theme-check.mjs` | `brand-system.md` |
 | `.github/workflows/*` · `server/loadEnv.ts` · `client/vite.config.ts` · `client/vitest.config.ts` · server/client `.env.example` | `ci-and-env.md` |
-| `server/lib/wideFormat/**` · `server/tests/fixtures/wideFormat/**` · `python-service/*melt*` · `server/lib/dataOps/melt.ts` · `client/**/WideFormatConfirmModal*` | `wide-format.md` |
+| `server/lib/wideFormat/**` · `server/tests/fixtures/wideFormat/**` · `python-service/*melt*` · `server/lib/wideFormat/meltDataset.ts` · `client/**/WideFormatConfirmModal*` | `wide-format.md` |
 
 ## Doc skeleton (copy when adding a new subsystem)
 
@@ -75,9 +75,9 @@ the current tree is intentionally small so nothing grows stale.
 
 ## History
 
-This tree was seeded alongside the override/break audit documented at
-[`docs/plans/i-suggest-we-start-keen-koala.md`](../plans/) (if present)
-or recoverable from `git log`. The audit identified five correctness
+This tree was seeded alongside the override/break audit (the plan lives
+in `/Users/tida/.claude/plans/`, or is recoverable from `git log`). The
+audit identified five correctness
 issues (skill selection, registry duplicate silent-overwrite, verdict
 enum duplication, dark-mode on three surfaces, legacy-agentic capability
 gap); each fix lands with its own doc update.

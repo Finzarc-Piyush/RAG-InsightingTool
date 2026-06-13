@@ -27,6 +27,11 @@ jobs:
       # but the code throws). Kernels in server/scripts/invariants.spec.ts.
       - name: Invariant firewall (CLAUDE.md vs code)
         run: npm run check:invariants
+      # Doc-reference validator — BLOCKING. Fails if any live routing doc
+      # (architecture/conventions/decisions/CLAUDE.md/skills) references a file,
+      # path, or line anchor that no longer exists.
+      - name: Doc references resolve (live docs vs tree)
+        run: npm run check:doc-refs
       # Registry manifest freshness — BLOCKING (P-005 pattern). Regenerate the
       # committed tools/routes/skills index; fail if a contributor changed a
       # registry without regenerating it.

@@ -38,7 +38,7 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 | `loadingProgress` | `{ processed, total, message? }?` | Progress info for long-running correlation chart loads. | Surfaced as `<SkeletonState progress={…}>` in `<PremiumChart>`. |
 | `keyInsightSessionId` | `string \| null?` | Enables on-demand "Key Insight" LLM fetch when the chart has no inline insight, triggered from inside `<ChartModal>`. | `<PremiumChart>` accepts `keyInsightSessionId` and forwards to its modal. Must call same backend route. |
 
-### 1.2 Internal state ([line 172+](../../client/src/pages/Home/Components/ChartRenderer.tsx#L172))
+### 1.2 Internal state ([line 172+](../../client/src/pages/Home/Components/ChartRenderer.tsx))
 
 | State | Initial | Used by | v2 parity |
 |-------|---------|---------|-----------|
@@ -53,19 +53,19 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 
 | Constant | Value | Where | v2 parity |
 |----------|------:|-------|-----------|
-| `MAX_COMPACT_X_TICKS` | `6` | [line 75](../../client/src/pages/Home/Components/ChartRenderer.tsx#L75) | Same constant in `<PremiumChart>` axis config. |
+| `MAX_COMPACT_X_TICKS` | `6` | [line 75](../../client/src/pages/Home/Components/ChartRenderer.tsx) | Same constant in `<PremiumChart>` axis config. |
 | `LINE_AREA_MAX_X_TICKS` | imported from shared | Used for line/area charts in non-fill mode. | Same. |
-| Outlier IQR threshold | `0.1` (paddingFraction default) | [line 201](../../client/src/pages/Home/Components/ChartRenderer.tsx#L201) | Constant in `dataEngine.ts:detectOutliers`. |
-| `MAX_RENDER_POINTS` per density | dynamic (`getMaxRenderPoints()`) | [line 437](../../client/src/pages/Home/Components/ChartRenderer.tsx#L437) | Ported into `dataEngine.ts:sample`. |
+| Outlier IQR threshold | `0.1` (paddingFraction default) | [line 201](../../client/src/pages/Home/Components/ChartRenderer.tsx) | Constant in `dataEngine.ts:detectOutliers`. |
+| `MAX_RENDER_POINTS` per density | dynamic (`getMaxRenderPoints()`) | [line 437](../../client/src/pages/Home/Components/ChartRenderer.tsx) | Ported into `dataEngine.ts:sample`. |
 
 ### 1.4 Per-mark behaviors
 
 #### `bar`
 
 - **Compact X-axis** when `!fillParent && !isSingleChart && chartData.length > MAX_COMPACT_X_TICKS`
-  ([line 448](../../client/src/pages/Home/Components/ChartRenderer.tsx#L448)). Picks the
+  ([line 448](../../client/src/pages/Home/Components/ChartRenderer.tsx)). Picks the
   first 6 categories or the largest 6 by value.
-- **Date-detection in compact mode** ([line 454-466](../../client/src/pages/Home/Components/ChartRenderer.tsx#L454-L466)):
+- **Date-detection in compact mode** ([line 454-466](../../client/src/pages/Home/Components/ChartRenderer.tsx)):
   if X looks like dates, takes a chronological slice; otherwise sorts by Y desc.
 - **Stacked / grouped** via `chart.barLayout`. Series defined by
   `seriesColumn` + `seriesKeys`.
@@ -75,14 +75,14 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 
 #### `line`
 
-- **Dual-axis (Y2)** ([line 864-869](../../client/src/pages/Home/Components/ChartRenderer.tsx#L864-L869)):
+- **Dual-axis (Y2)** ([line 864-869](../../client/src/pages/Home/Components/ChartRenderer.tsx)):
   when `chart.y2` is set, renders a second left-axis series with a different color
   (`hsl(var(--chart-1))` for left, `chartColor` for right).
 - **Multi-series** when `seriesColumn` + `seriesKeys` present; uses
   `RechartsWideLegendContent` with toggle-series and toggle-all callbacks.
-- **Trend line** ([line 189](../../client/src/pages/Home/Components/ChartRenderer.tsx#L189)):
+- **Trend line** ([line 189](../../client/src/pages/Home/Components/ChartRenderer.tsx)):
   optional `chart.trendLine` array (two points). Rendered as overlay.
-- **Dynamic Y domain** ([line 781](../../client/src/pages/Home/Components/ChartRenderer.tsx#L781))
+- **Dynamic Y domain** ([line 781](../../client/src/pages/Home/Components/ChartRenderer.tsx))
   via `getDynamicDomain(values, paddingFraction=0.1)`. Override with `chart.yDomain`.
 - **Dot toggle** in modal — controls `showDots` flag.
 
@@ -94,8 +94,8 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 #### `scatter`
 
 - **Outlier hiding** (state `hideOutliers`) — toggle in header.
-  IQR-based detection ([line 392](../../client/src/pages/Home/Components/ChartRenderer.tsx#L392)).
-- **Stratified sampling** ([line 437-445](../../client/src/pages/Home/Components/ChartRenderer.tsx#L437-L445)):
+  IQR-based detection ([line 392](../../client/src/pages/Home/Components/ChartRenderer.tsx)).
+- **Stratified sampling** ([line 437-445](../../client/src/pages/Home/Components/ChartRenderer.tsx)):
   when point count > `MAX_RENDER_POINTS`, samples every Nth point and slice-caps.
   Density slider (`low`/`medium`/`high`/`all`) controls `MAX_RENDER_POINTS`.
 - **Opacity slider** (`low` 0.3 / `medium` 0.6 / `high` 0.9). Used to mitigate
@@ -103,7 +103,7 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 - **Trend line** support same as line.
 - **Z-axis (size encoding)** for bubble-style scatter via `chart.z`.
 - **Loading progress** when `_isCorrelationChart` flag present
-  ([line 1727](../../client/src/pages/Home/Components/ChartRenderer.tsx#L1727)) — shows
+  ([line 1727](../../client/src/pages/Home/Components/ChartRenderer.tsx)) — shows
   progress overlay while correlation matrix computes server-side.
 
 #### `pie`
@@ -112,7 +112,7 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 - "Others" merging server-side.
 - Custom tooltip via `formatChartTooltipValue`.
 
-#### `heatmap` ([line 1088](../../client/src/pages/Home/Components/ChartRenderer.tsx#L1088))
+#### `heatmap` ([line 1088](../../client/src/pages/Home/Components/ChartRenderer.tsx))
 
 - **Custom HSL color scale** based on cell value vs. min/max range.
 - **Custom low-to-high legend** below the chart (gradient strip with min/max
@@ -125,17 +125,17 @@ Defined as the `ChartRendererProps` interface in [ChartRenderer.tsx](../../clien
 
 #### Lazy-render via IntersectionObserver
 
-[ChartRenderer.tsx:198-200](../../client/src/pages/Home/Components/ChartRenderer.tsx#L198-L200)
-+ [line 1566](../../client/src/pages/Home/Components/ChartRenderer.tsx#L1566).
+[ChartRenderer.tsx:198-200](../../client/src/pages/Home/Components/ChartRenderer.tsx)
++ [line 1566](../../client/src/pages/Home/Components/ChartRenderer.tsx).
 Renders an empty container until the chart enters viewport. Disabled when
 `isSingleChart || fillParent || isLoading`. **v2 parity**: same behavior in
 `<PremiumChart>` via the same hook (`useIntersectionObserver`).
 
 #### Filter UI
 
-[line 222](../../client/src/pages/Home/Components/ChartRenderer.tsx#L222) +
-[line 230](../../client/src/pages/Home/Components/ChartRenderer.tsx#L230) +
-[line 275](../../client/src/pages/Home/Components/ChartRenderer.tsx#L275).
+[line 222](../../client/src/pages/Home/Components/ChartRenderer.tsx) +
+[line 230](../../client/src/pages/Home/Components/ChartRenderer.tsx) +
+[line 275](../../client/src/pages/Home/Components/ChartRenderer.tsx).
 
 - Only enabled for `line`/`bar`/`area` when `enableFilters` is true.
 - Filter chips are derived from the original (pre-aggregation) data set.
@@ -148,7 +148,7 @@ onChange)`. Logic ported from `applyChartFilters`.
 #### Legend (multi-series)
 
 [RechartsWideLegendContent](../../client/src/lib/rechartsWideLegend.tsx)
-component, used at [line 851-856](../../client/src/pages/Home/Components/ChartRenderer.tsx#L851-L856).
+component, used at [line 851-856](../../client/src/pages/Home/Components/ChartRenderer.tsx).
 
 Behaviors:
 - Wide horizontal layout that wraps when narrow.
@@ -193,7 +193,8 @@ inline (no modal needed for editing).
 adds 10% padding above/below the value range. Used when `yDomain` not
 explicitly set. Returns `[min - pad, max + pad]`.
 
-**v2 parity**: still a local helper — no separate `client/src/lib/charts/scales.ts` module was extracted (that path does not exist).
+**v2 parity**: still a local helper — no separate charts/scales module
+was ever extracted.
 
 #### Series sort + topN
 
@@ -294,7 +295,7 @@ tiles).
 ### 3.4 Theme tokens
 
 > Filled in by WC1.4 (palette CSS variables in
-> [client/index.css](../../client/index.css)) and updates to
+> [client/src/index.css](../../client/src/index.css)) and updates to
 > [client/THEMING.md](../../client/THEMING.md).
 
 ### 3.5 Per-mark feature flags

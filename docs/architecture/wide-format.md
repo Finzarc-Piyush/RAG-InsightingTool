@@ -35,27 +35,29 @@ itself; each wave below adds the files it introduces.
 - (W2) `server/lib/wideFormat/metricVocabulary.ts`
 - (W3) `server/lib/wideFormat/tokenize.ts`
 - (W4) `server/lib/wideFormat/tagColumn.ts`
-- (W5) `server/lib/wideFormat/classify.ts`
+- (W5) `server/lib/wideFormat/classifyDataset.ts`
 - (W6) `server/tests/fixtures/wideFormat/*.csv`
 - (W7–W8) `server/shared/schema.ts` additions (`WideFormatProposal`,
   `ChatDocument.wideFormatProposal`, `wideFormatDecision`)
 - (W9–W10) `python-service/data_operations.py` `melt_frame` +
   `main.py` `/data-ops/melt` route
-- (W11) `server/lib/dataOps/melt.ts`
+- (W11) `server/lib/wideFormat/meltDataset.ts`
 - (W12) `WIDE_FORMAT_ENABLED` flag in
   `server/lib/agents/runtime/assertAgenticRag.ts`
 - (W13) SSE event `wide_format_proposal_ready`
 - (W14) classifier wired into `server/utils/uploadQueue.ts`
 - (W15) enrichment gate in the same file
-- (W16–W18) `server/controllers/wideFormatDecisionController.ts`
-- (W19–W21) `client/src/pages/Home/Components/WideFormatConfirmModal.tsx`
-  + wiring
+- (W16–W18) the wide-format decision controller (planned — W14-29
+  deferred, not yet built)
+- (W19–W21) the wide-format confirm modal + wiring (planned — W14-29
+  deferred, not yet built)
 - (W22–W23) enrichment awareness in `server/lib/datasetProfile.ts`
 - (W24–W25) preview toggle (server endpoint + client radio)
 - (W26) multi-row header flatten in `server/lib/fileParser.ts`
 - (W27) totals-row detection
 - (W28) melt size guard
-- (W29) `scripts/wideFormatEval.mjs`
+- (W29) the wide-format eval script (planned — W14-29 deferred, not
+  yet built)
 
 ## Data contracts
 

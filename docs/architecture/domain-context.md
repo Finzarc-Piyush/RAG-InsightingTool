@@ -34,7 +34,7 @@ on every turn so its analysis is grounded in the right operating reality.
 - The body is **qualitative only**. No market-share percentages, no revenue
   figures, no growth rates with numbers. Numeric claims must come from the
   dataset / tools / RAG citations — never from a pack. The verifier
-  ([`sharedPrompts.ts:30`](../../server/lib/agents/runtime/sharedPrompts.ts#L30))
+  ([`sharedPrompts.ts:30`](../../server/lib/agents/runtime/sharedPrompts.ts))
   enforces this; the prompt block label tells the model the same.
 
 ## How they reach the LLM
@@ -69,7 +69,7 @@ on every turn so its analysis is grounded in the right operating reality.
   state and total enabled tokens.
 - `PATCH /api/admin/domain-context/packs/:packId` body `{ enabled: boolean }` —
   flip a single pack and invalidate the loader cache.
-- Both gated by [`isAdminRequest()`](../../server/utils/admin.helper.ts#L25)
+- Both gated by [`isAdminRequest()`](../../server/utils/admin.helper.ts)
   (`ADMIN_EMAILS` env allow-list).
 - UI: [`client/src/pages/Admin/AdminContextPacks.tsx`](../../client/src/pages/Admin/AdminContextPacks.tsx) at
   `/admin/context-packs`.
