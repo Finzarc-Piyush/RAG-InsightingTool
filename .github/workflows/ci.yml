@@ -27,6 +27,14 @@ jobs:
       # but the code throws). Kernels in server/scripts/invariants.spec.ts.
       - name: Invariant firewall (CLAUDE.md vs code)
         run: npm run check:invariants
+      # Registry manifest freshness — BLOCKING (P-005 pattern). Regenerate the
+      # committed tools/routes/skills index; fail if a contributor changed a
+      # registry without regenerating it.
+      - name: Registry manifest fresh (docs/index/registries.generated.md)
+        run: |
+          npm run gen:registries
+          git -C .. diff --exit-code docs/index/registries.generated.md \
+            || { echo "::error::registries.generated.md is stale — run 'npm --prefix server run gen:registries' and commit."; exit 1; }
       - run: npm test
       # Supply-chain gate — BLOCKING at high+. The dependency-hardening wave
       # (xlsx→exceljs, dead jspdf removed, vitest bump, server `tar` override
