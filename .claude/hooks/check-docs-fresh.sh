@@ -27,7 +27,7 @@ SUBJECT="$(git log -1 --format='%s' 2>/dev/null)" || exit 0
 # Only nudge for Wave commits. Other commits (docs, chore, fix, refactor, etc.)
 # don't trigger the doc-update contract.
 case "$SUBJECT" in
-  "Wave W"*) : ;;   # continue
+  "Wave "*) : ;;   # continue (any wave prefix: W, CS, Dup, R, Rt, WG…)
   *) exit 0 ;;
 esac
 

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Pre-commit — local enforcement of the cold-start gates, so doc/code drift is
+# caught at commit time on a branch, not only by CI-on-push-to-main. Enable with
+#   git config core.hooksPath .githooks
+# Bypass in an emergency with  git commit --no-verify.
+#
+# Fast (<2s) and conservative: only the HARD, low-false-positive gates block.
+# The symbol index (volatile line numbers) is warn-only and never blocks.
+set -u
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$ROOT" || exit 0
+
+# Degrade gracefully if the toolchain isn't on PATH (e.g. GUI commit).
+if ! command -v npm >/dev/null 2>&1; then
+  echo "pre-commit: npm not on PATH — skipping cold-start gates." >&2
+  exit 0
+fi
+
+fail=0
+
+echo "pre-commit • invariant firewall…"
+if ! npm --prefix server run --silent check:invariants >/dev/null 2>&1; then
+  echo "  ✗ invariant drift — run: npm --prefix server run check:invariants" >&2
+  fail=1
+fi
+
+echo "pre-commit • doc references…"
+if ! npm --prefix server run --silent check:doc-refs >/dev/null 2>&1; then
+  echo "  ✗ a live doc references a file/symbol that doesn't exist — run: npm --prefix server run check:doc-refs" >&2
+  fail=1
+fi
+
+echo "pre-commit • registry manifest fresh…"
+npm --prefix server run --silent gen:registries >/dev/null 2>&1
+if ! git diff --quiet -- docs/index/registries.generated.md 2>/dev/null; then
+  echo "  ✗ registries.generated.md was stale (now regenerated). Stage it: git add docs/index/registries.generated.md" >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "✗ pre-commit blocked. Fix the above, or bypass with: git commit --no-verify" >&2
+  exit 1
+fi
+echo "✓ cold-start gates pass"
+exit 0

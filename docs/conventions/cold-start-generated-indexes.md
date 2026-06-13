@@ -16,6 +16,33 @@ invariants instructing dead workflows that survived 62 commits).
 | Orient pack (live state) | `server/scripts/generate-bootstrap.ts` | `orient` | **on-demand** — never committed |
 | Registry manifest (`docs/index/registries.generated.md`) | `server/scripts/generate-registries.ts` | `gen:registries` | **hard** — committed + blocking CI `git diff` |
 | Symbol index (`docs/index/symbols.generated.tsv`) | `server/scripts/generate-symbols.ts` | `gen:symbols` | **warn** — committed, regen at wave-commit, CI warns |
+| Doc-reference validator | `server/scripts/check-doc-refs.ts` | `check:doc-refs` | **hard** (broken links/paths/line-anchors in live docs) + **warn** (phantom symbols) |
+
+## Enforcement layers (where the gates actually run)
+
+The gates run at four points, so drift is caught no matter the workflow:
+
+1. **`npm test`** — `invariants.test.ts`, `docRefs.test.ts`, and the generator
+   sanity tests are glob-discovered, so the full suite fails on drift.
+2. **CI** (`.github/workflows/ci.yml`, server job) — blocking steps:
+   `check:invariants`, `check:doc-refs`, and `git diff` on the registries
+   manifest; symbol-index drift is a warning.
+3. **Pre-commit hook** (`.githooks/pre-commit`, enabled via
+   `git config core.hooksPath .githooks`) — runs the hard gates **locally at
+   commit time** so drift never reaches a session, not just CI-on-push. Bypass
+   with `git commit --no-verify`.
+4. **SessionStart hook** (`.claude/hooks/session-warmup.sh`) — auto-injects the
+   orient pack (incl. the firewall verdict) into every new session, so warmup is
+   automatic, not opt-in.
+
+## The irreducible residual (be honest)
+
+Generation + gating kills drift for every **machine-checkable** fact. It cannot
+verify **judgment prose** ("this design is better because…") — that can always
+diverge from code. The mitigations: minimise load-bearing prose, surface its
+staleness (orient pack shows per-doc size + last-touched), and the standing rule
+in CLAUDE.md #8 — **trust generated facts, verify prose against code** (now one
+grep via `symbols.generated.tsv`). A doc claim is a hint until confirmed.
 
 ## Why three different tiers (this is the important part)
 

@@ -100,6 +100,7 @@ Server tests run via [`scripts/runTests.mjs`](server/scripts/runTests.mjs), whic
 5. **Demand elegance (balanced).** For non-trivial changes: "is there a simpler way?" Don't over-engineer simple fixes.
 6. **Autonomous bug fixing.** Point at logs/errors/failing tests → resolve them. No hand-holding required.
 7. **Run `/wave-commit`** at the end of every wave. The Stop hook nudges if you forget.
+8. **Trust generated facts; verify prose.** The `/orient` pack, the invariant firewall, and `docs/index/` (registries + symbols) are generated or CI-gated — trust them. Hand-written prose in `docs/architecture/` & `docs/conventions/` is a **hint, not ground truth**: before you rely on a specific path / symbol / line / behaviour from it, confirm against code (one grep, or `docs/index/symbols.generated.tsv`). `npm --prefix server run check:doc-refs` flags any live doc whose file references have broken. This is the rule that keeps "fast" from becoming "confidently wrong."
 
 ## Maintenance contract
 

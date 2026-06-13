@@ -15,6 +15,18 @@
     ]
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/session-warmup.sh",
+            "timeout": 45
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",
