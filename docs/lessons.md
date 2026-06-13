@@ -7,6 +7,14 @@
 > Newest at top. One lesson per section. Each lesson states: the rule, why (what went wrong),
 > and how to apply it next time.
 
+## L-012 — A literal control byte in source hides the file from ripgrep
+
+**Rule:** A source file containing a literal control byte (NUL U+0000, SOH U+0001, Unit Separator U+001F, …) is classified as *binary* by `file(1)`, and **ripgrep — hence the Grep tool, the shell `grep`/`rg` wrappers, and most editor search — silently skips it**. A "no matches" result for such a file is a false negative, not proof the symbol is absent.
+
+**Why:** During the 2026-06 duplication audit, four chart files (`server/lib/chartGenerator.ts`, `server/lib/agents/runtime/tools/marketBasketTool.ts`, `client/src/lib/charts/dataEngine.ts`, `client/src/lib/charts/visxRenderers/BarRenderer.tsx`) embedded literal control bytes as composite-Map-key delimiters. The audit's ripgrep-based finders silently skipped them — missing ~10 real duplications — and a verifier mis-read an invisible NUL as a space and reported a non-existent "bug". Any dead-code / "no caller" deletion verified with ripgrep over such files would be unsafe.
+
+**How to apply:** (1) When a `grep`/Grep "no match" is load-bearing (e.g. before deleting "dead" code), confirm with `LC_ALL=C command /usr/bin/grep -a` (forces text mode, bypasses the shell's rg wrapper) or `Read` the file directly; `file <path>` reveals binary classification. (2) Don't embed literal control bytes in source — write the unicode escape and route composite keys through the shared `KEY_SEP`/`compositeKey` (convention: [composite-key-separators](conventions/composite-key-separators.md)). Fixed across the Dup1–Dup7 waves; see [duplication-audit-deferrals](decisions/duplication-audit-deferrals.md) for what was intentionally left.
+
 ## L-001 — Don't restore the legacy orchestrator fallback
 
 **Rule:** `dataAnalyzer.answerQuestion` MUST throw when `AGENTIC_LOOP_ENABLED` is false. No fallback.
