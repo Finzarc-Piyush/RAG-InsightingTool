@@ -4,9 +4,9 @@
  * Bi-weekly (~14d) falls on the month/quarter branch by using &lt; 14 for the first bucket.
  */
 
-export type TemporalDisplayGrain = 'dayOrWeek' | 'monthOrQuarter' | 'year';
+import { MONTH_SHORT_NAMES as MONTH_SHORT } from './dateUtils.js';
 
-const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export type TemporalDisplayGrain = 'dayOrWeek' | 'monthOrQuarter' | 'year';
 
 /** Median of positive finite numbers; returns undefined if empty. */
 function medianPositive(values: number[]): number | undefined {

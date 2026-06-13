@@ -18,44 +18,16 @@ import {
   type PivotDefaultsRowsValues,
 } from "../../lib/pivotDefaultsFromExecution.js";
 import { normalizePivotValueFieldForBaseTable } from "../../lib/pivotDefaultsFromPreview.js";
-import type { DimensionFilter } from "../../shared/queryTypes.js";
 import {
   mergePivotSliceDefaults,
   pivotSliceDefaultsFromDimensionFilters,
+  readDimensionFiltersFromParsed,
 } from "../../lib/pivotSliceDefaultsFromDimensionFilters.js";
 import {
   sanitisePivotColumnDimensionsInput,
   suggestPivotColumnsFromDimensions,
 } from "../../lib/pivotLayoutFromDimensions.js";
 import { logger } from "../../lib/logger.js";
-
-function readDimensionFiltersFromParsed(
-  parsedQuery: Record<string, unknown> | null | undefined
-): DimensionFilter[] | undefined {
-  if (!parsedQuery) return undefined;
-  const raw = parsedQuery.dimensionFilters;
-  if (!Array.isArray(raw)) return undefined;
-  const out: DimensionFilter[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    if (typeof o.column !== "string") continue;
-    if (o.op !== "in" && o.op !== "not_in") continue;
-    if (!Array.isArray(o.values)) continue;
-    out.push({
-      column: o.column,
-      op: o.op as "in" | "not_in",
-      values: o.values.map((v) => String(v)),
-      match:
-        o.match === "exact" ||
-        o.match === "case_insensitive" ||
-        o.match === "contains"
-          ? o.match
-          : undefined,
-    });
-  }
-  return out.length ? out : undefined;
-}
 
 export function mergePivotDefaultsForResponse(params: {
   dataSummary: ChatDocument["dataSummary"];

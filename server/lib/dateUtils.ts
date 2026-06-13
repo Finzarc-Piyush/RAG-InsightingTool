@@ -36,7 +36,7 @@ export interface NormalizedDate {
   displayLabel: string;
 }
 
-const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** First three letters of English month name → 0-based month index (MMM-YY / Month YYYY). */
 const MONTH_ABBREV_TO_INDEX: Record<string, number> = {

@@ -18,8 +18,7 @@
  */
 
 import type { BusinessActionItem } from "../shared/schema.js";
-
-const dashboardPatchChain = new Map<string, Promise<unknown>>();
+import { serializePerDashboard } from "./dashboardPatchMutex.js";
 
 export async function patchDashboardBusinessActions(params: {
   dashboardId: string;
@@ -28,25 +27,9 @@ export async function patchDashboardBusinessActions(params: {
 }): Promise<{ ok: boolean; reason?: string }> {
   if (!params.items?.length) return { ok: true, reason: "empty" };
 
-  const previous = dashboardPatchChain.get(params.dashboardId);
-  const work = (async () => {
-    if (previous) {
-      try {
-        await previous;
-      } catch {
-        // Prior caller's failure is its own concern.
-      }
-    }
-    return doPatch(params);
-  })();
-  dashboardPatchChain.set(params.dashboardId, work);
-  try {
-    return await work;
-  } finally {
-    if (dashboardPatchChain.get(params.dashboardId) === work) {
-      dashboardPatchChain.delete(params.dashboardId);
-    }
-  }
+  return serializePerDashboard(`businessActions:${params.dashboardId}`, () =>
+    doPatch(params)
+  );
 }
 
 async function doPatch(params: {

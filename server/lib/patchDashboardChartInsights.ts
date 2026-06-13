@@ -17,6 +17,7 @@
 
 import type { ChartSpec, Dashboard } from "../shared/schema.js";
 import { applyChartInsightsBySignature } from "./applyChartInsightsBySignature.js";
+import { serializePerDashboard } from "./dashboardPatchMutex.js";
 
 /** Minimal model surface — injectable so the patcher is unit-testable
  *  without a live Cosmos container. Defaults to the real dashboard.model. */
@@ -24,8 +25,6 @@ export type DashboardInsightPatchDeps = {
   getDashboardById: (id: string, username: string) => Promise<Dashboard | null>;
   updateDashboard: (dashboard: Dashboard) => Promise<Dashboard>;
 };
-
-const dashboardInsightPatchChain = new Map<string, Promise<unknown>>();
 
 export async function patchDashboardChartInsights(params: {
   dashboardId: string;
@@ -35,25 +34,9 @@ export async function patchDashboardChartInsights(params: {
 }): Promise<{ ok: boolean; reason?: string; patchedCount?: number }> {
   if (!params.charts?.length) return { ok: true, reason: "empty" };
 
-  const previous = dashboardInsightPatchChain.get(params.dashboardId);
-  const work = (async () => {
-    if (previous) {
-      try {
-        await previous;
-      } catch {
-        // Prior caller's failure is its own concern.
-      }
-    }
-    return doPatch(params);
-  })();
-  dashboardInsightPatchChain.set(params.dashboardId, work);
-  try {
-    return await work;
-  } finally {
-    if (dashboardInsightPatchChain.get(params.dashboardId) === work) {
-      dashboardInsightPatchChain.delete(params.dashboardId);
-    }
-  }
+  return serializePerDashboard(`chartInsights:${params.dashboardId}`, () =>
+    doPatch(params)
+  );
 }
 
 async function doPatch(params: {

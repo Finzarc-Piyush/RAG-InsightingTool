@@ -12,6 +12,38 @@ export type PivotSliceDefaults = {
 };
 
 /**
+ * Parse a raw `parsedQuery.dimensionFilters` blob into a typed `DimensionFilter[]`.
+ * Returns `undefined` when absent or when no valid (`in`/`not_in`) filters survive.
+ */
+export function readDimensionFiltersFromParsed(
+  parsedQuery: Record<string, unknown> | null | undefined
+): DimensionFilter[] | undefined {
+  if (!parsedQuery) return undefined;
+  const raw = parsedQuery.dimensionFilters;
+  if (!Array.isArray(raw)) return undefined;
+  const out: DimensionFilter[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    if (typeof o.column !== "string") continue;
+    if (o.op !== "in" && o.op !== "not_in") continue;
+    if (!Array.isArray(o.values)) continue;
+    out.push({
+      column: o.column,
+      op: o.op as "in" | "not_in",
+      values: o.values.map((v) => String(v)),
+      match:
+        o.match === "exact" ||
+        o.match === "case_insensitive" ||
+        o.match === "contains"
+          ? o.match
+          : undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/**
  * Build filter well fields + initial selections from dimension filters.
  * Fields on pivot rows or pivot columns only get `filterSelections` (same field is in slice keys).
  */
