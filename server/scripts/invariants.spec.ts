@@ -1,0 +1,160 @@
+/**
+ * Wave W1 · Single source of truth for the machine-checkable kernel of each
+ * CLAUDE.md critical invariant.
+ *
+ * WHY THIS EXISTS — the cold-start firewall.
+ * CLAUDE.md invariants are prose a fresh Claude session trusts implicitly. When
+ * code moves and the prose doesn't, the session is not just slow — it is
+ * confidently WRONG (e.g. invariant #4 told sessions to hand-edit a test
+ * file-list that Wave R26 had already replaced with glob auto-discovery; the
+ * lie survived 62 commits because nothing executed the claim). Each entry below
+ * encodes the *checkable kernel* of an invariant as data; `check-invariants.ts`
+ * executes every kernel against the live tree, so a frozen or contradicted
+ * invariant becomes a red build instead of a silent misdirection.
+ *
+ * This file is the SoT the CLAUDE.md invariant list points at. Prose carries
+ * judgment ("don't reintroduce a fallback"); this carries the assertion.
+ *
+ * Paths are relative to the repo root. Keep checks CONSERVATIVE: a false-fail is
+ * loud and fixable; a false-pass re-opens the drift hole. Prefer structural
+ * kinds (json_eq / symbol_exported / first_import / absent) over substring
+ * matches on free-form behavioural prose, which break on harmless rewording.
+ */
+
+/** A single assertion against one file. ALL of an invariant's checks must pass. */
+export type Check =
+  /** File must CONTAIN the needle (string substring or RegExp match). */
+  | { kind: "file_contains"; file: string; needle: string | RegExp; note?: string }
+  /** File must NOT contain the needle — the contradiction guard. Catches a
+   *  reintroduced footgun / a doc sentence that disagrees with code. */
+  | { kind: "absent"; file: string; needle: string | RegExp; note?: string }
+  /** JSON file: the value at a dotted path must deep-equal `equals`. */
+  | { kind: "json_eq"; file: string; path: string; equals: unknown; note?: string }
+  /** The first `import` statement in the file must reference `module`. */
+  | { kind: "first_import"; file: string; module: string; note?: string }
+  /** The file must export a top-level binding named `symbol`. */
+  | { kind: "symbol_exported"; file: string; symbol: string; note?: string };
+
+export interface Invariant {
+  /** Matches the CLAUDE.md invariant number, e.g. "I4" ↔ invariant #4. */
+  id: string;
+  /** One-line human summary mirroring the CLAUDE.md prose. */
+  title: string;
+  checks: Check[];
+}
+
+export const INVARIANTS: ReadonlyArray<Invariant> = [
+  {
+    id: "I1",
+    title: "AGENTIC_LOOP_ENABLED is mandatory — no legacy orchestrator fallback",
+    checks: [
+      {
+        kind: "file_contains",
+        file: "server/lib/dataAnalyzer.ts",
+        needle: "the legacy orchestrator has been removed",
+        note: "the throw that enforces the agentic-only path",
+      },
+      {
+        kind: "absent",
+        file: "docs/architecture/agent-runtime.md",
+        needle: "legacy handler orchestrator takes",
+        note: "the deleted-fallback contradiction (agent-runtime.md once said it 'takes over')",
+      },
+    ],
+  },
+  {
+    id: "I3",
+    title: "loadEnv MUST be the first import in server/index.ts",
+    checks: [{ kind: "first_import", file: "server/index.ts", module: "./loadEnv.js" }],
+  },
+  {
+    id: "I4",
+    title: "Server `npm test` is glob auto-discovery (runTests.mjs), NOT a hand-maintained file list",
+    checks: [
+      {
+        kind: "json_eq",
+        file: "server/package.json",
+        path: "scripts.test",
+        equals: "node scripts/runTests.mjs",
+      },
+      {
+        kind: "file_contains",
+        file: "server/scripts/runTests.mjs",
+        needle: "GLOB auto-discovery",
+      },
+      {
+        kind: "absent",
+        file: "CLAUDE.md",
+        needle: "explicit file list",
+        note: "guards the rewritten invariant #4 against regressing to the old footgun wording",
+      },
+      {
+        kind: "absent",
+        file: "docs/lessons.md",
+        needle: "Glob-style discovery is NOT in play",
+        note: "guards the rewritten L-005",
+      },
+    ],
+  },
+  {
+    id: "I5",
+    title: "Non-standard env file name: server/server.env (loaded by code, not tooling)",
+    checks: [{ kind: "file_contains", file: "server/loadEnv.ts", needle: "server.env" }],
+  },
+  {
+    id: "I7",
+    title: "Verifier verdicts are constants from VERIFIER_VERDICT.* (never string literals)",
+    checks: [
+      {
+        kind: "symbol_exported",
+        file: "server/lib/agents/runtime/schemas.ts",
+        symbol: "VERIFIER_VERDICT",
+      },
+    ],
+  },
+  {
+    id: "I8",
+    title: "Tool/skill duplicate name = fatal at boot (ToolAlreadyRegisteredError guard exists)",
+    checks: [
+      {
+        kind: "symbol_exported",
+        file: "server/lib/agents/runtime/toolRegistry.ts",
+        symbol: "ToolAlreadyRegisteredError",
+      },
+    ],
+  },
+  {
+    id: "I9",
+    title: "mutateChatDocument is THE read-modify-write seam (lock + IfMatch _etag)",
+    checks: [
+      {
+        kind: "symbol_exported",
+        file: "server/models/chat.model.ts",
+        symbol: "mutateChatDocument",
+      },
+      {
+        kind: "file_contains",
+        file: "server/models/chat.model.ts",
+        needle: "withSessionWriteLock",
+        note: "the per-session lock the RMW seam takes",
+      },
+      {
+        kind: "file_contains",
+        file: "server/models/chat.model.ts",
+        needle: /ifMatch/i,
+        note: "the Cosmos optimistic-concurrency precondition",
+      },
+    ],
+  },
+  {
+    id: "I10",
+    title: "Per-role model routing via OPENAI_MODEL_FOR_* override names (read llmCallPurpose.ts)",
+    checks: [
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/llmCallPurpose.ts",
+        needle: "OPENAI_MODEL_FOR",
+      },
+    ],
+  },
+];

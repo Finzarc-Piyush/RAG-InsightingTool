@@ -55,13 +55,13 @@
 
 **How to apply:** When adding new imports, append them after `loadEnv`. When reorganizing modules, leave `loadEnv` alone.
 
-## L-005 — Server `npm test` is an explicit file list, not a glob
+## L-005 — Server `npm test` auto-discovers tests (Wave R26); the firewall now guards it
 
-**Rule:** When you add a new test file (server-side OR client-side imported via `../client/...`), append it to the `test` script in [server/package.json](../server/package.json). Glob-style discovery is NOT in play.
+**Rule:** Server tests run via [`scripts/runTests.mjs`](../server/scripts/runTests.mjs), which globs every `*.test.ts` under `tests/` (and the client `node:test` files it drives). New tests are picked up automatically — do NOT reintroduce a hand-maintained file list. Vitest files (`*.vitest.test.ts`) are excluded and run under the client's own config.
 
-**Why:** CI runs exactly what's in the script. A new test file not appended is silently skipped — coverage feels green, real regressions ship.
+**Why:** The old explicit-list `test` script silently skipped any file you forgot to append — coverage felt green while regressions shipped. Wave R26 (`0140ae68`) killed that footgun, but this lesson AND CLAUDE.md invariant #4 kept describing the dead workflow for ~62 commits. That drift is exactly why invariant kernels are now machine-checked by [`server/scripts/check-invariants.ts`](../server/scripts/check-invariants.ts): a doc that contradicts code becomes a red build, not a confident lie.
 
-**How to apply:** Wave-commit step verifies every new `tests/*.ts` file appears in `server/package.json`'s `test` script.
+**How to apply:** Just name the file `*.test.ts`. To assert an invariant still holds (or repair a drifted one), edit `server/scripts/invariants.spec.ts` and run `npm run check:invariants`.
 
 ## L-006 — Don't put wave-by-wave history back into CLAUDE.md
 

@@ -22,6 +22,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      # Invariant firewall — BLOCKING. Fails if any CLAUDE.md critical invariant
+      # stops matching the code (e.g. a doc says "legacy orchestrator takes over"
+      # but the code throws). Kernels in server/scripts/invariants.spec.ts.
+      - name: Invariant firewall (CLAUDE.md vs code)
+        run: npm run check:invariants
       - run: npm test
       # Supply-chain gate — BLOCKING at high+. The dependency-hardening wave
       # (xlsx→exceljs, dead jspdf removed, vitest bump, server `tar` override

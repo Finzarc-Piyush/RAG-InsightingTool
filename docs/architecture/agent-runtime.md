@@ -5,9 +5,11 @@
 The engine every chat turn routes through when `AGENTIC_LOOP_ENABLED=true`.
 Plans a sequence of tool calls, executes them with reflection between
 steps, verifies the final answer, and streams SSE events to the client
-workbench. When agentic is off, the legacy handler orchestrator takes
-over — see "Legacy layer" below; the two layers have different
-capabilities.
+workbench. The agentic loop is mandatory: with `AGENTIC_LOOP_ENABLED`
+unset/false, `dataAnalyzer.answerQuestion` throws — the legacy
+orchestrator was deleted in `9422bed7` (invariant #1), so there is no
+fallback path. The "Legacy layer" section below is frozen history, not a
+live alternative.
 
 ## Key files
 
