@@ -35,7 +35,7 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
    - **YYYY-MM-DD** — **Wave W<n> · <subject>.** <One-paragraph problem statement: what was broken / what was missing.>
      - **What landed.** Files touched with markdown link syntax: [`path/to/file.ts`](path/to/file.ts), key functions added/changed, key constants. Be specific.
      - **Why this design.** Root cause, what alternatives were considered, why this one wins. Reference any plan file at `/Users/tida/.claude/plans/<plan>.md`.
-     - **Tests.** New test files with paths + case count. Note if appended to `server/package.json`'s explicit `test` list.
+     - **Tests.** New test files with paths + case count. (Tests are glob-discovered by `scripts/runTests.mjs` — no manual list to append.)
      - **Verified.** Server tests N/N pass, client tests N/N pass, `npx tsc --noEmit` baseline preserved (X errors, identical to <prior wave>).
      - **Conventions added** (if any). State the rule, why, where it applies. If a convention is named, create [`docs/conventions/<slug>.md`](docs/conventions/<slug>.md) with the same content expanded.
      - **Out of scope.** Deferred items + reason. Prevents future-Claude from reopening settled scope.
@@ -45,12 +45,9 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
 
 4. **Prepend the entry** to `docs/WAVES.md`, right under the front-matter header block (above the previous newest entry).
 
-5. **Update `docs/STATE.md`:**
-   - Bump HEAD to the new wave: subject line, branch (`git branch --show-current`), last commit hash + date.
-   - Update working tree status (`git status -uno` summary).
-   - Rotate "Last 5 waves" — prepend the new one, drop the oldest 6th.
-   - If this wave starts or ends a feature stream, update "Live feature streams".
-   - Update WIP / next-wave hints if applicable.
+5. **Update `docs/STATE.md` (durable context only).** STATE.md no longer hand-tracks HEAD or a "Last 5 waves" list — the `/orient` pack owns live state (that hand-maintained block is what drifted 62 commits behind). **Do NOT re-add a HEAD or Last-5-waves block.** Update only durable context this wave changed:
+   - "Feature streams" — if this wave starts / ends / advances a stream.
+   - "Known WIP / broken" and "Next wave" hints, if applicable.
 
 6. **Touch affected subsystem docs.** For each subsystem identified in step 2, append a one-line "Recent changes" entry to its `docs/architecture/<name>.md` file:
 
@@ -86,10 +83,12 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
 
 8. **New cross-session lesson?** If the user corrected Claude on something non-obvious during the wave, append an L-NNN entry to [`docs/lessons.md`](../../docs/lessons.md).
 
-9. **Stage and commit the doc updates.** Run:
+9. **Regenerate the cold-start indexes, then stage and commit the doc updates.** The generated indexes in `docs/index/` must ship fresh with every wave — CI blocks on a stale registries manifest. Run:
 
    ```bash
-   git add docs/STATE.md docs/WAVES.md docs/architecture/ docs/conventions/ docs/lessons.md
+   npm --prefix server run gen:registries   # docs/index/registries.generated.md (CI-gated)
+   npm --prefix server run gen:symbols      # docs/index/symbols.generated.tsv (warn tier)
+   git add docs/STATE.md docs/WAVES.md docs/architecture/ docs/conventions/ docs/lessons.md docs/index/
    git commit -m "$(cat <<'EOF'
    docs(W<n>): update STATE/WAVES + touched subsystems
 

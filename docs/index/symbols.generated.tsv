@@ -715,6 +715,7 @@ COL_MAX_PX	const	client/src/lib/datasetPreviewModel.ts	14
 COL_MIN_PX	const	client/src/lib/datasetPreviewModel.ts	13
 collectBooleanIndicators	function	server/lib/agents/runtime/booleanIndicatorRateRepair.ts	64
 collectColKeys	function	client/src/lib/pivot/buildPivotModel.ts	405
+collectSymbols	function	server/scripts/generate-symbols.ts	56
 ColumnarStorageOptions	interface	server/lib/columnarStorage.ts	58
 ColumnarStorageService	class	server/lib/columnarStorage.ts	193
 ColumnCurrency	type	server/shared/schema.ts	1871
