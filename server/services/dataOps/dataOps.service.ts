@@ -4,11 +4,11 @@
  */
 import { Message } from "../../shared/schema.js";
 import { parseDataOpsIntent, executeDataOperation, DataOpsIntent } from "../../lib/dataOps/dataOpsOrchestrator.js";
-import { 
-  getChatBySessionIdForUser, 
-  updateChatDocument, 
+import {
+  getChatBySessionIdForUser,
+  mutateChatDocument,
   addMessagesBySessionId,
-  ChatDocument 
+  ChatDocument
 } from "../../models/chat.model.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import queryCache from "../../lib/cache.js";
@@ -64,10 +64,15 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
     throw new Error('Session not found. Please upload a file first.');
   }
 
-  // Update dataOpsMode if provided
+  // Update dataOpsMode if provided. Routes through mutateChatDocument (fresh
+  // read + ETag precondition) so this whole-document write can't clobber a
+  // concurrent message-append on a multi-instance deployment (invariant #9).
   if (dataOpsMode !== undefined && chatDocument.dataOpsMode !== dataOpsMode) {
+    await mutateChatDocument(sessionId, (doc) => {
+      if (doc.dataOpsMode === dataOpsMode) return false;
+      doc.dataOpsMode = dataOpsMode;
+    });
     chatDocument.dataOpsMode = dataOpsMode;
-    await updateChatDocument(chatDocument);
   }
 
   // Load data

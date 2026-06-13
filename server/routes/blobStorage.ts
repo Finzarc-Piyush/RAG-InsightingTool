@@ -11,7 +11,6 @@ const router = Router();
 
 // Get all files for a user
 router.get('/files/user/:username', getUserFiles);
-router.get('/files/user', getUserFiles); // Alternative endpoint
 
 // Get file metadata
 router.get('/files/:blobName/metadata', getFileMetadata);

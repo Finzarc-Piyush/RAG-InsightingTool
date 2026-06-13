@@ -163,6 +163,7 @@ export const streamChatMessagesController = async (req: Request, res: Response) 
     const { sessionId } = req.params;
 
     if (!sessionId) {
+      res.status(400).json({ error: "Missing sessionId" });
       return;
     }
 

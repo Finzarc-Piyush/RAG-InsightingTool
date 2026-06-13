@@ -65,9 +65,9 @@ export const dataOpsChatWithAIStream = async (req: Request, res: Response) => {
 
     // Validate required fields
     if (!sessionId || !message) {
-      return;
+      return sendValidationError(res, 'Missing required fields');
     }
-    
+
     // Process streaming data operation (chatHistory will be fetched from Cosmos DB in the service)
     await processStreamDataOperation({
       sessionId,
