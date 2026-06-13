@@ -50,6 +50,7 @@ import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 import { formatTemporalPeriodKeyForDisplay } from '@/lib/temporalPeriodDisplay';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import { makeAxisTickFormatter } from '@/lib/charts/format';
+import { KEY_SEP } from '@/lib/charts/compositeKey';
 import {
   CHART_SERIES_COLORS as COLORS,
   evenlySpacedDataKeys,
@@ -1167,7 +1168,7 @@ export function ChartRenderer({
           const raw = row[vk];
           const n = typeof raw === 'number' ? raw : Number(raw);
           if (Number.isFinite(n)) {
-            cellMap.set(`${rk}\u0000${ck}`, n);
+            cellMap.set(`${rk}${KEY_SEP}${ck}`, n);
             vmin = Math.min(vmin, n);
             vmax = Math.max(vmax, n);
           }
@@ -1214,7 +1215,7 @@ export function ChartRenderer({
                     <span className="line-clamp-3">{r}</span>
                   </div>
                   {colLabels.map((c) => {
-                    const val = cellMap.get(`${r}\u0000${c}`);
+                    const val = cellMap.get(`${r}${KEY_SEP}${c}`);
                     const t =
                       val !== undefined && Number.isFinite(val)
                         ? (val - vmin) / (vmax - vmin)

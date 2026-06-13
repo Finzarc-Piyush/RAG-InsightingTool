@@ -13,6 +13,7 @@ import {
   inferOptimalPeriodForChartColumn,
 } from './chartDownsampling.js';
 import { logger } from "./logger.js";
+import { KEY_SEP } from "./compositeKey.js";
 
 export type ProcessChartDataOptions = {
   /** Used to pick date bucket (year/month/...) for aggregated line charts and downsampling. */
@@ -60,7 +61,7 @@ export function pivotLongToWideBar(
       seriesSeen.add(sv);
       rawSeriesOrder.push(sv);
     }
-    const key = `${xv}\u0000${sv}`;
+    const key = `${xv}${KEY_SEP}${sv}`;
     const n = toNumber(row[valueCol]);
     if (isNaN(n)) continue;
     if (!pairMap.has(key)) pairMap.set(key, []);
@@ -93,7 +94,7 @@ export function pivotLongToWideBar(
     for (const sv of rawSeriesOrder) {
       let total = 0;
       for (const xv of xOrder) {
-        const vals = pairMap.get(`${xv}\u0000${sv}`);
+        const vals = pairMap.get(`${xv}${KEY_SEP}${sv}`);
         if (vals) total += vals.reduce((a, b) => a + b, 0);
       }
       seriesTotals.set(sv, total);
@@ -110,7 +111,7 @@ export function pivotLongToWideBar(
     for (const sv of rawSeriesOrder) {
       if (topSet.has(sv)) continue;
       for (const xv of xOrder) {
-        pairMap.delete(`${xv}\u0000${sv}`);
+        pairMap.delete(`${xv}${KEY_SEP}${sv}`);
       }
     }
     rawSeriesOrder.length = 0;
@@ -153,7 +154,7 @@ export function pivotLongToWideBar(
     for (const xv of xOrder) {
       let total = 0;
       for (const rawS of rawSeriesOrder) {
-        const vals = pairMap.get(`${xv}\u0000${rawS}`);
+        const vals = pairMap.get(`${xv}${KEY_SEP}${rawS}`);
         if (vals && vals.length > 0) {
           total += vals.reduce((a, b) => a + b, 0);
         }
@@ -168,7 +169,7 @@ export function pivotLongToWideBar(
     const out: Record<string, any> = { [xCol]: xv };
     for (const rawS of rawSeriesOrder) {
       const san = displayToSanitized.get(rawS)!;
-      const key = `${xv}\u0000${rawS}`;
+      const key = `${xv}${KEY_SEP}${rawS}`;
       const vals = pairMap.get(key);
       let v = 0;
       if (vals && vals.length > 0) {
@@ -202,7 +203,7 @@ function processHeatmapLongData(
     if (cv === null || cv === undefined || cv === "") continue;
     const rk = String(rv);
     const ck = String(cv);
-    const key = `${rk}\u0000${ck}`;
+    const key = `${rk}${KEY_SEP}${ck}`;
     const n = toNumber(row[valueCol]);
     if (isNaN(n)) continue;
     if (!cellMap.has(key)) {

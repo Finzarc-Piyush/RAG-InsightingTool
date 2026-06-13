@@ -40,6 +40,7 @@
 import { z } from "zod";
 import type { ToolRegistry, ToolResult, ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
+import { compositeKey, splitCompositeKey } from "../../../compositeKey.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -209,7 +210,7 @@ export function runMarketBasket(
   const pairCounts = new Map<string, number>();
   function pairKey(a: string, b: string): string {
     // Order-independent canonical key for pair counting.
-    return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+    return a < b ? compositeKey(a, b) : compositeKey(b, a);
   }
   for (const basket of transactions.values()) {
     const items = Array.from(basket).filter((i) => frequentSet.has(i));
@@ -226,7 +227,7 @@ export function runMarketBasket(
   const rules: AssociationRule[] = [];
   for (const [k, count] of pairCounts) {
     if (count < minCount) continue;
-    const [a, b] = k.split("\u0000");
+    const [a, b] = splitCompositeKey(k);
     const supA = (itemCounts.get(a) ?? 0) / T;
     const supB = (itemCounts.get(b) ?? 0) / T;
     const supAB = count / T;

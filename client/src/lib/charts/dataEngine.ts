@@ -12,6 +12,7 @@
 
 import type { ChartAggOp, ChartTransform } from "@/shared/schema";
 import { asNumber, asString } from "./encodingResolver";
+import { KEY_SEP } from "./compositeKey";
 
 export type Row = Record<string, unknown>;
 export type Predicate = (row: Row) => boolean;
@@ -24,7 +25,6 @@ export type Predicate = (row: Row) => boolean;
  * Group rows by one or more key columns. Composite keys are joined
  * with a unit-separator that won't appear in user data.
  */
-const KEY_SEP = "\u001f";
 
 export function groupBy(rows: Row[], keys: string[]): Map<string, Row[]> {
   const out = new Map<string, Row[]>();

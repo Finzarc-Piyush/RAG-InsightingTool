@@ -43,6 +43,7 @@ import {
 import { localPoint } from "@visx/event";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
+import { KEY_SEP } from "@/lib/charts/compositeKey";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
   asNumber,
@@ -311,7 +312,7 @@ export function BarRenderer({
       patternKey: string;
     }
     const aggKey = (k: AggKey) =>
-      `${k.outerKey}\u0001${k.colorKey}\u0001${k.detailKey}`;
+      `${k.outerKey}${KEY_SEP}${k.colorKey}${KEY_SEP}${k.detailKey}`;
     const aggregated = new Map<
       string,
       AggKey & { value: number }
@@ -356,18 +357,18 @@ export function BarRenderer({
       let stackKey: string;
       switch (layout) {
         case "grouped":
-          stackKey = `${a.outerKey}\u0001${a.colorKey}\u0001${a.detailKey}`;
+          stackKey = `${a.outerKey}${KEY_SEP}${a.colorKey}${KEY_SEP}${a.detailKey}`;
           break;
         case "stacked":
         case "normalized":
           stackKey = a.outerKey;
           break;
         case "grouped-stacked":
-          stackKey = `${a.outerKey}\u0001${a.colorKey}`;
+          stackKey = `${a.outerKey}${KEY_SEP}${a.colorKey}`;
           break;
         case "diverging": {
           const side = value >= 0 ? "+" : "-";
-          stackKey = `${a.outerKey}\u0001${side}`;
+          stackKey = `${a.outerKey}${KEY_SEP}${side}`;
           break;
         }
       }
