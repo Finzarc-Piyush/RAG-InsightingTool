@@ -58,6 +58,8 @@ Pre-condition: a wave's code changes are either staged, committed, or about to b
 
    If the file doesn't have a "Recent changes" section yet, add one at the bottom. Don't rewrite the body of the subsystem doc unless the wave actually changed the subsystem's contract — most waves don't.
 
+   **STRICTLY one line per wave.** Full prose belongs in `docs/WAVES.md` only. (In 2026-06 the charting/agent-runtime/schemas "Recent changes" sections had bloated to full multi-paragraph entries — 72K tokens — and were archived to `docs/archive/<name>-changelog.md`. Don't re-bloat them: the `/load` cost is exactly what we're protecting.)
+
 7. **New convention?** If the wave's "Conventions added" entry names a new rule, create `docs/conventions/<slug>.md`:
 
    ```markdown
