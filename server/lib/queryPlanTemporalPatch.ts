@@ -1,4 +1,4 @@
-import { detectPeriodFromQuery, normalizeDateToPeriod } from "./dateUtils.js";
+import { detectPeriodFromQuery } from "./dateUtils.js";
 import {
   hasExplicitBreakdownOrGrain,
   vagueTemporalTrendQuestion,
@@ -8,9 +8,25 @@ import {
   parseTemporalFacetDisplayKey,
   facetColumnKey,
   detectCoarseTimeIntentFromMessage,
-  GRAIN_TO_PERIOD,
-  type TemporalFacetGrain,
 } from "./temporalFacetColumns.js";
+import {
+  GRAIN_RANK,
+  PERIOD_TO_FACET_GRAIN,
+  distinctBucketsForGrain,
+  pickTrendGrainForSpan,
+  type DateRange,
+  type DateRangeByColumn,
+} from "./temporalGrainAuthority.js";
+
+// These span primitives now live in temporalGrainAuthority.ts (the leaf grain
+// module). Re-exported here so existing importers of these names keep working.
+export {
+  GRAIN_RANK,
+  PERIOD_TO_FACET_GRAIN,
+  distinctBucketsForGrain,
+  pickTrendGrainForSpan,
+};
+export type { DateRange, DateRangeByColumn };
 
 /** Minimal shape for planner steps; keeps tests free of planner → LLM import chain. */
 export type ExecuteQueryPlanStepLike = {
@@ -39,89 +55,6 @@ export function patchExecuteQueryPlanDateAggregation(
 
 export const TREND_OVER_TIME_RE =
   /\b(trend|over\s+time|time\s+series|evolution|trajectory|how\s+.+\s+(changed|evolved)|temporal\s+pattern)\b/i;
-
-/** Wave T2 · per-source-date-column span metadata, as populated by
- * `createDataSummary` (Wave T1). Optional input to the grain patch; when
- * absent the patch falls back to the pre-T2 behaviour ("month"). minIso/maxIso
- * (Wave T4) let `distinctBucketsForGrain` count how many buckets a coarse grain
- * would yield, so the patch can REFINE a collapsing facet (e.g. Month → Day on a
- * single-month daily span), not just coarsen a raw date. */
-export type DateRangeByColumn = ReadonlyMap<
-  string,
-  { spanDays: number; distinctDayCount: number; minIso?: string; maxIso?: string }
->;
-
-/** Coarse→fine ordinal so we only ever refine to a STRICTLY finer grain. */
-const GRAIN_RANK: Record<TemporalFacetGrain, number> = {
-  date: 0,
-  week: 1,
-  month: 2,
-  quarter: 3,
-  half_year: 4,
-  year: 5,
-};
-
-/** `pickTrendGrainForSpan` returns SQL periods; map them to facet grains.
- *  Exported (W3) so the dashboard feature sweep can pick a span-appropriate
- *  trend facet (e.g. Day on a single-month span) instead of an unconditional
- *  Month facet that collapses to one bucket. */
-export const PERIOD_TO_FACET_GRAIN: Record<
-  "day" | "week" | "month" | "quarter",
-  TemporalFacetGrain
-> = { day: "date", week: "week", month: "month", quarter: "quarter" };
-
-/**
- * How many distinct buckets a grain yields over [minIso, maxIso]. `date` →
- * `distinctDayCount` directly; coarser grains walk the span day-by-day and
- * bucket via `normalizeDateToPeriod` (matching the upload-time facet keys).
- * Returns 1 when the span can't be resolved (the safe "single bucket" answer),
- * and is bounded so a multi-year span can't dominate planning time.
- */
-export function distinctBucketsForGrain(
-  range: { spanDays: number; distinctDayCount: number; minIso?: string; maxIso?: string },
-  grain: TemporalFacetGrain,
-): number {
-  if (grain === "date") return Math.max(0, range.distinctDayCount ?? 0);
-  if (!range.minIso || !range.maxIso) return 1;
-  const parse = (iso: string): Date | null => {
-    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (!m) return null;
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
-  const start = parse(range.minIso);
-  const end = parse(range.maxIso);
-  if (!start || !end || end.getTime() < start.getTime()) return 1;
-  const period = GRAIN_TO_PERIOD[grain];
-  const keys = new Set<string>();
-  const MAX_STEPS = 4000; // ~11 years of daily steps — beyond this any coarse grain clearly has ≥2 buckets.
-  let steps = 0;
-  const cur = new Date(start.getTime());
-  while (cur.getTime() <= end.getTime() && steps < MAX_STEPS) {
-    const norm = normalizeDateToPeriod(new Date(cur.getTime()), period);
-    if (norm) keys.add(norm.normalizedKey);
-    cur.setDate(cur.getDate() + 1);
-    steps += 1;
-  }
-  if (steps >= MAX_STEPS) return Math.max(keys.size, 2);
-  return Math.max(1, keys.size);
-}
-
-/** Wave T2 · pure picker. Mirrors the display-side thresholds in
- * `temporalGrain.ts`. Returns the SQL aggregation period the
- * planner should bind to `plan.dateAggregationPeriod`. */
-export function pickTrendGrainForSpan(
-  spanDays: number,
-  distinctDayCount: number,
-): "day" | "week" | "month" | "quarter" {
-  if (!Number.isFinite(spanDays) || spanDays <= 0 || distinctDayCount <= 1) {
-    return "month";
-  }
-  if (spanDays <= 90) return "day";
-  if (spanDays <= 365) return "week";
-  if (spanDays <= 365 * 5) return "month";
-  return "quarter";
-}
 
 /**
  * Wave T4 · Span-aware temporal grain for trend / "over time" questions.

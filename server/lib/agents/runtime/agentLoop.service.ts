@@ -210,7 +210,7 @@ import {
 import { MODEL } from "../../openai.js";
 import { callLlm } from "./callLlm.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
-import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
+import { ANALYST_PREAMBLE, ANSWER_ENVELOPE_CONTRACT } from "./sharedPrompts.js";
 import { getInsightModel, getInsightTemperatureConservative } from "../../insightSynthesis/insightModelConfig.js";
 import { completeJson } from "./llmJson.js";
 import { proposeAndBuildExtraCharts } from "./visualPlanner.js";
@@ -247,7 +247,8 @@ import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPrevi
 import { buildAutoPivotSpecFromPreview } from "../../autoPivotSpec.js";
 import { mergePivotDefaultRowsAndValues } from "../../pivotDefaultsFromExecution.js";
 import type { QueryPlanBody } from "../../queryPlanExecutor.js";
-import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
+import { classifyQueryIntent } from "./queryIntentAuthority.js";
+import { isBusinessActionsEnabled } from "../../envFlags.js";
 import { sanitizeIntermediatePreviewRows } from "../../agentIntermediatePreviewSanitize.js";
 
 /**
@@ -682,15 +683,7 @@ Numeric claims, extremes, and trends must match tool output (aggregated tables, 
 If data is insufficient, say what is missing in body and use minimal ctas. Respect the CONTEXT BUNDLE when it does not contradict the data.
 If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.
 
-W8 · Decision-grade extensions — emit each only when grounded in the observations. Calibrate count to the question; do not pad to hit a target.
-- "implications": each {statement, soWhat, confidence?}. \`statement\` is the observed fact; \`soWhat\` is the business meaning for an FMCG operator (buyer, brand manager, channel head), framed using DOMAIN KNOWLEDGE when relevant. For a simple lookup this array may be empty; for a deep analytical dive it may carry several. Never invent implications to hit a count.
-- "recommendations": each {action, rationale, horizon?}. \`action\` is concrete; \`rationale\` ties it to a finding and the domain context; \`horizon\` ∈ {now, this_quarter, strategic}. Same calibration as implications.
-- "domainLens": one paragraph framing the findings against the relevant FMCG/Marico context. Cite the pack id verbatim when referenced (e.g. "Per \`marico-haircare-portfolio\`, …"). Omit when no pack is materially relevant. Treat domain packs as orientation only — never invent domain facts.
-
-Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
-- "magnitudes": entries that back your main claim. Each entry is {label, value, confidence?}. \`label\` names what the magnitude measures (e.g. "East tech decline Mar→Apr"); \`value\` is human-readable ("-23.4%", "$1.2M"); \`confidence\` is "low" | "medium" | "high" (use "high" only for direct aggregates from tool output). Magnitudes MUST come from observation numbers — never invent. Emit zero when the answer carries no numeric backbone.
-- "unexplained": one sentence on what the tools could NOT determine (e.g. "Composition shift between product sub-categories wasn't isolated because no sub-category column exists in this dataset."). Leave undefined when nothing material is missing.
-When the user message says "questionShape: none" you may omit magnitudes and unexplained.`;
+${ANSWER_ENVELOPE_CONTRACT}`;
 
   const out = await completeJson(system, user, finalAnswerEnvelopeSchema, {
     turnId: `${turnId}_synth`,
@@ -1171,6 +1164,25 @@ export async function runAgentTurn(
     agentLog("quick_lookup.path_threw", {
       turnId,
       error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Query-intent authority (single source of truth). Both fast paths have
+  // bailed, so we are committed to the full loop. Classify the question ONCE
+  // and memoise the verdict + depthBudget on ctx; every downstream output-
+  // shaping gate (extra charts, dashboard offer, spawned follow-ups, envelope
+  // recommendations) reads `ctx.depthBudget` instead of re-deriving intent.
+  // `minimal` ⇒ a plain lookup / direct factual ask: answer what was asked,
+  // don't auto-pad. This is the structural fix for "simple question → plethora".
+  ctx.queryIntent = classifyQueryIntent(ctx.question);
+  ctx.depthBudget = ctx.queryIntent.depthBudget;
+  const minimalDepth = ctx.depthBudget === "minimal";
+  if (minimalDepth) {
+    agentLog("depth_budget.minimal", {
+      turnId,
+      intentClass: ctx.queryIntent.intentClass,
+      isDirectFactual: ctx.queryIntent.isDirectFactual,
+      isLookupShape: ctx.queryIntent.isLookupShape,
     });
   }
 
@@ -2993,7 +3005,9 @@ export async function runAgentTurn(
     // Round 2 derives queries from the combined (incl. sub-investigation) findings.
     if (
       shouldRunSpawnedFollowUp(isSpawnedFollowUpEnabled(), {
-        suppress: ctx.suppressSpawnedFollowUp,
+        // Depth-budget gate (query-intent authority): never auto-investigate
+        // spawned sub-questions for a plain lookup / direct factual ask.
+        suppress: ctx.suppressSpawnedFollowUp || minimalDepth,
         mode: ctx.mode,
         questionCount: accumulatedSpawnedQuestions.length,
       })
@@ -3216,7 +3230,7 @@ export async function runAgentTurn(
             // investigation". Implications stay (those are findings, not
             // action prompts). Diagnostic / strategy questions retain the
             // full envelope.
-            const suppressFollowUps = isDirectFactualQuestion(ctx.question);
+            const suppressFollowUps = minimalDepth;
             if (envCtas.length && !suppressFollowUps) env.nextSteps = envCtas;
             if (narResult.implications?.length) env.implications = narResult.implications;
             if (narResult.recommendations?.length && !suppressFollowUps) {
@@ -3273,7 +3287,7 @@ export async function runAgentTurn(
             > = {};
             // PVT3 · same direct-factual gate as the narrator branch — strip
             // recommendations + nextSteps for plain "what is X" questions.
-            const suppressFollowUps = isDirectFactualQuestion(ctx.question);
+            const suppressFollowUps = minimalDepth;
             if (envCtas.length && !suppressFollowUps) synthEnv.nextSteps = envCtas;
             if (env.implications?.length) synthEnv.implications = env.implications;
             if (env.recommendations?.length && !suppressFollowUps) {
@@ -3316,7 +3330,11 @@ export async function runAgentTurn(
           });
         }
 
-        if (envCtas.length) followUpPrompts = envCtas;
+        // Depth-budget gate: a minimal-depth ask must not leak next-step chips
+        // via the parallel `followUpPrompts` field even though `env.nextSteps`
+        // was already suppressed above. This is the seam the suppression rule
+        // previously lost on (the chips re-reached the client here).
+        if (envCtas.length && !minimalDepth) followUpPrompts = envCtas;
         if (!agentSuggestionHints.length) {
           agentSuggestionHints = [...envCtas, ...(envKeyInsight ? [envKeyInsight] : [])];
         }
@@ -3536,14 +3554,19 @@ export async function runAgentTurn(
           .map((c) => c.trim())
           .filter(Boolean)
           .slice(0, 3);
-        if (repairedCtas.length) envFresh.nextSteps = repairedCtas;
+        // Depth-budget gate: the verifier-revise path rebuilds the envelope
+        // from scratch, so it must re-apply the same minimal-depth suppression
+        // the narrator/synth branches do — otherwise a revised answer to a plain
+        // lookup re-introduces next-steps + recommendations the loop just stripped.
+        if (repairedCtas.length && !minimalDepth) envFresh.nextSteps = repairedCtas;
         if (repaired.implications?.length) envFresh.implications = repaired.implications;
-        if (repaired.recommendations?.length) envFresh.recommendations = repaired.recommendations;
+        if (repaired.recommendations?.length && !minimalDepth)
+          envFresh.recommendations = repaired.recommendations;
         if (repaired.domainLens) envFresh.domainLens = repaired.domainLens;
         if (Object.keys(envFresh).length) envelopeAnswerEnvelope = envFresh;
         if (repaired.magnitudes?.length) envelopeMagnitudes = repaired.magnitudes;
         if (repaired.unexplained) envelopeUnexplained = repaired.unexplained;
-        if (repairedCtas.length) followUpPrompts = repairedCtas;
+        if (repairedCtas.length && !minimalDepth) followUpPrompts = repairedCtas;
       }
     }
 
@@ -3610,8 +3633,12 @@ export async function runAgentTurn(
       computeDimensionLeaders,
     } = await import("./dashboardFeatureSweep.js");
     const breadthEnabled = isExhaustiveBreadthEnabled();
+    // Depth-budget gate (query-intent authority): the breadth-on-every-analysis-
+    // turn path (one chart per categorical dimension) must NOT fire for a plain
+    // lookup. An EXPLICIT dashboard ask still sweeps (it is never minimal-depth).
     const runFeatureSweep =
-      isExplicitDashboardAsk || (breadthEnabled && ctx.mode === "analysis");
+      isExplicitDashboardAsk ||
+      (!minimalDepth && breadthEnabled && ctx.mode === "analysis");
     if (runFeatureSweep) {
       try {
         // Breadth ties its ceiling to the configured final-chart cap (40 in the
@@ -3798,14 +3825,22 @@ export async function runAgentTurn(
     //     button the user can click.
     // Non-fatal: failures leave dashboardDraft unset and the normal answer
     // still streams to the client.
-    const dashIntent = classifyDashboardIntent({
+    const rawDashIntent = classifyDashboardIntent({
       question: ctx.question,
       chartCount: mergedCharts.length,
       brief: ctx.analysisBrief,
     });
+    // Depth-budget gate (query-intent authority). The unsolicited "offer" track
+    // self-trips whenever a turn happens to accumulate ≥3 charts — which a plain
+    // lookup never asked for. Suppress the offer for minimal-depth questions.
+    // An EXPLICIT dashboard ask ("auto_create") is never minimal (the word
+    // "dashboard" is in the analytical core), so this only drops the offer.
+    const dashIntent =
+      minimalDepth && rawDashIntent === "offer" ? "none" : rawDashIntent;
     agentLog("dashboard_intent", {
       turnId,
       intent: dashIntent,
+      ...(dashIntent !== rawDashIntent ? { suppressedFrom: rawDashIntent, reason: "minimal_depth" } : {}),
       chartCount: mergedCharts.length,
     });
     try {
@@ -4179,9 +4214,7 @@ export async function runAgentTurn(
     // separate `business_actions` SSE event and patches the persisted
     // message. Hard-skipped when the env flag is off, the synthesis
     // cascaded to the fallback renderer, or there is no envelope.
-    const businessActionsEnabled =
-      String(process.env.BUSINESS_ACTIONS_ENABLED ?? "true").toLowerCase() !==
-      "false";
+    const businessActionsEnabled = isBusinessActionsEnabled();
     const businessActionsPromise =
       businessActionsEnabled &&
       answerSource !== "fallback" &&

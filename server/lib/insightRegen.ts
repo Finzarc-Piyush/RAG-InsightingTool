@@ -44,6 +44,7 @@
 import { z } from "zod";
 import { callLlm } from "./agents/runtime/callLlm.js";
 import { LLM_PURPOSE } from "./agents/runtime/llmCallPurpose.js";
+import { formatCompactNumber } from "./formatCompactNumber.js";
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared types + zod contracts
@@ -216,14 +217,12 @@ export function extractInsightCitations(text: string): string[] {
   return out;
 }
 
+// Narrative magnitude formatting is owned by the shared authority
+// (formatCompactNumber) so every path renders 1.5M / 15.2K identically — this
+// module previously rolled its own always-2dp variant ("1.50M"). The only local
+// concern kept here is the "n/a" rendering for non-finite values.
 function formatNumberCompact(n: number): string {
-  if (!Number.isFinite(n)) return "n/a";
-  const abs = Math.abs(n);
-  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${(n / 1e3).toFixed(2)}K`;
-  if (abs < 1 && abs > 0) return n.toFixed(3);
-  return n.toFixed(2);
+  return Number.isFinite(n) ? formatCompactNumber(n) : "n/a";
 }
 
 export interface InsightRegenPrompt {

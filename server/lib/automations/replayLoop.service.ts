@@ -55,6 +55,7 @@ import {
 } from "../agents/runtime/analyticalBlackboard.js";
 import { runNarrator } from "../agents/runtime/narratorAgent.js";
 import { runBusinessActions } from "../agents/runtime/businessActionsAgent.js";
+import { isBusinessActionsEnabled } from "../envFlags.js";
 import { planStepSchema } from "../agents/runtime/schemas.js";
 import { loadEnabledDomainContext } from "../domainContext/loadEnabledDomainContext.js";
 import { applyWideFormatMeltIfNeeded } from "../wideFormat/applyWideFormatMeltIfNeeded.js";
@@ -419,10 +420,7 @@ const executeReplayTurn = async (args: {
   // turns (when BUSINESS_ACTIONS_ENABLED). Hard-skips when the envelope
   // is too thin; never throws. Awaited inline (replay is sequential by
   // design — no need for the live agent's promise-attach pattern).
-  if (
-    answerEnvelope &&
-    process.env.BUSINESS_ACTIONS_ENABLED !== "false"
-  ) {
+  if (answerEnvelope && isBusinessActionsEnabled()) {
     try {
       const items = await runBusinessActions(ctx, answerEnvelope, {
         turnId: `${turnId}_business_actions`,

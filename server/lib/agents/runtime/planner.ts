@@ -91,6 +91,7 @@ import {
   patchExecuteQueryPlanTrendCoarserGrain,
   patchExecuteQueryPlanTrendMissingGroupBy,
 } from "../../queryPlanTemporalPatch.js";
+import { buildDateRangeByColumn } from "../../temporalGrainAuthority.js";
 import {
   repairExecuteQueryPlanDimensionFilters,
   repairExecuteQueryPlanSort,
@@ -825,20 +826,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
   // pick Day / Week / Month / Quarter from the dataset's actual range instead
   // of hard-coding "month". When dateRange is missing (no parseable cells in
   // the column), the patch falls back to its "month" default.
-  const dateRangeByColumn = new Map<
-    string,
-    { spanDays: number; distinctDayCount: number; minIso?: string; maxIso?: string }
-  >();
-  for (const col of ctx.summary.columns) {
-    if (col.dateRange) {
-      dateRangeByColumn.set(col.name, {
-        spanDays: col.dateRange.spanDays,
-        distinctDayCount: col.dateRange.distinctDayCount,
-        minIso: col.dateRange.minIso,
-        maxIso: col.dateRange.maxIso,
-      });
-    }
-  }
+  const dateRangeByColumn = buildDateRangeByColumn(ctx.summary);
 
   for (const step of stepsWithMeta) {
     normalizeExecuteQueryPlanStepArgs(

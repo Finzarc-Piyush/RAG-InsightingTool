@@ -12,8 +12,8 @@
  *
  * WHY IT MATTERS
  *   Centralising the choice keeps cost and latency under control — the
- *   classifiers in this folder (complexQueryDetector, intentClassifier,
- *   modeClassifier) all ask for the cheap "intent" tier here rather than burning
+ *   classifiers in this folder (intentClassifier, modeClassifier) all ask for
+ *   the cheap "intent" tier here rather than burning
  *   the expensive generation model on simple labelling. One place to retune.
  *
  * KEY PIECES
@@ -25,8 +25,8 @@
  *     differ (i.e. a real cheap tier is configured).
  *
  * HOW IT CONNECTS
- *   getModelForTask('intent') is called by complexQueryDetector.ts,
- *   intentClassifier.ts, and modeClassifier.ts before each LLM call. No I/O of
+ *   getModelForTask('intent') is called by intentClassifier.ts and
+ *   modeClassifier.ts before each LLM call. No I/O of
  *   its own — just reads process.env and returns strings.
  */
 

@@ -111,6 +111,7 @@ import {
 import type { TemporalFacetGrain } from "../../temporalFacetColumns.js";
 import { matchPeriod } from "../../wideFormat/periodVocabulary.js";
 import { logger } from "../../logger.js";
+import { VALUE_SALES_METRIC_RE } from "../../factsMetricResolver.js";
 
 /** Tools that accept `dimensionFilters` at args[plan].dimensionFilters. */
 const NESTED_PLAN_TOOLS = new Set(["execute_query_plan"]);
@@ -406,7 +407,7 @@ const METRIC_VOCABULARY: ReadonlyArray<{
   {
     family: "value_sales",
     keywords: /\b(value\s+sales|sales\s+value|revenue|turnover|gmv|sales)\b/i,
-    metricMatch: /value[\s_-]*sales|sales[\s_-]*value|revenue|turnover|gmv|^sales$/i,
+    metricMatch: VALUE_SALES_METRIC_RE, // shared owner (factsMetricResolver)
   },
   {
     family: "volume",
@@ -625,10 +626,9 @@ export function injectCompoundShapeMetricGuard(
   let toFilter: string[] = matched;
   let fallbackUsed = false;
   if (toFilter.length === 0) {
-    // Heuristic default for FMCG: prefer value-sales family.
-    const fallback = distinctMetricValues.find((m) =>
-      /value[\s_-]*sales|sales[\s_-]*value|revenue|^sales$/i.test(m)
-    );
+    // Heuristic default for FMCG: prefer value-sales family (shared owner —
+    // now also matches turnover/gmv, consistent with the pivot-defaults path).
+    const fallback = distinctMetricValues.find((m) => VALUE_SALES_METRIC_RE.test(m));
     if (!fallback) {
       if (!distinctMetricValues.length) return { reason: "no_metrics_known" };
       // No vocab match and no value-sales alias — pick the first distinct metric.

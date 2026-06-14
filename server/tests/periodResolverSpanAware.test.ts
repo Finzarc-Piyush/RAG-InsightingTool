@@ -69,8 +69,17 @@ describe("Wave T4 · resolvePeriodAxis span-aware default", () => {
     assert.equal(d.pickedColumn, "Quarter · Period");
   });
 
-  it("no dateRange → legacy month-first default (back-compat)", () => {
-    const d = resolvePeriodAxis(COLUMNS, SAMPLE, summaryWithRange());
-    assert.equal(d.pickedColumn, "Month · Period");
+  it("no dateRange metadata but a coherent daily sample → STILL Day (metadata-free, not month-first)", () => {
+    // The columnar/metadata reload path strips dateRange. The authority must still
+    // pick Day from the sample's materialized bucket counts — this is the property
+    // that makes the single-month-daily fix robust to missing span metadata.
+    const cols = ["Day · Period", "Week · Period", "Month · Period"];
+    const dailySample = Array.from({ length: 30 }, (_, i) => ({
+      "Day · Period": `2026-04-${String(i + 1).padStart(2, "0")}`, // 30 distinct
+      "Week · Period": `2026-W${14 + Math.floor(i / 7)}`, // ~5 distinct
+      "Month · Period": "2026-04", // 1 distinct (collapses)
+    }));
+    const d = resolvePeriodAxis(cols, dailySample, summaryWithRange());
+    assert.equal(d.pickedColumn, "Day · Period");
   });
 });

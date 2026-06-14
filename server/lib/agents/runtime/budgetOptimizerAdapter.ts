@@ -33,6 +33,7 @@
  *   narrator's `answerEnvelope.{recommendations,magnitudes,domainLens}`.
  */
 import type { BudgetRedistributeResponse } from "../../dataOps/mmmService.js";
+import { formatCompactNumber } from "../../formatCompactNumber.js";
 
 export interface NarratorRecommendation {
   action: string;
@@ -179,14 +180,9 @@ function confidenceFromCaveats(
   return "medium";
 }
 
+// Compact magnitude formatting is owned by the shared authority
+// (formatCompactNumber) — uppercase K (this module previously emitted a
+// lowercase "k"), magnitude-appropriate decimals, native negative handling.
 function formatMoney(x: number): string {
-  if (!Number.isFinite(x)) return String(x);
-  const abs = Math.abs(x);
-  if (abs >= 1e9) return `${sign(x)}${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign(x)}${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${sign(x)}${(abs / 1e3).toFixed(1)}k`;
-  return `${sign(x)}${abs.toFixed(0)}`;
-}
-function sign(x: number): string {
-  return x < 0 ? "-" : "";
+  return formatCompactNumber(x);
 }

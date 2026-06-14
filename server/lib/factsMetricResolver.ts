@@ -36,6 +36,32 @@ export interface FactsMetricDecision {
 /** Column names heuristically recognised as Facts discriminators. */
 const FACTS_COLUMN_NAME_RE = /^(facts?|metric|kpi|measure_name|metric_name)$/i;
 
+/**
+ * Canonical "value-sales family" metric-VALUE matcher (Value Sales / Sales Value
+ * / Revenue / Turnover / GMV / bare Sales). THE single owner — the inline copies
+ * in pivotDefaultsFromExecution and planArgRepairs (one of which omitted
+ * turnover/gmv and so disagreed on a "Turnover" metric) now delegate here so
+ * "which metric do we default to" has one answer. See `pickPreferredMetricValue`.
+ */
+export const VALUE_SALES_METRIC_RE =
+  /value[\s_-]*sales|sales[\s_-]*value|revenue|turnover|gmv|^sales$/i;
+
+/**
+ * Pick the metric VALUE to default to from a Facts column's distinct values:
+ * prefer the value-sales family (the FMCG headline metric), else the first
+ * distinct value. Returns undefined only for an empty list. This is the shared
+ * "prefer-value-sales, else first" policy (NOT most-common) used by both the
+ * pivot-defaults and plan-arg-repair paths.
+ */
+export function pickPreferredMetricValue(
+  distinctValues: string[]
+): string | undefined {
+  return (
+    distinctValues.find((m) => VALUE_SALES_METRIC_RE.test(m)) ??
+    distinctValues[0]
+  );
+}
+
 /** Words that suggest the user-question is asking about a specific Facts value. */
 const SALES_VALUE_HINTS = ["value sales", "sales value", "revenue", "turnover", "gmv"];
 const SALES_VOLUME_HINTS = ["volume sales", "sales volume", "units", "volume"];

@@ -167,7 +167,9 @@ describe("budget-optimizer cross-wave pipeline (W46 → W53 → W54)", () => {
     // Magnitudes header
     assert.equal(mags[0].label, "Projected lift");
     assert.equal(mags[0].value, "8.0%");
-    assert.match(mags[1].value, /2\.40M|2400000/);
+    // Canonical compact format (shared formatCompactNumber authority): "2.4M"
+    // (trailing zero stripped), not the old bespoke always-2dp "2.40M".
+    assert.match(mags[1].value, /2\.4M|2400000/);
     assert.match(lens, /adstock/);
     assert.match(lens, /SLSQP/);
 

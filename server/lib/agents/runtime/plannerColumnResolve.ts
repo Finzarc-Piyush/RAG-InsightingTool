@@ -161,6 +161,18 @@ export function resolveToSchemaColumn(
 }
 
 /**
+ * Money/value measure-name vocabulary used to recognise a metric column by name.
+ * One named constant — this regex was previously inlined twice in the function
+ * below (the gate test + the candidate filter), which is exactly the kind of
+ * copy that drifts. NOTE: deliberately distinct from the client's currency-
+ * FORMATTING `CURRENCY_RE` and the FMCG rate/outcome detectors — those are
+ * tuned per concern (formatting vs resolution vs aggregation) and are NOT unified
+ * here to avoid changing number formatting without visual QA.
+ */
+const MONEY_MEASURE_NAME_RE =
+  /revenue|sales|amount|value|total|gmv|turnover|income/;
+
+/**
  * Resolve metric-like aliases (e.g. "Total_Revenue") to a schema metric column
  * when the mapping is unambiguous.
  */
@@ -175,17 +187,12 @@ export function resolveMetricAliasToSchemaColumn(
   const t = raw.trim();
   if (!t) return raw;
   const tl = t.toLowerCase();
-  const metricish =
-    /revenue|sales|amount|value|total|gmv|turnover|income/.test(tl);
-  if (!metricish) return raw;
+  if (!MONEY_MEASURE_NAME_RE.test(tl)) return raw;
 
   const preferred = new Set(preferredNumeric.filter(Boolean));
   const candidates = columns.filter((c) => {
     const cl = c.name.toLowerCase();
-    return (
-      /revenue|sales|amount|value|total|gmv|turnover|income/.test(cl) ||
-      preferred.has(c.name)
-    );
+    return MONEY_MEASURE_NAME_RE.test(cl) || preferred.has(c.name);
   });
   if (candidates.length === 1) return candidates[0].name;
   if (preferred.size === 1) return Array.from(preferred)[0];

@@ -60,6 +60,11 @@ import {
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
 import { resolvePeriodAxis } from "../../periodColumnResolver.js";
+import {
+  resolveTrendGrain,
+  buildDateRangeByColumn,
+} from "../../temporalGrainAuthority.js";
+import { parseTemporalFacetDisplayKey } from "../../temporalFacetColumns.js";
 import { resolveFactsMetric } from "../../factsMetricResolver.js";
 
 export { validateChartProposal } from "./chartProposalValidation.js";
@@ -92,6 +97,74 @@ Rules:
 - When ANALYTICAL_RESULT_COLUMNS list **multiple categorical dimensions** plus a measure, prefer **bar** (or line/area for time-like X) so the server can bind a breakdown; you may omit \`seriesColumn\`—the chart compiler will bind a second dimension from the result rows.
 - **Series cardinality**: only propose seriesColumn when the column has ≤15 distinct values. For high-cardinality columns (states, customers, SKUs), use a single-series bar chart sorted by y (top N items) instead of multi-series.
 Output JSON only matching the schema.`;
+
+/**
+ * If `x` is a temporal axis, ensure it uses the span-appropriate grain via the
+ * single grain authority — derived from the RAW frame (which carries every
+ * materialized facet) NOT from an already-aggregated analytical table, because
+ * aggregation is destructive: a `Month · Date`-grouped table can never recover
+ * daily detail, and `chartRowsForProposal` serves an LLM-proposed `Month · Date`
+ * straight from the raw frame where it re-collapses to one bucket. When the
+ * authority picks a different (finer, non-collapsing) facet, we return it AND the
+ * raw frame so the chart is rebuilt at that grain. Non-temporal axes pass through.
+ */
+export function refineTemporalAxis(
+  ctx: AgentExecutionContext,
+  x: string,
+  fallbackRows: Record<string, unknown>[],
+  fallbackUseAnalyticalOnly: boolean,
+): {
+  x: string;
+  rows: Record<string, unknown>[];
+  useAnalyticalOnly: boolean;
+  axisReason?: string;
+} {
+  const passthrough = {
+    x,
+    rows: fallbackRows,
+    useAnalyticalOnly: fallbackUseAnalyticalOnly,
+  };
+  const parsed = parseTemporalFacetDisplayKey(x);
+  const isRawDate = ctx.summary.dateColumns.includes(x);
+  if (!parsed && !isRawDate) return passthrough;
+
+  const rawFrame = (ctx.turnStartDataRef ?? ctx.data) as
+    | Record<string, unknown>[]
+    | undefined;
+  if (!rawFrame?.length) return passthrough;
+
+  // Constrain the authority to the SAME source column the proposal intended, so a
+  // multi-date-column dataset doesn't silently switch axes to a different source.
+  const wantSource = parsed?.sourceColumn ?? (isRawDate ? x : null);
+  const available = ctx.summary.columns
+    .map((c) => c.name)
+    .filter((n) => {
+      if (!wantSource) return true;
+      const p = parseTemporalFacetDisplayKey(n);
+      return p ? p.sourceColumn === wantSource : n === wantSource;
+    });
+
+  const decision = resolveTrendGrain({
+    availableColumns: available,
+    dateColumns: ctx.summary.dateColumns,
+    dateRangeByColumn: buildDateRangeByColumn(ctx.summary),
+    question: ctx.question,
+    sample: rawFrame.slice(0, 200),
+    isDashboard: ctx.analysisBrief?.requestsDashboard === true,
+    allowSingleBucket: true,
+  });
+
+  if (!decision.facetColumn || decision.facetColumn === x) return passthrough;
+
+  // Authority chose a finer, non-collapsing facet → rebuild from the raw frame,
+  // which carries that facet with real (e.g. daily) buckets.
+  return {
+    x: decision.facetColumn,
+    rows: rawFrame,
+    useAnalyticalOnly: false,
+    axisReason: decision.reason,
+  };
+}
 
 export async function proposeAndBuildExtraCharts(
   ctx: AgentExecutionContext,
@@ -329,6 +402,15 @@ export async function proposeAndBuildExtraCharts(
     }
   }
 
+  // Depth-budget gate (query-intent authority). A plain lookup / direct-factual
+  // ask warrants NO speculative EXTRA charts. The deterministic single-chart
+  // fallback above already visualised the answer frame when there was no chart
+  // yet; asking the LLM for 1–2 more is exactly the "plethora" a simple question
+  // should not get. Diagnostic/strategic/descriptive turns are unaffected.
+  if (ctx.depthBudget === "minimal") {
+    return { charts: [] };
+  }
+
   const cols = ctx.summary.columns.map((c) => `${c.name} (${c.type})`).join(", ");
   const existing = existingCharts.map((c) => `${c.type}:${c.x}/${c.y}`).join("; ") || "(none)";
   const analyticalCols = ctx.lastAnalyticalTable?.columns?.length
@@ -368,7 +450,14 @@ export async function proposeAndBuildExtraCharts(
   for (const p of out.data.addCharts.slice(0, maxExtra)) {
     if (!validateChartProposal(ctx, p)) continue;
     if (existingCharts.some((c) => c.x === p.x && c.y === p.y && c.type === p.type)) continue;
-    const { rows: rowSource, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
+    const base = chartRowsForProposal(ctx, p);
+    // Span-aware grain: if the LLM proposed a temporal axis (e.g. "Month · Date"),
+    // refine it to the span-appropriate, non-collapsing facet via the central
+    // authority and build from the RAW frame — otherwise a single month of daily
+    // data re-collapses to one Month point (the reported bug).
+    const refined = refineTemporalAxis(ctx, p.x, base.rows, base.useAnalyticalOnly);
+    const rowSource = refined.rows;
+    const useAnalyticalOnly = refined.useAnalyticalOnly;
     const { merged: mp } = compileChartSpec(
       rowSource as Record<string, unknown>[],
       {
@@ -377,13 +466,14 @@ export async function proposeAndBuildExtraCharts(
       },
       {
         type: p.type,
-        x: p.x,
+        x: refined.x,
         y: p.y,
         z: p.z,
         seriesColumn: p.seriesColumn,
       },
       {
-        columnOrder: ctx.lastAnalyticalTable?.columns ?? null,
+        columnOrder:
+          refined.x === p.x ? (ctx.lastAnalyticalTable?.columns ?? null) : null,
       }
     );
 
@@ -399,7 +489,9 @@ export async function proposeAndBuildExtraCharts(
       continue;
     }
 
-    const xIsDate = ctx.summary.dateColumns.some((d) => d === mp.x);
+    const xIsDate =
+      ctx.summary.dateColumns.some((d) => d === mp.x) ||
+      /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(mp.x);
     if (mp.type === "bar" && xIsDate && rowSource.length > 50) {
       continue;
     }
@@ -417,8 +509,10 @@ export async function proposeAndBuildExtraCharts(
             : (mp.aggregate ?? "none");
       const spec = chartSpecSchema.parse({
         type: mp.type,
+        // When the grain was refined the LLM's title (which names the old grain)
+        // would be misleading, so regenerate it to name the actual axis.
         title:
-          p.title ||
+          (refined.x === p.x ? p.title : undefined) ||
           (mp.type === "heatmap" && mp.z
             ? `${mp.z} (${mp.x} × ${mp.y})`
             : `${mp.y} by ${mp.x}`),
@@ -429,6 +523,7 @@ export async function proposeAndBuildExtraCharts(
           ? { seriesColumn: mp.seriesColumn, barLayout: mp.barLayout ?? ("stacked" as const) }
           : {}),
         aggregate: aggregateTimeSeries ?? baseAgg,
+        ...(refined.axisReason ? { axisReason: refined.axisReason } : {}),
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
       const processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {

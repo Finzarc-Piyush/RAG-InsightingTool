@@ -53,13 +53,31 @@ const MIN_IMPLICATIONS = 1;
 const MIN_RECOMMENDATIONS = 1;
 
 /**
+ * The ONLY question shapes for which a missing implications/recommendations
+ * section is a HARD failure (forces a narrator re-emit). These are the
+ * genuinely diagnostic asks where a decision-grade "so what + action" is the
+ * point of the question. For the lighter analytical shapes — `comparison`,
+ * `trend`, `exploration` (and `descriptive`/`none`) — the gate is ADVISORY: the
+ * narrator already calibrates depth to the question (see ANSWER_ENVELOPE_CONTRACT),
+ * so FORCING implications + recommendations onto "compare A vs B" or "show the
+ * trend" manufactured exactly the unrequested-content bloat the product is
+ * trying to avoid. (Finding #8 — the completeness gate was forcing a concise
+ * draft to expand.) Magnitudes are still nudged by the verifier's low-severity
+ * MISSING_MAGNITUDES for every shape — a key number is the answer, not padding.
+ */
+const HARD_COMPLETENESS_SHAPES: ReadonlySet<string> = new Set([
+  "driver_discovery",
+  "variance_diagnostic",
+]);
+
+/**
  * @param envelope Optional — when undefined we always pass (the synthesizer
  *   fallback path emits no envelope; nothing to enforce).
- * @param questionShape From `ctx.analysisBrief?.questionShape`. When `undefined`,
- *   `"none"` (conversational turn), or `"descriptive"` (lookup/summary) the
- *   check always passes — these question shapes don't require padded
- *   implications/recommendations sections, and forcing them produces the
- *   manufactured-content bloat we explicitly want to avoid.
+ * @param questionShape From `ctx.analysisBrief?.questionShape`. The check only
+ *   HARD-fails for the diagnostic shapes in `HARD_COMPLETENESS_SHAPES`. Every
+ *   other shape — `undefined`, `"none"`, `"descriptive"`, `"comparison"`,
+ *   `"trend"`, `"exploration"` — passes: forcing padded implications/
+ *   recommendations on them is the manufactured-content bloat we avoid.
  * @param domainContextWasSupplied `Boolean(ctx.domainContext?.trim())` at the
  *   call site. Required so we don't demand `domainLens` on turns where no
  *   pack was loaded — the narrator would have nothing to cite.
@@ -70,7 +88,7 @@ export function checkEnvelopeCompleteness(
   domainContextWasSupplied: boolean
 ): CompletenessResult {
   if (!envelope) return { ok: true };
-  if (!questionShape || questionShape === "none" || questionShape === "descriptive") {
+  if (!questionShape || !HARD_COMPLETENESS_SHAPES.has(questionShape)) {
     return { ok: true };
   }
 

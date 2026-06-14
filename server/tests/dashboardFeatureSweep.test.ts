@@ -10,12 +10,41 @@ import type { AnalysisBrief, ChartSpec, DataSummary } from "../shared/schema.js"
 
 /** Build a ctx whose summary carries temporal-facet columns + a base date
  *  column with `dateRange`, for the W3 grain-selection tests. */
-function makeTemporalCtx(dateRange: {
-  spanDays: number;
-  distinctDayCount: number;
-  minIso?: string;
-  maxIso?: string;
-} | null): AgentExecutionContext {
+/** Emit `days` consecutive daily rows from `startIso` with materialized facet
+ *  columns (Day/Week/Month · Date), so the grain authority can count REAL
+ *  buckets from the rows even when dateRange metadata is absent. */
+function genDailyRows(startIso: string, days: number): Record<string, unknown>[] {
+  const start = new Date(startIso + "T00:00:00");
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getTime());
+    d.setDate(d.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const iso = `${y}-${m}-${day}`;
+    const week = Math.ceil((d.getTime() - new Date(y, 0, 1).getTime()) / (7 * 86400000)) + 1;
+    rows.push({
+      ASM: i % 2 === 0 ? "North" : "South",
+      Date: iso,
+      "Day · Date": iso,
+      "Week · Date": `${y}-W${String(week).padStart(2, "0")}`,
+      "Month · Date": `${y}-${m}`,
+      Sales: 100 + i,
+    });
+  }
+  return rows;
+}
+
+function makeTemporalCtx(
+  dateRange: {
+    spanDays: number;
+    distinctDayCount: number;
+    minIso?: string;
+    maxIso?: string;
+  } | null,
+  rows: Record<string, unknown>[] = [],
+): AgentExecutionContext {
   const columns: DataSummary["columns"] = [
     { name: "ASM", type: "string", sampleValues: [] },
     {
@@ -38,7 +67,8 @@ function makeTemporalCtx(dateRange: {
   return {
     sessionId: "s",
     question: "build a pjp dashboard",
-    data: [],
+    data: rows,
+    turnStartDataRef: rows,
     summary,
     chatHistory: [],
     mode: "analysis",
@@ -68,29 +98,33 @@ test("MW2 · numeric-outcome breakdowns are size-normalized (mean), not raw sum"
   assert.match(bar!.title, /\(avg\)/);
 });
 
-test("W3 · single-month daily span falls from collapsing Month facet to the Day facet", () => {
-  const ctx = makeTemporalCtx({
-    spanDays: 29,
-    distinctDayCount: 30,
-    minIso: "2026-04-01",
-    maxIso: "2026-04-30",
-  });
-  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Day · Date");
+test("TG5 · single-month daily span → Day facet (collapsing Month refined)", () => {
+  const rows = genDailyRows("2026-04-01", 30);
+  const ctx = makeTemporalCtx(
+    { spanDays: 29, distinctDayCount: 30, minIso: "2026-04-01", maxIso: "2026-04-30" },
+    rows,
+  );
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx, rows), "Day · Date");
 });
 
-test("W3 · multi-month span keeps the Month facet (≥2 buckets, no-op)", () => {
-  const ctx = makeTemporalCtx({
-    spanDays: 200,
-    distinctDayCount: 150,
-    minIso: "2026-01-01",
-    maxIso: "2026-07-20",
-  });
-  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Month · Date");
+test("TG5 · ≤1yr span → Week facet (span-appropriate, consistent with pickTrendGrainForSpan / planner)", () => {
+  const rows = genDailyRows("2026-01-01", 200);
+  const ctx = makeTemporalCtx(
+    { spanDays: 200, distinctDayCount: 200, minIso: "2026-01-01", maxIso: "2026-07-19" },
+    rows,
+  );
+  // 200-day span → pickTrendGrainForSpan returns "week"; the planner already binds
+  // weekly for such a trend query, so the dashboard now matches (was Month under W3).
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx, rows), "Week · Date");
 });
 
-test("W3 · missing dateRange metadata keeps the Month facet (safe no-op)", () => {
-  const ctx = makeTemporalCtx(null);
-  assert.equal(sweepTest.pickStrongestDateColumn(ctx), "Month · Date");
+test("TG5 · missing dateRange metadata but daily rows → STILL Day (metadata-free fix)", () => {
+  // The columnar/metadata reload path strips dateRange. The authority derives the
+  // grain from the materialized facet buckets in the raw rows, so a single month
+  // of daily data still yields Day — the old W3 logic silently kept Month here.
+  const rows = genDailyRows("2026-04-01", 30);
+  const ctx = makeTemporalCtx(null, rows);
+  assert.equal(sweepTest.pickStrongestDateColumn(ctx, rows), "Day · Date");
 });
 
 function makeBrief(over: Partial<AnalysisBrief> = {}): AnalysisBrief {

@@ -81,6 +81,25 @@ describe("W17 · checkEnvelopeCompleteness — passes", () => {
     const r = checkEnvelopeCompleteness(env, "driver_discovery", true);
     assert.equal(r.ok, true);
   });
+
+  // Finding #8 — the lighter analytical shapes are ADVISORY, not hard-gated:
+  // forcing implications/recommendations onto "compare A vs B" / "show the
+  // trend" manufactured the unrequested bloat we want to avoid. The narrator
+  // still adds them when warranted; the gate just no longer FORCES expansion.
+  it("passes for 'comparison' even with no implications/recommendations (advisory)", () => {
+    const r = checkEnvelopeCompleteness({ tldr: "East is 23% above West." }, "comparison", true);
+    assert.equal(r.ok, true);
+  });
+
+  it("passes for 'trend' even with no implications/recommendations (advisory)", () => {
+    const r = checkEnvelopeCompleteness({ tldr: "Visits rose 14% over the window." }, "trend", true);
+    assert.equal(r.ok, true);
+  });
+
+  it("passes for 'exploration' even with no implications/recommendations (advisory)", () => {
+    const r = checkEnvelopeCompleteness({ tldr: "Several segments stand out." }, "exploration", true);
+    assert.equal(r.ok, true);
+  });
 });
 
 describe("W17 · checkEnvelopeCompleteness — fails", () => {
@@ -111,21 +130,21 @@ describe("W17 · checkEnvelopeCompleteness — fails", () => {
     }
   });
 
-  it("aggregates multiple missing sections into one description", () => {
+  it("aggregates multiple missing sections into one description (diagnostic shape)", () => {
     const env: AnswerEnvelope = { tldr: "x" };
-    const r = checkEnvelopeCompleteness(env, "trend", true);
+    const r = checkEnvelopeCompleteness(env, "driver_discovery", true);
     assert.equal(r.ok, false);
     if (!r.ok) {
       assert.match(r.description, /implications/);
       assert.match(r.description, /recommendations/);
       assert.match(r.description, /domainLens/);
-      assert.match(r.description, /questionShape=trend/);
+      assert.match(r.description, /questionShape=driver_discovery/);
     }
   });
 
   it("courseCorrection omits domain pack instruction when domain wasn't supplied", () => {
     const env: AnswerEnvelope = { tldr: "x" };
-    const r = checkEnvelopeCompleteness(env, "trend", false);
+    const r = checkEnvelopeCompleteness(env, "variance_diagnostic", false);
     assert.equal(r.ok, false);
     if (!r.ok) {
       assert.ok(!/marico-haircare/.test(r.courseCorrection));
@@ -133,7 +152,7 @@ describe("W17 · checkEnvelopeCompleteness — fails", () => {
   });
 
   it("emits a non-empty courseCorrection that re-asserts the no-invent rule", () => {
-    const r = checkEnvelopeCompleteness({}, "comparison", true);
+    const r = checkEnvelopeCompleteness({}, "driver_discovery", true);
     assert.equal(r.ok, false);
     if (!r.ok) {
       assert.match(r.courseCorrection, /do not invent new numbers/);

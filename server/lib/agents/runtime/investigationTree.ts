@@ -37,6 +37,7 @@
  */
 
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
+import { envInt, envFlagOn } from "../../envFlags.js";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -60,10 +61,7 @@ export interface DeepInvestigationConfig {
 }
 
 export function loadDeepInvestigationConfig(): DeepInvestigationConfig {
-  const num = (v: string | undefined, d: number) => {
-    const n = v ? parseInt(v, 10) : NaN;
-    return Number.isFinite(n) ? n : d;
-  };
+  const num = envInt;
   return {
     maxDepth: num(process.env.DEEP_INVESTIGATION_MAX_DEPTH, 3),
     maxNodes: num(process.env.DEEP_INVESTIGATION_MAX_NODES, 15),
@@ -76,9 +74,11 @@ export function loadDeepInvestigationConfig(): DeepInvestigationConfig {
   };
 }
 
+// Master switch for the BFS deep-investigation path (unwired by the single-flow
+// policy, invariant #6). THE single definition — the byte-for-byte duplicate
+// that used to sit in diagnosticPipelineConfig.ts was removed.
 export function isDeepInvestigationEnabled(): boolean {
-  const v = process.env.DEEP_INVESTIGATION_ENABLED;
-  return v === "true" || v === "1";
+  return envFlagOn(process.env.DEEP_INVESTIGATION_ENABLED);
 }
 
 // ─── Spawned-question follow-up pass (single-flow) ───────────────────────────
@@ -108,10 +108,7 @@ export interface SpawnedFollowUpConfig {
 }
 
 export function loadSpawnedFollowUpConfig(): SpawnedFollowUpConfig {
-  const num = (v: string | undefined, d: number) => {
-    const n = v ? parseInt(v, 10) : NaN;
-    return Number.isFinite(n) ? n : d;
-  };
+  const num = envInt;
   return {
     maxLlmCalls: num(process.env.SPAWNED_FOLLOWUP_MAX_LLM_CALLS, 60),
     maxWallMs: num(process.env.SPAWNED_FOLLOWUP_MAX_WALL_MS, 120_000),

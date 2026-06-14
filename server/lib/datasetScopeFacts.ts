@@ -230,7 +230,10 @@ function pickAnalyzableDimensions(summary: DataSummary, max: number): string[] {
 }
 
 // ── row-count formatter ──────────────────────────────────────────────────────
-
+// INTENTIONALLY distinct from the narrative magnitude authority
+// (formatCompactNumber): a COUNT of records reads better integer-leaning
+// ("15K records", "1.2M records") than with a forced decimal ("15.2K records").
+// This is a deliberate non-consolidation, not drift — counts ≠ magnitudes.
 function formatRowCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;

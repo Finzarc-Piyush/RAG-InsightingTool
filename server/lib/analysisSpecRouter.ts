@@ -1,4 +1,8 @@
 import type { DataSummary } from "../shared/schema.js";
+// Diagnostic-mode vocabulary is owned by the query-intent authority (single
+// source of truth for question-intent regexes) — this module used to carry its
+// own DIAGNOSTIC_RE, which drifted against the routing/depth classifiers.
+import { DIAGNOSTIC_MODE_RE } from "./agents/runtime/queryIntentAuthority.js";
 
 export type AnalysisMode = "descriptive" | "diagnostic";
 
@@ -7,9 +11,6 @@ export interface AnalysisSpec {
   /** Primary numeric outcome when inferrable (e.g. Sales). */
   outcomeColumn?: string;
 }
-
-const DIAGNOSTIC_RE =
-  /\b(factors?\s+driving|drivers?\s+of|driving\s+\w+|root\s*cause|what\s+(drives|explains)|why\s+(did|is|are|was|were)|investigating\b|contributing\s+to|success\s+in|performance\s+in|deep\s*dive|associations?\s+with)\b/i;
 
 /**
  * Lightweight heuristic router (no extra LLM). Used for gating UX merges and planner hints.
@@ -21,7 +22,7 @@ export function classifyAnalysisSpec(
   const q = question.trim();
   if (!q) return { mode: "descriptive" };
 
-  const mode: AnalysisMode = DIAGNOSTIC_RE.test(q) ? "diagnostic" : "descriptive";
+  const mode: AnalysisMode = DIAGNOSTIC_MODE_RE.test(q) ? "diagnostic" : "descriptive";
 
   let outcomeColumn: string | undefined;
   const numerics = summary.numericColumns || [];

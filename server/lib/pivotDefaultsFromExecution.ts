@@ -17,6 +17,7 @@ import {
 } from "./pivotDefaultsFromPreview.js";
 import { pivotSliceDefaultsFromDimensionFilters } from "./pivotSliceDefaultsFromDimensionFilters.js";
 import { suggestPivotColumnsFromDimensions } from "./pivotLayoutFromDimensions.js";
+import { pickPreferredMetricValue } from "./factsMetricResolver.js";
 
 /**
  * PVT5 · the unified safety contract. A pivot defaults object is "safe to
@@ -492,10 +493,8 @@ export function mergePivotDefaultRowsAndValues(params: {
       .map((t) => String(t.value).trim())
       .filter(Boolean);
     if (distinctMetrics.length > 0) {
-      const preferred =
-        distinctMetrics.find((m) =>
-          /value[\s_-]*sales|sales[\s_-]*value|revenue|^sales$/i.test(m)
-        ) ?? distinctMetrics[0];
+      // Shared "prefer value-sales family, else first" picker (one owner).
+      const preferred = pickPreferredMetricValue(distinctMetrics) ?? distinctMetrics[0];
       out.filterFields = [...(out.filterFields ?? []), wf.metricColumn];
       out.filterSelections = {
         ...(out.filterSelections ?? {}),

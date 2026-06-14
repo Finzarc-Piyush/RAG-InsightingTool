@@ -45,11 +45,9 @@ import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { calculateSmartDomainsForChart } from "../../axisScaling.js";
 import { toNumber } from "../../numberCoercion.js";
 import {
-  distinctBucketsForGrain,
-  pickTrendGrainForSpan,
-  PERIOD_TO_FACET_GRAIN,
-} from "../../queryPlanTemporalPatch.js";
-import { facetColumnKey, parseTemporalFacetDisplayKey } from "../../temporalFacetColumns.js";
+  resolveTrendGrain,
+  buildDateRangeByColumn,
+} from "../../temporalGrainAuthority.js";
 
 /**
  * Cardinality regime (how many distinct values a dimension has):
@@ -177,7 +175,7 @@ export function enumerateMissingDashboardCharts(
 
   const out: ChartSpec[] = [];
 
-  const trendX = pickStrongestDateColumn(ctx);
+  const trendX = pickStrongestDateColumn(ctx, sourceRows);
   if (trendX && !coveredX.has(trendX)) {
     const trend = tryBuildChart(ctx, sourceRows, "line", trendX, outcome);
     if (trend) out.push(trend);
@@ -320,51 +318,30 @@ export const __test__ = {
   DEFAULT_MAX_SWEEP_CHARTS,
 };
 
-function pickStrongestDateColumn(ctx: AgentExecutionContext): string | null {
+/**
+ * Pick the time-axis column for the dashboard trend tile via the single grain
+ * authority. The authority is span-aware AND counts MATERIALIZED buckets from the
+ * raw rows, so a single month of daily data yields the Day facet even when the
+ * per-column dateRange was stripped on the columnar/metadata reload path (the
+ * old W3 logic silently kept Month whenever dateRange was absent). Falls back to
+ * the first raw date column only when no temporal facet is usable at all.
+ */
+function pickStrongestDateColumn(
+  ctx: AgentExecutionContext,
+  sourceRows: readonly Record<string, unknown>[],
+): string | null {
   const dates = ctx.summary.dateColumns ?? [];
   if (!dates.length) return null;
-  const colNames = ctx.summary.columns.map((c) => c.name);
-  // Prefer a derived month/quarter facet when present — already aggregated
-  // into clean buckets, which line/area charts read more cleanly.
-  const monthLike = colNames.find((n) => /^Month · /.test(n));
-  if (!monthLike) return dates[0]!;
-
-  // W3 · a Month facet collapses to ONE bucket on a single-month (daily) span,
-  // which renders a flat 1-point "trend" and triggers the "only one temporal
-  // bucket" caveat. When that happens, fall to the span-appropriate finer grain
-  // (Month → Week → Day) so a real multi-point trend is charted. No-op (keeps
-  // Month) when the span genuinely yields ≥2 monthly buckets or when per-column
-  // dateRange metadata is unavailable.
-  const parsed = parseTemporalFacetDisplayKey(monthLike);
-  const source = parsed?.sourceColumn;
-  const dateRange = source
-    ? (
-        ctx.summary.columns.find((c) => c.name === source) as
-          | {
-              dateRange?: {
-                spanDays: number;
-                distinctDayCount: number;
-                minIso?: string;
-                maxIso?: string;
-              };
-            }
-          | undefined
-      )?.dateRange
-    : undefined;
-  if (!source || !dateRange) return monthLike;
-  if (distinctBucketsForGrain(dateRange, "month") >= 2) return monthLike;
-
-  // Month collapsed — pick the grain appropriate to the span (Day for ≤90 days,
-  // Week for ≤1y, …) and use its facet if it exists and yields ≥2 buckets.
-  const period = pickTrendGrainForSpan(dateRange.spanDays, dateRange.distinctDayCount);
-  const preferredGrain = PERIOD_TO_FACET_GRAIN[period] ?? "date";
-  const candidateGrains = [preferredGrain, "week", "date"] as const;
-  for (const grain of candidateGrains) {
-    if (distinctBucketsForGrain(dateRange, grain) < 2) continue;
-    const facet = facetColumnKey(source, grain);
-    if (colNames.includes(facet)) return facet;
-  }
-  return monthLike;
+  const decision = resolveTrendGrain({
+    availableColumns: ctx.summary.columns.map((c) => c.name),
+    dateColumns: dates,
+    dateRangeByColumn: buildDateRangeByColumn(ctx.summary),
+    question: ctx.question,
+    sample: sourceRows.slice(0, 200),
+    isDashboard: true,
+    allowSingleBucket: true, // a dashboard trend tile shows one honest point as a last resort
+  });
+  return decision.facetColumn ?? dates[0]!;
 }
 
 function countUniqueValuesUpTo(

@@ -9,6 +9,7 @@
 import type { ChartSpecV2 } from "@/shared/schema";
 import { aggregate } from "./dataEngine";
 import { asNumber, asString, type Row } from "./encodingResolver";
+import { formatKMB } from "./format";
 
 const MARK_LABEL: Record<ChartSpecV2["mark"], string> = {
   point: "Scatter chart",
@@ -40,13 +41,12 @@ const MARK_LABEL: Record<ChartSpecV2["mark"], string> = {
 
 const MAX_DESC_LEN = 280;
 
+// Spoken numbers go through the SAME compact formatter the visx renderers use
+// (formatKMB) so the screen-reader description matches the on-screen label
+// exactly — this used to be a private K/M/B copy that drifted (e.g. "15.0K" vs
+// the rendered "15K"). Non-finite stays "n/a" for clearer speech than "—".
 function format(v: number): string {
-  if (!Number.isFinite(v)) return "n/a";
-  if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
-  if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
-  if (Math.abs(v) >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
-  if (Number.isInteger(v)) return String(v);
-  return v.toFixed(2);
+  return Number.isFinite(v) ? formatKMB(v) : "n/a";
 }
 
 export function chartA11ySummary(

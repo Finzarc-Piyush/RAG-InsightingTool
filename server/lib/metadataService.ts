@@ -6,6 +6,7 @@
 import { ColumnarStorageService, DatasetMetadata } from './columnarStorage.js';
 import { DataSummary } from '../shared/schema.js';
 import { inferTemporalGrainFromDates } from './temporalGrain.js';
+import { deriveDateRangeFromRows } from './temporalGrainAuthority.js';
 import { isLikelyIdentifierColumnName } from './columnIdHeuristics.js';
 import {
   isTemporalFacetColumnKey,
@@ -88,11 +89,21 @@ export class MetadataService {
         }
       }
 
+      // Backfill per-column dateRange (span metadata) from the sample rows. The
+      // in-memory `createDataSummary` path computes this over the full dataset;
+      // this columnar/reload path used to omit it entirely, which silently forced
+      // every span-aware grain decision to Month-first (the single-month-daily
+      // bug). Sample-derived span is sufficient for the grain thresholds; the
+      // grain authority also re-derives from the charted rows as a final fallback.
+      const dateRange =
+        type === 'date' ? deriveDateRangeFromRows(sampleRows, col.name) : undefined;
+
       return {
         name: col.name,
         type,
         sampleValues,
         ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
+        ...(dateRange ? { dateRange } : {}),
       };
     });
 

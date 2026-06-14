@@ -60,6 +60,7 @@ import type {
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import type { SpawnedQuestion } from "./investigationTree.js";
 import type { InferredFilter } from "../utils/inferFiltersFromQuestion.js";
+import { envInt } from "../../envFlags.js";
 
 // Trace / workbench size caps are env-overridable so prod can dial them down
 // without a redeploy. They bound how much step-by-step debugging detail gets
@@ -157,10 +158,7 @@ export interface AgentConfig {
 }
 
 export function loadAgentConfigFromEnv(): AgentConfig {
-  const num = (v: string | undefined, d: number) => {
-    const n = v ? parseInt(v, 10) : NaN;
-    return Number.isFinite(n) ? n : d;
-  };
+  const num = envInt;
   return {
     maxSteps: num(process.env.AGENT_MAX_STEPS, 30),
     maxWallTimeMs: num(process.env.AGENT_MAX_WALL_MS, 600_000),
@@ -249,6 +247,18 @@ export interface AgentExecutionContext {
    * a list of X", "what markets exist?"). Defaults to undefined (regex-only).
    */
   routeToLookup?: boolean;
+  /**
+   * Question-intent verdict from `queryIntentAuthority.classifyQueryIntent`,
+   * computed ONCE per turn near the top of the full agent loop and consulted by
+   * every output-shaping gate (extra charts, dashboard offer, spawned
+   * follow-ups, envelope recommendations) so a simple question stops
+   * auto-padding. `depthBudget` is the consumable summary; `minimal` ⇒ trim the
+   * answer to what was asked. Undefined on the fast paths (they return before
+   * the heavy enrichment stages that read it). Single source of truth — gates
+   * MUST read this, not re-classify the question.
+   */
+  queryIntent?: import("./queryIntentAuthority.js").QueryIntent;
+  depthBudget?: import("./queryIntentAuthority.js").DepthBudget;
   /**
    * Deterministic pre-planner resolution of user-named segment values to column
    * filters (e.g. "furniture sales by region" → Category=Furniture). Seeded

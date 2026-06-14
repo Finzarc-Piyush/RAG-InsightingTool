@@ -3,13 +3,12 @@
  * Defaults preserve existing behavior until flags are enabled.
  */
 
-const truthy = (v: string | undefined) =>
-  v === "1" || v === "true" || v === "yes" || v === "on";
+// Truthiness + int parsing live in the shared envFlags helper so every config
+// file reads flags identically (case-insensitive). See lib/envFlags.ts.
+import { envFlagOn, envInt } from "./envFlags.js";
 
-const num = (v: string | undefined, d: number) => {
-  const n = v ? parseInt(v, 10) : NaN;
-  return Number.isFinite(n) ? n : d;
-};
+const truthy = envFlagOn;
+const num = envInt;
 
 /** When true, merge parser dimensionFilters into intermediate SSE pivotDefaults (gated by confidence + diagnostic scope). */
 export function isDiagnosticPivotFilterMergeEnabled(): boolean {
@@ -39,8 +38,6 @@ export function diagnosticMaxParallelBranches(): number {
   return Math.min(8, Math.max(1, num(process.env.DIAGNOSTIC_MAX_PARALLEL, 3)));
 }
 
-/** W7: master switch for the BFS investigation tree (self-questioning mode). */
-export function isDeepInvestigationEnabled(): boolean {
-  const v = process.env.DEEP_INVESTIGATION_ENABLED;
-  return v === "true" || v === "1";
-}
+// isDeepInvestigationEnabled lives in investigationTree.ts (its natural home,
+// where the deep-investigation tests import it). The byte-for-byte duplicate
+// that used to sit here was removed.

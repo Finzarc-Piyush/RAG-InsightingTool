@@ -157,4 +157,126 @@ export const INVARIANTS: ReadonlyArray<Invariant> = [
       },
     ],
   },
+  {
+    id: "I11",
+    title:
+      "Temporal chart-axis grain is decided ONLY by temporalGrainAuthority.resolveTrendGrain — no chart builder rolls its own",
+    checks: [
+      {
+        kind: "symbol_exported",
+        file: "server/lib/temporalGrainAuthority.ts",
+        symbol: "resolveTrendGrain",
+        note: "the single grain authority all chart builders delegate to",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/temporalGrainAuthority.ts",
+        symbol: "DEFAULT_FACET_PREFERENCE",
+        note: "the grain-preference array lives ONLY in the authority",
+      },
+      // Chart builders must call resolveTrendGrain, never the raw span picker or a
+      // local preference array — that duplication was the 'fixed on one route only' bug.
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/visualPlanner.ts",
+        needle: "pickTrendGrainForSpan",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/visualPlanner.ts",
+        needle: "DEFAULT_FACET_PREFERENCE",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/dashboardFeatureSweep.ts",
+        needle: "pickTrendGrainForSpan",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/dashboardFeatureSweep.ts",
+        needle: "DEFAULT_FACET_PREFERENCE",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/chartFromTable.ts",
+        needle: "pickTrendGrainForSpan",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/periodColumnResolver.ts",
+        needle: "recommendGrainFromSpan",
+        note: "deleted — periodColumnResolver delegates grain to the authority",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/periodColumnResolver.ts",
+        needle: "DEFAULT_FACET_PREFERENCE",
+      },
+    ],
+  },
+  {
+    id: "I12",
+    title:
+      "Question intent + depth budget are decided ONLY by queryIntentAuthority.classifyQueryIntent — the routing/suppression gates delegate, never re-regex",
+    checks: [
+      {
+        kind: "symbol_exported",
+        file: "server/lib/agents/runtime/queryIntentAuthority.ts",
+        symbol: "classifyQueryIntent",
+        note: "the single question-intent authority every gate delegates to",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/agents/runtime/queryIntentAuthority.ts",
+        symbol: "ANALYTICAL_CORE_RE",
+        note: "the canonical analytical-intent vocabulary lives ONLY in the authority",
+      },
+      // The legacy classifiers must be THIN VIEWS over the authority — they call
+      // classifyQueryIntent and no longer carry a private, drift-prone denylist.
+      // (The divergent NON_FACTUAL_CUES vs ANALYTICAL_DENYLIST_REGEX copies were
+      // the 'same question, different verdict' bug this authority retired.)
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/isDirectFactualQuestion.ts",
+        needle: "classifyQueryIntent",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/isDirectFactualQuestion.ts",
+        needle: "NON_FACTUAL_CUES",
+        note: "deleted — the direct-factual denylist now lives in the authority",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/quickAnswerDetector.ts",
+        needle: "classifyQueryIntent",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/quickAnswerDetector.ts",
+        needle: "ANALYTICAL_DENYLIST_REGEX",
+        note: "deleted — the lookup denylist now lives in the authority",
+      },
+      // The diagnostic-MODE vocabulary (analysisSpecRouter) also delegates: its
+      // broad detector lives in the authority as DIAGNOSTIC_MODE_RE, distinct
+      // from the narrow depth-budget DIAGNOSTIC_INTENT_RE but in the same home.
+      {
+        kind: "symbol_exported",
+        file: "server/lib/agents/runtime/queryIntentAuthority.ts",
+        symbol: "DIAGNOSTIC_MODE_RE",
+        note: "the broad diagnostic-mode vocabulary lives in the authority",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/analysisSpecRouter.ts",
+        needle: "DIAGNOSTIC_MODE_RE",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/analysisSpecRouter.ts",
+        needle: "const DIAGNOSTIC_RE",
+        note: "deleted — analysisSpecRouter delegates to the authority's DIAGNOSTIC_MODE_RE",
+      },
+    ],
+  },
 ];

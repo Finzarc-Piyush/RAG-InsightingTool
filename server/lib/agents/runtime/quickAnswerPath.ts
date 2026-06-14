@@ -57,6 +57,7 @@ import {
 } from "./quickAnswerDetector.js";
 import { runQuickLookupPlanner } from "./quickAnswerPlanner.js";
 import { buildQuickAnswerFollowUps } from "./quickAnswerFollowUps.js";
+import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
 import { agentLog } from "./agentLogger.js";
 import {
   normalizeAndValidateQueryPlanBody,
@@ -418,12 +419,18 @@ export async function tryQuickAnswer(
     details: `${rows.length} row${rows.length === 1 ? "" : "s"}`,
   });
 
-  // 7) Deterministic follow-up chips.
-  const followUps = buildQuickAnswerFollowUps({
-    plan: normalizedPlan,
-    rows,
-    dataSummary: ctx.summary,
-  });
+  // 7) Deterministic follow-up chips. Depth gate (query-intent authority): a
+  // DIRECT factual ask ("what is the average X per Y?") gets NO "investigate
+  // further" chips — the user asked for the number, not next steps (the explicit
+  // "direct question → no further investigation" rule). Exploratory lookups
+  // ("top 10 X by Y") keep navigational chips.
+  const followUps = isDirectFactualQuestion(ctx.question)
+    ? undefined
+    : buildQuickAnswerFollowUps({
+        plan: normalizedPlan,
+        rows,
+        dataSummary: ctx.summary,
+      });
 
   // 8) Cap preview rows (mirrors the loop's tool-result preview cap).
   const previewRows =
