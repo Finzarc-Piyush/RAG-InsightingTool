@@ -4,7 +4,7 @@ uvicorn[standard]==0.32.0
 pandas==2.2.3
 numpy==1.26.4
 pydantic>=2.6.0,<3.0.0
-python-multipart==0.0.12
+python-multipart==0.0.32
 scikit-learn==1.5.2
 scipy>=1.11,<2
 # matplotlib and seaborn were declared but never imported (P-055) — removed to
