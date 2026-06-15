@@ -14,7 +14,11 @@ us before.
 
 ## Key files
 
-- `server/shared/schema.ts` — authoritative server-side schemas.
+- `server/shared/schema.ts` — authoritative server-side schemas. Since EX20
+  this is a re-export **barrel**: the chart/dashboard grammar (the bulk) lives in
+  `server/shared/schema/charts.ts` and is `export *`-ed here, alongside the
+  analytics tail (pivot / past-analysis / automations / usage events). Every
+  `from ".../schema"` import is unchanged.
 - `client/src/shared/schema.ts` — client mirror, imported as
   `@shared/schema` via the `@shared/*` alias.
 - A drift gate (historical) hashed both files' structural shape and
@@ -80,3 +84,5 @@ Per-wave history lives in [`docs/WAVES.md`](../WAVES.md) (search the wave id). T
 pre-2026-06 subsystem changelog was moved out of this routing doc to keep `/load` cheap —
 see [`docs/archive/schemas-changelog.md`](../archive/schemas-changelog.md). Keep new
 entries here to ONE line each; full prose belongs in `docs/WAVES.md`.
+
+- **EX20 / ARCH-4 (2026-06-15):** split the 3,479-line `schema.ts` (fan-in 616) into [`server/shared/schema/charts.ts`](../../server/shared/schema/charts.ts) + a re-export barrel; imports unchanged. See WAVES.md + ADR [`expert-audit-remediation.md`](../decisions/expert-audit-remediation.md).

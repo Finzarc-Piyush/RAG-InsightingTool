@@ -17,6 +17,7 @@
 import { Router, type Request, type Response } from "express";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { agentLog } from "../lib/agents/runtime/agentLogger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 import {
   regenInsightForFilteredView,
   regenInsightRequestSchema,
@@ -48,7 +49,7 @@ export async function insightRegenController(req: Request, res: Response) {
     });
     return res.status(200).json(response);
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errorMessage(e);
     agentLog("insight_regen.error", {
       tileId: parsed.data.tileId,
       error: message.slice(0, 200),

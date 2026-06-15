@@ -80,7 +80,7 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
   const currencyRe = /([\$€£₹])\s*(-?[\d,]+(?:\.\d+)?)\s*(M|B|K|lakh|crore|million|billion|thousand)?/gi;
   for (const m of text.matchAll(currencyRe)) {
     if (m.index == null) continue;
-    const numeric = Number(m[2].replace(/,/g, ""));
+    const numeric = Number(m[2]!.replace(/,/g, ""));
     const mult = unitMultiplier(m[3]);
     push(m[0], numeric * mult, m.index);
   }
@@ -89,7 +89,7 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
   const percentRe = /(-?[\d,]+(?:\.\d+)?)\s*%/g;
   for (const m of text.matchAll(percentRe)) {
     if (m.index == null) continue;
-    const v = Number(m[1].replace(/,/g, ""));
+    const v = Number(m[1]!.replace(/,/g, ""));
     push(m[0], v, m.index);
   }
 
@@ -97,7 +97,7 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
   const magRe = /(-?[\d,]+(?:\.\d+)?)\s*(M|B|K|lakh|crore|million|billion|thousand)\b/gi;
   for (const m of text.matchAll(magRe)) {
     if (m.index == null) continue;
-    const v = Number(m[1].replace(/,/g, "")) * unitMultiplier(m[2]);
+    const v = Number(m[1]!.replace(/,/g, "")) * unitMultiplier(m[2]);
     push(m[0], v, m.index);
   }
 
@@ -105,11 +105,11 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
   const bareRe = /(?<![\d\.])(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)(?![\d\.%])/g;
   for (const m of text.matchAll(bareRe)) {
     if (m.index == null) continue;
-    const v = Number(m[1].replace(/,/g, ""));
+    const v = Number(m[1]!.replace(/,/g, ""));
     if (!Number.isFinite(v)) continue;
     if (Math.abs(v) <= 5) continue; // skip noisy "3 sentences", etc.
     if (Number.isInteger(v) && v >= 1990 && v <= 2099) continue; // year filter
-    push(m[1], v, m.index);
+    push(m[1]!, v, m.index);
   }
 
   return out.sort((a, b) => a.index - b.index);

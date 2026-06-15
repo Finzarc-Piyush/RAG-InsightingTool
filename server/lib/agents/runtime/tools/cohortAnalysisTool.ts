@@ -206,7 +206,7 @@ export function runCohortAnalysis(
       if (prev === undefined || pIdx < prev) entityMinPeriodIdx.set(eKey, pIdx);
     }
     for (const [eKey, pIdx] of entityMinPeriodIdx) {
-      entityCohort.set(eKey, sortedPeriods[pIdx]);
+      entityCohort.set(eKey, sortedPeriods[pIdx]!);
     }
   }
   if (entityCohort.size === 0) {

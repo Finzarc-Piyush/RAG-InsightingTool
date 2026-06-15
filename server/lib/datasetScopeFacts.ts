@@ -99,8 +99,8 @@ function computeTimeSpan(summary: DataSummary): string | null {
       .map((v) => parseSampleDate(v))
       .filter((d): d is Date => d !== null);
     if (dates.length < 2) continue;
-    let min = dates[0];
-    let max = dates[0];
+    let min = dates[0]!;
+    let max = dates[0]!;
     for (const d of dates) {
       if (d < min) min = d;
       if (d > max) max = d;
@@ -208,7 +208,7 @@ function pickPrimaryMetricLabel(summary: DataSummary): string | null {
     if (match) return match;
   }
   // No semantic match — only use the lone metric when it's unambiguous.
-  if (summary.numericColumns.length === 1) return summary.numericColumns[0];
+  if (summary.numericColumns.length === 1) return summary.numericColumns[0]!;
   return null;
 }
 

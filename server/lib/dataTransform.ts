@@ -451,22 +451,22 @@ function referenceValue(
         const sorted = [...values].sort((a, b) => a - b);
         const mid = Math.floor(sorted.length / 2);
         return sorted.length % 2 === 0
-          ? (sorted[mid - 1] + sorted[mid]) / 2
-          : sorted[mid];
+          ? (sorted[mid - 1]! + sorted[mid]!) / 2
+          : sorted[mid]!;
       }
       case 'min': {
         // Use loop to avoid stack overflow on large arrays
-        let min = values[0];
+        let min = values[0]!;
         for (let i = 1; i < values.length; i++) {
-          if (values[i] < min) min = values[i];
+          if (values[i]! < min) min = values[i]!;
         }
         return min;
       }
       case 'max': {
         // Use loop to avoid stack overflow on large arrays
-        let max = values[0];
+        let max = values[0]!;
         for (let i = 1; i < values.length; i++) {
-          if (values[i] > max) max = values[i];
+          if (values[i]! > max) max = values[i]!;
         }
         return max;
       }
@@ -534,7 +534,7 @@ function sampleDateParseableRatio(data: Record<string, any>[], col: string): num
   let nonNull = 0;
   let ok = 0;
   for (let i = 0; i < n; i++) {
-    const raw = data[i][col];
+    const raw = data[i]![col];
     if (raw === null || raw === undefined || raw === "") continue;
     nonNull++;
     if (raw instanceof Date && !isNaN(raw.getTime())) ok++;
@@ -776,9 +776,9 @@ function applyAggregations(
             if (values.length === 0) {
               resultValue = null;
             } else {
-              let min = values[0];
+              let min = values[0]!;
               for (let i = 1; i < values.length; i++) {
-                if (values[i] < min) min = values[i];
+                if (values[i]! < min) min = values[i]!;
               }
               resultValue = min;
             }
@@ -787,9 +787,9 @@ function applyAggregations(
             if (values.length === 0) {
               resultValue = null;
             } else {
-              let max = values[0];
+              let max = values[0]!;
               for (let i = 1; i < values.length; i++) {
-                if (values[i] > max) max = values[i];
+                if (values[i]! > max) max = values[i]!;
               }
               resultValue = max;
             }
@@ -800,8 +800,8 @@ function applyAggregations(
               const mid = Math.floor(sortedVals.length / 2);
               resultValue =
                 sortedVals.length % 2 === 0
-                  ? (sortedVals[mid - 1] + sortedVals[mid]) / 2
-                  : sortedVals[mid];
+                  ? (sortedVals[mid - 1]! + sortedVals[mid]!) / 2
+                  : sortedVals[mid]!;
             }
             break;
         }
@@ -906,7 +906,7 @@ function applyAggregations(
         if (dateColumnMap.has(col)) {
           // Use display label for normalized date columns
           const originalCol = dateColumnMap.get(col)!.original;
-          const normalizedKey = keyParts[idx];
+          const normalizedKey = keyParts[idx]!;
           base[originalCol] = displayLabelMap.get(normalizedKey) || normalizedKey;
         } else {
           base[col] = keyParts[idx];
@@ -981,9 +981,9 @@ function applyAggregations(
               if (values.length === 0) {
                 resultValue = null;
               } else {
-                let min = values[0];
+                let min = values[0]!;
                 for (let i = 1; i < values.length; i++) {
-                  if (values[i] < min) min = values[i];
+                  if (values[i]! < min) min = values[i]!;
                 }
                 resultValue = min;
               }
@@ -993,9 +993,9 @@ function applyAggregations(
               if (values.length === 0) {
                 resultValue = null;
               } else {
-                let max = values[0];
+                let max = values[0]!;
                 for (let i = 1; i < values.length; i++) {
-                  if (values[i] > max) max = values[i];
+                  if (values[i]! > max) max = values[i]!;
                 }
                 resultValue = max;
               }
@@ -1006,8 +1006,8 @@ function applyAggregations(
                 const mid = Math.floor(sortedVals.length / 2);
                 resultValue =
                   sortedVals.length % 2 === 0
-                    ? (sortedVals[mid - 1] + sortedVals[mid]) / 2
-                    : sortedVals[mid];
+                    ? (sortedVals[mid - 1]! + sortedVals[mid]!) / 2
+                    : sortedVals[mid]!;
               }
               break;
           }
@@ -1021,7 +1021,7 @@ function applyAggregations(
     }
     
     // Sort by groupBy column for percent_change calculation
-    const groupByCol = normalizedGroupBy[0];
+    const groupByCol = normalizedGroupBy[0]!;
     const originalGroupByCol = dateColumnMap.has(groupByCol) ? dateColumnMap.get(groupByCol)!.original : groupByCol;
     aggregatedRows.sort((a, b) => {
       const aVal = a[originalGroupByCol];
@@ -1042,7 +1042,7 @@ function applyAggregations(
         const targetName = agg.alias || `${agg.column}_${agg.operation}`;
         
         for (let i = 0; i < aggregatedRows.length; i++) {
-          const currentRow = aggregatedRows[i];
+          const currentRow = aggregatedRows[i]!;
           const previousRow = i > 0 ? aggregatedRows[i - 1] : null;
           
           // Get the current value (might need to aggregate first if not already aggregated)
@@ -1118,7 +1118,7 @@ function applyAggregations(
         if (dateColumnMap.has(col)) {
           // Use display label for normalized date columns
           const originalCol = dateColumnMap.get(col)!.original;
-          const normalizedKey = keyParts[idx];
+          const normalizedKey = keyParts[idx]!;
           base[originalCol] = displayLabelMap.get(normalizedKey) || normalizedKey;
         } else {
           base[col] = keyParts[idx];
@@ -1188,9 +1188,9 @@ function applyAggregations(
               if (values.length === 0) {
                 resultValue = null;
               } else {
-                let min = values[0];
+                let min = values[0]!;
                 for (let i = 1; i < values.length; i++) {
-                  if (values[i] < min) min = values[i];
+                  if (values[i]! < min) min = values[i]!;
                 }
                 resultValue = min;
               }
@@ -1200,9 +1200,9 @@ function applyAggregations(
               if (values.length === 0) {
                 resultValue = null;
               } else {
-                let max = values[0];
+                let max = values[0]!;
                 for (let i = 1; i < values.length; i++) {
-                  if (values[i] > max) max = values[i];
+                  if (values[i]! > max) max = values[i]!;
                 }
                 resultValue = max;
               }
@@ -1213,8 +1213,8 @@ function applyAggregations(
                 const mid = Math.floor(sortedVals.length / 2);
                 resultValue =
                   sortedVals.length % 2 === 0
-                    ? (sortedVals[mid - 1] + sortedVals[mid]) / 2
-                    : sortedVals[mid];
+                    ? (sortedVals[mid - 1]! + sortedVals[mid]!) / 2
+                    : sortedVals[mid]!;
               }
               break;
           }
@@ -1524,7 +1524,7 @@ export function applyQueryTransformations(
       workingData = aggregated;
       logger.log(`   Data after aggregation: ${workingData.length} rows`);
       if (workingData.length > 0) {
-        const columns = Object.keys(workingData[0]);
+        const columns = Object.keys(workingData[0]!);
         logger.log(`   Aggregated columns: [${columns.join(', ')}]`);
         logger.log(`   Sample aggregated row:`, JSON.stringify(workingData[0], null, 2));
       } else {

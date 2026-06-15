@@ -7,6 +7,7 @@ import {
 import { metadataService } from "./metadataService.js";
 import { isParquetReadPathEnabled, openSessionParquetAsView } from "./sessionParquet.js";
 import { logger } from "./logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const materializeLocks = new Map<string, Promise<void>>();
 
@@ -62,7 +63,7 @@ export async function ensureAuthoritativeDataTable(
       } catch (parquetErr) {
         logger.warn(
           `⚠️ Parquet read path failed for ${sessionId}; falling back to rematerialize: ${
-            parquetErr instanceof Error ? parquetErr.message : String(parquetErr)
+            errorMessage(parquetErr)
           }`,
         );
       }

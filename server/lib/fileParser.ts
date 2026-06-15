@@ -148,7 +148,7 @@ export function warnSuspiciousDuplicateRowIdInSample(
   context: string
 ): void {
   if (sampleRows.length < 5) return;
-  const keys = Object.keys(sampleRows[0]);
+  const keys = Object.keys(sampleRows[0]!);
   const idCol = keys.find((k) => {
     const n = k.trim().replace(/\s+/g, " ").replace(/^#\s*/, "").toLowerCase();
     return n === "row id";
@@ -414,7 +414,7 @@ function normalizeColumnNames(data: Record<string, any>[]): Record<string, any>[
   }
   
   // Create a mapping of old column names to normalized (trimmed) names
-  const firstRow = data[0];
+  const firstRow = data[0]!;
   const columnMapping: Record<string, string> = {};
   
   for (const oldKey of Object.keys(firstRow)) {
@@ -524,7 +524,7 @@ function hydrateLogicalDateColumnKeysFromPhysical(
   logicalCols: string[]
 ): void {
   if (data.length === 0) return;
-  const physical = Object.keys(data[0]);
+  const physical = Object.keys(data[0]!);
   for (const logical of logicalCols) {
     if (physical.includes(logical)) continue;
     const m = findMatchingColumn(logical, physical);
@@ -649,7 +649,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     throw new Error('No data found in file');
   }
 
-  const userColumns = Object.keys(data[0]).filter((k) => !isTemporalFacetColumnKey(k));
+  const userColumns = Object.keys(data[0]!).filter((k) => !isTemporalFacetColumnKey(k));
   const numericColumns: string[] = [];
   const dateColumns: string[] = [];
 
@@ -868,7 +868,7 @@ export function resolveDateColumnsForUpload(
   data: Record<string, any>[],
   profile: DatasetProfile
 ): string[] {
-  const keys = new Set(Object.keys(data[0]));
+  const keys = new Set(Object.keys(data[0]!));
   return profile.dateColumns.filter((c) => keys.has(c) && !isLikelyIdentifierColumnName(c));
 }
 

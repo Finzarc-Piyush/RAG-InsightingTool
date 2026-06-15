@@ -103,7 +103,7 @@ Output JSON only:
       { purpose: LLM_PURPOSE.SUGGEST_FOLLOW_UPS }
     );
 
-    const content = response.choices[0].message.content || '{}';
+    const content = response.choices[0]?.message.content || '{}';
     const parsed = JSON.parse(content);
     
     if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {

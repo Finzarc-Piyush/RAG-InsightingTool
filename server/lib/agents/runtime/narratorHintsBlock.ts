@@ -107,7 +107,7 @@ export function extractFindingEvidence(detail: string): FindingEvidence {
   const effMatch =
     /\beffect(?:[-_\s]?(?:size|magnitude))?\s*[=:]\s*(negligible|small|medium|large)\b/i.exec(text);
   if (effMatch) {
-    evidence.effectMagnitude = effMatch[1].toLowerCase() as FindingEvidence["effectMagnitude"];
+    evidence.effectMagnitude = effMatch[1]!.toLowerCase() as FindingEvidence["effectMagnitude"];
   }
 
   return evidence;

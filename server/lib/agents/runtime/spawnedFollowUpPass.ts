@@ -38,6 +38,7 @@ import {
 import { markQuestionActioned } from "./analyticalBlackboard.js";
 import { loadAgentConfigFromEnv } from "./types.js";
 import type { AgentConfig, AgentExecutionContext, AgentLoopResult } from "./types.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 /** Mirrors AgentSseEmitter; inlined so this module doesn't import agentLoop. */
 type SseEmit = (event: string, data: unknown) => void;
@@ -154,7 +155,7 @@ export async function runSpawnedFollowUpPass(
         } catch (e) {
           agentLog("spawnedFollowUp.sub_failed", {
             question: q.question.slice(0, 120),
-            error: e instanceof Error ? e.message : String(e),
+            error: errorMessage(e),
           });
           return null; // best-effort — skip a failed sub-question
         }

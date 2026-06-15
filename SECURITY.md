@@ -32,6 +32,19 @@ Areas of particular interest:
 - Server and client CI enforce `typecheck`; security-relevant lint rules run
   via ESLint.
 
+## Secrets in git history
+
+- The Azure AD **tenant id** and **client (application) id** appear in git
+  history (a `client/client.env` was committed before `3b97ffcd` untracked it
+  and added the `*.env` gitignore). These are **public, non-secret** values by
+  design — an Azure AD app's tenant/client id are exposed to every browser that
+  authenticates and are not credentials. No rotation is required (CFG-5).
+- No **secrets** (Cosmos keys, Azure OpenAI keys, storage keys, JWT signing
+  material) are committed. `*.env` files (except `*.env.example`) are gitignored.
+- **Policy:** committing any `*.env` other than a `*.example` requires a history
+  purge (BFG / `git filter-repo`) and rotation of anything exposed. The
+  pre-commit gate + `.gitignore` are the first line of defence.
+
 ## Disclosure
 
 We follow coordinated disclosure. Please give us reasonable time to release a

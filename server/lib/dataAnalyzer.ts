@@ -19,6 +19,7 @@ import { classifyAnalysisSpec } from './analysisSpecRouter.js';
 import { loadEnabledDomainContext } from './domainContext/loadEnabledDomainContext.js';
 
 import { logger } from "./logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 /** Context for divide-and-conquer: each AI call knows which segment of the dataset it is analyzing */
 export interface DivisionContext {
@@ -248,7 +249,7 @@ export async function answerQuestion(
       };
     } catch (agenticErr) {
       const detail =
-        agenticErr instanceof Error ? agenticErr.message : String(agenticErr);
+        errorMessage(agenticErr);
       const safe = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
       logger.error('❌ Agentic loop error (no legacy fallback):', agenticErr);
       return {

@@ -73,8 +73,8 @@ async function main(): Promise<void> {
     console.error("usage: llm-golden-diff <baseline-label> <candidate-label>");
     process.exit(2);
   }
-  const baseline = await loadSummary(argv[0]);
-  const candidate = await loadSummary(argv[1]);
+  const baseline = await loadSummary(argv[0]!);
+  const candidate = await loadSummary(argv[1]!);
 
   // Index for join.
   const cByid = new Map<string, ReplayMetric>();

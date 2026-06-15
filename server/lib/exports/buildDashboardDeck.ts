@@ -35,6 +35,7 @@ import { LAYOUT_KIND, type SlideDeckPlan } from "../../shared/exportSchema.js";
 import type { Dashboard } from "../../shared/schema.js";
 import { renderDeckPlanToPptxBuffer } from "./pptx/render.js";
 import { renderDeckPlanToPdfBuffer } from "./pdf/render.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export interface BuildDeckOptions extends DeckPlannerOptions {
   /** ISO date (yyyy-mm-dd) — defaults to today. */
@@ -102,7 +103,7 @@ export async function buildAndVerifyDeckPlan(
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       agentLog("buildDeck.sessionContextLookupFailed", {
         turnId: opts.turnId,
         sessionId: dashboard.sessionId,
@@ -117,7 +118,7 @@ export async function buildAndVerifyDeckPlan(
     const dc = await loadEnabledDomainContext();
     if (dc.text) inputs.domainContext = dc.text;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     agentLog("buildDeck.domainContextLoadFailed", {
       turnId: opts.turnId,
       error: msg.slice(0, 200),

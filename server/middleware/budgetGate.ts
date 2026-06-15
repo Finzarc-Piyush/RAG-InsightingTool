@@ -26,6 +26,7 @@ import {
   type UserBudgetDoc,
 } from "../models/userBudget.model.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const DEFAULT_DAILY_QUOTA = 20;
 
@@ -89,7 +90,7 @@ export async function budgetGate(
   } catch (err) {
     // Cosmos hiccup. Don't block the user — log and move on. Worst case we
     // skip a quota check for one request.
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ budgetGate: increment failed (${msg}) — passing through`);
     next();
     return;

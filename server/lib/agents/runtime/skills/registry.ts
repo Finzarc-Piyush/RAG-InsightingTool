@@ -93,7 +93,7 @@ export function selectSkill(
   const matches: Array<{ skill: AnalysisSkill; order: number }> = [];
   const registered = listRegisteredSkills();
   for (let i = 0; i < registered.length; i += 1) {
-    const skill = registered[i];
+    const skill = registered[i]!;
     if (allow && !allow.has(skill.name)) continue;
     if (skill.appliesTo(brief, ctx)) {
       matches.push({ skill, order: i });
@@ -105,7 +105,7 @@ export function selectSkill(
     if (priorityDelta !== 0) return priorityDelta;
     return a.order - b.order;
   });
-  return matches[0].skill;
+  return matches[0]!.skill;
 }
 
 /** Expand the selected skill into a concrete invocation (plan steps). */

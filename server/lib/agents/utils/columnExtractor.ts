@@ -53,7 +53,7 @@ function extractMentionedColumns(question: string, summary: DataSummary): string
   for (const col of summary.columns) {
     const colLower = col.name.toLowerCase();
     // Check if column name appears in question
-    if (questionLower.includes(colLower) || colLower.includes(questionLower.split(' ')[0])) {
+    if (questionLower.includes(colLower) || colLower.includes(questionLower.split(' ')[0]!)) {
       mentioned.push(col.name);
     }
   }
@@ -217,7 +217,7 @@ export function extractColumnsFromHistory(
   );
 
   for (let i = chatHistory.length - 1; i >= 0 && i >= chatHistory.length - 8; i--) {
-    const msg = chatHistory[i];
+    const msg = chatHistory[i]!;
     if (msg.charts && msg.charts.length > 0) {
       msg.charts.forEach((spec) => {
         if (spec.x) columns.add(spec.x);

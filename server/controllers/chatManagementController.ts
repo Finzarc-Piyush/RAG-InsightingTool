@@ -49,7 +49,7 @@ export const getChatDetails = async (req: Request, res: Response) => {
     const { chatId } = req.params;
     const username = requireUsername(req);
 
-    const chat = await getChatDocument(chatId, username);
+    const chat = await getChatDocument(chatId!, username);
 
     if (!chat) {
       return res.status(404).json({ error: "Chat not found" });
@@ -74,7 +74,7 @@ export const deleteChat = async (req: Request, res: Response) => {
     const { chatId } = req.params;
     const username = requireUsername(req);
 
-    await deleteChatDocument(chatId, username);
+    await deleteChatDocument(chatId!, username);
 
     res.json({ message: "Chat deleted successfully" });
   } catch (error) {

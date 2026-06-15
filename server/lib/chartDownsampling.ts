@@ -113,7 +113,7 @@ export function resampleTimeSeries(
         aggregatedValue = values.length;
         break;
       default:
-        aggregatedValue = values[0];
+        aggregatedValue = values[0]!;
     }
 
     result.push({
@@ -188,7 +188,7 @@ export function resampleTimeSeriesMulti(
           aggregatedValue = values.length;
           break;
         default:
-          aggregatedValue = values[0];
+          aggregatedValue = values[0]!;
       }
       out[col] = aggregatedValue;
     }
@@ -220,7 +220,7 @@ function determineOptimalPeriod(data: Record<string, any>[], xColumn: string): D
   if (dates.length < 2) return null;
 
   dates.sort((a, b) => a.getTime() - b.getTime());
-  const timeSpan = dates[dates.length - 1].getTime() - dates[0].getTime();
+  const timeSpan = dates[dates.length - 1]!.getTime() - dates[0]!.getTime();
   const days = timeSpan / (1000 * 60 * 60 * 24);
 
   if (days > 365 * 2) return 'year';
@@ -254,7 +254,7 @@ function downsampleLTTB(
   let rangeA: number;
   let rangeB: number;
 
-  sampled.push(data[a]);
+  sampled.push(data[a]!);
 
   for (let i = 0; i < threshold - 2; i++) {
     rangeA = Math.floor((i + 1) * every) + 1;
@@ -263,27 +263,27 @@ function downsampleLTTB(
       rangeB = dataLength;
     }
 
-    const avgX = (toNumber(data[rangeA][xKey]) + toNumber(data[rangeB][xKey])) / 2;
-    const avgY = (toNumber(data[rangeA][yKey]) + toNumber(data[rangeB][yKey])) / 2;
+    const avgX = (toNumber(data[rangeA]![xKey]) + toNumber(data[rangeB]![xKey])) / 2;
+    const avgY = (toNumber(data[rangeA]![yKey]) + toNumber(data[rangeB]![yKey])) / 2;
 
     const rangeOffs = Math.floor((i + 0) * every) + 1;
     const rangeTo = Math.floor((i + 1) * every) + 1;
 
-    const pointAX = toNumber(data[a][xKey]);
-    const pointAY = toNumber(data[a][yKey]);
+    const pointAX = toNumber(data[a]![xKey]);
+    const pointAY = toNumber(data[a]![yKey]);
 
     maxArea = -1;
-    maxAreaPoint = data[rangeOffs];
+    maxAreaPoint = data[rangeOffs]!;
 
     for (let j = rangeOffs; j < rangeTo && j < dataLength; j++) {
       area =
         Math.abs(
-          (pointAX - avgX) * (toNumber(data[j][yKey]) - pointAY) -
-            (pointAX - toNumber(data[j][xKey])) * (avgY - pointAY)
+          (pointAX - avgX) * (toNumber(data[j]![yKey]) - pointAY) -
+            (pointAX - toNumber(data[j]![xKey])) * (avgY - pointAY)
         ) * 0.5;
       if (area > maxArea) {
         maxArea = area;
-        maxAreaPoint = data[j];
+        maxAreaPoint = data[j]!;
         nextA = j;
       }
     }
@@ -292,7 +292,7 @@ function downsampleLTTB(
     a = nextA;
   }
 
-  sampled.push(data[dataLength - 1]);
+  sampled.push(data[dataLength - 1]!);
   return sampled;
 }
 
@@ -329,7 +329,7 @@ function aggregateDownsample(
         aggregatedY = yValues.length;
         break;
       default:
-        aggregatedY = yValues[0];
+        aggregatedY = yValues[0]!;
     }
 
     const xRepresentative = xValues[Math.floor(xValues.length / 2)];
@@ -377,7 +377,7 @@ function aggregateDownsampleMulti(
           aggregatedY = yValues.length;
           break;
         default:
-          aggregatedY = yValues[0];
+          aggregatedY = yValues[0]!;
       }
       out[col] = aggregatedY;
     }

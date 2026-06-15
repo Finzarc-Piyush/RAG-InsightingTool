@@ -98,6 +98,19 @@ if not config.INTERNAL_API_KEY:
 
 
 @app.middleware("http")
+async def bind_trace_id(request: Request, call_next):
+    """PY-7/OBS-2: bind the per-request X-Trace-Id (sent by the Node tier) so every
+    log line for the request carries it, tying the data-op back to the chat turn."""
+    tid = request.headers.get("X-Trace-Id")
+    token = trace_id_var.set(tid) if tid else None
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            trace_id_var.reset(token)
+
+
+@app.middleware("http")
 async def internal_api_key_gate(request: Request, call_next):
     """Require X-Internal-Api-Key when PYTHON_SERVICE_API_KEY is set (Node must send the same value)."""
     if config.INTERNAL_API_KEY:
@@ -133,6 +146,11 @@ async def body_size_limit(request: Request, call_next):
 # P-010/P-035: cap concurrent training requests so a burst cannot saturate
 # every worker thread. Set TRAIN_CONCURRENCY=0 to disable the cap.
 import asyncio  # noqa: E402
+
+from logging_config import configure_logging, get_logger, trace_id_var  # noqa: E402
+
+configure_logging()
+logger = get_logger(__name__)
 
 _TRAIN_CONCURRENCY = int(os.getenv("TRAIN_CONCURRENCY", "3"))
 _train_semaphore: asyncio.Semaphore | None = (
@@ -315,7 +333,7 @@ async def remove_nulls_endpoint(request: RemoveNullsRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in remove_nulls: {traceback.format_exc()}")
+        logger.error(f"Error in remove_nulls: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -335,7 +353,7 @@ async def preview_endpoint(request: PreviewRequest):
         result = get_preview(data=request.data, limit=request.limit)
         return result
     except Exception as e:
-        print(f"Error in preview: {traceback.format_exc()}")
+        logger.error(f"Error in preview: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -357,7 +375,7 @@ async def summary_endpoint(request: dict[str, Any]):
         result = get_summary(data=data, column=column)
         return result
     except Exception as e:
-        print(f"Error in summary: {traceback.format_exc()}")
+        logger.error(f"Error in summary: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -377,7 +395,7 @@ async def initial_analysis_endpoint(request: dict[str, Any]):
         chart_suggestions = suggest_initial_charts(summary_response)
         return {"summary": summary_response.get("summary", []), "chart_suggestions": chart_suggestions}
     except Exception as e:
-        print(f"Error in initial-analysis: {traceback.format_exc()}")
+        logger.error(f"Error in initial-analysis: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -407,7 +425,7 @@ async def create_derived_column_endpoint(request: CreateDerivedColumnRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in create_derived_column: {traceback.format_exc()}")
+        logger.error(f"Error in create_derived_column: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -430,7 +448,7 @@ async def convert_type_endpoint(request: ConvertTypeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in convert_type: {traceback.format_exc()}")
+        logger.error(f"Error in convert_type: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -457,7 +475,7 @@ async def aggregate_endpoint(request: AggregateRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in aggregate: {traceback.format_exc()}")
+        logger.error(f"Error in aggregate: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -481,7 +499,7 @@ async def pivot_endpoint(request: PivotRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in pivot: {traceback.format_exc()}")
+        logger.error(f"Error in pivot: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -505,7 +523,7 @@ async def identify_outliers_endpoint(request: IdentifyOutliersRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in identify_outliers: {traceback.format_exc()}")
+        logger.error(f"Error in identify_outliers: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -531,7 +549,7 @@ async def treat_outliers_endpoint(request: TreatOutliersRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in treat_outliers: {traceback.format_exc()}")
+        logger.error(f"Error in treat_outliers: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -1069,14 +1087,14 @@ async def train_model_endpoint(request: TrainModelRequest):
 
         return result
     except ValueError as e:
-        print(f"ValueError in train_model: {str(e)}")
-        print(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
+        logger.error(f"ValueError in train_model: {str(e)}")
+        logger.debug(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
         raise HTTPException(status_code=400, detail=str(e)) from None
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in train_model: {traceback.format_exc()}")
-        print(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
+        logger.error(f"Error in train_model: {traceback.format_exc()}")
+        logger.debug(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -1153,7 +1171,7 @@ async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
-        print(f"Error in budget_redistribute: {traceback.format_exc()}")
+        logger.error(f"Error in budget_redistribute: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
 
 
@@ -1225,7 +1243,7 @@ def _run_mmm_pipeline(spend_df, y, dates, request: BudgetRedistributeRequest, fi
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler"""
-    print(f"Unhandled exception: {traceback.format_exc()}")
+    logger.error(f"Unhandled exception: {traceback.format_exc()}")
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {str(exc)}"}

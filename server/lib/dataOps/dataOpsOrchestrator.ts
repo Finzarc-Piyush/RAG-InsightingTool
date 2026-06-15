@@ -100,6 +100,7 @@ async function loadActiveFilterPersistModule() {
 
 export { isIdColumn, getCountNameForIdColumn } from "../columnIdHeuristics.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 // Streaming configuration for large datasets
 const LARGE_DATASET_THRESHOLD = 50000; // 50k rows
@@ -579,7 +580,7 @@ export async function parseDataOpsIntent(
                          message.match(/\baggregate\s+(.+?)\s+group\s+by\s+/i);
     
     if (groupByMatch) {
-      const rawAggCols = groupByMatch[1].trim();
+      const rawAggCols = groupByMatch[1]!.trim();
       const aggColumns = rawAggCols.split(',').map(c => {
         const col = c.trim();
         return findMentionedColumn(col, availableColumns) || col;
@@ -589,7 +590,7 @@ export async function parseDataOpsIntent(
       const orderByMatch = message.match(/group\s+by\s+([^,]+?)(?:\s*,\s*order\s+by|$)/i);
       let groupByColumn: string | undefined;
       if (orderByMatch) {
-        const rawGroupBy = orderByMatch[1].trim();
+        const rawGroupBy = orderByMatch[1]!.trim();
         groupByColumn = findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
       }
 
@@ -600,7 +601,7 @@ export async function parseDataOpsIntent(
       let orderByDirection: 'asc' | 'desc' = 'asc';
       
       if (orderByMatch2) {
-        const rawOrderBy = orderByMatch2[1].trim();
+        const rawOrderBy = orderByMatch2[1]!.trim();
         orderByColumn = findMentionedColumn(rawOrderBy, availableColumns) || rawOrderBy;
         const direction = orderByMatch2[2]?.toLowerCase();
         if (direction === 'desc' || direction === 'descending') {
@@ -627,8 +628,8 @@ export async function parseDataOpsIntent(
   const aggregateOnRegex = /\baggregate\s+([a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)*)\s+on\s+([a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)*)(?:\s|$|\.|,)/i;
   const aggregateOnMatch = aggregateOnRegex.exec(message);
   if (aggregateOnMatch) {
-    const rawAggColumn = aggregateOnMatch[1].trim();
-    const rawGroupBy = aggregateOnMatch[2].trim();
+    const rawAggColumn = aggregateOnMatch[1]!.trim();
+    const rawGroupBy = aggregateOnMatch[2]!.trim();
     
     const aggColumn = findMentionedColumn(rawAggColumn, availableColumns) || rawAggColumn;
     const groupByColumn = findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
@@ -646,8 +647,8 @@ export async function parseDataOpsIntent(
   if (lowerMessage.includes('aggregate') && lowerMessage.includes(' on ')) {
     const parts = message.split(/\s+on\s+/i);
     if (parts.length === 2) {
-      const beforeOn = parts[0].replace(/^aggregate\s+/i, '').trim();
-      const afterOn = parts[1].split(/\s|,|\./)[0].trim(); // Take first word after "on"
+      const beforeOn = parts[0]!.replace(/^aggregate\s+/i, '').trim();
+      const afterOn = parts[1]!.split(/\s|,|\./)[0]!.trim(); // Take first word after "on"
       
       if (beforeOn && afterOn) {
         const aggColumn = findMentionedColumn(beforeOn, availableColumns) || beforeOn;
@@ -669,7 +670,7 @@ export async function parseDataOpsIntent(
   const aggregateAllColumnsPattern = /\baggregate\s+(?:all\s+(?:the\s+other\s+)?columns?|all\s+other\s+columns?)\s+by\s+(.+?)(?:\s+using\s+(sum|avg|mean|min|max|count))?$/i;
   const aggregateAllColumnsMatch = aggregateAllColumnsPattern.exec(message);
   if (aggregateAllColumnsMatch) {
-    const rawGroupBy = aggregateAllColumnsMatch[1].trim();
+    const rawGroupBy = aggregateAllColumnsMatch[1]!.trim();
     const aggFunc = (aggregateAllColumnsMatch[2] || 'sum').toLowerCase() as 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count';
     
     // Try to find the column in available columns first
@@ -715,7 +716,7 @@ export async function parseDataOpsIntent(
   const aggregateOverRegex = /\baggregate\s+(?:the\s+whole\s+data|all\s+data|whole\s+data)?\s+over\s+([a-zA-Z0-9_ ]+?)(?:\s+column)?(?:\?|$)/i;
   const aggregateOverMatch = aggregateOverRegex.exec(message);
   if (aggregateOverMatch) {
-    const rawGroupBy = aggregateOverMatch[1].trim();
+    const rawGroupBy = aggregateOverMatch[1]!.trim();
     const groupByColumn =
       findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
 
@@ -733,8 +734,8 @@ export async function parseDataOpsIntent(
   const aggregateByUsingPattern = /\baggregate\s+([a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)*)\s+by\s+([a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)*)\s+using\s+(sum|avg|mean|min|max|count)/i;
   const aggregateByUsingMatch = aggregateByUsingPattern.exec(message);
   if (aggregateByUsingMatch) {
-    const rawAggColumn = aggregateByUsingMatch[1].trim();
-    const rawGroupByColumn = aggregateByUsingMatch[2].trim();
+    const rawAggColumn = aggregateByUsingMatch[1]!.trim();
+    const rawGroupByColumn = aggregateByUsingMatch[2]!.trim();
     const aggFunc = (aggregateByUsingMatch[3] || 'sum').toLowerCase() as 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count';
     
     // Try to match columns from available columns list
@@ -789,7 +790,7 @@ export async function parseDataOpsIntent(
   const aggregateByRegex = /\baggregate\s+by\s+([a-zA-Z0-9_ ]+?)(?:\s+column|\?|$)/i;
   const aggregateMatch = aggregateByRegex.exec(message);
   if (aggregateMatch) {
-    const rawGroupBy = aggregateMatch[1].trim();
+    const rawGroupBy = aggregateMatch[1]!.trim();
     const groupByColumn =
       findMentionedColumn(rawGroupBy, availableColumns) || rawGroupBy;
 
@@ -805,8 +806,8 @@ export async function parseDataOpsIntent(
     /\bcreate\s+(?:a\s+)?pivot\s+on\s+([a-zA-Z0-9_ ]+?)\s+showing\s+([a-zA-Z0-9_,&\s]+?)\s*(?:fields?|columns?)?(?:\?|$)/i;
   const pivotMatch = pivotRegex.exec(message);
   if (pivotMatch) {
-    const rawIndex = pivotMatch[1].trim();
-    const rawValues = pivotMatch[2].trim();
+    const rawIndex = pivotMatch[1]!.trim();
+    const rawValues = pivotMatch[2]!.trim();
 
     const pivotIndex =
       findMentionedColumn(rawIndex, availableColumns) || rawIndex;
@@ -831,7 +832,7 @@ export async function parseDataOpsIntent(
   const simplePivotRegex = /\b(?:create\s+)?(?:a\s+)?pivot\s+(?:table\s+)?(?:for|on|by)\s+([a-zA-Z0-9_ ]+?)(?:\s+(?:showing\s+([a-zA-Z0-9_,&\s]+?)|over\s+(?:rest|remaining|all)\s+(?:of\s+)?(?:the\s+)?(?:columns?|fields?)))?\s*(?:fields?|columns?)?(?:\?|$)/i;
   const simplePivotMatch = simplePivotRegex.exec(message);
   if (simplePivotMatch) {
-    const rawIndex = simplePivotMatch[1].trim();
+    const rawIndex = simplePivotMatch[1]!.trim();
     const rawValues = simplePivotMatch[2] ? simplePivotMatch[2].trim() : '';
 
     const pivotIndex =
@@ -859,7 +860,7 @@ export async function parseDataOpsIntent(
   const pivotOverRestRegex = /\b(?:create\s+)?(?:a\s+)?pivot\s+(?:table\s+)?(?:for|on|by)\s+([a-zA-Z0-9_ ]+?)\s+over\s+(?:rest|remaining|all)\s+(?:of\s+)?(?:the\s+)?(?:columns?|fields?)/i;
   const pivotOverRestMatch = pivotOverRestRegex.exec(message);
   if (pivotOverRestMatch) {
-    const rawIndex = pivotOverRestMatch[1].trim();
+    const rawIndex = pivotOverRestMatch[1]!.trim();
     const pivotIndex =
       findMentionedColumn(rawIndex, availableColumns) || rawIndex;
 
@@ -904,7 +905,7 @@ export async function parseDataOpsIntent(
   const keepFirstRegex = /\bkeep\s+(?:only\s+)?(?:the\s+)?first\s+(\d+)\s+rows?/i;
   const keepFirstMatch = keepFirstRegex.exec(message);
   if (keepFirstMatch) {
-    const count = parseInt(keepFirstMatch[1], 10);
+    const count = parseInt(keepFirstMatch[1]!, 10);
     if (!Number.isNaN(count) && count > 0) {
       // "Keep only first N rows" means "remove last (total - N) rows"
       // We'll handle this in executeDataOperation by calculating total - N
@@ -926,7 +927,7 @@ export async function parseDataOpsIntent(
   // Explicit "first N rows"
   const firstNMatch = firstNRowsRegex.exec(message);
   if (firstNMatch) {
-    const count = parseInt(firstNMatch[3], 10);
+    const count = parseInt(firstNMatch[3]!, 10);
     if (!Number.isNaN(count) && count > 0) {
     return {
         operation: 'remove_rows',
@@ -940,7 +941,7 @@ export async function parseDataOpsIntent(
   // Explicit "last N rows"
   const lastNMatch = lastNRowsRegex.exec(message);
   if (lastNMatch) {
-    const count = parseInt(lastNMatch[3], 10);
+    const count = parseInt(lastNMatch[3]!, 10);
     if (!Number.isNaN(count) && count > 0) {
     return {
         operation: 'remove_rows',
@@ -953,7 +954,7 @@ export async function parseDataOpsIntent(
 
   const firstLastMatch = firstLastRowRegex.exec(message);
   if (firstLastMatch) {
-    const which = firstLastMatch[3].toLowerCase();
+    const which = firstLastMatch[3]!.toLowerCase();
     return {
       operation: 'remove_rows',
       rowPosition: which === 'last' ? 'last' : 'first',
@@ -963,7 +964,7 @@ export async function parseDataOpsIntent(
   
   const rowIndexMatch = rowIndexRegex.exec(message);
   if (rowIndexMatch) {
-    const index = parseInt(rowIndexMatch[2], 10);
+    const index = parseInt(rowIndexMatch[2]!, 10);
     if (!Number.isNaN(index) && index > 0) {
       return {
         operation: 'remove_rows',
@@ -1122,7 +1123,7 @@ export async function parseDataOpsIntent(
       lowerMessage.match(/(?:give me|show me|display|view|see)\s+(?:the\s+)?(?:data\s+)?preview/i)) {
     // Extract number if specified (e.g., "give me data preview of 10 rows")
     const limitMatch = lowerMessage.match(/(\d+)\s*(?:rows?|records?)?/i);
-    const limit = limitMatch ? Math.min(parseInt(limitMatch[1], 10), 10000) : 50;
+    const limit = limitMatch ? Math.min(parseInt(limitMatch[1]!, 10), 10000) : 50;
     
     return {
       operation: 'preview',
@@ -1140,7 +1141,7 @@ export async function parseDataOpsIntent(
   if (previewWithConditionPattern && !lowerMessage.includes('filter')) {
     // This is a preview request with conditions - let AI handle extracting conditions
     // But mark it as preview operation, not filter
-    const limit = parseInt(previewWithConditionPattern[1], 10);
+    const limit = parseInt(previewWithConditionPattern[1]!, 10);
     if (limit > 0) {
       // Return preview operation - AI will extract filterConditions but operation stays 'preview'
       // The AI prompt will be updated to handle this case
@@ -1158,8 +1159,8 @@ export async function parseDataOpsIntent(
                      lowerMessage.match(/rows?\s+from\s+range\s+(\d+)\s+to\s+(\d+)/i) ||
                      lowerMessage.match(/from\s+range\s+(\d+)\s+to\s+(\d+)/i);
     if (rangeMatch) {
-      const startRow = parseInt(rangeMatch[1], 10);
-      const endRow = parseInt(rangeMatch[2], 10);
+      const startRow = parseInt(rangeMatch[1]!, 10);
+      const endRow = parseInt(rangeMatch[2]!, 10);
       if (startRow > 0 && endRow > 0 && endRow >= startRow) {
         return {
           operation: 'preview',
@@ -1176,7 +1177,7 @@ export async function parseDataOpsIntent(
                         lowerMessage.match(/row\s+(?:number\s+)?(\d+)/i) ||
                         lowerMessage.match(/show\s+(?:the\s+)?row\s+(\d+)/i);
     if (specificMatch) {
-      const rowNum = parseInt(specificMatch[1], 10);
+      const rowNum = parseInt(specificMatch[1]!, 10);
       if (rowNum > 0) {
         return {
           operation: 'preview',
@@ -1191,7 +1192,7 @@ export async function parseDataOpsIntent(
     const lastMatch = lowerMessage.match(/last\s+(\d+)\s+rows?/i) ||
                     lowerMessage.match(/show\s+(?:me\s+)?(?:the\s+)?last\s+(\d+)\s+rows?/i);
     if (lastMatch) {
-      const limit = parseInt(lastMatch[1], 10);
+      const limit = parseInt(lastMatch[1]!, 10);
       if (limit > 0) {
         return {
           operation: 'preview',
@@ -1206,7 +1207,7 @@ export async function parseDataOpsIntent(
     const firstMatch = lowerMessage.match(/(?:first|top)\s+(\d+)\s+rows?/i) ||
                      lowerMessage.match(/show\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(?:first|top)\s+(\d+)\s+rows?/i);
     if (firstMatch) {
-      const limit = parseInt(firstMatch[1], 10);
+      const limit = parseInt(firstMatch[1]!, 10);
       if (limit > 0) {
         return {
           operation: 'preview',
@@ -1220,7 +1221,7 @@ export async function parseDataOpsIntent(
     // Pattern 5: Generic "show N rows" - defaults to first N
     const genericMatch = lowerMessage.match(/show\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(\d+)\s+rows?/i);
     if (genericMatch) {
-      const limit = parseInt(genericMatch[1], 10);
+      const limit = parseInt(genericMatch[1]!, 10);
       if (limit > 0) {
         return {
           operation: 'preview',
@@ -1234,7 +1235,7 @@ export async function parseDataOpsIntent(
     // Pattern 6: Simple "show N" or "first N" - defaults to first N
     const simpleMatch = lowerMessage.match(/(?:show|first|top)\s+(\d+)/i);
     if (simpleMatch) {
-      const limit = parseInt(simpleMatch[1], 10);
+      const limit = parseInt(simpleMatch[1]!, 10);
       if (limit > 0) {
         return {
           operation: 'preview',
@@ -1465,7 +1466,7 @@ export async function parseDataOpsIntent(
     if (indexMatch) {
       return {
         operation: 'remove_rows',
-        rowIndex: parseInt(indexMatch[1], 10),
+        rowIndex: parseInt(indexMatch[1]!, 10),
         requiresClarification: false,
       };
     }
@@ -1503,7 +1504,7 @@ export async function parseDataOpsIntent(
       const valueMatch = message.match(/(?:by|add|increase|decrease|reduce|subtract)\s+(-?\d+(?:\.\d+)?)/i);
 
       if (verbMatch && valueMatch) {
-        const transformValue = parseFloat(valueMatch[1]);
+        const transformValue = parseFloat(valueMatch[1]!);
         let transformType: DataOpsIntent['transformType'];
 
         switch (verbMatch[1]) {
@@ -1539,8 +1540,8 @@ export async function parseDataOpsIntent(
     const renamePattern1 = /(?:rename|change|update)\s+(?:the\s+)?(?:column\s+)?(?:name\s+)?(?:from\s+)?["']?([^"'\s]+)["']?\s+to\s+["']?([^"'\s]+)["']?/i;
     const match1 = message.match(renamePattern1);
     if (match1) {
-      const oldName = match1[1].trim();
-      const newName = match1[2].trim();
+      const oldName = match1[1]!.trim();
+      const newName = match1[2]!.trim();
       const matchedColumn = findMatchingColumn(oldName, availableColumns);
       return {
         operation: 'rename_column',
@@ -1555,8 +1556,8 @@ export async function parseDataOpsIntent(
     const renamePattern2 = /(?:rename|change|update)\s+(?:the\s+)?column\s+["']?([^"'\s]+)["']?\s+["']?([^"'\s]+)["']?/i;
     const match2 = message.match(renamePattern2);
     if (match2 && !lowerMessage.includes('to')) {
-      const oldName = match2[1].trim();
-      const newName = match2[2].trim();
+      const oldName = match2[1]!.trim();
+      const newName = match2[2]!.trim();
       const matchedColumn = findMatchingColumn(oldName, availableColumns);
       return {
         operation: 'rename_column',
@@ -1574,7 +1575,7 @@ export async function parseDataOpsIntent(
         lowerMessage.includes('to')) {
       const toMatch = message.match(/\bto\s+["']?([^"'\s]+)["']?/i);
       if (toMatch) {
-        const newName = toMatch[1].trim();
+        const newName = toMatch[1]!.trim();
         // Column will be resolved from context
         return {
           operation: 'rename_column',
@@ -1626,7 +1627,7 @@ export async function parseDataOpsIntent(
   for (const pattern of convertTypePatterns) {
     const typeMatch = message.match(pattern);
     if (typeMatch) {
-      let extractedColumnName = typeMatch[2].trim();
+      let extractedColumnName = typeMatch[2]!.trim();
       const targetTypeRaw = (typeMatch[3] || typeMatch[4] || '').toLowerCase();
       
       // Clean up extracted column name - remove common stop words at the end
@@ -2426,7 +2427,7 @@ function handleClarificationResponse(
     if (indexMatch) {
       return {
         operation: 'remove_rows',
-        rowIndex: parseInt(indexMatch[1], 10),
+        rowIndex: parseInt(indexMatch[1]!, 10),
         requiresClarification: false,
       };
     }
@@ -2675,7 +2676,7 @@ function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: 
   
   // Look backwards through chat history for the most recent model result
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const msg = chatHistory[i];
+    const msg = chatHistory[i]!;
     if (msg.role === 'assistant' && msg.content) {
       const content = msg.content;
       
@@ -2700,8 +2701,8 @@ function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: 
                               content.match(/model type[:\s]+(\w+(?:\s+\w+)?)/i);
         
         if (targetMatch && featuresMatch) {
-          const targetVariable = targetMatch[1].trim();
-          const featuresStr = featuresMatch[1].trim();
+          const targetVariable = targetMatch[1]!.trim();
+          const featuresStr = featuresMatch[1]!.trim();
           // Parse features (comma-separated list, handle "&" and "and")
           const features = featuresStr
             .split(/[,&]| and /i)
@@ -2710,7 +2711,7 @@ function extractPreviousModelParams(chatHistory: Message[]): { targetVariable?: 
           
           let modelType: string | undefined;
           if (modelTypeMatch) {
-            let modelTypeStr = modelTypeMatch[1].trim().toLowerCase();
+            let modelTypeStr = modelTypeMatch[1]!.trim().toLowerCase();
             // Normalize model type names
             modelTypeStr = modelTypeStr.replace(/\s+/g, '_');
             // Handle variations
@@ -3423,7 +3424,7 @@ export async function executeDataOperation(
         // Show specific row (1-based index)
         const rowIndex = intent.previewStartRow - 1;
         if (rowIndex >= 0 && rowIndex < workingData.length) {
-          previewData = [workingData[rowIndex]];
+          previewData = [workingData[rowIndex]!];
           answer = `Showing row ${intent.previewStartRow}${intent.filterConditions ? ` of ${filteredCount} matching rows` : ` of ${data.length} rows`}:`;
         } else {
           return {
@@ -3767,7 +3768,7 @@ export async function executeDataOperation(
         };
       }
 
-      if (data.length > 0 && !(intent.column in data[0])) {
+      if (data.length > 0 && !(intent.column in data[0]!)) {
         return {
           answer: `Column "${intent.column}" was not found. Available columns: ${Object.keys(data[0] || {}).join(', ')}`
         };
@@ -3784,11 +3785,11 @@ export async function executeDataOperation(
       }
 
       // Calculate min/max without spread operator to avoid stack overflow on large arrays
-      let min = numericValues[0];
-      let max = numericValues[0];
+      let min = numericValues[0]!;
+      let max = numericValues[0]!;
       for (let i = 1; i < numericValues.length; i++) {
-        if (numericValues[i] < min) min = numericValues[i];
-        if (numericValues[i] > max) max = numericValues[i];
+        if (numericValues[i]! < min) min = numericValues[i]!;
+        if (numericValues[i]! > max) max = numericValues[i]!;
       }
       const range = max - min;
 
@@ -3840,7 +3841,7 @@ export async function executeDataOperation(
         };
       }
 
-      if (data.length > 0 && !(intent.column in data[0])) {
+      if (data.length > 0 && !(intent.column in data[0]!)) {
         return {
           answer: `Column "${intent.column}" was not found. Available columns: ${Object.keys(data[0] || {}).join(', ')}`
         };
@@ -3927,7 +3928,7 @@ export async function executeDataOperation(
       }
 
 
-      if (data.length > 0 && !(groupBy in data[0])) {
+      if (data.length > 0 && !(groupBy in data[0]!)) {
         return {
           answer: `Column "${groupBy}" was not found. Available columns: ${Object.keys(
             data[0] || {},
@@ -4000,7 +4001,7 @@ export async function executeDataOperation(
         
         logger.log(`✅ Aggregation complete: ${rowsAfter} rows, showing preview of ${previewData.length} rows`);
         if (previewData.length > 0) {
-          logger.log(`📊 Preview columns: ${Object.keys(previewData[0]).join(', ')}`);
+          logger.log(`📊 Preview columns: ${Object.keys(previewData[0]!).join(', ')}`);
           logger.log(`📊 Sample row:`, JSON.stringify(previewData[0], null, 2));
         } else {
           logger.warn(`⚠️ No preview data available - aggregatedData is empty`);
@@ -4015,7 +4016,7 @@ export async function executeDataOperation(
       } catch (error) {
         logger.error('Error calling Python service for aggregation:', error);
         return {
-          answer: `Error during aggregation: ${error instanceof Error ? error.message : String(error)}. Please try again.`,
+          answer: `Error during aggregation: ${errorMessage(error)}. Please try again.`,
         };
       }
     }
@@ -4035,7 +4036,7 @@ export async function executeDataOperation(
         };
       }
 
-      if (data.length > 0 && !(indexCol in data[0])) {
+      if (data.length > 0 && !(indexCol in data[0]!)) {
         return {
           answer: `Column "${indexCol}" was not found. Available columns: ${Object.keys(
             data[0] || {},
@@ -4059,7 +4060,7 @@ export async function executeDataOperation(
         logger.log(`🔄 Starting pivot operation: indexCol="${indexCol}", valueColumns=[${valueColumns.join(', ')}]`);
         logger.log(`📊 Input data: ${data.length} rows`);
         if (data.length > 0) {
-          logger.log(`📊 Input columns: ${Object.keys(data[0]).join(', ')}`);
+          logger.log(`📊 Input columns: ${Object.keys(data[0]!).join(', ')}`);
           logger.log(`📊 Sample input row:`, JSON.stringify(data[0], null, 2));
         }
         
@@ -4090,7 +4091,7 @@ export async function executeDataOperation(
 
           const uniquePivotValues = new Set<string>();
           if (pivotData.length > 0) {
-            const firstRow = pivotData[0];
+            const firstRow = pivotData[0]!;
             Object.keys(firstRow).forEach((key) => {
               if (key.includes('_') && key !== indexCol) {
                 const parts = key.split('_');
@@ -4149,7 +4150,7 @@ export async function executeDataOperation(
         // Get unique values from the pivot column to show in the answer
         const uniquePivotValues = new Set<string>();
         if (pivotData.length > 0) {
-          const firstRow = pivotData[0];
+          const firstRow = pivotData[0]!;
           // Find columns that contain the pivot index column name (these are the pivoted columns)
           Object.keys(firstRow).forEach(key => {
             if (key.includes('_') && key !== indexCol) {
@@ -4179,7 +4180,7 @@ export async function executeDataOperation(
 
         logger.log(`✅ Pivot complete: ${rowsAfter} rows, row-level preview ${previewData.length} rows`);
         if (previewData.length > 0) {
-          logger.log(`📊 Row-level preview columns: ${Object.keys(previewData[0]).join(', ')}`);
+          logger.log(`📊 Row-level preview columns: ${Object.keys(previewData[0]!).join(', ')}`);
           logger.log(`📊 Row-level sample row:`, JSON.stringify(previewData[0], null, 2));
         } else {
           logger.warn(`⚠️ No row-level preview — input data was empty`);
@@ -4197,7 +4198,7 @@ export async function executeDataOperation(
         logger.error('❌ Error calling Python service for pivot:', error);
         logger.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
         return {
-          answer: `Error during pivot creation: ${error instanceof Error ? error.message : String(error)}. Please try again.`,
+          answer: `Error during pivot creation: ${errorMessage(error)}. Please try again.`,
         };
       }
     }
@@ -4253,11 +4254,11 @@ export async function executeDataOperation(
         description = `all rows except the first ${keptCount}`;
         answerText = `✅ Kept only the first ${keptCount} rows and removed ${removedCount} row${removedCount === 1 ? '' : 's'}. Dataset now has ${keptCount} row${keptCount === 1 ? '' : 's'}.`;
       } else if (removedCount === 1) {
-        description = `row ${sortedIndices[0] + 1}`;
+        description = `row ${sortedIndices[0]! + 1}`;
         answerText = `✅ Removed ${description}.`;
-      } else if (removedCount > 1 && sortedIndices[sortedIndices.length - 1] - sortedIndices[0] + 1 === removedCount) {
+      } else if (removedCount > 1 && sortedIndices[sortedIndices.length - 1]! - sortedIndices[0]! + 1 === removedCount) {
         // Consecutive range
-        description = `rows ${sortedIndices[0] + 1}-${sortedIndices[sortedIndices.length - 1] + 1}`;
+        description = `rows ${sortedIndices[0]! + 1}-${sortedIndices[sortedIndices.length - 1]! + 1}`;
         answerText = `✅ Removed ${description}.`;
       } else {
         description = `rows ${sortedIndices.map(i => i + 1).join(', ')}`;
@@ -4410,7 +4411,7 @@ export async function executeDataOperation(
       }
       
       // Check if column exists
-      if (data.length > 0 && !(intent.column in data[0])) {
+      if (data.length > 0 && !(intent.column in data[0]!)) {
         return {
           answer: `Column "${intent.column}" not found. Available columns: ${Object.keys(data[0] || {}).join(', ')}`
         };
@@ -4523,14 +4524,14 @@ export async function executeDataOperation(
       }
       
       // Check if column exists
-      if (data.length > 0 && !(columnToRename in data[0])) {
+      if (data.length > 0 && !(columnToRename in data[0]!)) {
         return {
           answer: `Column "${columnToRename}" not found. Available columns: ${Object.keys(data[0] || {}).join(', ')}`
         };
       }
       
       // Check if new name already exists
-      if (data.length > 0 && newName in data[0] && newName !== columnToRename) {
+      if (data.length > 0 && newName in data[0]! && newName !== columnToRename) {
         return {
           answer: `Cannot rename: Column "${newName}" already exists. Please choose a different name.`
         };

@@ -21,6 +21,7 @@ import {
 } from "../shared/schema.js";
 import type { BusinessActionItem } from "../shared/schema.js";
 import { countTurnVotes } from "../lib/admin/feedbackVotes.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export const COSMOS_PAST_ANALYSES_CONTAINER_ID =
   process.env.COSMOS_PAST_ANALYSES_CONTAINER_ID || "past_analyses";
@@ -337,7 +338,7 @@ export async function patchPastAnalysisBusinessActions(params: {
       await upsertPastAnalysisDocUnlocked(parsed.data);
       return { ok: true };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return { ok: false, reason: msg };
     }
   });
@@ -373,7 +374,7 @@ export async function patchPastAnalysisPivotArtifacts(params: {
       await upsertPastAnalysisDocUnlocked(parsed.data);
       return { ok: true };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return { ok: false, reason: msg };
     }
   });

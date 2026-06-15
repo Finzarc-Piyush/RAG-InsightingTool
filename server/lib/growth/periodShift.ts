@@ -151,13 +151,13 @@ export function priorPeriodKey(
     // pairable across columns); use qualifier-shift on -YA/-2YA.
     const fyQual = t.match(/^(FY\d{4}|\d{4})-(TY|YA|2YA|3YA)$/);
     if (fyQual) {
-      const next = QUALIFIER_SHIFT[fyQual[2]];
+      const next = QUALIFIER_SHIFT[fyQual[2]!];
       return next ? `${fyQual[1]}-${next}` : null;
     }
     // Half-year labels "2024-H1", "2024-H1-YA".
     const halfQual = t.match(/^(\d{4}-H[12])-(TY|YA|2YA|3YA)$/);
     if (halfQual) {
-      const next = QUALIFIER_SHIFT[halfQual[2]];
+      const next = QUALIFIER_SHIFT[halfQual[2]!];
       return next ? `${halfQual[1]}-${next}` : null;
     }
   }

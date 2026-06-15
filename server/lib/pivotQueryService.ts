@@ -1,4 +1,5 @@
 import type { ChatDocument } from "../models/chat.model.js";
+import { parseNumericCell } from "../shared/parseNumericCell.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
 import { resolveSessionDataTable } from "./activeFilter/resolveSessionDataTable.js";
@@ -99,29 +100,6 @@ function pivotDimensionStringKey(raw: unknown): string {
     }
   }
   return String(raw);
-}
-
-function parseNumericCell(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-
-  const raw = String(value).trim();
-  if (!raw) return null;
-  if (raw.toLowerCase() === "null") return null;
-
-  const isParenNeg = raw.startsWith("(") && raw.endsWith(")");
-
-  const cleaned = raw
-    .replace(/^\(+/, "")
-    .replace(/\)+$/, "")
-    .replace(/[$€£¥₹]/g, "")
-    .replace(/,/g, "")
-    .replace(/%/g, "")
-    .replace(/\s+/g, "");
-
-  const num = parseFloat(cleaned);
-  if (!Number.isFinite(num)) return null;
-  return isParenNeg ? -Math.abs(num) : num;
 }
 
 function applyAgg(
@@ -301,7 +279,7 @@ function buildLevel(
   rowSort?: PivotRowSort
 ): { type: "leaf"; depth: number; label: string; pathKey: string; values: PivotAggRow }[] | any[] {
   if (rowFields.length === 0) return [];
-  const field = rowFields[depth];
+  const field = rowFields[depth]!;
   const isLast = depth === rowFields.length - 1;
 
   const groups = groupByField(rows, field);

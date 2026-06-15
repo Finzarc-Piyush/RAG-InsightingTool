@@ -44,6 +44,15 @@ export const SSE_EVENT_KIND = {
   RESPONSE_CHARTS: "response_charts",
   DONE: "done",
   ERROR: "error",
+  // EX15 / API-2 · previously-unregistered kinds the agent loop / fast paths emit.
+  ANSWER_CHUNK: "answer_chunk",
+  THINKING: "thinking",
+  MODE: "mode",
+  FLOW_DECISION: "flow_decision",
+  DIRECT_ANSWER_FALLBACK: "direct_answer_fallback",
+  QUICK_LOOKUP_FALLBACK: "quick_lookup_fallback",
+  DASHBOARD_COVERAGE_GATE: "dashboard_coverage_gate",
+  DASHBOARD_FEATURE_SWEEP_DIAGNOSTIC: "dashboard_feature_sweep_diagnostic",
 } as const;
 
 export type SseEventKind = (typeof SSE_EVENT_KIND)[keyof typeof SSE_EVENT_KIND];
@@ -225,6 +234,18 @@ const errorSchema = z
   })
   .passthrough();
 
+// EX15 / API-2 · lenient schemas for the newly-registered kinds. Like the rest
+// of the registry these are passthrough — they pin the load-bearing field(s)
+// the client reads and tolerate added telemetry without a coordinated release.
+const answerChunkSchema = z.object({ delta: z.string() }).passthrough();
+const thinkingSchema = z.object({}).passthrough();
+const modeSchema = z.object({ mode: z.string() }).passthrough();
+const flowDecisionSchema = z.object({}).passthrough();
+const directAnswerFallbackSchema = z.object({}).passthrough();
+const quickLookupFallbackSchema = z.object({}).passthrough();
+const dashboardCoverageGateSchema = z.object({}).passthrough();
+const dashboardFeatureSweepDiagnosticSchema = z.object({}).passthrough();
+
 export const sseEventSchemas: Record<SseEventKind, z.ZodTypeAny> = {
   [SSE_EVENT_KIND.QUEUED]: queuedSchema,
   [SSE_EVENT_KIND.INTENT_PARSED]: intentParsedSchema,
@@ -248,6 +269,14 @@ export const sseEventSchemas: Record<SseEventKind, z.ZodTypeAny> = {
   [SSE_EVENT_KIND.RESPONSE_CHARTS]: responseChartsSchema,
   [SSE_EVENT_KIND.DONE]: doneSchema,
   [SSE_EVENT_KIND.ERROR]: errorSchema,
+  [SSE_EVENT_KIND.ANSWER_CHUNK]: answerChunkSchema,
+  [SSE_EVENT_KIND.THINKING]: thinkingSchema,
+  [SSE_EVENT_KIND.MODE]: modeSchema,
+  [SSE_EVENT_KIND.FLOW_DECISION]: flowDecisionSchema,
+  [SSE_EVENT_KIND.DIRECT_ANSWER_FALLBACK]: directAnswerFallbackSchema,
+  [SSE_EVENT_KIND.QUICK_LOOKUP_FALLBACK]: quickLookupFallbackSchema,
+  [SSE_EVENT_KIND.DASHBOARD_COVERAGE_GATE]: dashboardCoverageGateSchema,
+  [SSE_EVENT_KIND.DASHBOARD_FEATURE_SWEEP_DIAGNOSTIC]: dashboardFeatureSweepDiagnosticSchema,
 };
 
 export type SseValidateResult =

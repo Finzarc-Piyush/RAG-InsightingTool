@@ -62,22 +62,22 @@ function extractColumnNameFromMessage(message: string): string | null {
   // Pattern 1: "Successfully created column "XYZ""
   const pattern1 = /(?:successfully\s+)?created\s+column\s+["']([^"']+)["']/i;
   const match1 = message.match(pattern1);
-  if (match1) return match1[1];
+  if (match1) return match1[1]!;
 
   // Pattern 2: "created column XYZ" (without quotes)
   const pattern2 = /(?:successfully\s+)?created\s+column\s+([^\s\n,\.]+)/i;
   const match2 = message.match(pattern2);
-  if (match2) return match2[1];
+  if (match2) return match2[1]!;
 
   // Pattern 3: "Created derived column "XYZ""
   const pattern3 = /created\s+derived\s+column\s+["']([^"']+)["']/i;
   const match3 = message.match(pattern3);
-  if (match3) return match3[1];
+  if (match3) return match3[1]!;
 
   // Pattern 4: Look for column name in quotes after "column"
   const pattern4 = /column\s+["']([^"']+)["']/i;
   const match4 = message.match(pattern4);
-  if (match4) return match4[1];
+  if (match4) return match4[1]!;
 
   return null;
 }
@@ -92,7 +92,7 @@ export function findLastCreatedColumn(chatHistory: Message[]): string | null {
 
   // Search backwards through assistant messages
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.content) {
       const columnName = extractColumnNameFromMessage(message.content);
       if (columnName) {
@@ -117,7 +117,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
 
   // Look at the last assistant message for suggestions
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.content) {
       const content = message.content.toLowerCase();
       
@@ -128,7 +128,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       // Look backwards for the user's question before this assistant message
       // Look up to 5 messages back to find the original question
       for (let j = i - 1; j >= 0 && j >= i - 5; j--) {
-        const prevMessage = chatHistory[j];
+        const prevMessage = chatHistory[j]!;
         if (prevMessage.role === 'user' && prevMessage.content) {
           const userContent = prevMessage.content.trim();
           // Skip very short responses like "yes", "ok" - these are not the original question
@@ -138,12 +138,12 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
             // Pattern: "what impacts X" or "does Y impact X"
             const impactMatch = originalQuestion.match(/(?:what\s+)?(?:impacts?|affects?|influences?)\s+([a-zA-Z0-9_\s]+?)(?:\s+significantly|\s+significantly\?|\?|$)/i);
             if (impactMatch) {
-              targetVariable = impactMatch[1].trim();
+              targetVariable = impactMatch[1]!.trim();
             } else {
               // Pattern: "does Y impact X"
               const doesMatch = originalQuestion.match(/does\s+([a-zA-Z0-9_\s]+?)\s+impact\s+([a-zA-Z0-9_\s]+?)(?:\s+significantly|\?|$)/i);
               if (doesMatch) {
-                targetVariable = doesMatch[2].trim(); // X is the target
+                targetVariable = doesMatch[2]!.trim(); // X is the target
               }
             }
             logger.debug(`   Found original question: "${originalQuestion}"`);
@@ -158,7 +158,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       // Pattern 1: "Would you like me to create a chart to visualize..."
       const chartSuggestionMatch = content.match(/would\s+you\s+like\s+me\s+to\s+(?:create|generate|show|make|draw|provide)\s+(?:a\s+)?(?:chart|visualization|graph|plot)\s+(?:to\s+)?(?:visualize|show|display|see)\s+(.+?)(?:\?|\.|$)/i);
       if (chartSuggestionMatch) {
-        const action = chartSuggestionMatch[1].trim();
+        const action = chartSuggestionMatch[1]!.trim();
         // If action is vague like "these relationships", use the original question context
         if (/these\s+relationships|these\s+correlations|the\s+relationships|the\s+correlations|these\s+results/i.test(action)) {
           if (originalQuestion) {
@@ -209,7 +209,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       // Pattern 2: "I can create a chart..." or "I can show you..."
       const canSuggestionMatch = content.match(/i\s+can\s+(?:create|generate|show|make|draw|provide)\s+(?:a\s+)?(?:chart|visualization|graph|plot)\s+(?:to\s+)?(?:visualize|show|display|see)\s+(.+?)(?:\.|$)/i);
       if (canSuggestionMatch) {
-        const action = canSuggestionMatch[1].trim();
+        const action = canSuggestionMatch[1]!.trim();
         if (/these\s+relationships|these\s+correlations|the\s+relationships|the\s+correlations|these\s+results/i.test(action)) {
           if (originalQuestion) {
             const isCorrelationQuestion = /(?:does|what|how)\s+.*?\s+(?:impact|affect|influence|correlation)/i.test(originalQuestion);
@@ -233,7 +233,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       // Pattern 3: "Should I create a chart..."
       const shouldSuggestionMatch = content.match(/should\s+i\s+(?:create|generate|show|make|draw|provide)\s+(?:a\s+)?(?:chart|visualization|graph|plot)\s+(?:to\s+)?(?:visualize|show|display|see)\s+(.+?)(?:\?|\.|$)/i);
       if (shouldSuggestionMatch) {
-        const action = shouldSuggestionMatch[1].trim();
+        const action = shouldSuggestionMatch[1]!.trim();
         if (/these\s+relationships|these\s+correlations|the\s+relationships|the\s+correlations|these\s+results/i.test(action)) {
           if (originalQuestion) {
             const isCorrelationQuestion = /(?:does|what|how)\s+.*?\s+(?:impact|affect|influence|correlation)/i.test(originalQuestion);
@@ -257,7 +257,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
       // Pattern 4: Generic "Would you like me to..." followed by action
       const genericSuggestionMatch = content.match(/would\s+you\s+like\s+me\s+to\s+(.+?)(?:\?|\.|$)/i);
       if (genericSuggestionMatch) {
-        const action = genericSuggestionMatch[1].trim();
+        const action = genericSuggestionMatch[1]!.trim();
         // Check if it's about charts/visualizations or deeper analysis
         // This now also supports suggestions like:
         // \"Would you like me to analyze these metrics month-over-month for a clearer picture?\"
@@ -382,9 +382,9 @@ export function resolveContextReferences(
   
   // Priority 2: Look for most recent chart
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.charts && message.charts.length > 0) {
-      const lastChart = message.charts[message.charts.length - 1];
+      const lastChart = message.charts[message.charts.length - 1]!;
       const chartRef = `the "${lastChart.title}" chart`;
       
       // Replace context references with explicit chart reference
@@ -402,9 +402,9 @@ export function resolveContextReferences(
 
   // Priority 3: Look for most recent insight
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.insights && message.insights.length > 0) {
-      const lastInsight = message.insights[message.insights.length - 1];
+      const lastInsight = message.insights[message.insights.length - 1]!;
       const insightRef = `the "${lastInsight.text.substring(0, 50)}..." insight`;
       
       resolvedQuestion = resolvedQuestion.replace(/\bthat\b/gi, insightRef);
@@ -444,7 +444,7 @@ export function resolveContextReference(
   if (lastColumn) {
     // Find the message index where column was created
     for (let i = chatHistory.length - 1; i >= 0; i--) {
-      const message = chatHistory[i];
+      const message = chatHistory[i]!;
       if (message.role === 'assistant' && message.content) {
         const columnName = extractColumnNameFromMessage(message.content);
         if (columnName === lastColumn) {
@@ -460,9 +460,9 @@ export function resolveContextReference(
 
   // Look for most recent chart
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.charts && message.charts.length > 0) {
-      const lastChart = message.charts[message.charts.length - 1];
+      const lastChart = message.charts[message.charts.length - 1]!;
       return {
         type: 'chart',
         value: lastChart.title,
@@ -473,9 +473,9 @@ export function resolveContextReference(
 
   // Look for most recent insight
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    const message = chatHistory[i];
+    const message = chatHistory[i]!;
     if (message.role === 'assistant' && message.insights && message.insights.length > 0) {
-      const lastInsight = message.insights[message.insights.length - 1];
+      const lastInsight = message.insights[message.insights.length - 1]!;
       return {
         type: 'insight',
         value: lastInsight.text,

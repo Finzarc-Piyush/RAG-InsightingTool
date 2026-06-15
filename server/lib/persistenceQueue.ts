@@ -160,7 +160,7 @@ async function runWithRetry(job: PersistJob): Promise<PersistOutcome> {
         } catch (cbErr) {
           logger.warn("persistenceQueue: onAttemptFailed callback threw:", cbErr);
         }
-        const wait = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)];
+        const wait = BACKOFF_MS[Math.min(job.attempts - 1, BACKOFF_MS.length - 1)]!;
         await sleeper(wait);
         continue;
       }

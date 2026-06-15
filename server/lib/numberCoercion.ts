@@ -3,8 +3,8 @@
  *
  * `toNumber` (the percent/comma-stripping, NaN-on-blank variant) was copy-pasted
  * byte-for-byte across chartGenerator, dataTransform and correlationMath;
- * `toNumberOrNull` (the parseFloat, null-on-blank variant) was duplicated in
- * dataProvenance and rowSetRef. This is the one definition of each.
+ * `toNumberOrNull` (the parseFloat, null-on-blank variant) was duplicated across
+ * call sites (e.g. rowSetRef). This is the one definition of each.
  *
  * NOTE: a few modules intentionally keep their own stricter/looser variants
  * (e.g. chartDownsampling strips currency symbols; richColumnProfile does an

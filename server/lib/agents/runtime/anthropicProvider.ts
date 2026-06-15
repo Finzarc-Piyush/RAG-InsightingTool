@@ -120,7 +120,7 @@ function buildAnthropicRequest(
   }
 
   // Anthropic requires the conversation to start with a user turn.
-  if (turns.length === 0 || turns[0].role !== "user") {
+  if (turns.length === 0 || turns[0]!.role !== "user") {
     turns.unshift({ role: "user", content: "" });
   }
 

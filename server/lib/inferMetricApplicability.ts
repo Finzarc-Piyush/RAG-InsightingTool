@@ -130,7 +130,7 @@ export function inferMetricApplicability(
     // SAFE: only adopt a gate that has a real name/plan signal (score > 0 from
     // overlap or plan-hint). Otherwise we'd risk gating on an outcome column.
     candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0];
+    const best = candidates[0]!;
     const hasSignal =
       tokenOverlap(metricTokens, tokens(best.gateColumn)) > 0 ||
       PLAN_TYPE_NAME_RE.test(best.gateColumn);

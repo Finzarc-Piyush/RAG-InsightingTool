@@ -494,7 +494,7 @@ export function mergePivotDefaultRowsAndValues(params: {
       .filter(Boolean);
     if (distinctMetrics.length > 0) {
       // Shared "prefer value-sales family, else first" picker (one owner).
-      const preferred = pickPreferredMetricValue(distinctMetrics) ?? distinctMetrics[0];
+      const preferred = pickPreferredMetricValue(distinctMetrics) ?? distinctMetrics[0]!;
       out.filterFields = [...(out.filterFields ?? []), wf.metricColumn];
       out.filterSelections = {
         ...(out.filterSelections ?? {}),

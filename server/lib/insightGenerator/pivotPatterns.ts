@@ -50,8 +50,8 @@ const percentile = (arr: number[], p: number): number => {
   const idx = (sorted.length - 1) * p;
   const lo = Math.floor(idx);
   const hi = Math.ceil(idx);
-  if (lo === hi) return sorted[lo];
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
 };
 
 const stdev = (arr: number[]): number => {
@@ -65,13 +65,13 @@ const pearson = (xs: number[], ys: number[]): number => {
   const n = Math.min(xs.length, ys.length);
   if (n < 3) return NaN;
   let sx = 0, sy = 0;
-  for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; }
+  for (let i = 0; i < n; i++) { sx += xs[i]!; sy += ys[i]!; }
   const mx = sx / n;
   const my = sy / n;
   let num = 0, dx2 = 0, dy2 = 0;
   for (let i = 0; i < n; i++) {
-    const dx = xs[i] - mx;
-    const dy = ys[i] - my;
+    const dx = xs[i]! - mx;
+    const dy = ys[i]! - my;
     num += dx * dy;
     dx2 += dx * dx;
     dy2 += dy * dy;
@@ -247,8 +247,8 @@ export function computePivotPatterns(
       let up = 0;
       let down = 0;
       for (let i = 1; i < tRows.length; i++) {
-        if (tRows[i].y > tRows[i - 1].y) up++;
-        else if (tRows[i].y < tRows[i - 1].y) down++;
+        if (tRows[i]!.y > tRows[i - 1]!.y) up++;
+        else if (tRows[i]!.y < tRows[i - 1]!.y) down++;
       }
       const swings = up + down;
       if (swings > 0) {

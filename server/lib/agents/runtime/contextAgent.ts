@@ -38,6 +38,7 @@ import {
   type AnalyticalBlackboard,
 } from "./analyticalBlackboard.js";
 import type { AgentExecutionContext } from "./types.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 const MAX_ROUND2_QUERIES = 3;
 const MAX_HITS_PER_QUERY = 2;
@@ -124,7 +125,7 @@ export async function runContextAgentRound2(
         agentLog("contextAgent.queryFailed", {
           turnId,
           query: query.slice(0, 80),
-          error: hitErr instanceof Error ? hitErr.message : String(hitErr),
+          error: errorMessage(hitErr),
         });
       }
     }
@@ -134,7 +135,7 @@ export async function runContextAgentRound2(
   } catch (err) {
     agentLog("contextAgent.round2.failed", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
     return 0;
   }

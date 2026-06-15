@@ -112,7 +112,7 @@ function resolveBySubstringOrTokens(
     if (cl.length < 2 || tl.length < 2) return cl === tl;
     return cl.includes(tl) || tl.includes(cl);
   });
-  if (subs.length === 1) return subs[0].name;
+  if (subs.length === 1) return subs[0]!.name;
   if (subs.length < 2) return null;
   let best: { name: string; score: number } | null = null;
   for (const c of subs) {
@@ -148,13 +148,13 @@ export function resolveToSchemaColumn(
   if (isStaleWideFormatColumn(t, wideFormatTransform)) return raw;
   const tl = t.toLowerCase();
   const caseInsensitive = columns.filter((c) => c.name.toLowerCase() === tl);
-  if (caseInsensitive.length === 1) return caseInsensitive[0].name;
+  if (caseInsensitive.length === 1) return caseInsensitive[0]!.name;
   const compact = (s: string) => s.replace(/\s+/g, "").toLowerCase();
   const compactHits = columns.filter((c) => compact(c.name) === compact(t));
-  if (compactHits.length === 1) return compactHits[0].name;
+  if (compactHits.length === 1) return compactHits[0]!.name;
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const normHits = columns.filter((c) => norm(c.name) === norm(t));
-  if (normHits.length === 1) return normHits[0].name;
+  if (normHits.length === 1) return normHits[0]!.name;
   const sub = resolveBySubstringOrTokens(t, tl, columns);
   if (sub) return sub;
   return raw;
@@ -194,7 +194,7 @@ export function resolveMetricAliasToSchemaColumn(
     const cl = c.name.toLowerCase();
     return MONEY_MEASURE_NAME_RE.test(cl) || preferred.has(c.name);
   });
-  if (candidates.length === 1) return candidates[0].name;
-  if (preferred.size === 1) return Array.from(preferred)[0];
+  if (candidates.length === 1) return candidates[0]!.name;
+  if (preferred.size === 1) return Array.from(preferred)[0]!;
   return raw;
 }

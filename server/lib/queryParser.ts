@@ -104,7 +104,7 @@ function convertIndianNumberUnits(value: number | string | null | undefined): nu
   // Handle crore (10 million)
   const croreMatch = str.match(/(\d+(?:\.\d+)?)\s*crore/i);
   if (croreMatch) {
-    const num = parseFloat(croreMatch[1]);
+    const num = parseFloat(croreMatch[1]!);
     if (!isNaN(num)) {
       return num * 10000000; // 10 million
     }
@@ -113,7 +113,7 @@ function convertIndianNumberUnits(value: number | string | null | undefined): nu
   // Handle lakh (100 thousand)
   const lakhMatch = str.match(/(\d+(?:\.\d+)?)\s*lakh/i);
   if (lakhMatch) {
-    const num = parseFloat(lakhMatch[1]);
+    const num = parseFloat(lakhMatch[1]!);
     if (!isNaN(num)) {
       return num * 100000; // 100 thousand
     }
@@ -260,7 +260,7 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   // Fix groupBy: if dateAggregationPeriod is set AND aggregations are requested, ensure groupBy uses actual date column
   // Only auto-add groupBy if aggregations are explicitly present (user requested aggregation)
   if (parsed.dateAggregationPeriod && parsed.aggregations && parsed.aggregations.length > 0 && summary && summary.dateColumns.length > 0) {
-    const dateColumn = summary.dateColumns[0]; // Use first date column
+    const dateColumn = summary.dateColumns[0]!; // Use first date column
     const periodNames = ['year', 'month', 'quarter', 'day', 'years', 'months', 'quarters', 'days'];
     
     if (!parsed.groupBy || parsed.groupBy.length === 0) {
@@ -357,7 +357,7 @@ function enhanceTimeFiltersWithExtractedDates(
       if (extracted.type === 'month' && f.type === 'month') {
         const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
                            'July', 'August', 'September', 'October', 'November', 'December'];
-        const extractedMonthName = monthNames[extracted.month!];
+        const extractedMonthName = monthNames[extracted.month!]!;
         return f.months?.some(m => m.toLowerCase() === extractedMonthName.toLowerCase());
       }
       if (extracted.type === 'dateRange' && f.type === 'dateRange') {
@@ -404,7 +404,7 @@ function enhanceTimeFiltersWithExtractedDates(
           parsed.timeFilters.push({
             type: 'month',
             column: dateColumn,
-            months: [monthNames[extracted.month!]],
+            months: [monthNames[extracted.month!]!],
           });
           logger.log(`✅ Added month filter: ${monthNames[extracted.month!]}`);
         }

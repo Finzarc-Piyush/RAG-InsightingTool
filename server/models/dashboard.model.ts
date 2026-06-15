@@ -16,6 +16,7 @@ import {
 } from "../shared/schema.js";
 import { waitForDashboardsContainer } from "./database.config.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 /**
  * Create a new dashboard
@@ -463,7 +464,7 @@ export const addChartToDashboard = async (
   }
   
   // If sheetId is provided, add to that sheet; otherwise add to first sheet
-  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find(s => s.id === targetSheetId);
   
   if (!targetSheet) {
@@ -672,7 +673,7 @@ export const removeChartFromDashboard = async (
     if (typeof predicate.index === 'number') {
       if (predicate.index >= 0 && predicate.index < sheet.charts.length) {
         // Get the chart BEFORE removing it
-        const chartToRemove = sheet.charts[predicate.index];
+        const chartToRemove = sheet.charts[predicate.index]!;
         
         // Remove from the specific sheet
         sheet.charts.splice(predicate.index, 1);
@@ -814,7 +815,7 @@ export const updateChartInsightOrRecommendation = async (
   }
 
   // Find the target sheet
-  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find(s => s.id === targetSheetId);
 
   if (!targetSheet) {
@@ -825,7 +826,7 @@ export const updateChartInsightOrRecommendation = async (
     throw new Error(`Chart index ${chartIndex} is out of range`);
   }
 
-  const chart = targetSheet.charts[chartIndex];
+  const chart = targetSheet.charts[chartIndex]!;
 
   // Update the chart's keyInsight
   if (updates.keyInsight !== undefined) {
@@ -841,7 +842,7 @@ export const updateChartInsightOrRecommendation = async (
   if (mainChartIndex >= 0) {
     if (updates.keyInsight !== undefined) {
       // If empty string, set to undefined to remove it
-      dashboard.charts[mainChartIndex].keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
+      dashboard.charts[mainChartIndex]!.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
     }
   }
 
@@ -901,7 +902,7 @@ export const addTableToDashboard = async (
     ];
   }
 
-  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
 
   if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
@@ -953,7 +954,7 @@ export const removeTableFromDashboard = async (
     throw new Error("No sheets found");
   }
 
-  const targetSheetId = predicate.sheetId || dashboard.sheets[0].id;
+  const targetSheetId = predicate.sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
   if (!targetSheet) throw new Error(`Sheet with id "${targetSheetId}" not found`);
 
@@ -1017,7 +1018,7 @@ export const addPivotToDashboard = async (
     ];
   }
 
-  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
   if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
 
@@ -1071,7 +1072,7 @@ export const removePivotFromDashboard = async (
     throw new Error("No sheets found");
   }
 
-  const targetSheetId = predicate.sheetId || dashboard.sheets[0].id;
+  const targetSheetId = predicate.sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
   if (!targetSheet) throw new Error(`Sheet with id "${targetSheetId}" not found`);
 
@@ -1139,7 +1140,7 @@ export const updateTableCaption = async (
     ];
   }
 
-  const targetSheetId = sheetId || dashboard.sheets[0].id;
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
   const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
   if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
 
@@ -1151,7 +1152,7 @@ export const updateTableCaption = async (
     throw new Error(`Table index ${tableIndex} is out of range`);
   }
 
-  const table = targetSheet.tables[tableIndex];
+  const table = targetSheet.tables[tableIndex]!;
 
   if (updates.caption !== undefined) {
     table.caption = updates.caption;
@@ -1224,7 +1225,7 @@ export const createReportDashboardFromAnalysis = async (
       }
       return updateDashboard(dashboard);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       if (msg.includes("already exists") && attempt < 7) {
         name = `${baseName} (${attempt + 2})`;
         continue;
@@ -1351,7 +1352,7 @@ export const createDashboardFromSpec = async (
       }
       return persisted;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       if (msg.includes("already exists") && attempt < 7) {
         name = `${baseName} (${attempt + 2})`;
         continue;

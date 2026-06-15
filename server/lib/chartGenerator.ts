@@ -1088,7 +1088,7 @@ function aggregateData(
         aggregatedValue = values.length;
         break;
       default:
-        aggregatedValue = values[0];
+        aggregatedValue = values[0]!;
     }
 
     result.push({
@@ -1162,7 +1162,7 @@ function aggregateDataMulti(
           aggregatedValue = vals.length;
           break;
         default:
-          aggregatedValue = vals[0];
+          aggregatedValue = vals[0]!;
       }
       out[col] = aggregatedValue;
     }

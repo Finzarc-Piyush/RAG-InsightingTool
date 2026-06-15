@@ -12,6 +12,7 @@ import { logUploadTelemetry, currentRssMb, type UploadPath } from './uploadTelem
 import { isParquetReadPathEnabled, writeAndUploadSessionParquet } from '../lib/sessionParquet.js';
 import { logger } from "../lib/logger.js";
 import { capChartDataPoints } from "../lib/chartDownsampling.js";
+import { errorMessage } from "./errorMessage.js";
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -415,7 +416,7 @@ class UploadQueue {
           data = await getDataForAnalysis(job.sessionId, undefined, undefined);
           logger.log(`✅ Large file processed: ${result.rowCount} rows, using ALL ${data.length} rows in memory`);
         } catch (largeFileError) {
-          const errorMsg = largeFileError instanceof Error ? largeFileError.message : String(largeFileError);
+          const errorMsg = errorMessage(largeFileError);
           throw new Error(`Failed to process large file: ${errorMsg}`);
         }
       } else if (!useChunking) {
@@ -437,7 +438,7 @@ class UploadQueue {
             }
           }
         } catch (parseError) {
-          const errorMsg = parseError instanceof Error ? parseError.message : String(parseError);
+          const errorMsg = errorMessage(parseError);
           if (errorMsg.includes('memory') || errorMsg.includes('heap') || errorMsg.includes('too large')) {
             throw new Error('File is too large to parse. Please try with a smaller file (under 100MB) or reduce the number of rows.');
           }
@@ -633,7 +634,7 @@ class UploadQueue {
           const dc = await loadEnabledDomainContext();
           datasetProfileDomainContext = dc.text || undefined;
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           logger.warn(`B5 · domain context load for dataset profile failed: ${msg}`);
         }
         // Wave W-DPC1 · The profiling LLM call is the dominant upload-critical-path
@@ -891,7 +892,7 @@ class UploadQueue {
                   summary,
                   seededCtx
                 );
-                messages = [{ ...messages[0], content: newContent }];
+                messages = [{ ...messages[0]!, content: newContent }];
               }
               await updateChatDocument({
                 ...doc,
@@ -1079,7 +1080,7 @@ class UploadQueue {
             const step = Math.floor(data.length / MAX_ROWS_FOR_SUMMARY);
             const sampledData: Record<string, any>[] = [];
             for (let i = 0; i < data.length && sampledData.length < MAX_ROWS_FOR_SUMMARY; i += step) {
-              sampledData.push(data[i]);
+              sampledData.push(data[i]!);
             }
             dataForSummary = sampledData;
           }
@@ -1214,7 +1215,7 @@ class UploadQueue {
               );
             } catch (enrichedErr) {
               logger.warn(
-                `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${enrichedErr instanceof Error ? enrichedErr.message : String(enrichedErr)}`,
+                `⚠️ Enriched currentDataBlob write skipped (non-fatal): ${errorMessage(enrichedErr)}`,
               );
             }
           } else {
@@ -1236,7 +1237,7 @@ class UploadQueue {
               parquetBlobInfo = { blobName, version: 0, rowCount: summary.rowCount };
             } catch (pqErr) {
               logger.warn(
-                `⚠️ Parquet write skipped (non-fatal): ${pqErr instanceof Error ? pqErr.message : String(pqErr)}`,
+                `⚠️ Parquet write skipped (non-fatal): ${errorMessage(pqErr)}`,
               );
             }
           }
@@ -1245,7 +1246,7 @@ class UploadQueue {
         }
       } catch (materializeError) {
         const errorMsg =
-          materializeError instanceof Error ? materializeError.message : String(materializeError);
+          errorMessage(materializeError);
         throw new Error(`Failed to materialize session DuckDB data table: ${errorMsg}`);
       }
 
@@ -1370,7 +1371,7 @@ class UploadQueue {
           });
         }
       } catch (cosmosError) {
-        const errorMsg = cosmosError instanceof Error ? cosmosError.message : String(cosmosError);
+        const errorMsg = errorMessage(cosmosError);
         logger.error("Failed to save chat document:", cosmosError);
         
         // Provide more helpful error messages for common issues
@@ -1402,7 +1403,7 @@ class UploadQueue {
           chatDocument = await updateChatDocument({ ...chatDocument, parquetBlob: parquetBlobInfo });
         } catch (pqDocErr) {
           logger.warn(
-            `⚠️ Failed to persist parquetBlob pointer (non-fatal): ${pqDocErr instanceof Error ? pqDocErr.message : String(pqDocErr)}`,
+            `⚠️ Failed to persist parquetBlob pointer (non-fatal): ${errorMessage(pqDocErr)}`,
           );
         }
       }
@@ -1444,9 +1445,7 @@ class UploadQueue {
             );
           } catch (materializeErr) {
             const msg =
-              materializeErr instanceof Error
-                ? materializeErr.message
-                : String(materializeErr);
+              errorMessage(materializeErr);
             logger.warn(
               `⚠️ eager DuckDB materialization failed for ${sessionIdForMaterialize}: ${msg.slice(0, 300)}`
             );

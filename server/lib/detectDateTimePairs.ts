@@ -191,7 +191,7 @@ export function detectDateTimePairs(params: {
     if (timeColumns.length === 1 && dateColumns.length === 1) {
       detected.push({
         timeColumn: timeCol.name,
-        dateColumn: dateColumns[0],
+        dateColumn: dateColumns[0]!,
         source: "auto",
         description: `Auto-paired (only date column in dataset).`,
       });

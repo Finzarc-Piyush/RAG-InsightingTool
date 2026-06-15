@@ -118,8 +118,8 @@ export async function generateChartInsights(
     const idx = (sorted.length - 1) * p;
     const lo = Math.floor(idx);
     const hi = Math.ceil(idx);
-    if (lo === hi) return sorted[lo];
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+    if (lo === hi) return sorted[lo]!;
+    return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
   };
 
   const roundSmart = (v: number): string => formatCompactNumber(v);
@@ -204,8 +204,8 @@ export async function generateChartInsights(
     const my = mean(y);
     let num = 0, dx2 = 0, dy2 = 0;
     for (let i = 0; i < n; i++) {
-      const dx = x[i] - mx;
-      const dy = y[i] - my;
+      const dx = x[i]! - mx;
+      const dy = y[i]! - my;
       num += dx * dy;
       dx2 += dx * dx;
       dy2 += dy * dy;
@@ -274,7 +274,7 @@ export async function generateChartInsights(
     .sort((a, b) => b.y - a.y)
     .slice(0, Math.min(10, Math.floor(chartData.length * 0.2))) // Top 20% or top 10, whichever is smaller
     .map(item => item.idx);
-  const xValuesForTopY = topYIndices.map(idx => Number(String(chartData[idx][chartSpec.x]).replace(/[%,,]/g, ''))).filter(v => !isNaN(v));
+  const xValuesForTopY = topYIndices.map(idx => Number(String(chartData[idx]![chartSpec.x]).replace(/[%,,]/g, ''))).filter(v => !isNaN(v));
   const avgXForTopY = xValuesForTopY.length > 0 ? xValuesForTopY.reduce((a, b) => a + b, 0) / xValuesForTopY.length : NaN;
   const xRangeForTopY = xValuesForTopY.length > 0 ? {
     min: Math.min(...xValuesForTopY),
@@ -348,8 +348,8 @@ NUMERIC XY RELATIONSHIP (ground truth from plotted points):
     Array.isArray(chatInsights) &&
     chatInsights.length > 0
   ) {
-    const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
-    const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
+    const topX = topPerformers.length > 0 ? topPerformers[0]!.x : undefined;
+    const topY = topPerformers.length > 0 ? topPerformers[0]!.y : undefined;
     const topXStr = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
     const topYStr =
       typeof topY === 'number' && !isNaN(topY) ? formatY(topY).toLowerCase() : '';
@@ -522,7 +522,7 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
       { purpose: LLM_PURPOSE.INSIGHT_GEN }
     );
 
-    const content = response.choices[0].message.content || '{}';
+    const content = response.choices[0]!.message.content || '{}';
     const result = JSON.parse(content);
 
     // Model might return either { keyInsight } or an { insights: [...] } shape.
@@ -559,8 +559,8 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
     }
 
     // Deterministic verification: ensure the output explicitly names the top category/value.
-    const topX = topPerformers.length > 0 ? topPerformers[0].x : undefined;
-    const topY = topPerformers.length > 0 ? topPerformers[0].y : undefined;
+    const topX = topPerformers.length > 0 ? topPerformers[0]!.x : undefined;
+    const topY = topPerformers.length > 0 ? topPerformers[0]!.y : undefined;
     const topXNorm = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
     const topYStr = typeof topY === 'number' && !isNaN(topY) ? formatY(topY) : '';
 

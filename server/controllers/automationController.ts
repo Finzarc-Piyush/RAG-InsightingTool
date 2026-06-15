@@ -28,6 +28,7 @@ import {
 import { sendSSE, setSSEHeaders, startSseKeepalive } from "../utils/sse.helper.js";
 import { z } from "zod";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const handleError = (res: Response, error: unknown, fallback: number = 500) => {
   if (error instanceof Error) {
@@ -259,7 +260,7 @@ export const runAutomationController = async (req: Request, res: Response) => {
     }
     sendSSE(res, "automation_halted", {
       ordinal: 0,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     });
     try {
       res.end();

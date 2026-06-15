@@ -157,8 +157,8 @@ function extractAggregations(expression: string): ParsedAggregation[] {
   let m: RegExpExecArray | null;
   while ((m = OP_REGEX.exec(expression)) !== null) {
     const raw = m[0];
-    const opToken = m[1];
-    let columnRaw = m[2].trim();
+    const opToken = m[1]!;
+    let columnRaw = m[2]!.trim();
     let hasDistinct = false;
     if (/^DISTINCT\s+/i.test(columnRaw)) {
       hasDistinct = true;

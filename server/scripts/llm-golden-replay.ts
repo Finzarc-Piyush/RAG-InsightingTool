@@ -47,8 +47,8 @@ function parseArgs(argv: string[]): CliArgs {
   let timeoutMs = 240_000;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--label" && argv[i + 1]) label = argv[++i];
-    else if (a === "--server" && argv[i + 1]) serverUrl = argv[++i];
+    if (a === "--label" && argv[i + 1]) label = argv[++i]!;
+    else if (a === "--server" && argv[i + 1]) serverUrl = argv[++i]!;
     else if (a === "--limit" && argv[i + 1]) {
       const n = Number(argv[++i]);
       if (Number.isFinite(n) && n > 0) limit = Math.floor(n);
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
 
   const metrics: ReplayMetric[] = [];
   for (let i = 0; i < questions.length; i++) {
-    const q = questions[i];
+    const q = questions[i]!;
     process.stdout.write(`[${i + 1}/${questions.length}] ${q.id} ... `);
     const m = await replayOne(q, args.serverUrl, args.timeoutMs);
     metrics.push(m);

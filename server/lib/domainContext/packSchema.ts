@@ -61,7 +61,7 @@ function splitFrontmatter(source: string, file: string): { fm: string; body: str
   }
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === FRONTMATTER_FENCE) {
+    if (lines[i]!.trim() === FRONTMATTER_FENCE) {
       end = i;
       break;
     }

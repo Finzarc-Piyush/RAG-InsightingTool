@@ -63,7 +63,7 @@ function findLatestTemporalGroupByObservation(
   observations: readonly StructuredObservation[],
 ): { facetColumn: string; rows: Record<string, unknown>[] } | null {
   for (let i = observations.length - 1; i >= 0; i--) {
-    const obs = observations[i];
+    const obs = observations[i]!;
     if (obs.tool !== "execute_query_plan") continue;
     const plan = (obs.args as { plan?: unknown } | undefined)?.plan as
       | { groupBy?: unknown }

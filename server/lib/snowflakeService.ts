@@ -11,6 +11,7 @@
 import snowflake from 'snowflake-sdk';
 import { uploadLimits } from '../config/uploadLimits.js';
 import { logger } from "./logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export interface SnowflakeConnectionConfig {
   account: string;
@@ -388,7 +389,7 @@ export async function verifySnowflakeConnection(): Promise<{ ok: boolean; messag
     await getOrCreateConnection({ ...fullConfig, database: '', schema: '' });
     return { ok: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { ok: false, message };
   }
 }
@@ -407,7 +408,7 @@ export async function testConnection(
     await getOrCreateConnection({ ...fullConfig, database: '', schema: '' });
     return { ok: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { ok: false, message };
   }
 }

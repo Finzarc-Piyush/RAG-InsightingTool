@@ -175,8 +175,8 @@ function inferGrainFromKind(kind: string | undefined): GrowthGrain {
 
 function summarizeRanked(rows: GrowthRow[], grain: GrowthGrain): string {
   if (rows.length === 0) return "compute_growth (rankByGrowth): no rows had a prior-period pair.";
-  const top = rows[0];
-  const bottom = rows[rows.length - 1];
+  const top = rows[0]!;
+  const bottom = rows[rows.length - 1]!;
   const fmtPct = (v: number | null) =>
     v === null ? "n/a" : `${(v * 100).toFixed(1)}%`;
   const lines = [

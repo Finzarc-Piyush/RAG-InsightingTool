@@ -27,6 +27,7 @@ import {
   type LlmCallUsage,
 } from "../agents/runtime/llmUsageEmitter.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export const COSMOS_COST_ALERTS_CONTAINER_ID =
   process.env.COSMOS_COST_ALERTS_CONTAINER_ID || "cost_alerts";
@@ -175,7 +176,7 @@ export async function recordAndCheckTurn(args: {
     const container = await waitForCostAlertsContainer();
     await container.items.upsert(alert);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ cost-alert persist failed: ${msg}`);
   }
 }

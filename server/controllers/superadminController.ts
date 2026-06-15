@@ -19,6 +19,7 @@ import {
   getDashboardByIdForSuperadmin,
 } from "../models/dashboard.model.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 /**
  * GET /api/superadmin/me — single bit the client uses to decide whether to
@@ -60,7 +61,7 @@ export async function listAllSessionsForSuperadminEndpoint(
       aggregateFeedbackCountsBySession().catch(
         (err) => {
           logger.warn(
-            `⚠️ superadmin: feedback aggregation failed (${err instanceof Error ? err.message : String(err)}); rendering with zero counts`
+            `⚠️ superadmin: feedback aggregation failed (${errorMessage(err)}); rendering with zero counts`
           );
           return new Map<string, { up: number; down: number; none: number }>();
         }

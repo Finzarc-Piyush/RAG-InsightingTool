@@ -37,7 +37,7 @@ function buildLlmPayload(data: Record<string, any>[]) {
   if (!data.length) {
     return { columns: [] as string[], sampleRows: [] as Record<string, unknown>[] };
   }
-  const columns = Object.keys(data[0]);
+  const columns = Object.keys(data[0]!);
   const sampleRows = data.slice(0, MAX_SAMPLE_ROWS).map((row) => {
     const o: Record<string, unknown> = {};
     for (const k of columns) {

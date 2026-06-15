@@ -37,7 +37,7 @@ export const getUserFiles = async (req: Request, res: Response) => {
 // Download a specific file from blob storage
 export const downloadFile = async (req: Request, res: Response) => {
   try {
-    const { blobName } = req.params;
+    const blobName = req.params.blobName!;
     const username = requireUsername(req);
 
     if (!blobName.startsWith(username.replace(/[^a-zA-Z0-9]/g, "_"))) {
@@ -66,7 +66,7 @@ export const downloadFile = async (req: Request, res: Response) => {
 // Delete a file from blob storage
 export const deleteFile = async (req: Request, res: Response) => {
   try {
-    const { blobName } = req.params;
+    const blobName = req.params.blobName!;
     const username = requireUsername(req);
 
     if (!blobName.startsWith(username.replace(/[^a-zA-Z0-9]/g, "_"))) {
@@ -91,7 +91,7 @@ export const deleteFile = async (req: Request, res: Response) => {
 // Generate a temporary SAS URL for file access
 export const generateFileAccessUrl = async (req: Request, res: Response) => {
   try {
-    const { blobName } = req.params;
+    const blobName = req.params.blobName!;
     const { expiresInMinutes = 60 } = req.body;
     const username = requireUsername(req);
 
@@ -121,7 +121,7 @@ export const generateFileAccessUrl = async (req: Request, res: Response) => {
 // Get file metadata
 export const getFileMetadata = async (req: Request, res: Response) => {
   try {
-    const { blobName } = req.params;
+    const blobName = req.params.blobName!;
     const username = requireUsername(req);
 
     if (!blobName.startsWith(username.replace(/[^a-zA-Z0-9]/g, "_"))) {

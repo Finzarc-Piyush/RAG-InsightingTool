@@ -1,4 +1,5 @@
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 /**
  * Wave R23 · Crash reporting hook.
  *
@@ -41,7 +42,7 @@ export async function initCrashReporter(): Promise<void> {
     sentry = mod;
     logger.log("✅ Sentry crash reporting initialised");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(
       `⚠️ SENTRY_DSN is set but @sentry/node could not load (run \`npm i @sentry/node\`): ${msg}`,
     );

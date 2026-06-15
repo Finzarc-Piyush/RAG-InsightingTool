@@ -29,6 +29,7 @@ import {
   type LlmUsageDoc,
 } from "../../models/llmUsage.model.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 const DEFAULT_MAX_BUFFER = 100;
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
@@ -83,7 +84,7 @@ export function createLlmUsageSink(config: LlmUsageSinkConfig): LlmUsageSink {
   const onError =
     config.onWriteError ??
     ((err, dropped) => {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       logger.warn(`⚠️ llmUsageSink dropped ${dropped} telemetry row(s): ${msg}`);
     });
 

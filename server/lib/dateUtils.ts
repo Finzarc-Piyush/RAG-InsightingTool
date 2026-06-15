@@ -151,7 +151,7 @@ export function parseFlexibleDate(dateStr: string | Date): Date | null {
   // Month name + year: "Sep-24", "Mar 23", "January 2025", "Dec/99" (aligns with client chartFilters / DataPreview pivot).
   const mmmYy = str.match(/^([A-Za-z]{3,})[-\s/]?(\d{2,4})$/i);
   if (mmmYy) {
-    const prefix = mmmYy[1].toLowerCase().slice(0, 3);
+    const prefix = mmmYy[1]!.toLowerCase().slice(0, 3);
     const monthIndex = MONTH_ABBREV_TO_INDEX[prefix];
     if (monthIndex !== undefined) {
       let year = Number(mmmYy[2]);
@@ -325,7 +325,7 @@ export function normalizeDateToPeriod(
       break;
     case 'monthOnly':
       normalizedKey = `${String(month + 1).padStart(2, '0')}`;
-      displayLabel = MONTH_SHORT_NAMES[month];
+      displayLabel = MONTH_SHORT_NAMES[month]!;
       break;
     case 'day':
       normalizedKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;

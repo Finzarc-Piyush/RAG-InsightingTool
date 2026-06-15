@@ -4,9 +4,9 @@
  * NOTE: the runtime cache + builders (sessionIndexCache / ensureSchemaIndex /
  * buildSchemaIndex / updateSchemaIndexColumn + the stats compute helpers) were
  * removed — they had zero callers anywhere in the codebase (the index was never
- * wired into the agent turn). Only the type definitions remain, which are still
- * imported (type-only) by dataProvenance.ts (NumericStats) and
- * stratifiedSample.ts (SchemaIndex, AssociationEntry).
+ * wired into the agent turn). Only the type definitions remain. (Their former
+ * type-only consumers `dataProvenance.ts` / `stratifiedSample.ts` were deleted as
+ * dead code in the EX20 / ARCH-7 cleanup.)
  *
  * If a typed schema index is wired up later, key any cache on `dataVersion`
  * (as the live caches in pivotQueryService.ts / questionCacheLookup.ts do) and

@@ -21,6 +21,7 @@ import {
   facetColumnInlineDuckDbExpr,
 } from "./temporalFacetColumns.js";
 import { quoteIdent, escapeSqlStringLiteral } from "./pivotFilterSql.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const DATA_TABLE = "data";
 
@@ -863,7 +864,7 @@ export async function executeQueryPlanOnDuckDb(
       try {
         await ensureAuthoritativeDataTable(storage, chat);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorMessage(e);
         return { ok: false, error: msg };
       }
     }
@@ -910,7 +911,7 @@ export async function executeQueryPlanOnDuckDb(
       descriptions: built.descriptions,
     };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     return { ok: false, error: msg };
   } finally {
     await storage.close();

@@ -251,7 +251,7 @@ OUTPUT FORMAT (JSON only, no markdown):
         { purpose: LLM_PURPOSE.MODE_CLASSIFY }
       );
 
-      const content = response.choices[0].message.content;
+      const content = response.choices[0]?.message.content;
       if (!content) {
         throw new Error('Empty response from LLM');
       }
@@ -264,7 +264,7 @@ OUTPUT FORMAT (JSON only, no markdown):
         // Try to extract JSON from markdown code blocks
         const jsonMatch = content.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
         if (jsonMatch) {
-          parsed = JSON.parse(jsonMatch[1]);
+          parsed = JSON.parse(jsonMatch[1]!);
         } else {
           throw parseError;
         }

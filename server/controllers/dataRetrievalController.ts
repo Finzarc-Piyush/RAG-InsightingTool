@@ -61,8 +61,8 @@ export const getAnalysisData = async (req: Request, res: Response) => {
     const { chatId } = req.params;
     const username = requireUsername(req);
 
-    const chatDocument = await getChatDocument(chatId, username);
-    
+    const chatDocument = await getChatDocument(chatId!, username);
+
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
     }
@@ -113,7 +113,7 @@ export const getAnalysisDataBySession = async (req: Request, res: Response) => {
     const { sessionId } = req.params;
     const username = requireUsername(req);
 
-    const chatDocument = await getChatBySessionIdForUser(sessionId, username);
+    const chatDocument = await getChatBySessionIdForUser(sessionId!, username);
 
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found for this session' });
@@ -163,8 +163,8 @@ export const getColumnStatistics = async (req: Request, res: Response) => {
     const { chatId } = req.params;
     const username = requireUsername(req);
 
-    const chatDocument = await getChatDocument(chatId, username);
-    
+    const chatDocument = await getChatDocument(chatId!, username);
+
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
     }
@@ -197,8 +197,8 @@ export const getRawData = async (req: Request, res: Response) => {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 100;
 
-    const chatDocument = await getChatDocument(chatId, username);
-    
+    const chatDocument = await getChatDocument(chatId!, username);
+
     if (!chatDocument) {
       return res.status(404).json({ error: 'Analysis data not found' });
     }

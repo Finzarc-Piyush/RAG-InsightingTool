@@ -49,7 +49,7 @@ function formatPercentDisplay(value: number, numFmt: string): string {
   if (/[#0],[#0]/.test(beforePct)) {
     const neg = fixed.startsWith('-');
     const [intPart, fracPart] = (neg ? fixed.slice(1) : fixed).split('.');
-    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const grouped = intPart!.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     return `${neg ? '-' : ''}${fracPart ? `${grouped}.${fracPart}` : grouped}%`;
   }
   return `${fixed}%`;

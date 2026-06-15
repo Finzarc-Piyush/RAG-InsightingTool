@@ -488,29 +488,29 @@ async function generateCorrelationInsights(
       if (factorValues.length > 0 && targetValues.length > 0) {
         const factorAvg = factorValues.reduce((a, b) => a + b, 0) / factorValues.length;
         // Calculate min/max without spread operator to avoid stack overflow
-        let factorMin = factorValues[0];
-        let factorMax = factorValues[0];
+        let factorMin = factorValues[0]!;
+        let factorMax = factorValues[0]!;
         for (let i = 1; i < factorValues.length; i++) {
-          if (factorValues[i] < factorMin) factorMin = factorValues[i];
-          if (factorValues[i] > factorMax) factorMax = factorValues[i];
+          if (factorValues[i]! < factorMin) factorMin = factorValues[i]!;
+          if (factorValues[i]! > factorMax) factorMax = factorValues[i]!;
         }
         // Sort once and reuse for percentiles
         const sortedFactorValues = [...factorValues].sort((a, b) => a - b);
-        const factorP25 = sortedFactorValues[Math.floor(sortedFactorValues.length * 0.25)];
-        const factorP75 = sortedFactorValues[Math.floor(sortedFactorValues.length * 0.75)];
+        const factorP25 = sortedFactorValues[Math.floor(sortedFactorValues.length * 0.25)]!;
+        const factorP75 = sortedFactorValues[Math.floor(sortedFactorValues.length * 0.75)]!;
         
         const targetAvg = targetValues.reduce((a, b) => a + b, 0) / targetValues.length;
         // Calculate min/max without spread operator to avoid stack overflow
-        let targetMin = targetValues[0];
-        let targetMax = targetValues[0];
+        let targetMin = targetValues[0]!;
+        let targetMax = targetValues[0]!;
         for (let i = 1; i < targetValues.length; i++) {
-          if (targetValues[i] < targetMin) targetMin = targetValues[i];
-          if (targetValues[i] > targetMax) targetMax = targetValues[i];
+          if (targetValues[i]! < targetMin) targetMin = targetValues[i]!;
+          if (targetValues[i]! > targetMax) targetMax = targetValues[i]!;
         }
         // Sort once and reuse for percentiles
         const sortedTargetValues = [...targetValues].sort((a, b) => a - b);
-        const targetP75 = sortedTargetValues[Math.floor(sortedTargetValues.length * 0.75)];
-        const targetP90 = sortedTargetValues[Math.floor(sortedTargetValues.length * 0.9)];
+        const targetP75 = sortedTargetValues[Math.floor(sortedTargetValues.length * 0.75)]!;
+        const targetP90 = sortedTargetValues[Math.floor(sortedTargetValues.length * 0.9)]!;
         
         // Find factor values for top target performers
         const pairs = data
@@ -527,17 +527,17 @@ async function generateCorrelationInsights(
         const optimalFactorRange = topTargetPairs.length > 0 ? {
           min: (() => {
             const factors = topTargetPairs.map(p => p.factor);
-            let min = factors[0];
+            let min = factors[0]!;
             for (let i = 1; i < factors.length; i++) {
-              if (factors[i] < min) min = factors[i];
+              if (factors[i]! < min) min = factors[i]!;
             }
             return min;
           })(),
           max: (() => {
             const factors = topTargetPairs.map(p => p.factor);
-            let max = factors[0];
+            let max = factors[0]!;
             for (let i = 1; i < factors.length; i++) {
-              if (factors[i] > max) max = factors[i];
+              if (factors[i]! > max) max = factors[i]!;
             }
             return max;
           })(),
@@ -635,7 +635,7 @@ Return JSON only: {“insights”:[{“text”:”...”}, ...]} with exactly ${
       },
       { purpose: LLM_PURPOSE.CORRELATION_INSIGHT }
     );
-    content = response.choices[0].message.content || '{}';
+    content = response.choices[0]!.message.content || '{}';
   } catch (err) {
     logger.error(
       '❌ Correlation insight LLM call failed — using deterministic fallback:',

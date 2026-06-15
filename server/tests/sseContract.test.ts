@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   SSE_EVENT_KIND,
   sseEventSchemas,
@@ -33,6 +36,36 @@ describe("W6 · sseEventSchemas registry", () => {
       assert.strictEqual(isKnownSseEventKind(kind), true);
     }
     assert.strictEqual(isKnownSseEventKind("unknown_event_xyz"), false);
+  });
+
+  // EX15 / API-2 · exhaustiveness: every `safeEmit("kind", ...)` call site in the
+  // agent runtime must use a REGISTERED kind. This is the guard that catches a
+  // new emit shipping an unregistered event (the gap that left 8 kinds out of
+  // the contract). A new unregistered safeEmit now fails CI here.
+  it("every safeEmit() kind in the runtime is registered", () => {
+    const runtimeDir = fileURLToPath(new URL("../lib/agents/runtime/", import.meta.url));
+    const emitRe = /safeEmit\(\s*["']([a-z_]+)["']/g;
+    const found = new Set<string>();
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, name.name);
+        if (name.isDirectory()) walk(full);
+        else if (name.name.endsWith(".ts")) {
+          const src = readFileSync(full, "utf8");
+          let m: RegExpExecArray | null;
+          while ((m = emitRe.exec(src)) !== null) found.add(m[1]);
+        }
+      }
+    };
+    walk(runtimeDir);
+    assert.ok(found.size > 0, "expected to find safeEmit call sites");
+    const unregistered = [...found].filter((k) => !isKnownSseEventKind(k));
+    assert.deepEqual(
+      unregistered,
+      [],
+      `Unregistered SSE kinds emitted via safeEmit: ${unregistered.join(", ")}. ` +
+        `Add them to SSE_EVENT_KIND + sseEventSchemas in server/shared/sseEvents.ts.`
+    );
   });
 });
 

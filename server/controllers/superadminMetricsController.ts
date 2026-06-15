@@ -33,6 +33,7 @@ import {
 } from "../lib/admin/bucketing.js";
 import { waitForPastAnalysesContainer } from "../models/pastAnalysis.model.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 function parseDateKey(raw: unknown, fallback: string): string {
   if (typeof raw === "string" && /^\d{8}$/.test(raw)) return raw;
@@ -213,7 +214,7 @@ export async function getSuperadminMetricsOverview(req: Request, res: Response) 
     logger.error("⚠️ superadmin/metrics/overview failed:", err);
     return res
       .status(500)
-      .json({ error: "superadmin_metrics_overview_failed", message: err instanceof Error ? err.message : String(err) });
+      .json({ error: "superadmin_metrics_overview_failed", message: errorMessage(err) });
   }
 }
 

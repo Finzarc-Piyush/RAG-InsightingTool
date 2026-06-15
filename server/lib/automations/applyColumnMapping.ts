@@ -67,7 +67,7 @@ const substituteInFormula = (
     const safe = /\s/.test(key)
       ? new RegExp(`(?<![\\w])${escaped}(?![\\w])`, "g")
       : new RegExp(`\\b${escaped}\\b`, "g");
-    out = out.replace(safe, mapping[key]);
+    out = out.replace(safe, mapping[key]!);
   }
   return out;
 };

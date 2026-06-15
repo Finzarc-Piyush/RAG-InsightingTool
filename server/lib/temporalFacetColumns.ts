@@ -455,7 +455,7 @@ export function withoutTemporalFacetColumns(
   data: Record<string, any>[]
 ): Record<string, any>[] {
   if (data.length === 0) return data;
-  const facetKeys = Object.keys(data[0]).filter(isTemporalFacetColumnKey);
+  const facetKeys = Object.keys(data[0]!).filter(isTemporalFacetColumnKey);
   if (facetKeys.length === 0) return data;
   const drop = new Set(facetKeys);
   return data.map((row) => {
@@ -640,7 +640,7 @@ export function applyTemporalFacetColumns(
     : dateColumns;
   if (effectiveDateColumns.length === 0) return [];
 
-  const keys = new Set(Object.keys(data[0]));
+  const keys = new Set(Object.keys(data[0]!));
 
   // A melted period dimension derives its grain facets from PeriodIso; it must
   // be removed from the generic (parseRowDate) date path so it is never faceted

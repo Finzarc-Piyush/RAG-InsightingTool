@@ -164,6 +164,7 @@ import { registerMarketBasketTool } from "./marketBasketTool.js";
 import { registerSignificanceTestTool } from "./significanceTestTool.js";
 import { registerExecuteMetricQueryTool } from "./executeMetricQueryTool.js";
 import { logger } from "../../../logger.js";
+import { errorMessage } from "../../../../utils/errorMessage.js";
 
 function appliedAggregationFromParsed(pq: ParsedQuery | null | undefined): boolean {
   return !!(pq?.aggregations?.length);
@@ -417,7 +418,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
         return {
           ok: false,
           summary: `Prior-result recall failed: ${
-            err instanceof Error ? err.message : String(err)
+            errorMessage(err)
           }`,
         };
       }
@@ -481,7 +482,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       }
       const colNames = s.columns.map((c) => c.name).join(",");
       if (ctx.exec.data.length > 0) {
-        const dataKeys = new Set(Object.keys(ctx.exec.data[0]));
+        const dataKeys = new Set(Object.keys(ctx.exec.data[0]!));
         const missing = s.columns
           .map((c) => c.name)
           .filter((n) => !dataKeys.has(n) && !n.startsWith("__tf_"));
@@ -747,7 +748,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       }
 
       const outCols =
-        resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
+        resultRows.length > 0 ? Object.keys(resultRows[0]!) : [];
 
       logAnalyticalToolMeta("run_analytical_query", ctx.exec.summary, res.parsedQuery);
 
@@ -1010,7 +1011,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       }
 
       const cols =
-        resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
+        resultRows.length > 0 ? Object.keys(resultRows[0]!) : [];
       // Slim the narrator observation snippet — 200 rows of JSON often
       // brushed the 40k observation cap and truncated unrelated tool output
       // from the same turn. The full result still rides on `table.rows` below
@@ -1145,7 +1146,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
             ? await ctx.exec.loadFullData()
             : ctx.exec.data;
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorMessage(e);
           return {
             ok: false,
             summary: `add_computed_columns: loadFullData failed (${msg.slice(0, 300)}).`,
@@ -1196,7 +1197,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
           replaceSummaryFromFresh(ctx.exec.summary, fresh);
           persistNote = " Persisted to session dataset (new blob version).";
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorMessage(e);
           return {
             ok: false,
             summary: `Computed columns were built but persist failed: ${msg.slice(0, 400)}`,
@@ -1214,7 +1215,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
             tableName: "data",
           });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = errorMessage(e);
           return {
             ok: false,
             summary: `Computed columns built but DuckDB rematerialize failed: ${msg.slice(0, 400)}`,
@@ -1386,7 +1387,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       // Derive categorical columns: low-to-medium cardinality string columns not already in numericColumns/dateColumns
       const dateColSet = new Set(ctx.exec.summary.dateColumns ?? []);
       const numericSet = new Set(numeric);
-      const allColNames = ctx.exec.data.length > 0 ? Object.keys(ctx.exec.data[0]) : [];
+      const allColNames = ctx.exec.data.length > 0 ? Object.keys(ctx.exec.data[0]!) : [];
       const MAX_CAT_CARDINALITY = 100;
       const sampleForCardinality = ctx.exec.data.slice(0, 2000);
       const categoricalCols = allColNames.filter(col => {
@@ -1482,7 +1483,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       // and trivial) from "r = 0.7 on n = 80" (real and large).
       let wv4EvidenceSuffix = "";
       if (topCorrelations && topCorrelations.length > 0) {
-        const strongest = topCorrelations[0];
+        const strongest = topCorrelations[0]!;
         const rSquared = strongest.correlation * strongest.correlation;
         const evidence: FindingEvidence = {};
         if (Number.isFinite(rSquared) && rSquared >= 0 && rSquared <= 1) {

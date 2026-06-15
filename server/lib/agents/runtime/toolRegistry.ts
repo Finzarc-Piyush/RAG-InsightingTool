@@ -40,6 +40,7 @@ import type { AgentConfig } from "./types.js";
 import type { AgentExecutionContext } from "./types.js";
 import { agentLog } from "./agentLogger.js";
 import { repairArgsBySchema } from "./repairArgsBySchema.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 export interface ToolRunContext {
   exec: AgentExecutionContext;
@@ -208,7 +209,7 @@ export class ToolRegistry {
       });
       return out;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = errorMessage(e);
       agentLog("tool_error", { tool: name, ms: Date.now() - started });
       return { ok: false, summary: msg };
     }

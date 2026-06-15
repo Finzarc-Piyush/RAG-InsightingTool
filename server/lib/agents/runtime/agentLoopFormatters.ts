@@ -75,7 +75,7 @@ export function extractMagnitudeFromSummary(
   const pctMatch = text.match(/([+\-−])\s*(\d+(?:\.\d+)?)\s*%/);
   if (pctMatch) {
     const sign = pctMatch[1] === "+" ? 1 : -1;
-    const value = sign * parseFloat(pctMatch[2]);
+    const value = sign * parseFloat(pctMatch[2]!);
     return {
       value,
       unit: "%",
@@ -84,7 +84,7 @@ export function extractMagnitudeFromSummary(
   }
   // Bare percent without sign — treat as magnitude only, no direction.
   const bareMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
-  if (bareMatch) return { value: parseFloat(bareMatch[1]), unit: "%" };
+  if (bareMatch) return { value: parseFloat(bareMatch[1]!), unit: "%" };
   return undefined;
 }
 
@@ -108,7 +108,7 @@ export function extractStatsFromNumericPayload(
   let count = 0;
   for (const m of matches) {
     if (count >= 6) break;
-    const value = parseFloat(m[2]);
+    const value = parseFloat(m[2]!);
     if (!Number.isFinite(value)) continue;
     out.push({ kind: tool, column: m[1], value });
     count++;
@@ -227,8 +227,8 @@ export function capAgentTrace(trace: AgentTrace): AgentTrace {
 
 export function lastVerdictForStep(trace: AgentTrace, stepId: string): string | undefined {
   for (let i = trace.criticRounds.length - 1; i >= 0; i--) {
-    if (trace.criticRounds[i].stepId === stepId) {
-      return trace.criticRounds[i].verdict;
+    if (trace.criticRounds[i]!.stepId === stepId) {
+      return trace.criticRounds[i]!.verdict;
     }
   }
   return undefined;

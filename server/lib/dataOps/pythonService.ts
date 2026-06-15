@@ -58,6 +58,12 @@ function pythonServiceHeaders(
   if (PYTHON_SERVICE_API_KEY) {
     h['X-Internal-Api-Key'] = PYTHON_SERVICE_API_KEY;
   }
+  // OBS-2: forward the turn's trace id so the Python tier can stamp it on its
+  // logs (bound via contextvars there), tying a data-op back to the chat turn.
+  const traceId = getRequestContext().traceId;
+  if (traceId) {
+    h['X-Trace-Id'] = traceId;
+  }
   return h;
 }
 
@@ -99,6 +105,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
+import { getRequestContext } from "../telemetry/requestContext.js";
 
 
 interface RemoveNullsRequest {
@@ -717,8 +725,8 @@ export async function createPivotTable(
           const rowsBeforeMatch = previewText.match(/"rows_before":\s*(\d+)/);
           const rowsAfterMatch = previewText.match(/"rows_after":\s*(\d+)/);
           
-          if (rowsBeforeMatch) rowsBefore = parseInt(rowsBeforeMatch[1], 10);
-          if (rowsAfterMatch) rowsAfter = parseInt(rowsAfterMatch[1], 10);
+          if (rowsBeforeMatch) rowsBefore = parseInt(rowsBeforeMatch[1]!, 10);
+          if (rowsAfterMatch) rowsAfter = parseInt(rowsAfterMatch[1]!, 10);
           
           // Try to parse first few rows from preview
           const dataStart = previewText.indexOf('"data":[');
@@ -1144,7 +1152,7 @@ export async function trainMLModel(
     logger.error('❌ Error calling Python service train-model:', {
       modelType,
       targetVariable,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
       stack: error instanceof Error ? error.stack : undefined
     });
     throw error;

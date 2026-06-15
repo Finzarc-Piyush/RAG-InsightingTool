@@ -193,7 +193,31 @@ export async function streamChatRequest(
     logger.log("📡 SSE response status:", response.status, response.statusText);
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      // RESIL-4: surface the server's actionable error body instead of a bare
+      // status code. Prefer the parsed {error}/{message}; special-case the
+      // limits (429 / 413) into human-readable guidance.
+      let detail = "";
+      try {
+        const body = await response.clone().json();
+        detail = body?.error || body?.message || "";
+      } catch {
+        try {
+          detail = (await response.text()).slice(0, 300);
+        } catch {
+          /* body unreadable */
+        }
+      }
+      if (response.status === 429) {
+        const retry = response.headers.get("retry-after");
+        throw new Error(
+          detail ||
+            `You've reached the usage limit.${retry ? ` Try again in ~${retry}s.` : " Please try again later."}`,
+        );
+      }
+      if (response.status === 413) {
+        throw new Error(detail || "The request was too large — try a smaller file or a shorter question.");
+      }
+      throw new Error(detail || `Request failed (HTTP ${response.status}).`);
     }
 
     if (!response.body) {
@@ -414,7 +438,31 @@ export async function streamDataOpsChatRequest(
     logger.log("📡 Data Ops SSE response status:", response.status, response.statusText);
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      // RESIL-4: surface the server's actionable error body instead of a bare
+      // status code. Prefer the parsed {error}/{message}; special-case the
+      // limits (429 / 413) into human-readable guidance.
+      let detail = "";
+      try {
+        const body = await response.clone().json();
+        detail = body?.error || body?.message || "";
+      } catch {
+        try {
+          detail = (await response.text()).slice(0, 300);
+        } catch {
+          /* body unreadable */
+        }
+      }
+      if (response.status === 429) {
+        const retry = response.headers.get("retry-after");
+        throw new Error(
+          detail ||
+            `You've reached the usage limit.${retry ? ` Try again in ~${retry}s.` : " Please try again later."}`,
+        );
+      }
+      if (response.status === 413) {
+        throw new Error(detail || "The request was too large — try a smaller file or a shorter question.");
+      }
+      throw new Error(detail || `Request failed (HTTP ${response.status}).`);
     }
 
     if (!response.body) {

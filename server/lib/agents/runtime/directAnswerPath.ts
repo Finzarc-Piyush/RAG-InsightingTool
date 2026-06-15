@@ -51,6 +51,7 @@ import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { agentLog } from "./agentLogger.js";
 import type { DataSummary } from "../../../shared/schema.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 /**
  * Mirrors `AgentSseEmitter` from `agentLoop.service.ts`. Inlined to break the
@@ -250,7 +251,7 @@ export async function tryDirectAnswer(
   } catch (err) {
     agentLog("direct_answer.threw", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 

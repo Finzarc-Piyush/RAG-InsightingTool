@@ -146,7 +146,7 @@ function resolveEntityColumn(
   //    dataset's primary entity; default to the first categorical column
   //    so the planner can still emit per-entity grouping.
   if (allowFallback && categorical.length > 0) {
-    return categorical[0];
+    return categorical[0]!;
   }
   return null;
 }
@@ -173,7 +173,7 @@ function resolveMetricColumn(
     /\b(?:by|of|for|in|on)\s+([a-zA-Z][a-zA-Z0-9_\s-]{1,40})/i
   );
   if (byMatch) {
-    const phrase = byMatch[1].trim();
+    const phrase = byMatch[1]!.trim();
     const match = findMatchingColumn(phrase, candidates, {
       wideFormatTransform: summary.wideFormatTransform,
     });

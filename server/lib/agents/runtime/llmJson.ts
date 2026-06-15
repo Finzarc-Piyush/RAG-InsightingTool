@@ -55,6 +55,7 @@ import {
 import { calculateCostUsd, clampMaxTokens, normalizeUsage } from "./llmCostModel.js";
 import { resolveModelFor, type LlmCallPurpose } from "./llmCallPurpose.js";
 import { isAnthropicModel } from "./anthropicProvider.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 export type { LlmCallUsage } from "./callLlm.js";
 
@@ -160,7 +161,7 @@ export async function completeJson<T>(
       // Fall back to first {..} / [..] match.
       const match = raw.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
       if (match) {
-        return JSON.parse(match[1]);
+        return JSON.parse(match[1]!);
       }
       throw new Error("No JSON object found in model output");
     }
@@ -198,7 +199,7 @@ export async function completeJson<T>(
     }
     return { ok: false, error: parsed.error.message, kind: "schema_error" };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     // OpenAI SDK errors carry a numeric `status` (4xx/5xx). Treat anything
     // with a status as an API error so the caller can surface "provider
     // rejected the request" instead of misdiagnosing it as a JSON failure.
@@ -317,7 +318,7 @@ export async function completeJsonStreaming<T>(
       }
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     agentLog("llm_streaming_failed", {
       turnId: options.turnId,
       err: msg.slice(0, 300),
@@ -339,7 +340,7 @@ export async function completeJsonStreaming<T>(
       return fallback();
     }
     try {
-      parsed = JSON.parse(match[1]);
+      parsed = JSON.parse(match[1]!);
     } catch {
       agentLog("llm_streaming_bad_json", { turnId: options.turnId });
       return fallback();

@@ -46,6 +46,7 @@ import type { ToolRegistry } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
 import { wrapUntrusted } from "../untrustedContent.js";
 import { addDomainContext } from "../analyticalBlackboard.js";
+import { errorMessage } from "../../../../utils/errorMessage.js";
 
 export const webSearchArgsSchema = z
   .object({
@@ -102,7 +103,7 @@ export function buildBibliographyBlock(webContents: string[]): string {
       }
       const u = URL_RE.exec(line);
       if (u) {
-        const url = u[1].trim();
+        const url = u[1]!.trim();
         if (!seen.has(url)) {
           seen.add(url);
           entries.push({ title: pendingTitle || "Source", url });
@@ -318,7 +319,7 @@ export function extractUrlsFromFormattedHits(formatted: string): string[] {
   if (!formatted) return [];
   const out: string[] = [];
   for (const match of formatted.matchAll(URL_LINE_RE)) {
-    out.push(match[1].trim());
+    out.push(match[1]!.trim());
   }
   return out;
 }
@@ -431,7 +432,7 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
           numericPayload: formatted,
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         agentLog("web_search.failed", { query: query.slice(0, 200), error: msg.slice(0, 300) });
         return {
           ok: false,

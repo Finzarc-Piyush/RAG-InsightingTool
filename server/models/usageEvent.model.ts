@@ -18,6 +18,7 @@ import {
   type UsageEventType,
 } from "../shared/schema.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export const COSMOS_USAGE_EVENTS_CONTAINER_ID =
   process.env.COSMOS_USAGE_EVENTS_CONTAINER_ID || "usage_events";
@@ -119,7 +120,7 @@ export async function recordUsageEvent(
     const container = await waitForUsageEventsContainer(4, 250);
     await container.items.create(parsed.data);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(
       `⚠️ recordUsageEvent · ${input.eventType} write failed (${msg}); event dropped`
     );

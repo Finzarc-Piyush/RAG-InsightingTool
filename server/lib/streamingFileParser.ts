@@ -150,11 +150,11 @@ export async function sampleCsvRows(
     const sample: ParsedRow[] = [];
     for (let i = 0; i < allRows.length; i++) {
       if (i < sampleSize) {
-        sample.push(allRows[i]);
+        sample.push(allRows[i]!);
       } else {
         const j = Math.floor(Math.random() * (i + 1));
         if (j < sampleSize) {
-          sample[j] = allRows[i];
+          sample[j] = allRows[i]!;
         }
       }
     }

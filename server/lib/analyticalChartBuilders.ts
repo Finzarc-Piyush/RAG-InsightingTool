@@ -33,7 +33,7 @@ function resolveMeasureColumn(
   parsedQuery: ParsedQuery | null | undefined
 ): string | null {
   if (parsedQuery?.aggregations?.length) {
-    const agg = parsedQuery.aggregations[0];
+    const agg = parsedQuery.aggregations[0]!;
     const alias = agg.alias || `${agg.column}_${agg.operation}`;
     const m = findMatchingColumn(alias, keys) || keys.find((k) => k === alias);
     if (m) return m;
@@ -46,7 +46,7 @@ function resolveMeasureColumn(
     let ok = 0;
     let n = 0;
     for (let i = 0; i < Math.min(rows.length, 40); i++) {
-      const v = rows[i][k];
+      const v = rows[i]![k];
       n++;
       if (typeof v === "number" && Number.isFinite(v)) ok++;
       else if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)))
@@ -68,7 +68,7 @@ export function buildAnalyticalChartSpecs(
   _question: string
 ): ChartSpec[] {
   if (!rows.length) return [];
-  const keys = Object.keys(rows[0]);
+  const keys = Object.keys(rows[0]!);
   const measure = resolveMeasureColumn(keys, rows, summary, parsedQuery);
   if (!measure) return [];
 
@@ -80,8 +80,8 @@ export function buildAnalyticalChartSpecs(
   const useAnalytical = true;
 
   if (resolvedGroup.length >= 2) {
-    const xDim = resolvedGroup[0];
-    const seriesDim = resolvedGroup[1];
+    const xDim = resolvedGroup[0]!;
+    const seriesDim = resolvedGroup[1]!;
     if (xDim === measure || seriesDim === measure) return [];
 
     const nSeries = new Set(rows.map((r) => String(r[seriesDim] ?? ""))).size;
@@ -145,8 +145,8 @@ export function buildAnalyticalChartSpecs(
   });
 
   if (catCandidates.length >= 2) {
-    const xDim = catCandidates[0];
-    const seriesDim = catCandidates[1];
+    const xDim = catCandidates[0]!;
+    const seriesDim = catCandidates[1]!;
     const nSeries = new Set(rows.map((r) => String(r[seriesDim] ?? ""))).size;
     const nX = new Set(rows.map((r) => String(r[xDim] ?? ""))).size;
     if (nSeries <= 1 || nX <= 1) return [];

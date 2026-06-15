@@ -25,6 +25,7 @@ import {
 } from "../rag/pastAnalysesStore.js";
 import { normalizeQuestionForCache } from "./normalizeQuestion.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 /** Default TTL — a week. Config via `QUESTION_CACHE_TTL_DAYS`. */
 const DEFAULT_TTL_DAYS = 7;
@@ -115,7 +116,7 @@ export async function tryExactQuestionCacheHit(
     };
   } catch (err) {
     // Never let a cache-lookup failure block the turn. Just log + miss.
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ exact question cache lookup failed (miss-on-error): ${msg}`);
     return null;
   }
@@ -154,7 +155,7 @@ export async function trySemanticQuestionCacheHit(
       createdAfterEpochMs: ttlCutoffMs(),
     });
     if (candidates.length === 0) return null;
-    const top = candidates[0];
+    const top = candidates[0]!;
     const threshold = semanticThreshold();
     if (top.score < threshold) return null;
     return {
@@ -164,7 +165,7 @@ export async function trySemanticQuestionCacheHit(
       score: top.score,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ semantic question cache lookup failed (miss-on-error): ${msg}`);
     return null;
   }

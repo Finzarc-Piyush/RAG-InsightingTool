@@ -16,6 +16,7 @@
 import type { Container, ItemDefinition } from "@azure/cosmos";
 import { getDatabase, initializeCosmosDB } from "./database.config.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export const COSMOS_DOMAIN_CONTEXT_TOGGLES_CONTAINER_ID =
   process.env.COSMOS_DOMAIN_CONTEXT_TOGGLES_CONTAINER_ID || "domain_context_toggles";
@@ -75,7 +76,7 @@ async function getContainer(): Promise<Container | null> {
       containerInstance = ref;
       return ref;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       logger.warn(`domainContextToggles: container init failed (${msg})`);
       return null;
     }
@@ -118,7 +119,7 @@ export async function getToggleOverrides(): Promise<Record<string, boolean>> {
     const doc = await readDoc(container);
     return doc?.overrides ?? {};
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`domainContextToggles: read failed (${msg}) — falling back to defaults`);
     return {};
   }

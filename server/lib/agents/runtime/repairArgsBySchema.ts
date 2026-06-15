@@ -92,7 +92,7 @@ export function repairArgsBySchema(
         // (schema-level or tool-downstream) applies instead.
         const path = issue.path;
         if (path.length === 0) continue; // can't delete the root itself
-        const key = path[path.length - 1];
+        const key = path[path.length - 1]!;
         if (deleteAtPath(work, path.slice(0, -1), key)) {
           changes.push(`removed invalid value at "${pathLabel(path)}"`);
           deletedThisPass = true;

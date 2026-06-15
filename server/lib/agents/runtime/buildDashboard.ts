@@ -68,6 +68,7 @@ import {
 import { buildKpiStripBlock } from "./kpiStripBlock.js";
 import { computeAttentionAreas } from "./computeAttentionAreas.js";
 import { attachOrgAverageReferenceLines } from "./attachReferenceLines.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 // Re-export the pure prompt builders so existing call sites that import them
 // from this module keep working. Tests should import directly from
@@ -195,7 +196,7 @@ function pickFeaturedCharts(authoritative: ChartSpec[]): ChartSpec[] {
     (c.title ?? "").toLowerCase().startsWith("top drivers of")
   );
   if (topDriversIdx >= 0) {
-    out.push(authoritative[topDriversIdx]);
+    out.push(authoritative[topDriversIdx]!);
     used.add(topDriversIdx);
   }
 
@@ -203,13 +204,13 @@ function pickFeaturedCharts(authoritative: ChartSpec[]): ChartSpec[] {
     (c, i) => !used.has(i) && (c.type === "line" || c.type === "area")
   );
   if (temporalIdx >= 0) {
-    out.push(authoritative[temporalIdx]);
+    out.push(authoritative[temporalIdx]!);
     used.add(temporalIdx);
   }
 
   for (let i = 0; i < authoritative.length && out.length < 3; i++) {
     if (!used.has(i)) {
-      out.push(authoritative[i]);
+      out.push(authoritative[i]!);
       used.add(i);
     }
   }
@@ -391,7 +392,7 @@ async function runDashboardCompletion(
     // still sees a draft + auto-persist rather than dropping the dashboard.
     agentLog("buildDashboard.threw_fallback", {
       turnId: args.turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
     try {
       const spec = buildFallbackSpec(args);
@@ -439,7 +440,7 @@ async function runDashboardCompletion(
     } catch (fallbackErr) {
       agentLog("buildDashboard.fallback_threw", {
         turnId: args.turnId,
-        error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+        error: errorMessage(fallbackErr),
       });
       return null;
     }

@@ -11,6 +11,7 @@ import { formatCompactNumber } from "../../lib/formatCompactNumber.js";
 import { ChatDocument } from "../../models/chat.model.js";
 import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
 import { logger } from "../../lib/logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export type ChartEnrichmentContext = {
   userQuestion?: string;
@@ -421,7 +422,7 @@ export async function enrichPivotInsightFromEnvelope(
     const newInsights = items.slice(0, 6).map((text, idx) => ({ id: idx + 1, text }));
     return { ...validated, insights: newInsights };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`Wave 3 · enrichPivotInsightFromEnvelope failed: ${msg}`);
     return validated;
   }

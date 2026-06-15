@@ -10,6 +10,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { logger } from "./logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 // Dynamic import for DuckDB to handle optional dependency
 let duckdb: any;
@@ -38,7 +39,7 @@ async function loadDuckDB() {
     return { Database };
   } catch (error) {
     duckdbAvailable = false;
-    throw new Error(`DuckDB is not available: ${error instanceof Error ? error.message : String(error)}. Large file processing will use fallback methods. To enable DuckDB, install it with: npm install duckdb`);
+    throw new Error(`DuckDB is not available: ${errorMessage(error)}. Large file processing will use fallback methods. To enable DuckDB, install it with: npm install duckdb`);
   }
 }
 
@@ -51,7 +52,7 @@ export async function initDuckDBEager(): Promise<void> {
     await loadDuckDB();
     logger.log('✅ DuckDB ready');
   } catch (err) {
-    logger.warn('⚠️ DuckDB unavailable:', err instanceof Error ? err.message : String(err));
+    logger.warn('⚠️ DuckDB unavailable:', errorMessage(err));
   }
 }
 
@@ -431,12 +432,12 @@ export class ColumnarStorageService {
         const conn = this.db!.connect();
         
         // Create table structure from first chunk
-        if (chunks.length === 0 || chunks[0].length === 0) {
+        if (chunks.length === 0 || chunks[0]!.length === 0) {
           reject(new Error('No data to load'));
           return;
         }
 
-        const firstRow = chunks[0][0];
+        const firstRow = chunks[0]![0]!;
         const columns = Object.keys(firstRow);
         // Escape column names and use VARCHAR for all initially (DuckDB will infer types)
         const columnDefs = columns.map(col => `"${col.replace(/"/g, '""')}" VARCHAR`).join(', ');
@@ -458,7 +459,7 @@ export class ColumnarStorageService {
               return;
             }
 
-            const chunk = chunks[batchIndex];
+            const chunk = chunks[batchIndex]!;
             if (chunk.length === 0) {
               insertBatch(batchIndex + 1);
               return;

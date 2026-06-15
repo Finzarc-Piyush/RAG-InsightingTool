@@ -9,6 +9,7 @@ import { suggestedColumnsFromHits, formatHitsForPrompt } from "./retrieveHelpers
 export type { RagHit } from "./ragHit.js";
 export { suggestedColumnsFromHits, formatHitsForPrompt } from "./retrieveHelpers.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 /**
  * Threshold below which vector recall is considered weak enough to warrant a
@@ -115,7 +116,7 @@ export async function retrieveRagHits(params: {
     };
   } catch (e) {
     logger.error("⚠️ RAG retrieve failed:", e);
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     return { hits: [], suggestedColumns: [], retrievalError: msg };
   }
 }
@@ -166,7 +167,7 @@ export async function searchMemoryEntries(params: {
     };
   } catch (e) {
     logger.error("⚠️ Memory recall search failed:", e);
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     return { hits: [], retrievalError: msg };
   }
 }

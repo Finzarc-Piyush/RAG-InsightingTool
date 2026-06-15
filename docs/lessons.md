@@ -131,6 +131,32 @@
 
 **How to apply:** Gave the Stop hook a second, freshness-gated trigger so it fires in the common case: **recent uncommitted product source** (`server`/`client`/`python-service`/`api`/`shared`, modified within `DOC_NUDGE_FRESH_MIN`, default 45 min) present while STATE.md/WAVES.md weren't updated → print the reminder. The freshness gate (mtime within the window) keeps days-old WIP and pure read-only / conversational turns silent — without it the perpetually-dirty tree would nag every turn. Still **advisory (always `exit 0`)**: a blocking Stop hook would trap conversational turns, and the chosen design was "reliable nudge," not "hard block." The genuine guarantee on narrative docs remains Claude discipline; the hook makes forgetting loud instead of silent. The five enforcement touchpoints (3 hard gates + 2 advisory edges) are documented in [cold-start-generated-indexes.md](./conventions/cold-start-generated-indexes.md). Composes with the CLAUDE.md #8 "trust generated, verify prose" rule that covers the residual prose-staleness the orient pack can't gate.
 
+## L-014 — A multi-file codemod that introduces a helper can collide with locals of the same name (`const X = X(...)`); guard for it and let `tsc` be the oracle.
+
+**Rule:** When a codemod replaces an inline expression with a call to a new helper (here `errorMessage(e)` replacing `e instanceof Error ? e.message : String(e)` across 125 sites), any site that assigned the original expression to a **local variable of the same name** (`const errorMessage = …`) becomes `const errorMessage = errorMessage(error)` — a use-before-declaration self-reference (TS2448/TS7022). The codemod ran clean on 113 sites and broke 12.
+
+**Why:** The replacement is purely textual; it can't see that the assignment target shadows the imported helper. Twelve files (`database.config.ts`, `chat.model.ts`, `chatStream.service.ts`, …) named their local `errorMessage`, so the rewrite shadowed the import with a self-referential `const`.
+
+**How to apply:** (1) Run `tsc --noEmit` immediately after any mass codemod — it pinpointed all 24 errors (2 per collision) precisely. (2) Fix collisions deterministically with a second script (revert just the colliding lines to the inline form, or rename the local), don't hand-edit 12 files. (3) Then strip imports that became unused by counting **call sites** (`errorMessage(`), not the bare identifier (which the reverted inline form still contains). The helper + codemod live in [`server/utils/errorMessage.ts`](../server/utils/errorMessage.ts); recorded in ADR [`expert-audit-remediation.md`](./decisions/expert-audit-remediation.md).
+
+## L-015 — A "dead code / dead dependency" audit finding from a JS-import grep can be a false positive; confirm against ALL reference kinds (CSS, dynamic import, config) before deleting.
+
+**Rule:** The expert audit flagged `react-resizable` as a dead dependency ("zero `from 'react-resizable'` imports"). It is **not** dead — it is imported as CSS (`import 'react-resizable/css/styles.css'` in [`DashboardTiles.tsx`](../client/src/pages/Dashboard/Components/DashboardTiles.tsx)) and provides the `.react-resizable-handle-*` styles that `react-grid-layout`'s resize handles depend on. Deleting it would have silently broken dashboard tile resizing. (The genuinely-dead `stratifiedSample.ts` / `dataProvenance.ts` — confirmed zero references of any kind — were correctly removed.)
+
+**Why:** The audit (and most "find dead code" greps) match ES module `import … from` statements only. CSS side-effect imports, `await import()`, string-keyed dynamic requires, and config/build references don't match — so a "zero importers" claim is necessary-but-not-sufficient evidence of deadness.
+
+**How to apply:** Before acting on any "delete this / it's unused" finding, grep the bare module/symbol name across **all** file types (TS, TSX, CSS, JSON, MJS), including CSS side-effect imports (`import '…/css'`), `await import`, and config files. Trust generated facts; verify audit prose against code (CLAUDE.md rule #8). A finding that says "delete" earns one extra confirmation grep.
+
+## L-016 — A large `tsconfig` strictness migration (`noUncheckedIndexedAccess`, 698 errors) is safely parallelizable across disjoint file-groups; and the dev shell is **zsh**, which does NOT word-split unquoted `$var`.
+
+**Rule (migration):** Enabling a strict-mode flag tree-wide surfaces hundreds of errors at once (here `noUncheckedIndexedAccess: true` → 698 across 95 files). Don't hand-fix serially and don't leave the tree red. Instead: (1) enable the flag, capture the errors, and **measure the blast radius first** (`tsc | grep -c 'error TS'`); (2) partition the offending files into **disjoint** groups (bin-pack by error count); (3) fan out one agent per group (a Workflow) — disjoint files mean concurrent edits never conflict, no worktrees needed; (4) instruct agents to fix **behavior-preserving** only (`!` solely where presence is provable — bounds-checked loop index, regex group the pattern guarantees, length-guarded read — else the fallback the code already implied); (5) verify **centrally** afterward (`tsc` to 0 + the hot-path test suite), and **revert the flag if you can't reach green** so the tree is never left broken. See ADR [`expert-audit-remediation.md`](./decisions/expert-audit-remediation.md).
+
+**Rule (shell):** This environment's shell is **zsh**, not bash. Unquoted parameter expansion does **not** field-split in zsh — `node --test $FILES` passes the whole string as ONE argument (cost three failed runs: node reported "Could not find '…a.test.ts b.test.ts…'"). Use a zsh **array** (`files=(a b c); cmd $files`) or force splitting with `${=FILES}`. The same gotcha bites `grep --include=*.ts` (zsh globs the unquoted `*.ts` → "no matches found"); quote it: `--include='*.ts'`.
+
+**Why:** The migration pattern turned a multi-day serial slog into one ~7-min parallel pass (12 agents, 698 fixes) with a clean central gate; the shell gotcha silently produced empty/garbled commands that looked like "tests didn't run" rather than erroring obviously.
+
+**How to apply:** For any future strict-flag adoption (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, …) use the measure→partition→fan-out→verify-centrally→revert-if-red loop. For any multi-file shell command, build a zsh array or quote globs.
+
 ## Adding new lessons
 
 When the user corrects Claude on something non-obvious (an approach that failed, a rule they didn't articulate before, an invariant Claude tripped):

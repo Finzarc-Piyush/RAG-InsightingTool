@@ -94,6 +94,7 @@ import {
 export { mergePivotDefaultsForResponse } from "./chatStreamPivotDefaults.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -142,7 +143,7 @@ async function serveCachedExactAnswer(params: {
     );
     richDoc = await getPastAnalysisDoc(sourceSessionId, sourceDocId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(
       `⚠️ AMR4 · failed to fetch rich past_analyses doc on cache hit (${msg})`
     );
@@ -198,7 +199,7 @@ async function serveCachedExactAnswer(params: {
       },
     ]);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ cache-hit message persist failed for ${chatDocument.id}: ${msg}`);
   }
 
@@ -407,7 +408,7 @@ function maybeWritePastAnalysisDoc(params: {
             }
           } catch (pivotErr) {
             const msg =
-              pivotErr instanceof Error ? pivotErr.message : String(pivotErr);
+              errorMessage(pivotErr);
             logger.warn(
               `⚠️ past_analyses pivotArtifacts materialize/patch failed for turn ${turnId}: ${msg}`
             );
@@ -415,11 +416,11 @@ function maybeWritePastAnalysisDoc(params: {
         }
       })
       .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         logger.warn(`⚠️ past_analyses persist failed for turn ${turnId}: ${msg}`);
       });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ past_analyses write preflight failed: ${msg}`);
   }
 }
@@ -965,7 +966,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           });
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         logger.warn(`D1 · multi-part detection failed: ${msg}`);
       }
     }
@@ -1410,7 +1411,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       const { text } = await loadEnabledDomainContext();
       if (text?.trim()) domainContextForCharts = text;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       logger.warn(`W12 · domain context load for chart commentary failed: ${msg}`);
     }
 
@@ -1454,7 +1455,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             safeSSE("workbench_enriched", { entries: agentWorkbench });
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           logger.warn(`W19 · enrichStepInsights failed: ${msg}`);
         }
       })(),
@@ -1497,7 +1498,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             },
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           logger.warn(`W-UD-integration · directive persistence failed: ${msg}`);
         }
       })(),
@@ -2044,7 +2045,17 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     logger.log('✅ Stream completed successfully');
   } catch (error) {
     logger.error('Chat stream error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to process message';
+    // RESIL-5: never forward the raw exception (may carry internal identifiers,
+    // file paths, SQL fragments, or upstream provider text) to the browser. The
+    // full error is logged above for server-side triage; map known sentinels to
+    // friendly guidance and emit a generic message for everything else (same
+    // don't-leak-internals policy as the Express terminal handler).
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const errorMessage =
+      rawMsg.includes('AGENT_CLIENT_ABORTED') ? 'The request was cancelled.'
+      : rawMsg.includes('AGENT_LLM_BUDGET') ? 'This question hit the per-turn analysis budget — try a more specific question.'
+      : /quota|rate.?limit|\b429\b/i.test(rawMsg) ? "You've reached a usage limit — please wait a moment and try again."
+      : 'The analysis agent encountered an error — please try again.';
     if (checkConnection()) {
     sendSSE(res, 'error', { error: errorMessage });
     }

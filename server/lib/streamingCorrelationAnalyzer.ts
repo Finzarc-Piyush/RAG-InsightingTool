@@ -84,8 +84,8 @@ async function computeCorrelationStreaming(
 
   // Process data in chunks to avoid blocking
   for (let i = 0; i < data.length; i++) {
-    const x = toNumber(data[i][xColumn]);
-    const y = toNumber(data[i][yColumn]);
+    const x = toNumber(data[i]![xColumn]);
+    const y = toNumber(data[i]![yColumn]);
 
     if (!isNaN(x) && !isNaN(y) && isFinite(x) && isFinite(y)) {
       // Update correlation state (O(1) per update)

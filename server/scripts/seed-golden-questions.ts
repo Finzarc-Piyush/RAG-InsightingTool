@@ -48,7 +48,7 @@ function parseArgs(argv: string[]): CliArgs {
       const n = Number(argv[++i]);
       if (Number.isFinite(n) && n > 0) limit = Math.floor(n);
     } else if (a === "--baseline" && argv[i + 1]) {
-      baselineConfig = argv[++i];
+      baselineConfig = argv[++i]!;
     }
   }
   return { limit, baselineConfig };

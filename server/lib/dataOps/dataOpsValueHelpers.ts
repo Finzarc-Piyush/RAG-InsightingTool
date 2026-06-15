@@ -58,7 +58,7 @@ export function extractCustomValue(message: string): { value: any; found: boolea
   for (const pattern of unquotedPatterns) {
     const unquotedMatch = message.match(pattern);
     if (unquotedMatch) {
-      const potentialValue = unquotedMatch[1].trim();
+      const potentialValue = unquotedMatch[1]!.trim();
       // Exclude method keywords and articles
       const methodKeywords = ['mean', 'median', 'mode', 'custom', 'delete', 'remove', 'fill', 'impute', 'replace', 'the', 'a', 'an', 'null', 'value', 'values'];
       if (potentialValue && !methodKeywords.includes(potentialValue.toLowerCase())) {
@@ -161,7 +161,7 @@ export function findMentionedColumn(message: string, availableColumns: string[])
       let lastWordMatches = false;
 
       for (let i = 0; i < searchWords.length; i++) {
-        const word = searchWords[i];
+        const word = searchWords[i]!;
         const wordRegex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
         const matches = wordRegex.test(colLower) || (word.length >= 2 && colLower.includes(word));
 
@@ -211,7 +211,7 @@ export function findMentionedColumn(message: string, availableColumns: string[])
   // Try column number (e.g., "column 3", "column#3")
   const colNumMatch = message.match(/column\s*#?\s*(\d+)/i);
   if (colNumMatch) {
-    const colIndex = parseInt(colNumMatch[1], 10) - 1;
+    const colIndex = parseInt(colNumMatch[1]!, 10) - 1;
     if (colIndex >= 0 && colIndex < availableColumns.length) {
       return availableColumns[colIndex];
     }

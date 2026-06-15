@@ -22,6 +22,7 @@ import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { getPastAnalysisDoc } from "../models/pastAnalysis.model.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export async function pastAnalysisRecallPivotController(
   req: Request,
@@ -50,7 +51,7 @@ export async function pastAnalysisRecallPivotController(
   try {
     doc = await getPastAnalysisDoc(sessionId, docId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`⚠️ pastAnalysisRecall: getPastAnalysisDoc failed (${msg})`);
     return res.status(500).json({ error: "lookup_failed" });
   }
@@ -87,7 +88,7 @@ export async function pastAnalysisRecallPivotController(
       rows: parsed,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(
       `⚠️ pastAnalysisRecall: blob fetch failed for ${artifact.storage.blobName} (${msg})`
     );

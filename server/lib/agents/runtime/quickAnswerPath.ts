@@ -59,6 +59,7 @@ import { runQuickLookupPlanner } from "./quickAnswerPlanner.js";
 import { buildQuickAnswerFollowUps } from "./quickAnswerFollowUps.js";
 import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
 import { agentLog } from "./agentLogger.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 import {
   normalizeAndValidateQueryPlanBody,
   executeQueryPlan,
@@ -234,7 +235,7 @@ export async function tryQuickAnswer(
     // with the raw plan rather than poisoning the fast path.
     agentLog("quick_lookup.repair_threw", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
   const repairedPlan = (stubStep.args as { plan: QueryPlanBody }).plan;

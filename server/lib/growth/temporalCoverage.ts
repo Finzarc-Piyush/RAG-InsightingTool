@@ -43,7 +43,7 @@ export function scanCalendarCoverage(
     if (v === null || v === undefined || v === "") continue;
     const s = String(v);
     const yearMatch = s.match(/^(\d{4})/);
-    if (yearMatch) years.add(yearMatch[1]);
+    if (yearMatch) years.add(yearMatch[1]!);
 
     if (/^\d{4}-Q[1-4]$/.test(s)) {
       const y = s.slice(0, 4);
@@ -58,8 +58,8 @@ export function scanCalendarCoverage(
       // Raw date (e.g. "2026-04-15", "2026-04-15T00:00:00") → bucket to YYYY-MM.
       const ymMatch = s.match(/^(\d{4})-(\d{1,2})/);
       if (ymMatch) {
-        const y = ymMatch[1];
-        (monthsByYear[y] ??= new Set()).add(`${y}-${ymMatch[2].padStart(2, "0")}`);
+        const y = ymMatch[1]!;
+        (monthsByYear[y] ??= new Set()).add(`${y}-${ymMatch[2]!.padStart(2, "0")}`);
       }
     }
   }

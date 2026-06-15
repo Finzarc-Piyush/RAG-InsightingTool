@@ -190,7 +190,7 @@ export async function runSegmentDriverAnalysisTool(
     // correlation by |r|; R² = r²; n = nPairs from the same pair.
     let wv7EvidenceSuffix = "";
     if (topCorrelations && topCorrelations.length > 0) {
-      const strongest = topCorrelations[0];
+      const strongest = topCorrelations[0]!;
       const rSquared = strongest.correlation * strongest.correlation;
       const evidence: FindingEvidence = {};
       if (Number.isFinite(rSquared) && rSquared >= 0 && rSquared <= 1) {

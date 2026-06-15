@@ -38,6 +38,7 @@ import {
   type DrillThroughRequest,
 } from "../services/dashboardDrillThrough.service.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 export async function drillDashboardController(
   req: Request,
@@ -90,7 +91,7 @@ export async function drillDashboardController(
     });
     res.status(200).json(response);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (msg.startsWith("chart_not_found:")) {
       res.status(404).json({ error: msg });
       return;

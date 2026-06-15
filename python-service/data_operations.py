@@ -16,6 +16,10 @@ def _is_temporal_facet_column_key(key: str) -> bool:
     return key.startswith("__tf_") or bool(_TEMPORAL_FACET_HEADER_RE.match(key))
 from asteval import Interpreter  # noqa: E402
 
+from logging_config import get_logger  # noqa: E402
+
+logger = get_logger(__name__)
+
 # PY-5 · Explicit truthy/falsy token sets (case-insensitive) for boolean coercion.
 # astype(bool) maps EVERY non-empty string — including 'false'/'no'/'0' — to True,
 # silently corrupting data. These are the same tokens aggregate_data already uses.
@@ -837,8 +841,8 @@ def create_derived_column(
     errors = []
 
     # Debug: print the received expression
-    print(f"📥 Received expression: '{expression}'")
-    print(f"📋 Available columns: {list(df.columns)}")
+    logger.debug(f"📥 Received expression: '{expression}'")
+    logger.debug(f"📋 Available columns: {list(df.columns)}")
 
     def find_column_fuzzy(search_name: str) -> str | None:
         """Find column name using fuzzy matching (case-insensitive, handles spaces/underscores)"""
@@ -880,7 +884,7 @@ def create_derived_column(
         # Strip quotes if present (handles cases where AI includes quotes in column names)
         col_name = col_name.strip().strip("'").strip('"').strip()
         # Debug: print the extracted column name
-        print(f"🔍 Extracting column name from match: '{match.group(1)}' -> cleaned: '{col_name}'")
+        logger.debug(f"🔍 Extracting column name from match: '{match.group(1)}' -> cleaned: '{col_name}'")
         # Try to find the column using fuzzy matching
         matched_col = find_column_fuzzy(col_name)
 
@@ -915,16 +919,16 @@ def create_derived_column(
             before = python_expr[start_pos-3:start_pos]
             if before in ["df'", 'df"']:
                 # This is already inside df['...'], skip it
-                print(f"⏭️ Skipping already processed pattern: {match.group(0)}")
+                logger.debug(f"⏭️ Skipping already processed pattern: {match.group(0)}")
                 continue
 
         # This is a new [ColumnName] pattern, replace it
         replacement = replace_column_ref(match)
         python_expr = python_expr[:match.start()] + replacement + python_expr[match.end():]
-        print(f"🔄 Replaced {match.group(0)} -> {replacement}")
+        logger.debug(f"🔄 Replaced {match.group(0)} -> {replacement}")
 
     # Debug: print the final expression
-    print(f"✅ Final Python expression: {python_expr}")
+    logger.debug(f"✅ Final Python expression: {python_expr}")
 
     if errors:
         return {
@@ -933,9 +937,9 @@ def create_derived_column(
         }
 
     # Debug: print the expression being evaluated and available columns
-    print(f"Evaluating expression: {python_expr}")
-    print(f"Available columns in DataFrame: {list(df.columns)}")
-    print(f"DataFrame shape: {df.shape}")
+    logger.debug(f"Evaluating expression: {python_expr}")
+    logger.debug(f"Available columns in DataFrame: {list(df.columns)}")
+    logger.debug(f"DataFrame shape: {df.shape}")
 
     try:
         # Check if expression uses Python ternary (if...else) instead of np.where
@@ -955,7 +959,7 @@ def create_derived_column(
                     condition = match.group(3).strip()
                     value_if_false = f"{quote}{match.group(4)}{quote}"
                     python_expr = f"np.where({condition}, {value_if_true}, {value_if_false})"
-                    print(f"Converted Python ternary to np.where (pattern 1): {python_expr}")
+                    logger.debug(f"Converted Python ternary to np.where (pattern 1): {python_expr}")
                 else:
                     # Pattern 2: 'value1' if condition else 'value2' (different quotes or no quotes)
                     ternary_pattern2 = r'(["\']?)([^"\']+?)\1\s+if\s+(.+?)\s+else\s+(["\']?)([^"\']+?)\4'
@@ -967,7 +971,7 @@ def create_derived_column(
                         quote2 = match.group(4) if match.group(4) else ''
                         value_if_false = f"{quote2}{match.group(5)}{quote2}" if quote2 else match.group(5)
                         python_expr = f"np.where({condition}, {value_if_true}, {value_if_false})"
-                        print(f"Converted Python ternary to np.where (pattern 2): {python_expr}")
+                        logger.debug(f"Converted Python ternary to np.where (pattern 2): {python_expr}")
                     else:
                         # Couldn't auto-convert, provide helpful error
                         errors.append(
@@ -991,7 +995,7 @@ def create_derived_column(
                         condition = match.group(3).strip()
                         value_if_false = f"{match.group(4)}{match.group(5)}{match.group(4)}"
                         python_expr = f"np.where({condition}, {value_if_true}, {value_if_false})"
-                        print(f"Converted Python ternary to np.where (regex fallback): {python_expr}")
+                        logger.debug(f"Converted Python ternary to np.where (regex fallback): {python_expr}")
                     else:
                         # Couldn't auto-convert, provide helpful error
                         errors.append(
@@ -1341,8 +1345,8 @@ def aggregate_data(
     string_cols = []
 
     # Debug: Log column types
-    print(f"🔍 Aggregating by '{group_by_column}'. Available columns: {all_columns}")
-    print(f"🔍 Column dtypes: {df.dtypes.to_dict()}")
+    logger.debug(f"🔍 Aggregating by '{group_by_column}'. Available columns: {all_columns}")
+    logger.debug(f"🔍 Column dtypes: {df.dtypes.to_dict()}")
 
     def is_numeric_column(col_name: str, series: pd.Series) -> bool:
         """Check if a column is numeric, including string numbers. Excludes ID columns and strings."""
@@ -1408,7 +1412,7 @@ def aggregate_data(
     else:
         # Auto-detect: Use all numeric columns except group_by, IDs, and strings
         # This handles cases where user says "aggregate all the other columns" or "aggregate all columns"
-        print(f"🔍 Auto-detecting numeric columns (excluding '{group_by_column}')...")
+        logger.debug(f"🔍 Auto-detecting numeric columns (excluding '{group_by_column}')...")
         for col in all_columns:
             if col == group_by_column:
                 continue
@@ -1419,7 +1423,7 @@ def aggregate_data(
             elif is_numeric_column(col, df[col]):
                 numeric_cols.append(col)
 
-    print(f"🔍 Column classification - Numeric: {numeric_cols}, ID: {id_columns}, String: {string_cols}")
+    logger.debug(f"🔍 Column classification - Numeric: {numeric_cols}, ID: {id_columns}, String: {string_cols}")
 
     # VALIDATION LAYER: Ensure we have columns to aggregate
     if not numeric_cols and not id_columns:
@@ -1462,21 +1466,21 @@ def aggregate_data(
         else:
             regular_numeric_cols.append(col)
 
-    print("🔍 Semantic column classification:")
-    print(f"   Price columns: {price_cols}")
-    print(f"   Percentage/Rate columns: {percentage_cols}")
-    print(f"   Boolean columns: {boolean_cols}")
-    print(f"   Date columns: {date_cols}")
-    print(f"   Derived/Ratio columns: {derived_cols}")
-    print(f"   Regular numeric columns: {regular_numeric_cols}")
+    logger.debug("🔍 Semantic column classification:")
+    logger.debug(f"   Price columns: {price_cols}")
+    logger.debug(f"   Percentage/Rate columns: {percentage_cols}")
+    logger.debug(f"   Boolean columns: {boolean_cols}")
+    logger.debug(f"   Date columns: {date_cols}")
+    logger.debug(f"   Derived/Ratio columns: {derived_cols}")
+    logger.debug(f"   Regular numeric columns: {regular_numeric_cols}")
 
     # Validate ID columns - ensure they NEVER use sum/avg/min/max
     # ID columns must use COUNT(DISTINCT) to count unique entities, not aggregate values
     if agg_funcs:
         for id_col in id_columns:
             if id_col in agg_funcs and agg_funcs[id_col] in ['sum', 'avg', 'mean', 'min', 'max']:
-                print(f"⚠️ ID column '{id_col}' cannot use {agg_funcs[id_col]}. ID columns represent identifiers/entities.")
-                print("   Automatically switching to COUNT(DISTINCT) (nunique) to count unique entities.")
+                logger.error(f"⚠️ ID column '{id_col}' cannot use {agg_funcs[id_col]}. ID columns represent identifiers/entities.")
+                logger.debug("   Automatically switching to COUNT(DISTINCT) (nunique) to count unique entities.")
                 # Remove from agg_funcs - will use default nunique below
                 del agg_funcs[id_col]
 
@@ -1513,7 +1517,7 @@ def aggregate_data(
             return 'any'
         elif col_type == 'derived':
             # Derived columns should not be aggregated directly - warn user
-            print(f"⚠️ Warning: Column '{col}' appears to be a derived/ratio column. "
+            logger.error(f"⚠️ Warning: Column '{col}' appears to be a derived/ratio column. "
                   f"Consider aggregating base components instead.")
             return 'mean'  # Default to mean as fallback
         else:
@@ -1631,18 +1635,18 @@ def aggregate_data(
         # Use nunique for COUNT(DISTINCT) - this counts unique ID values per group
         # This is the correct aggregation for identifier fields
         agg_dict[id_col] = 'nunique'
-        print(f"📊 ID column '{id_col}' will use COUNT(DISTINCT) -> will be renamed to '{get_count_name_for_id_column(id_col)}'")
+        logger.debug(f"📊 ID column '{id_col}' will use COUNT(DISTINCT) -> will be renamed to '{get_count_name_for_id_column(id_col)}'")
 
     if not agg_dict:
         # Provide helpful error message
         available_cols = [c for c in all_columns if c != group_by_column]
-        print(f"❌ No columns to aggregate. Numeric cols found: {numeric_cols}, ID cols found: {id_columns}, String cols: {string_cols}")
-        print(f"❌ All columns: {all_columns}")
+        logger.error(f"❌ No columns to aggregate. Numeric cols found: {numeric_cols}, ID cols found: {id_columns}, String cols: {string_cols}")
+        logger.error(f"❌ All columns: {all_columns}")
         raise ValueError(f"No numeric columns to aggregate (excluding IDs and strings). Available columns (excluding '{group_by_column}'): {', '.join(available_cols[:10])}{'...' if len(available_cols) > 10 else ''}. Found {len(numeric_cols)} numeric columns, {len(id_columns)} ID columns (excluded), {len(string_cols)} string columns (excluded).")
 
-    print(f"✅ Aggregating {len(numeric_cols)} numeric columns and {len(id_columns)} ID columns (COUNT(DISTINCT))")
+    logger.debug(f"✅ Aggregating {len(numeric_cols)} numeric columns and {len(id_columns)} ID columns (COUNT(DISTINCT))")
     if id_columns:
-        print(f"   ID columns will be counted as unique entities: {', '.join(id_columns)}")
+        logger.debug(f"   ID columns will be counted as unique entities: {', '.join(id_columns)}")
 
     # Perform aggregation
     # Handle percentile and custom functions separately
@@ -1673,14 +1677,14 @@ def aggregate_data(
         count_name = get_count_name_for_id_column(id_col)
         if id_col in grouped.columns:
             grouped = grouped.rename(columns={id_col: count_name})
-            print(f"✅ Renamed ID column aggregation: '{id_col}' -> '{count_name}' (COUNT(DISTINCT))")
+            logger.debug(f"✅ Renamed ID column aggregation: '{id_col}' -> '{count_name}' (COUNT(DISTINCT))")
 
     # Apply semantic renaming (rename_dict was built during column processing above)
     if rename_dict:
         # Only rename columns that exist in the grouped dataframe
         rename_dict_filtered = {k: v for k, v in rename_dict.items() if k in grouped.columns}
         grouped = grouped.rename(columns=rename_dict_filtered)
-        print(f"✅ Applied semantic renaming: {len(rename_dict_filtered)} columns")
+        logger.debug(f"✅ Applied semantic renaming: {len(rename_dict_filtered)} columns")
 
     # Apply sorting if specified
     if order_by_column:
@@ -1699,7 +1703,7 @@ def aggregate_data(
     # - groupBy column
     # - Aggregated columns (numeric_cols and id_columns with their aggregation functions)
     # No need to preserve other columns - they are not relevant to the aggregation
-    print(f"✅ Aggregation complete. Result columns: {list(grouped.columns)}")
+    logger.debug(f"✅ Aggregation complete. Result columns: {list(grouped.columns)}")
 
     rows_after = len(grouped)
 
@@ -1812,7 +1816,7 @@ def pivot_table(
 
     # Get unique values from index column (these will become column headers)
     index_values = df[index_column].dropna().unique().tolist()
-    print(f"🔍 Pivot - Index column '{index_column}' has {len(index_values)} unique values: {index_values[:10]}{'...' if len(index_values) > 10 else ''}")
+    logger.debug(f"🔍 Pivot - Index column '{index_column}' has {len(index_values)} unique values: {index_values[:10]}{'...' if len(index_values) > 10 else ''}")
 
     # No limit on unique values - allow any number of pivot values
 
@@ -1838,7 +1842,7 @@ def pivot_table(
         elif is_numeric_column(col, df[col]):
             regular_value_columns.append(col)
 
-    print(f"🔍 Pivot - Numeric: {regular_value_columns}, ID (excluded): {id_value_columns}, String (excluded): {string_value_columns}")
+    logger.debug(f"🔍 Pivot - Numeric: {regular_value_columns}, ID (excluded): {id_value_columns}, String (excluded): {string_value_columns}")
 
     # Identify columns to preserve (all columns except index_column and value_columns)
     # NOTE: We will add the index_column back after pivoting so users can see the original status values
@@ -1849,21 +1853,21 @@ def pivot_table(
         and c not in regular_value_columns
         and c not in id_value_columns
     ]
-    print(f"📋 Pivot - Preserving {len(columns_to_preserve)} columns: {columns_to_preserve}")
-    print(f"📋 Pivot - Index column '{index_column}' will be added back to result after pivoting")
+    logger.debug(f"📋 Pivot - Preserving {len(columns_to_preserve)} columns: {columns_to_preserve}")
+    logger.debug(f"📋 Pivot - Index column '{index_column}' will be added back to result after pivoting")
 
     # Estimate output size: number of columns = preserved columns + (value columns * unique index values)
     estimated_columns = len(columns_to_preserve) + (len(regular_value_columns) + len(id_value_columns)) * len(index_values)
     if estimated_columns > 1000:
-        print(f"⚠️ Warning: Pivot will create approximately {estimated_columns} columns. This may result in a very large output.")
+        logger.error(f"⚠️ Warning: Pivot will create approximately {estimated_columns} columns. This may result in a very large output.")
         # Still allow it, but warn the user
 
     # Validate ID columns - ensure they NEVER use sum/avg/min/max
     if pivot_funcs:
         for id_col in id_value_columns:
             if id_col in pivot_funcs and pivot_funcs[id_col] in ['sum', 'avg', 'mean', 'min', 'max']:
-                print(f"⚠️ ID column '{id_col}' cannot use {pivot_funcs[id_col]} in pivot. ID columns represent identifiers/entities.")
-                print("   Automatically switching to COUNT(DISTINCT) (nunique) to count unique entities.")
+                logger.error(f"⚠️ ID column '{id_col}' cannot use {pivot_funcs[id_col]} in pivot. ID columns represent identifiers/entities.")
+                logger.debug("   Automatically switching to COUNT(DISTINCT) (nunique) to count unique entities.")
                 del pivot_funcs[id_col]
 
     if not regular_value_columns and not id_value_columns:
@@ -1893,7 +1897,7 @@ def pivot_table(
     for id_col in id_value_columns:
         agg_dict[id_col] = 'nunique'
 
-    print(f"✅ Pivoting {len(all_value_cols)} value column(s) using aggregation functions: {agg_dict}")
+    logger.debug(f"✅ Pivoting {len(all_value_cols)} value column(s) using aggregation functions: {agg_dict}")
 
     # Create pivot table: index_column values become columns
     # Group by preserved columns (if any), pivot on index_column, aggregate value columns
@@ -1973,7 +1977,7 @@ def pivot_table(
         pivot_df = pivot_df.reset_index(drop=True)
         result_df = pivot_df
 
-        print(f"⚠️ No preserved columns - created summary pivot with {len(result_df)} row(s)")
+        logger.error(f"⚠️ No preserved columns - created summary pivot with {len(result_df)} row(s)")
 
     # Add the index_column back to the result by finding the status value with the highest aggregated value
     # This gives a "primary status" for each row
@@ -2034,15 +2038,15 @@ def pivot_table(
                 status_column_data.append(matching_status if matching_status is not None else index_values[0] if index_values else None)
 
         result_df[index_column] = status_column_data
-        print(f"✅ Added '{index_column}' column back to pivot result (using primary status based on highest values)")
+        logger.debug(f"✅ Added '{index_column}' column back to pivot result (using primary status based on highest values)")
 
     # Sort by index_column (status) so rows are grouped by status category
     if index_column in result_df.columns:
         result_df = result_df.sort_values(by=index_column, na_position='last')
-        print(f"✅ Sorted result by '{index_column}' column")
+        logger.debug(f"✅ Sorted result by '{index_column}' column")
 
-    print(f"✅ Pivot complete. Result columns: {list(result_df.columns)}")
-    print(f"✅ Result shape: {result_df.shape}")
+    logger.debug(f"✅ Pivot complete. Result columns: {list(result_df.columns)}")
+    logger.debug(f"✅ Result shape: {result_df.shape}")
 
     rows_after = len(result_df)
 
@@ -2362,7 +2366,7 @@ def treat_outliers(
 
                 if len(series_clean) == 0:
                     # If no valid values, skip this column
-                    print(f"Warning: Column '{col}' has no valid numeric values for imputation. Skipping.")
+                    logger.debug(f"Warning: Column '{col}' has no valid numeric values for imputation. Skipping.")
                     continue
 
                 if treatment_value == "mean":

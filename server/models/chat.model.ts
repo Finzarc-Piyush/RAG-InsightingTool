@@ -328,12 +328,12 @@ const generateUniqueFileName = async (baseFileName: string, username: string): P
     const existingNumbers = matchingSessions
       .map(session => {
         const match = session.fileName.match(/\((\d+)\)/);
-        return match ? parseInt(match[1], 10) : 1; // If no number, treat as (1)
+        return match ? parseInt(match[1]!, 10) : 1; // If no number, treat as (1)
       })
       .sort((a, b) => b - a); // Sort descending
     
     // Find the next available number
-    const maxNumber = existingNumbers.length > 0 ? existingNumbers[0] : 0;
+    const maxNumber = existingNumbers.length > 0 ? existingNumbers[0]! : 0;
     const nextNumber = maxNumber + 1;
     
     // Return filename with number suffix
@@ -1031,7 +1031,7 @@ export const updateMessageAndTruncate = async (
 
     // Update the message content
     doc.messages[messageIndex] = {
-      ...doc.messages[messageIndex],
+      ...doc.messages[messageIndex]!,
       content: updatedContent,
     };
 
@@ -1504,7 +1504,7 @@ export const updateSessionPermanentContext = async (
             );
             freshDoc.messages = [
               {
-                ...msgs[0],
+                ...msgs[0]!,
                 content: newContent,
                 suggestedQuestions: fresh.slice(0, 5),
               },
@@ -1996,7 +1996,7 @@ export const getSessionStatistics = async (): Promise<{
     // Sessions by date (grouped by day)
     const sessionsByDate: Record<string, number> = {};
     allSessions.forEach(session => {
-      const date = new Date(session.createdAt).toISOString().split('T')[0];
+      const date = new Date(session.createdAt).toISOString().split('T')[0]!;
       sessionsByDate[date] = (sessionsByDate[date] || 0) + 1;
     });
     
@@ -2032,9 +2032,9 @@ export const generateColumnStatistics = (data: Record<string, any>[], numericCol
       
       // Calculate median
       const mid = Math.floor(sortedValues.length / 2);
-      const median = sortedValues.length % 2 === 0 
-        ? (sortedValues[mid - 1] + sortedValues[mid]) / 2 
-        : sortedValues[mid];
+      const median = sortedValues.length % 2 === 0
+        ? (sortedValues[mid - 1]! + sortedValues[mid]!) / 2
+        : sortedValues[mid]!;
       
       // Calculate standard deviation
       const variance = values.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / values.length;
@@ -2043,15 +2043,15 @@ export const generateColumnStatistics = (data: Record<string, any>[], numericCol
       // Calculate quartiles
       const q1Index = Math.floor(sortedValues.length * 0.25);
       const q3Index = Math.floor(sortedValues.length * 0.75);
-      const q1 = sortedValues[q1Index];
-      const q3 = sortedValues[q3Index];
+      const q1 = sortedValues[q1Index]!;
+      const q3 = sortedValues[q3Index]!;
       
       // Calculate min/max without spread operator to avoid stack overflow on large arrays
-      let min = values[0];
-      let max = values[0];
+      let min = values[0]!;
+      let max = values[0]!;
       for (let i = 1; i < values.length; i++) {
-        if (values[i] < min) min = values[i];
-        if (values[i] > max) max = values[i];
+        if (values[i]! < min) min = values[i]!;
+        if (values[i]! > max) max = values[i]!;
       }
       
       stats[column] = {

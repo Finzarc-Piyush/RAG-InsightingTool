@@ -633,7 +633,7 @@ export function injectCompoundShapeMetricGuard(
       if (!distinctMetricValues.length) return { reason: "no_metrics_known" };
       // No vocab match and no value-sales alias — pick the first distinct metric.
       // Better than letting the SUM mix everything, even if a misroute is possible.
-      toFilter = [distinctMetricValues[0]];
+      toFilter = [distinctMetricValues[0]!];
       fallbackUsed = true;
     } else {
       toFilter = [fallback];

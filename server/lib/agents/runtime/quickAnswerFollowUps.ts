@@ -47,7 +47,7 @@ interface FollowUpInputs {
 /** Surface the first non-empty string value in the top row for the given column. */
 function readTopValue(rows: Record<string, unknown>[], column: string): string | undefined {
   if (rows.length === 0) return undefined;
-  const v = rows[0][column];
+  const v = rows[0]![column];
   if (typeof v === "string" && v.trim()) return v.trim();
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   return undefined;
@@ -121,7 +121,7 @@ export function buildQuickAnswerFollowUps({
 
   if (groupBy.length > 0 && measure) {
     // Ranking shape: top-N <dim> by <measure>.
-    const dim = groupBy[0];
+    const dim = groupBy[0]!;
     const topValue = readTopValue(rows, dim);
 
     pushIfNew(out, `What's driving the gap between top and bottom ${dim}?`);

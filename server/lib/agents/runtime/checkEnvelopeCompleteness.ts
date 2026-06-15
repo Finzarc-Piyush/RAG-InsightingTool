@@ -174,7 +174,7 @@ export function checkDomainLensCitations(
   const supplied = new Set(suppliedPackIds);
   const cited = new Set<string>();
   for (const match of envelope.domainLens.matchAll(CITATION_TOKEN_RE)) {
-    cited.add(match[1]);
+    cited.add(match[1]!);
   }
   if (cited.size === 0) return { ok: true };
 
@@ -212,7 +212,7 @@ export function extractSuppliedPackIds(domainContext: string | undefined): strin
   if (!domainContext) return [];
   const ids = new Set<string>();
   for (const match of domainContext.matchAll(PACK_MARKER_RE)) {
-    ids.add(match[1]);
+    ids.add(match[1]!);
   }
   return [...ids];
 }

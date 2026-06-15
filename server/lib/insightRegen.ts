@@ -208,7 +208,7 @@ export function extractInsightCitations(text: string): string[] {
   let m: RegExpExecArray | null;
   INSIGHT_CITATION_RE.lastIndex = 0;
   while ((m = INSIGHT_CITATION_RE.exec(text)) !== null) {
-    const tok = m[1];
+    const tok = m[1]!;
     if (!tok.includes("-")) continue;
     if (seen.has(tok)) continue;
     seen.add(tok);

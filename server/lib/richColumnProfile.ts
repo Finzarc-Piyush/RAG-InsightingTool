@@ -151,13 +151,13 @@ function toNumber(v: unknown): number | null {
 /** Linear-interpolation percentile over an ascending-sorted array. */
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return NaN;
-  if (sorted.length === 1) return sorted[0];
+  if (sorted.length === 1) return sorted[0]!;
   const idx = (sorted.length - 1) * p;
   const lo = Math.floor(idx);
   const hi = Math.ceil(idx);
-  if (lo === hi) return sorted[lo];
+  if (lo === hi) return sorted[lo]!;
   const frac = idx - lo;
-  return sorted[lo] * (1 - frac) + sorted[hi] * frac;
+  return sorted[lo]! * (1 - frac) + sorted[hi]! * frac;
 }
 
 /** Evenly-spaced sample to cap heavy work; returns input unchanged if small. */
@@ -166,7 +166,7 @@ function sampleArray<T>(arr: T[], cap: number): T[] {
   const step = arr.length / cap;
   const out: T[] = [];
   for (let i = 0; i < arr.length && out.length < cap; i += step) {
-    out.push(arr[Math.floor(i)]);
+    out.push(arr[Math.floor(i)]!);
   }
   return out;
 }
@@ -240,8 +240,8 @@ function buildNumericProfile(
   // Heavy stats (sort, moments) can be sampled on very large columns.
   const statNums = sampleArray(nums, STATS_SAMPLE_CAP);
   const sorted = [...statNums].sort((a, b) => a - b);
-  const min = sorted[0];
-  const max = sorted[sorted.length - 1];
+  const min = sorted[0]!;
+  const max = sorted[sorted.length - 1]!;
   const median = percentile(sorted, 0.5);
   const q1 = percentile(sorted, 0.25);
   const q3 = percentile(sorted, 0.75);
@@ -328,7 +328,7 @@ function buildHistogram(
     let idx = Math.floor((v - min) / width);
     if (idx < 0) idx = 0;
     if (idx >= binCount) idx = binCount - 1;
-    bins[idx].count += 1;
+    bins[idx]!.count += 1;
   }
   return bins;
 }

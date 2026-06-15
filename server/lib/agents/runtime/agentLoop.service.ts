@@ -877,6 +877,7 @@ function buildPreSynthesisMidTurnSummary(
 // keep the re-export so downstream consumers continue to import it via the
 // agent loop module.
 import { appendEnvelopeInsight } from "./insightHelpers.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 export { appendEnvelopeInsight };
 
 const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
@@ -1103,7 +1104,7 @@ export async function runAgentTurn(
     // to the existing pipeline. Logged so prod can spot a regressing helper.
     agentLog("direct_answer.path_threw", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 
@@ -1133,7 +1134,7 @@ export async function runAgentTurn(
     // helper without affecting user-visible behaviour.
     agentLog("quick_lookup.path_threw", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 
@@ -1410,7 +1411,7 @@ export async function runAgentTurn(
     }
     agentLog("upfrontRag.failed", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 
@@ -1433,7 +1434,7 @@ export async function runAgentTurn(
   } catch (err) {
     agentLog("memoryRecall.failed", {
       turnId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
     });
   }
 
@@ -1566,9 +1567,7 @@ export async function runAgentTurn(
                   agentLog("skill.parallel.failed", {
                     turnId,
                     error:
-                      parallelErr instanceof Error
-                        ? parallelErr.message
-                        : String(parallelErr),
+                      errorMessage(parallelErr),
                   });
                 }
               }
@@ -1578,9 +1577,7 @@ export async function runAgentTurn(
           agentLog("skill.dispatch.failed", {
             turnId,
             error:
-              skillErr instanceof Error
-                ? skillErr.message
-                : String(skillErr),
+              errorMessage(skillErr),
           });
         }
       }
@@ -1761,7 +1758,7 @@ export async function runAgentTurn(
                 const r = await registry.execute(step.tool, step.args, toolCtx);
                 return { id: step.id, result: r };
               } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
+                const msg = errorMessage(err);
                 return {
                   id: step.id,
                   result: { ok: false, summary: `Parallel pre-resolve error: ${msg}` } as ToolResult,
@@ -1782,12 +1779,12 @@ export async function runAgentTurn(
             }
             agentLog("parallel.group.resolved", {
               turnId,
-              parallelGroup: group[0].parallelGroup,
+              parallelGroup: group[0]!.parallelGroup,
               count: addedCount,
               elapsedMs: Date.now() - t0,
             });
             safeEmit("parallel_group_resolved", {
-              parallelGroup: group[0].parallelGroup,
+              parallelGroup: group[0]!.parallelGroup,
               stepIds: parallelSteps.map((s) => s.id),
               count: addedCount,
             });
@@ -1796,7 +1793,7 @@ export async function runAgentTurn(
       }
 
       stepLoop: for (let si = 0; si < plan.steps.length; si++) {
-        const step = plan.steps[si];
+        const step = plan.steps[si]!;
         if (Date.now() > deadline) {
           trace.budgetHits?.push("wall_time");
           stopEarly = true;
@@ -2554,9 +2551,7 @@ export async function runAgentTurn(
                 turnId,
                 tool: step.tool,
                 err:
-                  promoteErr instanceof Error
-                    ? promoteErr.message
-                    : String(promoteErr),
+                  errorMessage(promoteErr),
               });
             }
           }
@@ -3048,7 +3043,7 @@ export async function runAgentTurn(
         // Best-effort — a failed follow-up pass must never break the main answer.
         agentLog("spawnedFollowUp.pass_failed", {
           turnId,
-          error: e instanceof Error ? e.message : String(e),
+          error: errorMessage(e),
         });
       }
     }
@@ -3334,7 +3329,7 @@ export async function runAgentTurn(
           safeEmit
         );
       } catch (synErr) {
-        const msg = synErr instanceof Error ? synErr.message : String(synErr);
+        const msg = errorMessage(synErr);
         agentLog("synthesis_error", { turnId, err: msg.slice(0, 300) });
         answer = observationsFallbackAnswer();
         answerSource = "fallback";
@@ -3462,7 +3457,7 @@ export async function runAgentTurn(
           description: failedGaps.map((g) => g.description).join("\n\n"),
           courseCorrection:
             failedGaps.length === 1
-              ? failedGaps[0].courseCorrection
+              ? failedGaps[0]!.courseCorrection
               : failedGaps
                   .map((g, i) => `(${i + 1}) ${g.courseCorrection}`)
                   .join("\n\n"),
@@ -3558,7 +3553,7 @@ export async function runAgentTurn(
         answer.trim().slice(0, 6000)
       );
     } catch (visErr) {
-      const msg = visErr instanceof Error ? visErr.message : String(visErr);
+      const msg = errorMessage(visErr);
       agentLog("visual_planner_failed", { turnId, err: msg.slice(0, 300) });
     }
     if (visualExtra.charts.length) {
@@ -3728,7 +3723,7 @@ export async function runAgentTurn(
       } catch (sweepErr) {
         agentLog("dashboard_feature_sweep_failed", {
           turnId,
-          error: sweepErr instanceof Error ? sweepErr.message : String(sweepErr),
+          error: errorMessage(sweepErr),
         });
       }
     }
@@ -3782,7 +3777,7 @@ export async function runAgentTurn(
       } catch (err) {
         agentLog("bibliography.build_failed", {
           turnId,
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMessage(err),
         });
       }
     }
@@ -3926,7 +3921,7 @@ export async function runAgentTurn(
               // to click "Create" manually. 3 attempts with 200/400/800 ms
               // backoff, only on retryable errors.
               const isRetryable = (err: unknown): boolean => {
-                const m = err instanceof Error ? err.message : String(err);
+                const m = errorMessage(err);
                 const code = (err as { code?: string | number })?.code;
                 const status = (err as { statusCode?: number })?.statusCode;
                 if (status === 429 || status === 503 || status === 408) return true;
@@ -3992,9 +3987,7 @@ export async function runAgentTurn(
               agentLog("dashboard_auto_create_failed", {
                 turnId,
                 error:
-                  createErr instanceof Error
-                    ? createErr.message
-                    : String(createErr),
+                  errorMessage(createErr),
               });
             }
           }
@@ -4003,7 +3996,7 @@ export async function runAgentTurn(
     } catch (dashErr) {
       agentLog("buildDashboard.dispatch_failed", {
         turnId,
-        error: dashErr instanceof Error ? dashErr.message : String(dashErr),
+        error: errorMessage(dashErr),
       });
     }
 
@@ -4196,7 +4189,7 @@ export async function runAgentTurn(
           }).catch((err) => {
             agentLog("businessActionsAgent.unhandled", {
               turnId,
-              error: err instanceof Error ? err.message : String(err),
+              error: errorMessage(err),
             });
             return [] as Awaited<ReturnType<typeof runBusinessActions>>;
           })
@@ -4251,7 +4244,7 @@ export async function runAgentTurn(
       ...intentEnvelopeOut(),
     };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     if (msg === "AGENT_CLIENT_ABORTED") {
       // F3 · client closed the SSE stream; drop further LLM work and return
       // whatever partial state we have without a noisy error fallback.

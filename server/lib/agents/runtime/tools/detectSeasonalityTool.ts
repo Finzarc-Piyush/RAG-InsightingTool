@@ -124,7 +124,7 @@ function detectTemporalCoverage(
     if (v === null || v === undefined || v === "") continue;
     const s = String(v);
     const yearMatch = s.match(/^(\d{4})/);
-    if (yearMatch) years.add(yearMatch[1]);
+    if (yearMatch) years.add(yearMatch[1]!);
     if (/^\d{4}-\d{2}$/.test(s)) {
       const y = s.slice(0, 4);
       monthsByYear[y] ??= new Set();

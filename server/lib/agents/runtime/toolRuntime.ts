@@ -179,8 +179,8 @@ export function createToolRuntime(args: CreateToolRuntimeArgs): ToolRuntime {
         out = out.filter((f) => f.sources.some((s) => s === filter.tool));
       }
       if (filter?.minSignificance) {
-        const min = SIGNIFICANCE_RANK[filter.minSignificance];
-        out = out.filter((f) => SIGNIFICANCE_RANK[f.significance] >= min);
+        const min = SIGNIFICANCE_RANK[filter.minSignificance]!;
+        out = out.filter((f) => SIGNIFICANCE_RANK[f.significance]! >= min);
       }
       return out;
     },
@@ -200,7 +200,7 @@ export function createToolRuntime(args: CreateToolRuntimeArgs): ToolRuntime {
     workingFact(field: string) {
       // Walk in reverse so the most recent fact wins.
       for (let i = args.workingFacts.length - 1; i >= 0; i--) {
-        const f = args.workingFacts[i];
+        const f = args.workingFacts[i]!;
         if (f.id === field || f.statement.includes(field)) return f;
         if (f.relatedColumns?.includes(field)) return f;
       }
@@ -218,7 +218,7 @@ export function createToolRuntime(args: CreateToolRuntimeArgs): ToolRuntime {
 
     lastResultFor(toolName: string): StructuredObservation | undefined {
       for (let i = args.observations.length - 1; i >= 0; i--) {
-        if (args.observations[i].tool === toolName) return args.observations[i];
+        if (args.observations[i]!.tool === toolName) return args.observations[i];
       }
       return undefined;
     },

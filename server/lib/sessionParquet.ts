@@ -27,6 +27,7 @@ import {
 } from "./blobStorage.js";
 import { logger } from "./logger.js";
 import { quoteIdent } from "./pivotFilterSql.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 /** Phase 1 feature flag. Default OFF — the existing read path is used unless set to "true". */
 export function isParquetReadPathEnabled(): boolean {
@@ -131,7 +132,7 @@ export async function openSessionParquetAsView(
   } catch (remoteErr) {
     logger.warn(
       `⚠️ Parquet remote read unavailable, falling back to download: ${
-        remoteErr instanceof Error ? remoteErr.message : String(remoteErr)
+        errorMessage(remoteErr)
       }`,
     );
   }

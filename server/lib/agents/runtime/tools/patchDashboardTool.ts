@@ -42,6 +42,7 @@ import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { dashboardPatchSchema } from "../../../../shared/schema.js";
 import { chartSpecSchema } from "../../../../shared/schema.js";
 import { logger } from "../../../logger.js";
+import { errorMessage } from "../../../../utils/errorMessage.js";
 
 // Compose the args locally so the tool can accept `dashboardId`
 // alongside the core patch fields.
@@ -160,7 +161,7 @@ export function registerPatchDashboardTool(registry: ToolRegistry): void {
           },
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return {
           ok: false,
           summary: `patch_dashboard failed: ${msg.slice(0, 400)}`,

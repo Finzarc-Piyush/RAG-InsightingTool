@@ -53,6 +53,7 @@ import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 import { generateChartInsights } from "../lib/insightGenerator.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const CHART_KEY_INSIGHT_MAX_ROWS = 800;
 
@@ -353,7 +354,7 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
         );
       } catch (err) {
         logger.warn(
-          `⚠️ feedback hydration failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
+          `⚠️ feedback hydration failed for session ${sessionId}: ${errorMessage(err)}`
         );
       }
       const messagesWithFeedback = enrichedMessages.map((msg) => {
@@ -800,7 +801,7 @@ export const updateMessagePivotStateEndpoint = async (req: Request, res: Respons
         throw err;
       }
 
-      const next = { ...messages[idx] };
+      const next = { ...messages[idx]! };
       if (parsedState === null) {
         delete (next as Record<string, unknown>).pivotState;
       } else {
@@ -937,7 +938,7 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       const step = totalRowCount / MAX_ROWS_FOR_PROFILE;
       const sampled: Record<string, any>[] = [];
       for (let i = 0; i < data.length && sampled.length < MAX_ROWS_FOR_PROFILE; i += step) {
-        sampled.push(data[Math.floor(i)]);
+        sampled.push(data[Math.floor(i)]!);
       }
       data = sampled;
     }
@@ -1129,7 +1130,7 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       const step = Math.floor(data.length / MAX);
       const sampled: Record<string, unknown>[] = [];
       for (let i = 0; i < data.length && sampled.length < MAX; i += step) {
-        sampled.push(data[i]);
+        sampled.push(data[i]!);
       }
       data = sampled as Record<string, any>[];
     }
@@ -1324,7 +1325,7 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
       const { text } = await loadEnabledDomainContext();
       if (text?.trim()) domainContext = text;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       logger.warn(`postChartKeyInsightEndpoint · domain context load failed: ${msg}`);
     }
 

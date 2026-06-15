@@ -100,7 +100,7 @@ IMPORTANT:
       { purpose: LLM_PURPOSE.INTENT_CLASSIFY }
     );
 
-    const content = response.choices[0].message.content || '{}';
+    const content = response.choices[0]?.message.content || '{}';
     const parsed = JSON.parse(content);
 
     const byLower = new Map(availableColumns.map((c) => [c.toLowerCase(), c]));

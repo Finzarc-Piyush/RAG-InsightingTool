@@ -78,8 +78,8 @@ function matchMonthWithYear(tok: string): PeriodMatch | null {
   );
   const m = tok.trim().match(re);
   if (!m) return null;
-  const month = MONTH_INDEX[m[1].toLowerCase()];
-  const year = normalizeYear(m[2]);
+  const month = MONTH_INDEX[m[1]!.toLowerCase()]!;
+  const year = normalizeYear(m[2]!);
   return {
     kind: "month",
     iso: `${year}-${pad2(month)}`,
@@ -106,7 +106,7 @@ function matchYearThenMonth(tok: string): PeriodMatch | null {
   const nameRe = new RegExp(`^(\\d{4})[\\s\\-_](${MONTH_NAMES})$`, "i");
   const nameM = tok.trim().match(nameRe);
   if (nameM) {
-    const month = MONTH_INDEX[nameM[2].toLowerCase()];
+    const month = MONTH_INDEX[nameM[2]!.toLowerCase()]!;
     return {
       kind: "month",
       iso: `${nameM[1]}-${pad2(month)}`,
@@ -122,7 +122,7 @@ function matchBareMonth(tok: string): PeriodMatch | null {
   const re = new RegExp(`^(${MONTH_NAMES})$`, "i");
   const m = tok.trim().match(re);
   if (!m) return null;
-  const month = MONTH_INDEX[m[1].toLowerCase()];
+  const month = MONTH_INDEX[m[1]!.toLowerCase()]!;
   return {
     kind: "month",
     iso: `XXXX-${pad2(month)}`,
@@ -138,7 +138,7 @@ function matchQuarter(tok: string): PeriodMatch | null {
   if (m1) {
     return {
       kind: "quarter",
-      iso: `${normalizeYear(m1[2])}-Q${m1[1]}`,
+      iso: `${normalizeYear(m1[2]!)}-Q${m1[1]}`,
       confidence: 0.95,
       raw: tok,
     };
@@ -148,7 +148,7 @@ function matchQuarter(tok: string): PeriodMatch | null {
   if (m2) {
     return {
       kind: "quarter",
-      iso: `${normalizeYear(m2[2])}-Q${m2[1]}`,
+      iso: `${normalizeYear(m2[2]!)}-Q${m2[1]}`,
       confidence: 0.95,
       raw: tok,
     };
@@ -178,7 +178,7 @@ function matchYear(tok: string): PeriodMatch | null {
     const qual = fyM[2] ? `-${fyM[2].toUpperCase()}` : "";
     return {
       kind: "year",
-      iso: `FY${normalizeYear(fyM[1])}${qual}`,
+      iso: `FY${normalizeYear(fyM[1]!)}${qual}`,
       confidence: 0.85,
       raw: tok,
     };
@@ -189,7 +189,7 @@ function matchYear(tok: string): PeriodMatch | null {
     const qual = cyM[2] ? `-${cyM[2].toUpperCase()}` : "";
     return {
       kind: "year",
-      iso: `${normalizeYear(cyM[1])}${qual}`,
+      iso: `${normalizeYear(cyM[1]!)}${qual}`,
       confidence: 0.85,
       raw: tok,
     };
@@ -202,7 +202,7 @@ function matchYear(tok: string): PeriodMatch | null {
     if (year >= 1990 && year <= 2099) {
       return {
         kind: "year",
-        iso: yM[1],
+        iso: yM[1]!,
         confidence: 0.55,
         raw: tok,
       };
@@ -218,7 +218,7 @@ function matchHalfYear(tok: string): PeriodMatch | null {
   const m = tok.trim().match(re);
   if (!m) return null;
   const half = m[1];
-  const year = normalizeYear(m[2]);
+  const year = normalizeYear(m[2]!);
   const qual = m[3] ? `-${m[3].toUpperCase()}` : "";
   return {
     kind: "quarter", // reuse 'quarter' kind to keep agent temporal capabilities simple
@@ -248,7 +248,7 @@ function matchPeriodToDate(tok: string): PeriodMatch | null {
   if (compM) {
     return {
       kind: "ytd",
-      iso: `${compM[1].toUpperCase()}-${compM[2].toUpperCase()}`,
+      iso: `${compM[1]!.toUpperCase()}-${compM[2]!.toUpperCase()}`,
       confidence: 0.9,
       raw: tok,
     };
@@ -260,8 +260,8 @@ function matchPeriodToDate(tok: string): PeriodMatch | null {
   );
   const mtdM = t.match(mtdMonthRe);
   if (mtdM) {
-    const month = MONTH_INDEX[mtdM[1].toLowerCase()];
-    const year = normalizeYear(mtdM[2]);
+    const month = MONTH_INDEX[mtdM[1]!.toLowerCase()]!;
+    const year = normalizeYear(mtdM[2]!);
     return {
       kind: "ytd",
       iso: `MTD-${year}-${pad2(month)}`,
@@ -275,7 +275,7 @@ function matchPeriodToDate(tok: string): PeriodMatch | null {
   if (qtdM) {
     return {
       kind: "ytd",
-      iso: `QTD-${normalizeYear(qtdM[2])}-Q${qtdM[1]}`,
+      iso: `QTD-${normalizeYear(qtdM[2]!)}-Q${qtdM[1]}`,
       confidence: 0.92,
       raw: tok,
     };
@@ -293,7 +293,7 @@ function matchPeriodCode(tok: string): PeriodMatch | null {
   if (!m) return null;
   const period = Number(m[1]);
   if (period < 1 || period > 13) return null;
-  const year = normalizeYear(m[2]);
+  const year = normalizeYear(m[2]!);
   const qual = m[3] ? `-${m[3].toUpperCase()}` : "";
   return {
     kind: "rolling",
@@ -321,7 +321,7 @@ function matchWeek(tok: string): PeriodMatch | null {
   if (wYearM) {
     return {
       kind: "week",
-      iso: `${normalizeYear(wYearM[2])}-W${pad2(Number(wYearM[1]))}`,
+      iso: `${normalizeYear(wYearM[2]!)}-W${pad2(Number(wYearM[1]))}`,
       confidence: 0.9,
       raw: tok,
     };
@@ -353,7 +353,7 @@ function matchWeek(tok: string): PeriodMatch | null {
   if (weDmyM) {
     const day = Number(weDmyM[1]);
     const month = Number(weDmyM[2]);
-    const year = normalizeYear(weDmyM[3]);
+    const year = normalizeYear(weDmyM[3]!);
     if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
       return {
         kind: "week",
@@ -387,8 +387,8 @@ function matchMat(tok: string): PeriodMatch | null {
   );
   const named = t.match(namedRe);
   if (named) {
-    const month = MONTH_INDEX[named[1].toLowerCase()];
-    const year = normalizeYear(named[2]);
+    const month = MONTH_INDEX[named[1]!.toLowerCase()]!;
+    const year = normalizeYear(named[2]!);
     const qual = named[3] ? `-${named[3].toUpperCase()}` : "";
     return {
       kind: "mat",
@@ -416,7 +416,7 @@ function matchMat(tok: string): PeriodMatch | null {
   if (comp) {
     return {
       kind: "mat",
-      iso: `MAT-${comp[1].toUpperCase()}`,
+      iso: `MAT-${comp[1]!.toUpperCase()}`,
       confidence: 0.85,
       raw: tok,
     };
@@ -435,7 +435,7 @@ function matchYtd(tok: string): PeriodMatch | null {
   if (prefM) {
     return {
       kind: "ytd",
-      iso: `YTD-${normalizeYear(prefM[1])}`,
+      iso: `YTD-${normalizeYear(prefM[1]!)}`,
       confidence: 0.9,
       raw: tok,
     };
@@ -456,8 +456,8 @@ function matchYtd(tok: string): PeriodMatch | null {
   );
   const wmM = t.match(withMonth);
   if (wmM) {
-    const month = MONTH_INDEX[wmM[1].toLowerCase()];
-    const year = normalizeYear(wmM[2]);
+    const month = MONTH_INDEX[wmM[1]!.toLowerCase()]!;
+    const year = normalizeYear(wmM[2]!);
     return {
       kind: "ytd",
       iso: `YTD-${year}-${pad2(month)}`,
@@ -472,7 +472,7 @@ function matchYtd(tok: string): PeriodMatch | null {
   if (compM) {
     return {
       kind: "ytd",
-      iso: `YTD-${compM[1].toUpperCase()}`,
+      iso: `YTD-${compM[1]!.toUpperCase()}`,
       confidence: 0.92,
       raw: tok,
     };
@@ -502,7 +502,7 @@ function matchLatestN(tok: string): PeriodMatch | null {
   if (!m) return null;
   const n = Number(m[1]);
   if (!Number.isFinite(n) || n < 1 || n > 365) return null;
-  const unitWord = m[2].toLowerCase();
+  const unitWord = m[2]!.toLowerCase();
   let unit: "M" | "W" | "Y" | "D";
   if (/^mth|^month/.test(unitWord)) unit = "M";
   else if (/^wk|^week/.test(unitWord)) unit = "W";
@@ -522,7 +522,7 @@ function matchRolling(tok: string): PeriodMatch | null {
   const re = /^([lp])(\d{1,2})w$/i;
   const m = tok.trim().match(re);
   if (!m) return null;
-  const prefix = m[1].toUpperCase();
+  const prefix = m[1]!.toUpperCase();
   const n = Number(m[2]);
   // Sanity: only common Nielsen windows.
   if (![4, 12, 13, 26, 52].includes(n)) return null;

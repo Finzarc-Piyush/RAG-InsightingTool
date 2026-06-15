@@ -14,6 +14,7 @@ import { PACKS } from "./generatedPacks.js";
 import { getToggleOverrides } from "../../models/domainContextToggles.model.js";
 import type { DomainPack, PackSummary } from "./types.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 const TOKEN_BUDGET_WARN = 12_000;
 
@@ -58,7 +59,7 @@ function isEnabled(
   overrides: Record<string, boolean>
 ): boolean {
   if (Object.prototype.hasOwnProperty.call(overrides, pack.id)) {
-    return overrides[pack.id];
+    return overrides[pack.id]!;
   }
   return pack.enabledByDefault;
 }
@@ -173,7 +174,7 @@ export async function logDomainContextStartup(): Promise<void> {
       `📚 Domain context: ${enabledCount}/${packs.length} packs enabled, ~${totalEnabledTokens} tokens`
     );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`domainContext: startup log failed (${msg})`);
   }
 }

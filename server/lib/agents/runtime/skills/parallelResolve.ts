@@ -35,6 +35,7 @@
 import type { PlanStep } from "../types.js";
 import type { ToolResult } from "../toolRegistry.js";
 import type { SkillInvocation } from "./types.js";
+import { errorMessage } from "../../../../utils/errorMessage.js";
 
 export type ExecuteStep = (step: PlanStep) => Promise<ToolResult>;
 
@@ -69,7 +70,7 @@ export async function preResolveParallelSteps(
         const r = await execute(step);
         return { step, result: r };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return {
           step,
           result: {

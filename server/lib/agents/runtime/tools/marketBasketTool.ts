@@ -204,7 +204,7 @@ export function runMarketBasket(
     const items = Array.from(basket).filter((i) => frequentSet.has(i));
     for (let i = 0; i < items.length; i++) {
       for (let j = i + 1; j < items.length; j++) {
-        const k = pairKey(items[i], items[j]);
+        const k = pairKey(items[i]!, items[j]!);
         pairCounts.set(k, (pairCounts.get(k) ?? 0) + 1);
       }
     }
@@ -215,7 +215,7 @@ export function runMarketBasket(
   const rules: AssociationRule[] = [];
   for (const [k, count] of pairCounts) {
     if (count < minCount) continue;
-    const [a, b] = splitCompositeKey(k);
+    const [a, b] = splitCompositeKey(k) as [string, string];
     const supA = (itemCounts.get(a) ?? 0) / T;
     const supB = (itemCounts.get(b) ?? 0) / T;
     const supAB = count / T;
@@ -273,7 +273,7 @@ export function runMarketBasket(
 
   const summary =
     `${rules.length} rule(s) met confidence threshold; top ${capped.length} returned. ` +
-    `Strongest: ${capped[0].antecedent} → ${capped[0].consequent} (lift=${tableRows[0].lift}, conf=${tableRows[0].confidence}, support=${tableRows[0].support}).`;
+    `Strongest: ${capped[0]!.antecedent} → ${capped[0]!.consequent} (lift=${tableRows[0]!.lift}, conf=${tableRows[0]!.confidence}, support=${tableRows[0]!.support}).`;
 
   return {
     ok: true,

@@ -68,7 +68,7 @@ function firstImportModule(text: string): string | null {
       continue;
     }
     const m = line.match(/^import\b[^"']*["']([^"']+)["']/);
-    if (m) return m[1];
+    if (m) return m[1]!;
     return null; // first meaningful line is not an import → no leading import
   }
   return null;

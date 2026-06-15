@@ -79,7 +79,7 @@ function normaliseTimeString(raw: unknown): string | null {
   if (!TIME_HHMMSS_RE.test(t)) return null;
   // Pad single-digit hour and missing seconds to canonical HH:MM:SS.
   const parts = t.split(":");
-  const hh = parts[0].padStart(2, "0");
+  const hh = parts[0]!.padStart(2, "0");
   const mm = parts[1];
   const ss = parts[2] ?? "00";
   return `${hh}:${mm}:${ss}`;

@@ -23,7 +23,7 @@ import { logger } from "../lib/logger.js";
 function normalizeNumericColumns(data: Record<string, any>[]): Record<string, any>[] {
   if (!data || data.length === 0) return data;
   
-  const columns = Object.keys(data[0]);
+  const columns = Object.keys(data[0]!);
   const normalizedData = data.map(row => {
     const normalizedRow: Record<string, any> = {};
     for (const [key, value] of Object.entries(row)) {

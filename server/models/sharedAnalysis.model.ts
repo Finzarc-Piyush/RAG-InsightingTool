@@ -160,7 +160,7 @@ export const createSharedAnalysisInvite = async ({
     preview: buildSharedAnalysisPreview(sourceChat),
     dashboardId: dashboardsToShare[0], // Store first one for backward compatibility
     dashboardEditable: dashboardPermissions 
-      ? dashboardPermissions[dashboardsToShare[0]] === 'edit'
+      ? dashboardPermissions[dashboardsToShare[0]!] === 'edit'
       : dashboardEditable,
   };
 

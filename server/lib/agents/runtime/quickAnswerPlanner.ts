@@ -56,6 +56,7 @@ import {
 import type { AgentExecutionContext } from "./types.js";
 import type { DataSummary } from "../../../shared/schema.js";
 import { logger } from "../../logger.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 // ── LLM output sanitizers ──────────────────────────────────────────────
 // The Mini-tier LLM frequently produces JSON that fails the strict
@@ -322,7 +323,7 @@ export async function runQuickLookupPlanner(
     return null;
   } catch (err) {
     logger.warn(
-      `[quickAnswerPlanner] threw: ${err instanceof Error ? err.message : String(err)}`
+      `[quickAnswerPlanner] threw: ${errorMessage(err)}`
     );
     return null;
   }

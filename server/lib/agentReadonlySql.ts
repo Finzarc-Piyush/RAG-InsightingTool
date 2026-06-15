@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const FORBIDDEN = /\b(insert|update|delete|attach|pragma|copy|export|import|drop|alter|create|replace|call|detach)\b/i;
 
@@ -90,7 +91,7 @@ export async function executeReadonlySqlOnFrame(
     const columns = capped.length > 0 ? Object.keys(capped[0]!) : [];
     return { ok: true, rows: capped, columns };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     return { ok: false, error: `DuckDB: ${msg.slice(0, 500)}` };
   } finally {
     try {

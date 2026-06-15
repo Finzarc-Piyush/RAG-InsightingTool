@@ -48,6 +48,7 @@ import { getChatBySessionIdEfficient } from "../../models/chat.model.js";
 import type { AgentExecutionContext } from "./runtime/types.js";
 import type { ChartSpec, Insight } from "../../shared/schema.js";
 import { applyActiveFilter } from "../activeFilter/applyActiveFilter.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 /** Same routing as orchestrator: correlation-style questions are analysis, not data ops. */
 function isCorrelationStyleQuestion(text: string): boolean {
@@ -107,7 +108,7 @@ export async function runDataOpsFromAgentContext(exec: AgentExecutionContext): P
       sessionDoc
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     return { answer: `I couldn't understand that data operation: ${message}` };
   }
 
@@ -146,7 +147,7 @@ export async function runDataOpsFromAgentContext(exec: AgentExecutionContext): P
       },
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     return { answer: `I couldn't complete that data operation: ${message}` };
   }
 }

@@ -224,8 +224,8 @@ async function saveChunk(
       dates.sort();
       dateRanges.push({
         column: dateCol,
-        min: dates[0],
-        max: dates[dates.length - 1],
+        min: dates[0]!,
+        max: dates[dates.length - 1]!,
       });
     }
   }

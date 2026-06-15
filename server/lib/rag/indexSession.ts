@@ -11,6 +11,7 @@ import { getSampleFromDuckDB } from "../duckdbPlanExecutor.js";
 import type { AnalysisMemoryEntry } from "../../shared/schema.js";
 import { withSessionWriteLock } from "../sessionWriteLock.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 /**
  * Wave A6 · Locked, targeted update of `doc.ragIndex` only.
@@ -154,7 +155,7 @@ export async function indexSessionRag(sessionId: string): Promise<void> {
     });
     logger.log(`✅ RAG indexed session ${sessionId}: ${docs.length} chunks`);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = errorMessage(e);
     logger.error("❌ RAG indexSession failed:", e);
     try {
       await updateRagIndexField(sessionId, {

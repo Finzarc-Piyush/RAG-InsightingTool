@@ -83,7 +83,30 @@ function stripLegacyStepBlocks<S extends DashboardSheet>(sheet: S): S {
   return { ...sheet, narrativeBlocks: filtered };
 }
 
-export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boolean; sharedPermission?: "view" | "edit"; sharedBy?: string }): DashboardData => {
+// TYPE-2 · the incoming persisted dashboard carries shared-state + message-
+// mirroring fields beyond the lean ServerDashboard shape. Type them from the
+// canonical DashboardData field types (Partial — pre-DPF1 docs omit them) so the
+// reads below are type-checked instead of cast through `as any`.
+type PersistedDashboard = ServerDashboard & {
+  isShared?: boolean;
+  sharedPermission?: "view" | "edit";
+  sharedBy?: string;
+} & Partial<
+    Pick<
+      DashboardData,
+      | "collaborators"
+      | "answerEnvelope"
+      | "capturedActiveFilter"
+      | "businessActions"
+      | "followUpPrompts"
+      | "investigationSummary"
+      | "priorInvestigationsSnapshot"
+      | "attentionAreas"
+      | "sessionId"
+    >
+  >;
+
+export const normalizeDashboard = (dashboard: PersistedDashboard): DashboardData => {
   const normalized: DashboardData = {
     id: dashboard.id,
     name: dashboard.name,
@@ -94,22 +117,22 @@ export const normalizeDashboard = (dashboard: ServerDashboard & { isShared?: boo
     lastOpenedAt: dashboard.lastOpenedAt ? new Date(dashboard.lastOpenedAt) : undefined,
     username: dashboard.username,
     // Preserve shared dashboard properties
-    isShared: (dashboard as any).isShared || false,
-    sharedPermission: (dashboard as any).sharedPermission,
-    sharedBy: (dashboard as any).sharedBy,
+    isShared: dashboard.isShared || false,
+    sharedPermission: dashboard.sharedPermission,
+    sharedBy: dashboard.sharedBy,
     // Check if dashboard has collaborators (has been shared by owner)
-    collaborators: (dashboard as any).collaborators || [],
-    hasCollaborators: ((dashboard as any).collaborators && (dashboard as any).collaborators.length > 0) || false,
-    answerEnvelope: (dashboard as any).answerEnvelope,
-    capturedActiveFilter: (dashboard as any).capturedActiveFilter,
+    collaborators: dashboard.collaborators || [],
+    hasCollaborators: ((dashboard.collaborators && dashboard.collaborators.length > 0) || false),
+    answerEnvelope: dashboard.answerEnvelope,
+    capturedActiveFilter: dashboard.capturedActiveFilter,
     // DPF1 · the four message-mirroring fields. All optional + back-compat
     // — pre-DPF1 dashboards return undefined and the panel renders nothing.
-    businessActions: (dashboard as any).businessActions,
-    followUpPrompts: (dashboard as any).followUpPrompts,
-    investigationSummary: (dashboard as any).investigationSummary,
-    priorInvestigationsSnapshot: (dashboard as any).priorInvestigationsSnapshot,
-    attentionAreas: (dashboard as any).attentionAreas,
-    sessionId: (dashboard as any).sessionId,
+    businessActions: dashboard.businessActions,
+    followUpPrompts: dashboard.followUpPrompts,
+    investigationSummary: dashboard.investigationSummary,
+    priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
+    attentionAreas: dashboard.attentionAreas,
+    sessionId: dashboard.sessionId,
   };
   
   // Set permission for convenience (use sharedPermission if it's a shared dashboard)

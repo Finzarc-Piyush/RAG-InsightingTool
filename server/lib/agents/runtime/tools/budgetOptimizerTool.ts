@@ -56,6 +56,7 @@ import {
 import { tagMarketingColumns } from "../../../marketingColumnTags.js";
 import { roundTo } from "../../../numberCoercion.js";
 import type { ChartSpec, Insight } from "../../../../shared/schema.js";
+import { errorMessage } from "../../../../utils/errorMessage.js";
 
 const argsSchema = z
   .object({
@@ -140,13 +141,13 @@ export function registerBudgetOptimizerTool(
           deps.fetcher
         );
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { ok: false, summary: `run_budget_optimizer failed: ${msg}` };
       }
 
       const charts: ChartSpec[] = [
         buildAllocationChart(result),
-        ...result.channels.map((c) => buildResponseCurveChart(c, result.response_curves[c.name])),
+        ...result.channels.map((c) => buildResponseCurveChart(c, result.response_curves[c.name]!)),
       ];
       const insights = buildInsightCards(result);
 
@@ -199,7 +200,7 @@ function buildResponseCurveChart(
   ch: ChannelFitOut,
   curve: BudgetRedistributeResponse["response_curves"][string]
 ): ChartSpec {
-  const points = curve.x.map((x, i) => ({ spend: roundTo(x, 2), predicted_outcome: roundTo(curve.y[i], 2) }));
+  const points = curve.x.map((x, i) => ({ spend: roundTo(x, 2), predicted_outcome: roundTo(curve.y[i]!, 2) }));
   return {
     type: "line",
     title: `Response curve — ${ch.name}`,
@@ -265,7 +266,7 @@ function buildSummaryText(r: BudgetRedistributeResponse): string {
 
 function topShiftChannel(r: BudgetRedistributeResponse): string {
   if (!r.channels.length) return "";
-  const top = [...r.channels].sort((a, b) => Math.abs(b.delta_pct) - Math.abs(a.delta_pct))[0];
+  const top = [...r.channels].sort((a, b) => Math.abs(b.delta_pct) - Math.abs(a.delta_pct))[0]!;
   return `${top.name}:${top.delta_pct.toFixed(1)}%`;
 }
 

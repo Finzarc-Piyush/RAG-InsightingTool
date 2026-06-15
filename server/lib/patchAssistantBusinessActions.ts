@@ -57,7 +57,7 @@ export async function patchAssistantBusinessActions(params: {
       reason = "message_not_found";
       return false;
     }
-    const target = doc.messages[idx];
+    const target = doc.messages[idx]!;
     doc.messages[idx] = { ...target, businessActions: params.items };
   });
   if (!updated) return { ok: false, reason: reason ?? "session_not_found" };

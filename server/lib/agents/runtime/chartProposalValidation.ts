@@ -52,7 +52,7 @@ function rowHasKeys(
 function yIsNumericishOnFrame(rows: Record<string, unknown>[], y: string): boolean {
   const cap = Math.min(20, rows.length);
   for (let i = 0; i < cap; i++) {
-    const v = rows[i][y];
+    const v = rows[i]![y];
     if (v == null || v === "") continue;
     if (typeof v === "number" && Number.isFinite(v)) return true;
     if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return true;

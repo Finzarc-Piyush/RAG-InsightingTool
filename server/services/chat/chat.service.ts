@@ -22,6 +22,7 @@ import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export interface ProcessChatMessageParams {
   sessionId: string;
@@ -194,7 +195,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     const { text } = await loadEnabledDomainContext();
     if (text?.trim()) perTurnDomainContext = text;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`W34 · domain context load failed: ${msg}`);
   }
 
@@ -244,7 +245,7 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
       });
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     logger.warn(`W25 · enrichStepInsights (non-streaming) failed: ${msg}`);
   }
 

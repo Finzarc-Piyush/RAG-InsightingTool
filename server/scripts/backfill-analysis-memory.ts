@@ -120,12 +120,12 @@ async function backfillOne(
   // future re-runs of the same backfill.
   const messages = doc.messages ?? [];
   for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
+    const m = messages[i]!;
     if (m.role !== "assistant") continue;
     let userMsg = null;
     for (let j = i - 1; j >= 0; j--) {
-      if (messages[j].role === "user") {
-        userMsg = messages[j];
+      if (messages[j]!.role === "user") {
+        userMsg = messages[j]!;
         break;
       }
     }

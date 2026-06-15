@@ -40,6 +40,6 @@ export function applyVagueTrendDefaultAggregation(
 
   parsed.dateAggregationPeriod = "month";
   if (gb.length === 0) {
-    parsed.groupBy = [summary.dateColumns[0]];
+    parsed.groupBy = [summary.dateColumns[0]!];
   }
 }

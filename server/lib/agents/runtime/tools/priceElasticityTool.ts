@@ -199,10 +199,10 @@ export function fitLogLogElasticity(
   let sumX = 0;
   let sumY = 0;
   for (let i = 0; i < N; i++) {
-    logP[i] = Math.log(clean[i].price);
-    logQ[i] = Math.log(clean[i].quantity);
-    sumX += logP[i];
-    sumY += logQ[i];
+    logP[i] = Math.log(clean[i]!.price);
+    logQ[i] = Math.log(clean[i]!.quantity);
+    sumX += logP[i]!;
+    sumY += logQ[i]!;
   }
   const meanX = sumX / N;
   const meanY = sumY / N;
@@ -210,8 +210,8 @@ export function fitLogLogElasticity(
   let SSxx = 0;
   let SSyy = 0;
   for (let i = 0; i < N; i++) {
-    const dx = logP[i] - meanX;
-    const dy = logQ[i] - meanY;
+    const dx = logP[i]! - meanX;
+    const dy = logQ[i]! - meanY;
     SSxy += dx * dy;
     SSxx += dx * dx;
     SSyy += dy * dy;
@@ -228,8 +228,8 @@ export function fitLogLogElasticity(
   // Residual sum of squares.
   let SSres = 0;
   for (let i = 0; i < N; i++) {
-    const pred = intercept + slope * logP[i];
-    const resid = logQ[i] - pred;
+    const pred = intercept + slope * logP[i]!;
+    const resid = logQ[i]! - pred;
     SSres += resid * resid;
   }
   const r_squared = SSyy === 0 ? 1 : 1 - SSres / SSyy;
@@ -421,7 +421,7 @@ export function runPriceElasticity(
   // emits when finite β + non-anomalous sign; positive β (Giffen-good shape)
   // returns null and the suffix omits the magnitude field rather than ship a
   // misleading "large" for a sign-anomalous fit.
-  const topRow = tableRows[0];
+  const topRow = tableRows[0]!;
   const headlineEvidence: FindingEvidence = {};
   if (typeof topRow.n === "number" && Number.isFinite(topRow.n) && topRow.n >= 0) {
     headlineEvidence.n = topRow.n;

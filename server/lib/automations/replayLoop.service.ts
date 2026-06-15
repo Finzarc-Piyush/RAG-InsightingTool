@@ -71,6 +71,7 @@ import type {
   Message,
 } from "../../shared/schema.js";
 import { logger } from "../logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export type ReplaySseEvent =
   | { type: "automation_started"; automationId: string; recipeLength: number }
@@ -621,7 +622,7 @@ export async function replayAutomation(
         error: "Cancelled by client",
       };
     }
-    const step = transformPlan.steps[i];
+    const step = transformPlan.steps[i]!;
     const detail =
       step.kind === "wide_format_remelt"
         ? "Re-applying wide-format melt"
@@ -729,7 +730,7 @@ export async function replayAutomation(
       abortSignal
     );
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const error = errorMessage(err);
     emit({ type: "automation_halted", ordinal: startOrdinal, error });
     return {
       ok: false,
@@ -757,7 +758,7 @@ export async function replayAutomation(
       };
     }
 
-    const turn = liveRecipe[i];
+    const turn = liveRecipe[i]!;
     const turnId = `automation_${automationId}_turn_${i}`;
 
     // 6a. Persist user message.
@@ -773,7 +774,7 @@ export async function replayAutomation(
       // earlier turns of THIS replay run.
       ctx.chatHistory = [...(ctx.chatHistory ?? []), userMessage];
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = errorMessage(err);
       emit({ type: "automation_halted", ordinal: i, error });
       return {
         ok: false,
@@ -808,7 +809,7 @@ export async function replayAutomation(
       });
     } catch (err) {
       const isReplayErr = err instanceof ReplayStepError;
-      const error = err instanceof Error ? err.message : String(err);
+      const error = errorMessage(err);
       emit({
         type: "automation_halted",
         ordinal: i,
@@ -833,7 +834,7 @@ export async function replayAutomation(
         stepResult.assistantMessage,
       ];
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      const error = errorMessage(err);
       emit({ type: "automation_halted", ordinal: i, error });
       return {
         ok: false,

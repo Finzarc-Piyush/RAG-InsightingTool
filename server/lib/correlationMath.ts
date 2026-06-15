@@ -16,7 +16,7 @@ function pearsonCorrelation(x: number[], y: number[]): number {
 
   const sumX = x.slice(0, n).reduce((a, b) => a + b, 0);
   const sumY = y.slice(0, n).reduce((a, b) => a + b, 0);
-  const sumXY = x.slice(0, n).reduce((sum, xi, i) => sum + xi * y[i], 0);
+  const sumXY = x.slice(0, n).reduce((sum, xi, i) => sum + xi * y[i]!, 0);
   const sumX2 = x.slice(0, n).reduce((sum, xi) => sum + xi * xi, 0);
   const sumY2 = y.slice(0, n).reduce((sum, yi) => sum + yi * yi, 0);
 
@@ -42,8 +42,8 @@ export function calculateCorrelations(
     const x: number[] = [];
     const y: number[] = [];
     for (let i = 0; i < data.length; i++) {
-      const tv = targetValuesAllRows[i];
-      const cv = toNumber(data[i][col]);
+      const tv = targetValuesAllRows[i]!;
+      const cv = toNumber(data[i]![col]);
       if (!isNaN(tv) && !isNaN(cv)) {
         x.push(tv);
         y.push(cv);

@@ -66,7 +66,7 @@ function collectQuotedHits(message: string, columnMap: Map<string, string>): Spa
   const quotedPattern = /["'`]([^"'`]+)["'`]/g;
   let match: RegExpExecArray | null;
   while ((match = quotedPattern.exec(message)) !== null) {
-    const rawInner = match[1];
+    const rawInner = match[1]!;
     const trimmed = rawInner.trim();
     const normalized = trimmed.toLowerCase();
     if (!columnMap.has(normalized)) {

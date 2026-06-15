@@ -109,7 +109,7 @@ function scoreByValue(
     let hi = N;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (sorted[mid] <= e.value) lo = mid + 1;
+      if (sorted[mid]! <= e.value) lo = mid + 1;
       else hi = mid;
     }
     const rank = lo; // count of values ≤ e.value (1..N)

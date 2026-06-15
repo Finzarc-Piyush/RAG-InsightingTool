@@ -17,6 +17,7 @@ import rateLimit from "express-rate-limit";
 import { ZodError } from "zod";
 import { assertRequiredEnv } from "./config/env.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import { requireSuperadmin } from "./middleware/requireSuperadmin.js";
 import { corsConfig } from "./middleware/index.js";
 import { requireAzureAdAuth } from "./middleware/azureAdAuth.js";
 import { registerRoutes } from "./routes/index.js";
@@ -195,6 +196,34 @@ export function createApp() {
     }
     const ready = checks.cosmos && checks.blob;
     res.status(ready ? 200 : 503).json({ ready, checks, timestamp: Date.now() });
+  });
+
+  // OBS-7 · internal metrics endpoint (superadmin-gated). Lightweight process +
+  // runtime gauges plus upload-queue depth for an on-call dashboard / scrape —
+  // gives a live operational view that the cost telemetry doesn't cover. Not
+  // public: requireAzureAdAuth ran above, requireSuperadmin gates it further.
+  app.get('/api/metrics', requireSuperadmin, async (req, res) => {
+    const mem = process.memoryUsage();
+    const mb = (n: number) => Math.round(n / 1048576);
+    const out: Record<string, unknown> = {
+      ts: Date.now(),
+      uptimeSec: Math.round(process.uptime()),
+      node: process.version,
+      pid: process.pid,
+      memory: {
+        rssMb: mb(mem.rss),
+        heapUsedMb: mb(mem.heapUsed),
+        heapTotalMb: mb(mem.heapTotal),
+        externalMb: mb(mem.external),
+      },
+    };
+    try {
+      const { uploadQueue } = await import('./utils/uploadQueue.js');
+      out.uploadQueue = uploadQueue.getStats();
+    } catch {
+      /* queue stats best-effort */
+    }
+    res.json(out);
   });
 
   // Wave R20 · SSE ticket exchange. EventSource cannot send an Authorization

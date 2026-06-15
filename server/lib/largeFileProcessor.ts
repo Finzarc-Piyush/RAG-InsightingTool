@@ -16,6 +16,7 @@ import {
   periodDimensionFromSummary,
 } from './temporalFacetColumns.js';
 import { logger } from "./logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 /**
  * Wave Dup3 · feature flag — DEFAULT OFF. Mirrors the `USE_PARQUET_READ_PATH`
@@ -106,7 +107,7 @@ export async function processLargeFile(
       } catch (coerceErr) {
         logger.warn(
           `⚠️ Large-file coercion pass failed (continuing with un-coerced data): ${
-            coerceErr instanceof Error ? coerceErr.message : String(coerceErr)
+            errorMessage(coerceErr)
           }`,
         );
       }

@@ -82,7 +82,7 @@ function decodeJsonStringFragment(s: string): string {
       // Truncated unicode escape; drop it.
       break;
     }
-    const decoded = ESCAPE_MAP[next];
+    const decoded = ESCAPE_MAP[next!];
     if (decoded !== undefined) {
       out += decoded;
       i += 2;
@@ -190,7 +190,7 @@ export class JsonFieldStreamExtractor {
     if (fieldIdx === -1) return;
     let i = fieldIdx + needle.length;
     // Skip whitespace.
-    while (i < this.buffer.length && /\s/.test(this.buffer[i])) i++;
+    while (i < this.buffer.length && /\s/.test(this.buffer[i]!)) i++;
     if (i >= this.buffer.length) return;
     if (this.buffer[i] !== ":") {
       // Spurious match (e.g. `"body"` appears as a value somewhere);
@@ -201,7 +201,7 @@ export class JsonFieldStreamExtractor {
       return;
     }
     i++;
-    while (i < this.buffer.length && /\s/.test(this.buffer[i])) i++;
+    while (i < this.buffer.length && /\s/.test(this.buffer[i]!)) i++;
     if (i >= this.buffer.length) return;
     if (this.buffer[i] !== '"') {
       // Field exists but value isn't a string (e.g. it's `null` or a

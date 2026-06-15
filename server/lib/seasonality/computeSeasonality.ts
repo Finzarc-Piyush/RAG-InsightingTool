@@ -25,10 +25,10 @@ const QUARTER_LABELS = ["Q1", "Q2", "Q3", "Q4"];
 export function positionLabel(grain: SeasonalityGrain, position: number): string {
   if (grain === "month") {
     if (position < 1 || position > 12) return `M${position}`;
-    return MONTH_LABELS[position - 1];
+    return MONTH_LABELS[position - 1]!;
   }
   if (position < 1 || position > 4) return `Q${position}`;
-  return QUARTER_LABELS[position - 1];
+  return QUARTER_LABELS[position - 1]!;
 }
 
 // ---------------------------------------------------------------------
@@ -306,7 +306,7 @@ export function summarizeSeasonality(
       ? consistency.consistentPeaks
       : consistency.rows.slice(0, consistency.topK);
   const peakLabels = peaks.map((p) => p.label).join("/");
-  const topPeak = peaks[0];
+  const topPeak = peaks[0]!;
   const topIndexRow = index.find((r) => r.position === topPeak.position);
   const aboveAvgPct =
     topIndexRow && topIndexRow.index > 0
