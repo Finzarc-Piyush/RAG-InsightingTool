@@ -3,6 +3,7 @@
  * Handles async processing of large file uploads to prevent blocking
  */
 
+import { randomUUID } from 'node:crypto';
 import type { ChartSpec, Insight, SemanticModel, SessionAnalysisContext } from '../shared/schema.js';
 import { mergeSuggestedQuestions } from '../lib/suggestedQuestions.js';
 import { ColumnarStorageService } from '../lib/columnarStorage.js';
@@ -93,7 +94,9 @@ class UploadQueue {
       throw new Error('Upload queue is full. Please try again later.');
     }
 
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // SEC-1: jobIds must be unguessable — a guessable id (time prefix + Math.random)
+    // combined with a missing ownership check is a cross-tenant IDOR. Use a CSPRNG.
+    const jobId = `job_${randomUUID()}`;
     
     const job: UploadJob = {
       jobId,
@@ -129,7 +132,9 @@ class UploadQueue {
     if (this.jobs.size >= this.MAX_QUEUE_SIZE) {
       throw new Error('Upload queue is full. Please try again later.');
     }
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // SEC-1: jobIds must be unguessable — a guessable id (time prefix + Math.random)
+    // combined with a missing ownership check is a cross-tenant IDOR. Use a CSPRNG.
+    const jobId = `job_${randomUUID()}`;
     const job: UploadJob = {
       jobId,
       sessionId,

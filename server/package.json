@@ -2,6 +2,9 @@
     "name": "marico-insight-server",
     "version": "1.0.0",
     "type": "module",
+    "engines": {
+        "node": ">=20 <21"
+    },
     "scripts": {
         "dev": "npm run build:domain-packs && NODE_ENV=development NODE_OPTIONS='--max-old-space-size=4096' tsx watch index.ts",
         "build": "npm run build:domain-packs && esbuild index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist --sourcemap",
@@ -12,6 +15,7 @@
         "preview": "npm run build && npm run start",
         "test": "node scripts/runTests.mjs",
         "check:invariants": "node --import tsx scripts/check-invariants.ts",
+        "check:type-escapes": "node --import tsx scripts/check-type-escapes.ts",
         "orient": "node --import tsx scripts/generate-bootstrap.ts",
         "gen:registries": "node --import tsx scripts/generate-registries.ts",
         "gen:symbols": "node --import tsx scripts/generate-symbols.ts",
@@ -32,6 +36,8 @@
         "@google/generative-ai": "^0.21.0",
         "@jridgewell/trace-mapping": "^0.3.25",
         "@react-pdf/renderer": "^4.3.0",
+        "@types/compression": "^1.8.1",
+        "compression": "^1.8.1",
         "cors": "^2.8.5",
         "csv-parse": "^6.1.0",
         "dotenv": "^16.4.5",

@@ -1,4 +1,5 @@
 """Data operations using pandas"""
+import os
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -14,6 +15,54 @@ _TEMPORAL_FACET_HEADER_RE = re.compile(
 def _is_temporal_facet_column_key(key: str) -> bool:
     return key.startswith("__tf_") or bool(_TEMPORAL_FACET_HEADER_RE.match(key))
 from asteval import Interpreter  # noqa: E402
+
+# PY-5 · Explicit truthy/falsy token sets (case-insensitive) for boolean coercion.
+# astype(bool) maps EVERY non-empty string — including 'false'/'no'/'0' — to True,
+# silently corrupting data. These are the same tokens aggregate_data already uses.
+_BOOLEAN_TRUTHY_TOKENS = {"true", "1", "yes", "y", "t"}
+_BOOLEAN_FALSY_TOKENS = {"false", "0", "no", "n", "f", ""}
+
+# PY-6 · asteval derived-column evaluation hardening.
+_ASTEVAL_MAX_TIME_SEC = float(os.getenv("ASTEVAL_MAX_TIME_SEC", "5"))
+# Tokens that imply IO / process / code-loading; rejected before evaluation as a
+# belt-and-braces layer over asteval's own import/dunder blocking.
+_FORBIDDEN_EXPR_TOKENS = (
+    "__",
+    "import",
+    "eval(",
+    "exec(",
+    "open(",
+    "compile(",
+    "system",
+    "subprocess",
+    "to_csv",
+    "to_pickle",
+    "to_excel",
+    "to_json",
+    "to_parquet",
+    "to_sql",
+    "read_csv",
+    "read_pickle",
+    "getattr",
+    "setattr",
+)
+
+
+def coerce_to_boolean_with_warning(
+    series: pd.Series,
+) -> tuple[pd.Series, int]:
+    """
+    Map a string/object/numeric column to booleans using an explicit token set.
+    Returns (bool_series, ambiguous_count). Values matching no known token (and
+    not NaN) are treated as False and counted as ambiguous, so the caller can
+    surface a coercion warning — unlike astype(bool), which turns 'false'/'no'/'0'
+    into True. NaN is treated as False and not counted as ambiguous.
+    """
+    normalized = series.astype(str).str.strip().str.lower()
+    truthy = normalized.isin(_BOOLEAN_TRUTHY_TOKENS)
+    falsy = normalized.isin(_BOOLEAN_FALSY_TOKENS) | series.isna()
+    ambiguous = int((~truthy & ~falsy).sum())
+    return truthy, ambiguous
 
 
 def coerce_numeric_with_warning(
@@ -968,11 +1017,32 @@ def create_derived_column(
                         "errors": errors
                     }
 
-        # Evaluate via asteval (restricted interpreter) — no raw Python eval
-        aeval = Interpreter(
-            symtable={"df": df, "pd": pd, "np": np},
-            use_numpy=True,
-        )
+        # PY-6: defense-in-depth. asteval already blocks imports/dunders, but the
+        # expression is LLM-generated and we expose df/pd/np, so method-based
+        # side effects (file/network writes) remain reachable. Reject expressions
+        # containing IO/exec tokens before evaluating.
+        _expr_lower = python_expr.lower()
+        for _tok in _FORBIDDEN_EXPR_TOKENS:
+            if _tok in _expr_lower:
+                errors.append(
+                    f"Expression rejected: contains disallowed token '{_tok.strip()}'"
+                )
+                return {"data": data, "errors": errors}
+
+        # Evaluate via asteval (restricted interpreter) — no raw Python eval.
+        # Bound the runtime (max_time) so a pathological expression can't pin the
+        # worker. max_time is unsupported on older asteval — fall back gracefully.
+        try:
+            aeval = Interpreter(
+                symtable={"df": df, "pd": pd, "np": np},
+                use_numpy=True,
+                max_time=_ASTEVAL_MAX_TIME_SEC,
+            )
+        except TypeError:
+            aeval = Interpreter(
+                symtable={"df": df, "pd": pd, "np": np},
+                use_numpy=True,
+            )
         result = aeval(python_expr)
         if aeval.error:
             errors.append(f"Error evaluating expression: {aeval.error}")
@@ -1100,8 +1170,17 @@ def convert_type(
             conversion_info["note"] = "Values converted to 0-1 range (divide by 100 if > 1)"
 
         elif target_type == "boolean":
-            df[column] = df[column].astype(bool)
+            # PY-5: never use astype(bool) on object/string columns — it maps
+            # every non-empty string (incl. 'false'/'no'/'0') to True. Use the
+            # explicit truthy/falsy token mapping and surface a coercion warning.
+            bool_series, ambiguous = coerce_to_boolean_with_warning(df[column])
+            df[column] = bool_series
             conversion_info["converted_type"] = "bool"
+            if ambiguous > 0:
+                conversion_info["errors"].append(
+                    f"{ambiguous} value(s) were not recognised as boolean "
+                    "(expected true/false/yes/no/1/0) and were set to False"
+                )
 
         # Count conversion errors (NaN values created)
         null_before = pd.DataFrame(data)[column].isna().sum()

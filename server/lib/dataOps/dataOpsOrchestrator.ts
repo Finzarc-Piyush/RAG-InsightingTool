@@ -2150,7 +2150,9 @@ IMPORTANT PRIORITY RULES:
 
 Return ONLY valid JSON, no other text.`;
 
-    logger.log(`🤖 Sending AI prompt for intent detection. Message: "${message}"`);
+    // OBS-3: the message is confidential user content — verbatim text is debug-only.
+    logger.log(`🤖 Sending AI prompt for intent detection (message ${message.length} chars)`);
+    logger.debug(`🤖 intent-detection message: "${message}"`);
     logger.log(`📋 Available columns (${availableColumns.length}): ${availableColumns.slice(0, 10).join(', ')}${availableColumns.length > 10 ? '...' : ''}`);
     
     const response = await callLlm(

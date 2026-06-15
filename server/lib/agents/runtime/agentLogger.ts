@@ -18,8 +18,20 @@
  * HOW IT CONNECTS
  *   Called throughout server/lib/agents/runtime/ wherever a step wants to
  *   record what happened. Pure console.log — no external sink.
+ *
+ * EX4 / OBS-4 · Every event is auto-stamped with the request-correlation ids
+ *   (traceId, sessionId) from the AsyncLocalStorage request context, so an
+ *   agent event can be tied to the exact turn — and to the general `logger`
+ *   lines (which carry the same ids) — during incident triage. Explicit fields
+ *   passed by the caller win over the auto-merged context.
  */
+import { getRequestContext } from "../../telemetry/requestContext.js";
+
 export function agentLog(event: string, fields: Record<string, string | number | boolean | undefined>) {
-  const payload = { ts: Date.now(), event: `agent.${event}`, ...fields };
+  const ctx = getRequestContext();
+  const correlation: Record<string, string | undefined> = {};
+  if (ctx.traceId) correlation.traceId = ctx.traceId;
+  if (ctx.sessionId) correlation.sessionId = ctx.sessionId;
+  const payload = { ts: Date.now(), event: `agent.${event}`, ...correlation, ...fields };
   console.log(JSON.stringify(payload));
 }

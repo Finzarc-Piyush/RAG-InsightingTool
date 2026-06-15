@@ -1145,6 +1145,17 @@ const retryOnConnectionError = async <T>(
   throw lastError;
 };
 
+/**
+ * ⚠️ UNSAFE — NO AUTHORIZATION. Returns the full chat document for a sessionId
+ * with NO tenant/collaborator check. This is an INTERNAL primitive.
+ *
+ * SEC-2: Do NOT call this from a controller/route for a user-facing read — that
+ * is exactly how the upload-status IDOR (SEC-1) happened. User-facing reads MUST
+ * go through `getChatBySessionIdForUser(sessionId, requesterEmail)` (collaborator
+ * check) or, for superadmin shadow-view, `getChatBySessionIdForSuperadmin` after
+ * an explicit `isSuperadminRequest` gate. The few existing controller callers
+ * that use it do so only after performing their own ownership check first.
+ */
 export const getChatBySessionIdEfficient = async (
   sessionId: string,
   forceRefresh = false

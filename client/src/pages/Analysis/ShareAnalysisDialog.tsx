@@ -50,9 +50,13 @@ export const ShareAnalysisDialog = ({
   const { toast } = useToast();
   const userEmail = getUserEmail();
 
-  // Fetch user dashboards
+  // Fetch user dashboards.
+  // FE-5: share the canonical ['dashboards','list'] cache key (the list is
+  // already server-scoped to the authenticated user, so keying by userEmail
+  // only forked the cache into a stale duplicate that missed the ~15 optimistic
+  // writes/invalidations targeting the canonical key in useDashboardState).
   const { data: dashboardsData, isLoading: isLoadingDashboards } = useQuery({
-    queryKey: ['dashboards', 'list', userEmail],
+    queryKey: ['dashboards', 'list'],
     queryFn: async () => {
       const res = await dashboardsApi.list();
       // The API returns dashboards owned by the user

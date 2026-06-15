@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import multer from "multer";
 import { uploadQueue } from "../utils/uploadQueue.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
+import { isSuperadminRequest } from "../lib/superadmin.js";
 import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
 import { getExcelSheetNames } from "../lib/fileParser.js";
 import { createPlaceholderSession } from "../models/chat.model.js";
@@ -120,15 +121,38 @@ export const uploadFile = async (
  */
 export const getUploadStatus = async (req: Request, res: Response) => {
   try {
+    let email: string;
+    try {
+      email = requireUsername(req);
+    } catch (e) {
+      if (e instanceof AuthenticationError) {
+        return res.status(401).json({ error: e.message });
+      }
+      throw e;
+    }
+
     const { jobId } = req.params;
-    
+
     if (!jobId) {
       return res.status(400).json({ error: 'Job ID is required' });
     }
 
     const job = uploadQueue.getJob(jobId);
-    
+
     if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    // SEC-1: tenant-isolation check. The job carries the owner's email; a
+    // requester may only poll their own job (superadmins may shadow-view).
+    // Respond 404 (not 403) on mismatch so the endpoint does not confirm the
+    // existence of another tenant's job to an attacker enumerating ids.
+    const ownerEmail = (job.username ?? "").trim().toLowerCase();
+    const requesterEmail = email.trim().toLowerCase();
+    if (ownerEmail !== requesterEmail && !isSuperadminRequest(req)) {
+      logger.warn(
+        `⚠️ [uploadStatus] cross-tenant access blocked: requester=${requesterEmail} owner=${ownerEmail} job=${jobId}`
+      );
       return res.status(404).json({ error: 'Job not found' });
     }
 

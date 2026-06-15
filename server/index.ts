@@ -12,7 +12,11 @@ import {
 } from "./lib/agents/runtime/assertAgenticRag.js";
 import express from "express";
 import helmet from "helmet";
+import compression from "compression";
 import rateLimit from "express-rate-limit";
+import { ZodError } from "zod";
+import { assertRequiredEnv } from "./config/env.js";
+import { requestLogger } from "./middleware/requestLogger.js";
 import { corsConfig } from "./middleware/index.js";
 import { requireAzureAdAuth } from "./middleware/azureAdAuth.js";
 import { registerRoutes } from "./routes/index.js";
@@ -100,6 +104,9 @@ const authPreflightLimiter = rateLimit({
 
 // Factory function to create the Express app
 export function createApp() {
+  // CFG-1 · fail fast on a misconfigured credential cluster (prod) / warn (dev),
+  // before lazy per-subsystem failures can surface mid-request.
+  assertRequiredEnv();
   assertAgenticRagConfiguration();
   assertDashboardAutogenConfiguration();
   // W1.3 · subscribe the telemetry sink to the LLM usage emitter. Idempotent;
@@ -125,6 +132,25 @@ export function createApp() {
       crossOriginEmbedderPolicy: false,
     })
   );
+
+  // EX11 / PERF-6 · compress JSON API responses (gzip/deflate). Skips SSE
+  // streams — text/event-stream must not be buffered/coalesced — and honours an
+  // explicit `x-no-compression` opt-out. Large analytical envelopes and session
+  // lists shrink substantially on the wire.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        if (req.headers["x-no-compression"]) return false;
+        const contentType = String(res.getHeader("Content-Type") || "");
+        if (contentType.includes("text/event-stream")) return false;
+        return compression.filter(req, res);
+      },
+    })
+  );
+
+  // OBS-5 · per-request access log (one structured line on response finish).
+  // Early, so 401s/preflights are captured; reads req.auth at finish-time.
+  app.use(requestLogger);
 
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   app.use(express.urlencoded({ extended: false, limit: JSON_BODY_LIMIT }));
@@ -193,6 +219,26 @@ export function createApp() {
   // return a generic 500 without leaking internals. Registered AFTER all routes
   // so thrown errors / next(err) from any handler land here.
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    // EX15 / API-1 · A failed input validation is a CLIENT error (400), not a
+    // 500. Map a Zod parse failure to 400 + the flattened field errors so the
+    // caller can fix the request instead of seeing an opaque server error.
+    if (err instanceof ZodError) {
+      console.warn("[express-validation]", err.message);
+      if (!res.headersSent) {
+        res.status(400).json({ error: "Invalid request", details: err.flatten() });
+      }
+      return;
+    }
+    // EX15 / API-5 · Honour an explicit 4xx status tagged on the error (e.g.
+    // the 403 thrown by getChatBySessionIdForUser) instead of mislabelling it
+    // 500. The message is caller-safe for intentional 4xx; 5xx stays generic.
+    const tagged = (err as { statusCode?: unknown } | null)?.statusCode;
+    if (typeof tagged === "number" && tagged >= 400 && tagged < 500) {
+      if (!res.headersSent) {
+        res.status(tagged).json({ error: err instanceof Error ? err.message : "Request failed" });
+      }
+      return;
+    }
     const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
     console.error("[express-error]", msg);
     captureException(err, { source: "express" });

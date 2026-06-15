@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Message } from '@/shared/schema';
 import {
   REGENERATE_EVENT,
@@ -26,30 +26,36 @@ export const useHomeHandlers = ({
   chatMutation,
   resetState,
 }: UseHomeHandlersProps) => {
-  const handleFileSelect = (file: File, opts?: { sheetName?: string }) => {
+  // FE-1: these are passed down to every MessageBubble, whose React.memo
+  // comparator requires referential stability of its callback props. As plain
+  // declarations they were recreated every render — defeating the memo and
+  // re-rendering every bubble on each SSE token. useCallback (with the full set
+  // of closed-over values as deps, so no stale closures) lets the comparator
+  // actually short-circuit.
+  const handleFileSelect = useCallback((file: File, opts?: { sheetName?: string }) => {
     uploadMutation.mutate({ file, fileSize: file.size, sheetName: opts?.sheetName });
-  };
+  }, [uploadMutation]);
 
-  const handleSendMessage = (message: string) => {
+  const handleSendMessage = useCallback((message: string) => {
     if (!sessionId) return;
-    
+
     const userMessage: Message = {
       role: 'user',
       content: message,
       timestamp: Date.now(),
     };
-    
+
     setMessages((prev) => [...prev, userMessage]);
     chatMutation.mutate({ message, targetTimestamp: userMessage.timestamp });
-  };
+  }, [sessionId, setMessages, chatMutation]);
 
-  const handleUploadNew = () => {
+  const handleUploadNew = useCallback(() => {
     resetState();
-  };
+  }, [resetState]);
 
-  const handleEditMessage = (messageIndex: number, newContent: string) => {
+  const handleEditMessage = useCallback((messageIndex: number, newContent: string) => {
     if (!sessionId) return;
-    
+
     setMessages((prev) => {
       const updated = [...prev];
       
@@ -75,7 +81,7 @@ export const useHomeHandlers = ({
 
       return updated;
     });
-  };
+  }, [sessionId, setMessages, chatMutation]);
 
   // W9 follow-up · listen for `rag:regenerate` events emitted by the per-
   // message RegenerateButton dropdown. The event payload carries the

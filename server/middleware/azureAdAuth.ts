@@ -136,27 +136,40 @@ export async function requireAzureAdAuth(
   }
 
   if (process.env.DISABLE_AUTH === "true") {
-    // P-009: belt-and-braces guards against accidental production bypass.
-    // (1) refuse to honour the flag in production
-    if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+    // P-009 / SEC-3: belt-and-braces guards against accidental production bypass.
+    // (1) Fail SAFE: only honour the bypass when the environment is EXPLICITLY
+    //     development or test. An unset/unknown NODE_ENV (or Vercel) is treated
+    //     as production and refused — "unset" must never silently disable auth.
+    const env = (process.env.NODE_ENV || "").trim().toLowerCase();
+    const isExplicitDevOrTest = env === "development" || env === "test";
+    if (!isExplicitDevOrTest || process.env.VERCEL) {
       logger.error(
-        "DISABLE_AUTH=true is not honoured in production / Vercel; rejecting request"
+        `DISABLE_AUTH=true is only honoured when NODE_ENV is explicitly 'development' or 'test' and not on Vercel (NODE_ENV='${env}'); rejecting request`
       );
       res.status(500).json({ error: "Server authentication is not configured" });
       return;
     }
-    // (2) require a secondary dev-only sentinel header/env match
+    // (2) SEC-3: the secondary dev-only sentinel is MANDATORY. Previously the
+    //     check only ran when AUTH_BYPASS_DEV_TOKEN happened to be set, so an
+    //     operator who set DISABLE_AUTH=true but left the token unset would have
+    //     the server trust an attacker-supplied X-User-Email header (assume ANY
+    //     identity). Now an unset token fails closed.
     const expectedSentinel = process.env.AUTH_BYPASS_DEV_TOKEN?.trim();
-    if (expectedSentinel) {
-      const provided = req.headers["x-auth-bypass-dev-token"];
-      const providedStr = typeof provided === "string" ? provided.trim() : "";
-      const match =
-        providedStr.length === expectedSentinel.length &&
-        timingSafeStringEqual(providedStr, expectedSentinel);
-      if (!match) {
-        res.status(401).json({ error: "DISABLE_AUTH requires X-Auth-Bypass-Dev-Token" });
-        return;
-      }
+    if (!expectedSentinel) {
+      logger.error(
+        "DISABLE_AUTH=true requires AUTH_BYPASS_DEV_TOKEN to be set (fail-closed); rejecting request"
+      );
+      res.status(500).json({ error: "Server authentication is not configured" });
+      return;
+    }
+    const provided = req.headers["x-auth-bypass-dev-token"];
+    const providedStr = typeof provided === "string" ? provided.trim() : "";
+    const match =
+      providedStr.length === expectedSentinel.length &&
+      timingSafeStringEqual(providedStr, expectedSentinel);
+    if (!match) {
+      res.status(401).json({ error: "DISABLE_AUTH requires X-Auth-Bypass-Dev-Token" });
+      return;
     }
     const raw = req.headers["x-user-email"];
     const email =

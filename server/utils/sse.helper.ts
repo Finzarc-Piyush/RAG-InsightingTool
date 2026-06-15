@@ -64,9 +64,12 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
     if (typeof (res as any).flush === 'function') {
       (res as any).flush();
     }
-    // Only log in development or when explicitly enabled
+    // OBS-3: never dump the full SSE payload at info level — answer envelopes /
+    // chart data may carry confidential analytical content. Log the event name
+    // + serialized byte size; the verbatim payload is debug-only.
     if (ENABLE_SSE_LOGGING || process.env.NODE_ENV === 'development') {
-      logger.log(`📤 SSE sent: ${event}`, data);
+      logger.log(`📤 SSE sent: ${event} (${message.length}B)`);
+      logger.debug(`📤 SSE payload: ${event}`, data);
     }
     return true;
   } catch (error: any) {

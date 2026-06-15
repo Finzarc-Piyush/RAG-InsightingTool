@@ -58,17 +58,18 @@ Everything runs on Node 20 and Python 3.12. No external services.
 | `DEEP_ANALYSIS_SKILL_ALLOWLIST` | Comma-separated skill names for staged rollout. |
 | `DASHBOARD_AUTOGEN_ENABLED=true` | Phase-2 dashboard draft loop. Requires `AGENTIC_LOOP_ENABLED=true`. |
 | `PYTHON_SERVICE_URL=http://localhost:8001` | Node → Python bridge. |
-| `AGENT_TOOL_TIMEOUT_MS` / `AGENTIC_MAX_STEPS` | Hotfix knobs — prefer these over disabling the agentic runtime. |
+| `AGENT_MAX_STEPS` / `AGENT_MAX_WALL_MS` | Hotfix knobs (max plan/act steps · max wall-clock per turn) — prefer these over disabling the agentic runtime. |
 
 See `server/.env.example` for the complete list.
 
 ## Server tests
 
-`server/package.json` `test` is **an explicit file list**, not a glob.
-Node's built-in test runner (`node --import tsx --test`) is invoked
-with every test file listed by path. New test files must be appended
-or CI silently skips them. Known gotcha — a comment in `CLAUDE.md`
-calls it out.
+`server/package.json` `test` runs `node scripts/runTests.mjs`, which
+**glob-discovers** every `tests/**/*.test.ts` and invokes Node's built-in
+runner (`node --import tsx --test`) with them (Wave R26). New `*.test.ts`
+files are picked up automatically — there is no hand-maintained list (this
+is CLAUDE.md invariant #4). `*.vitest.test.ts` files are excluded; they run
+under the client's vitest config.
 
 Some client tests also live in the server `test` list via
 `../client/...` paths (`chartFilters.test.ts`,
@@ -113,7 +114,7 @@ cleanly and that `api/data-ops/requirements.txt` pins versions via
 
 - **`loadEnv.ts` must be the first import in `server/index.ts`.**
   Anything above it will read `process.env` before it's populated.
-- **Server `npm test` is an explicit list.** See above.
+- **Server `npm test` auto-discovers `*.test.ts`** via `scripts/runTests.mjs` (Wave R26) — new test files are picked up automatically; there is no hand-maintained list (it excludes `*.vitest.test.ts`, which run under the client config).
 - **Non-standard env-file names don't auto-load.** Rename only with
   the matching loader change.
 - **Block comments with glob patterns can close themselves.** A

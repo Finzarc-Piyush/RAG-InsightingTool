@@ -63,10 +63,23 @@ async function saveModifiedDataLocked(
   description: string,
   sessionDoc?: ChatDocument
 ): Promise<SaveDataResult> {
-  // Get current document
-  const doc = sessionDoc ?? await getChatBySessionIdEfficient(sessionId);
+  // Validate before the expensive blob write.
+  if (!modifiedData || modifiedData.length === 0) {
+    throw new Error('Cannot save empty dataset. The data operation resulted in no data.');
+  }
+
+  // DATA-4: read the doc FRESH inside the lock rather than trusting the
+  // caller-supplied `sessionDoc`, which may have been fetched earlier in the
+  // turn and gone stale. Carry over ONLY the caller's intended in-flight
+  // mutation (`dataOpsContext`) onto the fresh doc, so a concurrent writer's
+  // changes to other fields are preserved.
+  const callerDataOpsContext = sessionDoc?.dataOpsContext;
+  const doc = await getChatBySessionIdEfficient(sessionId, /* forceRefresh */ true);
   if (!doc) {
     throw new Error('Session not found');
+  }
+  if (callerDataOpsContext !== undefined) {
+    doc.dataOpsContext = callerDataOpsContext;
   }
 
   // Determine new version
@@ -122,11 +135,6 @@ async function saveModifiedDataLocked(
     return serializedRow;
   });
 
-  // Validate data before creating summary
-  if (!modifiedData || modifiedData.length === 0) {
-    throw new Error('Cannot save empty dataset. The data operation resulted in no data.');
-  }
-  
   // Update data summary (canonicalize dates then refresh typing / grains)
   const preSummary = createDataSummary(modifiedData);
   canonicalizeDateColumnValues(modifiedData, preSummary.dateColumns);
@@ -203,8 +211,27 @@ async function saveModifiedDataLocked(
   // Update last updated timestamp
   doc.lastUpdatedAt = Date.now();
 
-  // Update document
-  await updateChatDocument(doc);
+  // DATA-3: persist with optimistic concurrency (IfMatch _etag) instead of a
+  // bare last-writer-wins upsert. We are already inside withSessionWriteLock, so
+  // we cannot call mutateChatDocument (non-reentrant — would deadlock); instead
+  // we replicate its read-fresh → reapply → IfMatch loop inline, applying ONLY
+  // the fields this save owns onto the freshest doc so a concurrent writer
+  // (turn-end persist, BAI patch, active-filter PUT on another instance) is not
+  // clobbered.
+  const patch: Partial<ChatDocument> = {
+    currentDataBlob: doc.currentDataBlob,
+    sampleRows: doc.sampleRows,
+    dataSummary: doc.dataSummary,
+    dataSummaryStatistics: doc.dataSummaryStatistics,
+    columnStatistics: doc.columnStatistics,
+    rawData: doc.rawData,
+    dataVersions: doc.dataVersions,
+    lastUpdatedAt: doc.lastUpdatedAt,
+  };
+  if (callerDataOpsContext !== undefined) {
+    patch.dataOpsContext = doc.dataOpsContext;
+  }
+  await persistMetadataPatchWithEtag(sessionId, doc, patch);
   logger.log(`✅ Updated CosmosDB document with blob reference: version ${newVersion}, blob: ${newBlob.blobName}`);
 
   const { scheduleIndexSessionRag } = await import("../rag/indexSession.js");
@@ -245,5 +272,51 @@ async function saveModifiedDataLocked(
     blobUrl: newBlob.blobUrl,
     blobName: newBlob.blobName,
   };
+}
+
+/** True for a Cosmos 412 Precondition Failed (IfMatch `_etag` mismatch). */
+function isPreconditionFailed(err: unknown): boolean {
+  const e = err as { code?: number; statusCode?: number } | null;
+  return e?.code === 412 || e?.statusCode === 412;
+}
+
+/**
+ * DATA-3 · ETag-safe metadata write for a path that ALREADY holds
+ * `withSessionWriteLock` (so it must NOT call `mutateChatDocument` — that is
+ * non-reentrant and would deadlock). The first attempt writes the doc we just
+ * mutated (its `_etag` came from our fresh in-lock read); on a 412 (another
+ * serverless instance moved the doc) we re-read fresh, re-apply ONLY our
+ * `patch` fields onto it, and retry — bounded by `maxRetries`. This preserves
+ * the concurrent writer's changes to every field outside `patch`.
+ */
+async function persistMetadataPatchWithEtag(
+  sessionId: string,
+  firstDoc: ChatDocument,
+  patch: Partial<ChatDocument>,
+  maxRetries = 3
+): Promise<ChatDocument> {
+  let target = firstDoc;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await updateChatDocument(target, { ifMatchEtag: target._etag });
+    } catch (err) {
+      if (isPreconditionFailed(err) && attempt < maxRetries) {
+        lastErr = err;
+        const fresh = await getChatBySessionIdEfficient(sessionId, /* forceRefresh */ true);
+        if (!fresh) throw err;
+        Object.assign(fresh, patch);
+        target = fresh;
+        logger.warn(
+          `↻ saveModifiedData: 412 on ${sessionId} (attempt ${attempt}/${maxRetries}); retrying against fresh doc`
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`saveModifiedData: exhausted retries for ${sessionId}`);
 }
 

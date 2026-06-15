@@ -44,6 +44,12 @@ export default tseslint.config(
       "@typescript-eslint/no-non-null-assertion": "warn",
       "@typescript-eslint/ban-ts-comment": "warn",
       "no-empty": ["warn", { allowEmptyCatch: true }],
+      // CQ-8 / FE-2 · Size/complexity ratchet (warn, high thresholds) so god
+      // components (DataPreviewTable ~3633 LOC) surface in lint and can only
+      // shrink. Decrement per decomposition wave.
+      "max-lines-per-function": ["warn", { max: 400, skipBlankLines: true, skipComments: true, IIFEs: true }],
+      "complexity": ["warn", 50],
+      "max-depth": ["warn", 6],
       "no-control-regex": "off",
       "no-useless-escape": "off",
     },

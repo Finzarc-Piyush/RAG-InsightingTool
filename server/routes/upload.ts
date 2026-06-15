@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import express from "express";
 import { uploadFile, getUploadStatus, getQueueStats } from "../controllers/uploadController.js";
+import { requireSuperadmin } from "../middleware/requireSuperadmin.js";
 import { uploadLimits } from "../config/uploadLimits.js";
 
 // P-019: cap upload size. 1 GiB in-memory was an OOM risk; realistic user
@@ -62,7 +63,9 @@ router.post('/upload', upload.single('file'), (err: any, req: express.Request, r
 // Upload status endpoint
 router.get('/upload/status/:jobId', getUploadStatus);
 
-// Queue statistics endpoint (for monitoring)
-router.get('/upload/queue/stats', getQueueStats);
+// Queue statistics endpoint (for monitoring). SEC-6: this returns global,
+// cross-tenant aggregates, so it is gated to superadmins — its documented
+// "admin endpoint" intent — rather than any authenticated user.
+router.get('/upload/queue/stats', requireSuperadmin, getQueueStats);
 
 export default router;

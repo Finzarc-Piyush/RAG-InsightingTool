@@ -1,0 +1,24 @@
+{
+  // EX5 / TYPE-3 · Type-check the test tree, which the main tsconfig.json
+  // deliberately excludes (so the runtime build stays test-free). Test files
+  // import production source, so without this they drift out of type-sync
+  // silently. Wired into CI as a `tsc --noEmit -p tsconfig.test.json` step.
+  "extends": "./tsconfig.json",
+  "include": [
+    "index.ts",
+    "loadEnv.ts",
+    "controllers/**/*.ts",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "middleware/**/*.ts",
+    "models/**/*.ts",
+    "routes/**/*.ts",
+    "services/**/*.ts",
+    "shared/**/*.ts",
+    "types/**/*.ts",
+    "utils/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

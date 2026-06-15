@@ -32,10 +32,16 @@ const DEFAULT_DAILY_QUOTA = 20;
 export type BudgetMode = "off" | "warn_only" | "enforce";
 
 function mode(): BudgetMode {
-  const raw = (process.env.BUDGET_GATE_ENFORCEMENT || "off").toLowerCase();
-  if (raw === "warn_only") return "warn_only";
+  // SEC-4: default to `warn_only`, not `off`. A per-user spend control that is a
+  // complete no-op by default does not exist as a control. `warn_only` activates
+  // the atomic daily-question accounting and the X-Budget-* headers (so over-quota
+  // users are observable) WITHOUT rejecting anyone. Production should set
+  // BUDGET_GATE_ENFORCEMENT=enforce with a tuned DAILY_QUESTION_QUOTA; set it
+  // explicitly to `off` to fully disable.
+  const raw = (process.env.BUDGET_GATE_ENFORCEMENT || "warn_only").toLowerCase();
+  if (raw === "off") return "off";
   if (raw === "enforce") return "enforce";
-  return "off";
+  return "warn_only";
 }
 
 function dailyQuota(): number {

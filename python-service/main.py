@@ -1,4 +1,5 @@
 """FastAPI application for Data Operations Service"""
+import hmac
 import os
 import traceback
 from typing import Any, Literal
@@ -100,7 +101,10 @@ if not config.INTERNAL_API_KEY:
 async def internal_api_key_gate(request: Request, call_next):
     """Require X-Internal-Api-Key when PYTHON_SERVICE_API_KEY is set (Node must send the same value)."""
     if config.INTERNAL_API_KEY:
-        if request.headers.get("X-Internal-Api-Key", "") != config.INTERNAL_API_KEY:
+        # SEC-5: constant-time comparison so the gate does not leak the secret
+        # via response-timing (mirrors the Node side's timingSafeEqual).
+        provided = request.headers.get("X-Internal-Api-Key", "")
+        if not hmac.compare_digest(provided, config.INTERNAL_API_KEY):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 

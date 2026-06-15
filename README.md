@@ -34,8 +34,11 @@ multi-service Vercel topology.
 ## Key docs
 
 - `CLAUDE.md` — architecture, dev loop, conventions that bite.
-- `docs/agents-architecture-inventory.md` — canonical map of the legacy handler
-  orchestrator and the agentic runtime.
+- `docs/architecture/agent-runtime.md` — the agentic plan/act runtime (start here
+  for the agent loop, tools, and skills).
+- `docs/agents-architecture-inventory.md` — file-by-file inventory of the agent
+  runtime modules. (Note: the legacy `AgentOrchestrator`/handler chain it once
+  contrasted was deleted in `9422bed7`; only the agentic runtime exists now.)
 - `docs/plans/agentic_only_rag_chat.md` — product invariants (RAG always on
   when agentic is on, no legacy fallback).
 - `docs/architecture/upload_and_enrichment.md` — in-process upload queue and

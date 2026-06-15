@@ -31,7 +31,23 @@ function getClient(): CosmosClient {
     if (!COSMOS_ENDPOINT || !COSMOS_KEY) {
       throw new Error("CosmosDB not configured. Set COSMOS_ENDPOINT and COSMOS_KEY in server/server.env");
     }
-    clientInstance = new CosmosClient({ endpoint: COSMOS_ENDPOINT, key: COSMOS_KEY });
+    clientInstance = new CosmosClient({
+      endpoint: COSMOS_ENDPOINT,
+      key: COSMOS_KEY,
+      // RESIL-2: bound how long a single request may hang and how aggressively
+      // the SDK retries throttling (429) / transient transport errors, so a
+      // Cosmos hiccup degrades gracefully instead of pinning a serverless
+      // invocation until the platform kills it. Defaults mirror the SDK's own
+      // (timeout 30s, 9 retries, 30s cap) but are now explicit + env-tunable.
+      connectionPolicy: {
+        requestTimeout: Number(process.env.COSMOS_REQUEST_TIMEOUT_MS) || 30000,
+        retryOptions: {
+          maxRetryAttemptCount: Number(process.env.COSMOS_MAX_RETRY_ATTEMPTS) || 9,
+          fixedRetryIntervalInMilliseconds: 0, // 0 → SDK's exponential backoff
+          maxWaitTimeInSeconds: Number(process.env.COSMOS_MAX_RETRY_WAIT_SEC) || 30,
+        },
+      },
+    });
   }
   return clientInstance;
 }

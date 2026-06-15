@@ -27,7 +27,28 @@ const HARDCODED_SUPERADMIN_EMAILS: ReadonlyArray<string> = [
   "piyush@finzarc.com",
 ];
 
-let SUPERADMIN_EMAILS = new Set<string>(HARDCODED_SUPERADMIN_EMAILS);
+/**
+ * CFG-3 · Optional `SUPERADMIN_EMAILS` env (comma-separated) is MERGED with the
+ * hardcoded default rather than replacing it, so the standing grant stays
+ * rotatable/auditable via config without losing the documented default. To move
+ * fully off email, prefer the immutable-oid path (`SUPERADMIN_OIDS`, below).
+ */
+function parseEnvEmailSet(name: string): Set<string> {
+  const raw = process.env[name]?.trim();
+  if (!raw) return new Set<string>();
+  return new Set(
+    raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+function buildSuperadminEmailSet(): Set<string> {
+  return new Set<string>([
+    ...HARDCODED_SUPERADMIN_EMAILS.map((e) => e.toLowerCase()),
+    ...parseEnvEmailSet("SUPERADMIN_EMAILS"),
+  ]);
+}
+
+let SUPERADMIN_EMAILS = buildSuperadminEmailSet();
 
 /**
  * Wave R19 · Optional immutable-`oid` allowlist (comma-separated `SUPERADMIN_OIDS`
@@ -89,7 +110,7 @@ export function __setSuperadminEmailsForTesting(emails: ReadonlyArray<string>): 
  * it via `__setSuperadminEmailsForTesting`.
  */
 export function __resetSuperadminEmailsForTesting(): void {
-  SUPERADMIN_EMAILS = new Set<string>(HARDCODED_SUPERADMIN_EMAILS);
+  SUPERADMIN_EMAILS = buildSuperadminEmailSet();
 }
 
 /** Test-only · override the in-process oid allowlist (Wave R19). */

@@ -111,8 +111,12 @@ export async function answerQuestion(
   // past_analyses doc for cross-session recall.
   pivotArtifacts?: import('./agents/runtime/types.js').AgentLoopResult['pivotArtifacts'];
 }> {
-  // CRITICAL: This log should ALWAYS appear first
-  logger.log('🚀 answerQuestion() CALLED with question:', question);
+  // CRITICAL: This log should ALWAYS appear first.
+  // OBS-3: the question is confidential user content — keep the call marker at
+  // info level but emit the verbatim text only at debug (dropped at the
+  // production LOG_LEVEL=info).
+  logger.log('🚀 answerQuestion() CALLED');
+  logger.debug('🚀 answerQuestion question:', question);
   logger.log('📋 SessionId:', sessionId);
   logger.log('📊 Data rows:', data?.length);
 

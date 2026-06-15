@@ -22,11 +22,24 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      # EX5 / TYPE-3 · Type-check the TEST tree (the main tsconfig excludes it).
+      # Test files import production source and drift out of type-sync silently;
+      # this surfaces the drift. Report-only for now (~116 pre-existing test type
+      # errors); flip continue-on-error off once the test type-debt is burned down.
+      - name: Typecheck tests (report-only until test type-debt cleared)
+        run: npx tsc --noEmit -p tsconfig.test.json
+        continue-on-error: true
       # Invariant firewall — BLOCKING. Fails if any CLAUDE.md critical invariant
       # stops matching the code (e.g. a doc says "legacy orchestrator takes over"
       # but the code throws). Kernels in server/scripts/invariants.spec.ts.
       - name: Invariant firewall (CLAUDE.md vs code)
         run: npm run check:invariants
+      # EX16 / TYPE-4 · Type-escape ratchet — BLOCKING. Fails if `as any` /
+      # `as unknown as` count grows past the committed baseline, so the any-bleed
+      # can only shrink. Lower the BASELINE in scripts/check-type-escapes.ts as
+      # casts are removed.
+      - name: Type-escape ratchet (no new as-any / as-unknown-as)
+        run: npm run check:type-escapes
       # Doc-reference validator — BLOCKING. Fails if any live routing doc
       # (architecture/conventions/decisions/CLAUDE.md/skills) references a file,
       # path, or line anchor that no longer exists.
@@ -109,6 +122,11 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Smoke import
         run: python -c "import main; print('OK')"
+      # EX5 / TEST-4 · Run the Python unit tests (MMM fit/optimize/transforms).
+      # Previously CI only smoke-imported main.py, so ~all real Python behaviour
+      # was unverified in CI despite passing locally. Now blocking.
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
       # ruff is now BLOCKING (all 1175 findings cleared — Wave R32). mypy stays
       # report-only: it surfaces ~52 type findings, a tracked typing-adoption
       # effort across the heavily dynamic pandas/sklearn service; flip its

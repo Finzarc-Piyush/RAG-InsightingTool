@@ -44,6 +44,13 @@ export default tseslint.config(
       "@typescript-eslint/no-non-null-assertion": "warn",
       "@typescript-eslint/ban-ts-comment": "warn",
       "no-empty": ["warn", { allowEmptyCatch: true }],
+      // CQ-8 · Size/complexity ratchet (warn, high thresholds) so the god-files
+      // (runAgentTurn ~3378 LOC, parseDataOpsIntent ~2900 LOC) surface in lint
+      // and can only shrink, never regrow. Decrement thresholds per decomposition
+      // wave; graduate to error once the monsters are split.
+      "max-lines-per-function": ["warn", { max: 400, skipBlankLines: true, skipComments: true, IIFEs: true }],
+      "complexity": ["warn", 50],
+      "max-depth": ["warn", 6],
       // Noise in a large mature codebase — off.
       "no-control-regex": "off",
       "no-useless-escape": "off",

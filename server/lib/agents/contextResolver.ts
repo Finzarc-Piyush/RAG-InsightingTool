@@ -146,7 +146,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
                 targetVariable = doesMatch[2].trim(); // X is the target
               }
             }
-            logger.log(`   Found original question: "${originalQuestion}"`);
+            logger.debug(`   Found original question: "${originalQuestion}"`);
             if (targetVariable) {
               logger.log(`   Extracted target variable: "${targetVariable}"`);
             }
@@ -170,10 +170,10 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
               // For correlation questions, keep the correlation language and add chart request
               // This ensures proper intent classification as "correlation"
               const correlationQuery = originalQuestion.toLowerCase().replace(/\?$/, '');
-              logger.log(`   Reconstructed correlation query from original question: "${correlationQuery}"`);
+              logger.debug(`   Reconstructed correlation query from original question: "${correlationQuery}"`);
               // Use "show correlation chart" to make intent clear
               const chartQuery = `show correlation chart for ${correlationQuery}`;
-              logger.log(`   Final query: "${chartQuery}"`);
+              logger.debug(`   Final query: "${chartQuery}"`);
               return {
                 suggestion: message.content,
                 action: chartQuery,
@@ -182,7 +182,7 @@ export function detectAISuggestion(chatHistory: Message[]): { suggestion: string
             } else {
               // For non-correlation questions, use generic chart visualization
               const chartQuery = `show me a chart to visualize ${originalQuestion.toLowerCase().replace(/\?$/, '')}`;
-              logger.log(`   Reconstructed chart query from original question: "${chartQuery}"`);
+              logger.debug(`   Reconstructed chart query from original question: "${chartQuery}"`);
               return {
                 suggestion: message.content,
                 action: chartQuery,
@@ -308,17 +308,17 @@ export function resolveContextReferences(
     const suggestion = detectAISuggestion(chatHistory);
     if (suggestion) {
       logger.log(`✅ Detected confirmation to AI suggestion`);
-      logger.log(`   Original question: "${question}"`);
+      logger.debug(`   Original question: "${question}"`);
       logger.log(`   AI suggestion: "${suggestion.suggestion}"`);
       logger.log(`   Extracted action: "${suggestion.action}"`);
       
       // Use the extracted action as the new question
       // This will be processed as if the user explicitly asked for this
       const enrichedQuestion = suggestion.action;
-      logger.log(`   Enriched question: "${enrichedQuestion}"`);
+      logger.debug(`   Enriched question: "${enrichedQuestion}"`);
       return enrichedQuestion;
     } else {
-      logger.log(`⚠️ User said "${question}" but no AI suggestion found in recent messages`);
+      logger.debug(`⚠️ User said "${question}" but no AI suggestion found in recent messages`);
     }
   }
   
@@ -375,7 +375,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+previous\s+one\b/gi, `"${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+last\s+one\b/gi, `"${lastColumn}"`);
       
-      logger.log(`✅ Resolved column context reference: "${question}" → "${resolvedQuestion}"`);
+      logger.debug(`✅ Resolved column context reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -395,7 +395,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+previous\s+one\b/gi, chartRef);
       resolvedQuestion = resolvedQuestion.replace(/\bthe\s+last\s+one\b/gi, chartRef);
       
-      logger.log(`✅ Resolved context reference: "${question}" → "${resolvedQuestion}"`);
+      logger.debug(`✅ Resolved context reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -410,7 +410,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bthat\b/gi, insightRef);
       resolvedQuestion = resolvedQuestion.replace(/\bit\b/gi, insightRef);
       
-      logger.log(`✅ Resolved context reference to insight: "${question}" → "${resolvedQuestion}"`);
+      logger.debug(`✅ Resolved context reference to insight: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
@@ -423,7 +423,7 @@ export function resolveContextReferences(
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+this\b/gi, `rename "${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+that\b/gi, `rename "${lastColumn}"`);
       resolvedQuestion = resolvedQuestion.replace(/\bdo\s+it\b/gi, `rename "${lastColumn}"`);
-      logger.log(`✅ Resolved generic action reference: "${question}" → "${resolvedQuestion}"`);
+      logger.debug(`✅ Resolved generic action reference: "${question}" → "${resolvedQuestion}"`);
       return resolvedQuestion;
     }
   }
