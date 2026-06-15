@@ -30,34 +30,26 @@
 import * as echarts from "echarts";
 import type { ChartSpec } from "../../shared/schema.js";
 import { formatPeriodKeyForDisplay } from "../dateUtils.js";
+import { toFiniteNumber } from "../numberCoercion.js";
+import { cartesianSeries, scatterSeries } from "./chartSpecSeries.js";
+import { EXPORT_HEX, EXPORT_CATEGORICAL_HEX, withHash } from "./brandPalette.js";
 
 /**
- * Brand palette mirrored from `client/src/pages/Dashboard/exportTheme.ts`.
- * Keep in sync there — both files reference the same hex values so the
- * renderer (this file) and the existing client export match. The duplication
- * is intentional: the client file is browser-bundled and importing it on
- * the server forces a `vite` round-trip we don't want.
+ * Brand palette for this renderer, built from the single source in
+ * `brandPalette.ts` (shared with the PPTX and PDF masters). '#'-prefixed for
+ * ECharts.
  */
 const EXPORT_BRAND = {
-  primary: "#0B63F6",
-  accent: "#0EA5E9",
-  foreground: "#111827",
-  muted: "#6B7280",
-  border: "#D1D5DB",
-  background: "#FFFFFF",
+  primary: withHash(EXPORT_HEX.primary),
+  accent: withHash(EXPORT_HEX.accent),
+  foreground: withHash(EXPORT_HEX.foreground),
+  muted: withHash(EXPORT_HEX.muted),
+  border: withHash(EXPORT_HEX.border),
+  background: withHash(EXPORT_HEX.background),
   // 8-step categorical palette — matches the dashboard's Tailwind chart
   // palette (the first 8 of the 12-color cycle in `client/src/index.css`).
-  categorical: [
-    "#0B63F6", // primary blue
-    "#0EA5E9", // sky
-    "#10B981", // emerald
-    "#F59E0B", // amber
-    "#EF4444", // red
-    "#8B5CF6", // violet
-    "#EC4899", // pink
-    "#14B8A6", // teal
-  ],
-} as const;
+  categorical: EXPORT_CATEGORICAL_HEX,
+};
 
 const FONT_FAMILY = "Inter, ui-sans-serif, system-ui, sans-serif";
 
@@ -151,14 +143,10 @@ export function chartSpecToEchartsOption(
 type DataRow = Record<string, string | number | null>;
 type TextStyle = { fontFamily: string; color: string };
 
+// (row, key) form for pie / heatmap extraction below. The cartesian and
+// scatter paths use the shared chartSpecSeries helpers instead. Single coercer.
 function readNum(row: DataRow, key: string): number | null {
-  const v = row[key];
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
+  return toFiniteNumber(row[key]);
 }
 
 function cartesianOption(
@@ -174,8 +162,9 @@ function cartesianOption(
   // overhaul — out of scope for the export-rewrite stream.
   // Canonical period keys ("2023-Q1") → human labels ("Q1 2023") for display.
   // Positional category axis: y-values align by index, so order is preserved.
-  const xValues = data.map((r) => formatPeriodKeyForDisplay(r[xKey]));
-  const yValues = data.map((r) => readNum(r, yKey) ?? 0);
+  const cs = cartesianSeries(data, xKey, yKey, spec.yLabel ?? yKey);
+  const xValues = cs.labels;
+  const yValues = cs.values;
 
   const seriesType = spec.type === "area" ? "line" : spec.type;
   const series: EchartsLikeOption = {
@@ -231,9 +220,7 @@ function scatterOption(
   showTitle: boolean,
   textStyle: TextStyle
 ): EchartsLikeOption {
-  const points = data
-    .map((r) => [readNum(r, spec.x), readNum(r, spec.y)] as [number | null, number | null])
-    .filter((p): p is [number, number] => p[0] !== null && p[1] !== null);
+  const points = scatterSeries(data, spec.x, spec.y, spec.yLabel ?? spec.y).values;
   return {
     animation: false,
     backgroundColor: EXPORT_BRAND.background,

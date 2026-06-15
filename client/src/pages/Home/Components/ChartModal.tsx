@@ -24,6 +24,7 @@ import {
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
+import { capScatterPoints } from '@/lib/charts/scatterDecimation';
 import {
   formatDateForDisplay as formatDateForDisplayLocal,
   determineSliderStep as determineSliderStepLocal,
@@ -315,20 +316,6 @@ export function ChartModal({
     return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, LINE_AREA_MAX_X_TICKS);
   }, [type, allData, x]);
 
-  // Optimize scatter data for rendering performance (computed at component level for use in metadata)
-  const getMaxRenderPoints = () => {
-    if (type !== 'scatter') return 0;
-    switch (pointDensity) {
-      case 'low': return 2000;
-      case 'medium': return 10000;
-      case 'high': return 20000;
-      case 'all': return processedScatterData.length;
-      default: return 10000;
-    }
-  };
-  
-  const MAX_RENDER_POINTS = getMaxRenderPoints();
-
   const modalVisibleSeriesKeys = useMemo(
     () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
     [specSeriesKeys, effectiveFilters]
@@ -350,14 +337,9 @@ export function ChartModal({
   }, [specSeriesKeys]);
 
   const optimizedScatterData = useMemo(() => {
-    if (type !== 'scatter' || processedScatterData.length <= MAX_RENDER_POINTS) {
-      return processedScatterData;
-    }
-    
-    // Stratified sampling to preserve distribution
-    const step = Math.ceil(processedScatterData.length / MAX_RENDER_POINTS);
-    return processedScatterData.filter((_, idx) => idx % step === 0).slice(0, MAX_RENDER_POINTS);
-  }, [type, processedScatterData, MAX_RENDER_POINTS]);
+    if (type !== 'scatter') return processedScatterData;
+    return capScatterPoints(processedScatterData, pointDensity);
+  }, [type, processedScatterData, pointDensity]);
 
   const renderChart = () => {
     switch (type) {

@@ -310,11 +310,7 @@ function buildAutoPivotSpec(args: {
   });
 }
 
-import {
-  calculateSmartDomainsForChart,
-  multiSeriesYDomainKind,
-  yDomainForMultiSeriesRows,
-} from "../../axisScaling.js";
+import { finishChartSpec } from "../../chartSpecFinish.js";
 // Wave R31 · pure shape/extraction/serialisation helpers extracted to a sibling
 // module (low-coupling: they depend only on EXTERNAL types/modules, never on
 // runtime values defined here). Imported back for internal use AND re-exported
@@ -459,34 +455,8 @@ function materializeDeferredBuildCharts(
         ctx.summary.dateColumns,
         { chartQuestion: ctx.question }
       );
-      let smartDomains: Record<string, unknown> = {};
-      if (spec.type === "heatmap") {
-        smartDomains = {};
-      } else if (spec.seriesKeys?.length) {
-        const sk = spec.seriesKeys;
-        smartDomains = yDomainForMultiSeriesRows(
-          processed,
-          sk,
-          multiSeriesYDomainKind(spec.type, spec.barLayout)
-        );
-      } else {
-        smartDomains = calculateSmartDomainsForChart(
-          processed,
-          spec.x,
-          spec.y,
-          spec.y2 || undefined,
-          {
-            yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-            y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
-          }
-        );
-      }
       mergedCharts.push({
-        ...spec,
-        xLabel: spec.x,
-        yLabel: spec.y,
-        data: processed,
-        ...smartDomains,
+        ...finishChartSpec(spec, processed),
         ...(tmpl._agentEvidenceRef ?
           { _agentEvidenceRef: tmpl._agentEvidenceRef }
         : {}),

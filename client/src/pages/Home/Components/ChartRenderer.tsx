@@ -48,6 +48,7 @@ import { parseDateLike } from '@/lib/parseDateLike';
 import { compareTemporalOrLexicalLabels } from '@/lib/temporalAxisSort';
 import { formatTemporalPeriodKeyForDisplay } from '@/lib/temporalPeriodDisplay';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
+import { capScatterPoints } from '@/lib/charts/scatterDecimation';
 import { makeAxisTickFormatter } from '@/lib/charts/format';
 import {
   formatDateForDisplay,
@@ -383,27 +384,7 @@ export function ChartRenderer({
   // This must be at the top level to follow Rules of Hooks
   const optimizedScatterData = useMemo(() => {
     if (type !== 'scatter') return processedScatterData;
-    
-    // Calculate max render points based on user preference
-    const getMaxRenderPoints = () => {
-      switch (pointDensity) {
-        case 'low': return 2000;
-        case 'medium': return 10000;
-        case 'high': return 20000;
-        case 'all': return processedScatterData.length; // Show all, but warn if too many
-        default: return 10000;
-      }
-    };
-    
-    const MAX_RENDER_POINTS = getMaxRenderPoints();
-    
-    if (processedScatterData.length <= MAX_RENDER_POINTS) {
-      return processedScatterData;
-    }
-    
-    // Stratified sampling to preserve distribution
-    const step = Math.ceil(processedScatterData.length / MAX_RENDER_POINTS);
-    return processedScatterData.filter((_, idx) => idx % step === 0).slice(0, MAX_RENDER_POINTS);
+    return capScatterPoints(processedScatterData, pointDensity);
   }, [type, processedScatterData, pointDensity]);
 
   const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > MAX_COMPACT_X_TICKS;
@@ -1275,7 +1256,7 @@ export function ChartRenderer({
         const formatAxisTooltipMaybe = (v: unknown) => {
           if (typeof v === 'number' && Number.isFinite(v)) return formatChartTooltipValue(v);
           if (typeof v === 'string') {
-            const n = Number(v.replace(/[%,]/g, '').trim());
+            const n = parseNumericValue(v);
             if (Number.isFinite(n)) return formatChartTooltipValue(n);
           }
           return String(v ?? '');
@@ -1337,7 +1318,7 @@ export function ChartRenderer({
                       ? formatChartTooltipValue(xVal)
                       : typeof xVal === 'string'
                         ? (() => {
-                            const n = Number(xVal.replace(/[%,]/g, '').trim());
+                            const n = parseNumericValue(xVal);
                             return Number.isFinite(n) ? formatChartTooltipValue(n) : xVal;
                           })()
                         : String(xVal ?? '');

@@ -13,26 +13,26 @@
  * number only.
  */
 import type { PptxPres, PptxSlide, PptxRectShape } from "./types.js";
+import { EXPORT_HEX, EXPORT_CATEGORICAL } from "../brandPalette.js";
 
 /**
- * Palette + font mirrored from `client/src/pages/Dashboard/exportTheme.ts`
- * AND `server/lib/exports/chartSsr.ts`. Three sources of truth is one too
- * many — the unification lands in the W-EXP-7 wiring wave when the
- * controller imports both renderers.
+ * Palette + font for the PPTX renderer, built from the single source in
+ * `server/lib/exports/brandPalette.ts` (shared with the chartSsr and PDF
+ * masters). Bare hex (no `#`) per the pptxgenjs convention.
  */
 export const PPTX_BRAND = {
-  primary: "0B63F6",
-  accent: "0EA5E9",
-  foreground: "111827",
-  muted: "6B7280",
-  border: "D1D5DB",
-  background: "FFFFFF",
+  primary: EXPORT_HEX.primary,
+  accent: EXPORT_HEX.accent,
+  foreground: EXPORT_HEX.foreground,
+  muted: EXPORT_HEX.muted,
+  border: EXPORT_HEX.border,
+  background: EXPORT_HEX.background,
   /** Categorical palette (no `#` prefix per pptxgenjs convention). */
-  categorical: ["0B63F6", "0EA5E9", "10B981", "F59E0B", "EF4444", "8B5CF6", "EC4899", "14B8A6"],
+  categorical: [...EXPORT_CATEGORICAL],
   /** Horizon chips for ImplicationsByHorizon / Recommendations. */
-  horizonNow: "EF4444",
-  horizonThisQuarter: "F59E0B",
-  horizonStrategic: "10B981",
+  horizonNow: EXPORT_HEX.horizonNow,
+  horizonThisQuarter: EXPORT_HEX.horizonThisQuarter,
+  horizonStrategic: EXPORT_HEX.horizonStrategic,
 } as const;
 
 export const PPTX_FONT = "Inter";

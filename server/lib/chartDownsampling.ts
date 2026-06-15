@@ -14,6 +14,29 @@ import { logger } from "./logger.js";
 
 const MAX_CHART_POINTS = 5000;
 
+/**
+ * Simple memory-safety cap on a chart's already-built data points. This is the
+ * lightweight "don't ship 200k rows to the browser" guard — NOT the analytical
+ * {@link downsampleChartData} path (no time-bucketing / LTTB). For line/area it
+ * keeps every-Nth point to preserve trend shape; for other marks it takes the
+ * first N. Returns the input untouched when already under `max`.
+ *
+ * Single source for the cap that was inlined in both chatResponse.enrichCharts
+ * and the upload pipeline's chart sanitiser.
+ */
+export function capChartDataPoints<T>(
+  data: T[],
+  type: string | undefined,
+  max: number
+): T[] {
+  if (data.length <= max) return data;
+  if (type === "line" || type === "area") {
+    const step = Math.ceil(data.length / max);
+    return data.filter((_, idx) => idx % step === 0).slice(0, max);
+  }
+  return data.slice(0, max);
+}
+
 function toNumber(value: any): number {
   if (value === null || value === undefined || value === '') return NaN;
   if (typeof value === 'number') return isNaN(value) || !isFinite(value) ? NaN : value;

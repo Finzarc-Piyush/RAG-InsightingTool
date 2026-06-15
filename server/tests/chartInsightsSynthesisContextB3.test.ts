@@ -26,11 +26,10 @@ import { dirname, resolve } from "node:path";
  *       interacted with the dataset; no question / SAC / userIntent
  *       in scope. Passing undefined is correct.
  *
- *   - DEAD callers — kept as forward-compat surface:
- *     * lib/analyticalChartSpec.ts:mergeDeterministicAnalyticalCharts
- *       — imported but no live call site. Wave B3 added the
- *       `synthesisContext` parameter so a future re-wiring inherits
- *       the contract.
+ * (The former DEAD forward-compat caller `analyticalChartSpec.ts:
+ * mergeDeterministicAnalyticalCharts` was deleted as confirmed dead code —
+ * see docs/decisions/duplication-audit-deferrals.md. Its synthesisContext pin
+ * went with it; the four LIVE pins below remain the contract.)
  */
 
 const __filename = fileURLToPath(import.meta.url);
@@ -111,24 +110,6 @@ describe("Wave B3 · LIVE chart-insight callers pass synthesisContext", () => {
     assert.ok(
       callMatch,
       "correlationAnalyzer.ts must pass synthesisContext positionally to generateChartInsights"
-    );
-  });
-
-  it("lib/analyticalChartSpec.ts.mergeDeterministicAnalyticalCharts (forward-compat) accepts and forwards synthesisContext", () => {
-    const src = readSrc("lib/analyticalChartSpec.ts");
-    // Function signature should include the optional param.
-    assert.match(
-      src,
-      /mergeDeterministicAnalyticalCharts[\s\S]+?synthesisContext\?\s*:\s*ChartInsightSynthesisContext/,
-      "mergeDeterministicAnalyticalCharts must accept optional synthesisContext"
-    );
-    // generateChartInsights call inside should pass it.
-    const callMatch = src.match(
-      /generateChartInsights\s*\(\s*[\s\S]+?synthesisContext\s*\)/
-    );
-    assert.ok(
-      callMatch,
-      "mergeDeterministicAnalyticalCharts must forward synthesisContext into generateChartInsights"
     );
   });
 });

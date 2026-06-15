@@ -4,6 +4,7 @@
  */
 import { chatResponseSchema, ThinkingStep, SessionAnalysisContext } from "../../shared/schema.js";
 import { resolveChartDataRowsForEnrichment } from "../../lib/chartEnrichmentRows.js";
+import { capChartDataPoints } from "../../lib/chartDownsampling.js";
 import { generateChartInsights } from "../../lib/insightGenerator.js";
 import { generatePivotEnvelope } from "../../lib/insightGenerator/pivotEnvelope.js";
 import { formatCompactNumber } from "../../lib/formatCompactNumber.js";
@@ -76,12 +77,7 @@ export async function enrichCharts(
           logger.log(
             `⚠️ Chart "${c.title}" has ${dataForChart.length} data points, limiting to ${effectiveMax}`
           );
-          if (c.type === "line" || c.type === "area") {
-            const step = Math.ceil(dataForChart.length / effectiveMax);
-            dataForChart = dataForChart.filter((_: any, idx: number) => idx % step === 0).slice(0, effectiveMax);
-          } else {
-            dataForChart = dataForChart.slice(0, effectiveMax);
-          }
+          dataForChart = capChartDataPoints(dataForChart, c.type, effectiveMax);
         }
         
         const hasUsableKeyInsight =

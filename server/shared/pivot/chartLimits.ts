@@ -13,3 +13,9 @@ export const HEATMAP_MAX_COL_KEYS = 24;
 
 /** Max distinct row keys before a heatmap is considered too tall. */
 export const HEATMAP_MAX_ROW_KEYS = 40;
+
+/** Max categories before a pie/donut becomes unreadable. */
+export const PIE_MAX_CATEGORIES = 8;
+
+/** Max spokes before a radar chart becomes unreadable. */
+export const RADAR_MAX_SPOKES = 8;

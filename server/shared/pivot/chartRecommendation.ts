@@ -13,7 +13,12 @@
  */
 
 import { AGG_SUFFIX_CAPTURE } from './aggregationPatterns.js';
-import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from './chartLimits.js';
+import {
+  HEATMAP_MAX_COL_KEYS,
+  HEATMAP_MAX_ROW_KEYS,
+  PIE_MAX_CATEGORIES,
+  RADAR_MAX_SPOKES,
+} from './chartLimits.js';
 
 /**
  * Structural pivot-config shape consumed by the recommender. Only the
@@ -85,8 +90,6 @@ export interface PivotChartRecommendation {
   reason: string;
 }
 
-const PIE_MAX_CATEGORIES = 8;
-const RADAR_MAX_SPOKES = 8;
 const BUBBLE_MIN_MEASURES = 3;
 const PIE_DONUT_THRESHOLD = 4;
 

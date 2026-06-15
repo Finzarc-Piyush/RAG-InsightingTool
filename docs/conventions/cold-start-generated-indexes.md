@@ -20,7 +20,9 @@ invariants instructing dead workflows that survived 62 commits).
 
 ## Enforcement layers (where the gates actually run)
 
-The gates run at four points, so drift is caught no matter the workflow:
+The first three are **hard gates** (block); the last two are **automatic but
+advisory** — they keep a human/Claude in sync without ever blocking the session.
+Together they cover the read-in and write-out edges of a session:
 
 1. **`npm test`** — `invariants.test.ts`, `docRefs.test.ts`, and the generator
    sanity tests are glob-discovered, so the full suite fails on drift.
@@ -30,10 +32,23 @@ The gates run at four points, so drift is caught no matter the workflow:
 3. **Pre-commit hook** (`.githooks/pre-commit`, enabled via
    `git config core.hooksPath .githooks`) — runs the hard gates **locally at
    commit time** so drift never reaches a session, not just CI-on-push. Bypass
-   with `git commit --no-verify`.
-4. **SessionStart hook** (`.claude/hooks/session-warmup.sh`) — auto-injects the
-   orient pack (incl. the firewall verdict) into every new session, so warmup is
-   automatic, not opt-in.
+   with `git commit --no-verify`. Note: it gates code/doc-ref/registry drift, NOT
+   that STATE.md/WAVES.md were updated for a wave — that pairing is layer 5's job.
+4. **SessionStart hook** (`.claude/hooks/session-warmup.sh`) — the **read-in**
+   edge. Auto-injects the orient pack (incl. the firewall verdict) into every new
+   session, so warmup is automatic, not opt-in. Advisory: it cannot force Claude
+   to act on the pack.
+5. **Stop hook** (`.claude/hooks/check-docs-fresh.sh`) — the **write-out** edge.
+   On every turn-end it prints a reminder (never blocks; always exits 0) when
+   either (A) a `Wave …` commit landed without a paired STATE.md/WAVES.md update,
+   or (B) **recent uncommitted product source** (server/client/python-service/api/
+   shared, modified within `DOC_NUDGE_FRESH_MIN`, default 45 min) exists while the
+   narrative docs weren't updated. The freshness gate keeps days-old WIP and
+   read-only/conversational turns silent. This is the counterpart to layer 4: the
+   read-in edge is automatic, so the write-out edge is too — but advisory, because
+   a blocking Stop hook would trap conversational turns. The genuine guarantee on
+   narrative-doc freshness is still Claude discipline (`/wave-commit`); this layer
+   makes forgetting loud instead of silent.
 
 ## The irreducible residual (be honest)
 

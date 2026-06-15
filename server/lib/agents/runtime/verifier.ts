@@ -56,6 +56,7 @@ import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
+import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { checkInferredFilterFidelity } from "./verifierHelpers.js";
 import { detectConfidenceOverclaims } from "./verifierConfidenceCheck.js";
@@ -97,7 +98,7 @@ function chartPrecheck(
   // Guard: bar chart with a temporal X axis → should be line/area
   const isTemporalX =
     ctx.summary.dateColumns.includes(p.data.x) ||
-    /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(p.data.x);
+    isTemporalFacetColumnKey(p.data.x);
   if (p.data.type === "bar" && isTemporalX) {
     return {
       verdict: VERIFIER_VERDICT.reviseNarrative,

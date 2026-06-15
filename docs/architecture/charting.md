@@ -459,6 +459,8 @@ mid-flight.
 
 ## Recent changes
 
+- 2026-06-14 · Charting/pivot dedup audit: the table→ChartSpec builders now share leaf authorities — `chartMeasurePick` (scoreMeasure/isNumericishOnSample, fixed a latent y-axis-pick drift), `isTemporalFacetColumnKey` (temporal-x detection in 4 sites), and `chartSpecFinish.finishChartSpec` (the domains+labels tail, 5 builders). Client scatter decimation → `scatterDecimation.ts`; export palette → `brandPalette.ts`; export series extraction → `chartSpecSeries.ts`. See [`docs/decisions/centralized-chart-builders.md`](../decisions/centralized-chart-builders.md).
+
 Per-wave history lives in [`docs/WAVES.md`](../WAVES.md) (search the wave id). The detailed
 pre-2026-06 subsystem changelog was moved out of this routing doc to keep `/load` cheap —
 see [`docs/archive/charting-changelog.md`](../archive/charting-changelog.md). Keep new

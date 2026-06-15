@@ -10,6 +10,7 @@ import { uploadLimits } from '../config/uploadLimits.js';
 import { logUploadTelemetry, currentRssMb, type UploadPath } from './uploadTelemetry.js';
 import { isParquetReadPathEnabled, writeAndUploadSessionParquet } from '../lib/sessionParquet.js';
 import { logger } from "../lib/logger.js";
+import { capChartDataPoints } from "../lib/chartDownsampling.js";
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -1021,13 +1022,7 @@ class UploadQueue {
         // Limit data size for memory efficiency
         if (chartData.length > MAX_CHART_DATA_POINTS) {
           logger.log(`⚠️ Chart "${chart.title}" has ${chartData.length} data points, limiting to ${MAX_CHART_DATA_POINTS} for memory efficiency`);
-          // For line/area charts, sample evenly; for others, take first N
-          if (chart.type === 'line' || chart.type === 'area') {
-            const step = Math.ceil(chartData.length / MAX_CHART_DATA_POINTS);
-            chartData = chartData.filter((_: any, idx: number) => idx % step === 0).slice(0, MAX_CHART_DATA_POINTS);
-          } else {
-            chartData = chartData.slice(0, MAX_CHART_DATA_POINTS);
-          }
+          chartData = capChartDataPoints(chartData, chart.type, MAX_CHART_DATA_POINTS);
         }
         
         // Process in batches to avoid memory spikes

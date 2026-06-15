@@ -1,20 +1,24 @@
 /**
- * Wave W-GMK3 · drift-defence: the visual-planner deterministic fallback
- * MUST share the same x-axis selector as `chartFromTable.ts`. Both paths
- * can build a chart from `ctx.lastAnalyticalTable` — if they diverge,
- * the same result-table produces two incoherent charts depending on
- * which path fires for the turn.
+ * Wave W-GMK3 (updated 2026-06-14) · drift-defence: the visual-planner
+ * deterministic fallback MUST produce the SAME chart as `chartFromTable.ts`'s
+ * `buildChartFromAnalyticalTable` from the same `ctx.lastAnalyticalTable`.
  *
- * Pinned via source inspection (no full ctx mock needed). If a refactor
- * removes the `resolvePeriodAxis` import or the call site, this test
- * surfaces the drift before the deterministic fallback silently reverts
- * to the dumb `dimCols[0]!` rule.
+ * Originally this was enforced by source-inspecting that the fallback mirrored
+ * `chartFromTable`'s `resolvePeriodAxis` x-axis selector line-for-line. The two
+ * paths have since been MERGED: the fallback now *calls* `buildChartFromAnalyticalTable`
+ * outright (see docs/decisions/duplication-audit-deferrals.md — the deferred full
+ * merge, now done), so parity is structural, not copied. This test pins the
+ * delegation (the tripwire) AND asserts runtime equivalence.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { buildDeterministicFallbackChart } from "../lib/agents/runtime/visualPlanner.js";
+import { buildChartFromAnalyticalTable } from "../lib/agents/runtime/chartFromTable.js";
+import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
+import type { DataSummary } from "../shared/schema.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(
@@ -22,45 +26,69 @@ const src = readFileSync(
   "utf8"
 );
 
-describe("W-GMK3 · visualPlanner parity with chartFromTable's period resolver", () => {
-  it("imports resolvePeriodAxis from the shared helper module", () => {
+describe("W-GMK3 · visualPlanner deterministic fallback delegates to chartFromTable", () => {
+  it("imports buildChartFromAnalyticalTable from the shared promotion builder", () => {
     assert.match(
       src,
-      /from\s+"\.\.\/\.\.\/periodColumnResolver\.js"/,
-      "visualPlanner.ts must import from server/lib/periodColumnResolver.ts"
+      /from\s+"\.\/chartFromTable\.js"/,
+      "visualPlanner.ts must import from chartFromTable.ts (the shared builder)"
     );
-    assert.match(src, /\bresolvePeriodAxis\b/);
+    assert.match(src, /\bbuildChartFromAnalyticalTable\b/);
   });
 
-  it("calls resolvePeriodAxis with (columns, sample, ctx.summary, ctx.question)", () => {
-    assert.match(
-      src,
-      /resolvePeriodAxis\(\s*columns\s*,\s*sample\s*,\s*ctx\.summary\s*,\s*ctx\.question\s*\)/
-    );
-  });
-
-  it("applies the injected PeriodKind filter before compileChartSpec", () => {
-    // The filter loop must rebind `workingRows` from the picker's
-    // injectedFilter before the chart compile call uses it.
-    assert.match(
-      src,
-      /periodAxis\.injectedFilter[\s\S]*?workingRows\s*=\s*filtered/
-    );
-    assert.match(src, /compileChartSpec\(\s*workingRows\b/);
-    assert.match(src, /processChartData\(\s*workingRows\b/);
-  });
-
-  it("forwards axisReason into the chart spec when present", () => {
-    assert.match(src, /\.\.\.\(axisReason\s*\?\s*\{\s*axisReason\s*\}\s*:\s*\{\}\)/);
-  });
-
-  it("does NOT use the pre-wave `const x = dimCols[0]!` rule unconditionally", () => {
-    // The old single line must be gone — replaced by the resolver branch.
+  it("the deterministic fallback CALLS buildChartFromAnalyticalTable (no re-implemented x-pick)", () => {
+    assert.match(src, /buildChartFromAnalyticalTable\(\{/);
+    // The old inline `const x = dimCols[0]!` rule and a private resolvePeriodAxis
+    // call must be gone — the fallback no longer rolls its own axis logic.
     assert.doesNotMatch(src, /^\s*const x = dimCols\[0\]!;\s*$/m);
+    assert.doesNotMatch(src, /\bresolvePeriodAxis\b/);
   });
 
-  it("falls back to cardinality-pruning when no period column is present", () => {
-    assert.match(src, /distinct\.size\s*>=\s*2/);
-    assert.match(src, /usableDim/);
+  it("re-applies the ctx-aware validateChartProposal guard before shipping", () => {
+    assert.match(
+      src,
+      /buildDeterministicFallbackChart[\s\S]+?validateChartProposal\(/,
+      "the fallback must still run validateChartProposal on the built spec"
+    );
+  });
+
+  it("runtime: fallback chart is byte-identical to buildChartFromAnalyticalTable", () => {
+    const table = {
+      rows: [
+        { Region: "North", sales_sum: 1200 },
+        { Region: "South", sales_sum: 800 },
+        { Region: "West", sales_sum: 1500 },
+      ],
+      columns: ["Region", "sales_sum"],
+    };
+    const summary: DataSummary = {
+      rowCount: 3,
+      columnCount: 2,
+      columns: [
+        { name: "Region", type: "string", sampleValues: [] },
+        { name: "sales_sum", type: "number", sampleValues: [] },
+      ],
+      numericColumns: ["sales_sum"],
+      dateColumns: [],
+    } as unknown as DataSummary;
+    const direct = buildChartFromAnalyticalTable({
+      table,
+      summary,
+      question: "sales by region",
+    });
+    const ctx = {
+      sessionId: "s",
+      question: "sales by region",
+      data: table.rows,
+      turnStartDataRef: table.rows,
+      summary,
+      chatHistory: [],
+      mode: "analysis",
+      lastAnalyticalTable: { columns: table.columns, rows: table.rows },
+    } as unknown as AgentExecutionContext;
+    const fallback = buildDeterministicFallbackChart(ctx, []);
+    assert.notEqual(direct, null);
+    assert.notEqual(fallback, null);
+    assert.deepEqual(fallback!.charts[0], direct);
   });
 });

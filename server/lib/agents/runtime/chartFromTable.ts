@@ -42,11 +42,12 @@ import type { ChartSpec, DataSummary } from "../../../shared/schema.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { processChartData } from "../../chartGenerator.js";
-import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import { finishChartSpec } from "../../chartSpecFinish.js";
 import { resolvePeriodAxis } from "../../periodColumnResolver.js";
 import { resolveFactsMetric } from "../../factsMetricResolver.js";
+import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
+import { isNumericishOnSample, scoreMeasure } from "./chartMeasurePick.js";
 
-const TEMPORAL_FACET_PREFIX_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
 const X_LABEL_CARDINALITY_CAP = 60;
 const ROW_COUNT_CAP = 200;
 const MIN_UNIQUE_X_FOR_CARDINALITY_PRUNE = 2;
@@ -62,44 +63,6 @@ export interface ChartFromTableInput {
   question: string;
   /** Optional title override; falls back to "{Y} by {X}". */
   title?: string;
-}
-
-function isNumericishOnSample(
-  col: string,
-  sample: Record<string, unknown>[]
-): boolean {
-  const cap = Math.min(20, sample.length);
-  for (let i = 0; i < cap; i++) {
-    const v = sample[i]?.[col];
-    if (v == null || v === "") continue;
-    if (typeof v === "number" && Number.isFinite(v)) return true;
-    if (typeof v === "string") {
-      const cleaned = v.replace(/[%,]/g, "").trim();
-      if (cleaned && Number.isFinite(Number(cleaned))) return true;
-    }
-  }
-  return false;
-}
-
-function scoreMeasure(col: string): number {
-  const n = col.toLowerCase();
-  // countIf-ratio helper columns (`<base>__matching` / `<base>__total`) are the
-  // numerator/denominator behind a computed rate — never the measure to chart.
-  // Force them below everything so the rate alias wins the y-axis. (Targets the
-  // double-underscore helper convention only, so single-underscore aliases like
-  // a user's `revenue_total` are unaffected.)
-  if (/__matching\b|__total\b/.test(n)) return -1;
-  return (
-    // A computed rate/share alias (e.g. `pjp_adherence_rate`) outranks raw
-    // aggregates: for a boolean-indicator breakdown the RATE is the measure,
-    // not the underlying matching/total counts.
-    (/_rate\b|_ratio\b|_share\b|_pct\b/.test(n) ? 6 : 0) +
-    (/_sum\b/.test(n) ? 5 : 0) +
-    (/_avg\b/.test(n) || /_mean\b/.test(n) ? 4 : 0) +
-    (/_count\b/.test(n) ? 3 : 0) +
-    (/_min\b/.test(n) || /_max\b/.test(n) ? 2 : 0) +
-    (/_total\b/.test(n) ? 1 : 0)
-  );
 }
 
 /**
@@ -199,8 +162,7 @@ export function buildChartFromAnalyticalTable(
 
   const xTemporal =
     summary.dateColumns.includes(x) ||
-    TEMPORAL_FACET_PREFIX_RE.test(x) ||
-    x.startsWith("__tf_") ||
+    isTemporalFacetColumnKey(x) ||
     Boolean(periodAxis.pickedColumn);
 
   const workingSample = workingRows.slice(0, 80);
@@ -262,35 +224,5 @@ export function buildChartFromAnalyticalTable(
     return null;
   }
 
-  const smartDomains =
-    spec.type === "heatmap"
-      ? {}
-      : calculateSmartDomainsForChart(
-          processed as any,
-          spec.x as any,
-          spec.y as any,
-          (spec.y2 as any) || undefined,
-          {
-            yOptions: {
-              useIQR: true,
-              paddingPercent: 5,
-              includeOutliers: true,
-            },
-            y2Options: spec.y2
-              ? {
-                  useIQR: true,
-                  paddingPercent: 5,
-                  includeOutliers: true,
-                }
-              : undefined,
-          }
-        );
-
-  return {
-    ...spec,
-    xLabel: spec.x,
-    yLabel: spec.y,
-    data: processed,
-    ...smartDomains,
-  } as ChartSpec;
+  return finishChartSpec(spec, processed);
 }

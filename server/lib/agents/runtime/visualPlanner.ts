@@ -52,20 +52,18 @@ import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
-import {
-  calculateSmartDomainsForChart,
-  multiSeriesYDomainKind,
-  yDomainForMultiSeriesRows,
-} from "../../axisScaling.js";
+import { finishChartSpec } from "../../chartSpecFinish.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
-import { resolvePeriodAxis } from "../../periodColumnResolver.js";
+import { buildChartFromAnalyticalTable } from "./chartFromTable.js";
 import {
   resolveTrendGrain,
   buildDateRangeByColumn,
 } from "../../temporalGrainAuthority.js";
-import { parseTemporalFacetDisplayKey } from "../../temporalFacetColumns.js";
-import { resolveFactsMetric } from "../../factsMetricResolver.js";
+import {
+  parseTemporalFacetDisplayKey,
+  isTemporalFacetColumnKey,
+} from "../../temporalFacetColumns.js";
 
 export { validateChartProposal } from "./chartProposalValidation.js";
 
@@ -166,6 +164,61 @@ export function refineTemporalAxis(
   };
 }
 
+/**
+ * Deterministic single-chart fallback. When the turn produced an analytical
+ * result table but no chart yet, build ONE sensible chart from that table with
+ * plain code — no LLM — so the user is never left chart-less.
+ *
+ * This delegates the ENTIRE column-split → x-pick → measure-pick → type →
+ * compile → finish flow to the SAME `buildChartFromAnalyticalTable` the
+ * chart-promotion path (agentLoop) uses, so the two deterministic paths can
+ * never produce different charts from the same `lastAnalyticalTable`. The only
+ * extra step is the ctx-aware `validateChartProposal` guard the fallback has
+ * always applied (the promotion path runs that guard separately in agentLoop).
+ *
+ * Returns `null` to mean "no deterministic chart — let the LLM proposer try"
+ * (empty/too-many rows, no usable dimension, scalar frame, too many X labels,
+ * compile failure, or the proposal guard rejects it). Returns `{ charts, note }`
+ * when a chart was built. A `minimal` depth ask is then short-circuited to
+ * `{ charts: [] }` by the caller's depth gate, so a plain lookup still gets at
+ * most this one chart and never an LLM-padded plethora.
+ */
+export function buildDeterministicFallbackChart(
+  ctx: AgentExecutionContext,
+  existingCharts: ChartSpec[]
+): { charts: ChartSpec[]; note: string } | null {
+  if (existingCharts.length !== 0) return null;
+  const table = ctx.lastAnalyticalTable;
+  if (!table?.rows?.length) return null;
+
+  const spec = buildChartFromAnalyticalTable({
+    table: { rows: table.rows, columns: table.columns ?? [] },
+    summary: ctx.summary,
+    question: ctx.question,
+  });
+  if (!spec) return null;
+
+  // Re-apply the ctx-aware proposal guard (columns exist on the analytical
+  // frame / dataset summary + y is numeric). On failure, fall through to the
+  // LLM proposer rather than ship a chart the validator can't confirm.
+  if (
+    !validateChartProposal(ctx, {
+      x: spec.x,
+      y: spec.y,
+      type: spec.type,
+      z: spec.z,
+      seriesColumn: spec.seriesColumn,
+    })
+  ) {
+    return null;
+  }
+
+  return {
+    charts: [spec],
+    note: `Deterministic chart fallback for breakdown: ${spec.title}`,
+  };
+}
+
 export async function proposeAndBuildExtraCharts(
   ctx: AgentExecutionContext,
   observationsText: string,
@@ -190,217 +243,14 @@ export async function proposeAndBuildExtraCharts(
     return { charts: [] };
   }
 
-  // Deterministic fallback: for simple breakdown frames (one categorical-ish dimension + one numeric measure),
-  // always build a chart when no charts were already produced.
-  // This prevents a UX failure mode where the LLM returns {"addCharts": []}.
-  if (existingCharts.length === 0 && ctx.lastAnalyticalTable?.rows?.length) {
-    const rows = ctx.lastAnalyticalTable.rows as Record<string, any>[];
-    const columns = ctx.lastAnalyticalTable.columns ?? [];
-
-    // Only run on small enough frames so the chart remains readable.
-    if (rows.length > 0 && rows.length <= 200 && columns.length >= 2) {
-      const sample = rows.slice(0, 80);
-
-      const isNumericishOnSample = (col: string): boolean => {
-        const cap = Math.min(20, sample.length);
-        for (let i = 0; i < cap; i++) {
-          const v = sample[i]?.[col];
-          if (v == null || v === "") continue;
-          if (typeof v === "number" && Number.isFinite(v)) return true;
-          if (typeof v === "string") {
-            const cleaned = v.replace(/[%,]/g, "").trim();
-            if (cleaned && Number.isFinite(Number(cleaned))) return true;
-          }
-        }
-        return false;
-      };
-
-      const numericCols = columns.filter((c) => isNumericishOnSample(c));
-      const dimCols = columns.filter((c) => !isNumericishOnSample(c));
-
-      if (numericCols.length >= 1 && dimCols.length >= 1) {
-        // Mirror chartFromTable's resolver-based x-axis pick. Keeps the
-        // visual-planner deterministic fallback in lockstep with the
-        // chart-promotion path so a Marico-style multi-period frame doesn't
-        // produce two different incoherent charts from the two paths.
-        const periodAxis = resolvePeriodAxis(
-          columns,
-          sample,
-          ctx.summary,
-          ctx.question
-        );
-
-        let x: string;
-        let workingRows: Record<string, unknown>[] = rows as Record<
-          string,
-          unknown
-        >[];
-        let axisReason: string | undefined;
-
-        if (periodAxis.pickedColumn) {
-          x = periodAxis.pickedColumn;
-          axisReason = periodAxis.reason;
-          if (periodAxis.injectedFilter) {
-            const f = periodAxis.injectedFilter;
-            const filtered = (rows as Record<string, unknown>[]).filter(
-              (r) => String(r?.[f.column] ?? "").trim() === f.value
-            );
-            if (filtered.length > 0) workingRows = filtered;
-          }
-        } else {
-          const usableDim = dimCols.find((c) => {
-            const distinct = new Set<string>();
-            for (const r of sample) {
-              const v = r?.[c];
-              if (v == null || v === "") continue;
-              distinct.add(String(v));
-              if (distinct.size >= 2) break;
-            }
-            return distinct.size >= 2;
-          });
-          if (!usableDim) {
-            // Skip the deterministic fallback when no usable dim — better
-            // to ship the LLM proposal (or nothing) than a one-bar chart.
-            // Fall out of the if-block.
-            return { charts: [] };
-          }
-          x = usableDim;
-        }
-
-        // Facts/Metric awareness (mirrored from chartFromTable).
-        const factsMetric = resolveFactsMetric(
-          columns,
-          sample,
-          ctx.summary,
-          ctx.question
-        );
-        if (factsMetric.metricColumn && factsMetric.injectedFilter) {
-          const f = factsMetric.injectedFilter;
-          const filtered = workingRows.filter(
-            (r) => String(r?.[f.column] ?? "").trim() === f.value
-          );
-          if (filtered.length > 0) {
-            workingRows = filtered;
-            axisReason = axisReason
-              ? `${axisReason} · ${factsMetric.reason}`
-              : factsMetric.reason;
-          }
-        }
-
-        const scoreMeasure = (col: string): number => {
-          const n = col.toLowerCase();
-          return (
-            (/_sum\b/.test(n) ? 5 : 0) +
-            (/_avg\b/.test(n) || /_mean\b/.test(n) ? 4 : 0) +
-            (/_count\b/.test(n) ? 3 : 0) +
-            (/_min\b/.test(n) || /_max\b/.test(n) ? 2 : 0) +
-            (/_total\b/.test(n) ? 1 : 0)
-          );
-        };
-        const y = numericCols.slice().sort((a, b) => scoreMeasure(b) - scoreMeasure(a))[0]!;
-
-        const xTemporal =
-          ctx.summary.dateColumns.includes(x) ||
-          /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(x) ||
-          x.startsWith("__tf_") ||
-          Boolean(periodAxis.pickedColumn);
-
-        // Avoid building a bar chart with too many distinct X labels.
-        const workingSample = workingRows.slice(0, 80);
-        const xUnique = new Set(workingSample.map((r) => String(r?.[x] ?? ""))).size;
-        if (xUnique <= 60) {
-          const chartType = xTemporal ? "line" : "bar";
-
-          const { merged: mp } = compileChartSpec(
-            workingRows,
-            {
-              numericColumns: ctx.summary.numericColumns,
-              dateColumns: ctx.summary.dateColumns,
-            },
-            { type: chartType, x, y },
-            { columnOrder: columns }
-          );
-
-          const spec = chartSpecSchema.parse({
-            type: mp.type,
-            title:
-              mp.type === "heatmap"
-                ? `${mp.z} (${mp.x} × ${mp.y})`
-                : factsMetric.metricValue
-                  ? `${factsMetric.metricValue} by ${mp.x}`
-                  : `${mp.y} by ${mp.x}`,
-            x: mp.x,
-            y: mp.y,
-            ...(mp.z ? { z: mp.z } : {}),
-            ...(mp.seriesColumn ? { seriesColumn: mp.seriesColumn } : {}),
-            ...(mp.barLayout ? { barLayout: mp.barLayout } : {}),
-            aggregate:
-              mp.aggregate ??
-              (mp.seriesColumn &&
-              (mp.type === "bar" || mp.type === "line" || mp.type === "area")
-                ? ("sum" as const)
-                : ("none" as const)),
-            ...(axisReason ? { axisReason } : {}),
-          });
-
-          if (
-            validateChartProposal(ctx, {
-              x: mp.x,
-              y: mp.y,
-              type: mp.type,
-              z: mp.z,
-              seriesColumn: mp.seriesColumn,
-            }) &&
-            !existingCharts.length
-          ) {
-            const processed = processChartData(
-              workingRows,
-              spec,
-              ctx.summary.dateColumns,
-              { chartQuestion: ctx.question }
-            );
-
-            const smartDomains =
-              spec.type === "heatmap"
-                ? {}
-                : calculateSmartDomainsForChart(
-                    processed,
-                    spec.x,
-                    spec.y,
-                    spec.y2 || undefined,
-                    {
-                      yOptions: {
-                        useIQR: true,
-                        paddingPercent: 5,
-                        includeOutliers: true,
-                      },
-                      y2Options: spec.y2
-                        ? {
-                            useIQR: true,
-                            paddingPercent: 5,
-                            includeOutliers: true,
-                          }
-                        : undefined,
-                    }
-                  );
-
-            return {
-              charts: [
-                {
-                  ...spec,
-                  xLabel: spec.x,
-                  yLabel: spec.y,
-                  data: processed,
-                  ...smartDomains,
-                },
-              ],
-              note: `Deterministic chart fallback for breakdown: ${spec.title}`,
-            };
-          }
-        }
-      }
-    }
-  }
+  // Deterministic fallback: for simple breakdown frames (one categorical-ish
+  // dimension + one numeric measure), build ONE chart when no chart was produced
+  // yet — delegating to the SAME `buildChartFromAnalyticalTable` the
+  // chart-promotion path uses (so the two paths can't drift) plus the ctx-aware
+  // proposal guard. This prevents the UX failure mode where the LLM returns
+  // {"addCharts": []}. Returns null → fall through to the LLM proposer.
+  const deterministic = buildDeterministicFallbackChart(ctx, existingCharts);
+  if (deterministic) return deterministic;
 
   // Depth-budget gate (query-intent authority). A plain lookup / direct-factual
   // ask warrants NO speculative EXTRA charts. The deterministic single-chart
@@ -491,7 +341,7 @@ export async function proposeAndBuildExtraCharts(
 
     const xIsDate =
       ctx.summary.dateColumns.some((d) => d === mp.x) ||
-      /^(Day|Week|Month|Quarter|Half-year|Year) · /.test(mp.x);
+      isTemporalFacetColumnKey(mp.x);
     if (mp.type === "bar" && xIsDate && rowSource.length > 50) {
       continue;
     }
@@ -529,35 +379,7 @@ export async function proposeAndBuildExtraCharts(
       const processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
         chartQuestion: ctx.question,
       });
-      let smartDomains: Record<string, unknown> = {};
-      if (spec.type === "heatmap") {
-        smartDomains = {};
-      } else if (spec.seriesKeys?.length) {
-        const sk = spec.seriesKeys;
-        smartDomains = yDomainForMultiSeriesRows(
-          processed,
-          sk,
-          multiSeriesYDomainKind(spec.type, spec.barLayout)
-        );
-      } else {
-        smartDomains = calculateSmartDomainsForChart(
-          processed,
-          spec.x,
-          spec.y,
-          spec.y2 || undefined,
-          {
-            yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-            y2Options: spec.y2 ? { useIQR: true, paddingPercent: 5, includeOutliers: true } : undefined,
-          }
-        );
-      }
-      built.push({
-        ...spec,
-        xLabel: spec.x,
-        yLabel: spec.y,
-        data: processed,
-        ...smartDomains,
-      });
+      built.push(finishChartSpec(spec, processed));
     } catch {
       /* skip invalid */
     }

@@ -51,12 +51,16 @@ import type { DataSummary } from "../shared/schema.js";
 // from queryPlanTemporalPatch.ts so existing importers keep working).
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Per-source-date-column span metadata (subset produced by `createDataSummary`). */
+/** Per-source-date-column span metadata (subset produced by `createDataSummary`).
+ *  `minIso`/`maxIso` are required to mirror the canonical `dateRange` shape in
+ *  `shared/schema.ts` (DataSummary columns) — `deriveDateRangeFromRows` and
+ *  `createDataSummary` always emit all four fields when they emit a range at all,
+ *  so the two structures stay assignable in both directions. */
 export interface DateRange {
   spanDays: number;
   distinctDayCount: number;
-  minIso?: string;
-  maxIso?: string;
+  minIso: string;
+  maxIso: string;
 }
 
 export type DateRangeByColumn = ReadonlyMap<string, DateRange>;

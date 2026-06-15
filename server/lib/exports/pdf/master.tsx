@@ -11,26 +11,26 @@
  * `LAYOUT_WIDE` (13.33 × 7.5 inches). All layout files position content
  * within `CONTENT_BOX` to keep header / footer reservations consistent.
  *
- * One source of truth: palette mirrored from
- * `client/src/pages/Dashboard/exportTheme.ts`,
- * `server/lib/exports/chartSsr.ts`, AND `server/lib/exports/pptx/master.ts`.
- * Four sources is two too many; the unification is a follow-up cleanup.
+ * One source of truth: palette comes from the shared
+ * `server/lib/exports/brandPalette.ts` (also consumed by the chartSsr and
+ * pptx masters). '#'-prefixed for @react-pdf's CSS subset.
  */
 import React from "react";
 import { StyleSheet, Text, View } from "@react-pdf/renderer";
+import { EXPORT_HEX, EXPORT_CATEGORICAL_HEX, withHash } from "../brandPalette.js";
 
 export const PDF_BRAND = {
-  primary: "#0B63F6",
-  accent: "#0EA5E9",
-  foreground: "#111827",
-  muted: "#6B7280",
-  border: "#D1D5DB",
-  background: "#FFFFFF",
-  surfaceMuted: "#F8FAFC",
-  categorical: ["#0B63F6", "#0EA5E9", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#14B8A6"],
-  horizonNow: "#EF4444",
-  horizonThisQuarter: "#F59E0B",
-  horizonStrategic: "#10B981",
+  primary: withHash(EXPORT_HEX.primary),
+  accent: withHash(EXPORT_HEX.accent),
+  foreground: withHash(EXPORT_HEX.foreground),
+  muted: withHash(EXPORT_HEX.muted),
+  border: withHash(EXPORT_HEX.border),
+  background: withHash(EXPORT_HEX.background),
+  surfaceMuted: withHash(EXPORT_HEX.surfaceMuted),
+  categorical: EXPORT_CATEGORICAL_HEX,
+  horizonNow: withHash(EXPORT_HEX.horizonNow),
+  horizonThisQuarter: withHash(EXPORT_HEX.horizonThisQuarter),
+  horizonStrategic: withHash(EXPORT_HEX.horizonStrategic),
 } as const;
 
 /** @react-pdf falls back to its built-in Helvetica when "Inter" isn't registered.

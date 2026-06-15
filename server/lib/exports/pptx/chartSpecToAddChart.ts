@@ -21,57 +21,24 @@ import { PPTX_CHART_TYPE } from "./types.js";
 import type { PptxRectShape } from "./types.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { formatPeriodKeyForDisplay } from "../../dateUtils.js";
+import {
+  cartesianSeries,
+  scatterSeries,
+  readNum,
+  type CartesianSeries,
+  type ScatterSeries,
+} from "../chartSpecSeries.js";
 
 interface AddChartTarget {
   addChart: (chartType: unknown, data: unknown, options: Partial<PptxRectShape> & Record<string, unknown>) => unknown;
 }
 
-interface CartesianSeries {
-  name: string;
-  labels: string[];
-  values: number[];
-}
-
-interface ScatterSeries {
-  name: string;
-  values: Array<[number, number]>;
-}
-
-function readNum(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
 function buildCartesianSeries(spec: ChartSpec): CartesianSeries[] {
-  const data = spec.data ?? [];
-  // Canonical period keys → human labels ("2023-Q1" → "Q1 2023"); positional so
-  // value alignment / order is unaffected. Non-period categories pass through.
-  const labels = data.map((r) => formatPeriodKeyForDisplay(r[spec.x]));
-  const values = data.map((r) => readNum(r[spec.y]) ?? 0);
-  return [
-    {
-      name: spec.yLabel ?? spec.y,
-      labels,
-      values,
-    },
-  ];
+  return [cartesianSeries(spec.data ?? [], spec.x, spec.y, spec.yLabel ?? spec.y)];
 }
 
 function buildScatterSeries(spec: ChartSpec): ScatterSeries[] {
-  const data = spec.data ?? [];
-  const values = data
-    .map((r) => [readNum(r[spec.x]), readNum(r[spec.y])] as [number | null, number | null])
-    .filter((p): p is [number, number] => p[0] !== null && p[1] !== null);
-  return [
-    {
-      name: spec.yLabel ?? spec.y,
-      values,
-    },
-  ];
+  return [scatterSeries(spec.data ?? [], spec.x, spec.y, spec.yLabel ?? spec.y)];
 }
 
 function buildPieSeries(spec: ChartSpec): CartesianSeries[] {

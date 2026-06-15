@@ -8,7 +8,7 @@ import { pivotLongToWideBar, sanitizeSeriesKey, processChartData } from "../lib/
 import type { DataSummary } from "../shared/schema.js";
 import type { ParsedQuery } from "../shared/queryTypes.js";
 
-describe("analyticalChartSpec", () => {
+describe("analyticalChartBuilders", () => {
   it("shouldBuildDeterministic when two groupBy dimensions", () => {
     assert.equal(
       shouldBuildDeterministicAnalyticalCharts("give me sales", { groupBy: ["a", "b"] } as ParsedQuery, [

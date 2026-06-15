@@ -42,7 +42,7 @@ import type { ChartSpec } from "../../../shared/schema.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
-import { calculateSmartDomainsForChart } from "../../axisScaling.js";
+import { finishChartSpec } from "../../chartSpecFinish.js";
 import { toNumber } from "../../numberCoercion.js";
 import {
   resolveTrendGrain,
@@ -408,28 +408,7 @@ function tryBuildChart(
       ctx.summary.dateColumns,
       { chartQuestion: ctx.question }
     );
-    const smartDomains =
-      spec.type === "heatmap"
-        ? {}
-        : calculateSmartDomainsForChart(
-            processed,
-            spec.x,
-            spec.y,
-            spec.y2 || undefined,
-            {
-              yOptions: { useIQR: true, paddingPercent: 5, includeOutliers: true },
-              y2Options: spec.y2
-                ? { useIQR: true, paddingPercent: 5, includeOutliers: true }
-                : undefined,
-            }
-          );
-    return {
-      ...spec,
-      xLabel: spec.x,
-      yLabel: spec.y,
-      data: processed,
-      ...smartDomains,
-    } as ChartSpec;
+    return finishChartSpec(spec, processed);
   } catch {
     return null;
   }
