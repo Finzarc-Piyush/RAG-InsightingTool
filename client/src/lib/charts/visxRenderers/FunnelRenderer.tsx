@@ -8,7 +8,7 @@
  * the conversion % from the previous stage.
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
@@ -41,7 +41,7 @@ export interface FunnelRendererProps {
 
 const MARGIN = { top: 16, right: 16, bottom: 16, left: 16 };
 
-export function FunnelRenderer({
+function FunnelRendererImpl({
   spec,
   data,
   width,
@@ -178,3 +178,10 @@ export function FunnelRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const FunnelRenderer = memo(FunnelRendererImpl);
+FunnelRenderer.displayName = "FunnelRenderer";

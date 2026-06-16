@@ -2,7 +2,7 @@
 import os
 import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -50,6 +50,46 @@ _FORBIDDEN_EXPR_TOKENS = (
     "getattr",
     "setattr",
 )
+
+
+# PY-8 · Typed return shapes for the main data-ops functions. These are additive,
+# documentation-grade annotations — they describe the dicts the functions already
+# return and change no runtime behaviour or values. Row dicts and heterogeneous
+# stat/summary entries stay `dict[str, Any]` because their keys vary per dataset.
+class AggregateDataResult(TypedDict):
+    data: list[dict[str, Any]]
+    rows_before: int
+    rows_after: int
+    warnings: list[dict[str, Any]]
+
+
+class PivotTableResult(TypedDict):
+    data: list[dict[str, Any]]
+    rows_before: int
+    rows_after: int
+
+
+class CreateDerivedColumnResult(TypedDict):
+    data: list[dict[str, Any]]
+    errors: list[str]
+
+
+class GetSummaryResult(TypedDict):
+    summary: list[dict[str, Any]]
+
+
+class TreatOutliersSummary(TypedDict):
+    columns_treated: list[str]
+    outliers_by_column: dict[str, int]
+
+
+class TreatOutliersResult(TypedDict):
+    data: list[dict[str, Any]]
+    rows_before: int
+    rows_after: int
+    outliers_treated: int
+    treatment_applied: str
+    summary: TreatOutliersSummary
 
 
 def coerce_to_boolean_with_warning(
@@ -487,7 +527,7 @@ def get_preview(data: list[dict[str, Any]], limit: int = 50) -> dict[str, Any]:
     }
 
 
-def get_summary(data: list[dict[str, Any]], column: str | None = None) -> dict[str, Any]:
+def get_summary(data: list[dict[str, Any]], column: str | None = None) -> GetSummaryResult:
     """
     Generate summary statistics for each column or a specific column.
 
@@ -823,7 +863,7 @@ def create_derived_column(
     data: list[dict[str, Any]],
     new_column_name: str,
     expression: str
-) -> dict[str, Any]:
+) -> CreateDerivedColumnResult:
     """
     Create a new column from an expression.
 
@@ -1272,7 +1312,7 @@ def aggregate_data(
     order_by_column: str | None = None,
     order_by_direction: Literal["asc", "desc"] = "asc",
     user_intent: str | None = None  # User's original message to detect intent
-) -> dict[str, Any]:
+) -> AggregateDataResult:
     """
     Aggregate data by grouping on a column and applying semantic aggregation functions.
 
@@ -1738,7 +1778,7 @@ def pivot_table(
     index_column: str,
     value_columns: list[str] | None = None,
     pivot_funcs: dict[str, Literal["sum", "avg", "mean", "min", "max", "count"]] | None = None
-) -> dict[str, Any]:
+) -> PivotTableResult:
     """
     Create a pivot table where the index column's values become column headers.
 
@@ -2241,7 +2281,7 @@ def treat_outliers(
     threshold: float | None = None,
     treatment: Literal["remove", "cap", "winsorize", "transform", "impute"] = "remove",
     treatment_value: Literal["mean", "median", "mode", "min", "max"] | float | None = None
-) -> dict[str, Any]:
+) -> TreatOutliersResult:
     """
     Treat outliers in numeric columns.
 

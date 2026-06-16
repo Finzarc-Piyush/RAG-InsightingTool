@@ -14,6 +14,7 @@ import { sendSSE, setSSEHeaders } from "../../utils/sse.helper.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import { Response } from "express";
 import { logger } from "../../lib/logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export interface ProcessStreamDataOpsParams {
   sessionId: string;
@@ -77,9 +78,9 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     let chatDocument: ChatDocument | null = null;
     try {
       chatDocument = await getChatBySessionIdForUser(sessionId, username);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // If CosmosDB isn't initialized, we can't get the document
-      if (error?.message?.includes('CosmosDB container not initialized')) {
+      if (errorMessage(error).includes('CosmosDB container not initialized')) {
         logger.warn('⚠️ CosmosDB not initialized, cannot proceed without session document.');
         sendSSE(res, 'error', { error: 'Database is initializing. Please wait a moment and try again.' });
         res.end();
@@ -124,13 +125,13 @@ export async function processStreamDataOperation(params: ProcessStreamDataOpsPar
     let fullData: Record<string, any>[];
     try {
       fullData = await loadDataForOperation(chatDocument);
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('❌ Failed to load data:', error);
-      const errorMessage = error?.message || 'Failed to load data';
+      const loadErrorMessage = errorMessage(error) || 'Failed to load data';
       sendSSE(res, 'error', {
-        error: errorMessage.includes('No data found')
+        error: loadErrorMessage.includes('No data found')
           ? 'No data found. Please ensure your file was uploaded correctly and try uploading again.'
-          : errorMessage,
+          : loadErrorMessage,
       });
       res.end();
       return;

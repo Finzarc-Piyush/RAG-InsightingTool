@@ -26,6 +26,7 @@ import {
 import { normalizeQuestionForCache } from "./normalizeQuestion.js";
 import { logger } from "../logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
+import { isFlagOn } from "../featureFlags.js";
 
 /** Default TTL — a week. Config via `QUESTION_CACHE_TTL_DAYS`. */
 const DEFAULT_TTL_DAYS = 7;
@@ -56,11 +57,11 @@ export interface CacheLookupInput {
 }
 
 function exactFeatureEnabled(): boolean {
-  return process.env.QUESTION_CACHE_EXACT_ENABLED === "true";
+  return isFlagOn("QUESTION_CACHE_EXACT_ENABLED");
 }
 
 function semanticFeatureEnabled(): boolean {
-  return process.env.QUESTION_CACHE_SEMANTIC_ENABLED === "true";
+  return isFlagOn("QUESTION_CACHE_SEMANTIC_ENABLED");
 }
 
 /**

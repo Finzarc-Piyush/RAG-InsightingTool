@@ -143,10 +143,10 @@ import type {
   ToolCallRecord,
   WorkingMemoryEntry,
 } from "./types.js";
-import { isInterAgentPromptFeedbackEnabled } from "./types.js";
+import { isInterAgentPromptFeedbackEnabled } from "./runtimeConfig.js";
 import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
+import { closeTurnColumnarStorage } from "./turnColumnarStorage.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
-import { runPlanner, type PlannerRejectReason } from "./planner.js";
 import { maybeRunAnalysisBrief, shouldBuildAnalysisBrief } from "./analysisBrief.js";
 import { applyDashboardCoverage } from "./dashboardCoverageGate.js";
 import {
@@ -223,7 +223,6 @@ import {
   chartIntentGuardEnabled,
 } from "./chartIntentGuard.js";
 import {
-  chartSpecSchema,
   type ChartSpec,
   type DashboardPivotSpec,
   type DataSummary,
@@ -237,14 +236,15 @@ import {
   addComputedColumnsArgsSchema,
   registerComputedColumnsOnSummary,
 } from "../../computedColumns.js";
-import {
-  validateChartProposal,
-  chartRowsForProposal,
-} from "./chartProposalValidation.js";
-import { processChartData } from "../../chartGenerator.js";
 import { buildIntermediateInsight } from "./buildIntermediateInsight.js";
 import { derivePivotDefaultsFromPreviewRows } from "../../pivotDefaultsFromPreview.js";
-import { buildAutoPivotSpecFromPreview } from "../../autoPivotSpec.js";
+// Wave (ARCH-1/CQ-1) · pure pre-synthesis / dashboard-prep helpers extracted to a
+// sibling module (low-coupling: explicit args, pure, no runAgentTurn closure state).
+// Internal-only — no external importer uses them from this path, so no re-export.
+import {
+  buildAutoPivotSpec,
+  buildPreSynthesisMidTurnSummary,
+} from "./agentLoopSynthesisPrep.js";
 import { mergePivotDefaultRowsAndValues } from "../../pivotDefaultsFromExecution.js";
 import type { QueryPlanBody } from "../../queryPlanExecutor.js";
 import { classifyQueryIntent } from "./queryIntentAuthority.js";
@@ -281,36 +281,7 @@ const DATA_PREP_INTERMEDIATE_TOOLS = new Set([
   "derive_dimension_bucket",
 ]);
 
-/**
- * Build the `DashboardPivotSpec` to auto-attach to the dashboard at build
- * time. Uses the same `derivePivotDefaultsFromPreviewRows` helper that seeds
- * the chat-side pivot panel — so the dashboard's pivot tile renders the
- * SAME view the user sees if they switch the chat response to "Pivot".
- *
- * Returns `undefined` when the turn produced no analytical table or when the
- * derived defaults don't have a meaningful row × value pivot (single-cell
- * scalar answers, etc.). Caller treats undefined as "no pivot tile".
- */
-function buildAutoPivotSpec(args: {
-  table: unknown;
-  summary: DataSummary | undefined;
-  turnId: string;
-  sessionId: string | undefined;
-}): DashboardPivotSpec | undefined {
-  if (!args.summary) return undefined;
-  const { rows, columns } = extractTableRowsAndColumns(args.table);
-  // Pure spec assembly (incl. the base-table value-field guard) lives in
-  // ../../autoPivotSpec.js so it can be unit-tested without the agent runtime.
-  return buildAutoPivotSpecFromPreview({
-    rows,
-    columns,
-    summary: args.summary,
-    turnId: args.turnId,
-    sessionId: args.sessionId,
-  });
-}
 
-import { finishChartSpec } from "../../chartSpecFinish.js";
 // Wave R31 · pure shape/extraction/serialisation helpers extracted to a sibling
 // module (low-coupling: they depend only on EXTERNAL types/modules, never on
 // runtime values defined here). Imported back for internal use AND re-exported
@@ -348,126 +319,23 @@ export {
 
 export type AgentSseEmitter = (event: string, data: unknown) => void;
 
-/** Shape needed to rebuild a plan-time build_chart after synthesis (same frame as narrative). */
-type DeferredBuildChartTemplate = Pick<ChartSpec, "type" | "title" | "x" | "y" | "aggregate"> & {
-  y2?: string;
-  y2Series?: string[];
-  z?: string;
-  seriesColumn?: string;
-  barLayout?: "stacked" | "grouped";
-  _agentEvidenceRef?: string;
-  _agentTurnId?: string;
-};
-
-function deferredTemplateFromBuiltChart(c: ChartSpec): DeferredBuildChartTemplate {
-  return {
-    type: c.type,
-    title: c.title,
-    x: c.x,
-    y: c.y,
-    ...(c.y2 ? { y2: c.y2 } : {}),
-    ...(c.y2Series?.length ? { y2Series: [...c.y2Series] } : {}),
-    ...(c.z ? { z: c.z } : {}),
-    ...(c.seriesColumn ? { seriesColumn: c.seriesColumn } : {}),
-    ...(c.barLayout ? { barLayout: c.barLayout } : {}),
-    ...(c.aggregate != null ? { aggregate: c.aggregate } : {}),
-    ...(c._agentEvidenceRef ? { _agentEvidenceRef: c._agentEvidenceRef } : {}),
-    ...(c._agentTurnId ? { _agentTurnId: c._agentTurnId } : {}),
-  };
-}
-
-function rowFrameSupportsDeferredTemplate(
-  first: Record<string, unknown> | undefined,
-  t: DeferredBuildChartTemplate
-): boolean {
-  if (!first) return false;
-  const keys = [
-    t.x,
-    t.y,
-    ...(t.y2 ? [t.y2] : []),
-    ...(t.y2Series ?? []),
-    ...(t.z ? [t.z] : []),
-    ...(t.seriesColumn ? [t.seriesColumn] : []),
-  ];
-  return keys.every((k) => Object.prototype.hasOwnProperty.call(first, k));
-}
-
-/**
- * Plan-time build_chart specs are deferred until after synthesis so series are built from the
- * same analytical frame the answer used (last execute_query_plan / ctx.data), not mid-plan snapshots.
- */
-function materializeDeferredBuildCharts(
-  ctx: AgentExecutionContext,
-  deferred: DeferredBuildChartTemplate[],
-  mergedCharts: ChartSpec[]
-): void {
-  if (!deferred.length) return;
-  for (const tmpl of deferred) {
-    try {
-      const p = {
-        type: tmpl.type,
-        x: tmpl.x,
-        y: tmpl.y,
-        ...(tmpl.z ? { z: tmpl.z } : {}),
-        ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
-        ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
-      };
-      if (!validateChartProposal(ctx, p)) {
-        // P-A5: don't silently drop; leave a breadcrumb so operators can trace
-        // charts that never rendered.
-        agentLog("deferredChart.dropped", {
-          reason: "validateChartProposal",
-          title: tmpl.title,
-          x: tmpl.x,
-          y: tmpl.y,
-        });
-        continue;
-      }
-      const { rows, useAnalyticalOnly } = chartRowsForProposal(ctx, p);
-      const first = rows[0] as Record<string, unknown> | undefined;
-      if (!rowFrameSupportsDeferredTemplate(first, tmpl)) {
-        agentLog("deferredChart.dropped", {
-          reason: "frameMissingColumns",
-          title: tmpl.title,
-          x: tmpl.x,
-          y: tmpl.y,
-          ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
-          availableKeys: Object.keys(first ?? {}).slice(0, 12).join(", "),
-        });
-        continue;
-      }
-      const spec = chartSpecSchema.parse({
-        type: tmpl.type,
-        title: tmpl.title,
-        x: tmpl.x,
-        y: tmpl.y,
-        ...(tmpl.z ? { z: tmpl.z } : {}),
-        ...(tmpl.seriesColumn ? { seriesColumn: tmpl.seriesColumn } : {}),
-        ...(tmpl.barLayout ? { barLayout: tmpl.barLayout } : {}),
-        ...(tmpl.y2 ? { y2: tmpl.y2 } : {}),
-        ...(tmpl.y2Series?.length ? { y2Series: tmpl.y2Series } : {}),
-        aggregate: tmpl.aggregate ?? "none",
-        ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
-      });
-      const processed = processChartData(
-        rows as Record<string, any>[],
-        spec,
-        ctx.summary.dateColumns,
-        { chartQuestion: ctx.question }
-      );
-      mergedCharts.push({
-        ...finishChartSpec(spec, processed),
-        ...(tmpl._agentEvidenceRef ?
-          { _agentEvidenceRef: tmpl._agentEvidenceRef }
-        : {}),
-        ...(tmpl._agentTurnId ? { _agentTurnId: tmpl._agentTurnId } : {}),
-      });
-    } catch {
-      /* skip invalid */
-    }
-  }
-  deferred.length = 0;
-}
+// Wave (ARCH-1/CQ-1) · plan-time build_chart deferral + materialisation extracted
+// to a sibling module (low-coupling: depends only on EXTERNAL chart modules + the
+// shared ChartSpec / AgentExecutionContext types, never on runAgentTurn closure
+// state). Imported back for internal use AND re-exported so any file importing
+// them from this path keeps resolving unchanged.
+import {
+  type DeferredBuildChartTemplate,
+  deferredTemplateFromBuiltChart,
+  rowFrameSupportsDeferredTemplate,
+  materializeDeferredBuildCharts,
+} from "./agentLoopDeferredCharts.js";
+export {
+  type DeferredBuildChartTemplate,
+  deferredTemplateFromBuiltChart,
+  rowFrameSupportsDeferredTemplate,
+  materializeDeferredBuildCharts,
+} from "./agentLoopDeferredCharts.js";
 
 /**
  * Final pass over `mergedCharts`: dedupe by axis-signature and cap at
@@ -855,23 +723,6 @@ async function runPlainTextRetry(
   return text;
 }
 
-function buildPreSynthesisMidTurnSummary(
-  ctx: AgentExecutionContext,
-  trace: AgentTrace,
-  observations: string[],
-  mergedCharts: Array<{ title: string; x: string; y: string }>
-): string {
-  const tools = trace.toolCalls.map((t) => `${t.name}:${t.ok}`).join(", ");
-  const obsTail = observations.join("\n\n---\n\n").slice(-5000);
-  const charts = mergedCharts.map((c) => `${c.title}(${c.x}/${c.y})`).join("; ");
-  return [
-    `Question: ${ctx.question.slice(0, 500)}`,
-    `planRationale: ${(trace.planRationale || "").slice(0, 1200)}`,
-    `tools: ${tools || "(none)"}`,
-    `chartsSoFar: ${charts || "(none)"}`,
-    `recentObservations:\n${obsTail}`,
-  ].join("\n\n");
-}
 
 // Import explicitly so the local binding exists (the helper is used below);
 // keep the re-export so downstream consumers continue to import it via the
@@ -880,79 +731,14 @@ import { appendEnvelopeInsight } from "./insightHelpers.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
 export { appendEnvelopeInsight };
 
-const PLANNER_RETRY_HINTS: Partial<Record<PlannerRejectReason, string>> = {
-  llm_json_invalid:
-    "IMPORTANT: Fix the previous attempt. Output ONLY valid JSON: an object with \"rationale\" (string) and \"steps\" (non-empty array of objects with id, tool, args, optional dependsOn). Use exact tool names from the Tools list.",
-  empty_steps:
-    "IMPORTANT: The steps array must not be empty. Include at least one step with a valid tool and args.",
-  invalid_tool_args:
-    "IMPORTANT: Tool arguments failed schema validation. For `execute_query_plan`, ensure `plan.dimensionFilters` items include required keys `column`, `op` ('in'|'not_in'), and `values` (string[]). If `plan.sort` is present, every item must include `column` and `direction` ('asc'|'desc') — otherwise omit invalid sort entries. For other tools, use only allowed keys and exact column names from the Dataset columns line.",
-  unknown_tool:
-    "IMPORTANT: Use only tool names exactly as listed in the Tools section (no invented names).",
-  column_not_in_schema:
-    "IMPORTANT: Every column in the plan must match a name from the Dataset columns line exactly (including parentheses and spacing).",
-  invalid_aggregation_alias:
-    "IMPORTANT: For execute_query_plan aggregations, alias must differ from source column. Keep schema column in aggregations[].column and use a distinct human-readable aggregations[].alias if needed.",
-  ambiguous_column_resolution:
-    "IMPORTANT: Use the AUTHORITATIVE columns for this question exactly. Do not invent near-miss names; use only exact schema/canonical names in groupBy/aggregations/filters/sort.",
-  bad_depends_on:
-    "IMPORTANT: Each dependsOn must reference another step id from the same plan.",
-  dependency_cycle:
-    "IMPORTANT: Remove circular dependsOn links; order steps as a DAG.",
-};
-
-/** One follow-up planner attempt with a corrective hint (reduces empty-plan user-facing failures). */
-async function runPlannerWithOneRetry(
-  ctx: AgentExecutionContext,
-  registry: ToolRegistry,
-  turnId: string,
-  onLlmCall: () => void,
-  priorObservationsText?: string,
-  workingMemoryBlock?: string,
-  handoffDigest?: string,
-  ragHitsBlock?: string,
-  memoryRecallBlock?: string,
-  /** Wave B5 · structured per-step insights for re-planning. */
-  stepInsightsBlock?: string
-) {
-  const first = await runPlanner(
-    ctx,
-    registry,
-    turnId,
-    onLlmCall,
-    priorObservationsText,
-    workingMemoryBlock,
-    handoffDigest,
-    ragHitsBlock,
-    memoryRecallBlock,
-    stepInsightsBlock
-  );
-  if (first.ok) return first;
-  let hint = first.reason ? PLANNER_RETRY_HINTS[first.reason] : undefined;
-  if (!hint) return first;
-  // Make the retry self-correcting: append the SPECIFIC tool + Zod error so the
-  // LLM fixes exactly the field that failed, not just the generic category.
-  if (first.reason === "invalid_tool_args" && first.zod_error) {
-    hint += `\n\nThe tool "${first.tool}" rejected its args with this exact error: ${first.zod_error}\nFix precisely that — use only the allowed keys and exact enum values for that tool.`;
-  }
-  agentLog("planner.retry", { turnId, reason: first.reason });
-  const ctxRetry: AgentExecutionContext = {
-    ...ctx,
-    question: `${ctx.question}\n\n${hint}`,
-  };
-  return runPlanner(
-    ctxRetry,
-    registry,
-    turnId,
-    onLlmCall,
-    priorObservationsText,
-    workingMemoryBlock,
-    handoffDigest,
-    ragHitsBlock,
-    memoryRecallBlock,
-    stepInsightsBlock
-  );
-}
+// Wave (ARCH-1/CQ-1) · planner-retry wiring (PLANNER_RETRY_HINTS +
+// runPlannerWithOneRetry) extracted to a sibling module (low-coupling: explicit
+// args, returns the planner result, depends only on ./planner.js + ./agentLogger.js
+// and the shared AgentExecutionContext / ToolRegistry types — never on runAgentTurn
+// closure state). Imported back for internal use AND re-exported so any file
+// importing it from this path keeps resolving unchanged.
+import { runPlannerWithOneRetry } from "./agentLoopPlanner.js";
+export { runPlannerWithOneRetry } from "./agentLoopPlanner.js";
 
 export async function runAgentTurn(
   ctx: AgentExecutionContext,
@@ -1097,6 +883,9 @@ export async function runAgentTurn(
     });
     if (directResult) {
       trace.endedAt = Date.now();
+      // PERF-10 · Fast paths return before the main try/finally; close any
+      // per-turn shared DuckDB handle they opened (idempotent if none).
+      await closeTurnColumnarStorage(ctx);
       return directResult;
     }
   } catch (err) {
@@ -1126,6 +915,9 @@ export async function runAgentTurn(
     });
     if (quickResult) {
       trace.endedAt = Date.now();
+      // PERF-10 · Fast paths return before the main try/finally; close any
+      // per-turn shared DuckDB handle they opened (idempotent if none).
+      await closeTurnColumnarStorage(ctx);
       return quickResult;
     }
   } catch (err) {
@@ -1527,7 +1319,7 @@ export async function runAgentTurn(
                   invocation.rationale ||
                   `Skill ${skill.name} expanded into ${invocation.steps.length} step(s).`,
                 steps: invocation.steps,
-              } as unknown as Awaited<ReturnType<typeof runPlannerWithOneRetry>>;
+              };
 
               // PR 1.E: when the skill opts into parallelism, pre-run the
               // independent steps (no dependsOn) in parallel up to the
@@ -4323,5 +4115,12 @@ export async function runAgentTurn(
       ...appliedFiltersOut(),
       ...intentEnvelopeOut(),
     };
+  } finally {
+    // PERF-10 · Close the per-turn shared DuckDB handle exactly once at turn
+    // end (success, abort, or error). Idempotent — no-op if no analytical tool
+    // ever asked for a handle. Read tools (run_analytical_query, compute_growth,
+    // detect_seasonality, run_readonly_sql, execute_query_plan) borrow it via
+    // getTurnColumnarStorage and never close it themselves.
+    await closeTurnColumnarStorage(ctx);
   }
 }

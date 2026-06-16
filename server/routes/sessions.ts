@@ -32,7 +32,11 @@ import {
 
 const router = Router();
 
-// Get all sessions
+// Get all sessions.
+// API-9 · CANONICAL session-list route. The same entity is also reachable via
+// the legacy paths /chats/user/:username, /data/user/:username/sessions, and
+// /sessions/user/:username (all retained for back-compat). Prefer this route
+// with `?owner=me` for the current user's sessions, e.g. GET /api/sessions?owner=me.
 router.get('/sessions', getAllSessionsEndpoint);
 
 // Get sessions with pagination

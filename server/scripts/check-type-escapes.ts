@@ -14,8 +14,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 
-// Lower this as casts are removed — never raise it. (Established 2026-06-15.)
-const BASELINE = 201;
+// Lower this as casts are removed — never raise it. (201 on 2026-06-15;
+// lowered to 189 on 2026-06-16 after TYPE-6 removed 12 `as unknown as` casts.)
+const BASELINE = 188;
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const SCAN_DIRS = [

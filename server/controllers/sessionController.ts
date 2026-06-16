@@ -52,8 +52,9 @@ import {
 import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 import { generateChartInsights } from "../lib/insightGenerator.js";
+import { parsePagination } from "../lib/pagination.js";
 import { logger } from "../lib/logger.js";
-import { errorMessage } from "../utils/errorMessage.js";
+import { errorMessage, getErrorStatus } from "../utils/errorMessage.js";
 
 const CHART_KEY_INSIGHT_MAX_ROWS = 800;
 
@@ -70,6 +71,25 @@ function normalizeDataSummaryForLocalStats(ds: DataSummary): DataSummary {
 export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
   try {
     const username = requireUsername(req);
+
+    // API-9 · canonical convergence alias. The same "sessions for the current
+    // user" entity is reachable via three legacy paths (/chats/user/:username,
+    // /data/user/:username/sessions, /sessions/user/:username). This endpoint
+    // (GET /api/sessions) is the documented canonical form; `?owner=me` makes
+    // the intent explicit. Since this handler already scopes to the authed
+    // user, `owner=me` (or the user's own email) is an accepted no-op; any
+    // other owner is rejected — we never expose another user's sessions.
+    const ownerParam = (
+      Array.isArray(req.query.owner) ? req.query.owner[0] : req.query.owner
+    ) as string | undefined;
+    if (
+      ownerParam !== undefined &&
+      ownerParam !== "" &&
+      ownerParam.toLowerCase() !== "me" &&
+      ownerParam.trim().toLowerCase() !== username
+    ) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const sessions = await getAllSessions(username);
     
@@ -116,7 +136,13 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
 // Get sessions with pagination
 export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) => {
   try {
-    const pageSize = parseInt(req.query.pageSize as string) || 10;
+    // API-6 · clamp pageSize into [1, 100] via the shared parser (it treats
+    // `pageSize` as a limit alias). Default stays 10; the `pageSize` response
+    // field name is unchanged below so clients read the same shape.
+    const { limit: pageSize } = parsePagination(req.query, {
+      maxLimit: 100,
+      defaultLimit: 10,
+    });
     const continuationToken = req.query.continuationToken as string;
     
     const username = requireUsername(req);
@@ -388,9 +414,9 @@ export const getSessionDetailsEndpoint = async (req: Request, res: Response) => 
         session: sessionWithCharts,
         message: `Retrieved session details for ${sessionId}`
       });
-    } catch (accessError: any) {
+    } catch (accessError: unknown) {
       // Handle authorization errors separately
-      if (accessError?.statusCode === 403) {
+      if (getErrorStatus(accessError) === 403) {
         logger.warn(`⚠️ Unauthorized access attempt: ${normalizedRequesterEmail} tried to access session ${sessionId}`);
         return res.status(403).json({ 
           error: 'Unauthorized to access this session',
@@ -823,15 +849,15 @@ export const updateMessagePivotStateEndpoint = async (req: Request, res: Respons
     }
 
     return res.json({ ok: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof AuthenticationError) {
       return res.status(401).json({ error: err.message });
     }
-    if (err?.statusCode === 404) {
-      return res.status(404).json({ error: err.message });
+    if (getErrorStatus(err) === 404) {
+      return res.status(404).json({ error: errorMessage(err) });
     }
-    if (err?.statusCode === 403 || /unauthorized/i.test(String(err?.message ?? ""))) {
-      return res.status(403).json({ error: err.message });
+    if (getErrorStatus(err) === 403 || /unauthorized/i.test(errorMessage(err))) {
+      return res.status(403).json({ error: errorMessage(err) });
     }
     logger.error("Update message pivotState error:", err);
     return res.status(500).json({
@@ -856,8 +882,8 @@ export const getSessionAnalysisContextEndpoint = async (req: Request, res: Respo
       enrichmentStatus: session.enrichmentStatus ?? null,
       lastUpdatedAt: session.lastUpdatedAt,
     });
-  } catch (err: any) {
-    if (err instanceof AuthenticationError || err?.statusCode === 403) {
+  } catch (err: unknown) {
+    if (err instanceof AuthenticationError || getErrorStatus(err) === 403) {
       return res.status(403).json({ error: "Unauthorized" });
     }
     logger.error("getSessionAnalysisContextEndpoint error:", err);

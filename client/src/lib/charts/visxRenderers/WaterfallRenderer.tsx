@@ -11,7 +11,7 @@
  * chart-7 (red-ish), totals in chart-12 (neutral).
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { Bar } from "@visx/shape";
 import { scaleBand, scaleLinear } from "@visx/scale";
@@ -70,7 +70,7 @@ interface WaterfallBar {
   isTotal: boolean;
 }
 
-export function WaterfallRenderer({
+function WaterfallRendererImpl({
   spec,
   data,
   width,
@@ -299,3 +299,10 @@ export function WaterfallRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const WaterfallRenderer = memo(WaterfallRendererImpl);
+WaterfallRenderer.displayName = "WaterfallRenderer";

@@ -234,7 +234,7 @@ export function ChartRenderer({
     });
 
     return base;
-  }, [enableFilters, originalData, x, y, specSeriesKeys, type, chart.seriesColumn]);
+  }, [enableFilters, originalData, x, y, specSeriesKeys, type]);
 
   const isControlled = filters !== undefined;
 
@@ -256,7 +256,10 @@ export function ChartRenderer({
     [filters, isControlled, onFiltersChange]
   );
 
-  const baseFilters = isControlled ? (filters ?? {}) : internalFilters;
+  const baseFilters = useMemo(
+    () => (isControlled ? (filters ?? {}) : internalFilters),
+    [isControlled, filters, internalFilters],
+  );
 
   const effectiveFilters: ActiveChartFilters = useMemo(() => {
     if (!enableFilters) {
@@ -311,7 +314,8 @@ export function ChartRenderer({
   );
 
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
-  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeys?.join(',')]); // reset on chart change
+  const specSeriesKeysSig = specSeriesKeys?.join(',');
+  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeysSig]); // reset on chart change
 
   const filteredData = useMemo(() => {
     if (!enableFilters) return originalData;

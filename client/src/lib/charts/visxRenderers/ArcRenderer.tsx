@@ -7,7 +7,7 @@
  * standard pie with an inner radius slot reserved.
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { Pie } from "@visx/shape";
 import type { ChartSpecV2 } from "@/shared/schema";
@@ -54,7 +54,7 @@ interface Slice {
   color: string;
 }
 
-export function ArcRenderer({
+function ArcRendererImpl({
   spec,
   data,
   width,
@@ -219,3 +219,10 @@ export function ArcRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const ArcRenderer = memo(ArcRendererImpl);
+ArcRenderer.displayName = "ArcRenderer";

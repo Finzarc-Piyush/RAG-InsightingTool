@@ -8,8 +8,9 @@
 // ones that want `expect`, mocking, or a DOM — can live under
 // src/**/*.vitest.test.ts(x) and this runner will pick them up.
 //
-// Add `environment: "jsdom"` and `@testing-library/*` as devDeps the
-// first time a DOM-driven test lands; today the smoke test is pure.
+// CICD-7 · jsdom is now the default test environment (devDeps: jsdom +
+// @testing-library/react + @testing-library/jest-dom). A DOM-driven smoke
+// test lives at src/__tests__/smoke.vitest.test.tsx.
 //
 // NOTE: do not wrap this header in /* ... */ block comments — the glob
 // pattern above contains `*/` which silently closes the block and breaks
@@ -30,7 +31,7 @@ export default defineConfig({
     // server's node:test list until migrated. New vitest-native tests
     // should use `*.vitest.test.ts` (or `.vitest.spec.ts`) so the two
     // runners never double-count.
-    environment: "node",
+    environment: "jsdom",
     reporters: ["default"],
     passWithNoTests: true,
   },

@@ -19,9 +19,16 @@
  *   an inconsistent-results bug. Centralising the parse kills that class of fork.
  *
  * HOW IT CONNECTS
- *   Pure module (no imports). Import these instead of re-deriving truthiness or
- *   re-cloning the int parser.
+ *   Holds the truthiness/int primitives (no top-level imports). The TYPED flag
+ *   registry lives in `featureFlags.ts`, which builds ON these primitives; this
+ *   module in turn sources the DEFAULT polarity of known flags (e.g.
+ *   `BUSINESS_ACTIONS_ENABLED`) from that registry so the two never disagree.
+ *   The reference is lazy (call-time, inside the accessor) so the
+ *   envFlags⇄featureFlags ES-module cycle resolves cleanly. Import these
+ *   primitives instead of re-deriving truthiness or re-cloning the int parser.
  */
+
+import { FEATURE_FLAGS } from "./featureFlags.js";
 
 /**
  * Parse an integer env knob, falling back to `fallback` when unset or
@@ -57,8 +64,14 @@ export function envFlagEnabledByDefault(value: string | undefined): boolean {
 /**
  * `BUSINESS_ACTIONS_ENABLED` — default ON, case-insensitive. THE single accessor
  * so the live agent loop and the replay loop can never disagree on whether
- * business actions run (they previously diverged on case-sensitivity).
+ * business actions run (they previously diverged on case-sensitivity). The
+ * default polarity is sourced from the typed registry (`FEATURE_FLAGS`) so the
+ * default is declared in exactly one place; the parse is unchanged
+ * (`envFlagEnabledByDefault`, since the registered default is ON).
  */
 export function isBusinessActionsEnabled(): boolean {
-  return envFlagEnabledByDefault(process.env.BUSINESS_ACTIONS_ENABLED);
+  const raw = process.env.BUSINESS_ACTIONS_ENABLED;
+  return FEATURE_FLAGS.BUSINESS_ACTIONS_ENABLED.default
+    ? envFlagEnabledByDefault(raw)
+    : envFlagOn(raw);
 }

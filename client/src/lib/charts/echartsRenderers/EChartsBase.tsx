@@ -106,6 +106,9 @@ export function EChartsBase({
   useEffect(() => {
     let cancelled = false;
     let echartsRef: EChartsType | null = null;
+    // `chartRef` is a stable mutable container (useRef({instance:null})), not a
+    // DOM node ref — capture it so cleanup reads the same object, not a moved node.
+    const chartContainer = chartRef.current;
 
     async function init() {
       const echarts = (await import("echarts")) as unknown as EChartsType;
@@ -169,8 +172,8 @@ export function EChartsBase({
       cancelled = true;
       mql?.removeEventListener?.("change", reapplyTheme);
       mo?.disconnect();
-      chartRef.current.instance?.dispose();
-      chartRef.current.instance = null;
+      chartContainer.instance?.dispose();
+      chartContainer.instance = null;
     };
     // We intentionally re-init only on mount; option updates run separately.
     // eslint-disable-next-line react-hooks/exhaustive-deps

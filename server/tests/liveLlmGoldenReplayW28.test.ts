@@ -180,7 +180,7 @@ describe("W28 · live-LLM golden replay", () => {
         "../lib/agents/runtime/context.js"
       );
       const { loadAgentConfigFromEnv } = await import(
-        "../lib/agents/runtime/types.js"
+        "../lib/agents/runtime/runtimeConfig.js"
       );
 
       const ctx = buildAgentExecutionContext({

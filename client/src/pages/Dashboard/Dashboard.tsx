@@ -54,7 +54,7 @@ export default function Dashboard() {
       }
       window.history.replaceState({}, '', '/dashboard');
     })();
-  }, [dashboards, fetchDashboardById]);
+  }, [dashboards, fetchDashboardById, setCurrentDashboard]);
 
   const handleViewDashboard = async (dashboard: DashboardData) => {
     // Fetch fresh dashboard data to get updated lastOpenedAt

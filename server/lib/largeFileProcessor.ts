@@ -17,6 +17,7 @@ import {
 } from './temporalFacetColumns.js';
 import { logger } from "./logger.js";
 import { errorMessage } from "../utils/errorMessage.js";
+import { isFlagOn } from "./featureFlags.js";
 
 /**
  * Wave Dup3 · feature flag — DEFAULT OFF. Mirrors the `USE_PARQUET_READ_PATH`
@@ -32,7 +33,7 @@ import { errorMessage } from "../utils/errorMessage.js";
  * columns → "Yes"/"No" VARCHAR (matching `coerceBooleanCellToYesNo`).
  */
 export function isLargeFileCoercionEnabled(): boolean {
-  return process.env.LARGE_FILE_COERCION_ENABLED === 'true';
+  return isFlagOn('LARGE_FILE_COERCION_ENABLED');
 }
 
 export interface LargeFileProcessResult {

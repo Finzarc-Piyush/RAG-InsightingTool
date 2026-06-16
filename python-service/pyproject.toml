@@ -22,7 +22,9 @@ ignore_missing_imports = true
 # Lenient baseline — surfaces obvious type errors without demanding full
 # annotation coverage on an existing untyped codebase. Tighten over time.
 disallow_untyped_defs = false
-check_untyped_defs = false
+# PY-8: type-check the BODIES of unannotated functions too (still report-only in
+# CI — not blocking). Surfaces real type errors inside existing untyped code.
+check_untyped_defs = true
 warn_unused_ignores = false
 warn_redundant_casts = true
 no_implicit_optional = true

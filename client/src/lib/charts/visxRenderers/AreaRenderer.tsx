@@ -8,7 +8,7 @@
  * Dual-axis y2 not supported on area (use line + area combo via combo mark).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { AreaClosed, LinePath } from "@visx/shape";
 import { scaleLinear, scalePoint, scaleTime } from "@visx/scale";
@@ -116,7 +116,7 @@ function asTime(value: unknown): number {
   return Number.NaN;
 }
 
-export function AreaRenderer({
+function AreaRendererImpl({
   spec,
   data,
   width,
@@ -770,3 +770,10 @@ export function AreaRenderer({
     </div>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const AreaRenderer = memo(AreaRendererImpl);
+AreaRenderer.displayName = "AreaRenderer";

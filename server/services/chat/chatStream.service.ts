@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentWorkbenchEntry, Message, ThinkingStep, chartIdentityKey } from "../../shared/schema.js";
 import { answerQuestion } from "../../lib/dataAnalyzer.js";
+import { updateRequestContext } from "../../lib/telemetry/requestContext.js";
 import { toPersistedSpawnedQuestions } from "../../lib/agents/runtime/spawnedQuestionPersist.js";
 import { generateAISuggestions } from "../../lib/suggestionGenerator.js";
 import {
@@ -13,6 +14,8 @@ import {
   updateMessageAndTruncate,
   getChatBySessionIdEfficient,
   ensureDatasetFingerprintForSession,
+  acquireTurnLease,
+  releaseTurnLease,
   ChatDocument
 } from "../../models/chat.model.js";
 import { decideEnrichmentGate } from "./enrichmentGate.js";
@@ -39,7 +42,7 @@ import {
   type TrimmedBlockInfo,
 } from "../../lib/agents/runtime/promptBudget.js";
 import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
-import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/runtimeConfig.js";
 import {
   persistMidTurnAssistantSessionContext,
   extractAndPersistUserHierarchies,
@@ -94,7 +97,8 @@ import {
 export { mergePivotDefaultsForResponse } from "./chatStreamPivotDefaults.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
-import { errorMessage } from "../../utils/errorMessage.js";
+import { errorMessage, getErrorCode, getErrorStatus } from "../../utils/errorMessage.js";
+import { isFlagOn } from "../../lib/featureFlags.js";
 
 export interface ProcessStreamChatParams {
   sessionId: string;
@@ -267,7 +271,7 @@ function maybeWritePastAnalysisDoc(params: {
   chatDocument: ChatDocument;
   turnStartedAt: number;
 }): void {
-  if (process.env.PAST_ANALYSIS_WRITER_ENABLED === "false") return;
+  if (!isFlagOn("PAST_ANALYSIS_WRITER_ENABLED")) return;
   // Wave A1 · Skip cache writes when an active filter is set. Otherwise
   // future identical questions on the same dataVersion (filter cleared)
   // would hit a cached answer that was actually computed against the
@@ -370,8 +374,12 @@ function maybeWritePastAnalysisDoc(params: {
     void upsertPastAnalysisDoc(doc)
       .then(async () => {
         // W2.4 · mirror into the AI Search index for the semantic cache.
-        // Gated by PAST_ANALYSES_INDEX_ENABLED (default off until the index
-        // exists and has been created via `npm run create-past-analyses-index`).
+        // Intentionally a STRICTER, raw default-OFF rollout gate (requires an
+        // explicit `=true`) — distinct from the registry's default-ON store
+        // policy (`isFlagOn('PAST_ANALYSES_INDEX_ENABLED')`, honoured inside
+        // `indexPastAnalysis`/`mergeFeedbackInPastAnalysisIndex`). This kicks in
+        // only once the index exists (created via `npm run create-past-analyses-index`),
+        // so it is deliberately NOT migrated to `isFlagOn` (CFG-2). See featureFlags.ts.
         if (process.env.PAST_ANALYSES_INDEX_ENABLED === "true") {
           await indexPastAnalysis(doc);
         }
@@ -453,6 +461,22 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   // LLM budget after the user hangs up.
   const turnAbortController = new AbortController();
 
+  // DATA-5 · durable per-session turn lease. `turnLeaseId` identifies THIS turn;
+  // `turnLeaseHeld` records whether WE own the lease so the `finally` only
+  // releases a lease we actually acquired (a turn rejected by the guard, or one
+  // that lost the race, must not clear the live owner's lease). Acquired below
+  // once the session is known + enrichment-ready.
+  const turnLeaseId = randomUUID();
+  let turnLeaseHeld = false;
+
+  // RESIL-1 · Publish the turn's abort signal on the ambient request context so
+  // shared downstream helpers (pythonServiceFetch, the DuckDB query executor)
+  // can cancel in-flight network / query work on client disconnect WITHOUT the
+  // signal having to be threaded through every intermediate call. We already run
+  // inside a `withRequestContext` scope (bound in chatController), so this patches
+  // the live store; no-op if no context is bound (e.g. unit harness).
+  updateRequestContext({ abortSignal: turnAbortController.signal });
+
   // Handle client disconnect/abort
   const checkConnection = (): boolean => {
     if (res.writableEnded || res.destroyed || !res.writable) {
@@ -490,10 +514,10 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     
     try {
       chatDocument = await getChatBySessionIdForUser(sessionId, username);
-    } catch (dbError: any) {
+    } catch (dbError: unknown) {
       // Handle CosmosDB connection errors gracefully
       const errorMessage = dbError instanceof Error ? dbError.message : String(dbError);
-      if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || dbError.code === 'ECONNREFUSED') {
+      if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || getErrorCode(dbError) === 'ECONNREFUSED') {
         logger.error('❌ CosmosDB connection error, attempting to continue with blob storage data...');
         sendSSE(res, 'error', {
           error: 'Database connection issue. Please try again in a moment. If the problem persists, check your network connection.',
@@ -534,6 +558,41 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       });
       res.end();
       return;
+    }
+
+    // DATA-5 · concurrent-turn lease. Record (and optionally enforce) a durable
+    // per-session marker so a second turn arriving for the SAME session — even
+    // from another serverless instance — can observe one already in flight. The
+    // write routes through `mutateChatDocument` (per-session lock + IfMatch
+    // _etag) so it survives a cross-instance race; a lease older than
+    // TURN_LEASE_TTL_MS is treated as stale (crashed turn) and taken over.
+    //   • Flag OFF (default): we still acquire/record for observability, but a
+    //     `false` (live lease held elsewhere) NEVER rejects — behaviour unchanged.
+    //   • Flag ON: a live lease held by another turn rejects this one with 409.
+    // Always released in the `finally`, and only if WE acquired it.
+    try {
+      const acquired = await acquireTurnLease(sessionId, turnLeaseId);
+      if (acquired === true) {
+        turnLeaseHeld = true;
+      } else if (acquired === false && isFlagOn("CONCURRENT_TURN_GUARD_ENABLED")) {
+        logger.warn(
+          `🚦 Concurrent turn rejected for session ${sessionId}: another live turn holds the lease`
+        );
+        sendSSE(res, "error", {
+          error:
+            "Another request is already being processed for this session. Please wait for it to finish and try again.",
+          code: "CONCURRENT_TURN",
+        });
+        res.end();
+        return;
+      }
+      // acquired === false with the flag OFF → observability only, fall through.
+      // acquired === null (session vanished) → leave the lease alone, fall through.
+    } catch (leaseErr) {
+      // Lease acquisition is best-effort safety, not a hard dependency — never
+      // fail a turn because the marker couldn't be written. The TTL self-heal
+      // reclaims any leaked lease.
+      logger.warn(`⚠️ acquireTurnLease failed for session ${sessionId}:`, leaseErr);
     }
 
     // W5.2 · exact-match question cache. No LLM calls on a hit — the cached
@@ -950,7 +1009,7 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     // narrator envelope) lands in Wave D3; today this is
     // observability-only so we can validate the detector against real
     // questions before committing to behaviour change.
-    if (process.env.DEEP_INVESTIGATION_ENABLED === "true") {
+    if (isFlagOn("DEEP_INVESTIGATION_ENABLED")) {
       try {
         const { detectMultiPartQuestion } = await import(
           "../../lib/agents/runtime/detectMultiPartQuestion.js"
@@ -2056,8 +2115,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       : rawMsg.includes('AGENT_LLM_BUDGET') ? 'This question hit the per-turn analysis budget — try a more specific question.'
       : /quota|rate.?limit|\b429\b/i.test(rawMsg) ? "You've reached a usage limit — please wait a moment and try again."
       : 'The analysis agent encountered an error — please try again.';
+    const errorCode =
+      rawMsg.includes('AGENT_CLIENT_ABORTED') ? 'AGENT_CLIENT_ABORTED'
+      : rawMsg.includes('AGENT_LLM_BUDGET') ? 'AGENT_LLM_BUDGET'
+      : /quota|rate.?limit|\b429\b/i.test(rawMsg) ? 'QUOTA_EXCEEDED'
+      : 'AGENT_ERROR';
     if (checkConnection()) {
-    sendSSE(res, 'error', { error: errorMessage });
+    sendSSE(res, 'error', { error: errorMessage, code: errorCode });
     }
     if (!res.writableEnded && !res.destroyed) {
     res.end();
@@ -2065,6 +2129,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
   } finally {
     // W10: always clear the keepalive timer when the stream ends (success or error).
     stopKeepalive();
+    // DATA-5 · release the durable turn lease IFF we acquired it. `releaseTurnLease`
+    // is itself a no-op when the lease isn't ours (e.g. a stale-takeover handed it
+    // to a newer turn), so this can never clobber the live owner. Best-effort —
+    // the helper swallows its own errors so a release failure never surfaces.
+    if (turnLeaseHeld) {
+      await releaseTurnLease(sessionId, turnLeaseId);
+    }
   }
 }
 
@@ -2082,18 +2153,18 @@ export async function streamChatMessages(sessionId: string, username: string, re
     let chatDocument: ChatDocument | null = null;
     try {
       chatDocument = await getChatBySessionIdForUser(sessionId, normalizedUsername);
-    } catch (accessError: any) {
+    } catch (accessError: unknown) {
       // Handle authorization errors
-      if (accessError?.statusCode === 403) {
+      if (getErrorStatus(accessError) === 403) {
         logger.warn(`⚠️ Unauthorized SSE access attempt: ${username} tried to access session ${sessionId}`);
         sendSSE(res, 'error', { error: 'Unauthorized to access this session' });
         res.end();
         return;
       }
-      
+
       // Handle CosmosDB connection errors
       const errorMessage = accessError instanceof Error ? accessError.message : String(accessError);
-      if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || accessError.code === 'ECONNREFUSED') {
+      if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT') || getErrorCode(accessError) === 'ECONNREFUSED') {
         logger.error('❌ CosmosDB connection error in streamChatMessages:', errorMessage.substring(0, 100));
         sendSSE(res, 'error', {
           error: 'Database connection issue. Please try again in a moment.',

@@ -245,9 +245,12 @@ describe("WD3-telemetry · schema enum + route registration wiring", () => {
   });
 
   it("routes/index.ts mounts telemetryRoutes under /api", () => {
+    // API-7: routers are mounted via the `mount('<subpath>', router)` helper,
+    // which registers BOTH `/api<subpath>` and a `/api/v1<subpath>` alias.
+    // An empty subpath ('') means the router is mounted at `/api` (+ `/api/v1`).
     assert.match(
       routesIndexSrc,
-      /app\.use\(\s*['"]\/api['"]\s*,\s*telemetryRoutes\s*\)/,
+      /mount\(\s*['"]['"]\s*,\s*telemetryRoutes\s*\)/,
     );
   });
 });

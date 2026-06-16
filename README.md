@@ -23,6 +23,22 @@ cd server && npm ci && npm run dev                                        # :300
 cd client && npm ci && npm run dev                                        # :3000
 ```
 
+### Cross-service entrypoint
+
+The root `package.json` is **not** an npm workspace — each service keeps its own
+`package.json` and lockfile. It only provides convenience scripts that fan out to
+`server/` and `client/`, so you can build/check both from the repo root:
+
+```bash
+npm run build         # server build + client build
+npm run typecheck     # server + client typecheck
+npm run test          # server + client tests
+npm run lint          # server + client lint
+npm run format:check  # server + client prettier check
+```
+
+(Install per service the first time: `npm --prefix server ci && npm --prefix client ci`.)
+
 Non-standard env files (loaded by code, not tooling defaults):
 
 - `server/server.env` — copy from `server/.env.example`.

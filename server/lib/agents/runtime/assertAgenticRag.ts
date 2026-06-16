@@ -22,12 +22,13 @@
  *     flags themselves.
  *
  * HOW IT CONNECTS
- *   Reads flags via types.js (isAgenticLoopEnabled) and rag/config.js
+ *   Reads flags via runtimeConfig.js (isAgenticLoopEnabled) and rag/config.js
  *   (isRagEnabled). Called once at app startup (e.g. from createApp).
  */
-import { isAgenticLoopEnabled } from "./types.js";
+import { isAgenticLoopEnabled } from "./runtimeConfig.js";
 import { isRagEnabled } from "../../rag/config.js";
 import { logger } from "../../logger.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 /**
  * When the agentic loop is enabled, RAG (Azure AI Search + embeddings) must be viable.
@@ -36,7 +37,7 @@ import { logger } from "../../logger.js";
  * Set AGENTIC_ALLOW_NO_RAG=true only in unit tests or local experiments that mock retrieval.
  */
 export function assertAgenticRagConfiguration(): void {
-  if (process.env.AGENTIC_ALLOW_NO_RAG === "true") {
+  if (isFlagOn("AGENTIC_ALLOW_NO_RAG")) {
     return;
   }
   if (!isAgenticLoopEnabled()) {
@@ -56,7 +57,7 @@ export function assertAgenticRagConfiguration(): void {
  * without AGENTIC_LOOP_ENABLED=true would be silently dead configuration.
  */
 export function assertDashboardAutogenConfiguration(): void {
-  if (process.env.DASHBOARD_AUTOGEN_ENABLED !== "true") {
+  if (!isFlagOn("DASHBOARD_AUTOGEN_ENABLED")) {
     return;
   }
   if (!isAgenticLoopEnabled()) {

@@ -15,6 +15,7 @@ import type { ChatDocument } from "../models/chat.model.js";
 import { sharedInviteCache } from '../lib/cache.js';
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
 import { logger } from "../lib/logger.js";
+import { getErrorCode } from "../utils/errorMessage.js";
 
 const getUserEmailFromRequest = (req: Request): string | undefined =>
   getAuthenticatedEmail(req);
@@ -56,9 +57,10 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
       logger.log(`📤 SSE sent: ${event}`, data);
     }
     return true;
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Ignore errors from client disconnections (ECONNRESET, EPIPE are expected)
-    if (error.code === 'ECONNRESET' || error.code === 'EPIPE' || error.code === 'ECONNABORTED') {
+    const errorCode = getErrorCode(error);
+    if (errorCode === 'ECONNRESET' || errorCode === 'EPIPE' || errorCode === 'ECONNABORTED') {
       // Client disconnected - this is normal, don't log as error
       return false;
     }
@@ -312,8 +314,9 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
         // Only try to send error if connection is still open and it's not a connection error
         if (!res.writableEnded && !res.destroyed && res.writable) {
           logger.error('Error fetching shared analyses for SSE:', error);
-          sendSSE(res, 'error', { 
-            message: error instanceof Error ? error.message : 'Failed to fetch shared analyses.' 
+          sendSSE(res, 'error', {
+            error: error instanceof Error ? error.message : 'Failed to fetch shared analyses.',
+            code: 'SHARED_ANALYSES_FETCH_FAILED',
           });
         }
         return false;
@@ -413,7 +416,7 @@ export const streamIncomingSharedAnalysesController = async (req: Request, res: 
   } catch (error) {
     logger.error("streamIncomingSharedAnalysesController error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream shared analyses.";
-    sendSSE(res, 'error', { message });
+    sendSSE(res, 'error', { error: message, code: 'SHARED_ANALYSES_STREAM_ERROR' });
     res.end();
   }
 };

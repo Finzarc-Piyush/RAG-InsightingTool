@@ -13,6 +13,7 @@ import { isParquetReadPathEnabled, writeAndUploadSessionParquet } from '../lib/s
 import { logger } from "../lib/logger.js";
 import { capChartDataPoints } from "../lib/chartDownsampling.js";
 import { errorMessage } from "./errorMessage.js";
+import { isFlagOn } from "../lib/featureFlags.js";
 
 export interface SnowflakeImportConfig {
   tableName: string;
@@ -188,6 +189,22 @@ class UploadQueue {
    */
   private async processJob(job: UploadJob): Promise<void> {
     const JOB_TIMEOUT = 120 * 60 * 1000; // 120 minutes timeout for large files
+    // RESIL-3: a job timeout used to be a SOFT status flip — it set the status
+    // to 'failed' but the parse/largeFile/enrichment pipeline kept running and
+    // could later overwrite the terminal status with 'completed'. We now back
+    // every job with an AbortController. The timeout calls `controller.abort()`
+    // (so step boundaries bail out early) AND every status write past the await
+    // chain is guarded by `isJobTerminal(job)` so a late-finishing happy path
+    // can never resurrect a timed-out/failed job. The non-timeout (happy) path
+    // is byte-for-byte unchanged: the signal is never aborted, so every guard
+    // is a no-op pass-through.
+    const controller = new AbortController();
+    const { signal } = controller;
+    // A job is terminal once it has been marked completed or failed (the
+    // timeout marks it failed). Reading `aborted` covers the window between
+    // `controller.abort()` and the timeout callback finishing its writes.
+    const isJobTerminal = (): boolean =>
+      signal.aborted || job.status === 'completed' || job.status === 'failed';
     const timeoutId = setTimeout(() => {
       if (job.status !== 'completed' && job.status !== 'failed') {
         job.status = 'failed';
@@ -195,8 +212,11 @@ class UploadQueue {
         job.completedAt = Date.now();
         logger.error(`⏱️ Upload job ${job.jobId} timed out after ${JOB_TIMEOUT / 1000 / 60} minutes`);
       }
+      // Hard-cancel: signal the in-flight pipeline so it bails at the next
+      // step boundary instead of running to completion and clobbering status.
+      controller.abort();
     }, JOB_TIMEOUT);
-    
+
     try {
       job.startedAt = Date.now();
       job.status = 'uploading';
@@ -223,6 +243,7 @@ class UploadQueue {
         createChatDocument,
         generateColumnStatistics,
         getChatBySessionIdEfficient,
+        getChatSummaryBySessionId,
         updateChatDocument,
         ensureChatDocumentForUploadJob,
       } = await import('../models/chat.model.js');
@@ -290,10 +311,10 @@ class UploadQueue {
           fileSize: job.fileBuffer?.length ?? 0,
           blobInfo: job.blobInfo,
         });
-      } catch (placeholderError: any) {
+      } catch (placeholderError: unknown) {
         logger.warn("⚠️ Queue placeholder ensure skipped (will self-heal later):", {
           sessionId: job.sessionId,
-          error: placeholderError?.message || String(placeholderError),
+          error: errorMessage(placeholderError),
         });
       }
 
@@ -452,6 +473,14 @@ class UploadQueue {
       }
       } // end else if (job.fileBuffer)
 
+      // RESIL-3: parse phase complete. If the job timed out while we were
+      // parsing/loading, bail before the (expensive) enrichment phase so we
+      // don't keep burning CPU on a job whose status is already terminal.
+      if (isJobTerminal()) {
+        clearTimeout(timeoutId);
+        return;
+      }
+
       // Wide-format auto-melt: if the parsed dataset has period
       // headers (Q1 23, MAT Dec-24, Latest 12 Mths 2YA …) we reshape
       // it to long form HERE — before profile inference, summary
@@ -460,9 +489,7 @@ class UploadQueue {
       // original wide buffer remains in blob storage for download.
       // Feature-flag escape hatch: `WIDE_FORMAT_AUTO_MELT_ENABLED=false`.
       let wideFormatTransform: import('../shared/schema.js').WideFormatTransform | undefined;
-      const wideFormatEnabled =
-        process.env.WIDE_FORMAT_AUTO_MELT_ENABLED !== 'false' &&
-        process.env.WIDE_FORMAT_AUTO_MELT_ENABLED !== '0';
+      const wideFormatEnabled = isFlagOn('WIDE_FORMAT_AUTO_MELT_ENABLED');
       if (wideFormatEnabled && data.length > 0) {
         const { classifyDataset } = await import('../lib/wideFormat/classifyDataset.js');
         const { meltDataset } = await import('../lib/wideFormat/meltDataset.js');
@@ -519,9 +546,7 @@ class UploadQueue {
 
       const columnOrderBeforeClean = Object.keys(data[0] || {});
 
-      const skipUploadLlm =
-        process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === 'true' ||
-        process.env.DISABLE_UPLOAD_INITIAL_ANALYSIS === '1';
+      const skipUploadLlm = isFlagOn('DISABLE_UPLOAD_INITIAL_ANALYSIS');
 
       // Preview checkpoint: heuristic summary + 50 sample rows (no LLM).
       // Date columns for enrichment are chosen by the upload LLM; do not canonicalize preview on heuristics.
@@ -622,7 +647,10 @@ class UploadQueue {
         let datasetProfilePermanentContext: string | undefined;
         let datasetProfileDomainContext: string | undefined;
         try {
-          const existing = await getChatBySessionIdEfficient(job.sessionId);
+          // PERF-5 · only `permanentContext` is read here — use the lean summary
+          // projection instead of the full-doc `SELECT *` (no messages/rawData
+          // marshalled across the partition for a single light string field).
+          const existing = await getChatSummaryBySessionId(job.sessionId);
           datasetProfilePermanentContext = existing?.permanentContext;
         } catch {
           /* not fatal — fall through with undefined */
@@ -1169,6 +1197,16 @@ class UploadQueue {
         const { applyTemporalFacetColumns: applyFacets } = await import('../lib/temporalFacetColumns.js');
         applyFacets(data, summary.dateColumns, facetOptsForUpload());
       }
+
+      // RESIL-3: enrichment phase complete. If the job timed out during
+      // profile inference / pipeline enrichment, bail before the persist
+      // phase (DuckDB materialize + Cosmos/blob writes) so a timed-out job
+      // stops here instead of running to completion.
+      if (isJobTerminal()) {
+        clearTimeout(timeoutId);
+        return;
+      }
+
       job.status = 'saving';
       job.progress = 88;
       let columnarReadyMarker: string | undefined;
@@ -1453,6 +1491,20 @@ class UploadQueue {
         })();
       }
 
+      // RESIL-3: terminal-status guard. If the job timed out (status flipped
+      // to 'failed' + signal aborted) at any point during the await chain
+      // above, the success path MUST NOT resurrect it to 'completed'. Bail
+      // here so the terminal status the timeout wrote stays authoritative.
+      // On the happy path the signal is never aborted and status is still
+      // mid-flight ('saving'), so this is a no-op pass-through.
+      if (isJobTerminal()) {
+        clearTimeout(timeoutId);
+        if (job.fileBuffer) {
+          delete job.fileBuffer;
+        }
+        return;
+      }
+
       // Step 10: Complete
       job.status = 'completed';
       job.progress = 100;
@@ -1498,7 +1550,7 @@ class UploadQueue {
 
       // Clean up file buffer from memory after processing (file uploads only)
       if (job.fileBuffer) {
-        delete (job as any).fileBuffer;
+        delete job.fileBuffer;
       }
       
       // Clear timeout on successful completion

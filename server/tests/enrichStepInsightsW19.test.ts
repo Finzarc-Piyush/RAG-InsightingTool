@@ -57,14 +57,18 @@ const buildWorkbench = (): AgentWorkbenchEntry[] => [
 ];
 
 describe("W19 · isRichStepInsightsEnabled gate", () => {
-  it("is false unless RICH_STEP_INSIGHTS_ENABLED === 'true'", () => {
+  // CFG-2: gate reads via the typed registry's canonical truthiness
+  // (`isFlagOn` → 1/true/yes/on, case-insensitive).
+  it("is OFF unless RICH_STEP_INSIGHTS_ENABLED is a canonical-truthy value", () => {
     const prev = process.env.RICH_STEP_INSIGHTS_ENABLED;
     delete process.env.RICH_STEP_INSIGHTS_ENABLED;
     assert.equal(isRichStepInsightsEnabled(), false);
-    process.env.RICH_STEP_INSIGHTS_ENABLED = "1";
+    process.env.RICH_STEP_INSIGHTS_ENABLED = "off";
     assert.equal(isRichStepInsightsEnabled(), false);
-    process.env.RICH_STEP_INSIGHTS_ENABLED = "true";
-    assert.equal(isRichStepInsightsEnabled(), true);
+    for (const on of ["true", "1", "TRUE", "yes", "on"]) {
+      process.env.RICH_STEP_INSIGHTS_ENABLED = on;
+      assert.equal(isRichStepInsightsEnabled(), true, `expected ON for ${on}`);
+    }
     if (prev === undefined) delete process.env.RICH_STEP_INSIGHTS_ENABLED;
     else process.env.RICH_STEP_INSIGHTS_ENABLED = prev;
   });

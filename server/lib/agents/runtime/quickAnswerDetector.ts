@@ -31,6 +31,7 @@
  */
 
 import { classifyQueryIntent } from "./queryIntentAuthority.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 /**
  * Returns true iff the question is shaped like a simple lookup AND carries
@@ -49,5 +50,5 @@ export function detectQuickLookup(question: string | undefined | null): boolean 
  * force every turn through the full agentic loop (rollback path).
  */
 export function isQuickLookupEnabled(): boolean {
-  return process.env.QUICK_LOOKUP_ENABLED !== "false";
+  return isFlagOn("QUICK_LOOKUP_ENABLED");
 }

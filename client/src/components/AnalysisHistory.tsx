@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,15 +30,9 @@ export function AnalysisHistory({ onLoadAnalysis }: AnalysisHistoryProps) {
 
   const userEmail = getUserEmail();
 
-  useEffect(() => {
-    if (userEmail) {
-      loadUserSessions();
-    }
-  }, [userEmail]);
-
-  const loadUserSessions = async () => {
+  const loadUserSessions = useCallback(async () => {
     if (!userEmail) return;
-    
+
     setLoading(true);
     try {
       const response = await api.get<UserAnalysisSessionsResponse>(`/data/user/${userEmail}/sessions`);
@@ -52,7 +46,13 @@ export function AnalysisHistory({ onLoadAnalysis }: AnalysisHistoryProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [userEmail, toast]);
+
+  useEffect(() => {
+    if (userEmail) {
+      loadUserSessions();
+    }
+  }, [userEmail, loadUserSessions]);
 
   const loadAnalysisData = async (chatId: string) => {
     if (!userEmail) return;

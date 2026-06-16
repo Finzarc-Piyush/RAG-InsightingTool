@@ -41,6 +41,7 @@ import {
   forecastSeries,
   type ForecastSeasonality,
 } from "../../../forecasting/forecastSeries.js";
+import { isFlagOn } from "../../../featureFlags.js";
 
 export const forecastArgsSchema = z
   .object({
@@ -102,7 +103,7 @@ export function registerForecastTool(registry: ToolRegistry) {
     "run_forecast",
     forecastArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx: ToolRunContext, args: Record<string, unknown>) => {
-      if (process.env.FORECAST_ENABLED !== "true") {
+      if (!isFlagOn("FORECAST_ENABLED")) {
         return {
           ok: false,
           summary:

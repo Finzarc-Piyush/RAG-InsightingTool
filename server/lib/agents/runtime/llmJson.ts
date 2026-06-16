@@ -56,6 +56,7 @@ import { calculateCostUsd, clampMaxTokens, normalizeUsage } from "./llmCostModel
 import { resolveModelFor, type LlmCallPurpose } from "./llmCallPurpose.js";
 import { isAnthropicModel } from "./anthropicProvider.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 export type { LlmCallUsage } from "./callLlm.js";
 
@@ -232,7 +233,7 @@ export async function completeJson<T>(
  * `streamed: true` so dashboards can split streamed vs. non-streamed.
  */
 export function isStreamingNarratorEnabled(): boolean {
-  return process.env.STREAMING_NARRATOR_ENABLED === "true";
+  return isFlagOn("STREAMING_NARRATOR_ENABLED");
 }
 
 export interface StreamingChunkInfo {

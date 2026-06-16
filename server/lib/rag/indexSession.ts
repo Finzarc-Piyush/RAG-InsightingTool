@@ -1,4 +1,4 @@
-import { getChatBySessionIdEfficient, updateChatDocument, type ChatDocument } from "../../models/chat.model.js";
+import { getChatBySessionIdEfficient, mutateChatDocument, type ChatDocument } from "../../models/chat.model.js";
 import { isRagEnabled, getEmbeddingDimensions } from "./config.js";
 import { buildChunksForSession, userContextChunk, USER_CONTEXT_CHUNK_ID } from "./chunking.js";
 import { embedTexts } from "./embeddings.js";
@@ -9,7 +9,6 @@ import {
 } from "./aiSearchStore.js";
 import { getSampleFromDuckDB } from "../duckdbPlanExecutor.js";
 import type { AnalysisMemoryEntry } from "../../shared/schema.js";
-import { withSessionWriteLock } from "../sessionWriteLock.js";
 import { logger } from "../logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
 
@@ -24,22 +23,25 @@ import { errorMessage } from "../../utils/errorMessage.js";
  * those concurrent changes (last-writer-wins on full upsert) because
  * the in-memory `doc` was a stale snapshot.
  *
- * The fix: acquire the unified per-session write lock, re-fetch the
- * doc inside the lock, set ONLY the `ragIndex` field, and write. The
- * concurrent paths' changes are preserved.
+ * The fix: route through the `mutateChatDocument` seam (invariant #9), which
+ * acquires the unified per-session write lock, re-fetches the doc inside the
+ * lock, and writes with an IfMatch `_etag` precondition (412 → re-read + retry).
+ * SEC-2 upgraded this from a manual lock + bare `updateChatDocument` to the seam
+ * so concurrent writes are now safe ACROSS instances (ETag), not just intra-
+ * instance (lock). We set ONLY the `ragIndex` field; concurrent paths' changes
+ * are preserved.
  */
 async function updateRagIndexField(
   sessionId: string,
   patch: Partial<NonNullable<ChatDocument["ragIndex"]>>
 ): Promise<void> {
-  await withSessionWriteLock(sessionId, async () => {
-    const fresh = await getChatBySessionIdEfficient(sessionId);
-    if (!fresh) return;
+  await mutateChatDocument(sessionId, (fresh) => {
     fresh.ragIndex = {
       ...(fresh.ragIndex || {}),
       ...patch,
     } as ChatDocument["ragIndex"];
-    await updateChatDocument(fresh);
+    // void return → proceed with the write. (Missing doc → mutateChatDocument
+    // returns null without writing, matching the old `if (!fresh) return`.)
   });
 }
 

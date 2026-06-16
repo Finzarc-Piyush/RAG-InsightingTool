@@ -127,7 +127,7 @@ export const chatWithAIStream = async (req: Request, res: Response) => {
           }
           if (!res.writableEnded) {
             sendSSE(res, 'error', {
-              message:
+              error:
                 'The request took too long and was cancelled. Please try again or narrow the scope.',
               code: 'STREAM_CHAT_TIMEOUT',
             });

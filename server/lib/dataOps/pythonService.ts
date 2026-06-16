@@ -7,6 +7,7 @@ import {
   parsePythonResponse,
   previewResponseSchema,
 } from "./pythonResponseSchemas.js";
+import type { DataRow } from "./dataOpsTypes.js";
 
 // Use global fetch (Node.js 18+) or provide polyfill
 let fetchFn: typeof fetch;
@@ -71,25 +72,46 @@ function pythonServiceHeaders(
  * P-027: wrapper that guarantees timeout cleanup and explicitly destroys the
  * response body on abort so a streaming body cannot keep bytes flowing after
  * the timer trips.
+ *
+ * RESIL-1: the request is cancelled when EITHER (a) the internal timeout trips,
+ * OR (b) the caller's `signal` aborts (turn cancelled / client disconnected).
+ * The caller signal is resolved from the explicit `signal` argument first and
+ * falls back to the ambient turn signal on the request context, so the deep
+ * dataOps orchestrator call tree benefits without threading the signal through
+ * every intermediate function. Happy path (no abort) is unchanged.
  */
 export async function pythonServiceFetch(
   path: string,
   init: RequestInit = {},
-  timeoutMs: number = REQUEST_TIMEOUT
+  timeoutMs: number = REQUEST_TIMEOUT,
+  signal?: AbortSignal
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+  // Explicit caller signal wins; otherwise inherit the ambient turn signal.
+  const callerSignal = signal ?? getRequestContext().abortSignal;
+  // Combine internal timeout + caller cancellation into one signal. When there
+  // is no caller signal this is just the timeout controller (identical to the
+  // previous behaviour).
+  const combinedSignal = callerSignal
+    ? AbortSignal.any([timeoutController.signal, callerSignal])
+    : timeoutController.signal;
   try {
     const response = await fetchFn(`${PYTHON_SERVICE_URL}${path}`, {
       ...init,
       headers: pythonServiceHeaders(
         (init.headers as Record<string, string> | undefined) ?? {}
       ),
-      signal: controller.signal,
+      signal: combinedSignal,
     });
     return response;
   } catch (err) {
-    if (controller.signal.aborted) {
+    // Caller-initiated cancellation (turn aborted) — surface a clear, distinct
+    // error so it isn't conflated with a timeout.
+    if (callerSignal?.aborted) {
+      throw new Error(`Python service request aborted: ${path}`);
+    }
+    if (timeoutController.signal.aborted) {
       throw new Error(
         `Python service request timed out after ${timeoutMs}ms: ${path}`
       );
@@ -98,6 +120,31 @@ export async function pythonServiceFetch(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * RESIL-1 · Shared cancellation primitive for the direct-`fetchFn` data-ops
+ * functions below (aggregate, train-model, pivot, summary, …) which build their
+ * own timeout AbortController inline rather than going through
+ * `pythonServiceFetch`. Returns the internal timeout controller plus a `signal`
+ * combined with the ambient turn signal (resolved from the request context), so
+ * a client disconnect cancels the in-flight request. When no turn signal is
+ * bound the returned signal is just the timeout controller's — identical to the
+ * prior behaviour, so the happy path is unchanged.
+ */
+function dataOpRequest(timeoutMs: number = REQUEST_TIMEOUT): {
+  controller: AbortController;
+  timeoutId: ReturnType<typeof setTimeout>;
+  signal: AbortSignal;
+  callerSignal?: AbortSignal;
+} {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const callerSignal = getRequestContext().abortSignal;
+  const signal = callerSignal
+    ? AbortSignal.any([controller.signal, callerSignal])
+    : controller.signal;
+  return { controller, timeoutId, signal, callerSignal };
 }
 
 // Import fs for file operations (to handle large responses)
@@ -110,31 +157,31 @@ import { getRequestContext } from "../telemetry/requestContext.js";
 
 
 interface RemoveNullsRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   column?: string;
   method: 'delete' | 'mean' | 'median' | 'mode' | 'custom';
   custom_value?: any;
 }
 
 interface RemoveNullsResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   rows_before: number;
   rows_after: number;
   nulls_removed: number;
 }
 
 interface PreviewRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   limit: number;
 }
 
 interface PreviewResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   total_rows: number;
   returned_rows: number;
 }
 
-interface SummaryResponse {
+export interface SummaryResponse {
   summary: Array<{
     variable: string;
     datatype: string;
@@ -164,24 +211,24 @@ export interface InitialAnalysisResponse {
 }
 
 interface CreateDerivedColumnRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   new_column_name: string;
   expression: string;
 }
 
 interface CreateDerivedColumnResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   errors: string[];
 }
 
 interface ConvertTypeRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   column: string;
   target_type: 'numeric' | 'string' | 'date' | 'percentage' | 'boolean';
 }
 
 interface ConvertTypeResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   conversion_info: {
     column: string;
     original_type: string;
@@ -194,7 +241,7 @@ interface ConvertTypeResponse {
 }
 
 interface AggregateRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   group_by_column: string;
   agg_columns?: string[];
   agg_funcs?: Record<string, 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count' | 'median' | 'std' | 'var' | 'p90' | 'p95' | 'p99' | 'any' | 'all'>;
@@ -204,26 +251,26 @@ interface AggregateRequest {
 }
 
 interface AggregateResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   rows_before: number;
   rows_after: number;
 }
 
 interface PivotRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   index_column: string;
   value_columns?: string[];
   pivot_funcs?: Record<string, 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count'>;
 }
 
 interface PivotResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   rows_before: number;
   rows_after: number;
 }
 
 interface TrainModelRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   model_type: 
     | 'linear' | 'log_log' | 'logistic' | 'ridge' | 'lasso' | 'random_forest' | 'decision_tree' 
     | 'gradient_boosting' | 'elasticnet' | 'svm' | 'knn'
@@ -297,7 +344,7 @@ interface TrainModelRequest {
   group_column?: string;
 }
 
-interface TrainModelResponse {
+export interface TrainModelResponse {
   model_type: string;
   task_type: 'regression' | 'classification';
   target_variable: string;
@@ -345,7 +392,7 @@ export async function checkPythonServiceHealth(): Promise<boolean> {
  * Remove null values from data
  */
 export async function removeNulls(
-  data: Record<string, any>[],
+  data: DataRow[],
   column?: string,
   method: 'delete' | 'mean' | 'median' | 'mode' | 'custom' = 'delete',
   customValue?: any
@@ -354,7 +401,7 @@ export async function removeNulls(
     // Preprocess data: convert string "null" values to actual null
     // This handles cases where data has string "null" instead of actual null/NaN
     const preprocessedData = data.map(row => {
-      const processedRow: Record<string, any> = {};
+      const processedRow: DataRow = {};
       for (const [key, value] of Object.entries(row)) {
         // Convert string "null" (case-insensitive) to actual null
         if (typeof value === 'string' && value.toLowerCase().trim() === 'null') {
@@ -379,15 +426,14 @@ export async function removeNulls(
       request.custom_value = customValue;
     }
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/remove-nulls`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -407,7 +453,7 @@ export async function removeNulls(
  * Get data preview
  */
 export async function getDataPreview(
-  data: Record<string, any>[],
+  data: DataRow[],
   limit: number = 50
 ): Promise<PreviewResponse> {
   try {
@@ -416,15 +462,14 @@ export async function getDataPreview(
       limit,
     };
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/preview`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -448,17 +493,16 @@ export async function getDataPreview(
 /**
  * Get data summary statistics
  */
-export async function getDataSummary(data: Record<string, any>[], column?: string): Promise<SummaryResponse> {
+export async function getDataSummary(data: DataRow[], column?: string): Promise<SummaryResponse> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/summary`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify({ data, column }),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -478,17 +522,16 @@ export async function getDataSummary(data: Record<string, any>[], column?: strin
  * Get initial analysis: summary stats + rule-based chart suggestions (no AI).
  * Used for fast upload-time analysis (Python + 1 AI call path).
  */
-export async function getInitialAnalysis(data: Record<string, any>[]): Promise<InitialAnalysisResponse> {
+export async function getInitialAnalysis(data: DataRow[]): Promise<InitialAnalysisResponse> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/initial-analysis`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify({ data }),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
 
@@ -508,7 +551,7 @@ export async function getInitialAnalysis(data: Record<string, any>[]): Promise<I
  * Create a derived column from an expression
  */
 export async function createDerivedColumn(
-  data: Record<string, any>[],
+  data: DataRow[],
   newColumnName: string,
   expression: string
 ): Promise<CreateDerivedColumnResponse> {
@@ -519,15 +562,14 @@ export async function createDerivedColumn(
       expression,
     };
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/create-derived-column`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -547,7 +589,7 @@ export async function createDerivedColumn(
  * Convert column data type
  */
 export async function convertDataType(
-  data: Record<string, any>[],
+  data: DataRow[],
   column: string,
   targetType: 'numeric' | 'string' | 'date' | 'percentage' | 'boolean'
 ): Promise<ConvertTypeResponse> {
@@ -558,15 +600,14 @@ export async function convertDataType(
       target_type: targetType,
     };
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/convert-type`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -586,7 +627,7 @@ export async function convertDataType(
  * Aggregate data by grouping on a column
  */
 export async function aggregateData(
-  data: Record<string, any>[],
+  data: DataRow[],
   groupByColumn: string,
   aggColumns?: string[],
   aggFuncs?: Record<string, 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count' | 'median' | 'std' | 'var' | 'p90' | 'p95' | 'p99' | 'any' | 'all'>,
@@ -605,15 +646,14 @@ export async function aggregateData(
       user_intent: userIntent,
     };
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/aggregate`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -638,7 +678,7 @@ export async function aggregateData(
  * Create a pivot table
  */
 export async function createPivotTable(
-  data: Record<string, any>[],
+  data: DataRow[],
   indexColumn: string,
   valueColumns?: string[],
   pivotFuncs?: Record<string, 'sum' | 'avg' | 'mean' | 'min' | 'max' | 'count'>
@@ -651,15 +691,14 @@ export async function createPivotTable(
       pivot_funcs: pivotFuncs,
     };
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/pivot`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -712,7 +751,7 @@ export async function createPivotTable(
         const fileBuffer = fs.readFileSync(tempFile);
         
         // Try to parse a preview from the beginning of the file
-        const previewRows: Record<string, any>[] = [];
+        const previewRows: DataRow[] = [];
         let rowsBefore = 0;
         let rowsAfter = 0;
         
@@ -869,7 +908,7 @@ export async function createPivotTable(
  * Train a machine learning model
  */
 export async function trainMLModel(
-  data: Record<string, any>[],
+  data: DataRow[],
   modelType: 
     | 'linear' | 'log_log' | 'logistic' | 'ridge' | 'lasso' | 'random_forest' | 'decision_tree' 
     | 'gradient_boosting' | 'elasticnet' | 'svm' | 'knn'
@@ -1120,15 +1159,14 @@ export async function trainMLModel(
       request.group_column = options.groupColumn;
     }
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/train-model`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -1163,7 +1201,7 @@ export async function trainMLModel(
  * Identify outliers in data
  */
 interface IdentifyOutliersRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   column?: string;
   method: 'iqr' | 'zscore' | 'isolation_forest' | 'local_outlier_factor';
   threshold?: number;
@@ -1197,7 +1235,7 @@ interface IdentifyOutliersResponse {
 }
 
 export async function identifyOutliers(
-  data: Record<string, any>[],
+  data: DataRow[],
   column?: string,
   method: 'iqr' | 'zscore' | 'isolation_forest' | 'local_outlier_factor' = 'iqr',
   threshold?: number
@@ -1216,15 +1254,14 @@ export async function identifyOutliers(
       request.threshold = threshold;
     }
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/identify-outliers`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     
@@ -1252,7 +1289,7 @@ export async function identifyOutliers(
  * Treat outliers in data
  */
 interface TreatOutliersRequest {
-  data: Record<string, any>[];
+  data: DataRow[];
   column?: string;
   method: 'iqr' | 'zscore' | 'isolation_forest' | 'local_outlier_factor';
   threshold?: number;
@@ -1261,7 +1298,7 @@ interface TreatOutliersRequest {
 }
 
 interface TreatOutliersResponse {
-  data: Record<string, any>[];
+  data: DataRow[];
   rows_before: number;
   rows_after: number;
   outliers_treated: number;
@@ -1273,7 +1310,7 @@ interface TreatOutliersResponse {
 }
 
 export async function treatOutliers(
-  data: Record<string, any>[],
+  data: DataRow[],
   column?: string,
   method: 'iqr' | 'zscore' | 'isolation_forest' | 'local_outlier_factor' = 'iqr',
   threshold?: number,
@@ -1299,15 +1336,14 @@ export async function treatOutliers(
       request.treatment_value = treatmentValue;
     }
     
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    const { timeoutId, signal } = dataOpRequest();
     const response = await fetchFn(`${PYTHON_SERVICE_URL}/treat-outliers`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(request),
-      signal: controller.signal,
+      signal,
     });
     clearTimeout(timeoutId);
     

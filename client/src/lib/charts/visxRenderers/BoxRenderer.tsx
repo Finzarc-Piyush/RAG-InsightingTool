@@ -8,7 +8,7 @@
  * Computes IQR statistics in-renderer via dataEngine.aggregate.
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { scaleBand, scaleLinear } from "@visx/scale";
 import { AxisBottom, AxisLeft } from "@visx/axis";
@@ -63,7 +63,7 @@ interface BoxStats {
   max: number;
 }
 
-export function BoxRenderer({
+function BoxRendererImpl({
   spec,
   data,
   width,
@@ -252,3 +252,10 @@ export function BoxRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const BoxRenderer = memo(BoxRendererImpl);
+BoxRenderer.displayName = "BoxRenderer";

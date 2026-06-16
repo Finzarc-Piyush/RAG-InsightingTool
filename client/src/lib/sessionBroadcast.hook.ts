@@ -21,7 +21,7 @@
  *   // Later, after a successful filter PUT:
  *   emitSessionBroadcast("active_filter");
  */
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   openSessionChannel,
   type SessionBroadcastEvent,
@@ -63,11 +63,16 @@ export function useSessionBroadcast(
     };
   }, [sessionId]);
 
-  return {
-    emitSessionBroadcast: (kind) => {
+  // Stable identity (closes only over the stable `emitRef`) so consumers can
+  // safely list `emitSessionBroadcast` in their hook dep arrays without churn.
+  const emitSessionBroadcast = useCallback(
+    (kind: SessionBroadcastEventKind) => {
       // Capture the current emit; if the channel has been released
       // (mid-unmount), silently no-op.
       emitRef.current?.(kind);
     },
-  };
+    [],
+  );
+
+  return { emitSessionBroadcast };
 }

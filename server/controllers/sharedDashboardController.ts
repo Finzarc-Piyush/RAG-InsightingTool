@@ -12,6 +12,7 @@ import {
 } from "../models/sharedDashboard.model.js";
 import type { Dashboard } from "../shared/schema.js";
 import { getAuthenticatedEmail } from "../utils/auth.helper.js";
+import { getErrorCode } from "../utils/errorMessage.js";
 import { logger } from "../lib/logger.js";
 
 const getUserEmailFromRequest = (req: Request): string | undefined =>
@@ -34,9 +35,10 @@ function sendSSE(res: Response, event: string, data: any): boolean {
       (res as any).flush();
     }
     return true;
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Ignore errors from client disconnections (ECONNRESET, EPIPE are expected)
-    if (error.code === 'ECONNRESET' || error.code === 'EPIPE' || error.code === 'ECONNABORTED') {
+    const code = getErrorCode(error);
+    if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ECONNABORTED') {
       // Client disconnected - this is normal, don't log as error
       return false;
     }
@@ -239,8 +241,9 @@ export const streamIncomingSharedDashboardsController = async (req: Request, res
         // Only try to send error if connection is still open
         if (!res.writableEnded && !res.destroyed && res.writable) {
           logger.error('Error fetching shared dashboards for SSE:', error);
-          sendSSE(res, 'error', { 
-            message: error instanceof Error ? error.message : 'Failed to fetch shared dashboards.' 
+          sendSSE(res, 'error', {
+            error: error instanceof Error ? error.message : 'Failed to fetch shared dashboards.',
+            code: 'SHARED_DASHBOARDS_FETCH_FAILED',
           });
         }
         return false;
@@ -300,7 +303,7 @@ export const streamIncomingSharedDashboardsController = async (req: Request, res
   } catch (error) {
     logger.error("streamIncomingSharedDashboardsController error:", error);
     const message = error instanceof Error ? error.message : "Failed to stream shared dashboards.";
-    sendSSE(res, 'error', { message });
+    sendSSE(res, 'error', { error: message, code: 'SHARED_DASHBOARDS_STREAM_ERROR' });
     res.end();
   }
 };

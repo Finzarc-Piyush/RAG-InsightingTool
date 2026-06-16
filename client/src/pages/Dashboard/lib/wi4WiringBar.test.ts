@@ -81,7 +81,7 @@ describe("WI4-wiring-bar · explainSlice imports", () => {
     // This pin guards against a regression that drops one of them.
     assert.match(
       barSrc,
-      /import\s*\{\s*useEffect\s*,\s*useMemo\s*,\s*useRef\s*,\s*useState\s*\}\s*from\s*["']react["']/,
+      /import\s*\{\s*(?:memo\s*,\s*)?useEffect\s*,\s*useMemo\s*,\s*useRef\s*,\s*useState\s*\}\s*from\s*["']react["']/,
     );
   });
 });

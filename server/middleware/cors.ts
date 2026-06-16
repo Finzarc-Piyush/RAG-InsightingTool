@@ -4,6 +4,7 @@
  */
 import cors from "cors";
 import { logger } from "../lib/logger.js";
+import { isFlagOn } from "../lib/featureFlags.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -41,7 +42,7 @@ const getAllowedOrigins = (): string[] => {
 };
 
 const allowNoOrigin =
-  !isProduction || process.env.CORS_ALLOW_NO_ORIGIN === "true";
+  !isProduction || isFlagOn("CORS_ALLOW_NO_ORIGIN");
 
 /**
  * CORS configuration

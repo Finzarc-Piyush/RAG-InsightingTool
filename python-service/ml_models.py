@@ -1,4 +1,27 @@
-"""Machine Learning Model Training Functions"""
+"""Machine Learning Model Training Functions
+
+CQ-4 / PY-3 refactor: the ~25 public ``train_*`` functions used to each carry a
+fully copy-pasted train→split→fit→predict→metrics→assemble skeleton (~3,300 LOC).
+The shared mechanics now live in a small set of internal templates
+(:func:`_run_supervised`, :func:`_run_unsupervised`) plus per-feature config, and
+every public ``train_<model>`` is a thin wrapper. Public names, signatures and
+return-dict shapes are unchanged — the FastAPI ``/train-model`` dispatch and its
+callers see identical behaviour.
+
+PY-3: the previous uniform ``except Exception: raise ValueError(...) from None``
+swallowed the root cause. We now preserve the cause (``from e``) and log the
+traceback exactly once via :data:`logger`, while keeping ``ValueError`` as the
+type that crosses the FastAPI boundary for genuine training failures (so the
+HTTP 400 mapping in ``main.py`` is unchanged). Genuine input-validation still
+raises ``ValueError`` directly (no double-log) via the ``_InputError`` marker.
+
+PY-2: model types whose backing library is NOT pinned in ``requirements.txt``
+(xgboost, lightgbm, catboost, umap-learn, statsmodels, tensorflow, lifelines)
+raise :class:`MissingDependencyError` when the import is absent. ``main.py`` maps
+that to HTTP 501 Not-Implemented so a deployment that DOES install the optional
+lib keeps working, while the default image gives a clear, distinct status.
+"""
+from collections.abc import Callable
 from typing import Any, Literal
 
 import numpy as np
@@ -47,6 +70,10 @@ from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # Optional imports for advanced models
 try:
     import xgboost as xgb
@@ -94,6 +121,74 @@ try:
 except ImportError:
     HDBSCAN_AVAILABLE = False
 
+
+# ============================================================================
+# ERROR HANDLING (PY-3 / PY-2)
+# ============================================================================
+
+class MissingDependencyError(Exception):
+    """PY-2: a model type whose backing library is absent at runtime.
+
+    ``main.py`` maps this to HTTP 501 Not-Implemented (distinct from the 400 a
+    ``ValueError`` produces) so an operator can tell "you asked for a model the
+    image doesn't ship" apart from "your input was invalid".
+    """
+
+
+class _InputError(ValueError):
+    """Internal marker: a genuine input-validation failure raised inside the
+    training body. It is a ``ValueError`` (so the boundary still returns 400)
+    but ``_train`` re-raises it verbatim WITHOUT logging a traceback, since the
+    cause is the caller's data, not a server fault."""
+
+
+def _train(label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """PY-3 shared error boundary for every public ``train_*`` function.
+
+    Runs ``fn`` and:
+      * passes :class:`MissingDependencyError` through untouched (→ 501);
+      * passes :class:`_InputError` through as a plain ``ValueError`` (→ 400),
+        WITHOUT logging — it is expected user-input noise;
+      * wraps any other exception in ``ValueError(f"Error training {label}: ...")``
+        with the original cause preserved (``from e``) and the traceback logged
+        exactly once. This keeps the ``ValueError → HTTP 400`` contract that
+        ``main.py`` relies on while no longer hiding the root cause.
+    """
+    try:
+        return fn()
+    except MissingDependencyError:
+        raise
+    except _InputError as e:
+        # Genuine input validation. The original code raised these inside the
+        # try and let the blanket handler prepend "Error training {label}: ",
+        # so we keep that exact wording for response-shape parity — but DON'T
+        # log a server-side traceback (the cause is the caller's data).
+        raise ValueError(f"Error training {label}: {str(e)}") from None
+    except ValueError as e:
+        # A plain ValueError raised inside the body (e.g. from _prepare_data or
+        # a defensive ImportError->ValueError) is also caller-facing; preserve
+        # the prefixed message and the 400 mapping, no traceback log.
+        raise ValueError(f"Error training {label}: {str(e)}") from e
+    except Exception as e:
+        # Genuine server/library fault: log the traceback ONCE (PY-3 — no longer
+        # silently swallowed), preserve the cause, and keep the ValueError type
+        # so the HTTP status is unchanged (400, exactly as before).
+        logger.error("Error training %s", label, exc_info=True)
+        raise ValueError(f"Error training {label}: {str(e)}") from e
+
+
+def _require(available: bool, model_label: str, pip_name: str) -> None:
+    """PY-2 guard for an optional dependency. Raises :class:`MissingDependencyError`
+    (→ HTTP 501) when the backing library is not installed."""
+    if not available:
+        raise MissingDependencyError(
+            f"{model_label} is not available: install it with `pip install {pip_name}`"
+        )
+
+
+# ============================================================================
+# DATA PREP + METRICS (shared)
+# ============================================================================
 
 def _prepare_data(
     data: list[dict[str, Any]],
@@ -243,6 +338,133 @@ def _calculate_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) ->
     }
 
 
+def _coefficients(model, features: list[str]) -> dict[str, Any]:
+    """Linear-family coefficient block: intercept + per-feature weights."""
+    return {
+        "intercept": float(model.intercept_),
+        "features": {
+            feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
+        }
+    }
+
+
+def _feature_importance(model, features: list[str]) -> dict[str, float]:
+    """Tree/ensemble feature-importance block."""
+    return {
+        feature: float(importance)
+        for feature, importance in zip(features, model.feature_importances_, strict=False)
+    }
+
+
+# ============================================================================
+# SUPERVISED TEMPLATE
+# ============================================================================
+
+def _run_supervised(
+    *,
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    test_size: float,
+    random_state: int,
+    make_regressor: Callable[[], Any] | None,
+    make_classifier: Callable[[], Any] | None,
+    forced_task_type: str | None = None,
+    scale_features: bool = False,
+    stratify: bool = False,
+    has_coefficients: bool = False,
+    has_feature_importance: bool = False,
+    extra_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Shared supervised skeleton: prepare → (scale) → task → split → fit →
+    predict → metrics → CV → assemble. Mirrors the exact logic the individual
+    train_* functions used; flags select the per-model variations.
+
+    ``model_type`` / ``task_type`` are NOT set here — the caller assembles the
+    final dict from this template's output so the public return shape (field
+    order, extra params) stays byte-for-byte identical.
+    """
+    X, y = _prepare_data(data, target_variable, features)
+
+    fit_X = X
+    if scale_features:
+        scaler = StandardScaler()
+        fit_X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
+
+    task_type = forced_task_type or _determine_task_type(y)
+
+    stratify_arg = y if (stratify and task_type == "classification" and y.nunique() > 1) else None
+    X_train, X_test, y_train, y_test = train_test_split(
+        fit_X, y, test_size=test_size, random_state=random_state, stratify=stratify_arg
+    )
+
+    if task_type == "regression":
+        model = make_regressor()
+    else:
+        model = make_classifier()
+
+    model.fit(X_train, y_train)
+
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    if task_type == "regression":
+        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
+        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
+        cv_scoring = 'r2'
+    else:
+        train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
+        test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
+        cv_scoring = 'accuracy'
+
+    cv_scores = cross_val_score(model, fit_X, y, cv=5, scoring=cv_scoring)
+
+    y_pred_full = model.predict(fit_X)
+
+    result: dict[str, Any] = {
+        "task_type": task_type,
+        "target_variable": target_variable,
+        "features": features,
+    }
+    if extra_fields:
+        result.update(extra_fields)
+
+    result["coefficients"] = _coefficients(model, features) if has_coefficients else None
+    result["metrics"] = {
+        "train": train_metrics,
+        "test": test_metrics,
+        "cross_validation": {
+            f"mean_{cv_scoring}": float(cv_scores.mean()),
+            f"std_{cv_scoring}": float(cv_scores.std())
+        }
+    }
+    result["predictions"] = y_pred_full.tolist()
+    result["feature_importance"] = _feature_importance(model, features) if has_feature_importance else None
+    result["n_samples"] = len(X)
+    result["n_train"] = len(X_train)
+    result["n_test"] = len(X_test)
+    return result
+
+
+def _run_unsupervised_prep(
+    data: list[dict[str, Any]],
+    features: list[str],
+    scale: bool = True,
+) -> tuple:
+    """Shared unsupervised/anomaly/dimensionality prep: prepare → select
+    features → (scale). Returns (X, X_for_model)."""
+    X, _ = _prepare_data(data, features[0], features)  # first feature as dummy target
+    X = X[features]
+    if scale:
+        scaler = StandardScaler()
+        return X, scaler.fit_transform(X)
+    return X, X.values
+
+
+# ============================================================================
+# LINEAR / REGRESSION MODELS
+# ============================================================================
+
 def train_linear_regression(
     data: list[dict[str, Any]],
     target_variable: str,
@@ -251,62 +473,104 @@ def train_linear_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a linear regression model."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: LinearRegression(), make_classifier=None,
+            forced_task_type="regression", has_coefficients=True,
         )
+        return {"model_type": "linear_regression", **result}
+    return _train("linear regression", _build)
 
-        # Train model
-        model = LinearRegression()
-        model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+def train_ridge_regression(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    alpha: float = 1.0,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a ridge regression model."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: Ridge(alpha=alpha, random_state=random_state),
+            make_classifier=None, forced_task_type="regression",
+            has_coefficients=True, extra_fields={"alpha": alpha},
+        )
+        return {"model_type": "ridge_regression", **result}
+    return _train("ridge regression", _build)
 
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
 
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
+def train_lasso_regression(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    alpha: float = 1.0,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a lasso regression model."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: Lasso(alpha=alpha, random_state=random_state, max_iter=1000),
+            make_classifier=None, forced_task_type="regression",
+            has_coefficients=True, extra_fields={"alpha": alpha},
+        )
+        return {"model_type": "lasso_regression", **result}
+    return _train("lasso regression", _build)
 
-        # Coefficients
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
 
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
+def train_elasticnet(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    alpha: float = 1.0,
+    l1_ratio: float = 0.5,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train an ElasticNet regression model (L1 + L2 regularization)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=random_state, max_iter=1000),
+            make_classifier=None, forced_task_type="regression",
+            has_coefficients=True, extra_fields={"alpha": alpha, "l1_ratio": l1_ratio},
+        )
+        return {"model_type": "elasticnet", **result}
+    return _train("ElasticNet", _build)
 
-        return {
-            "model_type": "linear_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,  # Linear regression doesn't have feature importance
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training linear regression: {str(e)}") from None
+
+def train_bayesian_regression(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    alpha_1: float = 1e-6,
+    alpha_2: float = 1e-6,
+    lambda_1: float = 1e-6,
+    lambda_2: float = 1e-6,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a Bayesian ridge regression model."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: BayesianRidge(
+                alpha_1=alpha_1, alpha_2=alpha_2, lambda_1=lambda_1, lambda_2=lambda_2
+            ),
+            make_classifier=None, forced_task_type="regression", has_coefficients=True,
+        )
+        return {"model_type": "bayesian_regression", **result}
+    return _train("Bayesian regression", _build)
 
 
 def train_log_log_regression(
@@ -335,67 +599,51 @@ def train_log_log_regression(
     Returns:
         Dictionary containing model results, metrics, and coefficients
     """
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
         # Check for non-positive values that would cause issues with log transformation
-        # For target variable
         if (y <= 0).any():
             negative_or_zero_count = (y <= 0).sum()
-            raise ValueError(
+            raise _InputError(
                 f"Log-log model requires all target values to be positive. "
                 f"Found {negative_or_zero_count} non-positive values in '{target_variable}'. "
                 f"Consider using an offset or filtering out non-positive values."
             )
 
-        # For feature variables
         for feature in features:
             if (X[feature] <= 0).any():
                 negative_or_zero_count = (X[feature] <= 0).sum()
-                raise ValueError(
+                raise _InputError(
                     f"Log-log model requires all feature values to be positive. "
                     f"Found {negative_or_zero_count} non-positive values in feature '{feature}'. "
                     f"Consider using an offset or filtering out non-positive values."
                 )
 
-        # Apply log transformation to target
+        # Apply log transformation to target and features
         y_log = np.log(y)
-
-        # Apply log transformation to features
         X_log = X.copy()
         for feature in features:
             X_log[feature] = np.log(X_log[feature])
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X_log, y_log, test_size=test_size, random_state=random_state
         )
 
-        # Train model on log-transformed data
         model = LinearRegression()
         model.fit(X_train, y_train)
 
-        # Predictions (in log space)
-        y_train_pred_log = model.predict(X_train)
-        y_test_pred_log = model.predict(X_test)
-
-        # Convert predictions back to original scale (exponential)
-        y_train_pred = np.exp(y_train_pred_log)
-        y_test_pred = np.exp(y_test_pred_log)
-
-        # Convert actual values back to original scale for metrics
+        # Predictions (log space) → back to original scale
+        y_train_pred = np.exp(model.predict(X_train))
+        y_test_pred = np.exp(model.predict(X_test))
         y_train_actual = np.exp(y_train.values)
         y_test_actual = np.exp(y_test.values)
 
-        # Metrics (calculated in original scale)
         train_metrics = _calculate_regression_metrics(y_train_actual, y_train_pred)
         test_metrics = _calculate_regression_metrics(y_test_actual, y_test_pred)
 
-        # Cross-validation (in log space, then convert metrics)
         cv_scores = cross_val_score(model, X_log, y_log, cv=5, scoring='r2')
 
-        # Coefficients (in log-log space)
-        # Interpretation: a 1% change in feature X leads to a (coefficient)% change in target Y
         coefficients = {
             "intercept": float(model.intercept_),
             "features": {
@@ -404,9 +652,7 @@ def train_log_log_regression(
             "interpretation": "Coefficients represent elasticities: a 1% change in a feature leads to a (coefficient)% change in the target variable"
         }
 
-        # Predictions on full dataset (in original scale)
-        y_pred_full_log = model.predict(X_log)
-        y_pred_full = np.exp(y_pred_full_log)
+        y_pred_full = np.exp(model.predict(X_log))
 
         return {
             "model_type": "log_log_regression",
@@ -423,15 +669,14 @@ def train_log_log_regression(
                 }
             },
             "predictions": y_pred_full.tolist(),
-            "feature_importance": None,  # Linear regression doesn't have feature importance
+            "feature_importance": None,
             "n_samples": len(X),
             "n_train": len(X_train),
             "n_test": len(X_test),
             "transformation_applied": "log-log transformation applied to both target and features",
             "note": "Model coefficients represent elasticities. A coefficient of 0.5 means a 1% increase in the feature leads to a 0.5% increase in the target."
         }
-    except Exception as e:
-        raise ValueError(f"Error training log-log regression: {str(e)}") from None
+    return _train("log-log regression", _build)
 
 
 def train_logistic_regression(
@@ -442,54 +687,42 @@ def train_logistic_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a logistic regression model."""
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
-        # Determine if classification is needed
         task_type = _determine_task_type(y)
 
-        # Handle binary target conversion
         unique_values = sorted(y.unique())
         is_binary = len(unique_values) == 2
 
         if is_binary and set(unique_values).issubset({0, 1}):
-            # Already binary (0/1), use as-is
             task_type = "classification"
         elif is_binary:
-            # Binary but not 0/1, convert to 0/1
             y = y.map({unique_values[0]: 0, unique_values[1]: 1})
             task_type = "classification"
         elif task_type != "classification":
-            # Convert continuous to binary using median threshold
             median = y.median()
             y = (y > median).astype(int)
             task_type = "classification"
 
-        # Use stratify for binary classification to maintain class distribution
         use_stratify = len(y.unique()) == 2 and min(y.value_counts()) >= 2
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state, stratify=y if use_stratify else None
         )
 
-        # Train model
         model = LogisticRegression(max_iter=1000, random_state=random_state)
         model.fit(X_train, y_train)
 
-        # Predictions
         y_train_pred = model.predict(X_train)
         y_test_pred = model.predict(X_test)
 
-        # Metrics
         train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
         test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
 
-        # Cross-validation
         cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
 
-        # Coefficients - for logistic regression, coef_ has shape (n_classes, n_features)
-        # For binary classification, we take the first row
+        # coef_ has shape (n_classes, n_features); for binary take first row
         coef_array = model.coef_[0] if len(model.coef_.shape) > 1 else model.coef_
         coefficients = {
             "intercept": float(model.intercept_[0]) if len(model.intercept_) == 1 else model.intercept_.tolist(),
@@ -499,7 +732,6 @@ def train_logistic_regression(
             }
         }
 
-        # Predictions on full dataset
         y_pred_full = model.predict(X)
 
         return {
@@ -522,649 +754,8 @@ def train_logistic_regression(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training logistic regression: {str(e)}") from None
+    return _train("logistic regression", _build)
 
-
-def train_ridge_regression(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    alpha: float = 1.0,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a ridge regression model."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = Ridge(alpha=alpha, random_state=random_state)
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        # Coefficients
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        return {
-            "model_type": "ridge_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "alpha": alpha,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training ridge regression: {str(e)}") from None
-
-
-def train_lasso_regression(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    alpha: float = 1.0,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a lasso regression model."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = Lasso(alpha=alpha, random_state=random_state, max_iter=1000)
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        # Coefficients
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        return {
-            "model_type": "lasso_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "alpha": alpha,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training lasso regression: {str(e)}") from None
-
-
-def train_random_forest(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    n_estimators: int = 100,
-    max_depth: int | None = None,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a random forest model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Determine task type
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = RandomForestRegressor(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-        else:
-            model = RandomForestClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        result = {
-            "model_type": "random_forest",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "coefficients": None,  # Tree models don't have coefficients
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-
-        return result
-    except Exception as e:
-        raise ValueError(f"Error training random forest: {str(e)}") from None
-
-
-def train_decision_tree(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    max_depth: int | None = None,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a decision tree model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Determine task type
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = DecisionTreeRegressor(
-                max_depth=max_depth,
-                random_state=random_state
-            )
-        else:
-            model = DecisionTreeClassifier(
-                max_depth=max_depth,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        return {
-            "model_type": "decision_tree",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "max_depth": max_depth,
-            "coefficients": None,  # Tree models don't have coefficients
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training decision tree: {str(e)}") from None
-
-
-def train_gradient_boosting(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    n_estimators: int = 100,
-    learning_rate: float = 0.1,
-    max_depth: int | None = 3,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a gradient boosting model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Determine task type
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = GradientBoostingRegressor(
-                n_estimators=n_estimators,
-                learning_rate=learning_rate,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-        else:
-            model = GradientBoostingClassifier(
-                n_estimators=n_estimators,
-                learning_rate=learning_rate,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        return {
-            "model_type": "gradient_boosting",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_estimators": n_estimators,
-            "learning_rate": learning_rate,
-            "max_depth": max_depth,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training gradient boosting: {str(e)}") from None
-
-
-def train_elasticnet(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    alpha: float = 1.0,
-    l1_ratio: float = 0.5,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train an ElasticNet regression model (L1 + L2 regularization)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=random_state, max_iter=1000)
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        # Coefficients
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X)
-
-        return {
-            "model_type": "elasticnet",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "alpha": alpha,
-            "l1_ratio": l1_ratio,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training ElasticNet: {str(e)}") from None
-
-
-def train_svm(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    kernel: str = 'rbf',
-    C: float = 1.0,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a Support Vector Machine model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Determine task type
-        task_type = _determine_task_type(y)
-
-        # Scale features for SVM (important for performance)
-        scaler = StandardScaler()
-        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = SVR(kernel=kernel, C=C)
-        else:
-            model = SVC(kernel=kernel, C=C, random_state=random_state)
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X_scaled, y, cv=5, scoring=cv_scoring)
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X_scaled)
-
-        return {
-            "model_type": "svm",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "kernel": kernel,
-            "C": C,
-            "coefficients": None,  # SVM doesn't have simple coefficients
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,  # SVM doesn't have feature importance
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training SVM: {str(e)}") from None
-
-
-def train_knn(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    n_neighbors: int = 5,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a K-Nearest Neighbors model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Determine task type
-        task_type = _determine_task_type(y)
-
-        # Scale features for KNN (important for distance-based algorithms)
-        scaler = StandardScaler()
-        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = KNeighborsRegressor(n_neighbors=n_neighbors)
-        else:
-            model = KNeighborsClassifier(n_neighbors=n_neighbors)
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X_scaled, y, cv=5, scoring=cv_scoring)
-
-        # Predictions on full dataset
-        y_pred_full = model.predict(X_scaled)
-
-        return {
-            "model_type": "knn",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_neighbors": n_neighbors,
-            "coefficients": None,  # KNN doesn't have coefficients
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": y_pred_full.tolist(),
-            "feature_importance": None,  # KNN doesn't have feature importance
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training KNN: {str(e)}") from None
-
-
-# ============================================================================
-# ADDITIONAL REGRESSION MODELS
-# ============================================================================
 
 def train_polynomial_regression(
     data: list[dict[str, Any]],
@@ -1175,32 +766,26 @@ def train_polynomial_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a polynomial regression model."""
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
-        # Create polynomial features
         poly = PolynomialFeatures(degree=degree, include_bias=False)
         X_poly = poly.fit_transform(X)
         X_poly = pd.DataFrame(X_poly, columns=[f"poly_{i}" for i in range(X_poly.shape[1])])
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X_poly, y, test_size=test_size, random_state=random_state
         )
 
-        # Train model
         model = LinearRegression()
         model.fit(X_train, y_train)
 
-        # Predictions
         y_train_pred = model.predict(X_train)
         y_test_pred = model.predict(X_test)
 
-        # Metrics
         train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
         test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
 
-        # Cross-validation
         cv_scores = cross_val_score(model, X_poly, y, cv=5, scoring='r2')
 
         return {
@@ -1227,78 +812,77 @@ def train_polynomial_regression(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training polynomial regression: {str(e)}") from None
+    return _train("polynomial regression", _build)
 
 
-def train_bayesian_regression(
+def _train_glm_regression(
+    *,
+    model_type: str,
+    label: str,
+    import_error_msg: str,
+    make_model: Callable[[], Any],
+    import_model: Callable[[], None],
+    sign_check: Callable[[pd.Series], None] | None,
     data: list[dict[str, Any]],
     target_variable: str,
     features: list[str],
-    alpha_1: float = 1e-6,
-    alpha_2: float = 1e-6,
-    lambda_1: float = 1e-6,
-    lambda_2: float = 1e-6,
-    test_size: float = 0.2,
-    random_state: int = 42
+    test_size: float,
+    random_state: int,
+    extra_fields: dict[str, Any],
 ) -> dict[str, Any]:
-    """Train a Bayesian ridge regression model."""
+    """Shared body for the sklearn GLM-family regressors (quantile, poisson,
+    gamma, tweedie) — each lazily imports its estimator, optionally sign-checks
+    the target, then runs the standard regression skeleton with coefficients."""
+    # Defensive import (these estimators ship with the pinned scikit-learn, so
+    # this only fires on a downgrade). Match the original: a bare, unprefixed
+    # ValueError -> HTTP 400, raised OUTSIDE the _train wrapper so it is not
+    # given the "Error training ..." prefix.
     try:
+        import_model()
+    except ImportError:
+        raise ValueError(import_error_msg) from None
+
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
-        # Split data
+        if sign_check is not None:
+            sign_check(y)
+
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
 
-        # Train model
-        model = BayesianRidge(
-            alpha_1=alpha_1, alpha_2=alpha_2,
-            lambda_1=lambda_1, lambda_2=lambda_2
-        )
+        model = make_model()
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_regression_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_regression_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
         cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
 
-        # Coefficients
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        return {
-            "model_type": "bayesian_regression",
+        result: dict[str, Any] = {
+            "model_type": model_type,
             "task_type": "regression",
             "target_variable": target_variable,
             "features": features,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Bayesian regression: {str(e)}") from None
+        result.update(extra_fields)
+        result["coefficients"] = _coefficients(model, features)
+        result["metrics"] = {
+            "train": train_metrics,
+            "test": test_metrics,
+            "cross_validation": {
+                "mean_r2": float(cv_scores.mean()),
+                "std_r2": float(cv_scores.std())
+            }
+        }
+        result["predictions"] = model.predict(X).tolist()
+        result["feature_importance"] = None
+        result["n_samples"] = len(X)
+        result["n_train"] = len(X_train)
+        result["n_test"] = len(X_test)
+        return result
+    return _train(label, _build)
 
 
 def train_quantile_regression(
@@ -1311,63 +895,20 @@ def train_quantile_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a quantile regression model."""
-    try:
+    def _import() -> None:
+        global QuantileRegressor
         from sklearn.linear_model import QuantileRegressor
 
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = QuantileRegressor(quantile=quantile, alpha=alpha, solver='highs')
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        return {
-            "model_type": "quantile_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "quantile": quantile,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except ImportError:
-        raise ValueError("QuantileRegressor requires scikit-learn >= 1.0. Please upgrade scikit-learn.") from None
-    except Exception as e:
-        raise ValueError(f"Error training quantile regression: {str(e)}") from None
+    return _train_glm_regression(
+        model_type="quantile_regression", label="quantile regression",
+        import_error_msg="QuantileRegressor requires scikit-learn >= 1.0. Please upgrade scikit-learn.",
+        import_model=_import,
+        make_model=lambda: QuantileRegressor(quantile=quantile, alpha=alpha, solver='highs'),
+        sign_check=None,
+        data=data, target_variable=target_variable, features=features,
+        test_size=test_size, random_state=random_state,
+        extra_fields={"quantile": quantile},
+    )
 
 
 def train_poisson_regression(
@@ -1379,67 +920,24 @@ def train_poisson_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Poisson regression model (for count data)."""
-    try:
+    def _import() -> None:
+        global PoissonRegressor
         from sklearn.linear_model import PoissonRegressor
 
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure target is non-negative for Poisson
+    def _check(y: pd.Series) -> None:
         if (y < 0).any():
-            raise ValueError("Poisson regression requires non-negative target values")
+            raise _InputError("Poisson regression requires non-negative target values")
 
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = PoissonRegressor(alpha=alpha, max_iter=1000)
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        return {
-            "model_type": "poisson_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "alpha": alpha,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except ImportError:
-        raise ValueError("PoissonRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.") from None
-    except Exception as e:
-        raise ValueError(f"Error training Poisson regression: {str(e)}") from None
+    return _train_glm_regression(
+        model_type="poisson_regression", label="Poisson regression",
+        import_error_msg="PoissonRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.",
+        import_model=_import,
+        make_model=lambda: PoissonRegressor(alpha=alpha, max_iter=1000),
+        sign_check=_check,
+        data=data, target_variable=target_variable, features=features,
+        test_size=test_size, random_state=random_state,
+        extra_fields={"alpha": alpha},
+    )
 
 
 def train_gamma_regression(
@@ -1451,67 +949,24 @@ def train_gamma_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Gamma regression model (for positive continuous data)."""
-    try:
+    def _import() -> None:
+        global GammaRegressor
         from sklearn.linear_model import GammaRegressor
 
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure target is positive for Gamma
+    def _check(y: pd.Series) -> None:
         if (y <= 0).any():
-            raise ValueError("Gamma regression requires positive target values")
+            raise _InputError("Gamma regression requires positive target values")
 
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
-        )
-
-        # Train model
-        model = GammaRegressor(alpha=alpha, max_iter=1000)
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        return {
-            "model_type": "gamma_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "alpha": alpha,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except ImportError:
-        raise ValueError("GammaRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.") from None
-    except Exception as e:
-        raise ValueError(f"Error training Gamma regression: {str(e)}") from None
+    return _train_glm_regression(
+        model_type="gamma_regression", label="Gamma regression",
+        import_error_msg="GammaRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.",
+        import_model=_import,
+        make_model=lambda: GammaRegressor(alpha=alpha, max_iter=1000),
+        sign_check=_check,
+        data=data, target_variable=target_variable, features=features,
+        test_size=test_size, random_state=random_state,
+        extra_fields={"alpha": alpha},
+    )
 
 
 def train_tweedie_regression(
@@ -1524,68 +979,103 @@ def train_tweedie_regression(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Tweedie regression model."""
-    try:
+    def _import() -> None:
+        global TweedieRegressor
         from sklearn.linear_model import TweedieRegressor
 
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure target is non-negative for Tweedie
+    def _check(y: pd.Series) -> None:
         if (y < 0).any():
-            raise ValueError("Tweedie regression requires non-negative target values")
+            raise _InputError("Tweedie regression requires non-negative target values")
 
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state
+    return _train_glm_regression(
+        model_type="tweedie_regression", label="Tweedie regression",
+        import_error_msg="TweedieRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.",
+        import_model=_import,
+        make_model=lambda: TweedieRegressor(power=power, alpha=alpha, max_iter=1000),
+        sign_check=_check,
+        data=data, target_variable=target_variable, features=features,
+        test_size=test_size, random_state=random_state,
+        extra_fields={"power": power, "alpha": alpha},
+    )
+
+
+# ============================================================================
+# TREE / ENSEMBLE MODELS (dual task, feature importance)
+# ============================================================================
+
+def train_random_forest(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    n_estimators: int = 100,
+    max_depth: int | None = None,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a random forest model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: RandomForestRegressor(
+                n_estimators=n_estimators, max_depth=max_depth, random_state=random_state),
+            make_classifier=lambda: RandomForestClassifier(
+                n_estimators=n_estimators, max_depth=max_depth, random_state=random_state),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"n_estimators": n_estimators, "max_depth": max_depth},
         )
+        return {"model_type": "random_forest", **result}
+    return _train("random forest", _build)
 
-        # Train model
-        model = TweedieRegressor(power=power, alpha=alpha, max_iter=1000)
-        model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+def train_decision_tree(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    max_depth: int | None = None,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a decision tree model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: DecisionTreeRegressor(max_depth=max_depth, random_state=random_state),
+            make_classifier=lambda: DecisionTreeClassifier(max_depth=max_depth, random_state=random_state),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"max_depth": max_depth},
+        )
+        return {"model_type": "decision_tree", **result}
+    return _train("decision tree", _build)
 
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
 
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring='r2')
-
-        coefficients = {
-            "intercept": float(model.intercept_),
-            "features": {
-                feature: float(coef) for feature, coef in zip(features, model.coef_, strict=False)
-            }
-        }
-
-        return {
-            "model_type": "tweedie_regression",
-            "task_type": "regression",
-            "target_variable": target_variable,
-            "features": features,
-            "power": power,
-            "alpha": alpha,
-            "coefficients": coefficients,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    "mean_r2": float(cv_scores.mean()),
-                    "std_r2": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except ImportError:
-        raise ValueError("TweedieRegressor requires scikit-learn >= 0.23. Please upgrade scikit-learn.") from None
-    except Exception as e:
-        raise ValueError(f"Error training Tweedie regression: {str(e)}") from None
+def train_gradient_boosting(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    n_estimators: int = 100,
+    learning_rate: float = 0.1,
+    max_depth: int | None = 3,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a gradient boosting model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: GradientBoostingRegressor(
+                n_estimators=n_estimators, learning_rate=learning_rate,
+                max_depth=max_depth, random_state=random_state),
+            make_classifier=lambda: GradientBoostingClassifier(
+                n_estimators=n_estimators, learning_rate=learning_rate,
+                max_depth=max_depth, random_state=random_state),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"n_estimators": n_estimators, "learning_rate": learning_rate, "max_depth": max_depth},
+        )
+        return {"model_type": "gradient_boosting", **result}
+    return _train("gradient boosting", _build)
 
 
 def train_extra_trees(
@@ -1598,80 +1088,19 @@ def train_extra_trees(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train an Extra Trees model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: ExtraTreesRegressor(
+                n_estimators=n_estimators, max_depth=max_depth, random_state=random_state),
+            make_classifier=lambda: ExtraTreesClassifier(
+                n_estimators=n_estimators, max_depth=max_depth, random_state=random_state),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"n_estimators": n_estimators, "max_depth": max_depth},
         )
-
-        # Train model
-        if task_type == "regression":
-            model = ExtraTreesRegressor(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-        else:
-            model = ExtraTreesClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        return {
-            "model_type": "extra_trees",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training Extra Trees: {str(e)}") from None
+        return {"model_type": "extra_trees", **result}
+    return _train("Extra Trees", _build)
 
 
 def train_xgboost(
@@ -1685,86 +1114,23 @@ def train_xgboost(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train an XGBoost model (regression or classification)."""
-    if not XGBOOST_AVAILABLE:
-        raise ValueError("XGBoost is not installed. Install it with: pip install xgboost")
+    _require(XGBOOST_AVAILABLE, "XGBoost", "xgboost")
 
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: xgb.XGBRegressor(
+                n_estimators=n_estimators, max_depth=max_depth,
+                learning_rate=learning_rate, random_state=random_state),
+            make_classifier=lambda: xgb.XGBClassifier(
+                n_estimators=n_estimators, max_depth=max_depth,
+                learning_rate=learning_rate, random_state=random_state),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"n_estimators": n_estimators, "max_depth": max_depth, "learning_rate": learning_rate},
         )
-
-        # Train model
-        if task_type == "regression":
-            model = xgb.XGBRegressor(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                random_state=random_state
-            )
-        else:
-            model = xgb.XGBClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        return {
-            "model_type": "xgboost",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training XGBoost: {str(e)}") from None
+        return {"model_type": "xgboost", **result}
+    return _train("XGBoost", _build)
 
 
 def train_lightgbm(
@@ -1778,88 +1144,23 @@ def train_lightgbm(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a LightGBM model (regression or classification)."""
-    if not LIGHTGBM_AVAILABLE:
-        raise ValueError("LightGBM is not installed. Install it with: pip install lightgbm")
+    _require(LIGHTGBM_AVAILABLE, "LightGBM", "lightgbm")
 
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: lgb.LGBMRegressor(
+                n_estimators=n_estimators, max_depth=max_depth,
+                learning_rate=learning_rate, random_state=random_state, verbose=-1),
+            make_classifier=lambda: lgb.LGBMClassifier(
+                n_estimators=n_estimators, max_depth=max_depth,
+                learning_rate=learning_rate, random_state=random_state, verbose=-1),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"n_estimators": n_estimators, "max_depth": max_depth, "learning_rate": learning_rate},
         )
-
-        # Train model
-        if task_type == "regression":
-            model = lgb.LGBMRegressor(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                random_state=random_state,
-                verbose=-1
-            )
-        else:
-            model = lgb.LGBMClassifier(
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                random_state=random_state,
-                verbose=-1
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
-
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
-
-        return {
-            "model_type": "lightgbm",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training LightGBM: {str(e)}") from None
+        return {"model_type": "lightgbm", **result}
+    return _train("LightGBM", _build)
 
 
 def train_catboost(
@@ -1873,88 +1174,109 @@ def train_catboost(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a CatBoost model (regression or classification)."""
-    if not CATBOOST_AVAILABLE:
-        raise ValueError("CatBoost is not installed. Install it with: pip install catboost")
+    _require(CATBOOST_AVAILABLE, "CatBoost", "catboost")
 
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: cb.CatBoostRegressor(
+                iterations=iterations, depth=depth, learning_rate=learning_rate,
+                random_state=random_state, verbose=False),
+            make_classifier=lambda: cb.CatBoostClassifier(
+                iterations=iterations, depth=depth, learning_rate=learning_rate,
+                random_state=random_state, verbose=False),
+            stratify=True, has_feature_importance=True,
+            extra_fields={"iterations": iterations, "depth": depth, "learning_rate": learning_rate},
         )
+        return {"model_type": "catboost", **result}
+    return _train("CatBoost", _build)
 
-        # Train model
-        if task_type == "regression":
-            model = cb.CatBoostRegressor(
-                iterations=iterations,
-                depth=depth,
-                learning_rate=learning_rate,
-                random_state=random_state,
-                verbose=False
-            )
-        else:
-            model = cb.CatBoostClassifier(
-                iterations=iterations,
-                depth=depth,
-                learning_rate=learning_rate,
-                random_state=random_state,
-                verbose=False
-            )
 
-        model.fit(X_train, y_train)
+# ============================================================================
+# SCALED DUAL-TASK MODELS (no coefficients, no feature importance)
+# ============================================================================
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+def train_svm(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    kernel: str = 'rbf',
+    C: float = 1.0,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a Support Vector Machine model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: SVR(kernel=kernel, C=C),
+            make_classifier=lambda: SVC(kernel=kernel, C=C, random_state=random_state),
+            scale_features=True, stratify=True,
+            extra_fields={"kernel": kernel, "C": C},
+        )
+        return {"model_type": "svm", **result}
+    return _train("SVM", _build)
 
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
 
-        # Cross-validation
-        cv_scores = cross_val_score(model, X, y, cv=5, scoring=cv_scoring)
+def train_knn(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    n_neighbors: int = 5,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a K-Nearest Neighbors model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: KNeighborsRegressor(n_neighbors=n_neighbors),
+            make_classifier=lambda: KNeighborsClassifier(n_neighbors=n_neighbors),
+            scale_features=True, stratify=True,
+            extra_fields={"n_neighbors": n_neighbors},
+        )
+        return {"model_type": "knn", **result}
+    return _train("KNN", _build)
 
-        # Feature importance
-        feature_importance = {
-            feature: float(importance)
-            for feature, importance in zip(features, model.feature_importances_, strict=False)
-        }
 
-        return {
-            "model_type": "catboost",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "iterations": iterations,
-            "depth": depth,
-            "learning_rate": learning_rate,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
+def train_mlp(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    hidden_layer_sizes: tuple = (100,),
+    activation: str = 'relu',
+    solver: str = 'adam',
+    alpha: float = 0.0001,
+    learning_rate: str = 'constant',
+    max_iter: int = 200,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> dict[str, Any]:
+    """Train a Multi-Layer Perceptron (MLP) model (regression or classification)."""
+    def _build() -> dict[str, Any]:
+        result = _run_supervised(
+            data=data, target_variable=target_variable, features=features,
+            test_size=test_size, random_state=random_state,
+            make_regressor=lambda: MLPRegressor(
+                hidden_layer_sizes=hidden_layer_sizes, activation=activation,
+                solver=solver, alpha=alpha, learning_rate=learning_rate,
+                max_iter=max_iter, random_state=random_state),
+            make_classifier=lambda: MLPClassifier(
+                hidden_layer_sizes=hidden_layer_sizes, activation=activation,
+                solver=solver, alpha=alpha, learning_rate=learning_rate,
+                max_iter=max_iter, random_state=random_state),
+            scale_features=True, stratify=True,
+            extra_fields={
+                "hidden_layer_sizes": hidden_layer_sizes,
+                "activation": activation,
+                "solver": solver,
             },
-            "predictions": model.predict(X).tolist(),
-            "feature_importance": feature_importance,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training CatBoost: {str(e)}") from None
+        )
+        return {"model_type": "mlp", **result}
+    return _train("MLP", _build)
 
 
 def train_gaussian_process(
@@ -1965,10 +1287,13 @@ def train_gaussian_process(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Gaussian Process regression model."""
+    # GaussianProcessRegressor ships with the pinned scikit-learn, so this guard
+    # is defensive only. Keep the original bare ValueError (-> HTTP 400); GP is
+    # NOT a PY-2 missing-dependency case (the lib is always present).
     if not GAUSSIAN_PROCESS_AVAILABLE:
         raise ValueError("Gaussian Process requires scikit-learn >= 0.18")
 
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
         # Limit data size for GP (can be slow)
@@ -1976,25 +1301,17 @@ def train_gaussian_process(
             X = X.sample(n=1000, random_state=random_state)
             y = y.loc[X.index]
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
 
-        # Train model
         kernel = C(1.0, (1e-3, 1e3)) * RBF(1.0, (1e-2, 1e2))
         model = GaussianProcessRegressor(kernel=kernel, random_state=random_state, n_restarts_optimizer=5)
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_regression_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_regression_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation (on smaller subset)
         cv_scores = cross_val_score(model, X_train, y_train, cv=min(5, len(X_train)//10), scoring='r2')
 
         return {
@@ -2017,110 +1334,83 @@ def train_gaussian_process(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Gaussian Process: {str(e)}") from None
-
-
-def train_mlp(
-    data: list[dict[str, Any]],
-    target_variable: str,
-    features: list[str],
-    hidden_layer_sizes: tuple = (100,),
-    activation: str = 'relu',
-    solver: str = 'adam',
-    alpha: float = 0.0001,
-    learning_rate: str = 'constant',
-    max_iter: int = 200,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> dict[str, Any]:
-    """Train a Multi-Layer Perceptron (MLP) model (regression or classification)."""
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Scale features for MLP
-        scaler = StandardScaler()
-        X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
-
-        task_type = _determine_task_type(y)
-
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=test_size, random_state=random_state,
-            stratify=y if task_type == "classification" and y.nunique() > 1 else None
-        )
-
-        # Train model
-        if task_type == "regression":
-            model = MLPRegressor(
-                hidden_layer_sizes=hidden_layer_sizes,
-                activation=activation,
-                solver=solver,
-                alpha=alpha,
-                learning_rate=learning_rate,
-                max_iter=max_iter,
-                random_state=random_state
-            )
-        else:
-            model = MLPClassifier(
-                hidden_layer_sizes=hidden_layer_sizes,
-                activation=activation,
-                solver=solver,
-                alpha=alpha,
-                learning_rate=learning_rate,
-                max_iter=max_iter,
-                random_state=random_state
-            )
-
-        model.fit(X_train, y_train)
-
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        # Metrics
-        if task_type == "regression":
-            train_metrics = _calculate_regression_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_regression_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'r2'
-        else:
-            train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-            test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-            cv_scoring = 'accuracy'
-
-        # Cross-validation
-        cv_scores = cross_val_score(model, X_scaled, y, cv=5, scoring=cv_scoring)
-
-        return {
-            "model_type": "mlp",
-            "task_type": task_type,
-            "target_variable": target_variable,
-            "features": features,
-            "hidden_layer_sizes": hidden_layer_sizes,
-            "activation": activation,
-            "solver": solver,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {
-                    f"mean_{cv_scoring}": float(cv_scores.mean()),
-                    f"std_{cv_scoring}": float(cv_scores.std())
-                }
-            },
-            "predictions": model.predict(X_scaled).tolist(),
-            "feature_importance": None,
-            "n_samples": len(X),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training MLP: {str(e)}") from None
+    return _train("Gaussian Process", _build)
 
 
 # ============================================================================
 # ADDITIONAL CLASSIFICATION MODELS
 # ============================================================================
+
+def _train_multiclass_classifier(
+    *,
+    model_type: str,
+    label: str,
+    make_model: Callable[[], Any],
+    min_classes_msg: str,
+    cv_on: Literal["full", "train"],
+    predict_on: Literal["full", "train"],
+    bernoulli_binarize: bool,
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    test_size: float,
+    random_state: int,
+    extra_fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Shared body for the always-classification estimators (multinomial
+    logistic, LDA, QDA, naive bayes). Preserves each one's exact CV-source and
+    prediction-source quirks via ``cv_on`` / ``predict_on``."""
+    def _build() -> dict[str, Any]:
+        X, y = _prepare_data(data, target_variable, features)
+
+        unique_classes = y.nunique()
+        if unique_classes < 2:
+            raise _InputError(min_classes_msg)
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state,
+            stratify=y if unique_classes > 1 else None
+        )
+
+        if bernoulli_binarize:
+            X_train = (X_train > X_train.mean()).astype(int)
+            X_test = (X_test > X_test.mean()).astype(int)
+
+        model = make_model()
+        model.fit(X_train, y_train)
+
+        train_metrics = _calculate_classification_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_classification_metrics(y_test.values, model.predict(X_test))
+
+        cv_source_X, cv_source_y = (X, y) if cv_on == "full" else (X_train, y_train)
+        cv_scores = cross_val_score(model, cv_source_X, cv_source_y, cv=5, scoring='accuracy')
+
+        predict_source = X if predict_on == "full" else X_train
+
+        result: dict[str, Any] = {
+            "model_type": model_type,
+            "task_type": "classification",
+            "target_variable": target_variable,
+            "features": features,
+        }
+        result.update(extra_fields)
+        result["coefficients"] = None
+        result["metrics"] = {
+            "train": train_metrics,
+            "test": test_metrics,
+            "cross_validation": {
+                "mean_accuracy": float(cv_scores.mean()),
+                "std_accuracy": float(cv_scores.std())
+            }
+        }
+        result["predictions"] = model.predict(predict_source).tolist()
+        result["feature_importance"] = None
+        result["n_samples"] = len(X)
+        result["n_train"] = len(X_train)
+        result["n_test"] = len(X_test)
+        return result
+    return _train(label, _build)
+
 
 def train_multinomial_logistic(
     data: list[dict[str, Any]],
@@ -2130,33 +1420,24 @@ def train_multinomial_logistic(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a multinomial logistic regression model."""
-    try:
+    # n_classes is computed inside the template; recompute for the extra field.
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure we have multiple classes
         unique_classes = y.nunique()
         if unique_classes < 2:
-            raise ValueError("Multinomial logistic regression requires at least 2 classes")
+            raise _InputError("Multinomial logistic regression requires at least 2 classes")
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state,
             stratify=y if unique_classes > 1 else None
         )
 
-        # Train model
         model = LogisticRegression(multi_class='multinomial', max_iter=1000, random_state=random_state)
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_classification_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_classification_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
         cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
 
         return {
@@ -2180,8 +1461,7 @@ def train_multinomial_logistic(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training multinomial logistic regression: {str(e)}") from None
+    return _train("multinomial logistic regression", _build)
 
 
 def train_naive_bayes(
@@ -2193,50 +1473,41 @@ def train_naive_bayes(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Naive Bayes model (Gaussian, Multinomial, or Bernoulli)."""
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state,
             stratify=y if y.nunique() > 1 else None
         )
 
-        # Train model based on variant
-        if variant.lower() == 'gaussian':
+        variant_l = variant.lower()
+        if variant_l == 'gaussian':
             model = GaussianNB()
-        elif variant.lower() == 'multinomial':
-            # Ensure non-negative values for multinomial
+        elif variant_l == 'multinomial':
             if (X < 0).any().any():
-                raise ValueError("Multinomial Naive Bayes requires non-negative feature values")
+                raise _InputError("Multinomial Naive Bayes requires non-negative feature values")
             model = MultinomialNB()
-        elif variant.lower() == 'bernoulli':
-            # Binarize features for Bernoulli
+        elif variant_l == 'bernoulli':
             X_train = (X_train > X_train.mean()).astype(int)
             X_test = (X_test > X_test.mean()).astype(int)
             model = BernoulliNB()
         else:
-            raise ValueError(f"Unknown Naive Bayes variant: {variant}. Use 'gaussian', 'multinomial', or 'bernoulli'")
+            raise _InputError(f"Unknown Naive Bayes variant: {variant}. Use 'gaussian', 'multinomial', or 'bernoulli'")
 
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_classification_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_classification_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
         cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='accuracy')
 
         return {
-            "model_type": f"naive_bayes_{variant.lower()}",
+            "model_type": f"naive_bayes_{variant_l}",
             "task_type": "classification",
             "target_variable": target_variable,
             "features": features,
-            "variant": variant.lower(),
+            "variant": variant_l,
             "coefficients": None,
             "metrics": {
                 "train": train_metrics,
@@ -2252,8 +1523,7 @@ def train_naive_bayes(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Naive Bayes ({variant}): {str(e)}") from None
+    return _train(f"Naive Bayes ({variant})", _build)
 
 
 def train_lda(
@@ -2264,33 +1534,23 @@ def train_lda(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Linear Discriminant Analysis (LDA) model."""
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure we have multiple classes
         unique_classes = y.nunique()
         if unique_classes < 2:
-            raise ValueError("LDA requires at least 2 classes")
+            raise _InputError("LDA requires at least 2 classes")
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state,
             stratify=y if unique_classes > 1 else None
         )
 
-        # Train model
         model = LinearDiscriminantAnalysis()
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_classification_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_classification_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
         cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
 
         return {
@@ -2314,8 +1574,7 @@ def train_lda(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training LDA: {str(e)}") from None
+    return _train("LDA", _build)
 
 
 def train_qda(
@@ -2326,33 +1585,23 @@ def train_qda(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a Quadratic Discriminant Analysis (QDA) model."""
-    try:
+    def _build() -> dict[str, Any]:
         X, y = _prepare_data(data, target_variable, features)
-
-        # Ensure we have multiple classes
         unique_classes = y.nunique()
         if unique_classes < 2:
-            raise ValueError("QDA requires at least 2 classes")
+            raise _InputError("QDA requires at least 2 classes")
 
-        # Split data
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state,
             stratify=y if unique_classes > 1 else None
         )
 
-        # Train model
         model = QuadraticDiscriminantAnalysis()
         model.fit(X_train, y_train)
 
-        # Predictions
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
+        train_metrics = _calculate_classification_metrics(y_train.values, model.predict(X_train))
+        test_metrics = _calculate_classification_metrics(y_test.values, model.predict(X_test))
 
-        # Metrics
-        train_metrics = _calculate_classification_metrics(y_train.values, y_train_pred)
-        test_metrics = _calculate_classification_metrics(y_test.values, y_test_pred)
-
-        # Cross-validation
         cv_scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
 
         return {
@@ -2376,8 +1625,7 @@ def train_qda(
             "n_train": len(X_train),
             "n_test": len(X_test)
         }
-    except Exception as e:
-        raise ValueError(f"Error training QDA: {str(e)}") from None
+    return _train("QDA", _build)
 
 
 # ============================================================================
@@ -2391,19 +1639,12 @@ def train_kmeans(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a K-Means clustering model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)  # Use first feature as dummy target
-        X = X[features]  # Get only the features
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
         labels = model.fit_predict(X_scaled)
 
-        # Calculate silhouette score
         try:
             silhouette = float(silhouette_score(X_scaled, labels))
         except Exception:
@@ -2419,8 +1660,7 @@ def train_kmeans(
             "silhouette_score": silhouette,
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training K-Means: {str(e)}") from None
+    return _train("K-Means", _build)
 
 
 def train_dbscan(
@@ -2430,22 +1670,15 @@ def train_dbscan(
     min_samples: int = 5
 ) -> dict[str, Any]:
     """Train a DBSCAN clustering model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = DBSCAN(eps=eps, min_samples=min_samples)
         labels = model.fit_predict(X_scaled)
 
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         n_noise = list(labels).count(-1)
 
-        # Calculate silhouette score (only if we have clusters)
         try:
             if n_clusters > 1:
                 silhouette = float(silhouette_score(X_scaled, labels))
@@ -2464,8 +1697,7 @@ def train_dbscan(
             "silhouette_score": silhouette,
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training DBSCAN: {str(e)}") from None
+    return _train("DBSCAN", _build)
 
 
 def train_hierarchical_clustering(
@@ -2475,19 +1707,12 @@ def train_hierarchical_clustering(
     linkage: str = 'ward'
 ) -> dict[str, Any]:
     """Train a Hierarchical/Agglomerative clustering model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage)
         labels = model.fit_predict(X_scaled)
 
-        # Calculate silhouette score
         try:
             silhouette = float(silhouette_score(X_scaled, labels))
         except Exception:
@@ -2503,8 +1728,7 @@ def train_hierarchical_clustering(
             "silhouette_score": silhouette,
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Hierarchical Clustering: {str(e)}") from None
+    return _train("Hierarchical Clustering", _build)
 
 
 # ============================================================================
@@ -2517,19 +1741,12 @@ def train_pca(
     n_components: int | None = None
 ) -> dict[str, Any]:
     """Train a Principal Component Analysis (PCA) model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = PCA(n_components=n_components)
         X_transformed = model.fit_transform(X_scaled)
 
-        # Calculate explained variance
         explained_variance_ratio = model.explained_variance_ratio_.tolist()
         cumulative_variance = np.cumsum(explained_variance_ratio).tolist()
 
@@ -2543,8 +1760,7 @@ def train_pca(
             "transformed_data": X_transformed.tolist(),
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training PCA: {str(e)}") from None
+    return _train("PCA", _build)
 
 
 def train_tsne(
@@ -2555,7 +1771,7 @@ def train_tsne(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a t-SNE dimensionality reduction model."""
-    try:
+    def _build() -> dict[str, Any]:
         X, _ = _prepare_data(data, features[0], features)
         X = X[features]
 
@@ -2563,11 +1779,9 @@ def train_tsne(
         if len(X) > 1000:
             X = X.sample(n=1000, random_state=random_state)
 
-        # Scale features
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # Train model
         model = TSNE(n_components=n_components, perplexity=perplexity, random_state=random_state)
         X_transformed = model.fit_transform(X_scaled)
 
@@ -2580,8 +1794,7 @@ def train_tsne(
             "transformed_data": X_transformed.tolist(),
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training t-SNE: {str(e)}") from None
+    return _train("t-SNE", _build)
 
 
 def train_umap(
@@ -2593,18 +1806,11 @@ def train_umap(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a UMAP dimensionality reduction model."""
-    if not UMAP_AVAILABLE:
-        raise ValueError("UMAP is not installed. Install it with: pip install umap-learn")
+    _require(UMAP_AVAILABLE, "UMAP", "umap-learn")
 
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = UMAP(n_components=n_components, n_neighbors=n_neighbors, min_dist=min_dist, random_state=random_state)
         X_transformed = model.fit_transform(X_scaled)
 
@@ -2616,13 +1822,37 @@ def train_umap(
             "transformed_data": X_transformed.tolist(),
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training UMAP: {str(e)}") from None
+    return _train("UMAP", _build)
 
 
 # ============================================================================
 # TIME SERIES MODELS
 # ============================================================================
+
+def _extract_time_series(
+    data: list[dict[str, Any]],
+    target_variable: str,
+    date_column: str | None,
+) -> pd.Series:
+    """Shared time-series extraction: validate target, sort by date if given,
+    drop nulls, enforce minimum length."""
+    df = pd.DataFrame(data)
+
+    if target_variable not in df.columns:
+        raise _InputError(f"Target variable '{target_variable}' not found in data")
+
+    if date_column and date_column in df.columns:
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+        df = df.sort_values(date_column)
+        ts = df[target_variable].dropna()
+    else:
+        ts = pd.Series(df[target_variable].dropna())
+
+    if len(ts) < 10:
+        raise _InputError("Time series must have at least 10 observations")
+
+    return ts
+
 
 def train_arima(
     data: list[dict[str, Any]],
@@ -2632,27 +1862,11 @@ def train_arima(
     seasonal_order: tuple | None = None
 ) -> dict[str, Any]:
     """Train an ARIMA or SARIMA time series model."""
-    if not STATSMODELS_AVAILABLE:
-        raise ValueError("statsmodels is not installed. Install it with: pip install statsmodels")
+    _require(STATSMODELS_AVAILABLE, "statsmodels (ARIMA/SARIMA)", "statsmodels")
 
-    try:
-        df = pd.DataFrame(data)
+    def _build() -> dict[str, Any]:
+        ts = _extract_time_series(data, target_variable, date_column)
 
-        if target_variable not in df.columns:
-            raise ValueError(f"Target variable '{target_variable}' not found in data")
-
-        # Extract time series
-        if date_column and date_column in df.columns:
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-            df = df.sort_values(date_column)
-            ts = df[target_variable].dropna()
-        else:
-            ts = pd.Series(df[target_variable].dropna())
-
-        if len(ts) < 10:
-            raise ValueError("Time series must have at least 10 observations")
-
-        # Train model
         if seasonal_order:
             model = SARIMAX(ts, order=order, seasonal_order=seasonal_order)
         else:
@@ -2660,10 +1874,8 @@ def train_arima(
 
         fitted_model = model.fit()
 
-        # Forecast
         forecast = fitted_model.forecast(steps=min(10, len(ts) // 4))
 
-        # Get model summary metrics
         aic = float(fitted_model.aic) if hasattr(fitted_model, 'aic') else None
         bic = float(fitted_model.bic) if hasattr(fitted_model, 'bic') else None
 
@@ -2679,8 +1891,7 @@ def train_arima(
             "n_samples": len(ts),
             "fitted_values": fitted_model.fittedvalues.tolist()
         }
-    except Exception as e:
-        raise ValueError(f"Error training ARIMA/SARIMA: {str(e)}") from None
+    return _train("ARIMA/SARIMA", _build)
 
 
 def train_exponential_smoothing(
@@ -2692,36 +1903,16 @@ def train_exponential_smoothing(
     seasonal_periods: int | None = None
 ) -> dict[str, Any]:
     """Train an Exponential Smoothing time series model."""
-    if not STATSMODELS_AVAILABLE:
-        raise ValueError("statsmodels is not installed. Install it with: pip install statsmodels")
+    _require(STATSMODELS_AVAILABLE, "statsmodels (Exponential Smoothing)", "statsmodels")
 
-    try:
-        df = pd.DataFrame(data)
+    def _build() -> dict[str, Any]:
+        ts = _extract_time_series(data, target_variable, date_column)
 
-        if target_variable not in df.columns:
-            raise ValueError(f"Target variable '{target_variable}' not found in data")
-
-        # Extract time series
-        if date_column and date_column in df.columns:
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-            df = df.sort_values(date_column)
-            ts = df[target_variable].dropna()
-        else:
-            ts = pd.Series(df[target_variable].dropna())
-
-        if len(ts) < 10:
-            raise ValueError("Time series must have at least 10 observations")
-
-        # Train model
         model = ExponentialSmoothing(
-            ts,
-            trend=trend,
-            seasonal=seasonal,
-            seasonal_periods=seasonal_periods
+            ts, trend=trend, seasonal=seasonal, seasonal_periods=seasonal_periods
         )
         fitted_model = model.fit()
 
-        # Forecast
         forecast = fitted_model.forecast(steps=min(10, len(ts) // 4))
 
         return {
@@ -2736,8 +1927,113 @@ def train_exponential_smoothing(
             "n_samples": len(ts),
             "fitted_values": fitted_model.fittedvalues.tolist()
         }
-    except Exception as e:
-        raise ValueError(f"Error training Exponential Smoothing: {str(e)}") from None
+    return _train("Exponential Smoothing", _build)
+
+
+def _train_keras_sequence(
+    *,
+    model_type: str,
+    label: str,
+    build_layer: Callable[[Any, int, int], Any],
+    units_key: str,
+    units: int,
+    data: list[dict[str, Any]],
+    target_variable: str,
+    features: list[str],
+    sequence_length: int,
+    epochs: int,
+    test_size: float,
+    random_state: int,
+) -> dict[str, Any]:
+    """Shared body for the Keras recurrent models (LSTM, GRU): build sequences,
+    split, build a single-recurrent-layer Sequential net, fit, score, and
+    release TF resources (P-034). PY-2: TensorFlow is not pinned, so a missing
+    import yields HTTP 501 via :class:`MissingDependencyError`."""
+    try:
+        import tensorflow as tf
+        from tensorflow.keras.layers import Dense, Dropout
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.optimizers import Adam
+    except ImportError as ie:
+        raise MissingDependencyError(
+            "TensorFlow is not available: install it with `pip install tensorflow`"
+        ) from ie
+
+    keras_model = None
+
+    def _build() -> dict[str, Any]:
+        nonlocal keras_model
+        X, y = _prepare_data(data, target_variable, features)
+
+        def create_sequences(arr, seq_length):
+            X_seq, y_seq = [], []
+            for i in range(len(arr) - seq_length):
+                X_seq.append(arr[i:i+seq_length])
+                y_seq.append(arr[i+seq_length])
+            return np.array(X_seq), np.array(y_seq)
+
+        data_array = X.values
+        X_seq, y_seq = create_sequences(data_array, sequence_length)
+
+        if len(X_seq) < 10:
+            raise _InputError(f"Need at least {sequence_length + 10} samples for {label}")
+
+        split_idx = int(len(X_seq) * (1 - test_size))
+        X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
+        y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
+
+        X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], X_train.shape[2]))
+        X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], X_test.shape[2]))
+
+        keras_model = Sequential([
+            build_layer(units, sequence_length, len(features)),
+            Dropout(0.2),
+            Dense(1)
+        ])
+        keras_model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
+
+        keras_model.fit(
+            X_train, y_train, epochs=epochs, batch_size=32,
+            validation_data=(X_test, y_test), verbose=0
+        )
+
+        y_train_pred = keras_model.predict(X_train, verbose=0).flatten()
+        y_test_pred = keras_model.predict(X_test, verbose=0).flatten()
+        predictions = keras_model.predict(X_seq, verbose=0).flatten().tolist()
+
+        train_metrics = _calculate_regression_metrics(y_train, y_train_pred)
+        test_metrics = _calculate_regression_metrics(y_test, y_test_pred)
+
+        return {
+            "model_type": model_type,
+            "task_type": "time_series",
+            "target_variable": target_variable,
+            "features": features,
+            "sequence_length": sequence_length,
+            units_key: units,
+            "coefficients": None,
+            "metrics": {
+                "train": train_metrics,
+                "test": test_metrics,
+                "cross_validation": {}
+            },
+            "predictions": predictions,
+            "feature_importance": None,
+            "n_samples": len(X_seq),
+            "n_train": len(X_train),
+            "n_test": len(X_test)
+        }
+
+    try:
+        return _train(label, _build)
+    finally:
+        # P-034: release the TF graph / variables once metrics have been extracted.
+        try:
+            if keras_model is not None:
+                del keras_model
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
 
 
 def train_lstm(
@@ -2751,97 +2047,17 @@ def train_lstm(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train an LSTM time series model."""
-    try:
-        import tensorflow as tf
-        from tensorflow.keras.layers import LSTM, Dense, Dropout
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.optimizers import Adam
-    except ImportError:
-        raise ValueError("TensorFlow is not installed. Install it with: pip install tensorflow") from None
+    def _layer(units, seq_len, n_feat):
+        from tensorflow.keras.layers import LSTM
+        return LSTM(units, activation='relu', input_shape=(seq_len, n_feat))
 
-    model = None
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        # Create sequences for LSTM
-        def create_sequences(data, seq_length):
-            X_seq, y_seq = [], []
-            for i in range(len(data) - seq_length):
-                X_seq.append(data[i:i+seq_length])
-                y_seq.append(data[i+seq_length])
-            return np.array(X_seq), np.array(y_seq)
-
-        # Prepare data
-        data_array = X.values
-        X_seq, y_seq = create_sequences(data_array, sequence_length)
-
-        if len(X_seq) < 10:
-            raise ValueError(f"Need at least {sequence_length + 10} samples for LSTM")
-
-        # Split data
-        split_idx = int(len(X_seq) * (1 - test_size))
-        X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
-        y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
-
-        # Reshape for LSTM (samples, timesteps, features)
-        X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], X_train.shape[2]))
-        X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], X_test.shape[2]))
-
-        # Build model
-        model = Sequential([
-            LSTM(lstm_units, activation='relu', input_shape=(sequence_length, len(features))),
-            Dropout(0.2),
-            Dense(1)
-        ])
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
-
-        # Train model
-        model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=32,
-            validation_data=(X_test, y_test),
-            verbose=0
-        )
-
-        # Predictions
-        y_train_pred = model.predict(X_train, verbose=0).flatten()
-        y_test_pred = model.predict(X_test, verbose=0).flatten()
-        predictions = model.predict(X_seq, verbose=0).flatten().tolist()
-
-        # Metrics
-        train_metrics = _calculate_regression_metrics(y_train, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test, y_test_pred)
-
-        return {
-            "model_type": "lstm",
-            "task_type": "time_series",
-            "target_variable": target_variable,
-            "features": features,
-            "sequence_length": sequence_length,
-            "lstm_units": lstm_units,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {}
-            },
-            "predictions": predictions,
-            "feature_importance": None,
-            "n_samples": len(X_seq),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training LSTM: {str(e)}") from None
-    finally:
-        # P-034: release the TF graph / variables once metrics have been extracted.
-        try:
-            if model is not None:
-                del model
-            tf.keras.backend.clear_session()
-        except Exception:
-            pass
+    return _train_keras_sequence(
+        model_type="lstm", label="LSTM", build_layer=_layer,
+        units_key="lstm_units", units=lstm_units,
+        data=data, target_variable=target_variable, features=features,
+        sequence_length=sequence_length, epochs=epochs,
+        test_size=test_size, random_state=random_state,
+    )
 
 
 def train_gru(
@@ -2855,89 +2071,17 @@ def train_gru(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a GRU time series model."""
-    try:
-        import tensorflow as tf
-        from tensorflow.keras.layers import GRU, Dense, Dropout
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.optimizers import Adam
-    except ImportError:
-        raise ValueError("TensorFlow is not installed. Install it with: pip install tensorflow") from None
+    def _layer(units, seq_len, n_feat):
+        from tensorflow.keras.layers import GRU
+        return GRU(units, activation='relu', input_shape=(seq_len, n_feat))
 
-    model = None
-    try:
-        X, y = _prepare_data(data, target_variable, features)
-
-        def create_sequences(data, seq_length):
-            X_seq, y_seq = [], []
-            for i in range(len(data) - seq_length):
-                X_seq.append(data[i:i+seq_length])
-                y_seq.append(data[i+seq_length])
-            return np.array(X_seq), np.array(y_seq)
-
-        data_array = X.values
-        X_seq, y_seq = create_sequences(data_array, sequence_length)
-
-        if len(X_seq) < 10:
-            raise ValueError(f"Need at least {sequence_length + 10} samples for GRU")
-
-        split_idx = int(len(X_seq) * (1 - test_size))
-        X_train, X_test = X_seq[:split_idx], X_seq[split_idx:]
-        y_train, y_test = y_seq[:split_idx], y_seq[split_idx:]
-
-        X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], X_train.shape[2]))
-        X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], X_test.shape[2]))
-
-        model = Sequential([
-            GRU(gru_units, activation='relu', input_shape=(sequence_length, len(features))),
-            Dropout(0.2),
-            Dense(1)
-        ])
-        model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
-
-        model.fit(
-            X_train, y_train,
-            epochs=epochs,
-            batch_size=32,
-            validation_data=(X_test, y_test),
-            verbose=0
-        )
-
-        y_train_pred = model.predict(X_train, verbose=0).flatten()
-        y_test_pred = model.predict(X_test, verbose=0).flatten()
-        predictions = model.predict(X_seq, verbose=0).flatten().tolist()
-
-        train_metrics = _calculate_regression_metrics(y_train, y_train_pred)
-        test_metrics = _calculate_regression_metrics(y_test, y_test_pred)
-
-        return {
-            "model_type": "gru",
-            "task_type": "time_series",
-            "target_variable": target_variable,
-            "features": features,
-            "sequence_length": sequence_length,
-            "gru_units": gru_units,
-            "coefficients": None,
-            "metrics": {
-                "train": train_metrics,
-                "test": test_metrics,
-                "cross_validation": {}
-            },
-            "predictions": predictions,
-            "feature_importance": None,
-            "n_samples": len(X_seq),
-            "n_train": len(X_train),
-            "n_test": len(X_test)
-        }
-    except Exception as e:
-        raise ValueError(f"Error training GRU: {str(e)}") from None
-    finally:
-        # P-034: release TF resources (graph + variables + session).
-        try:
-            if model is not None:
-                del model
-            tf.keras.backend.clear_session()
-        except Exception:
-            pass
+    return _train_keras_sequence(
+        model_type="gru", label="GRU", build_layer=_layer,
+        units_key="gru_units", units=gru_units,
+        data=data, target_variable=target_variable, features=features,
+        sequence_length=sequence_length, epochs=epochs,
+        test_size=test_size, random_state=random_state,
+    )
 
 
 # ============================================================================
@@ -2952,23 +2096,14 @@ def train_isolation_forest(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train an Isolation Forest anomaly detection model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = IsolationForest(
-            contamination=contamination,
-            n_estimators=n_estimators,
-            random_state=random_state
+            contamination=contamination, n_estimators=n_estimators, random_state=random_state
         )
         predictions = model.fit_predict(X_scaled)
 
-        # -1 for anomalies, 1 for normal
         anomaly_indices = np.where(predictions == -1)[0].tolist()
         n_anomalies = len(anomaly_indices)
 
@@ -2982,8 +2117,7 @@ def train_isolation_forest(
             "anomaly_scores": model.score_samples(X_scaled).tolist(),
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Isolation Forest: {str(e)}") from None
+    return _train("Isolation Forest", _build)
 
 
 def train_one_class_svm(
@@ -2994,21 +2128,14 @@ def train_one_class_svm(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train a One-Class SVM anomaly detection model."""
-    try:
+    def _build() -> dict[str, Any]:
         from sklearn.svm import OneClassSVM
 
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = OneClassSVM(nu=nu, kernel=kernel)
         predictions = model.fit_predict(X_scaled)
 
-        # -1 for anomalies, 1 for normal
         anomaly_indices = np.where(predictions == -1)[0].tolist()
         n_anomalies = len(anomaly_indices)
 
@@ -3022,8 +2149,7 @@ def train_one_class_svm(
             "anomaly_indices": anomaly_indices,
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training One-Class SVM: {str(e)}") from None
+    return _train("One-Class SVM", _build)
 
 
 def train_local_outlier_factor(
@@ -3033,21 +2159,14 @@ def train_local_outlier_factor(
     contamination: float = 0.1
 ) -> dict[str, Any]:
     """Train a Local Outlier Factor (LOF) anomaly detection model."""
-    try:
+    def _build() -> dict[str, Any]:
         from sklearn.neighbors import LocalOutlierFactor
 
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
         predictions = model.fit_predict(X_scaled)
 
-        # -1 for anomalies, 1 for normal
         anomaly_indices = np.where(predictions == -1)[0].tolist()
         n_anomalies = len(anomaly_indices)
 
@@ -3062,8 +2181,7 @@ def train_local_outlier_factor(
             "outlier_scores": model.negative_outlier_factor_.tolist(),
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Local Outlier Factor: {str(e)}") from None
+    return _train("Local Outlier Factor", _build)
 
 
 def train_elliptic_envelope(
@@ -3073,19 +2191,12 @@ def train_elliptic_envelope(
     random_state: int = 42
 ) -> dict[str, Any]:
     """Train an Elliptic Envelope anomaly detection model."""
-    try:
-        X, _ = _prepare_data(data, features[0], features)
-        X = X[features]
+    def _build() -> dict[str, Any]:
+        X, X_scaled = _run_unsupervised_prep(data, features, scale=True)
 
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        # Train model
         model = EllipticEnvelope(contamination=contamination, random_state=random_state)
         predictions = model.fit_predict(X_scaled)
 
-        # -1 for anomalies, 1 for normal
         anomaly_indices = np.where(predictions == -1)[0].tolist()
         n_anomalies = len(anomaly_indices)
 
@@ -3098,8 +2209,7 @@ def train_elliptic_envelope(
             "anomaly_indices": anomaly_indices,
             "n_samples": len(X)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Elliptic Envelope: {str(e)}") from None
+    return _train("Elliptic Envelope", _build)
 
 
 # ============================================================================
@@ -3117,35 +2227,25 @@ def train_matrix_factorization(
     regularization: float = 0.1
 ) -> dict[str, Any]:
     """Train a Matrix Factorization recommendation model (simplified ALS)."""
-    try:
+    def _build() -> dict[str, Any]:
         df = pd.DataFrame(data)
 
-        # Validate columns
         required_cols = [user_column, item_column, rating_column]
         missing = [col for col in required_cols if col not in df.columns]
         if missing:
-            raise ValueError(f"Missing columns: {missing}")
+            raise _InputError(f"Missing columns: {missing}")
 
-        # Create user-item matrix
         user_item_matrix = df.pivot_table(
-            index=user_column,
-            columns=item_column,
-            values=rating_column,
-            fill_value=0
+            index=user_column, columns=item_column, values=rating_column, fill_value=0
         )
 
-        # Simple matrix factorization using SVD
         from sklearn.decomposition import NMF
 
-        # Use NMF for non-negative matrix factorization
         model = NMF(n_components=n_factors, random_state=42, max_iter=n_epochs)
         W = model.fit_transform(user_item_matrix)
         H = model.components_
 
-        # Reconstruct matrix
         reconstructed = np.dot(W, H)
-
-        # Calculate reconstruction error
         mse = np.mean((user_item_matrix.values - reconstructed) ** 2)
 
         return {
@@ -3160,8 +2260,7 @@ def train_matrix_factorization(
             "reconstruction_error": float(mse),
             "n_samples": len(df)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Matrix Factorization: {str(e)}") from None
+    return _train("Matrix Factorization", _build)
 
 
 # ============================================================================
@@ -3177,30 +2276,27 @@ def train_cox_proportional_hazards(
     """Train a Cox Proportional Hazards survival analysis model."""
     try:
         from lifelines import CoxPHFitter
-    except ImportError:
-        raise ValueError("lifelines is not installed. Install it with: pip install lifelines") from None
+    except ImportError as ie:
+        raise MissingDependencyError(
+            "lifelines is not available: install it with `pip install lifelines`"
+        ) from ie
 
-    try:
+    def _build() -> dict[str, Any]:
         df = pd.DataFrame(data)
 
-        # Validate columns
         required_cols = [duration_column, event_column] + features
         missing = [col for col in required_cols if col not in df.columns]
         if missing:
-            raise ValueError(f"Missing columns: {missing}")
+            raise _InputError(f"Missing columns: {missing}")
 
-        # Prepare data
         survival_data = df[[duration_column, event_column] + features].copy()
         survival_data = survival_data.dropna()
 
         if len(survival_data) < 10:
-            raise ValueError("Need at least 10 samples for survival analysis")
+            raise _InputError("Need at least 10 samples for survival analysis")
 
-        # Train model
         cph = CoxPHFitter()
         cph.fit(survival_data, duration_column=duration_column, event_col=event_column)
-
-        # Get summary
 
         return {
             "model_type": "cox_proportional_hazards",
@@ -3215,8 +2311,7 @@ def train_cox_proportional_hazards(
             },
             "n_samples": len(survival_data)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Cox Proportional Hazards: {str(e)}") from None
+    return _train("Cox Proportional Hazards", _build)
 
 
 def train_kaplan_meier(
@@ -3228,34 +2323,32 @@ def train_kaplan_meier(
     """Train a Kaplan-Meier survival estimator."""
     try:
         from lifelines import KaplanMeierFitter
-    except ImportError:
-        raise ValueError("lifelines is not installed. Install it with: pip install lifelines") from None
+    except ImportError as ie:
+        raise MissingDependencyError(
+            "lifelines is not available: install it with `pip install lifelines`"
+        ) from ie
 
-    try:
+    def _build() -> dict[str, Any]:
         df = pd.DataFrame(data)
 
-        # Validate columns
         required_cols = [duration_column, event_column]
         if group_column:
             required_cols.append(group_column)
         missing = [col for col in required_cols if col not in df.columns]
         if missing:
-            raise ValueError(f"Missing columns: {missing}")
+            raise _InputError(f"Missing columns: {missing}")
 
-        # Prepare data
         survival_data = df[[duration_column, event_column]].copy()
         if group_column:
             survival_data[group_column] = df[group_column]
         survival_data = survival_data.dropna()
 
         if len(survival_data) < 10:
-            raise ValueError("Need at least 10 samples for survival analysis")
+            raise _InputError("Need at least 10 samples for survival analysis")
 
-        # Train model
         kmf = KaplanMeierFitter()
 
         if group_column:
-            # Fit for each group
             groups = survival_data[group_column].unique()
             results = {}
             for group in groups:
@@ -3281,5 +2374,4 @@ def train_kaplan_meier(
             "results": results,
             "n_samples": len(survival_data)
         }
-    except Exception as e:
-        raise ValueError(f"Error training Kaplan-Meier: {str(e)}") from None
+    return _train("Kaplan-Meier", _build)

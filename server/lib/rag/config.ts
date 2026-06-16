@@ -14,6 +14,8 @@
  * Embeddings use AZURE_OPENAI_EMBEDDING_* / shared OpenAI client (see lib/openai.ts).
  */
 
+import { isFlagOn } from "../featureFlags.js";
+
 export function hasAzureSearchCredentials(): boolean {
   return (
     Boolean(process.env.AZURE_SEARCH_ENDPOINT?.trim()) &&
@@ -24,10 +26,10 @@ export function hasAzureSearchCredentials(): boolean {
 
 /** Runtime retrieval + indexing when true. */
 export function isRagEnabled(): boolean {
-  if (process.env.RAG_ENABLED === "false") {
+  if (!isFlagOn("RAG_ENABLED")) {
     return false;
   }
-  return process.env.RAG_ENABLED === "true" && hasAzureSearchCredentials();
+  return isFlagOn("RAG_ENABLED") && hasAzureSearchCredentials();
 }
 
 /** For admin script: create index without RAG_ENABLED. */

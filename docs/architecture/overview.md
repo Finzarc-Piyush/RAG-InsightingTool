@@ -62,6 +62,22 @@ Vercel. `api/index.ts` sets `process.env.VERCEL = '1'`; `server/index.ts`
 skips `http.createServer` when `VERCEL` is set. `client/vercel.json`
 rewrites all routes to `index.html` and caches `/assets/*` immutably.
 
+## Services vs controllers boundary
+
+`server/controllers/` orchestrate `server/lib/` **directly** — a controller
+is the orchestration seam for its own route, and most route handling is
+single-entrypoint, so it lives in the controller (no pass-through service).
+The thin `server/services/` tier is retained **only** for orchestration
+genuinely shared by more than one entrypoint — a controller plus a background
+worker and/or a second controller — e.g. `services/chat/` (chat + automation
+routes + the upload queue), `services/dataOps/`, and `services/dashboardExport/`
+(dashboard + export routes). New cross-entrypoint orchestration goes in
+`services/`; single-entrypoint orchestration may stay in the controller. The
+~69-vs-9 lib-vs-services import ratio in controllers is the *expected* shape,
+not a bypassed tier. See
+[`docs/decisions/services-layer-boundary.md`](../decisions/services-layer-boundary.md)
+(closes audit finding ARCH-6).
+
 ## Conventions that bite
 
 - **ESM everywhere on the server.** Relative imports use `.js`
@@ -72,6 +88,12 @@ rewrites all routes to `index.html` and caches `/assets/*` immutably.
 - **Server `npm test` is an explicit file list**, not a glob — see
   `server/package.json`. New tests must be appended or CI silently
   skips them.
+- **Import cycles: dynamic `await import(...)` cycle-breakers are an
+  accepted pattern** for genuine runtime behavior (e.g. `chat.model`
+  deferring `memoryLifecycleBuilders` / `sessionAnalysisContext`); but a
+  module that imports a symbol *only to annotate a type* must use
+  `import type` so it does not get dragged into a cycle. See
+  [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
 
 ## Recent changes
 

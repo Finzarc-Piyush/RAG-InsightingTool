@@ -28,7 +28,7 @@
  * remount.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { Bar, LinePath } from "@visx/shape";
 import { scaleBand, scaleLinear } from "@visx/scale";
@@ -164,7 +164,7 @@ function pickOrientation(
   return "vertical";
 }
 
-export function BarRenderer({
+function BarRendererImpl({
   spec,
   data,
   width,
@@ -195,7 +195,10 @@ export function BarRenderer({
         .filter((c): c is NonNullable<ReturnType<typeof resolveChannel>> => !!c),
     [spec.encoding.y2Series],
   );
-  const allY2 = y2Series.length > 0 ? y2Series : y2Ch ? [y2Ch] : [];
+  const allY2 = useMemo(
+    () => (y2Series.length > 0 ? y2Series : y2Ch ? [y2Ch] : []),
+    [y2Series, y2Ch],
+  );
 
   // Audit fix: if user supplies BOTH `detail` encoding AND a non-stacking
   // layout, auto-promote to `grouped-stacked` so the detail dimension has
@@ -407,16 +410,19 @@ export function BarRenderer({
 
   // ───────── scales ─────────
   // Band scale on the categorical (outer) axis.
-  const outerScaleRange =
-    orientation === "vertical" ? [0, innerWidth] : [0, innerHeight];
+  const outerScaleRange = useMemo<[number, number]>(
+    () =>
+      orientation === "vertical" ? [0, innerWidth] : [0, innerHeight],
+    [orientation, innerWidth, innerHeight],
+  );
   const outerScale = useMemo(
     () =>
       scaleBand<string>({
         domain: xValues,
-        range: outerScaleRange as [number, number],
+        range: outerScaleRange,
         padding: 0.18,
       }),
-    [xValues, orientation, innerWidth, innerHeight],
+    [xValues, outerScaleRange],
   );
   // Inner band scale (within each outer) for grouped / grouped-stacked.
   const innerScale = useMemo(() => {
@@ -1316,3 +1322,10 @@ export function BarRenderer({
     </div>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const BarRenderer = memo(BarRendererImpl);
+BarRenderer.displayName = "BarRenderer";

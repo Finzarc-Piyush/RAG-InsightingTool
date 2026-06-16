@@ -48,21 +48,93 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       rollupOptions: {
         output: {
-          manualChunks: {
-            // Vendor chunks (routing uses wouter, not react-router)
-            "react-vendor": ["react", "react-dom"],
-            "ui-vendor": [
-              "@radix-ui/react-dialog",
-              "@radix-ui/react-dropdown-menu",
-              "@radix-ui/react-select",
-              "@radix-ui/react-tooltip",
-              "@radix-ui/react-toast",
-            ],
-            "chart-vendor": ["recharts"],
-            "query-vendor": ["@tanstack/react-query"],
-            "msal-vendor": ["@azure/msal-browser", "@azure/msal-react"],
-            "utils-vendor": ["axios", "date-fns", "zod"],
-            "grid-vendor": ["react-grid-layout", "react-resizable"],
+          // PERF-9: split heavy, independently-cacheable vendor groups into
+          // their own chunks so the catch-all vendor chunk stops dwarfing
+          // everything. Function form (keyed on the resolved module id) is
+          // robust to sub-package paths — every `@radix-ui/*`, `@tanstack/*`,
+          // `@visx/*`, `@azure/msal*` entry point is captured, not just the
+          // few we happen to list. Only packages present in package.json are
+          // referenced. Order matters: first match wins. Non-node_modules
+          // ids fall through to Rollup's default app chunking (don't break
+          // route-level code-splitting).
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return undefined;
+
+            // React core (routing uses wouter, not react-router).
+            if (
+              id.includes("node_modules/react/") ||
+              id.includes("node_modules/react-dom/") ||
+              id.includes("node_modules/scheduler/")
+            ) {
+              return "react-vendor";
+            }
+
+            // echarts is huge (~1 MB) and its own world (ships zrender).
+            // Keep it isolated so it doesn't bloat the other chart chunks.
+            if (
+              id.includes("node_modules/echarts/") ||
+              id.includes("node_modules/zrender/")
+            ) {
+              return "echarts";
+            }
+
+            // Charting stack: visx + the d3 primitives it pulls in, plus
+            // recharts. These are large and change rarely.
+            if (
+              id.includes("node_modules/@visx/") ||
+              id.includes("node_modules/d3-") ||
+              id.includes("node_modules/recharts/") ||
+              id.includes("node_modules/victory-vendor/")
+            ) {
+              return "charts";
+            }
+
+            // All Radix UI primitives.
+            if (id.includes("node_modules/@radix-ui/")) {
+              return "radix";
+            }
+
+            // TanStack (react-query + react-virtual).
+            if (id.includes("node_modules/@tanstack/")) {
+              return "tanstack";
+            }
+
+            // Azure MSAL auth stack.
+            if (id.includes("node_modules/@azure/msal")) {
+              return "msal";
+            }
+
+            // Spreadsheet / file export libs.
+            if (
+              id.includes("node_modules/exceljs/") ||
+              id.includes("node_modules/papaparse/")
+            ) {
+              return "sheets";
+            }
+
+            // Animation runtime.
+            if (id.includes("node_modules/framer-motion/")) {
+              return "motion";
+            }
+
+            // Grid / resizable layout.
+            if (
+              id.includes("node_modules/react-grid-layout/") ||
+              id.includes("node_modules/react-resizable/")
+            ) {
+              return "grid-vendor";
+            }
+
+            // Small shared utils.
+            if (
+              id.includes("node_modules/axios/") ||
+              id.includes("node_modules/date-fns/") ||
+              id.includes("node_modules/zod/")
+            ) {
+              return "utils-vendor";
+            }
+
+            return undefined;
           },
         },
       },

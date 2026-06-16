@@ -41,7 +41,7 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 | `web_search` | Open-web search / external research for ANY question the uploaded data can | server/lib/agents/runtime/tools/webSearchTool.ts |
 | `zod` | — | server/lib/agents/runtime/tools/registerTools.ts |
 
-## HTTP routes (129 handlers across 19 modules)
+## HTTP routes (130 handlers across 20 modules)
 
 ### server/routes/upload.ts — mounted at `/api` (3)
 - `POST` /api/upload
@@ -209,6 +209,9 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 ### server/routes/telemetry.ts — mounted at `/api` (2)
 - `POST` /api/telemetry/drill-through
 - `POST` /api/telemetry/explain-slice
+
+### server/routes/clientError.ts — mounted at `/api` (1)
+- `POST` /api/client-error
 
 ## Skills (5)
 

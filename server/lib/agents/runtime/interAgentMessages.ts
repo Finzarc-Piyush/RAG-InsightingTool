@@ -26,7 +26,7 @@
  *   (agentWorkbench.util).
  */
 import type { AgentTrace, InterAgentMessage } from "./types.js";
-import { isInterAgentTraceEnabled } from "./types.js";
+import { isInterAgentTraceEnabled } from "./runtimeConfig.js";
 
 const MAX_MESSAGES = 48;
 const MAX_INTENT_CHARS = 400;

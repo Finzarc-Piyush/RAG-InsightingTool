@@ -47,23 +47,41 @@ import {
   buildDashboardPptx,
 } from "../services/dashboardExport.service.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
+
+/**
+ * API-7(c) · Idempotency-Key passthrough. We accept (and log) the
+ * `Idempotency-Key` header on create POSTs so the contract exists for external
+ * consumers / retries. A full dedupe store is out of scope — this is
+ * acceptance + observability only; it never changes the response.
+ */
+function logIdempotencyKey(req: Request, route: string): void {
+  const raw = req.get("Idempotency-Key");
+  const key = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof key === "string" && key.trim().length > 0) {
+    logger.info(
+      `[idempotency] ${route} received Idempotency-Key: ${key.trim().slice(0, 200)}`,
+    );
+  }
+}
 
 export const createDashboardController = async (req: Request, res: Response) => {
   try {
     const username = requireUsername(req);
+    logIdempotencyKey(req, "POST /dashboards");
     const parsed = createDashboardRequestSchema.parse(req.body);
     const dashboard = await createDashboard(username, parsed.name, parsed.charts || []);
     res.status(201).json(dashboard);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     // Check if it's a duplicate name error
-    if (error?.message?.includes('already exists')) {
-      res.status(409).json({ error: error.message });
+    if (errorMessage(error).includes('already exists')) {
+      res.status(409).json({ error: errorMessage(error) });
     } else {
-      res.status(400).json({ error: error?.message || 'Failed to create dashboard' });
+      res.status(400).json({ error: errorMessage(error) || 'Failed to create dashboard' });
     }
   }
 };
@@ -116,12 +134,12 @@ export const listDashboardsController = async (req: Request, res: Response) => {
     const allDashboards = [...dashboards, ...validSharedDashboards];
     
     res.json({ dashboards: allDashboards });
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(500).json({ error: error?.message || 'Failed to fetch dashboards' });
+    res.status(500).json({ error: errorMessage(error) || 'Failed to fetch dashboards' });
   }
 };
 
@@ -133,6 +151,14 @@ export const getDashboardController = async (req: Request, res: Response) => {
     if (!dashboard) {
       return res.status(404).json({ error: 'Dashboard not found' });
     }
+    // API-7(b) · best-effort ETag. Cosmos stamps every doc with a system
+    // `_etag`; surface it as a response header so external consumers can do
+    // conditional requests / caching. Additive only — the JSON body is
+    // unchanged, and the header is omitted when no etag is present.
+    const cosmosEtag = (dashboard as { _etag?: unknown })._etag;
+    if (typeof cosmosEtag === "string" && cosmosEtag.length > 0) {
+      res.setHeader("ETag", cosmosEtag);
+    }
     // Wave AD3 · admin-dashboard observability. Fire-and-forget; never affects response.
     void recordUsageEvent({
       eventType: "dashboard.opened",
@@ -140,12 +166,12 @@ export const getDashboardController = async (req: Request, res: Response) => {
       dashboardId,
     });
     res.json(dashboard);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(500).json({ error: error?.message || 'Failed to fetch dashboard' });
+    res.status(500).json({ error: errorMessage(error) || 'Failed to fetch dashboard' });
   }
 };
 
@@ -157,12 +183,12 @@ export const deleteDashboardController = async (req: Request, res: Response) => 
     if (!existing) return res.status(404).json({ error: 'Dashboard not found' });
     await deleteDashboard(dashboardId, username);
     res.json({ success: true });
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(500).json({ error: error?.message || 'Failed to delete dashboard' });
+    res.status(500).json({ error: errorMessage(error) || 'Failed to delete dashboard' });
   }
 };
 
@@ -176,13 +202,13 @@ export const addChartToDashboardController = async (req: Request, res: Response)
     
     const updated = await addChartToDashboard(dashboardId, username, parsed.chart, parsed.sheetId);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     logger.error(`[addChartToDashboard] Error:`, error);
-    res.status(400).json({ error: error?.message || 'Failed to add chart' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to add chart' });
   }
 };
 
@@ -194,12 +220,12 @@ export const addTableToDashboardController = async (req: Request, res: Response)
 
     const updated = await addTableToDashboard(dashboardId, username, parsed.table, parsed.sheetId);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to add table' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to add table' });
   }
 };
 
@@ -211,12 +237,12 @@ export const addPivotToDashboardController = async (req: Request, res: Response)
 
     const updated = await addPivotToDashboard(dashboardId, username, parsed.pivot, parsed.sheetId);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to add pivot' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to add pivot' });
   }
 };
 
@@ -231,12 +257,12 @@ export const removePivotFromDashboardController = async (req: Request, res: Resp
       sheetId: parsed.sheetId,
     });
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to remove pivot' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to remove pivot' });
   }
 };
 
@@ -250,16 +276,16 @@ export const addSheetToDashboardController = async (req: Request, res: Response)
     }
     const updated = await addSheetToDashboard(dashboardId, username, name.trim());
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     // Check if it's a duplicate name error
-    if (error?.message?.includes('already exists')) {
-      res.status(409).json({ error: error.message });
+    if (errorMessage(error).includes('already exists')) {
+      res.status(409).json({ error: errorMessage(error) });
     } else {
-      res.status(400).json({ error: error?.message || 'Failed to add sheet' });
+      res.status(400).json({ error: errorMessage(error) || 'Failed to add sheet' });
     }
   }
 };
@@ -270,12 +296,12 @@ export const removeSheetFromDashboardController = async (req: Request, res: Resp
     const { dashboardId, sheetId } = req.params as { dashboardId: string; sheetId: string };
     const updated = await removeSheetFromDashboard(dashboardId, username, sheetId);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to remove sheet' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to remove sheet' });
   }
 };
 
@@ -289,16 +315,16 @@ export const renameSheetController = async (req: Request, res: Response) => {
     }
     const updated = await renameSheet(dashboardId, username, sheetId, name.trim());
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     // Check if it's a duplicate name error
-    if (error?.message?.includes('already exists')) {
-      res.status(409).json({ error: error.message });
+    if (errorMessage(error).includes('already exists')) {
+      res.status(409).json({ error: errorMessage(error) });
     } else {
-      res.status(400).json({ error: error?.message || 'Failed to rename sheet' });
+      res.status(400).json({ error: errorMessage(error) || 'Failed to rename sheet' });
     }
   }
 };
@@ -314,12 +340,12 @@ export const reorderSheetsController = async (req: Request, res: Response) => {
       parsed.orderedSheetIds,
     );
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || "Failed to reorder sheets" });
+    res.status(400).json({ error: errorMessage(error) || "Failed to reorder sheets" });
   }
 };
 
@@ -333,16 +359,16 @@ export const renameDashboardController = async (req: Request, res: Response) => 
     }
     const updated = await renameDashboard(dashboardId, username, name.trim());
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     // Check if it's a duplicate name error
-    if (error?.message?.includes('already exists')) {
-      res.status(409).json({ error: error.message });
+    if (errorMessage(error).includes('already exists')) {
+      res.status(409).json({ error: errorMessage(error) });
     } else {
-      res.status(400).json({ error: error?.message || 'Failed to rename dashboard' });
+      res.status(400).json({ error: errorMessage(error) || 'Failed to rename dashboard' });
     }
   }
 };
@@ -354,12 +380,12 @@ export const removeChartFromDashboardController = async (req: Request, res: Resp
     const parsed = removeChartFromDashboardRequestSchema.parse(req.body);
     const updated = await removeChartFromDashboard(dashboardId, username, parsed);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to remove chart' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to remove chart' });
   }
 };
 
@@ -370,12 +396,12 @@ export const removeTableFromDashboardController = async (req: Request, res: Resp
     const parsed = removeTableFromDashboardRequestSchema.parse(req.body);
     const updated = await removeTableFromDashboard(dashboardId, username, parsed);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to remove table' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to remove table' });
   }
 };
 
@@ -407,12 +433,12 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
       updates
     );
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to update chart insight or recommendation' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to update chart insight or recommendation' });
   }
 };
 
@@ -429,12 +455,12 @@ export const updateTableCaptionController = async (req: Request, res: Response) 
 
     const updated = await updateTableCaption(dashboardId, username, tableIndex, sheetId, { caption });
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || 'Failed to update table caption' });
+    res.status(400).json({ error: errorMessage(error) || 'Failed to update table caption' });
   }
 };
 
@@ -444,12 +470,12 @@ export const createReportDashboardController = async (req: Request, res: Respons
     const parsed = createReportDashboardRequestSchema.parse(req.body);
     const dashboard = await createReportDashboardFromAnalysis(username, parsed);
     res.status(201).json(dashboard);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || "Failed to create report dashboard" });
+    res.status(400).json({ error: errorMessage(error) || "Failed to create report dashboard" });
   }
 };
 
@@ -463,6 +489,7 @@ export const createDashboardFromSpecController = async (
 ) => {
   try {
     const username = requireUsername(req);
+    logIdempotencyKey(req, "POST /dashboards/from-spec");
     const parsed = createDashboardFromSpecRequestSchema.parse(req.body);
 
     // Wave-FA6 · If the spec was authored client-side without an explicit
@@ -512,13 +539,13 @@ export const createDashboardFromSpecController = async (
       );
     }
     res.status(201).json(dashboard);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     res.status(400).json({
-      error: error?.message || "Failed to create dashboard from spec",
+      error: errorMessage(error) || "Failed to create dashboard from spec",
     });
   }
 };
@@ -534,13 +561,13 @@ export const patchDashboardController = async (req: Request, res: Response) => {
     const parsed = patchDashboardRequestSchema.parse(req.body);
     const dashboard = await patchDashboard(dashboardId, username, parsed.patch);
     res.json(dashboard);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
     res.status(400).json({
-      error: error?.message || "Failed to patch dashboard",
+      error: errorMessage(error) || "Failed to patch dashboard",
     });
   }
 };
@@ -552,12 +579,12 @@ export const patchDashboardSheetController = async (req: Request, res: Response)
     const parsed = patchDashboardSheetRequestSchema.parse(req.body);
     const updated = await patchDashboardSheet(dashboardId, username, sheetId, parsed);
     res.json(updated);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(400).json({ error: error?.message || "Failed to update sheet" });
+    res.status(400).json({ error: errorMessage(error) || "Failed to update sheet" });
   }
 };
 
@@ -617,12 +644,12 @@ export const exportDashboardController = async (req: Request, res: Response) => 
       },
     });
     res.send(buf);
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof AuthenticationError) {
       res.status(401).json({ error: error.message });
       return;
     }
-    res.status(500).json({ error: error?.message || "Export failed" });
+    res.status(500).json({ error: errorMessage(error) || "Export failed" });
   }
 };
 

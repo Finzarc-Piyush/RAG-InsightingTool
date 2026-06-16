@@ -24,6 +24,7 @@
  *   trace + SSE for visibility. Pure function, no I/O.
  */
 import type { AnalysisBrief } from "../../../shared/schema.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 export interface DecompositionDecision {
   /** Should the agent loop split into multiple arcs? */
@@ -42,8 +43,7 @@ export function shouldDecompose(opts: {
   question: string;
   brief?: AnalysisBrief;
 }): DecompositionDecision {
-  const enabled =
-    (process.env.AGENT_DECOMPOSITION_ENABLED ?? "false").toLowerCase() === "true";
+  const enabled = isFlagOn("AGENT_DECOMPOSITION_ENABLED");
   if (!enabled) {
     return {
       shouldDecompose: false,

@@ -7,7 +7,7 @@
  *   - Hover tooltip with [x, y, color, size] context.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { Circle } from "@visx/shape";
 import { scaleLinear } from "@visx/scale";
@@ -72,7 +72,7 @@ const MARGIN = { top: 16, right: 16, bottom: 36, left: 48 };
 const DEFAULT_RADIUS = 4;
 const SIZE_RANGE: [number, number] = [3, 22];
 
-export function PointRenderer({
+function PointRendererImpl({
   spec,
   data,
   width,
@@ -643,3 +643,10 @@ export function PointRenderer({
     </div>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const PointRenderer = memo(PointRendererImpl);
+PointRenderer.displayName = "PointRenderer";

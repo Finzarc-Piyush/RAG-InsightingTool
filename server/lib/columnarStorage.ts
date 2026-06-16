@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { logger } from "./logger.js";
 import { errorMessage } from "../utils/errorMessage.js";
+import { getRequestContext } from "./telemetry/requestContext.js";
 
 // Dynamic import for DuckDB to handle optional dependency
 let duckdb: any;
@@ -760,17 +761,57 @@ export class ColumnarStorageService {
   }
 
   /**
-   * Execute aggregation query
+   * Execute aggregation query.
+   *
+   * RESIL-1 · When a `signal` is supplied (or an ambient turn signal is bound on
+   * the request context) and it aborts mid-query, we call `db.interrupt()` to
+   * cancel the in-flight DuckDB query and reject with an abort error instead of
+   * letting the connection run to completion after the client has hung up. If
+   * the signal is already aborted we fail fast before issuing the query. Happy
+   * path (no signal / not aborted) is unchanged.
    */
-  async executeQuery<T = any>(query: string): Promise<T[]> {
+  async executeQuery<T = any>(query: string, signal?: AbortSignal): Promise<T[]> {
     if (!this.db) {
       throw new Error('Database not initialized. Call initialize() first.');
     }
 
+    const abortSignal = signal ?? getRequestContext().abortSignal;
+    if (abortSignal?.aborted) {
+      throw new Error('DuckDB query aborted before execution');
+    }
+
     return new Promise((resolve, reject) => {
       const conn = this.db!.connect();
-      
+      let settled = false;
+      let onAbort: (() => void) | undefined;
+
+      const cleanup = () => {
+        if (onAbort && abortSignal) {
+          abortSignal.removeEventListener('abort', onAbort);
+        }
+      };
+
+      if (abortSignal) {
+        onAbort = () => {
+          if (settled) return;
+          settled = true;
+          // Cancel the running query; the conn.all callback will fire with an
+          // error which we ignore (already rejected here).
+          try {
+            this.db?.interrupt();
+          } catch {
+            // best-effort: interrupt may throw if the db is already closing
+          }
+          cleanup();
+          reject(new Error('DuckDB query aborted'));
+        };
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+
       conn.all(query, (err: Error | null, rows: any[]) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         if (err) {
           reject(err);
         } else {

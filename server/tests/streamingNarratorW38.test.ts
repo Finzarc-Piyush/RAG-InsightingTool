@@ -11,16 +11,19 @@ const { isStreamingNarratorEnabled, completeJsonStreaming } = await import(
 const { z } = await import("zod");
 
 describe("W38 · isStreamingNarratorEnabled gate", () => {
-  it("is false unless STREAMING_NARRATOR_ENABLED === 'true'", () => {
+  // CFG-2: the gate now reads via the typed registry's canonical truthiness
+  // (`isFlagOn` → envFlagOn: 1/true/yes/on, case-insensitive). This asserts the
+  // registry contract, not a per-site string match.
+  it("is OFF unless STREAMING_NARRATOR_ENABLED is a canonical-truthy value", () => {
     const prev = process.env.STREAMING_NARRATOR_ENABLED;
     delete process.env.STREAMING_NARRATOR_ENABLED;
     assert.equal(isStreamingNarratorEnabled(), false);
-    process.env.STREAMING_NARRATOR_ENABLED = "1";
+    process.env.STREAMING_NARRATOR_ENABLED = "false";
     assert.equal(isStreamingNarratorEnabled(), false);
-    process.env.STREAMING_NARRATOR_ENABLED = "TRUE";
-    assert.equal(isStreamingNarratorEnabled(), false);
-    process.env.STREAMING_NARRATOR_ENABLED = "true";
-    assert.equal(isStreamingNarratorEnabled(), true);
+    for (const on of ["true", "1", "TRUE", "yes", "on"]) {
+      process.env.STREAMING_NARRATOR_ENABLED = on;
+      assert.equal(isStreamingNarratorEnabled(), true, `expected ON for ${on}`);
+    }
     if (prev === undefined) delete process.env.STREAMING_NARRATOR_ENABLED;
     else process.env.STREAMING_NARRATOR_ENABLED = prev;
   });

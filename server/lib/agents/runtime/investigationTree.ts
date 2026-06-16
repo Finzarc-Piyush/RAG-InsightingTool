@@ -37,7 +37,8 @@
  */
 
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
-import { envInt, envFlagOn } from "../../envFlags.js";
+import { envInt } from "../../envFlags.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -78,7 +79,7 @@ export function loadDeepInvestigationConfig(): DeepInvestigationConfig {
 // policy, invariant #6). THE single definition — the byte-for-byte duplicate
 // that used to sit in diagnosticPipelineConfig.ts was removed.
 export function isDeepInvestigationEnabled(): boolean {
-  return envFlagOn(process.env.DEEP_INVESTIGATION_ENABLED);
+  return isFlagOn("DEEP_INVESTIGATION_ENABLED");
 }
 
 // ─── Spawned-question follow-up pass (single-flow) ───────────────────────────
@@ -121,8 +122,7 @@ export function loadSpawnedFollowUpConfig(): SpawnedFollowUpConfig {
 }
 
 export function isSpawnedFollowUpEnabled(): boolean {
-  const v = process.env.SPAWNED_FOLLOWUP_ENABLED;
-  return v === "true" || v === "1";
+  return isFlagOn("SPAWNED_FOLLOWUP_ENABLED");
 }
 
 /**

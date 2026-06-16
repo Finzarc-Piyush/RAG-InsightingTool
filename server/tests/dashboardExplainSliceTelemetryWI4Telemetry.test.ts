@@ -256,9 +256,11 @@ describe("WI4-telemetry · schema enum + route registration wiring", () => {
   });
 
   it("routes/index.ts mounts the shared telemetry router under /api (covers both WD3 + WI4 paths)", () => {
+    // API-7: the `mount('', telemetryRoutes)` helper registers both `/api` and
+    // its `/api/v1` alias to the same router.
     assert.match(
       routesIndexSrc,
-      /app\.use\(\s*['"]\/api['"]\s*,\s*telemetryRoutes\s*\)/,
+      /mount\(\s*['"]['"]\s*,\s*telemetryRoutes\s*\)/,
     );
   });
 });

@@ -12,6 +12,7 @@ import {
 import { generateColumnStatistics } from '../../models/chat.model.js';
 import { withSessionWriteLock } from '../sessionWriteLock.js';
 import { logger } from "../logger.js";
+import type { DataRow } from "./dataOpsTypes.js";
 
 export interface SaveDataResult {
   version: number;
@@ -46,7 +47,7 @@ export interface SaveDataResult {
  */
 export async function saveModifiedData(
   sessionId: string,
-  modifiedData: Record<string, any>[],
+  modifiedData: DataRow[],
   operation: string,
   description: string,
   sessionDoc?: ChatDocument
@@ -58,7 +59,7 @@ export async function saveModifiedData(
 
 async function saveModifiedDataLocked(
   sessionId: string,
-  modifiedData: Record<string, any>[],
+  modifiedData: DataRow[],
   operation: string,
   description: string,
   sessionDoc?: ChatDocument
@@ -124,7 +125,7 @@ async function saveModifiedDataLocked(
 
   // Update sample rows (first 100)
   doc.sampleRows = modifiedData.slice(0, 100).map(row => {
-    const serializedRow: Record<string, any> = {};
+    const serializedRow: DataRow = {};
     for (const [key, value] of Object.entries(row)) {
       if (value instanceof Date) {
         serializedRow[key] = value.toISOString();
@@ -161,7 +162,7 @@ async function saveModifiedDataLocked(
   
   if (estimatedSize < MAX_DOCUMENT_SIZE && modifiedData.length < 10000) {
     doc.rawData = modifiedData.map(row => {
-      const serializedRow: Record<string, any> = {};
+      const serializedRow: DataRow = {};
       for (const [key, value] of Object.entries(row)) {
         if (value instanceof Date) {
           serializedRow[key] = value.toISOString();

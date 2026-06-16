@@ -35,13 +35,19 @@ describe("W3 · isSpawnedFollowUpEnabled", () => {
     assert.equal(isSpawnedFollowUpEnabled(), false);
   });
 
-  it("is on for 'true' and '1' only", () => {
-    process.env.SPAWNED_FOLLOWUP_ENABLED = "true";
-    assert.equal(isSpawnedFollowUpEnabled(), true);
-    process.env.SPAWNED_FOLLOWUP_ENABLED = "1";
-    assert.equal(isSpawnedFollowUpEnabled(), true);
-    process.env.SPAWNED_FOLLOWUP_ENABLED = "yes";
-    assert.equal(isSpawnedFollowUpEnabled(), false);
+  // CFG-2: gate now reads via the typed registry's canonical truthiness
+  // (`isFlagOn` → 1/true/yes/on, case-insensitive) rather than a bespoke
+  // `=== 'true' || === '1'` check. Still default-OFF (invariant #6 above).
+  it("is ON for any canonical-truthy value; OFF for canonical-falsy", () => {
+    for (const on of ["true", "1", "TRUE", "yes", "on"]) {
+      process.env.SPAWNED_FOLLOWUP_ENABLED = on;
+      assert.equal(isSpawnedFollowUpEnabled(), true, `expected ON for ${on}`);
+    }
+    for (const off of ["false", "0", "no", "off"]) {
+      process.env.SPAWNED_FOLLOWUP_ENABLED = off;
+      assert.equal(isSpawnedFollowUpEnabled(), false, `expected OFF for ${off}`);
+    }
+    delete process.env.SPAWNED_FOLLOWUP_ENABLED;
   });
 });
 

@@ -10,7 +10,7 @@
  *   color     → optional categorical (multi-series bars)
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { Bar, LinePath } from "@visx/shape";
 import { scaleBand, scaleLinear } from "@visx/scale";
@@ -59,7 +59,7 @@ export interface ComboRendererProps {
 
 const MARGIN = { top: 16, right: 56, bottom: 36, left: 56 };
 
-export function ComboRenderer({
+function ComboRendererImpl({
   spec,
   data,
   width,
@@ -292,3 +292,10 @@ export function ComboRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const ComboRenderer = memo(ComboRendererImpl);
+ComboRenderer.displayName = "ComboRenderer";

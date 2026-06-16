@@ -55,7 +55,19 @@ const roots = ["tests", "../client/src"];
 const files = roots.flatMap((r) => findTests(r)).sort();
 console.log(`▶ Discovered ${files.length} node:test file(s)`);
 
-const res = spawnSync("node", ["--import", "tsx", "--test", ...files], {
-  stdio: "inherit",
-});
+// COVERAGE=1 turns on Node 20's built-in test coverage reporter (report-only;
+// the normal `npm test` path is unchanged when the flag is absent). Wired here
+// rather than as a separate script so discovery stays single-sourced.
+const coverageArgs =
+  process.env.COVERAGE === "1" || process.env.COVERAGE === "true"
+    ? ["--experimental-test-coverage"]
+    : [];
+
+const res = spawnSync(
+  "node",
+  ["--import", "tsx", "--test", ...coverageArgs, ...files],
+  {
+    stdio: "inherit",
+  },
+);
 process.exit(res.status ?? 1);

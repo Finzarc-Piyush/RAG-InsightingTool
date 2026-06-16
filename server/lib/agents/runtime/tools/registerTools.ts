@@ -79,7 +79,7 @@
 import { z } from "zod";
 import { ToolRegistry, type ToolRunContext } from "../toolRegistry.js";
 import { agentLog } from "../agentLogger.js";
-import { AGENT_WORKBENCH_ENTRY_CODE_MAX, isAgenticLoopEnabled } from "../types.js";
+import { AGENT_WORKBENCH_ENTRY_CODE_MAX, isAgenticLoopEnabled } from "../runtimeConfig.js";
 import { executeAnalyticalQuery } from "../../../analyticalQueryExecutor.js";
 import type { DimensionFilter, ParsedQuery } from "../../../../shared/queryTypes.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
@@ -146,6 +146,7 @@ import {
   ColumnarStorageService,
   isDuckDBAvailable,
 } from "../../../columnarStorage.js";
+import { getTurnColumnarStorage } from "../turnColumnarStorage.js";
 import { metadataService } from "../../../metadataService.js";
 import { registerBreakdownRankingTool } from "./breakdownRankingTool.js";
 import { registerTwoSegmentCompareTool } from "./twoSegmentCompareTool.js";
@@ -574,11 +575,15 @@ export function registerDefaultTools(registry: ToolRegistry) {
         const validated = normalizeAndValidateQueryPlanBody(ctx.exec.summary, plan);
         if (validated.ok && canExecuteQueryPlanOnDuckDb(validated.normalizedPlan)) {
           try {
+            // PERF-10 · Reuse the per-turn shared DuckDB handle.
+            const { storage: sharedStorage } = await getTurnColumnarStorage(ctx.exec);
             const duck = await executeQueryPlanOnDuckDb(
               ctx.exec.sessionId,
               validated.normalizedPlan,
               ctx.exec.summary,
-              ctx.exec.chatDocument
+              ctx.exec.chatDocument,
+              ctx.exec.abortSignal,
+              sharedStorage
             );
             if (duck.ok) {
               const duckRows = duck.rows as Record<string, any>[];
@@ -850,11 +855,15 @@ export function registerDefaultTools(registry: ToolRegistry) {
       };
 
       if (tryDuck) {
+        // PERF-10 · Reuse the per-turn shared DuckDB handle.
+        const { storage: sharedStorage } = await getTurnColumnarStorage(ctx.exec);
         const duck = await executeQueryPlanOnDuckDb(
           ctx.exec.sessionId,
           normalizedPlan,
           ctx.exec.summary,
-          ctx.exec.chatDocument
+          ctx.exec.chatDocument,
+          ctx.exec.abortSignal,
+          sharedStorage
         );
         if (duck.ok) {
           resultRows = duck.rows as Record<string, any>[];
@@ -1315,9 +1324,10 @@ export function registerDefaultTools(registry: ToolRegistry) {
         isDuckDBAvailable()
       ) {
         const sessionSql = pre.sql.replace(/\bdataset\b/gi, '"data"');
-        const storage = new ColumnarStorageService({ sessionId: ctx.exec.sessionId });
+        // PERF-10 · Reuse the per-turn shared DuckDB handle instead of opening
+        // and closing our own; the turn owner closes it at turn end.
+        const { storage } = await getTurnColumnarStorage(ctx.exec);
         try {
-          await storage.initialize();
           await storage.assertTableExists("data");
           const rows = await storage.executeQuery<Record<string, any>>(sessionSql);
           const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
@@ -1330,8 +1340,6 @@ export function registerDefaultTools(registry: ToolRegistry) {
           };
         } catch (e) {
           // Fall through to in-memory path on any DuckDB error.
-        } finally {
-          await storage.close().catch(() => { /* ignore */ });
         }
       }
 

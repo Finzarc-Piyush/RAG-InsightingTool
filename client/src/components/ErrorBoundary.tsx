@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 import { logger } from '@/lib/logger';
+import { reportClientError } from '@/lib/errorSink';
 
 interface Props {
   children: ReactNode;
@@ -33,7 +34,16 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     // Log error to console in development
     logger.error('ErrorBoundary caught an error:', error, errorInfo);
-    
+
+    // OBS-6 · best-effort, fire-and-forget report to the server error sink so
+    // render-tree crashes reach the structured server logs, not just the
+    // browser console. Never awaited; reportClientError never throws.
+    void reportClientError({
+      message: error.message || String(error),
+      stack: error.stack || errorInfo.componentStack || undefined,
+      source: 'ErrorBoundary',
+    });
+
     // Store error info for display
     this.setState({
       error,
@@ -44,9 +54,6 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
     }
-
-    // In production, you might want to send this to an error reporting service
-    // Example: Sentry.captureException(error, { contexts: { react: errorInfo } });
   }
 
   handleReset = () => {

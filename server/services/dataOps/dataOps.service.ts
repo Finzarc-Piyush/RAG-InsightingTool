@@ -13,6 +13,7 @@ import {
 import { loadLatestData } from "../../utils/dataLoader.js";
 import queryCache from "../../lib/cache.js";
 import { logger } from "../../lib/logger.js";
+import { errorMessage } from "../../utils/errorMessage.js";
 
 export interface ProcessDataOpsParams {
   sessionId: string;
@@ -48,9 +49,9 @@ export async function processDataOperation(params: ProcessDataOpsParams): Promis
   let chatDocument: ChatDocument | null = null;
   try {
     chatDocument = await getChatBySessionIdForUser(sessionId, username);
-  } catch (error: any) {
+  } catch (error: unknown) {
     // If CosmosDB isn't initialized, we can't get the document
-    if (error?.message?.includes('CosmosDB container not initialized')) {
+    if (errorMessage(error).includes('CosmosDB container not initialized')) {
       logger.warn('⚠️ CosmosDB not initialized, proceeding without session document. Context may be limited.');
       // We'll continue without chatDocument, but this means we won't have data or dataSummary
       // This is a limitation - we need CosmosDB to be initialized to work properly

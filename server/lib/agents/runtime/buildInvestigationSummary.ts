@@ -25,7 +25,7 @@
  */
 import type { AnalyticalBlackboard, Finding, OpenQuestion } from "./analyticalBlackboard.js";
 import type { InvestigationSummary } from "../../../shared/schema.js";
-import { filterSpawnedQuestions, type SpawnedQuestionLike } from "./filterSpawnedQuestions.js";
+import { filterSpawnedQuestions } from "./filterSpawnedQuestions.js";
 
 const MAX_HYPOTHESES = 8;
 const MAX_FINDINGS = 8;
@@ -38,6 +38,16 @@ const SIGNIFICANCE_RANK: Record<Finding["significance"], number> = {
   anomalous: 0,
   notable: 1,
   routine: 2,
+};
+
+/** Minimal projection of an OpenQuestion carrying just the fields this digest
+ *  needs. The plain object literal satisfies `SpawnedQuestionLike`'s
+ *  `[key: string]: unknown` index signature (which the full `OpenQuestion`
+ *  interface does not), so it flows through `filterSpawnedQuestions` with its
+ *  typed `priority` intact — no cast required. */
+type OpenQuestionDigest = {
+  question: string;
+  priority: OpenQuestion["priority"];
 };
 
 function clip(s: string | undefined, max: number): string {
@@ -79,17 +89,26 @@ export function buildInvestigationSummary(
   // the openQuestions surface reads the blackboard directly, so random-sample /
   // duplicate / identifier-grouping noise that slipped in from any addOpenQuestion
   // caller is dropped here before the user sees it.
-  const cleanedOpen = filterSpawnedQuestions(
-    blackboard.openQuestions.filter((q) => !q.actionedByNodeId) as unknown as readonly SpawnedQuestionLike[],
-    { excludedColumns: excludedColumns ?? [] }
-  );
+  //
+  // Project each open question to the minimal OpenQuestionDigest BEFORE filtering:
+  // the plain literals satisfy SpawnedQuestionLike's `[key: string]: unknown`
+  // index signature (the full OpenQuestion interface does not), so
+  // filterSpawnedQuestions infers T = OpenQuestionDigest and returns survivors
+  // with their typed `priority` intact — no cast needed, and the digest still
+  // carries `question` for the filter's random-sample / identifier / dedup gates.
+  const digestible: OpenQuestionDigest[] = blackboard.openQuestions
+    .filter((q) => !q.actionedByNodeId)
+    .map((q) => ({ question: q.question, priority: q.priority }));
+  const cleanedOpen = filterSpawnedQuestions(digestible, {
+    excludedColumns: excludedColumns ?? [],
+  });
   const openQuestions = cleanedOpen
     .slice(0, MAX_OPEN_QUESTIONS)
     .map((q) => ({
       question: clip(q.question, MAX_QUESTION_TEXT),
-      priority: (q as unknown as OpenQuestion).priority,
+      priority: q.priority,
     }))
-    .filter((q) => q.question.length > 0) as Array<{ question: string; priority: "low" | "medium" | "high" }>;
+    .filter((q) => q.question.length > 0);
 
   if (hypotheses.length === 0 && findings.length === 0 && openQuestions.length === 0) {
     return undefined;

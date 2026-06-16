@@ -539,3 +539,19 @@ export const waitForDatasetProfileCacheContainer = async (
  */
 export const getDatabase = () => database;
 
+/**
+ * Test-only escape hatch · inject a fake chat `Container` so hermetic unit tests
+ * can exercise the chat-doc read/write seam (`mutateChatDocument`) without a real
+ * Cosmos account. `waitForContainer()` returns whatever is injected here.
+ * Production code MUST NOT call this — guarded to throw under `NODE_ENV=production`,
+ * mirroring `__setSuperadminEmailsForTesting` in `lib/superadmin.ts`.
+ *
+ * Pass `null` to restore the real (lazily-initialised) container.
+ */
+export function __setContainerForTesting(fake: Container | null): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("__setContainerForTesting must not be called in production");
+  }
+  container = fake as Container;
+}
+

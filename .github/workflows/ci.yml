@@ -22,6 +22,15 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      # CICD-10 · Typecheck the Vercel serverless wrapper(s). api/index.ts wraps
+      # server/createApp but is never built by the server's own tsconfig, so a
+      # broken cross-service import would only surface at deploy. Runs from repo
+      # root (working-directory: .) using the server's tsc; resolves the
+      # `../server/index.js` import to the .ts source via api/tsconfig.json.
+      # BLOCKING — the wrapper currently typechecks clean.
+      - name: Typecheck Vercel api/ wrappers
+        working-directory: .
+        run: ./server/node_modules/.bin/tsc --noEmit -p api/tsconfig.json
       # EX5 / TYPE-3 · Type-check the TEST tree (the main tsconfig excludes it).
       # Test files import production source and drift out of type-sync silently;
       # this surfaces the drift. Report-only for now (~116 pre-existing test type
@@ -70,9 +79,26 @@ jobs:
       # MODERATES, tolerated below this threshold.
       - name: npm audit (blocking · high+)
         run: npm audit --audit-level=high
-      # Lint gate — report-only until the observability/lint wave clears the ~50 errors.
-      - name: ESLint (report-only until lint wave)
+      # CICD-5 · Lint gate — now BLOCKING. All ESLint ERRORS cleared (the two
+      # remaining — a constant-truthiness `||` and a `let`-never-reassigned —
+      # were fixed behaviour-preservingly). ~3.1k findings remain as WARNINGS
+      # (no-explicit-any, no-unused-vars, the size/complexity ratchet on the
+      # god-files), tracked for incremental burn-down in server/eslint.config.js.
+      # `npm run lint` is `eslint .` with no `--max-warnings`, so warnings don't
+      # fail the gate; a new ERROR will.
+      - name: ESLint (blocking)
         run: npm run lint
+      # CICD-4 · Prettier format check — REPORT-ONLY (no mass reformat yet; the
+      # --write pass is a separate churn-heavy wave). Surfaces formatting drift
+      # without blocking.
+      - name: Prettier format check (report-only)
+        run: npm run format:check
+        continue-on-error: true
+      # CICD-6 · Test coverage — REPORT-ONLY (Node 20 built-in, no threshold).
+      # COVERAGE=1 adds --experimental-test-coverage; the normal `npm test`
+      # above is unchanged.
+      - name: Test coverage (report-only)
+        run: npm run coverage
         continue-on-error: true
 
   client:
@@ -106,6 +132,16 @@ jobs:
       # gate; a new error will.
       - name: ESLint (blocking)
         run: npm run lint
+      # CICD-4 · Prettier format check — REPORT-ONLY (no mass reformat yet; the
+      # --write pass is a separate churn-heavy wave). Surfaces formatting drift
+      # without blocking.
+      - name: Prettier format check (report-only)
+        run: npm run format:check
+        continue-on-error: true
+      # CICD-6 · Test coverage — REPORT-ONLY (@vitest/coverage-v8, no threshold).
+      - name: Test coverage (report-only)
+        run: npm run coverage
+        continue-on-error: true
 
   python:
     runs-on: ubuntu-latest

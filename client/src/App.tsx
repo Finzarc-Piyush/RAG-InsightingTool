@@ -4,7 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { sessionsApi } from "@/lib/api";
 import { getUserEmail } from "@/utils/userStorage";
-import type { SessionsResponse } from "@/pages/Analysis/types";
+import type { SessionsResponse, LoadedSessionData } from "@/pages/Analysis/types";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "@/pages/Layout";
@@ -64,7 +64,7 @@ function Router() {
   const userEmail = getUserEmail();
   const [location, setLocation] = useLocation();
   const [resetTrigger, setResetTrigger] = useState(0);
-  const [loadedSessionData, setLoadedSessionData] = useState<any>(null);
+  const [loadedSessionData, setLoadedSessionData] = useState<LoadedSessionData | null>(null);
   // The URL is the single source of truth for sessionId. App keeps no mirror.
   // Two small bits of UX-hint state:
   //   • `lastChatSessionId` — remembered so the "Chat" tab re-opens the most

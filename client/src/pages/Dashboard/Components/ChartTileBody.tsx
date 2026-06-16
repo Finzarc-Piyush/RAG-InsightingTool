@@ -237,8 +237,9 @@ export function ChartTileBody({
   const historyEntries = useMemo<InsightHistoryEntry[]>(
     () => (insightHistoryStore ? insightHistoryStore.get(tile.id) : []),
     // `historyVersion` is the load-bearing dep — the store is a stable
-    // reference (factory return value held in a parent `useMemo`), so
-    // we re-read whenever a fresh record bumps the version.
+    // reference (factory return value held in a parent `useMemo`) that mutates
+    // its Map in place, so we re-read whenever a fresh record bumps the version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [insightHistoryStore, tile.id, historyVersion],
   );
 

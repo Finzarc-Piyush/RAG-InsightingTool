@@ -51,6 +51,7 @@ import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
 import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
+import { isFlagOn } from "../../../featureFlags.js";
 
 /**
  * Build a canonical FindingEvidence suffix from a significance test result.
@@ -137,7 +138,7 @@ export function registerSignificanceTestTool(registry: ToolRegistry) {
     "run_significance_test",
     significanceTestArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx: ToolRunContext, args: Record<string, unknown>) => {
-      if (process.env.SIGNIFICANCE_TESTS_ENABLED !== "true") {
+      if (!isFlagOn("SIGNIFICANCE_TESTS_ENABLED")) {
         return {
           ok: false,
           summary:

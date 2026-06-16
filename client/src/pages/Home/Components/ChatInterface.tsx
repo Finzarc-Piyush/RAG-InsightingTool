@@ -560,7 +560,7 @@ export function ChatInterface({
         if (seq === filterRequestSeqRef.current) setSavingFilter(false);
       }
     },
-    [sessionId, toast]
+    [sessionId, toast, emitSessionBroadcast]
   );
 
   const debouncedPushConditions = useMemo(
@@ -617,7 +617,7 @@ export function ChatInterface({
     } finally {
       if (seq === filterRequestSeqRef.current) setSavingFilter(false);
     }
-  }, [sessionId, toast]);
+  }, [sessionId, toast, emitSessionBroadcast]);
 
   const handleRemoveSingleCondition = useCallback(
     (column: string) => {

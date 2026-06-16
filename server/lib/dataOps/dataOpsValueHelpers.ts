@@ -15,7 +15,7 @@
  * Extract custom value from message (handles numbers and strings)
  * Examples: "fill nulls with 0", "fill nulls with the 132.45", "fill nulls with 'N/A'", "fill nulls with N/A", "fill nulls with Unknown"
  */
-export function extractCustomValue(message: string): { value: any; found: boolean } {
+export function extractCustomValue(message: string): { value: unknown; found: boolean } {
   const lowerMessage = message.toLowerCase();
 
   // Patterns to match custom value specifications
@@ -245,7 +245,7 @@ export function findMatchingColumn(searchName: string, availableColumns: string[
   return undefined;
 }
 
-export function normalizeNumericValue(value: any): number | null {
+export function normalizeNumericValue(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;

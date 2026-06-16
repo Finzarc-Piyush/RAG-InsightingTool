@@ -40,9 +40,10 @@ import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { z } from "zod";
 import { getInsightModel, getInsightTemperature } from "../../insightSynthesis/insightModelConfig.js";
 import { agentLog } from "./agentLogger.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 export function isRichStepInsightsEnabled(): boolean {
-  return process.env.RICH_STEP_INSIGHTS_ENABLED === "true";
+  return isFlagOn("RICH_STEP_INSIGHTS_ENABLED");
 }
 
 // 200 chars was too short for a substantive per-step insight; users see these

@@ -220,6 +220,11 @@ export const useSessionLoader = ({
     setMessages,
     setSuggestions,
     setCollaborators,
+    setCurrencyByColumn,
+    setDateTimeColumnPairs,
+    setIndicators,
+    setSessionAnalysisContext,
+    setWideFormatTransform,
   ]);
 };
 

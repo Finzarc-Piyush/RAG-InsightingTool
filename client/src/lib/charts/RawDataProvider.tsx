@@ -82,6 +82,9 @@ export function RawDataProvider({
       isLoading,
       error,
     }),
+    // `initialRows` is intentional: the memo reads `lastRowsRef.current`, so we
+    // must recompute when a new rows array identity arrives to propagate it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionId, dataVersion, isLoading, error, initialRows],
   );
 

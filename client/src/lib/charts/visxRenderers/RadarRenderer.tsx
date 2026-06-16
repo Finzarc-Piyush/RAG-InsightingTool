@@ -7,7 +7,7 @@
  *   color → optional categorical (one polygon per series)
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { Line, LineRadial } from "@visx/shape";
 import { scaleLinear } from "@visx/scale";
@@ -34,7 +34,7 @@ interface SeriesPoint {
   value: number;
 }
 
-export function RadarRenderer({
+function RadarRendererImpl({
   spec,
   data,
   width,
@@ -181,3 +181,10 @@ export function RadarRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const RadarRenderer = memo(RadarRendererImpl);
+RadarRenderer.displayName = "RadarRenderer";

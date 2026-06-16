@@ -36,7 +36,7 @@ import {
   type SpawnedQuestion,
 } from "./investigationTree.js";
 import { markQuestionActioned } from "./analyticalBlackboard.js";
-import { loadAgentConfigFromEnv } from "./types.js";
+import { loadAgentConfigFromEnv } from "./runtimeConfig.js";
 import type { AgentConfig, AgentExecutionContext, AgentLoopResult } from "./types.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
 

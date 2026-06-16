@@ -52,6 +52,7 @@ import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { agentLog } from "./agentLogger.js";
 import type { DataSummary } from "../../../shared/schema.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 /**
  * Mirrors `AgentSseEmitter` from `agentLoop.service.ts`. Inlined to break the
@@ -68,7 +69,7 @@ export interface TryDirectAnswerInput {
 
 /** Feature flag. Default OFF in code; enabled per-deployment via env. */
 export function isDirectAnswerEnabled(): boolean {
-  return process.env.DIRECT_ANSWER_ENABLED === "true";
+  return isFlagOn("DIRECT_ANSWER_ENABLED");
 }
 
 const MAX_COLUMNS_IN_PROMPT = 60;

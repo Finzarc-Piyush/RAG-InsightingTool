@@ -84,7 +84,7 @@ export const getMemoryEntriesEndpoint = async (
       count: entries.length,
       nextCursor,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }
@@ -115,7 +115,7 @@ export const searchMemoryEndpoint = async (req: Request, res: Response) => {
       ...(result.retrievalError ? { retrievalError: result.retrievalError } : {}),
       ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }
@@ -193,7 +193,7 @@ export const exportMemoryEndpoint = async (req: Request, res: Response) => {
       `attachment; filename="analysis-memory-${auth.sessionId}.md"`
     );
     return res.send(md);
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (err instanceof AuthenticationError) {
       return res.status(403).json({ error: "Unauthorized" });
     }

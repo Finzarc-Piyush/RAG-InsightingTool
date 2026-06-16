@@ -19,7 +19,7 @@ import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import queryCache from "../../lib/cache.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
-import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/runtimeConfig.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
 import { logger } from "../../lib/logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";

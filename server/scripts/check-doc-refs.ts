@@ -13,6 +13,10 @@
  *     - `path#Lnn` line anchors (policy: never hand-type line numbers)
  *     - backticked code identifiers that appear NOWHERE in tracked source
  *       → would have caught the phantom `processUploadJob`
+ *     - backticked ALL-CAPS_SNAKE tokens that LOOK like env vars (appear near
+ *       the word "env" or in an env table) but are read by NO `process.env.X`
+ *       / `getenv("X")` / `os.environ["X"]` anywhere in server + python-service
+ *       → would catch a documented flag that was renamed/deleted in code
  *
  * SCOPE = live routing docs only. WAVES.md / docs/archive / docs/problems are
  * append-only history (they legitimately reference files that later moved), so
@@ -46,7 +50,7 @@ const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|json|ya?ml|sh|md|css)$/;
 export interface DocFinding {
   doc: string;
   line: number;
-  kind: "broken-link" | "broken-path" | "line-anchor" | "phantom-symbol";
+  kind: "broken-link" | "broken-path" | "line-anchor" | "phantom-symbol" | "phantom-env";
   detail: string;
 }
 
@@ -155,10 +159,60 @@ function sourceIdentifiers(): Set<string> {
   return set;
 }
 
+let _envNames: Set<string> | null = null;
+/** Lazily build the set of every env-var name actually READ in code, by grepping
+ *  `process.env.X` (Node) + `getenv("X")` / `os.environ["X"]` (Python) across
+ *  server + python-service, plus client `import.meta.env.VITE_*` (so legitimately
+ *  documented client env vars aren't flagged). This is the ground truth the
+ *  phantom-env WARN compares documented env-looking tokens against. */
+function sourceEnvNames(): Set<string> {
+  if (_envNames) return _envNames;
+  const set = new Set<string>();
+  const add = (raw: string, re: RegExp) => {
+    for (const m of raw.matchAll(re)) set.add(m[1]!);
+  };
+  // Node `process.env.X` + client `import.meta.env.X` reads.
+  for (const f of sh("git ls-files -- 'server' 'python-service' 'client' 'api'").split("\n").filter(Boolean)) {
+    let text: string;
+    try {
+      text = readFileSync(join(REPO_ROOT, f), "utf8");
+    } catch {
+      continue;
+    }
+    add(text, /process\.env\.([A-Z][A-Z0-9_]+)/g);
+    add(text, /import\.meta\.env\.([A-Z][A-Z0-9_]+)/g);
+    // Python `os.getenv("X")` / `os.environ["X"]` / `os.environ.get("X")`.
+    add(text, /getenv\(\s*["']([A-Z][A-Z0-9_]+)["']/g);
+    add(text, /environ(?:\.get)?\(?\s*\[?\s*["']([A-Z][A-Z0-9_]+)["']/g);
+  }
+  _envNames = set;
+  return set;
+}
+
+/** A backticked ALL-CAPS_SNAKE token (≥5 chars, underscore-or-digit body). These
+ *  are the env-flag shape (`AGENTIC_LOOP_ENABLED`); they never match the camelCase
+ *  `looksLikeIdentifier`, so the symbol check ignores them — env is their only gate. */
+function looksLikeEnvVar(s: string): boolean {
+  return /^[A-Z][A-Z0-9_]{4,}$/.test(s) && s.includes("_") && !isTemplated(s);
+}
+
+/** Heuristic "this token is being used as an env var here": the line mentions
+ *  env/environment/`.env`, OR it's a markdown table row inside an env-themed doc
+ *  (e.g. `ci-and-env.md`'s flag table lists one var per row without repeating the
+ *  word "env"). Restricting the table signal to env-named docs keeps non-env
+ *  constant tables (e.g. charting.md's "Constants" table) from matching. Low-recall
+ *  on purpose — a WARN tier exists to surface likely rot, not to fire on every
+ *  shouty constant. */
+function inEnvContext(rawLine: string, docRel: string): boolean {
+  if (/\benv(ironment)?\b/i.test(rawLine) || /\.env\b/i.test(rawLine)) return true;
+  return /env/i.test(docRel) && /^\s*\|/.test(rawLine);
+}
+
 export function runDocRefChecks(): { hard: DocFinding[]; warn: DocFinding[] } {
   const hard: DocFinding[] = [];
   const warn: DocFinding[] = [];
   const candidateSymbols: { doc: string; line: number; sym: string }[] = [];
+  const candidateEnvVars: { doc: string; line: number; name: string }[] = [];
 
   for (const doc of liveDocs()) {
     const text = readFileSync(join(REPO_ROOT, doc), "utf8");
@@ -196,6 +250,8 @@ export function runDocRefChecks(): { hard: DocFinding[]; warn: DocFinding[] } {
           }
         } else if (looksLikeIdentifier(tok)) {
           candidateSymbols.push({ doc, line, sym: tok });
+        } else if (looksLikeEnvVar(tok) && inEnvContext(raw, doc)) {
+          candidateEnvVars.push({ doc, line, name: tok });
         }
       }
     });
@@ -208,6 +264,24 @@ export function runDocRefChecks(): { hard: DocFinding[]; warn: DocFinding[] } {
       if (!ids.has(c.sym)) {
         warn.push({ doc: c.doc, line: c.line, kind: "phantom-symbol", detail: `\`${c.sym}\` not found anywhere in source (renamed/deleted?)` });
       }
+    }
+  }
+
+  if (candidateEnvVars.length) {
+    const envNames = sourceEnvNames();
+    const ids = sourceIdentifiers();
+    const seen = new Set<string>();
+    for (const c of candidateEnvVars) {
+      if (envNames.has(c.name)) continue;
+      // A token that exists as a real source identifier is a documented CONSTANT,
+      // not a phantom env var (e.g. `LINE_AREA_MAX_X_TICKS`, `EXPORT_BRAND`). The
+      // symbol check already vouches for it — env is only the gate for tokens that
+      // appear NOWHERE in code, in any form.
+      if (ids.has(c.name)) continue;
+      const key = `${c.doc}:${c.line}:${c.name}`;
+      if (seen.has(key)) continue; // de-dupe a token repeated on one line
+      seen.add(key);
+      warn.push({ doc: c.doc, line: c.line, kind: "phantom-env", detail: `\`${c.name}\` looks like an env var but is read by no process.env/getenv/os.environ in server+python-service (renamed/deleted?)` });
     }
   }
 

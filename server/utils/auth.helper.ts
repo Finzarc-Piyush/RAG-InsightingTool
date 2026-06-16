@@ -4,6 +4,7 @@
  * or from X-User-Email when DISABLE_AUTH=true.
  */
 import { Request } from "express";
+import { isFlagOn } from "../lib/featureFlags.js";
 
 export class AuthenticationError extends Error {
   constructor(message = "Authentication required") {
@@ -16,7 +17,7 @@ export function getAuthenticatedEmail(req: Request): string | undefined {
   if (req.auth?.email) {
     return req.auth.email;
   }
-  if (process.env.DISABLE_AUTH === "true") {
+  if (isFlagOn("DISABLE_AUTH")) {
     const raw = req.headers["x-user-email"];
     if (typeof raw === "string" && raw.trim()) {
       return raw.trim().toLowerCase();
@@ -36,7 +37,7 @@ export function getAuthenticatedOid(req: Request): string | undefined {
   if (req.auth?.oid) {
     return req.auth.oid;
   }
-  if (process.env.DISABLE_AUTH === "true") {
+  if (isFlagOn("DISABLE_AUTH")) {
     const raw = req.headers["x-user-id"];
     if (typeof raw === "string" && raw.trim()) {
       return raw.trim();

@@ -127,8 +127,10 @@ export function ChartOnlyModal({
   const xTickFormatter = useMemo(() => makeAxisTickFormatter(x), [x]);
   
   // Use filtered data if available, otherwise use original data
-  const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
-  const allData = Array.isArray(baseData) ? baseData : [];
+  const allData = useMemo(() => {
+    const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
+    return Array.isArray(baseData) ? baseData : [];
+  }, [enableFilters, chartData, chartDataSource]);
   
   // Process scatter plot data for display (only outlier filtering) - show ALL data points
   const processedScatterData = useMemo(() => {

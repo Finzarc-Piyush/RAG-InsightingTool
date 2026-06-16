@@ -8,7 +8,7 @@ import { capChartDataPoints } from "../../lib/chartDownsampling.js";
 import { generateChartInsights } from "../../lib/insightGenerator.js";
 import { generatePivotEnvelope } from "../../lib/insightGenerator/pivotEnvelope.js";
 import { formatCompactNumber } from "../../lib/formatCompactNumber.js";
-import { ChatDocument } from "../../models/chat.model.js";
+import type { ChatDocument } from "../../models/chat.model.js";
 import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
 import { logger } from "../../lib/logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";

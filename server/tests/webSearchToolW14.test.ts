@@ -42,22 +42,26 @@ describe("W14 · webSearchArgsSchema", () => {
 });
 
 describe("W14 · isWebSearchEnabled", () => {
-  it("is false when WEB_SEARCH_ENABLED is unset or not literally 'true'", () => {
+  // CFG-2: gate reads via the typed registry's canonical truthiness
+  // (`isFlagOn` → 1/true/yes/on, case-insensitive). Unset / 0/false/no/off = OFF.
+  it("is OFF when WEB_SEARCH_ENABLED is unset or a canonical-falsy value", () => {
     const prev = process.env.WEB_SEARCH_ENABLED;
     delete process.env.WEB_SEARCH_ENABLED;
     assert.equal(isWebSearchEnabled(), false);
-    process.env.WEB_SEARCH_ENABLED = "1";
-    assert.equal(isWebSearchEnabled(), false);
-    process.env.WEB_SEARCH_ENABLED = "TRUE";
-    assert.equal(isWebSearchEnabled(), false);
+    for (const off of ["false", "0", "no", "off"]) {
+      process.env.WEB_SEARCH_ENABLED = off;
+      assert.equal(isWebSearchEnabled(), false, `expected OFF for ${off}`);
+    }
     if (prev === undefined) delete process.env.WEB_SEARCH_ENABLED;
     else process.env.WEB_SEARCH_ENABLED = prev;
   });
 
-  it("is true only when WEB_SEARCH_ENABLED === 'true'", () => {
+  it("is ON for any canonical-truthy WEB_SEARCH_ENABLED value", () => {
     const prev = process.env.WEB_SEARCH_ENABLED;
-    process.env.WEB_SEARCH_ENABLED = "true";
-    assert.equal(isWebSearchEnabled(), true);
+    for (const on of ["true", "1", "TRUE", "yes", "on"]) {
+      process.env.WEB_SEARCH_ENABLED = on;
+      assert.equal(isWebSearchEnabled(), true, `expected ON for ${on}`);
+    }
     if (prev === undefined) delete process.env.WEB_SEARCH_ENABLED;
     else process.env.WEB_SEARCH_ENABLED = prev;
   });

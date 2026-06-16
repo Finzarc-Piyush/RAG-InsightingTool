@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { AgentTrace } from "../lib/agents/runtime/types.js";
 import {
   isInterAgentTraceEnabled,
-} from "../lib/agents/runtime/types.js";
+} from "../lib/agents/runtime/runtimeConfig.js";
 import {
   appendInterAgentMessage,
   formatInterAgentHandoffsForPrompt,

@@ -6,6 +6,8 @@ import { SharedDashboardInvite, type Dashboard } from "../shared/schema.js";
 import { waitForSharedDashboardsContainer } from "./database.config.js";
 import { getDashboardById } from "./dashboard.model.js";
 import { logger } from "../lib/logger.js";
+import { sharedDashboardInviteReadSchema, safeParseRead } from "./persistedSchemas.js";
+import { getErrorCode } from "../utils/errorMessage.js";
 
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -126,7 +128,13 @@ export const listSharedDashboardsForUser = async (targetEmail: string): Promise<
       )
       .fetchAll();
 
-    const list = (resources ?? []) as SharedDashboardInvite[];
+    const list = (resources ?? []).map((r) =>
+      safeParseRead<SharedDashboardInvite>(
+        "listSharedDashboardsForUser",
+        sharedDashboardInviteReadSchema,
+        r,
+      ),
+    );
     return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -150,7 +158,13 @@ export const listSharedDashboardsForOwner = async (ownerEmail: string): Promise<
     )
     .fetchAll();
 
-  return resources as SharedDashboardInvite[];
+  return resources.map((r) =>
+    safeParseRead<SharedDashboardInvite>(
+      "listSharedDashboardsForOwner",
+      sharedDashboardInviteReadSchema,
+      r,
+    ),
+  );
 };
 
 /**
@@ -164,9 +178,14 @@ export const getSharedDashboardInviteById = async (
     const sharedContainer = await waitForSharedDashboardsContainer();
     const normalizedTarget = normalizeEmail(targetEmail) || targetEmail;
     const { resource } = await sharedContainer.item(id, normalizedTarget).read();
-    return resource as unknown as SharedDashboardInvite;
-  } catch (error: any) {
-    if (error.code === 404) {
+    return safeParseRead<SharedDashboardInvite>(
+      "getSharedDashboardInviteById",
+      sharedDashboardInviteReadSchema,
+      resource,
+    );
+  } catch (error: unknown) {
+    // Cosmos sets a numeric `code` (404); getErrorCode stringifies it.
+    if (getErrorCode(error) === "404") {
       return null;
     }
     throw error;

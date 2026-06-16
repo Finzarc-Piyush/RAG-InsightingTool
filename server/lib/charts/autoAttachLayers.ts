@@ -11,6 +11,7 @@
  */
 
 import type { ChartSpec } from "../../shared/schema.js";
+import { isFlagOn } from "../featureFlags.js";
 
 // Fix-2 · target detection uses a two-step approach so "above the $100
 // target" matches as well as "target of $100":
@@ -49,8 +50,7 @@ const MAX_QUESTION_LENGTH = 4000;
 function autoAttachEnabled(): boolean {
   // Default true; explicit "false" or "0" disables. Lets ops kill the
   // feature globally if regex misfires in production.
-  const v = process.env.AUTO_ATTACH_LAYERS_ENABLED;
-  return v !== "false" && v !== "0";
+  return isFlagOn("AUTO_ATTACH_LAYERS_ENABLED");
 }
 
 function parseNumberWithSuffix(raw: string): number | null {

@@ -3,21 +3,22 @@
  * Defaults preserve existing behavior until flags are enabled.
  */
 
-// Truthiness + int parsing live in the shared envFlags helper so every config
-// file reads flags identically (case-insensitive). See lib/envFlags.ts.
-import { envFlagOn, envInt } from "./envFlags.js";
+// Int parsing lives in the shared envFlags helper so every config file reads
+// numeric config identically. Boolean feature flags route through the typed
+// registry (isFlagOn). See lib/envFlags.ts and lib/featureFlags.ts.
+import { envInt } from "./envFlags.js";
+import { isFlagOn } from "./featureFlags.js";
 
-const truthy = envFlagOn;
 const num = envInt;
 
 /** When true, merge parser dimensionFilters into intermediate SSE pivotDefaults (gated by confidence + diagnostic scope). */
 export function isDiagnosticPivotFilterMergeEnabled(): boolean {
-  return truthy(process.env.DIAGNOSTIC_PIVOT_FILTER_MERGE_ENABLED);
+  return isFlagOn("DIAGNOSTIC_PIVOT_FILTER_MERGE_ENABLED");
 }
 
 /** Master switch for composite segment driver tool registration and execution. */
 export function isDiagnosticCompositeToolEnabled(): boolean {
-  return truthy(process.env.DIAGNOSTIC_COMPOSITE_TOOL_ENABLED);
+  return isFlagOn("DIAGNOSTIC_COMPOSITE_TOOL_ENABLED");
 }
 
 /** Minimum parseUserQuery confidence (0–1) to merge filters into intermediate pivots. */

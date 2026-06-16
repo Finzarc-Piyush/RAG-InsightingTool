@@ -57,7 +57,6 @@ import { downloadPivotGridAsXlsx } from '@/lib/pivot/exportPivotToXlsx';
 import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotModel, PivotUiConfig } from '@/lib/pivot/types';
 import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
-import { parseDateLike } from '@/lib/parseDateLike';
 import { api } from '@/lib/httpClient';
 import { withInflightLimit } from '@/lib/inflightLimiter';
 import {
@@ -75,45 +74,16 @@ import {
   type PivotChartValidityMap,
 } from '@/lib/pivot/chartTypeValidity';
 
-// PV4 · UI ordering + display labels for the Change Chart Type dropdown.
-// Order: Compare → Trend → Distribution → Composition → Multi-measure → Flow.
-const CHART_KIND_DROPDOWN_ORDER: ReadonlyArray<PivotChartKind> = [
-  'bar',
-  'line',
-  'area',
-  'scatter',
-  'pie',
-  'donut',
-  'heatmap',
-  'radar',
-  'bubble',
-  'waterfall',
-];
-const CHART_KIND_LABEL: Record<PivotChartKind, string> = {
-  bar: 'Bar',
-  line: 'Line',
-  area: 'Area',
-  scatter: 'Scatter',
-  pie: 'Pie',
-  donut: 'Donut',
-  heatmap: 'Heatmap',
-  radar: 'Radar',
-  bubble: 'Bubble',
-  waterfall: 'Waterfall',
-};
-type V1ChartType = 'bar' | 'line' | 'area' | 'scatter' | 'pie' | 'heatmap';
-const V2_TO_V1_FALLBACK: Record<'donut' | 'radar' | 'bubble' | 'waterfall', V1ChartType> = {
-  donut: 'pie',
-  radar: 'bar',
-  bubble: 'scatter',
-  waterfall: 'bar',
-};
-function coerceChartTypeForPersistence(kind: PivotChartKind): V1ChartType {
-  if (kind === 'donut' || kind === 'radar' || kind === 'bubble' || kind === 'waterfall') {
-    return V2_TO_V1_FALLBACK[kind];
-  }
-  return kind;
-}
+import {
+  CHART_KIND_DROPDOWN_ORDER,
+  CHART_KIND_LABEL,
+  coerceChartTypeForPersistence,
+} from './DataPreviewTable/chartKinds';
+import {
+  inferNumericColumns,
+  inferDateLikeColumns,
+} from './DataPreviewTable/columnHelpers';
+import { ChartKeyInsightCallout } from './DataPreviewTable/ChartKeyInsightCallout';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
 import { PivotFilterChips } from './pivot/PivotFilterChips';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
@@ -230,71 +200,7 @@ export interface PivotBuilderAddPayload {
   previewRows: Record<string, unknown>[];
 }
 
-function inferNumericColumns(
-  rows: Record<string, any>[],
-  columnKeys: string[]
-): string[] {
-  const sample = rows.slice(0, 500);
-  const out: string[] = [];
-  for (const col of columnKeys) {
-    if (isTemporalFacetFieldId(col)) continue;
-    let n = 0;
-    let numeric = 0;
-    for (const row of sample) {
-      const v = row[col];
-      if (v === null || v === undefined || v === '') continue;
-      n++;
-      const parsed = parseNumericCell(v);
-      if (parsed !== null) numeric++;
-    }
-    if (n >= 2 && numeric / n >= 0.75) out.push(col);
-  }
-  return out;
-}
-
-function isIdLikeColumn(field: string): boolean {
-  const f = field.trim().toLowerCase();
-  return (
-    f === 'id' ||
-    f.endsWith('_id') ||
-    f.endsWith(' id') ||
-    f.includes(' id ') ||
-    f.includes('row id') ||
-    f.includes('order id') ||
-    f.includes('customer id') ||
-    f.includes('product id')
-  );
-}
-
-/** Columns that parse as dates in preview rows (created/derived dims not in schema dateColumns). */
-function inferDateLikeColumns(
-  rows: Record<string, any>[],
-  columnKeys: string[],
-  numericSet: Set<string>
-): string[] {
-  const sample = rows.slice(0, 500);
-  const out: string[] = [];
-  for (const col of columnKeys) {
-    if (numericSet.has(col)) continue;
-    if (isIdLikeColumn(col)) continue;
-    if (isTemporalFacetFieldId(col)) {
-      out.push(col);
-      continue;
-    }
-    let n = 0;
-    let ok = 0;
-    for (const row of sample) {
-      const v = row[col];
-      if (v === null || v === undefined || v === '') continue;
-      n++;
-      if (parseDateLike(v) !== null) ok++;
-    }
-    if (n >= 3 && ok / n >= 0.7) out.push(col);
-  }
-  return out;
-}
-
-export function DataPreviewTable({ 
+export function DataPreviewTable({
   data, 
   title, 
   maxRows = 100, 
@@ -1019,6 +925,12 @@ export function DataPreviewTable({
     setSessionSampleError(null);
     setChartPreviewError(null);
     setChartPreviewLoading(false);
+    // Intentionally keyed off `pivotDataSignature` (a stable string already
+    // encoding pivotFieldKeys/numericColumns/default row|col|value keys + the
+    // filter-defaults key) — this is a reset-on-data-shape-change effect; firing
+    // it on the raw array identities or pivotDefaults/pivotBuilderMode each
+    // render would wipe live user pivot/chart state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [variant, pivotDataSignature, initialPivotState]);
 
   /**
@@ -1164,6 +1076,10 @@ export function DataPreviewTable({
     return () => {
       cancelled = true;
     };
+    // `pivotSyncFields` is intentionally read via its stable string signature
+    // (`pivotDistinctFieldsSignature`) so we refetch distincts only when the
+    // field SET changes, not on every array-identity churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     variant,
     sessionId,
@@ -1218,6 +1134,11 @@ export function DataPreviewTable({
         filterDistinctProvenanceRef
       )
     );
+    // `pivotDefaults?.filterSelections` is read via `pivotDataSignature`, whose
+    // `pivotFilterDefaultsKey` member JSON-encodes filterFields + filterSelections
+    // by VALUE — so this effect already re-runs on content change without
+    // depending on the per-render object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     variant,
     pivotRows,
@@ -1574,6 +1495,7 @@ export function DataPreviewTable({
     pivotRows,
     normalizedPivotConfig,
     filterSelections,
+    temporalFacetColumns,
   ]);
 
   // In analysis variant the server pivot (operating on the full DuckDB session
@@ -1768,7 +1690,6 @@ export function DataPreviewTable({
       normalizedPivotConfig,
       filterSelections,
       filterDistinctSnapshotRef,
-      pivotDrillthrough,
     ]
   );
 
@@ -3495,139 +3416,7 @@ export function DataPreviewTable({
   );
 }
 
-function ChartKeyInsightCallout({
-  insight,
-}: {
-  insight: { text: string | null; loading: boolean; error: string | null } | null;
-}) {
-  if (!insight) return null;
-  // No text yet and we're loading the first one — show a slim spinner.
-  if (insight.loading && !insight.text) {
-    return (
-      <div className="mt-3 flex items-center gap-2 rounded-lg border border-border/60 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Generating key insight…
-      </div>
-    );
-  }
-  // Error with no prior text to fall back on — show the error.
-  if (insight.error && !insight.text) {
-    return (
-      <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-        Key insight unavailable: {insight.error}
-      </div>
-    );
-  }
-  if (!insight.text) return null;
-  return (
-    <Card className="mt-3 p-3 bg-primary/5 border-l-4 border-l-primary shadow-sm border-border/60">
-      <div className="flex items-center gap-2 mb-1.5">
-        <Lightbulb className="w-4 h-4 text-primary" />
-        <h4 className="text-xs font-semibold text-foreground uppercase tracking-wide">
-          Key insight
-        </h4>
-        {insight.loading && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Refreshing…
-          </span>
-        )}
-      </div>
-      <div className="text-sm text-foreground">
-        <MarkdownRenderer content={insight.text} />
-      </div>
-      {insight.error && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground italic">
-          Couldn't refresh: {insight.error}. Showing previous insight.
-        </p>
-      )}
-    </Card>
-  );
-}
-
-interface DataSummaryTableProps {
-  summary: Array<{
-    variable: string;
-    datatype: string;
-    total_values: number;
-    null_values: number;
-    non_null_values: number;
-    mean?: number | null;
-    median?: number | null;
-    std_dev?: number | null;
-    min?: number | null;
-    max?: number | null;
-    mode?: any;
-  }>;
-}
-
-export function DataSummaryTable({ summary }: DataSummaryTableProps) {
-  if (!summary || summary.length === 0) {
-    return (
-      <Card className="p-4">
-        <p className="text-sm text-muted-foreground">No summary data available</p>
-      </Card>
-    );
-  }
-
-  return (
-    <Card className="p-4 mt-2">
-      <h4 className="text-sm font-semibold mb-3 text-foreground">Data Summary</h4>
-      <div className="overflow-x-auto max-h-[500px] overflow-y-auto border border-border rounded-md">
-        <table className="w-full border-collapse text-sm">
-          <thead className="sticky top-0 bg-muted/40 z-10">
-            <tr className="border-b border-border">
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">Variable</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">Datatype</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">#Values</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">#Nulls</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">Mean</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">Median</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">Mode</th>
-              <th className="px-3 py-2 text-left font-semibold text-foreground bg-muted/40">STD Dev</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summary.map((row, idx) => (
-              <tr
-                key={idx}
-                className="border-b border-border hover:bg-muted/30 transition-colors"
-              >
-                <td className="px-3 py-2 text-foreground font-medium">{row.variable}</td>
-                <td className="px-3 py-2 text-muted-foreground">{row.datatype}</td>
-                <td className="px-3 py-2 text-foreground">{row.total_values}</td>
-                <td className="px-3 py-2 text-foreground">{row.null_values}</td>
-                <td className="px-3 py-2 text-foreground">
-                  {row.mean !== null && row.mean !== undefined
-                    ? typeof row.mean === 'number'
-                      ? row.mean.toFixed(2)
-                      : String(row.mean)
-                    : '-'}
-                </td>
-                <td className="px-3 py-2 text-foreground">
-                  {row.median !== null && row.median !== undefined
-                    ? typeof row.median === 'number'
-                      ? row.median.toFixed(2)
-                      : String(row.median)
-                    : '-'}
-                </td>
-                <td className="px-3 py-2 text-foreground">
-                  {row.mode !== null && row.mode !== undefined
-                    ? String(row.mode)
-                    : '-'}
-                </td>
-                <td className="px-3 py-2 text-foreground">
-                  {row.std_dev !== null && row.std_dev !== undefined
-                    ? typeof row.std_dev === 'number'
-                      ? row.std_dev.toFixed(2)
-                      : String(row.std_dev)
-                    : '-'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
+// Re-exported from the sibling module so existing
+// `import { DataSummaryTable } from './DataPreviewTable'` consumers keep working
+// after the god-file decomposition (behaviour-preserving code motion).
+export { DataSummaryTable } from './DataPreviewTable/DataSummaryTable';

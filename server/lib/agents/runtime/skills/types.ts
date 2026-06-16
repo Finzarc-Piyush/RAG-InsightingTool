@@ -34,6 +34,7 @@
  */
 import type { AgentExecutionContext, PlanStep } from "../types.js";
 import type { AnalysisBrief, QuestionShape } from "../../../../shared/schema.js";
+import { isFlagOn } from "../../../featureFlags.js";
 
 export interface SkillInvocation {
   /** Stable human-readable id — logged in traces, shown in SSE events. */
@@ -69,7 +70,7 @@ export interface AnalysisSkill {
 }
 
 export function isDeepAnalysisSkillsEnabled(): boolean {
-  return process.env.DEEP_ANALYSIS_SKILLS_ENABLED === "true";
+  return isFlagOn("DEEP_ANALYSIS_SKILLS_ENABLED");
 }
 
 /**

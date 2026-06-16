@@ -48,3 +48,25 @@
 
 Each god-file now has a proven seam + ≥1 module carved off. To keep shrinking
 them, repeat the pattern one cohesive cluster per wave per the table above.
+
+- **EX-batch9 (2026-06-16) · expert-audit ARCH-1/2/5 + CQ-1/2/3 + FE-2** — three
+  parallel agents carved more low-coupling clusters AND added characterization
+  tests so the remaining (heavily closure-coupled) cores can be phase-decomposed
+  test-first later:
+  - `agentLoop.service.ts` (4327→4112) → `agentLoopDeferredCharts.ts` (deferred
+    build_chart materialisation), `agentLoopPlanner.ts` (planner-retry wiring),
+    `agentLoopSynthesisPrep.ts` (pure auto-pivot + mid-turn-summary helpers).
+    Char test: `tests/agentLoopExtractionCharacterization.test.ts` (incl. a
+    re-export identity-seam assertion).
+  - `dataOpsOrchestrator.ts` (5245→5093) → `dataOps/handlers/{countNulls,describe,summary,identifyOutliers}.ts`
+    (the least-coupled per-operation `executeDataOperation` branches, each with a
+    single typed args object). Char test: `tests/dataOpsExecuteCharacterization.test.ts`.
+  - `DataPreviewTable.tsx` (3633→3422) → `DataPreviewTable/{columnHelpers.ts,chartKinds.ts,ChartKeyInsightCallout.tsx,DataSummaryTable.tsx}`.
+    Char test: `DataPreviewTable/columnHelpers.vitest.test.ts` (9 tests).
+  - **Deliberately staged (do NOT force-split):** `runAgentTurn` (~3160 lines,
+    ~31 closures sharing mutable turn state), `executeDataOperation`'s coupled
+    branches, the DataPreviewTable pivot/chart/filter state web (~30 useState),
+    and any cluster pinned by a source-text grep test (synthesisRetry,
+    dashboardCapsDPF6, the verifier-wiring tests). These need the integration
+    suite to drive a test-first phase decomposition — the characterization tests
+    above are the first step.

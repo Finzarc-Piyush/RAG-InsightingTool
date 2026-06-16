@@ -16,6 +16,7 @@ import { requireAzureSearchCredentials } from "./config.js";
 import { PAST_ANALYSES_INDEX_NAME } from "./createPastAnalysesIndex.js";
 import type { PastAnalysisDoc } from "../../shared/schema.js";
 import { logger } from "../logger.js";
+import { isFlagOn } from "../featureFlags.js";
 
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -97,7 +98,7 @@ function toSearchDoc(
  * swallow errors. Skipped entirely when `PAST_ANALYSES_INDEX_ENABLED=false`.
  */
 export async function indexPastAnalysis(doc: PastAnalysisDoc): Promise<void> {
-  if (process.env.PAST_ANALYSES_INDEX_ENABLED === "false") return;
+  if (!isFlagOn("PAST_ANALYSES_INDEX_ENABLED")) return;
   // Lazy-import so the cache-lookup code path doesn't pull in embeddings →
   // openai module load (which crashes in unit-test env without Azure creds).
   const { embedQuery } = await import("./embeddings.js");
@@ -122,7 +123,7 @@ export async function mergeFeedbackInPastAnalysisIndex(
   id: string,
   feedback: PastAnalysisDoc["feedback"]
 ): Promise<void> {
-  if (process.env.PAST_ANALYSES_INDEX_ENABLED === "false") return;
+  if (!isFlagOn("PAST_ANALYSES_INDEX_ENABLED")) return;
   const client = getClient();
   await withSearchRetry("mergeFeedbackInPastAnalysisIndex", () =>
     client.mergeDocuments([{ id, feedback } as PastAnalysisSearchDoc])

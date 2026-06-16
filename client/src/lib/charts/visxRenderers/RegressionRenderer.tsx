@@ -8,7 +8,7 @@
  * 'regression'; for now we always linearly fit the points in-renderer.
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { Circle, Line } from "@visx/shape";
 import { scaleLinear } from "@visx/scale";
@@ -76,7 +76,7 @@ function linearFit(
   return { m, b, r2 };
 }
 
-export function RegressionRenderer({
+function RegressionRendererImpl({
   spec,
   data,
   width,
@@ -237,3 +237,10 @@ export function RegressionRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const RegressionRenderer = memo(RegressionRendererImpl);
+RegressionRenderer.displayName = "RegressionRenderer";

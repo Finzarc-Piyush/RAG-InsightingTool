@@ -30,6 +30,7 @@ import {
   type DatasetProfile,
 } from "../shared/schema.js";
 import { logger } from "../lib/logger.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 const DOC_ID_SEPARATOR = "__";
 
@@ -93,9 +94,10 @@ export async function readCachedProfile(
     if (parsed.data.schemaVersion !== DATASET_PROFILE_CACHE_SCHEMA_VERSION) return null;
     if (parsed.data.contextHash !== contextHash) return null;
     return parsed.data.profile;
-  } catch (err: any) {
-    if (err?.code === 404) return null;
-    logger.warn("⚠️ readCachedProfile failed (treating as miss):", err?.message ?? err);
+  } catch (err: unknown) {
+    // Cosmos 404 = entry missing; `code` is a numeric Cosmos status here.
+    if ((err as { code?: number })?.code === 404) return null;
+    logger.warn("⚠️ readCachedProfile failed (treating as miss):", errorMessage(err));
     return null;
   }
 }
@@ -124,8 +126,8 @@ export async function writeCachedProfile(
       updatedAt: Date.now(),
     });
     await container.items.upsert(doc);
-  } catch (err: any) {
-    logger.warn("⚠️ writeCachedProfile failed (non-fatal):", err?.message ?? err);
+  } catch (err: unknown) {
+    logger.warn("⚠️ writeCachedProfile failed (non-fatal):", errorMessage(err));
   }
 }
 

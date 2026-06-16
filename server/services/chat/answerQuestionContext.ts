@@ -15,7 +15,7 @@ import { classifyIntent } from "../../lib/agents/intentClassifier.js";
 import { parseUserQuery } from "../../lib/queryParser.js";
 import { isInformationSeekingQuery, isAnalyticalQuery } from "../../lib/analyticalQueryEngine.js";
 import { getSampleFromDuckDB } from "../../lib/duckdbPlanExecutor.js";
-import { isAgenticLoopEnabled } from "../../lib/agents/runtime/types.js";
+import { isAgenticLoopEnabled } from "../../lib/agents/runtime/runtimeConfig.js";
 import { canonicalizeDateColumnValues } from "../../lib/fileParser.js";
 import {
   applyTemporalFacetColumns,

@@ -14,7 +14,7 @@
  * via the sequential palette + a small below-chart legend strip.
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Group } from "@visx/group";
 import { scaleBand } from "@visx/scale";
 import { AxisBottom, AxisLeft } from "@visx/axis";
@@ -58,7 +58,7 @@ export interface RectRendererProps {
 
 const MARGIN = { top: 12, right: 16, bottom: 56, left: 80 };
 
-export function RectRenderer({
+function RectRendererImpl({
   spec,
   data,
   width,
@@ -378,3 +378,10 @@ export function RectRenderer({
     </svg>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const RectRenderer = memo(RectRendererImpl);
+RectRenderer.displayName = "RectRenderer";

@@ -22,7 +22,7 @@ process.env.QUICK_LOOKUP_ENABLED = "true";
 
 const { runAgentTurn } = await import("../lib/agents/runtime/agentLoop.service.js");
 const { buildAgentExecutionContext } = await import("../lib/agents/runtime/context.js");
-const { loadAgentConfigFromEnv } = await import("../lib/agents/runtime/types.js");
+const { loadAgentConfigFromEnv } = await import("../lib/agents/runtime/runtimeConfig.js");
 const { LLM_PURPOSE } = await import("../lib/agents/runtime/llmCallPurpose.js");
 const { installLlmStub, clearLlmStub } = await import("./helpers/llmStub.js");
 

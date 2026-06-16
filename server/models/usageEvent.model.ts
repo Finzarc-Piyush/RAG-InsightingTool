@@ -19,6 +19,7 @@ import {
 } from "../shared/schema.js";
 import { logger } from "../lib/logger.js";
 import { errorMessage } from "../utils/errorMessage.js";
+import { isFlagOn } from "../lib/featureFlags.js";
 
 export const COSMOS_USAGE_EVENTS_CONTAINER_ID =
   process.env.COSMOS_USAGE_EVENTS_CONTAINER_ID || "usage_events";
@@ -94,7 +95,7 @@ export interface RecordUsageEventInput {
 export async function recordUsageEvent(
   input: RecordUsageEventInput
 ): Promise<void> {
-  if (process.env.USAGE_EVENTS_ENABLED === "false") return;
+  if (!isFlagOn("USAGE_EVENTS_ENABLED")) return;
   const userEmail = input.userEmail?.trim().toLowerCase();
   if (!userEmail) return; // nothing to attribute against
   const ts = input.timestamp ?? Date.now();

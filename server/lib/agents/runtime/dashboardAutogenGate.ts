@@ -34,9 +34,10 @@
 
 import type { AnalysisBrief, ChartSpec } from "../../../shared/schema.js";
 import type { DashboardIntent } from "./dashboardIntent.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 export function isDashboardAutogenEnabled(): boolean {
-  return process.env.DASHBOARD_AUTOGEN_ENABLED === "true";
+  return isFlagOn("DASHBOARD_AUTOGEN_ENABLED");
 }
 
 /**

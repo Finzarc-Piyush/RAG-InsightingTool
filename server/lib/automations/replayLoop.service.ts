@@ -34,7 +34,7 @@
 import {
   addMessageToChat,
   getChatDocument,
-  updateChatDocument,
+  mutateChatDocument,
   updateSessionPermanentContext,
 } from "../../models/chat.model.js";
 import {
@@ -45,7 +45,7 @@ import { applyColumnMappingToRecipe } from "./applyColumnMapping.js";
 import { planSessionTransformations } from "./planSessionTransformations.js";
 import { loadLatestData } from "../../utils/dataLoader.js";
 import { buildAgentExecutionContext } from "../agents/runtime/context.js";
-import { loadAgentConfigFromEnv } from "../agents/runtime/types.js";
+import { loadAgentConfigFromEnv } from "../agents/runtime/runtimeConfig.js";
 import type { AgentExecutionContext } from "../agents/runtime/types.js";
 import { ToolRegistry } from "../agents/runtime/toolRegistry.js";
 import { registerDefaultTools } from "../agents/runtime/tools/registerTools.js";
@@ -523,9 +523,17 @@ const persistAutomationContextOntoChat = async (
       // through unknown because the SAC type is more specific than
       // `partial.deep` and the assistant-merge LLM normally fills in
       // the gaps. The next live turn will refine via the normal merge.
-      chat.sessionAnalysisContext =
-        seed as unknown as typeof chat.sessionAnalysisContext;
-      await updateChatDocument(chat);
+      const sac = seed as unknown as typeof chat.sessionAnalysisContext;
+      // SEC-2: persist via the `mutateChatDocument` seam (invariant #9) — lock +
+      // IfMatch `_etag` retry — instead of a bare get→mutate→`updateChatDocument`
+      // on a stale snapshot. The mutator re-checks the FRESH doc, so a SAC seeded
+      // by a concurrent live turn is never clobbered.
+      await mutateChatDocument(chat.sessionId, (doc) => {
+        if (doc.sessionAnalysisContext) return false; // already set — no write
+        doc.sessionAnalysisContext = sac;
+        return true;
+      });
+      chat.sessionAnalysisContext = sac; // keep the in-memory snapshot consistent
     }
   } catch (err) {
     logger.warn("[automation-replay] context persist failed:", err);

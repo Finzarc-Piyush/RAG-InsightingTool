@@ -3,7 +3,11 @@
  * Shared function to load the latest data for a chat document
  * Ensures analysis uses the most up-to-date data including data operation changes
  */
-import { ChatDocument } from "../models/chat.model.js";
+// `import type` (not a value import): `ChatDocument` is used here only as a
+// parameter annotation, so keeping it type-only erases the runtime edge into
+// the heavy `chat.model` module and this file is NOT pulled into the chat.model
+// import cycle. See docs/decisions/import-cycles.md.
+import type { ChatDocument } from "../models/chat.model.js";
 import { SessionDataNotMaterializedError } from "../lib/columnarStorage.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
 import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";

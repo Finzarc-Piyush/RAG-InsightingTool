@@ -447,7 +447,8 @@ describe("WI2-server · route + purpose wiring (source-inspection)", () => {
       routesIndexSrc,
       /import insightRegenRoutes from "\.\/insightRegen\.js"/,
     );
-    assert.match(routesIndexSrc, /app\.use\('\/api',\s*insightRegenRoutes\)/);
+    // API-7: mounted via `mount('', insightRegenRoutes)` → `/api` + `/api/v1`.
+    assert.match(routesIndexSrc, /mount\(\s*['"]['"]\s*,\s*insightRegenRoutes\s*\)/);
   });
 
   it("LLM_PURPOSE includes INSIGHT_REGEN mapped to MINI", () => {

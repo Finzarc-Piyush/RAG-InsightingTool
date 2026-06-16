@@ -34,8 +34,9 @@ export default tseslint.config(
       "no-unsafe-optional-chaining": "error",
       "eqeqeq": ["error", "smart"],
       "@typescript-eslint/no-misused-new": "error",
-      // Large existing surface — warn for now.
-      "react-hooks/exhaustive-deps": "warn",
+      // FE-3 · exhaustive-deps is an ERROR (all violations fixed behaviour-
+      // preservingly; intentional omissions carry a justified disable comment).
+      "react-hooks/exhaustive-deps": "error",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": [
         "warn",

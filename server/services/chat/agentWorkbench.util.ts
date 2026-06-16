@@ -2,7 +2,7 @@ import type { AgentWorkbenchEntry } from "../../shared/schema.js";
 import {
   AGENT_WORKBENCH_ENTRY_CODE_MAX,
   AGENT_WORKBENCH_MAX_BYTES,
-} from "../../lib/agents/runtime/types.js";
+} from "../../lib/agents/runtime/runtimeConfig.js";
 
 function truncateCode(s: string): string {
   if (s.length <= AGENT_WORKBENCH_ENTRY_CODE_MAX) return s;

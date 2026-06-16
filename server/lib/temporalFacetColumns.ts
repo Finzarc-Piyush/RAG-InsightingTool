@@ -11,6 +11,7 @@ import {
   parseFlexibleDate,
   type DatePeriod,
 } from "./dateUtils.js";
+import { isFlagOn } from "./featureFlags.js";
 import type { DataSummary } from "../shared/schema.js";
 
 export const TEMPORAL_FACET_PREFIX = "__tf_";
@@ -626,10 +627,7 @@ export function applyTemporalFacetColumns(
     periodDimension?: PeriodDimensionBinding;
   }
 ): TemporalFacetColumnMeta[] {
-  if (
-    process.env.DISABLE_TEMPORAL_FACETS === "1" ||
-    process.env.DISABLE_TEMPORAL_FACETS === "true"
-  ) {
+  if (isFlagOn("DISABLE_TEMPORAL_FACETS")) {
     return [];
   }
   if (data.length === 0 || !dateColumns.length) return [];

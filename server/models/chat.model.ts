@@ -17,6 +17,8 @@ import type { SemanticModelAuditEntry } from "../lib/semantic/semanticModelAudit
 import { waitForContainer } from "./database.config.js";
 import { ChartReference, saveChartsToBlob, loadChartsFromBlob } from "../lib/blobStorage.js";
 import { logger } from "../lib/logger.js";
+import { chatDocumentReadSchema, safeParseRead } from "./persistedSchemas.js";
+import { errorMessage } from "../utils/errorMessage.js";
 
 // ─── Short-lived CosmosDB read caches ────────────────────────────────────────
 // Each unique session document is fetched from Cosmos at most once per TTL
@@ -29,15 +31,22 @@ const ACCESS_CACHE_TTL_MS = 30_000;
 const sessionDocCache = new Map<string, { doc: ChatDocument | null; expiresAt: number }>();
 const sessionListCache = new Map<string, { sessions: SessionListSummary[]; expiresAt: number }>();
 const accessResultCache = new Map<string, { expiresAt: number }>();
+// PERF-5 · lean summary cache (see getChatSummaryBySessionId). Same 5 s TTL as
+// the doc cache; invalidated alongside it so a write never leaves a stale summary.
+const sessionSummaryCache = new Map<string, { summary: ChatSessionSummary | null; expiresAt: number }>();
 
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of sessionDocCache) if (v.expiresAt <= now) sessionDocCache.delete(k);
   for (const [k, v] of sessionListCache) if (v.expiresAt <= now) sessionListCache.delete(k);
   for (const [k, v] of accessResultCache) if (v.expiresAt <= now) accessResultCache.delete(k);
+  for (const [k, v] of sessionSummaryCache) if (v.expiresAt <= now) sessionSummaryCache.delete(k);
 }, 60_000).unref();
 
-function invalidateSessionDoc(sessionId: string) { sessionDocCache.delete(sessionId); }
+function invalidateSessionDoc(sessionId: string) {
+  sessionDocCache.delete(sessionId);
+  sessionSummaryCache.delete(sessionId);
+}
 function invalidateSessionList(username: string) {
   sessionListCache.delete(username.toLowerCase());
   sessionListCache.delete(""); // clear any all-users cached query
@@ -74,7 +83,7 @@ export interface ChatDocument {
       non_null_values: number;
       mean?: number | null;
       median?: number | null;
-      mode?: any;
+      mode?: string | number | boolean | null;
       std_dev?: number | null;
       min?: number | string | null;
       max?: number | string | null;
@@ -110,13 +119,13 @@ export interface ChatDocument {
     operation: string;
     description: string;
     timestamp: number;
-    parameters?: any;
+    parameters?: unknown;
     affectedRows?: number;
     affectedColumns?: string[];
     rowsBefore?: number;
     rowsAfter?: number;
   }>;
-  dataOpsContext?: any; // Context for data operations (pending operations, filters, etc.)
+  dataOpsContext?: unknown; // Context for data operations (pending operations, filters, etc.)
   analysisMetadata: { // Additional metadata about the analysis
     totalProcessingTime: number; // Time taken to process the file
     aiModelUsed: string; // AI model used for analysis
@@ -211,6 +220,20 @@ export interface ChatDocument {
     stepsCompleted?: number;
   };
   /**
+   * DATA-5 · durable concurrent-turn lease. Recorded at turn start and cleared
+   * at turn end so a second turn arriving for the same `sessionId` (even from
+   * another serverless instance) can observe an in-flight turn. Optional +
+   * additive — absent on existing docs and on sessions with no live turn. A
+   * lease older than `TURN_LEASE_TTL_MS` is treated as STALE (a crashed turn
+   * never released it) and may be taken over. The `CONCURRENT_TURN_GUARD_ENABLED`
+   * flag decides whether a held live lease REJECTS a second turn (409) or is
+   * merely recorded for observability (default OFF → behaviour unchanged).
+   */
+  turnInProgress?: {
+    turnId: string;
+    startedAt: number;
+  };
+  /**
    * Wave-FA1 · Excel-style active filter overlay. Non-destructive — the
    * canonical `currentDataBlob` / `rawData` / `blobInfo` are never altered
    * by filter changes. Applied at `loadLatestData` and DuckDB query time.
@@ -247,6 +270,61 @@ const SESSION_LIST_SELECT =
   "SELECT c.id, c.username, c.fileName, c.uploadedAt, c.createdAt, c.lastUpdatedAt, c.collaborators, c.sessionId, c.pinned, c.pinnedAt, " +
   "IIF(IS_DEFINED(c.messages) AND IS_ARRAY(c.messages), ARRAY_LENGTH(c.messages), 0) AS messageCount, " +
   "IIF(IS_DEFINED(c.charts) AND IS_ARRAY(c.charts), ARRAY_LENGTH(c.charts), 0) AS chartCount FROM c";
+
+/**
+ * PERF-5 · light per-session summary. The heavy fields the hot read
+ * `getChatBySessionIdEfficient` drags across the partition boundary
+ * (`messages[]`, `charts[]` data, `rawData`, `sampleRows`,
+ * `currentDataBlob`, `dataVersions`, the semantic model …) are projected
+ * AWAY — only the light metadata a summary / existence-check caller needs
+ * stays. Scalars off the nested `dataSummary` are surfaced flat so callers
+ * never have to pull the whole object.
+ */
+export interface ChatSessionSummary {
+  id: string;
+  username: string;
+  fileName: string;
+  sessionId: string;
+  uploadedAt: number;
+  createdAt: number;
+  lastUpdatedAt: number;
+  collaborators?: string[];
+  enrichmentStatus?: ChatDocument["enrichmentStatus"];
+  permanentContext?: string;
+  rowCount: number;
+  columnCount: number;
+}
+
+/**
+ * PERF-5 · the explicit Cosmos SELECT for `getChatSummaryBySessionId`. Listing
+ * each light field by name (vs `SELECT *`) is the whole point — Cosmos only
+ * marshals/transfers the projected fields, so the hottest by-sessionId read
+ * stops paying to ship megabytes of `messages` / `rawData` when the caller
+ * only wanted a couple of scalars.
+ */
+const SESSION_SUMMARY_SELECT =
+  "SELECT c.id, c.username, c.fileName, c.sessionId, c.uploadedAt, c.createdAt, c.lastUpdatedAt, " +
+  "c.collaborators, c.enrichmentStatus, c.permanentContext, " +
+  "c.dataSummary.rowCount AS rowCount, c.dataSummary.columnCount AS columnCount " +
+  "FROM c WHERE c.sessionId = @sessionId ORDER BY c.lastUpdatedAt DESC";
+
+/** PERF-5 · defensive finaliser: coerce a raw Cosmos summary row into the typed shape. */
+const finalizeChatSessionSummary = (raw: Record<string, unknown>): ChatSessionSummary => ({
+  id: String(raw.id ?? ""),
+  username: String(raw.username ?? ""),
+  fileName: String(raw.fileName ?? ""),
+  sessionId: String(raw.sessionId ?? ""),
+  uploadedAt: Number(raw.uploadedAt ?? 0),
+  createdAt: Number(raw.createdAt ?? 0),
+  lastUpdatedAt: Number(raw.lastUpdatedAt ?? 0),
+  collaborators: Array.isArray(raw.collaborators)
+    ? (raw.collaborators as string[]).filter((e): e is string => typeof e === "string")
+    : undefined,
+  enrichmentStatus: raw.enrichmentStatus as ChatDocument["enrichmentStatus"] | undefined,
+  permanentContext: typeof raw.permanentContext === "string" ? raw.permanentContext : undefined,
+  rowCount: Number(raw.rowCount ?? 0),
+  columnCount: Number(raw.columnCount ?? 0),
+});
 
 // Helper functions
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
@@ -373,7 +451,7 @@ export const createChatDocument = async (
       non_null_values: number;
       mean?: number | null;
       median?: number | null;
-      mode?: any;
+      mode?: string | number | boolean | null;
       std_dev?: number | null;
       min?: number | string | null;
       max?: number | string | null;
@@ -462,9 +540,12 @@ export const createChatDocument = async (
     const { resource } = await containerInstance.items.create(chatDocument);
     logger.log(`✅ Created chat document: ${chatId}`);
     return resource as ChatDocument;
-  } catch (error: any) {
-    // Check if error is due to document size
-    if (error?.code === 400 || error?.message?.includes('Request Entity Too Large') || error?.message?.includes('413')) {
+  } catch (error: unknown) {
+    // Check if error is due to document size. Cosmos attaches a NUMERIC `code`
+    // (HTTP status) here, so narrow locally to a number rather than using the
+    // string-returning getErrorCode helper (which would never === 400).
+    const err = error as { code?: number };
+    if (err?.code === 400 || errorMessage(error).includes('Request Entity Too Large') || errorMessage(error).includes('413')) {
       logger.error(`❌ Document too large for CosmosDB (${rawData.length} rows). Retrying without rawData...`);
       // Retry without rawData
       const retryDocument = {
@@ -565,7 +646,7 @@ export const createPlaceholderSession = async (
       }
     })();
     return resource as ChatDocument;
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error("❌ Failed to create placeholder session:", error);
     throw error;
   }
@@ -642,8 +723,11 @@ export const getChatDocument = async (
     }
 
     return chatDocument;
-  } catch (error: any) {
-    if (error.code === 404) {
+  } catch (error: unknown) {
+    // Cosmos `code` is a NUMERIC HTTP status here; narrow locally to a number
+    // (getErrorCode returns a string and would never === 404).
+    const err = error as { code?: number };
+    if (err.code === 404) {
       return null;
     }
     logger.error("Failed to get chat document:", error);
@@ -707,6 +791,9 @@ export const updateChatDocument = async (
     // immediately after a write hit the cache. Load-bearing — see the
     // doc comment above for the cross-module contract.
     sessionDocCache.set(result.sessionId, { doc: result, expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS });
+    // PERF-5 · drop the stale lean summary so the next `getChatSummaryBySessionId`
+    // re-projects the freshly-written light fields (e.g. permanentContext / enrichmentStatus).
+    sessionSummaryCache.delete(result.sessionId);
     logger.log(`✅ Updated chat document: ${chatDocument.id}`);
     return result;
   } catch (error) {
@@ -776,6 +863,70 @@ function isPreconditionFailed(err: unknown): boolean {
   const e = err as { code?: number; statusCode?: number } | null;
   return e?.code === 412 || e?.statusCode === 412;
 }
+
+/**
+ * DATA-5 · A lease older than this is considered STALE — its owning turn
+ * almost certainly crashed without releasing it, so a new turn may take over.
+ * Self-heals the durable marker after an instance dies mid-turn.
+ */
+export const TURN_LEASE_TTL_MS = 5 * 60_000; // 5 minutes
+
+/**
+ * DATA-5 · Try to acquire the durable per-session turn lease for `turnId`.
+ *
+ * Returns `true` when the lease is now held by `turnId` (it was absent, STALE,
+ * or already owned by this turnId), `false` when another LIVE turn holds it.
+ * The write goes through the `mutateChatDocument` seam (per-session lock +
+ * IfMatch `_etag` 412-retry) so it serialises against every other RMW on the
+ * doc and survives a cross-instance race. Returns `null` when the doc is
+ * missing (caller decides — a missing session is not a contention case).
+ *
+ * NOTE: this only RECORDS / detects contention. Whether a `false` result
+ * rejects the turn is the caller's decision (gated by
+ * `CONCURRENT_TURN_GUARD_ENABLED` at the turn entry).
+ */
+export const acquireTurnLease = async (
+  sessionId: string,
+  turnId: string,
+  now: number = Date.now(),
+): Promise<boolean | null> => {
+  let acquired = false;
+  const doc = await mutateChatDocument(sessionId, (d) => {
+    const existing = d.turnInProgress;
+    const isStale = !existing || now - existing.startedAt >= TURN_LEASE_TTL_MS;
+    const ownedBySelf = existing?.turnId === turnId;
+    if (!isStale && !ownedBySelf) {
+      acquired = false;
+      return false; // another LIVE turn holds it — no write
+    }
+    d.turnInProgress = { turnId, startedAt: now };
+    acquired = true;
+  });
+  if (doc === null) return null; // session not found
+  return acquired;
+};
+
+/**
+ * DATA-5 · Release the durable turn lease IFF it is currently held by `turnId`.
+ * A no-op (no write) when the lease is absent or owned by a different turn —
+ * so a turn that lost its lease to a stale-takeover can't clear the new owner's
+ * lease in its `finally`. Routes through the same lock + ETag seam.
+ */
+export const releaseTurnLease = async (
+  sessionId: string,
+  turnId: string,
+): Promise<void> => {
+  try {
+    await mutateChatDocument(sessionId, (d) => {
+      if (d.turnInProgress?.turnId !== turnId) return false; // not ours — leave it
+      delete d.turnInProgress;
+    });
+  } catch (err) {
+    // Best-effort: the TTL self-heal will reclaim a leaked lease. Never let a
+    // release failure surface to the user at turn end.
+    logger.warn(`⚠️ releaseTurnLease failed (${sessionId}/${turnId}):`, err);
+  }
+};
 
 /**
  * Add message to chat
@@ -1095,16 +1246,31 @@ const retryOnConnectionError = async <T>(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
-    } catch (error: any) {
+    } catch (error: unknown) {
       lastError = error;
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
+
+      // Cosmos errors carry a mix of NUMERIC (statusCode/code as HTTP status)
+      // and STRING (code as ECONNREFUSED/RestError) fields plus a deep
+      // `diagnostics` object — none cleanly served by the string-returning
+      // helpers — so narrow once locally and keep the comparisons verbatim.
+      const err = error as {
+        statusCode?: number;
+        code?: number | string;
+        name?: string;
+        diagnostics?: {
+          clientSideRequestStatistics?: {
+            gatewayStatistics?: Array<{ subStatusCode?: number }>;
+          };
+        };
+      };
+
       // 412 (precondition/ETag conflict), 409 (conflict), 404, 400 are LOGICAL
       // errors, not transient transport failures — retrying the same stale
       // operation just fails again. The optimistic-concurrency seam
       // (mutateChatDocument) handles 412 via re-read + fresh ETag; this
       // connection-retry wrapper must NOT swallow/retry it (Wave R2).
-      const statusCode = error?.statusCode ?? error?.code;
+      const statusCode = err?.statusCode ?? err?.code;
       const isNonTransient =
         statusCode === 412 ||
         statusCode === 409 ||
@@ -1115,14 +1281,14 @@ const retryOnConnectionError = async <T>(
       // Include PARSE_ERROR and query timeout errors (subStatusCode 1004)
       const isRetryableError =
         !isNonTransient && (
-        error.code === "ECONNREFUSED" ||
-        error.code === "ETIMEDOUT" || 
-        error.code === "ENOTFOUND" ||
-        error.code === "ECONNRESET" ||
-        error.code === "RestError" ||
-        error.code === "PARSE_ERROR" ||
-        error.name === "RestError" ||
-        (error.diagnostics?.clientSideRequestStatistics?.gatewayStatistics?.[0]?.subStatusCode === 1004) ||
+        err.code === "ECONNREFUSED" ||
+        err.code === "ETIMEDOUT" ||
+        err.code === "ENOTFOUND" ||
+        err.code === "ECONNRESET" ||
+        err.code === "RestError" ||
+        err.code === "PARSE_ERROR" ||
+        err.name === "RestError" ||
+        (err.diagnostics?.clientSideRequestStatistics?.gatewayStatistics?.[0]?.subStatusCode === 1004) ||
         errorMessage.includes("ECONNREFUSED") ||
         errorMessage.includes("ETIMEDOUT") ||
         errorMessage.includes("ENOTFOUND") ||
@@ -1185,6 +1351,14 @@ export const getChatBySessionIdEfficient = async (
       if (!d) {
         logger.warn("⚠️ No chat document found for sessionId:", sessionId);
       } else {
+        // Validate-and-warn (observability only): the raw doc is still used
+        // and mutated exactly as before — safeParseRead returns the same
+        // object and never throws/drops on a read-shape mismatch.
+        safeParseRead<ChatDocument>(
+          "getChatBySessionIdEfficient",
+          chatDocumentReadSchema,
+          d,
+        );
         ensureCollaborators(d as ChatDocument);
       }
       return d as unknown as ChatDocument | null;
@@ -1247,6 +1421,44 @@ export const getChatBySessionIdForSuperadmin = async (
   sessionId: string
 ): Promise<ChatDocument | null> => {
   return await getChatBySessionIdEfficient(sessionId);
+};
+
+/**
+ * PERF-5 · LEAN by-sessionId read for callers that need only light metadata
+ * (existence / ownership checks, enrichment-status polls, summary rows). Issues
+ * the explicit `SESSION_SUMMARY_SELECT` projection so Cosmos NEVER marshals the
+ * heavy `messages[]` / `rawData` / `sampleRows` / `charts` payloads that
+ * `getChatBySessionIdEfficient` (`SELECT *`) drags across the partition
+ * boundary. Returns `null` when no doc matches.
+ *
+ * ⚠ NOT authorization-aware (mirrors `getChatBySessionIdEfficient`) and does NOT
+ * populate or cache a `ChatDocument` — never substitute it for a caller that
+ * reads any field outside `ChatSessionSummary`. Has its OWN summary cache so a
+ * burst of polls (upload-status) collapses to one cross-partition query.
+ */
+export const getChatSummaryBySessionId = async (
+  sessionId: string,
+): Promise<ChatSessionSummary | null> => {
+  const hit = sessionSummaryCache.get(sessionId);
+  if (hit && hit.expiresAt > Date.now()) return hit.summary;
+
+  const summary = await retryOnConnectionError(async () => {
+    const containerInstance = await waitForContainer();
+    const { resources } = await containerInstance.items
+      .query({
+        query: SESSION_SUMMARY_SELECT,
+        parameters: [{ name: "@sessionId", value: sessionId }],
+      })
+      .fetchAll();
+    const raw = resources && resources.length > 0 ? resources[0] : null;
+    return raw ? finalizeChatSessionSummary(raw as Record<string, unknown>) : null;
+  }, 3, "getChatSummaryBySessionId");
+
+  sessionSummaryCache.set(sessionId, {
+    summary,
+    expiresAt: Date.now() + SESSION_DOC_CACHE_TTL_MS,
+  });
+  return summary;
 };
 
 /** Queue a user message while enrichment is incomplete (single slot; latest wins). */
@@ -1622,8 +1834,10 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
         invalidateSessionList(chatDocument.username);
         logger.log(`✅ Successfully deleted session: ${sessionId} (chatId: ${chatId}, partitionKey: ${pkValue})`);
         return;
-      } catch (pkError: any) {
-        if (pkError.code === 404) {
+      } catch (pkError: unknown) {
+        // Cosmos `code` is a NUMERIC HTTP status here; narrow locally.
+        const pkErr = pkError as { code?: number };
+        if (pkErr.code === 404) {
           logger.log(`   ⚠️ Partition key ${pkValue} didn't work (404), trying next...`);
           continue;
         }
@@ -1632,7 +1846,7 @@ export const deleteSessionBySessionId = async (sessionId: string, username: stri
     }
     
     throw new Error(`Could not delete document with any partition key value`);
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error("❌ Failed to delete session by sessionId:", error);
     throw error;
   }

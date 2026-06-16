@@ -89,13 +89,20 @@ export function DashboardModal({ isOpen, onClose, chart, liveInsight }: Dashboar
     .slice(0, 5);
 
   // Get selected dashboard's sheets
-  const selectedDashboardData = editableDashboards.find(d => d.id === selectedDashboard);
+  const selectedDashboardData = useMemo(
+    () => editableDashboards.find(d => d.id === selectedDashboard),
+    [editableDashboards, selectedDashboard]
+  );
   // If no sheets exist, create a default one for backward compatibility
-  const sheets = selectedDashboardData?.sheets && selectedDashboardData.sheets.length > 0 
-    ? selectedDashboardData.sheets 
-    : selectedDashboardData 
-      ? [{ id: 'default', name: 'Overview', charts: selectedDashboardData.charts || [], order: 0 }]
-      : [];
+  const sheets = useMemo(
+    () =>
+      selectedDashboardData?.sheets && selectedDashboardData.sheets.length > 0
+        ? selectedDashboardData.sheets
+        : selectedDashboardData
+          ? [{ id: 'default', name: 'Overview', charts: selectedDashboardData.charts || [], order: 0 }]
+          : [],
+    [selectedDashboardData]
+  );
   
   // Debug logging
   useEffect(() => {

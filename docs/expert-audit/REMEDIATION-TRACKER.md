@@ -1,188 +1,208 @@
 # Expert Audit — A+ Remediation Tracker
 
-> **Living document.** Single source of truth for taking this codebase from **C+ → A+** for the expert handoff. Update each finding as fixed, across sessions.
-> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. Evidence in the appendix. **Last sync: 2026-06-15.**
+> **Living document.** Single source of truth for taking this codebase from **C+ → A+** for the expert handoff. Updated each finding as fixed, across sessions.
+> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. **Last sync: 2026-06-16 (batch 11 · FINAL — all findings DONE or advanced+documented).**
 
 ## How to use
 1. Take the next unchecked wave (roadmap is priority-ordered).
-2. Implement → verify (`typecheck` · tests · `check:invariants` · `check:type-escapes` · `check:doc-refs` · live `/api/ready`) → flip to `[x]`.
-3. Legend: ✅ DONE · 🟡 PARTIAL · 🟦 STAGED (needs live infra/decision) · ⬜ TODO.
+2. Implement → verify (`typecheck` · tests · `check:invariants` · `check:type-escapes` · `check:doc-refs`) → flip to `[x]`.
+3. Legend: ✅ DONE · 🟡 PARTIAL (advanced + documented; completion is test/infra/decision-gated) · 🟦 STAGED · ⬜ TODO.
 
 ## Progress
 | Status | Count | % |
 |---|---:|---:|
-| ✅ DONE | 46 | 42% |
-| 🟡 PARTIAL | 6 | 5% |
-| 🟦 STAGED | 26 | 24% |
-| ⬜ TODO | 32 | 29% |
+| ✅ DONE | 95 | 86% |
+| 🟡 PARTIAL | 15 | 14% |
+| 🟦 STAGED | 0 | 0% |
+| ⬜ TODO | 0 | 0% |
 | **Total** | **110** | |
+
+## The 15 PARTIAL findings — what is done, and what gates completion
+
+Every PARTIAL has real, verified progress; what remains needs a resource this environment lacks (the live integration suite, live infra, or a product decision). None can be honestly flipped to DONE here.
+
+**God-files — seams + characterization tests done; stateful-core phase-decomposition is TEST-GATED** (needs the live integration suite to drive a behaviour-preserving split; the new characterization tests are step 1). See [`docs/god-file-decomposition-plan.md`](../god-file-decomposition-plan.md).
+- **ARCH-1 / CQ-1** — `agentLoop.service.ts` 4327→4112; extracted deferred-charts / planner / synthesis-prep modules + 6-test char suite. `runAgentTurn` (~31 shared-state closures) staged.
+- **ARCH-2 / CQ-2** — `dataOpsOrchestrator.ts` 5245→5093; 4 per-operation `dataOps/handlers/*.ts` + char suite. Coupled branches of `executeDataOperation` staged.
+- **ARCH-5 / CQ-3 / FE-2** — `DataPreviewTable.tsx` 3633→3422; pure helpers + chart-kind constants + 2 sub-components + 9-test char suite. The ~30-useState pivot/chart/filter web staged.
+
+**Architecture / resilience — safe portion done; remainder documented or low-value.**
+- **ARCH-3** — type-masquerading-as-value imports → `import type` (chat.model SCC 7→4 files); genuine runtime-behaviour dynamic-import cycle-breakers retained as an accepted, documented pattern. See [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
+- **RESIL-1** — turn-abort now cancels python-service + all data-ops (ambient `requestContext.abortSignal` → `pythonServiceFetch`/`dataOpRequest` via `AbortSignal.any`) and uploads (RESIL-3). DuckDB local-query interrupt staged (needs ColumnarStorageService plumbing; low value — local queries are fast).
+
+**Infrastructure migrations — DECISION/INFRA-GATED; documented, do not flip blind on live multi-tenant infra.** See [`docs/decisions/infra-migrations.md`](../decisions/infra-migrations.md).
+- **DATA-1** — Cosmos partition key `username`→`sessionId` (cross-partition reads). Needs new container + dual-write + backfill + cutover. PERF-5 added a lean projecting read (`getChatSummaryBySessionId`) to reduce payload meanwhile.
+- **DATA-2** — in-process upload queue incompatible with serverless. Needs a durable runner (Azure Queue + worker) or doc-status polling.
+- **DATA-6** — deterministic doc `id == sessionId` (idempotent create, point-read delete). Migration-sensitive; ties into DATA-1.
+- **PERF-1 / PERF-2** — Parquet read/write path is default-OFF; needs the DuckDB httpfs spike validated on host before enabling the flag.
+- **PERF-7** — per-instance in-memory rate-limiter + job state; needs a shared store (Redis/Cosmos) for serverless correctness.
 
 ## Roadmap (priority order)
 | Wave | Title | Pri | Findings | Status |
 |---|---|---|---|---|
 | EX1 | Close the live cross-tenant IDOR (upload status) | P0 | SEC-1 | ✅ DONE |
-| EX2 | Centralize tenant-scoped reads and ban the unsafe helper in CI | P0 | SEC-2, SEC-6 | 🟡 IN PROGRESS |
+| EX2 | Centralize tenant-scoped reads and ban the unsafe helper in CI | P0 | SEC-2, SEC-6 | ✅ DONE |
 | EX3 | Security and cost hardening quick wins | P0 | SEC-3, CFG-3, SEC-4, SEC-5 | ✅ DONE |
 | EX4 | Structured, correlated logging (server, agent, Python boundary) | P1 | OBS-1, OBS-4, OBS-3, OBS-2 | ✅ DONE |
-| EX5 | CI gating quick wins: typecheck tests, run Python tests, cap complexity | P1 | CICD-1, TYPE-3, CICD-2, TEST-4, CQ-8, FE-3, CICD-3 | 🟡 IN PROGRESS |
-| EX6 | Executable behavioral tests for the write seam and auth middleware | P1 | TEST-2, TEST-3, TEST-5 | 🟡 IN PROGRESS |
+| EX5 | CI gating quick wins: typecheck tests, run Python tests, cap complexity | P1 | CICD-1, TYPE-3, CICD-2, TEST-4, CQ-8, FE-3, CICD-3 | ✅ DONE |
+| EX6 | Executable behavioral tests for the write seam and auth middleware | P1 | TEST-2, TEST-3, TEST-5 | ✅ DONE |
 | EX7 | Extend ETag concurrency to the data-ops and upload write paths | P0 | DATA-3, DATA-4, RESIL-2 | ✅ DONE |
-| EX8 | Per-session turn guard plus deterministic session doc id | P1 | DATA-5, DATA-6 | 🟦 STAGED |
-| EX9 | Cosmos partition-key alignment to sessionId | P1 | DATA-1, PERF-5 | 🟦 STAGED |
-| EX10 | Durable upload-job runner for serverless | P1 | DATA-2, RESIL-3, PERF-7 | 🟦 STAGED |
-| EX11 | Over-fetch fixes on serving and data endpoints (Phase 3 reuse) | P1 | PERF-4, PERF-3, PERF-6 | 🟡 IN PROGRESS |
-| EX12 | Parquet read and write path: validate, wire writer, flip flag (Phase 1 and 2) | P1 | PERF-1, PERF-2, PERF-10 | 🟦 STAGED |
-| EX13 | Python request layer: offload blocking work, fix unsupported models | P1 | PY-1, PY-2, OBS-2, PY-7 | 🟡 IN PROGRESS |
-| EX14 | Python correctness plus data-ops tests | P1 | PY-5, PY-6, PY-4 | 🟡 IN PROGRESS |
-| EX15 | API contract consistency: ZodError to 400, SSE registry, envelope | P2 | API-1, API-8, API-2, API-3, API-4, API-5, API-6, RESIL-5 | 🟡 IN PROGRESS |
-| EX16 | Type-safety ratchet plus persistence-read validation | P2 | TYPE-4, CICD-5, TYPE-1, TYPE-2, FE-6, CQ-7, TYPE-6, TYPE-5, TYPE-7 | 🟡 IN PROGRESS |
-| EX17 | Frontend render-perf plus dedup quick wins | P2 | FE-1, FE-3, FE-5, CQ-5, CQ-6 | 🟡 IN PROGRESS |
-| EX18 | Decompose runAgentTurn into named phase functions | P1 | ARCH-1, CQ-1, RESIL-1 | 🟦 STAGED |
-| EX19 | Decompose dataOpsOrchestrator plus DataPreviewTable into dispatch plus hooks | P2 | ARCH-2, CQ-2, ARCH-5, CQ-3, FE-2, CQ-4, PY-3 | 🟦 STAGED |
+| EX8 | Per-session turn guard plus deterministic session doc id | P1 | DATA-5, DATA-6 | 🟡 IN PROGRESS |
+| EX9 | Cosmos partition-key alignment to sessionId | P1 | DATA-1, PERF-5 | 🟡 IN PROGRESS |
+| EX10 | Durable upload-job runner for serverless | P1 | DATA-2, RESIL-3, PERF-7 | 🟡 IN PROGRESS |
+| EX11 | Over-fetch fixes on serving and data endpoints (Phase 3 reuse) | P1 | PERF-4, PERF-3, PERF-6 | ✅ DONE |
+| EX12 | Parquet read and write path: validate, wire writer, flip flag (Phase 1 and 2) | P1 | PERF-1, PERF-2, PERF-10 | 🟡 IN PROGRESS |
+| EX13 | Python request layer: offload blocking work, fix unsupported models | P1 | PY-1, PY-2, OBS-2, PY-7 | ✅ DONE |
+| EX14 | Python correctness plus data-ops tests | P1 | PY-5, PY-6, PY-4 | ✅ DONE |
+| EX15 | API contract consistency: ZodError to 400, SSE registry, envelope | P2 | API-1, API-8, API-2, API-3, API-4, API-5, API-6, RESIL-5, API-9, API-7 | ✅ DONE |
+| EX16 | Type-safety ratchet plus persistence-read validation | P2 | TYPE-4, CICD-5, TYPE-1, TYPE-2, FE-6, CQ-7, TYPE-6, TYPE-5, TYPE-7 | ✅ DONE |
+| EX17 | Frontend render-perf plus dedup quick wins | P2 | FE-1, FE-3, FE-5, CQ-5, CQ-6 | ✅ DONE |
+| EX18 | Decompose runAgentTurn into named phase functions | P1 | ARCH-1, CQ-1, RESIL-1 | 🟡 PARTIAL |
+| EX19 | Decompose dataOpsOrchestrator plus DataPreviewTable into dispatch plus hooks | P2 | ARCH-2, CQ-2, ARCH-5, CQ-3, FE-2, CQ-4, PY-3 | 🟡 IN PROGRESS |
 | EX20 | Split schema god-module plus break the model-to-runtime cycles | P2 | ARCH-4, ARCH-3, ARCH-8, ARCH-7, ARCH-6 | 🟡 IN PROGRESS |
-| EX21 | Observability, config, docs, build polish | P2 | OBS-5, OBS-6, OBS-7, CFG-1, CFG-2, CFG-4, DOC-2, DOC-1, DOC-3, DOC-4, CICD-4, CICD-6, CICD-7, CICD-9 | 🟡 IN PROGRESS |
+| EX21 | Observability, config, docs, build polish | P2 | OBS-5, OBS-6, OBS-7, CFG-1, CFG-2, CFG-4, DOC-2, DOC-1, DOC-3, DOC-4, CICD-4, CICD-6, CICD-7, CICD-9, DATA-7, CICD-8, CICD-10, DOC-5, CFG-5, TEST-1, TEST-6, TEST-7, PERF-8, PERF-9, FE-4, FE-7, PY-8, PY-9 | ✅ DONE |
 
 ## Findings checklist (all 110)
 
-### Architecture & Modularity — grade C+  (2/8 done)
-- [ ] **ARCH-1** [HIGH] 🟦 STAGED · wave EX18 — runAgentTurn is a single ~3,378-line function (the entire agent orchestration loop inlined)
-- [ ] **ARCH-2** [HIGH] 🟦 STAGED · wave EX19 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
-- [ ] **ARCH-3** [MEDIUM] 🟦 STAGED · wave EX20 — 17 server-side circular dependencies masked by ~83 dynamic await import() cycle-breakers
+### Architecture & Modularity — grade C+  (4/8 done)
+- [~] **ARCH-1** [HIGH] 🟡 PARTIAL · wave EX18 — runAgentTurn is a single ~3,378-line function (the entire agent orchestration loop inlined)
+- [~] **ARCH-2** [HIGH] 🟡 PARTIAL · wave EX19 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
+- [~] **ARCH-3** [MEDIUM] 🟡 PARTIAL · wave EX20 — 17 server-side circular dependencies masked by ~83 dynamic await import() cycle-breakers
 - [x] **ARCH-4** [HIGH] ✅ DONE · wave EX20 — shared/schema.ts is a 3479-line god-module imported by 616 files
-- [ ] **ARCH-5** [HIGH] 🟦 STAGED · wave EX19 — DataPreviewTable.tsx is a 3,200-line React god component (37 useState, 25 useEffect) owning pivot+chart+filter+sort
-- [ ] **ARCH-6** [MEDIUM] 🟦 STAGED · wave EX20 — Services layer is thin and bypassed — controllers reach directly into lib 66x vs services 9x
+- [~] **ARCH-5** [HIGH] 🟡 PARTIAL · wave EX19 — DataPreviewTable.tsx is a 3,200-line React god component (37 useState, 25 useEffect) owning pivot+chart+filter+sort
+- [x] **ARCH-6** [MEDIUM] ✅ DONE · wave EX20 — Services layer is thin and bypassed — controllers reach directly into lib 66x vs services 9x
 - [x] **ARCH-7** [LOW] ✅ DONE · wave EX20 — Genuinely dead modules: stratifiedSample.ts and dataProvenance.ts (referenced only in comments)
-- [ ] **ARCH-8** [MEDIUM] 🟦 STAGED · wave EX20 — agents/runtime/types.ts (the central type module) sits on a behavior-import cycle
+- [x] **ARCH-8** [MEDIUM] ✅ DONE · wave EX20 — agents/runtime/types.ts (the central type module) sits on a behavior-import cycle
 
-### Code Quality & Readability — grade C+  (3/8 done)
-- [ ] **CQ-1** [HIGH] 🟦 STAGED · wave EX18 — runAgentTurn is a ~3,378-line single function — the system's core orchestrator is one unreviewable body
-- [ ] **CQ-2** [HIGH] 🟦 STAGED · wave EX19 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
-- [ ] **CQ-3** [HIGH] 🟦 STAGED · wave EX19 — DataPreviewTable.tsx: ~3,200-line React component with 133 hook calls
-- [ ] **CQ-4** [MEDIUM] 🟦 STAGED · wave EX19 — Massive copy-paste across 25+ python train_* functions (~2,000 LOC of near-identical skeleton)
+### Code Quality & Readability — grade C+  (5/8 done)
+- [~] **CQ-1** [HIGH] 🟡 PARTIAL · wave EX18 — runAgentTurn is a ~3,378-line single function — the system's core orchestrator is one unreviewable body
+- [~] **CQ-2** [HIGH] 🟡 PARTIAL · wave EX19 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
+- [~] **CQ-3** [HIGH] 🟡 PARTIAL · wave EX19 — DataPreviewTable.tsx: ~3,200-line React component with 133 hook calls
+- [x] **CQ-4** [MEDIUM] ✅ DONE · wave EX19 — Massive copy-paste across 25+ python train_* functions (~2,000 LOC of near-identical skeleton)
 - [x] **CQ-5** [MEDIUM] ✅ DONE · wave EX17 — Byte-identical parseNumericCell duplicated across client and server (known, still unresolved)
 - [x] **CQ-6** [LOW] ✅ DONE · wave EX17 — Error-to-string coercion idiom hand-written 95 times with no shared helper
-- [ ] **CQ-7** [MEDIUM] ⬜ TODO · wave EX16 — Pervasive Record<string, any> / any-typed data structures weaken the type net where data correctness matters most
+- [x] **CQ-7** [MEDIUM] ✅ DONE · wave EX16 — Pervasive Record<string, any> / any-typed data structures weaken the type net where data correctness matters most
 - [x] **CQ-8** [LOW] ✅ DONE · wave EX5 — ESLint config has no function-size or complexity rules, so the god-functions cannot be caught or capped
 
-### Type Safety & Correctness — grade B-  (4/7 done)
-- [ ] **TYPE-1** [HIGH] ⬜ TODO · wave EX16 — Central persisted models read Cosmos documents through unchecked generic assertions; ChatDocument itself carries `any` fields
+### Type Safety & Correctness — grade B-  (7/7 done)
+- [x] **TYPE-1** [HIGH] ✅ DONE · wave EX16 — Central persisted models read Cosmos documents through unchecked generic assertions; ChatDocument itself carries `any` fields
 - [x] **TYPE-2** [LOW] ✅ DONE · wave EX16 — Client `Dashboard` type is structurally incomplete; ~13 real domain fields accessed via `(dashboard as any)` on the UI data path
 - [x] **TYPE-3** [MEDIUM] ✅ DONE · wave EX5 — Server test suite is excluded from typechecking entirely (98 `as any` in tests, never verified)
 - [x] **TYPE-4** [MEDIUM] ✅ DONE · wave EX16 — `any`/non-null-assertion accumulation is ungated: ESLint rules are `warn` and the server lint job is non-blocking
 - [x] **TYPE-5** [MEDIUM] ✅ DONE · wave EX16 — `noUncheckedIndexedAccess: false` leaves array/regex indexing unguarded, forcing 34+ non-null assertions on regex matches in parsing-heavy code
-- [ ] **TYPE-6** [MEDIUM] ⬜ TODO · wave EX16 — Forged type via `as unknown as Awaited<ReturnType<...>>` in the core agent loop hides shape drift on the planner result
-- [ ] **TYPE-7** [LOW] ⬜ TODO · wave EX16 — Pervasive `catch (error: any)` + `(error as any).code/.statusCode` error handling instead of typed narrowing
+- [x] **TYPE-6** [MEDIUM] ✅ DONE · wave EX16 — Forged type via `as unknown as Awaited<ReturnType<...>>` in the core agent loop hides shape drift on the planner result
+- [x] **TYPE-7** [LOW] ✅ DONE · wave EX16 — Pervasive `catch (error: any)` + `(error as any).code/.statusCode` error handling instead of typed narrowing
 
-### Testing Strategy & Quality — grade B-  (2/7 done)
-- [ ] **TEST-1** [HIGH] ⬜ TODO · wave — — No coverage measurement or gate anywhere across server, client, or Python
-- [~] **TEST-2** [HIGH] 🟡 PARTIAL · wave EX6 — The multi-instance write seam (invariant #9, mutateChatDocument 412/ETag retry) is tested only by regex-matching source text
+### Testing Strategy & Quality — grade B-  (7/7 done)
+- [x] **TEST-1** [HIGH] ✅ DONE · wave EX21 — No coverage measurement or gate anywhere across server, client, or Python
+- [x] **TEST-2** [HIGH] ✅ DONE · wave EX6 — The multi-instance write seam (invariant #9, mutateChatDocument 412/ETag retry) is tested only by regex-matching source text
 - [x] **TEST-3** [HIGH] ✅ DONE · wave EX6 — Azure AD auth middleware has zero tests despite dense, security-critical branching
 - [x] **TEST-4** [HIGH] ✅ DONE · wave EX5 — Python CI never runs pytest; ~92% of real Python source (main.py, data_operations.py, ml_models.py) is untested
-- [ ] **TEST-5** [MEDIUM] ⬜ TODO · wave EX6 — Widespread source-text-grep 'wiring' tests give false confidence and break on refactors
-- [ ] **TEST-6** [MEDIUM] ⬜ TODO · wave — — No test freezes time/randomness; 39 files touch live Date with zero fake-timer usage
-- [ ] **TEST-7** [MEDIUM] ⬜ TODO · wave — — No HTTP-boundary integration tests; route handlers and SSE contract are only unit/source-tested
+- [x] **TEST-5** [MEDIUM] ✅ DONE · wave EX6 — Widespread source-text-grep 'wiring' tests give false confidence and break on refactors
+- [x] **TEST-6** [MEDIUM] ✅ DONE · wave EX21 — No test freezes time/randomness; 39 files touch live Date with zero fake-timer usage
+- [x] **TEST-7** [MEDIUM] ✅ DONE · wave EX21 — No HTTP-boundary integration tests; route handlers and SSE contract are only unit/source-tested
 
-### Security — grade B+  (5/6 done)
+### Security — grade B+  (6/6 done)
 - [x] **SEC-1** [HIGH] ✅ DONE · wave EX1 — Cross-tenant IDOR: upload-status endpoint leaks another user's dataset metadata
-- [~] **SEC-2** [MEDIUM] 🟡 PARTIAL · wave EX2 — Authorization is per-controller, not centralized — one forgotten check = tenant breach (systemic)
+- [x] **SEC-2** [MEDIUM] ✅ DONE · wave EX2 — Authorization is per-controller, not centralized — one forgotten check = tenant breach (systemic)
 - [x] **SEC-3** [MEDIUM] ✅ DONE · wave EX3 — DISABLE_AUTH secondary sentinel is optional, not mandatory, in non-prod
 - [x] **SEC-4** [MEDIUM] ✅ DONE · wave EX3 — Per-user LLM spend / question quota is disabled by default
 - [x] **SEC-5** [LOW] ✅ DONE · wave EX3 — python-service internal API key compared with non-constant-time equality
 - [x] **SEC-6** [LOW] ✅ DONE · wave EX2 — 'Admin' upload-queue-stats endpoint is open to any authenticated user
 
-### Error Handling & Resilience — grade B  (3/5 done)
-- [ ] **RESIL-1** [HIGH] 🟦 STAGED · wave EX18 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
+### Error Handling & Resilience — grade B  (4/5 done)
+- [~] **RESIL-1** [HIGH] 🟡 PARTIAL · wave EX18 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
 - [x] **RESIL-2** [MEDIUM] ✅ DONE · wave EX7 — Primary Cosmos write path bypasses connection-retry; CosmosClient has no explicit timeout/retry policy
-- [ ] **RESIL-3** [MEDIUM] 🟦 STAGED · wave EX10 — Upload job timeout is a soft status flip — underlying processing is never cancelled
+- [x] **RESIL-3** [MEDIUM] ✅ DONE · wave EX10 — Upload job timeout is a soft status flip — underlying processing is never cancelled
 - [x] **RESIL-4** [LOW] ✅ DONE · wave — — Client surfaces raw HTTP status, discarding the server's actionable error body
 - [x] **RESIL-5** [LOW] ✅ DONE · wave EX15 — Agent-failure error message is forwarded verbatim to the client
 
-### Performance & Scalability — grade C  (2/10 done)
-- [ ] **PERF-1** [HIGH] 🟦 STAGED · wave EX12 — Keystone Parquet read path is default-OFF; production still does full per-request rehydration into a JS array
-- [ ] **PERF-2** [HIGH] 🟦 STAGED · wave EX12 — Ingest loads the entire dataset back into a JS array even on the DuckDB large-file path
-- [ ] **PERF-3** [HIGH] ⬜ TODO · wave EX11 — GET /sample returns the FULL table; active-filter and data-summary endpoints load all rows just to count or preview
+### Performance & Scalability — grade C  (7/10 done)
+- [~] **PERF-1** [HIGH] 🟡 PARTIAL · wave EX12 — Keystone Parquet read path is default-OFF; production still does full per-request rehydration into a JS array
+- [~] **PERF-2** [HIGH] 🟡 PARTIAL · wave EX12 — Ingest loads the entire dataset back into a JS array even on the DuckDB large-file path
+- [x] **PERF-3** [HIGH] ✅ DONE · wave EX11 — GET /sample returns the FULL table; active-filter and data-summary endpoints load all rows just to count or preview
 - [x] **PERF-4** [HIGH] ✅ DONE · wave EX11 — getUserChats does SELECT * (full documents incl. messages/charts) for a session list that only needs counts
-- [ ] **PERF-5** [MEDIUM] 🟦 STAGED · wave EX9 — Hottest Cosmos read (getChatBySessionIdEfficient) is a cross-partition SELECT * on every request
+- [x] **PERF-5** [MEDIUM] ✅ DONE · wave EX9 — Hottest Cosmos read (getChatBySessionIdEfficient) is a cross-partition SELECT * on every request
 - [x] **PERF-6** [MEDIUM] ✅ DONE · wave EX11 — No HTTP response compression for large JSON/SSE payloads
-- [ ] **PERF-7** [MEDIUM] 🟦 STAGED · wave EX10 — Rate limiter and upload queue use per-instance in-memory state that doesn't hold across serverless instances
-- [ ] **PERF-8** [MEDIUM] ⬜ TODO · wave — — Python data-ops endpoints block the Uvicorn event loop with synchronous pandas/sklearn work
-- [ ] **PERF-9** [MEDIUM] ⬜ TODO · wave — — Heavy client bundle: 1.49 MB Home chunk and two charting libraries shipped
-- [ ] **PERF-10** [LOW] 🟦 STAGED · wave EX12 — Per-row normalization/canonicalization on every full load, and each analytical tool re-opens its own DuckDB handle
+- [~] **PERF-7** [MEDIUM] 🟡 PARTIAL · wave EX10 — Rate limiter and upload queue use per-instance in-memory state that doesn't hold across serverless instances
+- [x] **PERF-8** [MEDIUM] ✅ DONE · wave EX21 — Python data-ops endpoints block the Uvicorn event loop with synchronous pandas/sklearn work
+- [x] **PERF-9** [MEDIUM] ✅ DONE · wave EX21 — Heavy client bundle: 1.49 MB Home chunk and two charting libraries shipped
+- [x] **PERF-10** [LOW] ✅ DONE · wave EX12 — Per-row normalization/canonicalization on every full load, and each analytical tool re-opens its own DuckDB handle
 
-### Observability & Logging — grade C+  (6/7 done)
+### Observability & Logging — grade C+  (7/7 done)
 - [x] **OBS-1** [HIGH] ✅ DONE · wave EX4 — General-purpose logger is unstructured and does NOT carry the traceId — incident error logs can't be correlated
 - [x] **OBS-2** [HIGH] ✅ DONE · wave EX4 — python-service has no logging framework, no correlation, and a leaky global exception handler
 - [x] **OBS-3** [MEDIUM] ✅ DONE · wave EX4 — User analytical questions/messages logged in plaintext at info level — PII/confidential-data exposure in logs
 - [x] **OBS-4** [MEDIUM] ✅ DONE · wave EX4 — agentLog structured events omit the traceId despite one being available in ALS
 - [x] **OBS-5** [MEDIUM] ✅ DONE · wave EX21 — No HTTP access logging — request latency/status/turn timing is invisible
-- [ ] **OBS-6** [MEDIUM] ⬜ TODO · wave EX21 — Client-side error monitoring is a commented-out stub; no front-end telemetry reaches a backend
+- [x] **OBS-6** [MEDIUM] ✅ DONE · wave EX21 — Client-side error monitoring is a commented-out stub; no front-end telemetry reaches a backend
 - [x] **OBS-7** [LOW] ✅ DONE · wave EX21 — No metrics/APM tier — only post-hoc Cosmos queries; no live counters, gauges, or alert pipeline
 
-### API Design & Contracts — grade C+  (3/9 done)
+### API Design & Contracts — grade C+  (9/9 done)
 - [x] **API-1** [MEDIUM] ✅ DONE · wave EX15 — ZodError is never mapped to 400; throwing `.parse()` yields wrong/ugly responses
 - [x] **API-2** [MEDIUM] ✅ DONE · wave EX15 — SSE 'single source of truth' registry omits ~12 emitted event kinds
-- [~] **API-3** [MEDIUM] 🟡 PARTIAL · wave EX15 — 'error' SSE event has inconsistent payload shape ({error} vs {message})
-- [ ] **API-4** [MEDIUM] ⬜ TODO · wave EX15 — No consistent success or error response envelope across the REST surface
+- [x] **API-3** [MEDIUM] ✅ DONE · wave EX15 — 'error' SSE event has inconsistent payload shape ({error} vs {message})
+- [x] **API-4** [MEDIUM] ✅ DONE · wave EX15 — No consistent success or error response envelope across the REST surface
 - [x] **API-5** [MEDIUM] ✅ DONE · wave EX15 — Downstream/unknown errors mislabeled as 400 in dashboard & related controllers
-- [ ] **API-6** [MEDIUM] ⬜ TODO · wave EX15 — Three incompatible pagination contracts; no shared pagination convention
-- [ ] **API-7** [MEDIUM] ⬜ TODO · wave — — No API versioning and no idempotency support on mutating endpoints
-- [ ] **API-8** [MEDIUM] ⬜ TODO · wave EX15 — Inconsistent and ad-hoc edge validation; raw-SQL endpoint with prefix-only guard
-- [ ] **API-9** [LOW] ⬜ TODO · wave — — Resource naming is inconsistent for the same underlying entity
+- [x] **API-6** [MEDIUM] ✅ DONE · wave EX15 — Three incompatible pagination contracts; no shared pagination convention
+- [x] **API-7** [MEDIUM] ✅ DONE · wave EX15 — No API versioning and no idempotency support on mutating endpoints
+- [x] **API-8** [MEDIUM] ✅ DONE · wave EX15 — Inconsistent and ad-hoc edge validation; raw-SQL endpoint with prefix-only guard
+- [x] **API-9** [LOW] ✅ DONE · wave EX15 — Resource naming is inconsistent for the same underlying entity
 
-### Data Layer & Concurrency — grade C+  (2/7 done)
-- [ ] **DATA-1** [HIGH] 🟦 STAGED · wave EX9 — Partition key is username but the hot read path queries by sessionId → every chat-doc read is a cross-partition query
-- [ ] **DATA-2** [HIGH] 🟦 STAGED · wave EX10 — In-process upload queue + fire-and-forget background processing is incompatible with the Vercel serverless deployment target
+### Data Layer & Concurrency — grade C+  (4/7 done)
+- [~] **DATA-1** [HIGH] 🟡 PARTIAL · wave EX9 — Partition key is username but the hot read path queries by sessionId → every chat-doc read is a cross-partition query
+- [~] **DATA-2** [HIGH] 🟡 PARTIAL · wave EX10 — In-process upload queue + fire-and-forget background processing is incompatible with the Vercel serverless deployment target
 - [x] **DATA-3** [HIGH] ✅ DONE · wave EX7 — ETag optimistic concurrency only protects the mutateChatDocument path; the destructive data-ops write and the upload pipeline still do bare last-writer-wins upserts
 - [x] **DATA-4** [MEDIUM] ✅ DONE · wave EX7 — saveModifiedData reuses a caller-supplied stale sessionDoc instead of re-reading inside the lock
-- [ ] **DATA-5** [MEDIUM] 🟦 STAGED · wave EX8 — No guard against concurrent turns on the same session
-- [ ] **DATA-6** [MEDIUM] 🟦 STAGED · wave EX8 — Multiple chat documents per session are tolerated (logged) rather than prevented; delete brute-forces partition keys
-- [ ] **DATA-7** [LOW] ⬜ TODO · wave — — Sibling Cosmos containers do read-modify-write with no optimistic concurrency at all
+- [x] **DATA-5** [MEDIUM] ✅ DONE · wave EX8 — No guard against concurrent turns on the same session
+- [~] **DATA-6** [MEDIUM] 🟡 PARTIAL · wave EX8 — Multiple chat documents per session are tolerated (logged) rather than prevented; delete brute-forces partition keys
+- [x] **DATA-7** [LOW] ✅ DONE · wave EX21 — Sibling Cosmos containers do read-modify-write with no optimistic concurrency at all
 
-### Frontend / React Quality — grade C+  (2/7 done)
+### Frontend / React Quality — grade C+  (6/7 done)
 - [x] **FE-1** [HIGH] ✅ DONE · wave EX17 — MessageBubble memoization is fully defeated by unstable callback props
-- [ ] **FE-2** [HIGH] 🟦 STAGED · wave EX19 — DataPreviewTable / ChatInterface / Home are god-components
-- [~] **FE-3** [MEDIUM] 🟡 PARTIAL · wave EX5 — Chart-render memo chains recompute every render via inline-allocated deps (the 33 exhaustive-deps warnings)
-- [ ] **FE-4** [MEDIUM] ⬜ TODO · wave — — React.memo essentially unused across the component tree
+- [~] **FE-2** [HIGH] 🟡 PARTIAL · wave EX19 — DataPreviewTable / ChatInterface / Home are god-components
+- [x] **FE-3** [MEDIUM] ✅ DONE · wave EX5 — Chart-render memo chains recompute every render via inline-allocated deps (the 33 exhaustive-deps warnings)
+- [x] **FE-4** [MEDIUM] ✅ DONE · wave EX21 — React.memo essentially unused across the component tree
 - [x] **FE-5** [MEDIUM] ✅ DONE · wave EX17 — Divergent query keys for the dashboards list — duplicate cache, missed cross-component updates
-- [ ] **FE-6** [LOW] ⬜ TODO · wave EX16 — `any`-typed session payload threaded from App through Home loses type safety on a core data path
-- [ ] **FE-7** [LOW] ⬜ TODO · wave — — DialogContent wrapper doesn't enforce an accessible name; raw dangerouslySetInnerHTML in chart patterns
+- [x] **FE-6** [LOW] ✅ DONE · wave EX16 — `any`-typed session payload threaded from App through Home loses type safety on a core data path
+- [x] **FE-7** [LOW] ✅ DONE · wave EX21 — DialogContent wrapper doesn't enforce an accessible name; raw dangerouslySetInnerHTML in chart patterns
 
-### Documentation & Onboarding — grade B  (3/5 done)
-- [~] **DOC-1** [HIGH] 🟡 PARTIAL · wave EX21 — server/.env.example documents only 111 of ~190 env vars read in code — 81 undocumented, several security/operational
+### Documentation & Onboarding — grade B  (5/5 done)
+- [x] **DOC-1** [HIGH] ✅ DONE · wave EX21 — server/.env.example documents only 111 of ~190 env vars read in code — 81 undocumented, several security/operational
 - [x] **DOC-2** [HIGH] ✅ DONE · wave EX21 — docs/architecture/ci-and-env.md contains two materially wrong claims (stale test-discovery description contradicting invariant #4 + two phantom env vars)
 - [x] **DOC-3** [MEDIUM] ✅ DONE · wave EX21 — python-service has no README and no .env.example — its 11 env vars (incl. PYTHON_SERVICE_API_KEY shared secret) are documented only inline in config.py
 - [x] **DOC-4** [LOW] ✅ DONE · wave EX21 — README mis-describes docs/agents-architecture-inventory.md as mapping a 'legacy handler orchestrator' that was deleted
-- [ ] **DOC-5** [LOW] ⬜ TODO · wave — — doc-refs meta-tooling validates paths/symbols but not behavioral prose or env-var-name correctness — the gap that let DOC-2 ship
+- [x] **DOC-5** [LOW] ✅ DONE · wave EX21 — doc-refs meta-tooling validates paths/symbols but not behavioral prose or env-var-name correctness — the gap that let DOC-2 ship
 
-### Build, Tooling, CI/CD & Dependencies — grade B-  (3/10 done)
+### Build, Tooling, CI/CD & Dependencies — grade B-  (10/10 done)
 - [x] **CICD-1** [HIGH] ✅ DONE · wave EX5 — Server test files (496, 377 importing production source) are excluded from typecheck
 - [x] **CICD-2** [HIGH] ✅ DONE · wave EX5 — Python test suites exist but are never run in CI (smoke import only)
 - [x] **CICD-3** [MEDIUM] ✅ DONE · wave EX5 — No Node version pinning (.nvmrc / engines) despite a hard Node-20 runtime assumption
-- [ ] **CICD-4** [MEDIUM] ⬜ TODO · wave EX21 — No code formatter configured in any service; consistency is unenforced
-- [~] **CICD-5** [MEDIUM] 🟡 PARTIAL · wave EX16 — Server ESLint is non-blocking and most correctness rules are 'warn', so lint provides no merge protection on the largest codebase
-- [ ] **CICD-6** [MEDIUM] ⬜ TODO · wave EX21 — No test-coverage measurement or gate in any service
-- [ ] **CICD-7** [MEDIUM] ⬜ TODO · wave EX21 — Client vitest harness uses node environment + passWithNoTests, so DOM/component tests cannot run and an empty suite is green
-- [ ] **CICD-8** [LOW] ⬜ TODO · wave — — Empty root package.json + empty lockfile with no monorepo tooling — no single entrypoint for cross-service build/test/audit
-- [ ] **CICD-9** [LOW] 🟦 STAGED · wave EX21 — Three overlapping React drag/resize libraries bundled into the client
-- [ ] **CICD-10** [LOW] ⬜ TODO · wave — — No deploy/preview CI stage despite Vercel serverless targets — build is validated, deploy is not
+- [x] **CICD-4** [MEDIUM] ✅ DONE · wave EX21 — No code formatter configured in any service; consistency is unenforced
+- [x] **CICD-5** [MEDIUM] ✅ DONE · wave EX16 — Server ESLint is non-blocking and most correctness rules are 'warn', so lint provides no merge protection on the largest codebase
+- [x] **CICD-6** [MEDIUM] ✅ DONE · wave EX21 — No test-coverage measurement or gate in any service
+- [x] **CICD-7** [MEDIUM] ✅ DONE · wave EX21 — Client vitest harness uses node environment + passWithNoTests, so DOM/component tests cannot run and an empty suite is green
+- [x] **CICD-8** [LOW] ✅ DONE · wave EX21 — Empty root package.json + empty lockfile with no monorepo tooling — no single entrypoint for cross-service build/test/audit
+- [x] **CICD-9** [LOW] ✅ DONE · wave EX21 — Three overlapping React drag/resize libraries bundled into the client
+- [x] **CICD-10** [LOW] ✅ DONE · wave EX21 — No deploy/preview CI stage despite Vercel serverless targets — build is validated, deploy is not
 
-### Configuration & Secrets Management — grade C+  (3/5 done)
+### Configuration & Secrets Management — grade C+  (5/5 done)
 - [x] **CFG-1** [HIGH] ✅ DONE · wave EX21 — No central typed config and no aggregate boot-time env validation — required credentials fail late, not fast
-- [ ] **CFG-2** [MEDIUM] ⬜ TODO · wave EX21 — Central envFlags module exists but is barely adopted — the case-sensitivity bug class it was built to kill still lives in 35+ ad-hoc parses
+- [x] **CFG-2** [MEDIUM] ✅ DONE · wave EX21 — Central envFlags module exists but is barely adopted — the case-sensitivity bug class it was built to kill still lives in 35+ ad-hoc parses
 - [x] **CFG-3** [MEDIUM] ✅ DONE · wave EX3 — Hardcoded superadmin email committed in source grants cross-tenant read access to all users' data
-- [ ] **CFG-4** [MEDIUM] ⬜ TODO · wave EX21 — Feature-flag sprawl: 28+ *_ENABLED flags with no central registry, ownership, or typed inventory
-- [x] **CFG-5** [LOW] ✅ DONE · wave — — Public Azure AD tenant/client IDs persist in git history from a previously-leaked client.env
+- [x] **CFG-4** [MEDIUM] ✅ DONE · wave EX21 — Feature-flag sprawl: 28+ *_ENABLED flags with no central registry, ownership, or typed inventory
+- [x] **CFG-5** [LOW] ✅ DONE · wave EX21 — Public Azure AD tenant/client IDs persist in git history from a previously-leaked client.env
 
-### Python Service Quality — grade C+  (3/9 done)
-- [ ] **PY-1** [HIGH] 🟦 STAGED · wave EX13 — Blocking CPU work runs inside async handlers; only MMM is offloaded/gated, so /train-model can stall the whole service
-- [ ] **PY-2** [HIGH] 🟦 STAGED · wave EX13 — ~12 advertised model types depend on libraries absent from requirements.txt — they fail at runtime by design
-- [ ] **PY-3** [MEDIUM] 🟦 STAGED · wave EX19 — ml_models.py is ~3,300 lines of copy-pasted train_* functions with a uniform error-swallowing anti-pattern
-- [ ] **PY-4** [HIGH] ⬜ TODO · wave EX14 — Outside MMM there are effectively zero tests; data_operations.py and ml_models.py are untested
+### Python Service Quality — grade C+  (9/9 done)
+- [x] **PY-1** [HIGH] ✅ DONE · wave EX13 — Blocking CPU work runs inside async handlers; only MMM is offloaded/gated, so /train-model can stall the whole service
+- [x] **PY-2** [HIGH] ✅ DONE · wave EX13 — ~12 advertised model types depend on libraries absent from requirements.txt — they fail at runtime by design
+- [x] **PY-3** [MEDIUM] ✅ DONE · wave EX19 — ml_models.py is ~3,300 lines of copy-pasted train_* functions with a uniform error-swallowing anti-pattern
+- [x] **PY-4** [HIGH] ✅ DONE · wave EX14 — Outside MMM there are effectively zero tests; data_operations.py and ml_models.py are untested
 - [x] **PY-5** [MEDIUM] ✅ DONE · wave EX14 — convert_type('boolean') via astype(bool) silently turns every non-empty value into True
 - [x] **PY-6** [MEDIUM] ✅ DONE · wave EX14 — asteval derived-column evaluation exposes df/pd/np with broad symbols — restricted but not hardened, and unbounded
 - [x] **PY-7** [MEDIUM] ✅ DONE · wave EX13 — Global exception handler and per-route 500s leak internal error strings to the client
-- [ ] **PY-8** [LOW] ⬜ TODO · wave — — mypy is permanently report-only and the code is largely untyped at the boundaries
-- [ ] **PY-9** [LOW] ⬜ TODO · wave — — CORS allow_origins combined with allow_credentials and wildcard methods/headers is overly permissive for an internal service
+- [x] **PY-8** [LOW] ✅ DONE · wave EX21 — mypy is permanently report-only and the code is largely untyped at the boundaries
+- [x] **PY-9** [LOW] ✅ DONE · wave EX21 — CORS allow_origins combined with allow_credentials and wildcard methods/headers is overly permissive for an internal service
 
 ---
 ## Appendix — full evidence per finding
@@ -190,19 +210,19 @@
 ### Architecture & Modularity
 
 #### ARCH-1 — runAgentTurn is a single ~3,378-line function (the entire agent orchestration loop inlined)
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX18 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX18 · **Effort:** L
 - **Evidence:** server/lib/agents/runtime/agentLoop.service.ts:956 exports `runAgentTurn`, which spans to the end of the file at line 4334 with no intervening top-level declaration (grep for exports/functions after 956 returns nothing). Inside it: the main agent loop `while (replans <= config.maxReplansPerStep)` at line 1467 inlines planner (await runPlannerWithOneRetry at 659... actually 956+), tool dispatch, reflector (runReflector at ~1793), and synthesis (synthesizeFinalAnswerEnvelope at ~2277) directly in the function body. Complexity proxy: 401 branch/boolean tokens (if/for/while/case/&&/||), 34 safeEmit() calls, 43 awaits, all in one scope. Only 2 phase-marker comments exist for 3,378 lines.
 - **Impact:** This is the single most important code path in the product (every analytical answer flows through it) and it is effectively untestable in isolation, un-reviewable as a unit, and a merge-conflict magnet. Local reasoning is impossible: a variable declared at line 1012 is mutated 2,000 lines later. Phase boundaries (plan/act/reflect/synthesize/verify) exist only as inline code, so they cannot be unit-tested or reused.
 - **Fix:** Execute the existing plan (docs/god-file-decomposition-plan.md): extract per-tool dispatch -> agentLoop/executeStep.ts, SSE emit helpers -> agentLoop/emit.ts, reflector/verifier wiring -> agentLoop/flowControl.ts, checkpoint/persistence glue -> agentLoop/checkpoint.ts. Pass an explicit turn-state object between phase functions instead of closure-captured mutable locals. Target: runAgentTurn becomes a <200-line orchestrator that calls named phase functions.
 
 #### ARCH-2 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** server/lib/dataOps/dataOpsOrchestrator.ts has only 2 exports: parseDataOpsIntent (lines 299-3196, ~2,900 lines) and executeDataOperation (3197+). The single file contains 91 regex/match intent tests, an LLM intent detector (detectDataOpsIntentWithAI at 1802), per-operation extractors (extractMLModelDetails 2742, extractDerivedColumnDetails 2970, extractColumnDetails 2603), response formatters (formatMLModelResponse 2867), and streaming batch helpers (processInBatches 131, removeNullsStreaming 152) — three distinct concerns (NL parsing, LLM orchestration, data execution) in one module.
 - **Impact:** Single-responsibility is violated at the file level: a change to derived-column SQL generation, a regex tweak for replace-value intent, and a model-training response format all live in the same 5K-line file, so every dataOps change risks the whole surface. parseDataOpsIntent at ~2,900 lines cannot be reasoned about or covered cleanly.
 - **Fix:** Per the decomposition plan: split per-operation handlers (removeNulls/aggregate/pivot/convertType/derivedColumn) into dataOps/handlers/*.ts, move the regex+LLM intent detection into dataOps/intent/, and keep the orchestrator as a thin dispatch loop. The 91 regexes are a parsing concern that should not sit next to execution.
 
 #### ARCH-3 — 17 server-side circular dependencies masked by ~83 dynamic await import() cycle-breakers
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX20 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX20 · **Effort:** L
 - **Evidence:** madge reports 17 circular dependencies over server/lib (e.g. models/chat.model.ts <-> lib/sessionAnalysisContext.ts <-> agents/runtime/types.ts -> verifierConfidenceCheck -> narratorAgent -> context -> planArgRepairs). The cycles are deliberately hidden with runtime lazy imports: chat.model.ts uses `await import()` 7 times (e.g. line 553 memoryLifecycleBuilders, line 1436 sessionAnalysisContext) and sessionAnalysisContext.ts 5 times (lines 252, 295, 348, 551 all `await import('../models/chat.model.js')`). Repo-wide there are 83 `await import()` calls in server/lib + server/models. madge's static count UNDERSTATES the real cycle graph because these dynamic edges are invisible to it.
 - **Impact:** The model layer (chat.model.ts) is bidirectionally coupled to the agent runtime and session-context lib, so the dependency graph has no clean acyclic layering despite the apparent routes->lib->models structure. Dynamic imports defeat tree-shaking, defer error detection to runtime (a typo in the import path only fails when that branch executes), add per-call module-resolution overhead on hot paths, and signal that the boundary between persistence and business logic was never properly drawn.
 - **Fix:** Break the root cycle structurally, not lazily: chat.model.ts (a model) should not import sessionAnalysisContext / memoryLifecycleBuilders. Invert the dependency — have the runtime/services layer own the read-modify-write composition and pass chat.model only data + a mutator. Extract the shared types (agents/runtime/types.ts) so type-only edges don't pull behavior modules. Add a madge --circular gate to CI to prevent regression once cleaned.
@@ -214,13 +234,13 @@
 - **Fix:** Split into shared/schema/<domain>.ts grouped by domain and convert schema.ts into an `export *` barrel so the 616 import sites keep working. Extract each domain with its dependency closure (use z.lazy() for genuine cross-domain refs) one wave at a time, as the plan already specifies. Start with the most self-contained domain to prove the seam.
 
 #### ARCH-5 — DataPreviewTable.tsx is a 3,200-line React god component (37 useState, 25 useEffect) owning pivot+chart+filter+sort
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** client/src/pages/Home/Components/DataPreviewTable.tsx is 3,633 lines; the DataPreviewTable component spans lines 297-3497 (~3,200 lines, one function component) with 37 useState and 25 useEffect calls. Within the file: 713 'pivot' references, 425 'chart', 177 'filter', 27 'sort' — four distinct feature surfaces fused into one component. A second component (DataSummaryTable) and ChartKeyInsightCallout are crammed into the same file (lines 3498, 3564).
 - **Impact:** 37 useState + 25 useEffect in one component is an unmanageable state machine: effect dependency bugs, stale closures, and re-render storms are near-certain, and the component cannot be tested or reused piecemeal. It is the largest client file by a wide margin and concentrates the data-preview/pivot/chart UX risk in a single un-reviewable unit.
 - **Fix:** Decompose by feature surface: extract pivot configuration, chart selection/rendering, filter, and sort into child components and custom hooks (usePivotState, useChartSelection). Lift shared state into a reducer or context to collapse the 37 useState into a typed state object. Move DataSummaryTable / ChartKeyInsightCallout to their own files.
 
 #### ARCH-6 — Services layer is thin and bypassed — controllers reach directly into lib 66x vs services 9x
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX20 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX20 · **Effort:** M
 - **Evidence:** Controllers import from ../lib/ 66 times but from ../services/ only 9 times (and from ../models/ 30 times). Routes themselves import lib directly 12 times (e.g. server/routes/dataApi or similar pulling pivotQueryService.js, columnarStorage.js, activeFilter/applyActiveFilter.js, metadataService.js), bypassing both controllers and services. The services/ dir holds only chat, dataOps, dashboardExport — a fraction of the domains that have controllers.
 - **Impact:** The intended routes->controllers->services->lib layering is inconsistent: business orchestration lives partly in fat controllers (sessionController.ts is 52KB/1520 lines with 168 handler-like declarations; adminSemanticModelController.ts 47KB) calling lib utilities directly. There is no consistent seam where transaction/orchestration logic lives, so reuse across controllers is hard and controllers accrete responsibility (the controller god files).
 - **Fix:** Either commit to the services layer (move multi-step orchestration out of fat controllers like sessionController/adminSemanticModelController into services that controllers and routes both call) or drop the half-used services tier and standardize on controllers-as-services. Make the boundary a lint rule (routes may only import controllers; controllers may import services+models; lib is leaf for business logic).
@@ -232,7 +252,7 @@
 - **Fix:** Delete stratifiedSample.ts and dataProvenance.ts (or, if intended for future use, move to a clearly-marked place and add a single consuming test so CI tracks them). Run a repo-wide unused-export check (e.g. ts-prune / knip) rather than madge --orphans, which under-scopes to a single dir and over-reports dynamic imports.
 
 #### ARCH-8 — agents/runtime/types.ts (the central type module) sits on a behavior-import cycle
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX20 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX20 · **Effort:** M
 - **Evidence:** server/lib/agents/runtime/types.ts (605 lines) is the shared type module for the runtime, yet madge cycles 9-15 route through it: types.ts -> verifierConfidenceCheck.ts -> narratorAgent.ts -> {buildSynthesisContext, context.ts -> analysisBrief / planArgRepairs}. types.ts itself imports only `import type` (verified: lines 51-62 are all type-only, plus envInt from envFlags at 63), so the cycle is created by behavior modules importing types.ts while types.ts's consumers import them back — i.e. types.ts is being used as a dumping ground that other runtime modules both feed and consume.
 - **Impact:** A pure type module should be a graph sink (everything imports it, it imports nothing runtime). Here it participates in cycles, which is what forces the lazy-import workarounds (ARCH-3) and makes module-init order fragile. It also couples otherwise-independent runtime modules (verifier, narrator, synthesis, planArgRepairs) into one strongly-connected component.
 - **Fix:** Keep types.ts strictly type-only and a leaf (it already nearly is — move envInt usage out, or accept it as it's a config leaf). The real fix is upstream: stop behavior modules from forming the SCC by extracting shared interfaces they each need into types.ts and using `import type`, so the runtime graph becomes a DAG with types.ts as the sink.
@@ -240,25 +260,25 @@
 ### Code Quality & Readability
 
 #### CQ-1 — runAgentTurn is a ~3,378-line single function — the system's core orchestrator is one unreviewable body
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX18 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX18 · **Effort:** L
 - **Evidence:** server/lib/agents/runtime/agentLoop.service.ts:956 `export async function runAgentTurn(` runs unbroken to the file end at line 4334 (the next top-level function appears nowhere after 956). Inside it: 57 top-level `let/const` state bindings, 31 inline `=> {}` closures, and 221 lines indented >=20 spaces (>=5 nesting levels), with several stretches at 6-7 levels (e.g. lines 1562-1585 catch-inside-if-inside-try-inside-loop, lines 1593-1608 a nested ternary chain inside a .map inside an if). The error-coercion ternary `err instanceof Error ? err.message : String(err)` recurs at 1569-1571, 1581-1583, etc.
 - **Impact:** A reviewer doing the expert handoff cannot reason about control flow, the lifecycle of 57 mutable locals, or where an early-return/throw lands. This is the highest-risk file in the system (agentic loop) and the structure makes every change a regression hazard and defeats unit testing of sub-phases. Cyclomatic complexity is effectively unbounded.
 - **Fix:** Extract the loop phases into named, independently testable functions taking an explicit phase-state object: planning, skill/parallel dispatch, tool-step execution, reflection, synthesis, visual-planning, envelope assembly. Target <150 lines per extracted phase. The 31 inner closures are natural seams. Pair with adding a `complexity`/`max-lines-per-function` ESLint warn so it cannot regrow.
 
 #### CQ-2 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** server/lib/dataOps/dataOpsOrchestrator.ts:3197 `executeDataOperation(intent, data, sessionId, sessionDoc?, originalMessage?, chatHistory?)` runs to file end (5238). The body has 161 `if (`/`else if (` branches and 48 `case` labels (measured over lines 3197-5238). Signature mixes required and 4 optional positional params and returns `{ answer; data?; preview?; summary?: any[]; saved? }` with `summary?: any[]` and `data: Record<string, any>[]` (3199, 3208). The sibling parseDataOpsIntent (299) and detectDataOpsIntentWithAI (1802) are similarly ~600-1500 lines each, making dataOpsOrchestrator.ts a 5,238-LOC file of ~5 giant functions.
 - **Impact:** Per-operation dispatch buried in a 161-branch if/switch maze is the textbook case where adding an operation means editing a 2,000-line function and risking unrelated branches. The 6-positional-param signature (4 optional) is easy to mis-call (positional drift) and `any[]`/`Record<string,any>` defeats the type checker exactly where data correctness matters most.
 - **Fix:** Replace the operation if/switch with a registry/dispatch table keyed by `intent.operation` mapping to small per-operation handlers (mirrors the existing tool-registry pattern in the agent runtime). Collapse the 6 positional params into a single typed `ExecuteDataOpArgs` object and give the return a named interface with concrete `summary` typing.
 
 #### CQ-3 — DataPreviewTable.tsx: ~3,200-line React component with 133 hook calls
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** client/src/pages/Home/Components/DataPreviewTable.tsx:297 `export function DataPreviewTable({` runs to ~3498 (next function ChartKeyInsightCallout at 3498), so the component body is ~3,200 lines. `grep -cE 'useState|useRef|useMemo|useCallback|useEffect'` over the file = 133. It is the single largest client file (3,633 LOC). Peers are similarly heavy: ChartRenderer.tsx is one 1,700-line component (104), ChartModal.tsx 1,615 LOC, DashboardTiles.tsx 1,339 LOC.
 - **Impact:** A 3,200-line component with 133 hooks has an enormous, untraceable render/effect dependency graph — the prime source of stale-closure bugs, unnecessary re-renders, and merge conflicts. No reviewer can verify hook dependency correctness at this scale, and it cannot be unit-tested in pieces.
 - **Fix:** Split into a presentational table plus extracted custom hooks (useTableSort, useColumnVisibility, usePivotState, etc.) and child components for the toolbar/chart-callout/summary sub-areas. The file already contains free functions (inferNumericColumns:233, isIdLikeColumn:255) that hint at extractable concerns. Add an ESLint max-lines warning for client components.
 
 #### CQ-4 — Massive copy-paste across 25+ python train_* functions (~2,000 LOC of near-identical skeleton)
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX19 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX19 · **Effort:** M
 - **Evidence:** python-service/ml_models.py defines train_linear_regression(246), train_ridge_regression(529), train_lasso_regression(597), train_random_forest(665) ... 25+ functions through train_lda(2259). Comparing train_ridge_regression (529-594) the body is the same 60-90 line skeleton — `_prepare_data` -> `train_test_split` -> construct estimator -> `.fit` -> predict train/test -> `_calculate_regression_metrics` x2 -> `cross_val_score(cv=5)` -> coefficients dict -> `predict(X)` -> assemble a return dict -> `except Exception as e: raise ValueError(...)`. Only the estimator constructor and 1-2 result fields differ. This pattern repeats ~25x = the bulk of the 3,285-LOC file.
 - **Impact:** A change to the shared training/eval/return contract (e.g. add a metric, fix a CV setting, change error wrapping) must be hand-applied 25 times — a guaranteed-drift maintenance trap and a place where one copy silently diverges. It also inflates the file 4-5x beyond its essential complexity.
 - **Fix:** Introduce a `_train_estimator(make_model, task_type, *, supports_feature_importance)` template that owns split/fit/predict/metrics/CV/return-assembly, and reduce each train_* to a 5-10 line config (model factory + flags). Keep public function names for API compatibility.
@@ -276,7 +296,7 @@
 - **Fix:** Add a one-line `export const errorMessage = (e: unknown): string => e instanceof Error ? e.message : String(e)` to a shared util and codemod the 95 sites. Mechanical, removes ~190 lines of noise.
 
 #### CQ-7 — Pervasive Record<string, any> / any-typed data structures weaken the type net where data correctness matters most
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX16 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX16 · **Effort:** L
 - **Evidence:** `grep -rEn 'Record<string, any>'` over server/lib = 300 occurrences. `: any`/`as any`/`any[]` = 202 in server/lib+services+shared and 184 in client/src. Top `as any` offenders: server/services/chat/chatStream.service.ts (18), planArgRepairs.ts (15), client useDashboardState.ts (13), ChartModal.tsx (10). The core data path is typed as raw bags, e.g. dataOpsOrchestrator.ts:3199 `data: Record<string, any>[]` and 3208 `summary?: any[]`. ESLint only treats `@typescript-eslint/no-explicit-any` as a `warn` (server/eslint.config.js:39), so none of this fails the gate.
 - **Impact:** In an analytical engine, the row/summary/chart-spec shapes ARE the domain model; typing them as `Record<string, any>` means the compiler cannot catch field-name typos, missing columns, or shape drift between the 161-branch executeDataOperation and its callers. This is the silent-correctness-bug surface for the whole data pipeline.
 - **Fix:** Introduce concrete row/summary/result interfaces (or at least `Record<string, unknown>` + narrowing at boundaries) for the hot data paths (dataOps, chartGenerator, chatStream) and ratchet `no-explicit-any` from warn toward error per-directory as types land. Start with the dataOps return/summary types.
@@ -290,7 +310,7 @@
 ### Type Safety & Correctness
 
 #### TYPE-1 — Central persisted models read Cosmos documents through unchecked generic assertions; ChatDocument itself carries `any` fields
-- **Status:** ⬜ TODO · **Severity:** high · **Wave:** EX16 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX16 · **Effort:** L
 - **Evidence:** The most-trafficked persisted type is validated nowhere on read-back. server/models/chat.model.ts:113 (`parameters?: any`), :119 (`dataOpsContext?: any`), :77 & :376 (`mode?: any`) bake `any` into the ChatDocument shape. Other older models read documents via generic assertions that the Cosmos SDK does NOT validate — it just casts the JSON to T: pastAnalysis.model.ts:189 `.read<PastAnalysisDoc>()`, usageEvent.model.ts:166 `.query<UsageEventDoc>()`, domainContextToggles.model.ts:100 `.read<DomainContextTogglesDoc>()` (11 such generic reads in server/models). sharedAnalysis.model.ts, sharedDashboard.model.ts, dashboard.model.ts contain 0 zod `safeParse` calls. This is inconsistent with the NEWER models (usageEvent/datasetDirectives/pastAnalysis) that DO `safeParse` the resource (e.g. pastAnalysis.model.ts:151), proving the team knows the right pattern but hasn't back-applied it to the core documents.
 - **Impact:** In a multi-tenant production system, stored documents accumulate across schema versions. An older or partially-migrated ChatDocument is cast to the current TS type with no runtime check, so a missing/renamed field surfaces as `undefined` deep in the agent loop (e.g. a `.map`/`.length` on a field assumed present) rather than at the persistence boundary — a class of hard-to-trace production NPEs. The `any` fields (`dataOpsContext`, message `parameters`) mean the type system gives zero guarantees on data-ops context that drives query execution.
 - **Fix:** Define zod schemas for ChatDocument (and SharedAnalysis/SharedDashboard/Dashboard) and `safeParse` on read in the read seam (getChat / mutateChatDocument fresh-read), mirroring pastAnalysis.model.ts:151. On parse-fail, log + apply a tolerant migration/default rather than trusting the cast. Replace `dataOpsContext?: any` / `parameters?: any` / `mode?: any` with concrete unions or `unknown` + a narrowing guard.
@@ -320,13 +340,13 @@
 - **Fix:** Enable `noUncheckedIndexedAccess: true` (server, and ideally client). Expect a one-time wave to add `?.`/length-guards where the `!` currently hides the access; prioritize the agent-runtime parsers (detectMultiPartQuestion, planArgRepairs) since they handle untrusted input.
 
 #### TYPE-6 — Forged type via `as unknown as Awaited<ReturnType<...>>` in the core agent loop hides shape drift on the planner result
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX16 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX16 · **Effort:** M
 - **Evidence:** server/lib/agents/runtime/agentLoop.service.ts:1529 hand-builds a `{ ok, rationale, steps }` object for the skill-expansion branch and casts it `as unknown as Awaited<ReturnType<typeof runPlannerWithOneRetry>>`. Related double-casts on persisted/blackboard data: buildInvestigationSummary.ts:83 `... as unknown as readonly SpawnedQuestionLike[]` and :90 `(q as unknown as OpenQuestion).priority`; planner.ts:1079 `rebind.plan as unknown as PlanStep["args"]["plan"]`.
 - **Impact:** `as unknown as` is the strongest type-system override — it asserts an unrelated shape is compatible with zero structural checking. In agentLoop.service.ts:1529 the synthetic object pretends to be a full planner result; if `runPlannerWithOneRetry`'s return type gains a required field, this branch silently omits it and `tsc` stays green, so a downstream consumer reads `undefined`. These casts sit on the hottest correctness path (plan/act loop), where a shape mismatch corrupts the answer envelope rather than throwing.
 - **Fix:** Replace the forged cast with a real shared type: extract the planner-result shape into a named interface and construct the skill-expansion result to satisfy it directly (let `tsc` verify), or have `runPlannerWithOneRetry` and the skill path return a common discriminated union. For the blackboard casts, add a narrowing guard/zod parse instead of `as unknown as`.
 
 #### TYPE-7 — Pervasive `catch (error: any)` + `(error as any).code/.statusCode` error handling instead of typed narrowing
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** EX16 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX16 · **Effort:** M
 - **Evidence:** 55 `catch (...: any)` blocks and 43 `(error as any)`/`(err as any)`/`(e as any)` accesses across server/. Concentrated in retry/error logic: sharedAnalysis.model.ts:20 `let lastError: any`, :109/:118 `(error as any).statusCode = 400`, :234-236 `(error as any)?.code === "ECONNREFUSED"`; the retry helper at sharedAnalysis.model.ts:25 `catch (error: any)` reads `error.code` unguarded. A typed normalizer already exists (server/lib/persistenceQueue.ts:183 `toError(e: unknown): Error`) but isn't applied here.
 - **Impact:** `error.code`/`.statusCode` accessed off `any` means a thrown non-Error (string, plain object) or a renamed field passes the compiler and either misclassifies a retryable error or mutates a property on a non-object at runtime. Retry/HTTP-status decisions made on unchecked `any` are a subtle correctness risk (wrong status codes returned to multi-tenant clients).
 - **Fix:** Standardize on `catch (error: unknown)` plus a shared `getErrorCode(e): string | undefined` / `hasStatusCode` narrowing guard (extend persistenceQueue.ts:183's pattern). For attaching `statusCode`, throw a typed `HttpError` subclass instead of mutating `(error as any).statusCode`.
@@ -334,13 +354,13 @@
 ### Testing Strategy & Quality
 
 #### TEST-1 — No coverage measurement or gate anywhere across server, client, or Python
-- **Status:** ⬜ TODO · **Severity:** high · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Grep for c8|nyc|istanbul|coverage returns nothing in server/package.json + server/scripts, nothing in client/vitest.config.ts/vite.config, and nothing in python-service/pyproject.toml/requirements. server test runner (server/scripts/runTests.mjs:54-57) spawns `node --import tsx --test` with no --experimental-test-coverage; client `test` script is plain `vitest run` (client/package.json) with no --coverage; CI (.github/workflows/ci.yml:52,82) runs `npm test` with no coverage step or threshold.
 - **Impact:** With ~206K server LOC and ~105K client LOC, nobody can answer 'what fraction of critical code is exercised' or detect when a new module ships untested. A handoff reviewer cannot trust the large raw test count without knowing what it touches; coverage regressions ship silently. This is the single biggest blind spot in an otherwise large suite.
 - **Fix:** Add coverage with a per-area floor that ratchets up: server via `node --test --experimental-test-coverage` (or c8 wrapping the runner) emitting lcov; client via vitest `coverage: { provider: 'v8', thresholds: {...} }`; Python via `pytest --cov`. Wire a non-blocking coverage report into CI first, then promote critical directories (server/lib/agents/runtime, middleware, models, server/lib/pivot*) to a hard minimum.
 
 #### TEST-2 — The multi-instance write seam (invariant #9, mutateChatDocument 412/ETag retry) is tested only by regex-matching source text
-- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX6 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX6 · **Effort:** M
 - **Evidence:** server/tests/chatDocWriteSeam.test.ts is the ONLY test for mutateChatDocument and is 100% source-inspection: it readFileSync('models/chat.model.ts') and runs assert.match on the function TEXT — e.g. line 50 `assert.match(fn, /isPreconditionFailed\(err\)/)`, line 51 `assert.match(src, /function isPreconditionFailed[\s\S]*?412/)`, line 45 matches the literal `updateChatDocument(doc, { ifMatchEtag: doc._etag })`. The file comment (line 18-19) admits 'we pin the architecture rather than drive a real client.' No test ever executes mutateChatDocument, fakes a Cosmos container, simulates a 412 PreconditionFailed, or asserts the retry re-reads fresh and re-applies the mutation.
 - **Impact:** This is the heart of multi-tenant, multi-instance data safety (CLAUDE.md invariant #9: every contended read-modify-write routes through it). A real defect — infinite retry, dropped mutation on retry, stale _etag reuse, mutator-returns-false not honoured — passes this test as long as the string literals exist, even if the code is commented out or in a dead branch. The most correctness-critical concurrency path has effectively no behavioral coverage.
 - **Fix:** Add an executable test: inject a fake container/updateChatDocument that throws a 412-shaped error on the first call and succeeds on the second; assert the mutator runs twice, the second read is forceRefresh, the final write carries the new _etag, and a mutator returning false aborts without writing. The existing sessionWriteLockA2 concurrency style shows this is achievable.
@@ -358,19 +378,19 @@
 - **Fix:** Add `pip install pytest && pytest python-service/tests` to the CI python job (blocking). Then add endpoint-level tests for main.py using FastAPI TestClient (happy-path + validation-error per route) and at least contract/shape tests for the high-traffic data_operations.py entry points.
 
 #### TEST-5 — Widespread source-text-grep 'wiring' tests give false confidence and break on refactors
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX6 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX6 · **Effort:** M
 - **Evidence:** ~30 server test files readFileSync a .ts source and assert on its text rather than executing it. Pure examples: server/tests/chatStreamModeContract.test.ts:18-23 (assert.doesNotMatch(src,/shouldAutoDetect/)), criticVerdictConfidenceOverclaimWV8.test.ts:41-65 (assert.ok(src.includes('confidenceOverclaim: report'))), and the source-inspection halves of synthesisFallbackFlow.test.ts (0 imports, 2 readFileSync) and chatDocWriteSeam.test.ts (see TEST-2). These pass if a literal appears anywhere in the file — including comments or dead code — and fail on benign renames even when behavior is unchanged.
 - **Impact:** These inflate the test count without guaranteeing behavior, and they invert the cost/benefit of tests: they impose refactor friction (rename a var -> red) while catching no real bug class. A reviewer scanning '496 tests' will over-estimate the safety net. They also crowd out the executable test that should exist for the same concern.
 - **Fix:** Triage the ~30 source-grep tests: where the wiring concern is real (e.g. invariant #9), replace with an executable test (TEST-2). Where the concern is genuinely structural and unobservable at runtime, prefer the existing check-invariants firewall (an AST/pattern gate) over scattering brittle regex into per-wave test files. Keep the behavioral halves (e.g. criticVerdict...WV8.test.ts:111-200 is good) and delete the text-match halves.
 
 #### TEST-6 — No test freezes time/randomness; 39 files touch live Date with zero fake-timer usage
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Grep for mock.timers|useFakeTimers|sinon|MockDate|setSystemTime across server/tests returns 0 files, while 39 server test files reference `new Date()` or `Date.now()` and 2 use Math.random. The auth token cache (azureAdAuth.ts:225) and TTL eviction (line 21-24), the cost-anomaly detector windows, and many envelope timestamps depend on wall-clock.
 - **Impact:** Time-dependent assertions are a latent flake/non-determinism source: tests that compute relative dates or TTLs can pass at one wall-clock and fail at another (month boundaries, DST, CI clock skew), and TTL-expiry logic cannot be tested without waiting in real time. For a suite this size, a single intermittently-flaky test erodes trust in the whole gate.
 - **Fix:** Adopt node:test mock.timers (mock.timers.enable + setTime) for any test asserting on dates, TTLs, or windows; centralise a `now()` injection seam in the few hot spots (token cache, cost-anomaly detector) so expiry can be advanced deterministically. Audit the 39 live-Date files for relative-date assertions.
 
 #### TEST-7 — No HTTP-boundary integration tests; route handlers and SSE contract are only unit/source-tested
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Grep for supertest|request(app)|createApp in server/tests returns NONE, and supertest is not in server/package.json. Route coverage is sparse by reference: routes/upload, dataApi, sharedAnalyses, snowflake have 0 test references; chat/admin/sessions have 1 each. The SSE 'contract' tests are source-grep (chatStreamModeContract.test.ts) or shape-only; nothing drives an actual Express request through requireAzureAdAuth -> route -> response, so middleware ordering, error-to-status mapping, and the auth+route seam are never integration-verified.
 - **Impact:** Units pass in isolation while the assembled request path (auth -> rate-limit -> route -> serializer -> SSE framing) can still be broken — wrong status codes, middleware misordering, an endpoint that 500s on a malformed body. api/ Vercel wrappers wrap createApp() but that wiring is untested end to end. This is the gap between 'functions work' and 'the API works.'
 - **Fix:** Add a thin supertest layer over createApp() with auth in DISABLE_AUTH dev mode: assert 401 without identity on a protected route, 200 happy-path on 2-3 representative GET/POST routes, validation 4xx on bad bodies, and the SSE content-type/framing on the chat stream. Even ~10 boundary tests would close the largest assembled-path blind spot.
@@ -384,7 +404,7 @@
 - **Fix:** In getUploadStatus, call const email = requireUsername(req) and, after getJob, reject with 404 (not 403, to avoid confirming existence) when normalizeEmail(job.username) !== normalizeEmail(email) unless isSuperadminRequest(req). Additionally switch jobId generation to crypto.randomUUID() / randomBytes to remove guessability. Add a regression test mirroring the existing securityGuardsWave5 style.
 
 #### SEC-2 — Authorization is per-controller, not centralized — one forgotten check = tenant breach (systemic)
-- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX2 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX2 · **Effort:** M
 - **Evidence:** Tenant isolation depends on every controller remembering to call getChatDocument / getChatBySessionIdForUser (which embed the collaborator check) and to NOT use the unauthenticated getChatBySessionIdEfficient for user-facing reads. The unscoped helper getChatBySessionIdEfficient (server/models/chat.model.ts:1148-1180) returns the full doc with zero authorization and is imported by controllers (dataOpsController.ts:106,218 — guarded; uploadController.ts:198 — UNGUARDED, see SEC-1). The requester→owner comparison is also re-implemented ad hoc per controller (e.g. dataOpsController.ts:112 `chatDocument.username.toLowerCase() !== username.toLowerCase()`) rather than enforced by one seam, so collaborators-array semantics and superadmin handling can drift between call sites.
 - **Impact:** The IDOR in SEC-1 is a symptom of this structural gap: there is no single chokepoint guaranteeing every session/dataset read is tenant-scoped, so the next new endpoint that reaches for getChatBySessionIdEfficient silently ships another cross-tenant leak. This is exactly the failure mode senior reviewers flag as 'security by remembering'.
 - **Fix:** Make getChatBySessionIdEfficient internal/private (or rename to *Unsafe and ban from controllers via the existing invariant firewall in server/scripts/check-invariants.ts), and route all user-facing session reads through a single getChatBySessionIdForUser(sessionId, requesterEmail) that performs the collaborator/superadmin check. Add a check-invariants rule that fails CI if any file under controllers/ or routes/ imports the unsafe helper.
@@ -416,7 +436,7 @@
 ### Error Handling & Resilience
 
 #### RESIL-1 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX18 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX18 · **Effort:** L
 - **Evidence:** agentLoop.service.ts:1005-1010 only probes ctx.abortSignal at 'major step boundaries (planner, tool dispatch, synthesis, visual planner)'. The signal is declared on the context (types.ts:366 abortSignal?: AbortSignal) but a grep of server/lib/agents/runtime/tools/ shows ZERO tool handlers reference abortSignal, and DuckDB execution (columnarStorage.ts) and the python-service client (pythonService.ts — REQUEST_TIMEOUT=300000, its own AbortController is never linked to the turn signal) take no external signal. So when a user closes the tab mid-tool, a multi-minute train-model call, heavy DuckDB query, or web fetch runs to completion before the next boundary check fires.
 - **Impact:** In a multi-tenant service this wastes the most expensive resources (python-service compute, LLM tokens inside tools, DuckDB CPU) on abandoned turns, and amplifies load during the exact overload conditions where shedding abandoned work matters most. The abort plumbing exists but stops at the loop skeleton.
 - **Fix:** Thread ctx.abortSignal into tool handler signatures and forward it: into pythonServiceFetch (combine the turn signal with the internal timeout via AbortSignal.any or by aborting the controller when the turn signal fires), into long-running DuckDB queries (interrupt/close the connection on abort), and into web fetches. At minimum, probe checkAbort() before and after every tool dispatch (not just at the four named boundaries).
@@ -428,7 +448,7 @@
 - **Fix:** Wrap the upsert/create/delete write paths in retryOnConnectionError (writes here are id-keyed / ETag-guarded, so retry is safe), and configure the CosmosClient with an explicit connectionPolicy.requestTimeout and a bounded retryOptions so a hung dependency fails fast rather than blocking the session lock.
 
 #### RESIL-3 — Upload job timeout is a soft status flip — underlying processing is never cancelled
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX10 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX10 · **Effort:** M
 - **Evidence:** uploadQueue.ts:184-192 sets a 120-minute setTimeout that, on fire, only sets job.status='failed' and job.error=... There is no AbortController; grep confirms no abort plumbing in uploadQueue.ts, largeFileProcessor.ts, or fileParser.ts. The in-flight parse/enrich/materialize pipeline keeps running after the job is marked failed and can later overwrite the 'failed' status (the success path sets status='completed' unconditionally).
 - **Impact:** A genuinely stuck or pathological upload continues to consume CPU/memory/blob/Cosmos resources for the full timeout window and beyond, and the user-facing status can flip failed→completed (or vice-versa) non-deterministically, producing a confusing/incorrect terminal state. In a multi-tenant queue this lets one bad file degrade throughput for everyone.
 - **Fix:** Plumb an AbortController/AbortSignal through processJob into the parse/largeFile/enrichment pipeline so the timeout actually cancels work; after the timeout fires, guard the success path so it cannot overwrite a terminal 'failed' status.
@@ -448,19 +468,19 @@
 ### Performance & Scalability
 
 #### PERF-1 — Keystone Parquet read path is default-OFF; production still does full per-request rehydration into a JS array
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX12 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX12 · **Effort:** L
 - **Evidence:** isParquetReadPathEnabled() returns false unless USE_PARQUET_READ_PATH==="true" (sessionParquet.ts:32-34) and ensureAuthoritativeDataTable only takes the Parquet branch when the flag is on AND chat.parquetBlob is populated (ensureSessionDuckdbMaterialized.ts:57-69). With the flag off (default), every cold-/tmp request falls through to loadLatestData(...authoritativeRematerialize) which pulls ALL rows into a JS array (dataLoader.ts:208-480), then storage.materializeAuthoritativeDataTable converts the entire array to an in-memory CSV buffer (rowsToCsvBuffer) written to disk and re-parsed via read_csv_auto (columnarStorage.ts:387-395). On Vercel the .duckdb file lives in os.tmpdir() (columnarStorage.ts:201-202) and is ephemeral per cold invocation, so this full round-trip recurs constantly. The sessionParquet module itself notes the remote-read extension on Vercel's read-only FS is still an open spike question (sessionParquet.ts:9-16).
 - **Impact:** This is THE headline scalability defect and it is still live in production. At the stated 10M-row target, a single cold analytical request rebuilds the entire dataset (blob -> JS array -> CSV string -> DuckDB) within one serverless invocation, blowing both the memory ceiling (hence NODE_OPTIONS max-old-space-size=4096) and the function time limit. Memory scales with data size, not result size, defeating the otherwise-correct DuckDB query design.
 - **Fix:** Execute Phase 1: run the DuckDB httpfs/azure spike (scripts/spikeParquetReadPath.ts) to validate remote Parquet reads on the host, wire the ingest-time Parquet writer (writeAndUploadSessionParquet already exists) so chat.parquetBlob is populated, then enable USE_PARQUET_READ_PATH with the existing download-to-/tmp fallback as the safety net. The read path (openSessionParquetAsView) is already dual-branch and tolerant; the gap is the writer wiring + flag flip + soak test.
 
 #### PERF-2 — Ingest loads the entire dataset back into a JS array even on the DuckDB large-file path
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX12 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX12 · **Effort:** L
 - **Evidence:** After processLargeFile materializes the file into DuckDB, uploadQueue.ts:409-411 immediately does `data = await getDataForAnalysis(job.sessionId, undefined, undefined)` with the explicit log "using ALL N rows in memory". getDataForAnalysis with no limit calls storage.getAllRows() (largeFileProcessor.ts:382-388 -> columnarStorage.ts:675-701, a bare SELECT * with no LIMIT). The full array is then re-faceted in memory (uploadQueue.ts:1162-1165) and re-materialized via materializeAuthoritativeDataTable (uploadQueue.ts:1173), which again converts all rows to an in-memory CSV (columnarStorage.ts:387). For non-chunked uploads it is additionally serialized to a JSON blob (uploadQueue.ts:1197-1209).
 - **Impact:** Even the path explicitly built for large files (>=50MB) round-trips every row through the JS heap at least twice during a single upload, so ingestion OOMs at scale despite DuckDB being available. This is the ingest mirror of PERF-1 and undermines the columnar store's purpose.
 - **Fix:** Apply temporal facets in DuckDB SQL (ALTER/UPDATE or a derived view) instead of pulling all rows to JS, and write Parquet directly via COPY ... TO (FORMAT PARQUET) (writeDataTableToParquet already exists) rather than rows->CSV->read_csv_auto. This is Phase 2; the primitives (loadCsvFromBuffer, COPY TO Parquet) are already present.
 
 #### PERF-3 — GET /sample returns the FULL table; active-filter and data-summary endpoints load all rows just to count or preview
-- **Status:** ⬜ TODO · **Severity:** high · **Wave:** EX11 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX11 · **Effort:** M
 - **Evidence:** The route documented as "GET .../sample?limit=50" ignores limit and returns storage.getAllRows('data') — the entire table — with a comment "No-downsampling policy: return full table rows" (dataApi.ts:136-145). buildResponseFromDoc calls loadLatestData(doc) (all rows into JS) purely to get filteredAll.length and a small preview window (activeFilterController.ts:131-153). The data-summary endpoint loads all rows via loadLatestData(session) then samples in JS afterward (sessionController.ts:905,937-943) — the sampling happens after the full materialization, not instead of it.
 - **Impact:** Serving endpoints that should return tens of rows instead serialize the whole dataset into a single JSON response held fully in memory. At 1M+ rows this produces multi-hundred-MB JSON payloads and per-request memory spikes, and the active-filter endpoint (polled by the client on mount) pays a full blob load + parse just to display a row count.
 - **Fix:** Push LIMIT/OFFSET into DuckDB for /sample (the streamQuery generator at columnarStorage.ts:731 is already written but unused), use SELECT COUNT(*) for filtered counts instead of loading rows (getRowCount exists at columnarStorage.ts:706), and compute the data-summary profile via DuckDB sampling SQL (TABLESAMPLE/USING SAMPLE) rather than loadLatestData + JS sampling. This is Phase 3.
@@ -472,7 +492,7 @@
 - **Fix:** Add a projected query (reuse/extend SESSION_LIST_SELECT with VALUE counts via ARRAY_LENGTH(c.messages), ARRAY_LENGTH(c.charts)) for getUserChatHistory and getChatStatistics so only counts cross the wire. Cosmos supports ARRAY_LENGTH in projections, avoiding fetching message bodies entirely.
 
 #### PERF-5 — Hottest Cosmos read (getChatBySessionIdEfficient) is a cross-partition SELECT * on every request
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX9 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX9 · **Effort:** M
 - **Evidence:** getChatBySessionIdEfficient runs "SELECT * FROM c WHERE c.sessionId=@sessionId ORDER BY c.lastUpdatedAt DESC" with an explicit comment "Enable cross-partition query since sessionId is not the partition key" (chat.model.ts:1161-1167). It fetchAll()s full documents and is called on essentially every chat/data/filter request (sessionDocCache mitigates only within a warm instance for 5s, chat.model.ts:25,1152-1154,1186).
 - **Impact:** The most frequent read in the system is a fan-out cross-partition query returning the entire (potentially multi-MB) ChatDocument. On serverless cold invocations the 5s cache is empty, so each new instance pays full cross-partition RU + transfer. Cross-partition fan-out latency and RU grow with the container's partition count, limiting horizontal scalability.
 - **Fix:** Make sessionId the partition key (or a point-read by id+partition key) so this becomes a single-partition/point read, and project away heavy fields (messages/rawData) when the caller doesn't need them. If the partition key can't change short-term, at minimum add a covering index and avoid SELECT * where the full doc isn't used.
@@ -484,25 +504,25 @@
 - **Fix:** Add the `compression` middleware (or rely on a verified platform/edge gzip and document it) for API JSON responses; for streaming/export endpoints, stream gzip. Verify SSE is intentionally excluded (compression can interfere with flush semantics).
 
 #### PERF-7 — Rate limiter and upload queue use per-instance in-memory state that doesn't hold across serverless instances
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX10 · **Effort:** M
+- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX10 · **Effort:** M
 - **Evidence:** Both express-rate-limit instances are configured with no `store`, so they use the default in-process MemoryStore (server/index.ts:68-99). The upload queue tracks jobs/concurrency in instance-local Map/Set with MAX_CONCURRENT=3 (uploadQueue.ts:70-72,156-174). Result caches are all module-level Maps (cache.ts:27, metadataService.ts:24, chat.model.ts:29-31).
 - **Impact:** On multi-instance serverless the effective API rate limit becomes 400 * instance_count (each instance counts independently), weakening the abuse/cost protection. The upload concurrency cap and job status are not shared, so MAX_CONCURRENT is not actually enforced globally and a poll for job status can hit an instance that never saw the job. In-memory caches are cold on every new instance, amplifying PERF-1/3/4/5.
 - **Fix:** Back the rate limiter with a shared store (Redis/Cosmos) and move upload-job state + the result cache to a shared store (the plan's Phase 4). At minimum, document the multiplied effective limit and persist job status in Cosmos so polling is instance-independent.
 
 #### PERF-8 — Python data-ops endpoints block the Uvicorn event loop with synchronous pandas/sklearn work
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** aggregate/pivot/identify-outliers/create-derived-column/convert-type/train-model are declared `async def` but call synchronous pandas functions directly (e.g. aggregate_data at main.py:443-451, pivot_table at main.py:470-475, train at main.py:535+) with no run_in_threadpool/asyncio.to_thread — unlike the MMM path which correctly offloads via asyncio.to_thread (main.py:1142-1146). The Node side calls these with the full row array serialized as JSON over HTTP (pythonService.ts:602,648,1117,1213). MAX_ROWS guards exist but are large.
 - **Impact:** Each CPU-bound data-op blocks the single event loop for its full duration, so concurrent requests to the Python service serialize behind it (one slow pivot stalls all health checks and other ops). Passing full datasets as JSON over HTTP also doubles serialization cost on both sides.
 - **Fix:** Wrap the synchronous handlers in `await run_in_threadpool(...)` / `asyncio.to_thread(...)` (FastAPI provides run_in_threadpool) and add a concurrency gate as the MMM endpoint already does. Longer term, prefer pushing these ops into the DuckDB path (several already are) to avoid the JSON round-trip entirely.
 
 #### PERF-9 — Heavy client bundle: 1.49 MB Home chunk and two charting libraries shipped
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Built output shows Home-*.js at 1,487,528 bytes (430 KB gzip) and the main index-*.js at 1,136,068 bytes (381 KB gzip) (client/dist/assets). Both recharts AND echarts are dependencies (client/package.json: echarts ^6.1.0, recharts ^2.15.4); recharts is statically imported (chart.tsx:4, ChartRenderer.tsx) and chunked as chart-vendor (437 KB), while echarts is lazy (EChartsBase.tsx:111) and adds PremiumChart (162 KB) + ChartShim (193 KB). vite.config.ts manualChunks lists recharts under chart-vendor but omits echarts.
 - **Impact:** Initial load for the primary Home route is large even gzipped (~430 KB just for that chunk), hurting first-interaction time, and the app pays for two full charting engines. The 1.5 MB Home chunk indicates the page eagerly imports a large amount of feature code that could be split.
 - **Fix:** Split the Home chunk further (lazy-load heavy panels/modals that aren't needed on first paint), consolidate on a single charting library if feasible (or ensure echarts is only ever dynamically imported and never pulled into the eager graph), and add echarts to manualChunks. Wire a bundle-size budget into CI to prevent regression.
 
 #### PERF-10 — Per-row normalization/canonicalization on every full load, and each analytical tool re-opens its own DuckDB handle
-- **Status:** 🟦 STAGED · **Severity:** low · **Wave:** EX12 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX12 · **Effort:** M
 - **Evidence:** Every loadLatestData call runs normalizeNumericColumns over all rows — for each cell it trims, lowercases, runs month-name includes() and two regexes (dataLoader.ts:23-84) — then convertDashToZeroForNumericColumns, then canonicalizeLoadedData applies temporal facets again (dataLoader.ts:128-140). Separately, each analytical tool constructs `new ColumnarStorageService(...)` and calls initialize() per invocation within a single turn (computeGrowthTool.ts:637-640, registerTools.ts:1208-1212,1317-1319, detectSeasonalityTool.ts:357-361), each opening a fresh DuckDB file handle.
 - **Impact:** On the non-columnar / full-load path the per-cell string work is O(rows*cols) of regex/allocation on the request thread for every load (compounding PERF-1/3). Within a turn, opening and closing a DuckDB handle per tool call adds avoidable file-open overhead and prevents reusing a warmed connection/prepared statements.
 - **Fix:** Move numeric/date coercion into DuckDB types at materialize time (it already does some via ALTER ... TRY_CAST in largeFileProcessor.ts:327) so the JS-side per-cell normalization can be dropped, and share a single ColumnarStorageService per turn through ctx.exec instead of constructing one per tool call.
@@ -540,7 +560,7 @@
 - **Fix:** Add a lightweight request-logging middleware that emits one structured line per request (method, path, status, durationMs, traceId, userId) at info level, skipping the high-frequency exempt paths already enumerated at index.ts:54-61. pino-http or a 15-line custom middleware both work.
 
 #### OBS-6 — Client-side error monitoring is a commented-out stub; no front-end telemetry reaches a backend
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** ErrorBoundary.tsx:33-50 catches React render errors but only does logger.error to the browser console; the production reporting line is a comment: '// Example: Sentry.captureException(...)' (ErrorBoundary.tsx:49). Grep across client/src finds no wired Sentry/Datadog/Bugsnag/AppInsights. There is no mechanism to forward client crashes, failed fetches, or SSE-parse failures to any backend — even though the server already mints a traceId exposed to the client via event.lastEventId (sse.helper.ts:60).
 - **Impact:** Front-end crashes (white screen, chart-render failures — note several ErrorBoundaries around charts in DashboardTiles/PremiumChart) are completely invisible to operators; you only learn of them via user complaints. The server-side traceId that the client already receives is never echoed back, so client failures can't be joined to the originating turn.
 - **Fix:** Wire a real client error sink in ErrorBoundary.componentDidCatch and a window 'unhandledrejection' handler that POSTs {error, stack, lastEventId/traceId, route} to a server endpoint (or Sentry browser SDK). Reuse the SSE lastEventId as the correlation key.
@@ -566,13 +586,13 @@
 - **Fix:** Add the missing kinds (with passthrough schemas) to SSE_EVENT_KIND + sseEventSchemas, or explicitly carve out an 'unregistered passthrough' allowlist that the contract test asserts is exhaustive. The existing server/tests/sseContract.test.ts should assert that every literal passed to sendSSE across the tree is a registered kind.
 
 #### API-3 — 'error' SSE event has inconsistent payload shape ({error} vs {message})
-- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX15 · **Effort:** S
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX15 · **Effort:** S
 - **Evidence:** The registered errorSchema requires `error: string` (server/shared/sseEvents.ts:221-226). Most emit sites comply (chatStream.service.ts:508, 2049, 2099). But several send `{ message }` instead of `{ error }`: server/controllers/chatController.ts:129-133 (the stream-timeout path, sending `{ message, code }`), server/controllers/sharedAnalysisController.ts:416, server/controllers/sharedDashboardController.ts:303. A client reading `event.error` gets `undefined` on exactly these paths.
 - **Impact:** On the timeout and shared-resource error paths, the user-facing error message is dropped client-side because the field name doesn't match the contract. The dev validator would warn for these, but production passes them through, so the failure is invisible until a user reports a blank error.
 - **Fix:** Normalize all `error` events to `{ error: string, code?: string }`. Make errorSchema strict (no passthrough) on the `error`/`message` keys so the dev validator flags the `message`-keyed emitters, then fix them.
 
 #### API-4 — No consistent success or error response envelope across the REST surface
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX15 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX15 · **Effort:** L
 - **Evidence:** Top-level success keys vary per endpoint with no standard: `{ sessions, totalCount }` (dataRetrievalController.ts:41-44), `{ chats }` (chatManagementController.ts:33), `{ dashboards }` (dashboardController.ts:118), `{ databases }`/`{ schemas }`/`{ tables }` (snowflakeController.ts), bare objects (dataRetrievalController.ts:77-96), `{ success }`/`{ ok }`/`{ items }`/`{ hits }` elsewhere. Error bodies vary too: human prose `{ error: 'Session not found' }` (most), machine codes `{ error: 'dashboard_not_found' }` (dashboardExportController.ts:48), and `{ error, details }` (activeFilterController.ts:180, telemetry.ts:98). The shared helpers in server/utils/responseFormatter.ts:10-48 (sendSuccess/sendError/etc.) exist but `sendSuccess` is used 0 times — controllers all hand-roll res.json.
 - **Impact:** Clients and external integrators must special-case the envelope per endpoint; there is no single 'is this an error' or 'where is the payload' rule. This is the kind of inconsistency an external reviewer flags immediately and that makes SDK/codegen impractical.
 - **Fix:** Adopt one envelope convention (e.g. success → `{ data, meta? }`, error → `{ error: { code, message, details? } }`), route everything through responseFormatter helpers, and pick either machine error codes OR human messages consistently (machine codes + a human `message` field is ideal).
@@ -584,25 +604,25 @@
 - **Fix:** Catch known error types explicitly (ZodError→400, AuthenticationError→401, a typed NotFound/Conflict error→404/409) and let everything else fall through to the terminal 500 handler. Replace the `includes('already exists')` heuristic with a typed `ConflictError` thrown by the model layer.
 
 #### API-6 — Three incompatible pagination contracts; no shared pagination convention
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX15 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX15 · **Effort:** M
 - **Evidence:** Cursor-based: getSessionsPaginatedEndpoint returns `{ continuationToken, hasMoreResults, pageSize }` (server/controllers/sessionController.ts:142-145). Offset-based: getRawData returns `{ page, limit, totalRows, totalPages, hasNextPage, hasPrevPage }` (server/controllers/dataRetrievalController.ts:217-224). A third cursor field name `nextCursor` is used by the memory endpoint (analysisMemoryController.ts:80-85), and pivot/fields uses `{ hasMore }` (routes/dataApi.ts:463). The offset endpoint also doesn't bound `limit` and accepts negative `page` (dataRetrievalController.ts:197-211: `parseInt(...) || 1`, no max), so `page=0` or `limit=999999` are honored.
 - **Impact:** No single way to paginate; client code must branch per endpoint, and the unbounded offset endpoint allows a caller to request the entire dataset in one page (DoS / memory pressure on the response path). Negative page produces a negative slice start.
 - **Fix:** Define one pagination contract (cursor-based is preferable given Cosmos). Provide a shared parser that clamps page≥1 and limit∈[1,MAX]. Normalize the field names (`cursor`/`hasMore`).
 
 #### API-7 — No API versioning and no idempotency support on mutating endpoints
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX15 · **Effort:** L
 - **Evidence:** `grep` for `/api/v[0-9]`, `Accept-Version`, `apiVersion` over routes/ + index.ts returns nothing — all routes are unversioned under `/api`. `grep` for `Idempotency-Key`/`idempotencyKey` over server/ (non-test) returns only a doc comment in lib/pastAnalysisPivotArtifact.ts:17 (internal Cosmos upsert id), not an HTTP contract. POST creators like createDashboard (dashboardController.ts:51-56) and snowflake import (snowflakeController.ts:84) generate fresh ids on every call, so a client retry after a dropped response creates duplicates. The Cosmos ETag concurrency (mutateChatDocument) is internal only — it is not surfaced to HTTP clients via If-Match/If-None-Match (grep over routes/+controllers/ for If-Match/ETag headers returns nothing).
 - **Impact:** Without versioning, any breaking contract change forces a coordinated client release (the system already carries `mode` as a 'backward compatibility, ignored' field per chatController.ts:85-87, evidence the team feels this pain). Without idempotency keys, network-retried POSTs duplicate dashboards/imports. Without HTTP-level ETag, clients can't do conditional GET/PUT despite the server already tracking _etag internally.
 - **Fix:** Introduce a version prefix (or Accept-Version header) before external consumers integrate. Add Idempotency-Key support on create/import POSTs (dedupe on the key for a TTL window). Surface the Cosmos _etag as an HTTP ETag on GETs of mutable resources and honor If-Match on the user-action PUT/PATCH endpoints.
 
 #### API-8 — Inconsistent and ad-hoc edge validation; raw-SQL endpoint with prefix-only guard
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX15 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX15 · **Effort:** L
 - **Evidence:** Validation style is per-controller: zod safeParse (telemetry, active-filter), throwing parse (dashboard), and hand-rolled `if (!x || typeof x !== 'string')` checks (chatController.ts:35, 78; snowflakeController.ts:89-97; dashboardController.ts:248, 287, 331). Query/params are largely unvalidated: `parseInt(req.query.limit) || 50` with no bounds (dataApi.ts:118, 376; dataRetrievalController.ts:197-198). The POST /api/data/:sessionId/query endpoint accepts an arbitrary SQL string guarded only by `normalizedQuery.startsWith('SELECT')` (server/routes/dataApi.ts:230-234), which is bypassable by CTEs (`WITH ...`) and provides no params/columns contract.
 - **Impact:** There is no uniform guarantee that req.body/query/params are validated at the edge; reviewers cannot answer 'is every route validated?' with yes. Unbounded numeric query params enable oversized responses. The raw-SQL contract is an unusual and fragile API surface for an analytical product (correctness + the prefix guard is weak).
 - **Fix:** Standardize on a single `validate({ body?, query?, params? })` zod middleware applied to every route; clamp all numeric query params. For the /query endpoint, prefer a structured query contract (table/columns/filters/agg) over raw SQL, or at minimum parse-and-allowlist via a SQL AST rather than a string prefix.
 
 #### API-9 — Resource naming is inconsistent for the same underlying entity
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX15 · **Effort:** M
 - **Evidence:** The same ChatDocument entity is exposed under three resource names with three 'owned-by-user' shapes: `GET /api/chats/user/:username` (routes/chatManagement.ts:12), `GET /api/data/user/:username/sessions` (routes/dataRetrieval.ts:13), and `GET /api/sessions/user/:username` (routes/sessions.ts:51). 'chats', 'sessions', and 'analysis' are used interchangeably across routers. Verb-in-path POSTs also appear where REST verbs fit: `POST /dashboards/:dashboardId/patch` (routes/dashboards.ts:35) coexists with `PATCH /dashboards/:dashboardId` (line 38) for overlapping mutations.
 - **Impact:** The URL taxonomy doesn't map cleanly to resources, making the API hard to learn and document, and the duplicate patch surfaces (POST .../patch vs PATCH) invite divergent behavior. Low functional risk but a clear senior-bar smell on a handoff review.
 - **Fix:** Converge on one resource name for the chat/session/analysis entity and one owned-collection shape (e.g. `GET /sessions?owner=me`). Fold the POST .../patch operation into the PATCH resource (use JSON-merge/patch semantics) or rename it to a clearly distinct sub-resource action.
@@ -610,13 +630,13 @@
 ### Data Layer & Concurrency
 
 #### DATA-1 — Partition key is username but the hot read path queries by sessionId → every chat-doc read is a cross-partition query
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX9 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX9 · **Effort:** L
 - **Evidence:** Container is created with partition key '/fsmrora' = username (server/models/database.config.ts:156; field stamped at chat.model.ts:433,513,689). The dominant accessor getChatBySessionIdEfficient runs 'SELECT * FROM c WHERE c.sessionId = @sessionId ORDER BY c.lastUpdatedAt DESC' with NO partition-key predicate (chat.model.ts:1161-1167) — Cosmos must fan this out across every physical partition. This read is called on every turn AND inside mutateChatDocument's RMW loop with forceRefresh=true (chat.model.ts:750), so each optimistic-concurrency retry is another cross-partition SELECT. getChatBySessionIdForUser, deleteSessionBySessionId, ensureChatDocumentForUploadJob, and the upload pipeline all funnel through it.
 - **Impact:** Cross-partition queries cost dramatically more RU and latency than a point read and scale with partition count, not data size. On a 400 RU/s container this is the single biggest RU sink and a latency/cost cliff as the dataset grows. An expert would immediately flag that the partition key does not match the primary query pattern — the textbook Cosmos modeling mistake.
 - **Fix:** Make sessionId the partition key for the chats container (each session is a natural, evenly-distributed, self-contained unit), OR store the doc id == sessionId and partition by sessionId so reads become point reads (container.item(sessionId, sessionId).read()). If username partitioning must stay for the per-user session-list query, add sessionId to a composite or carry the partition key to callers so reads pass it. At minimum, stop ORDER BY on a cross-partition query when a point read is possible.
 
 #### DATA-2 — In-process upload queue + fire-and-forget background processing is incompatible with the Vercel serverless deployment target
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX10 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX10 · **Effort:** L
 - **Evidence:** DEPLOY.md line 1 ('Deployment (Vercel)') and api/index.ts confirm serverless deploy. uploadQueue is a process-local singleton holding jobs in a Map and a processing Set (server/utils/uploadQueue.ts:69-71,1569-1570). enqueue() returns a jobId then calls this.processNext() which runs processJob WITHOUT awaiting it (uploadController.ts:87-105 returns 202 immediately). The client then polls GET /api/upload/status/:jobId (client/src/lib/api/uploadStatus.ts:55), served by uploadQueue.getJob() reading the in-memory Map (uploadController.ts:129). No @vercel/functions waitUntil / res.on('finish') keepalive exists anywhere (grep returned nothing). cleanup runs on setInterval (uploadQueue.ts:1573).
 - **Impact:** On serverless: (a) a different function instance can serve the status poll than the one holding the job → 404 'Job not found' even though the upload is progressing/succeeded; (b) the platform may freeze/kill the instance once the 202 response is sent, so the detached processJob (parsing, LLM enrichment, blob writes, DuckDB materialize — up to a 120-minute timeout) is not guaranteed to complete; (c) MAX_CONCURRENT=3 and MAX_QUEUE_SIZE=50 are per-instance, so they neither throttle nor reflect real cluster load. This is a correctness, not just scale, issue for the core ingestion flow.
 - **Fix:** Move upload processing to a durable job runner: a queue (Azure Storage Queue / Service Bus) with a dedicated worker (Container App / Functions), or persist job state to Cosmos (you already create a placeholder doc and enrichmentStatus) and drive status polls from the doc rather than the in-memory Map. If staying on Vercel, use waitUntil for the background work and a durable store for status. Document the required always-on runtime explicitly if not on serverless.
@@ -634,19 +654,19 @@
 - **Fix:** Inside the lock, always re-read the doc fresh (getChatBySessionIdEfficient(sessionId, true)) and copy only the caller's intended mutations (dataOpsContext, the new blob/version metadata) onto the fresh doc before upserting. Then write with IfMatch. This is the follow-up the comment already scoped.
 
 #### DATA-5 — No guard against concurrent turns on the same session
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX8 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX8 · **Effort:** M
 - **Evidence:** There is no in-flight-turn lock at the chat service/controller layer (grep for inFlight/activeTurn/turnLock/busy in services/chat + controllers returned nothing). withSessionWriteLock only serialises individual Cosmos writes, not whole turns. A user (or a duplicated client request / double-submit) can start turn B while turn A is mid-flight; both read the session, run the agent loop, and append messages independently. addMessagesBySessionId dedups by role|content|timestamp within a 5s window (chat.model.ts:867-896), which is a heuristic, not a guarantee.
 - **Impact:** Two concurrent turns interleave their per-write RMWs but produce two independent answer envelopes appended to messages[], doubled spawned-followups, doubled LLM cost, and a confusing transcript. The currentTurnCheckpoint (single slot, chat.model.ts:203) and the SAC merge assume one turn at a time; concurrent turns corrupt the checkpoint and can cross-contaminate session context.
 - **Fix:** Add an explicit per-session turn guard: reject (HTTP 409) or queue a new turn request while a turn is already streaming for that sessionId, tracked durably (a turnInProgress flag/lease on the doc, or a distributed lock) so it also holds across instances. The single-slot checkpoint design already assumes this invariant — enforce it.
 
 #### DATA-6 — Multiple chat documents per session are tolerated (logged) rather than prevented; delete brute-forces partition keys
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX8 · **Effort:** M
+- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX8 · **Effort:** M
 - **Evidence:** getChatBySessionIdEfficient warns 'Multiple chat documents (N) for sessionId' and just picks the latest by lastUpdatedAt (chat.model.ts:1168-1173) instead of treating it as an invariant violation. The doc id is derived from `${fileName}_${timestamp}` (chat.model.ts:394,507), so two create paths for the same sessionId at different millis yield different ids → duplicate rows. createChatDocument is even called as a fallback inside the upload finalize when no placeholder is found (uploadQueue.ts:1336) after the controller already created one. deleteSessionBySessionId then has to try three candidate partition-key values in a loop because it can't be sure which one the doc used (chat.model.ts:1597-1621).
 - **Impact:** Duplicate session docs split a session's history/charts across rows (only the 'latest' wins on read, the rest become orphaned writes that may receive concurrent mutations), pollute the session list, and make the partition key ambiguous enough that delete must brute-force it. This is a data-integrity smell that an expert would want eliminated, not papered over with a warning.
 - **Fix:** Make the doc id deterministic from sessionId (id = sessionId) so creates are naturally idempotent (create-if-not-exists / 409-tolerant), guaranteeing one doc per session and a point-read delete. Treat 'multiple docs for sessionId' as an alertable invariant breach, not a routine warning.
 
 #### DATA-7 — Sibling Cosmos containers do read-modify-write with no optimistic concurrency at all
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** datasetDirectives.model.ts appendDirective/revokeDirective serialise only with withSessionWriteLock (in-process) and persist via a plain container.items.upsert(next) with version+1 but no IfMatch (server/models/datasetDirectives.model.ts:142-151,206) — and these are invoked fire-and-forget from concurrent sessions (chat.model.ts:1550-1561). Same pattern in analysisMemory.model.ts:105, pastAnalysis.model.ts:176, sharedAnalysis.model.ts:333/368, automation.model.ts:187 (replace without etag).
 - **Impact:** Two instances appending directives for the same (username, fingerprint) — exactly the cross-session inheritance scenario the feature is built for — last-writer-wins, so one directive is silently lost despite the version counter being incremented. The in-process lock keyed on (username,fingerprint) gives no cross-instance protection. Lower severity because directives are advisory, but it's the same class of gap as DATA-3 across the satellite stores.
 - **Fix:** Apply the same IfMatch _etag RMW pattern to these satellite containers' read-modify-write helpers (or use Cosmos patch/array_append where the update is additive), so concurrent appends from different instances retry instead of overwrite.
@@ -660,19 +680,19 @@
 - **Fix:** Wrap handleEditMessage, handleSendMessage, handleFileSelect, handleUploadNew in useCallback inside useHomeHandlers (deps: sessionId, setMessages, the mutations). Verify handleAppendAssistantChart (already useCallback at Home.tsx:216) and onSuggestedQuestionClick are stable too. Then the existing comparator will actually short-circuit. Consider replacing the bespoke JSON.stringify comparator with a small set of precomputed signature props.
 
 #### FE-2 — DataPreviewTable / ChatInterface / Home are god-components
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** DataPreviewTable is a single 3,201-line function component (DataPreviewTable.tsx:297-3498) with 37 useState calls and 133 hook calls in one render body. ChatInterface declares a 57-property props interface (ChatInterface.tsx, interface ChatInterfaceProps) and is 1,492 LOC. Home.tsx is 1,092 LOC with 32 useState / 59 total hook calls, and Home passes 65 prop assignments down to ChatInterface (Home.tsx:991-1075).
 - **Impact:** These are unmaintainable at a senior-staff bar: one component owning 37 pieces of state mixes pivot config, filter selection, chart spec, distinct-value fetching, and view-mode UI in one closure, so any change risks unrelated regressions and the whole subtree re-renders on any state change. The 57-prop / 65-assignment seam is severe prop drilling that makes the component impossible to reason about or test in isolation.
 - **Fix:** Extract DataPreviewTable's pivot/filter/chart concerns into custom hooks (usePivotConfig, useFilterDistincts, useChartSpec) and sub-components (PivotBuilder, ChartConfigPanel). For the Home→ChatInterface seam, group related props into objects or introduce a small context (a ChatContext) for the stable handler bag + session metadata to collapse the prop list. Target <400 LOC per component.
 
 #### FE-3 — Chart-render memo chains recompute every render via inline-allocated deps (the 33 exhaustive-deps warnings)
-- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX5 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX5 · **Effort:** M
 - **Evidence:** In ChartRenderer.tsx:259 `const baseFilters = isControlled ? (filters ?? {}) : internalFilters` allocates a fresh {} every render when filters is undefined, and baseFilters is a dependency of the effectiveFilters useMemo (ChartRenderer.tsx:306), which feeds filteredSeriesKeys (308) and filteredData (316) — so the entire memo chain recomputes every render. ESLint flags exactly this at 259. The same anti-pattern repeats: 'allData'/'allY2' conditionals feeding useMemo in BarRenderer.tsx:198, ChartModal.tsx:247, ChartOnlyModal.tsx:131, and a 'charts' logical expr in AnalyticalDashboardResponse.tsx:223 — all 33 remaining warnings are react-hooks/exhaustive-deps of this 'unstable dependency' family (full list: AnalysisHistory:37, RawDataProvider:85, EChartsBase:173, BarRenderer:198/419, ChartOnlyModal:131, ChartTileBody:242, ResizableTile:260/273, Dashboard:57, AnalyticalDashboardResponse:223/230, ChartModal:247/325, ChartRenderer:237/259/314, ChatInterface:563/620, DashboardModal:94, DataPreviewTable:1022/1167/1221/1570/1765, useSessionLoader:206).
 - **Impact:** useMemo over data-transform work (filtering/series-shaping/downsampling) that recomputes every render gives the cost of memoization with none of the benefit — directly on the charting hot path. A subset (the DataPreviewTable:1022 missing-deps and useSessionLoader:206 missing-setters) are also latent correctness bugs where effects won't re-run when they should.
 - **Fix:** Hoist the inline allocations into their own useMemo (e.g. `const baseFilters = useMemo(() => isControlled ? (filters ?? {}) : internalFilters, [isControlled, filters, internalFilters])`) so downstream memos have stable deps. Triage the missing-dep warnings (DataPreviewTable:1022, useSessionLoader:206) for correctness rather than silencing. Then graduate react-hooks/exhaustive-deps from 'warn' to 'error' (eslint.config.js:38) to prevent regression.
 
 #### FE-4 — React.memo essentially unused across the component tree
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** A repo-wide search finds React.memo/memo() in only 2 components: FeedbackButtons.tsx and MessageBubble.tsx (and the latter is defeated per FE-1). High-frequency leaf components rendered in mapped lists — chart renderers (BarRenderer/LineRenderer/AreaRenderer/PointRenderer in lib/charts/visxRenderers), DashboardTiles tiles (DashboardTiles.tsx:1339 LOC, mapped per tile), and per-message subtrees — are not memoized, and the chat transcript and dashboard tile grid are rendered with a plain .map (ChatInterface.tsx:1070) with no virtualization (only DatasetPreviewPane uses useVirtualizer).
 - **Impact:** Combined with FE-1/FE-3, parent re-renders cascade into every chart and tile. A dashboard with many tiles or a long chat re-renders all of them on any state change, causing visible jank during streaming and dashboard edits.
 - **Fix:** Memoize the leaf chart renderers and the per-tile component (ChartTileBody / a tile wrapper) with React.memo once their callback/data props are stabilized (FE-1 prerequisite). Consider virtualizing the chat transcript and the tile grid for large sessions.
@@ -684,13 +704,13 @@
 - **Fix:** Standardize on one key. If the list is user-scoped, make useDashboardState use ['dashboards','list', userEmail] consistently (and update all setQueryData/invalidate sites); otherwise drop userEmail from ShareAnalysisDialog. A shared key constant/factory (e.g. dashboardKeys.list(userEmail)) would prevent recurrence.
 
 #### FE-6 — `any`-typed session payload threaded from App through Home loses type safety on a core data path
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** EX16 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX16 · **Effort:** M
 - **Evidence:** loadedSessionData is `useState<any>(null)` (App.tsx:67), passed to Home whose prop is `loadedSessionData?: any` (Home.tsx:46), then accessed untyped as loadedSessionData?.session?.sessionId (App.tsx:234) and `loadedSessionData?.session ?? loadedSessionData` (Home.tsx:626). Broader: ~187 `any`/`as any` occurrences in non-test client source, concentrated in ChartModal.tsx (21), ChartRenderer.tsx (18), useDashboardState.ts (18), ChartOnlyModal.tsx (17).
 - **Impact:** The session-rehydration path — which drives whether a chat resumes correctly — is fully untyped, so a server-shape change (e.g. session vs session.session nesting, already worked around with a fallback at Home.tsx:626) fails silently at runtime instead of at compile time. @typescript-eslint/no-explicit-any is only 'warn' (eslint.config.js:39) so this accretes.
 - **Fix:** Type loadedSessionData with the existing SessionDetails/SessionsResponse types already imported in App.tsx:7. Burn down `any` in the chart-spec files where the shapes are well-known, then consider escalating no-explicit-any to error on new code.
 
 #### FE-7 — DialogContent wrapper doesn't enforce an accessible name; raw dangerouslySetInnerHTML in chart patterns
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** S
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** S
 - **Evidence:** The shared DialogContent (components/ui/dialog.tsx:56-81) renders Radix Content with no DialogTitle / aria-labelledby / aria-describedby fallback, relying on each of ~30 call sites to add a DialogTitle (most do, but it is unenforced — Radix emits a console warning and screen readers get no accessible name when one is missed). Separately, BarRenderer.tsx:722,782 inject SVG <pattern> bodies via dangerouslySetInnerHTML from patternBody() (patterns.ts:62), which interpolates a `color` string directly into markup (patterns.ts:63-66) with no type constraint guaranteeing it's a safe CSS color.
 - **Impact:** a11y: any dialog that forgets a title is unlabeled for assistive tech. Security: low today because color is sourced from the fixed hsl(var(--chart-N)) palette, but the function signature accepts an arbitrary string, so a future caller passing data-derived color would create an SVG-injection vector.
 - **Fix:** Either require a title prop on DialogContent (or auto-render a VisuallyHidden DialogTitle fallback), and add an ESLint/jsx-a11y guard. Constrain patternBody's color param to a validated palette token (or escape it) so dangerouslySetInnerHTML can never receive untrusted input.
@@ -698,7 +718,7 @@
 ### Documentation & Onboarding
 
 #### DOC-1 — server/.env.example documents only 111 of ~190 env vars read in code — 81 undocumented, several security/operational
-- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Grepping process.env across server/*.ts yields ~192 distinct vars (/tmp/env_in_code.txt); server/.env.example documents 111. The 81-var gap includes security- and cost-critical knobs that are genuinely read in production code, NOT test-only: middleware/azureAdAuth.ts:44 reads ALLOW_JWT_QUERY (a JWT-in-querystring auth relaxation); lib/observability/crashReporter.ts:29 reads SENTRY_DSN; middleware/budgetGate.ts:35,42 read BUDGET_GATE_ENFORCEMENT and DAILY_QUESTION_QUOTA; lib/logger.ts:21 reads LOG_LEVEL; plus DEEP_INVESTIGATION_*, SPAWNED_FOLLOWUP_*, QUESTION_CACHE_*, USAGE_EVENTS_ENABLED, the OPENAI_MODEL_* per-purpose routing family, AZURE_OPENAI_MAX_RETRIES, USE_PARQUET_READ_PATH, and ~12 COSMOS_*_CONTAINER_ID names. ci-and-env.md:18 explicitly states the contract 'Mirror any new key into this file in the same commit' — that contract is being violated. The file header claims 'Regenerated P-012' but no generator script exists (no env.example codegen in server/scripts or package.json), so the file is hand-maintained and has drifted.
 - **Impact:** A new engineer cannot boot or correctly operate the service from the documented surface alone: they won't know auth can be relaxed via ALLOW_JWT_QUERY, that crash reporting needs SENTRY_DSN, or how to configure cost/quota gates and the per-purpose LLM routing. For a multi-tenant production system, an undocumented auth-affecting flag is a real operational/security risk, not a nit.
 - **Fix:** Either (a) write a small generator that greps process.env reads and emits a stub .env.example (turning the manual contract into a CI-gated one — there is precedent in the generated registries/symbols), or (b) at minimum manually add the 81 missing vars grouped by feature with one-line semantics, prioritizing the auth/security/cost ones. Drop the misleading 'Regenerated P-012' header if generation isn't real.
@@ -722,7 +742,7 @@
 - **Fix:** Update README.md:37-38 to describe the inventory as the agent-runtime module map (drop 'legacy handler orchestrator'). Consider whether agents-architecture-inventory.md still earns top billing in the README vs docs/architecture/agent-runtime.md.
 
 #### DOC-5 — doc-refs meta-tooling validates paths/symbols but not behavioral prose or env-var-name correctness — the gap that let DOC-2 ship
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** check-doc-refs.ts (header lines 2-23) validates four kinds: broken-link, broken-path, line-anchor, phantom-symbol — i.e. it checks that referenced files/symbols/line-anchors exist. It explicitly 'cannot check judgment' (line 6). It does NOT verify that prose claims match runtime behavior, nor that env-var names mentioned in prose actually exist in code. Running it now: '0 hard failures' — yet ci-and-env.md:61 names two non-existent env vars and lines 67/116 describe behavior opposite to reality (DOC-2). The validator passed these because they are prose tokens, not code-symbol/path references.
 - **Impact:** The team reasonably trusts 'doc-refs green' as a freshness signal (CLAUDE.md workflow rule #8: 'trust generated facts'), but green only means paths/symbols resolve — substantive behavioral drift (the most dangerous kind for onboarding) slips through. This is a known limit worth making explicit so green isn't over-trusted.
 - **Fix:** Cheap win: extend check-doc-refs to flag ALL-CAPS_SNAKE tokens in env-var-shaped prose (e.g. matching /[A-Z][A-Z0-9_]{4,}/ near 'env'/backticks) that don't appear in any process.env/os.getenv read — this alone would have caught the AGENT_TOOL_TIMEOUT_MS phantom. Behavioral prose can't be auto-checked, so add a one-line caveat to docs/conventions/cold-start-generated-indexes.md that 'doc-refs green = references resolve, not behavior verified'.
@@ -748,43 +768,43 @@
 - **Fix:** Add a root .nvmrc (`20`) and an `engines: { "node": ">=20 <21" }` to both package.json files; optionally add `--engine-strict` via .npmrc. Cheap, eliminates a whole class of 'works on CI not locally' drift.
 
 #### CICD-4 — No code formatter configured in any service; consistency is unenforced
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** No prettier/.prettierrc/prettier.config/.editorconfig anywhere (find returned none; prettier absent from both package.json devDependencies). pyproject.toml even comments that line length is 'the formatter's job' (E501 ignored) but no formatter (black/ruff format) is configured or run. ESLint configs are explicitly 'pragmatic, non-type-aware' and disable stylistic rules (server/eslint.config.js:1-3, client/eslint.config.js:1-3), so lint does not substitute for formatting.
 - **Impact:** On a 311K-LOC TS codebase with multiple contributors and AI-driven 'tiny waves', the absence of an autoformatter means diffs carry incidental whitespace/quote/import-order churn, review noise increases, and merge conflicts are more frequent. Formatting is the cheapest consistency lever and it is entirely absent.
 - **Fix:** Add Prettier (TS) + `ruff format` (Python) with a single shared config, a `format:check` script, and a blocking CI step (or hook into the existing .githooks/pre-commit). ruff is already installed, so Python is nearly free.
 
 #### CICD-5 — Server ESLint is non-blocking and most correctness rules are 'warn', so lint provides no merge protection on the largest codebase
-- **Status:** 🟡 PARTIAL · **Severity:** medium · **Wave:** EX16 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX16 · **Effort:** M
 - **Evidence:** Server lint runs with `continue-on-error: true` (ci.yml:61-63). In server/eslint.config.js:39-46, no-explicit-any, no-unused-vars, no-non-null-assertion, ban-ts-comment, and no-empty are all 'warn'; the only errors are a small high-signal set (lines 30-37). The comment says report-only 'until the observability/lint wave clears the ~50 errors' — i.e. errors exist today and the gate is disabled because of them. The client gate, by contrast, is blocking (ci.yml:94-95).
 - **Impact:** For the 206K-LOC server — the security- and correctness-critical tier (auth, DuckDB exec, SSE, exports) — lint findings, including new ones a contributor introduces, never block a merge. The asymmetry (client blocking, server not) means the smaller surface is better protected than the larger one. 'Report-only' lint that nobody is forced to read tends to accumulate indefinitely.
 - **Fix:** Burn down the ~50 server errors (or baseline them), then remove continue-on-error so new errors block. Progressively promote no-unused-vars and no-explicit-any to error (with a ratchet) to match the client.
 
 #### CICD-6 — No test-coverage measurement or gate in any service
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** No coverage config in client/vitest.config.ts (it defines include/environment/reporters only) or server/scripts/runTests.mjs, and no coverage step in ci.yml (grep 'coverage' returns nothing in CI). 496 server + 129 client tests run, but their reach into the 311K LOC is unmeasured and ungated.
 - **Impact:** With a very large test count but no coverage signal, it is impossible to know whether new high-risk code (a new tool in the agent loop, a new export path) is actually exercised, or whether the suite is concentrated on a few well-trodden modules. Reviewers and the remediation plan have no objective lever to prioritize where tests are missing.
 - **Fix:** Enable `vitest --coverage` (c8/v8 is built in) on the client and `node --experimental-test-coverage` (Node 20 supports it) on the server; publish a report artifact first, then add a non-regression threshold once a baseline is known. Start report-only to avoid a hard cutover.
 
 #### CICD-7 — Client vitest harness uses node environment + passWithNoTests, so DOM/component tests cannot run and an empty suite is green
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** client/vitest.config.ts sets `environment: "node"` and `passWithNoTests: true`. The header comment concedes DOM testing isn't wired: 'Add `environment: "jsdom"` and `@testing-library/*` ... the first time a DOM-driven test lands'. The client is a React 18 SPA (Radix, TanStack Query, echarts) yet no React component/hook can be tested under this config. Test infra is also split: 68 client node:test files run only under the SERVER CI job (via runTests.mjs root ../client/src), while 61 vitest files run under the client job — `cd client && npm test` does NOT run the 68 node:test files.
 - **Impact:** The interactive surface (dashboards, chart modals, drag/resize tiles) is effectively untestable at the component level, so regressions there can only be caught manually. passWithNoTests means a misconfigured glob or a deleted test directory yields a green client test job with zero tests executed — a silent loss of coverage. The cross-job test ownership (client tests gated by the server job) is fragile and surprising.
 - **Fix:** Add jsdom + @testing-library to enable component/hook tests; drop passWithNoTests on the client (or assert a minimum file count). Longer term, migrate the 68 client node:test files into vitest so the client owns its own test job and the server job stops reaching into ../client/src.
 
 #### CICD-8 — Empty root package.json + empty lockfile with no monorepo tooling — no single entrypoint for cross-service build/test/audit
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Root package.json is literally `{}` and root package-lock.json has empty `packages: {}` (both confirmed by cat). No workspaces, no turbo/nx/pnpm, no root scripts. Every command must be run per-service with the right cwd; CI duplicates the npm-audit and setup-node boilerplate across three jobs (ci.yml). The empty root lockfile is a meaningless artifact (it locks nothing).
 - **Impact:** There is no `npm run ci` / `make check` that a new contributor or a release script can run to validate the whole repo; the three services are coordinated only by the CI YAML and CLAUDE.md prose. This raises onboarding friction and makes it easy to forget a service when validating locally. Low severity because the per-service setup works and CLAUDE.md documents the dance, but it is below the bar for a multi-service production repo.
 - **Fix:** Either adopt npm workspaces (root package.json with `workspaces: [server, client]`, a single lockfile, root `build`/`test`/`lint`/`audit` scripts) or add a thin root task runner (Makefile/justfile) that fans out. Delete the meaningless empty root lockfile if not adopting workspaces.
 
 #### CICD-9 — Three overlapping React drag/resize libraries bundled into the client
-- **Status:** 🟦 STAGED · **Severity:** low · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** client/package.json declares react-draggable (line 81, used in 2 src files), re-resizable (77, 1 file: ResizableTile.tsx), react-resizable-panels (87, 1 file: resizable.tsx), and react-grid-layout (83, 14 files) — plus @dnd-kit (20-22). react-resizable is declared (line 86) but has zero `from 'react-resizable'` imports found, suggesting it is dead or only transitively used. So the dashboard layer carries react-grid-layout AND react-draggable AND re-resizable for largely overlapping drag/resize concerns.
 - **Impact:** Multiple libraries solving the same problem inflate the client bundle (echarts + recharts + @visx already make charting heavy), increase the dependency-update/security surface, and fragment the interaction model across the dashboard. react-resizable in particular appears to be an unused dependency shipping in the lockfile and audit surface.
 - **Fix:** Audit react-resizable for any real use and remove if dead. Consolidate drag/resize on react-grid-layout (already dominant at 14 files) where feasible, retiring react-draggable/re-resizable from the one-off ResizableTile/ChartContainer. Verify with `npx depcheck` per service.
 
 #### CICD-10 — No deploy/preview CI stage despite Vercel serverless targets — build is validated, deploy is not
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** Only two workflows exist: ci.yml and live-llm-replay.yml (ls .github/workflows). Neither builds or validates the Vercel serverless wrappers in api/ (api/index.ts wrapping createApp, api/data-ops wrapping FastAPI). There is no preview-deploy gate, no smoke test against a deployed preview, and no root vercel.json (only api/ subdir). The serverless entrypoints are not exercised by CI at all.
 - **Impact:** CI proves the server and client build in isolation, but the actual production shape (Vercel functions importing createApp and the FastAPI app, with --packages=external runtime deps) is never validated until a real deploy. Packaging/cold-start/import regressions in the api/ wrappers reach production undetected. Low severity only because Vercel's own build runs on deploy, but there is no pre-merge or preview-smoke safety net.
 - **Fix:** Add a CI step that at minimum typechecks/builds the api/ wrappers, and ideally a Vercel preview-deploy + a curl smoke check (health endpoint, one data-ops import) gated on PRs. This closes the gap between 'builds in CI' and 'runs as deployed'.
@@ -798,7 +818,7 @@
 - **Fix:** Introduce server/config/env.ts: one zod schema describing every required/optional var with types + defaults, parsed once after loadEnv, exporting a frozen typed `env` object. Call it from createApp so boot fails fast with a single aggregated error listing all missing required vars. Migrate subsystems to read from `env.*` instead of process.env directly. Start with the credential cluster (COSMOS_*, AZURE_STORAGE_*, AZURE_OPENAI_*, AZURE_AD_*).
 
 #### CFG-2 — Central envFlags module exists but is barely adopted — the case-sensitivity bug class it was built to kill still lives in 35+ ad-hoc parses
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** server/lib/envFlags.ts was created specifically because BUSINESS_ACTIONS_ENABLED was parsed case-insensitively on the live path but case-sensitively on the replay path, silently diverging (documented at envFlags.ts:16-19). Yet only 5 non-test files import it (diagnosticPipelineConfig, agentLoop.service, investigationTree, types, replayLoop.service). Meanwhile 35+ ad-hoc `process.env.X === "true"` boolean parses remain — e.g. AGENTIC_LOOP_ENABLED (types.ts:101), WEB_SEARCH_ENABLED (tools/webSearchTool.ts:76), STREAMING_NARRATOR_ENABLED (llmJson.ts:234), QUESTION_CACHE_*_ENABLED (cache/questionCacheLookup.ts:58,62), DIRECT_ANSWER_ENABLED (directAnswerPath.ts:70) — all case-SENSITIVE, so `=True`/`ON` silently fails. Worse, types.ts imports envInt from envFlags (types.ts:63) then immediately re-clones it as a local `_envInt` with different semantics (types.ts:69-74) — the exact duplication the module was meant to eliminate.
 - **Impact:** The consolidation that was supposed to prevent one class of silent inconsistent-behavior bug only covers ~14% of flag-parsing sites, so the bug class is still live across the agent runtime. An operator setting any of these flags to `True`/`yes`/`on` gets silent no-ops with no error — the hardest kind of config bug to diagnose.
 - **Fix:** Make envFlags the only sanctioned parser: replace every `process.env.X === "true"` / `!== "false"` with envFlagOn/envFlagEnabledByDefault, delete the duplicate `_envInt` in types.ts in favor of the imported envInt, and add a lint/check-invariants rule that flags raw `process.env.[A-Z_]*ENABLED === "true"` outside envFlags.ts.
@@ -810,13 +830,13 @@
 - **Fix:** Move the superadmin allowlist fully to env (SUPERADMIN_OIDS preferred — immutable, tamper-resistant) and remove the hardcoded email, or at minimum gate it so it is empty unless an explicit env opt-in is present. Document it as a privileged-access config in SECURITY.md. This also unifies it with the rest of config rather than being a special-cased literal.
 
 #### CFG-4 — Feature-flag sprawl: 28+ *_ENABLED flags with no central registry, ownership, or typed inventory
-- **Status:** ⬜ TODO · **Severity:** medium · **Wave:** EX21 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX21 · **Effort:** M
 - **Evidence:** grep finds 28 distinct *_ENABLED flags plus DISABLE_*/ALLOW_* variants in server (AGENT_DECOMPOSITION_ENABLED, ANOMALY_DETECTION_ENABLED, AUTO_ATTACH_LAYERS_ENABLED, DEEP_INVESTIGATION_ENABLED, EXHAUSTIVE_BREADTH_ENABLED, FORECAST_ENABLED, PAST_ANALYSES_INDEX_ENABLED, SIGNIFICANCE_TESTS_ENABLED, SPAWNED_FOLLOWUP_ENABLED, USE_PARQUET_READ_PATH, etc.). Many are read ad-hoc at point-of-use (sessionParquet.ts:33, temporalFacetColumns.ts:631) and several aren't in server/.env.example at all (e.g. USE_PARQUET_READ_PATH, AGENT_DECOMPOSITION_ENABLED, ANOMALY_DETECTION_ENABLED, AUTO_ATTACH_LAYERS_ENABLED, EXHAUSTIVE_BREADTH_ENABLED, OPENAI_USE_MAX_COMPLETION_TOKENS). There is no single registry enumerating flag name → default → owner → status (experimental/GA/deprecated).
 - **Impact:** With this many independently-read flags and no central inventory, the actual runtime behavior of a deployment is hard to reason about, dead/experimental flags accumulate undetected, and undocumented flags (missing from .env.example) are invisible to operators. This is config drift risk and a maintainability cost an architect-level reviewer flags directly.
 - **Fix:** Create a single typed flag registry (extend envFlags.ts) declaring every flag with its default + a one-line purpose + lifecycle status, derive all reads from it, and generate the .env.example flag section from the registry so it can never drift. Add a check that every flag referenced in code appears in the registry and vice-versa.
 
 #### CFG-5 — Public Azure AD tenant/client IDs persist in git history from a previously-leaked client.env
-- **Status:** ✅ DONE · **Severity:** low · **Wave:** — · **Effort:** S
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** S
 - **Evidence:** git log shows commit 3b97ffcd ("Wave 0 — secret hygiene: gitignore, untrack leaked artifacts, template client.env") untracked a previously-committed client/client.env. Its parent (git show 3b97ffcd~1:client/client.env) contained real VITE_AZURE_CLIENT_ID=1e24c2a8-... and VITE_AZURE_TENANT_ID=5980857f-... values, which remain in history.
 - **Impact:** These are browser-public values (the SPA client ID and tenant ID are exposed to every user anyway), so this is NOT a credential exposure — severity is low. But it documents that the hygiene fix only stopped future commits; the IDs are permanently in history, and the precedent (a real env file once committed) is worth noting for the handoff so reviewers don't mistake the IDs for leaked secrets and so the team treats any future accidental server.env commit as requiring history rewrite, not just untracking.
 - **Fix:** No action strictly required (public values). Document in the handoff that these IDs are intentionally public. Reinforce policy that any file matching *.env (other than *.example) committed in future requires a history purge (git filter-repo / BFG), not just removal, since real secret material in server.env would otherwise survive in history.
@@ -824,25 +844,25 @@
 ### Python Service Quality
 
 #### PY-1 — Blocking CPU work runs inside async handlers; only MMM is offloaded/gated, so /train-model can stall the whole service
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX13 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX13 · **Effort:** M
 - **Evidence:** All 11 non-MMM endpoints are declared `async def` (main.py:295,319,339,361,381,411,434,461,485,509,535) yet call synchronous pandas/sklearn/TensorFlow functions directly in the coroutine body (e.g. train_model_endpoint at main.py:535-1066 calls train_svm/train_gaussian_process/train_lstm inline; aggregate_endpoint:434 runs pandas groupby on up to MAX_ROWS=1,000,000 rows). Only budget_redistribute uses asyncio.to_thread + _with_training_gate (main.py:1143-1146). The _train_semaphore + 300s timeout (main.py:133-151) is therefore applied ONLY to MMM; train-model has no concurrency cap and no timeout.
 - **Impact:** Uvicorn runs a single event loop. A blocking call inside an async handler freezes ALL concurrent requests — including /health — for the duration of training. A GaussianProcess/SVM/t-SNE/LSTM run on a large frame can take minutes, and several concurrent train-model calls have no admission control, so the service is trivially DoS-able and cannot scale beyond one heavy request at a time. The comment at main.py:129-130 claims training is gated 'so a burst cannot saturate every worker thread' but the gate is not wired to /train-model.
 - **Fix:** Make every heavy endpoint `def` (let FastAPI run it in the threadpool) OR wrap the compute in asyncio.to_thread, and route /train-model (and ideally /aggregate, /pivot, /treat-outliers) through _with_training_gate with a per-call timeout, exactly as MMM already does.
 
 #### PY-2 — ~12 advertised model types depend on libraries absent from requirements.txt — they fail at runtime by design
-- **Status:** 🟦 STAGED · **Severity:** high · **Wave:** EX13 · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX13 · **Effort:** M
 - **Evidence:** main.py's TrainModelRequest.model_type Literal (main.py:214-227) advertises arima, sarima, exponential_smoothing, lstm, gru, umap, cox_proportional_hazards, kaplan_meier (and naive_bayes variants). ml_models.py imports these from optional libs guarded by try/except (statsmodels:78-83, umap:86-89, hdbscan:92-95) or lazy imports (tensorflow at ml_models.py:2755, lifelines at 3179/3230). requirements.txt (verified) lists only fastapi/uvicorn/pandas/numpy/pydantic/scikit-learn/scipy/asteval/python-multipart — none of tensorflow, statsmodels, umap-learn, lifelines, xgboost, lightgbm, catboost. So selecting e.g. model_type='arima' returns ValueError 'statsmodels is not installed' (ml_models.py:2636), and 'lstm' returns 'TensorFlow is not installed' (ml_models.py:2760).
 - **Impact:** The API contract promises ~50 models but ~12 are dead on any environment built from requirements.txt — a correctness/contract defect a reviewer will flag immediately. Worse, the failure is a generic 400 ValueError, so callers cannot distinguish 'unsupported in this deployment' from 'your data is bad'. xgboost/lightgbm/catboost/gaussian_process are similarly exposed and similarly unpinned.
 - **Fix:** Either pin the libraries you actually intend to support in requirements.txt, or remove the unsupported model_types from the Literal enum so pydantic rejects them at the boundary with a clear 422. At minimum, return a distinct 501/Not-Implemented for runtime-missing optional deps instead of a 400 ValueError.
 
 #### PY-3 — ml_models.py is ~3,300 lines of copy-pasted train_* functions with a uniform error-swallowing anti-pattern
-- **Status:** 🟦 STAGED · **Severity:** medium · **Wave:** EX19 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** medium · **Wave:** EX19 · **Effort:** L
 - **Evidence:** 40+ functions repeat the same skeleton (prepare → split → fit → metrics → assemble dict), e.g. train_linear_regression (ml_models.py:246-309), train_ridge_regression (529-593), train_lasso_regression (597-661) differ only in the estimator. Every one ends with `except Exception as e: raise ValueError(f'Error training X: {str(e)}') from None` (e.g. :308, :433, :525, :593, :2682, :2836), which discards the traceback and the original exception type, collapsing programming errors, convergence failures, and bad input into one opaque 400. The giant if/elif dispatch in main.py:583-1064 (~480 lines) duplicates per-model default-parameter logic that pydantic Fields could carry.
 - **Impact:** High duplication means a fix (e.g. a metrics bug or a NaN-serialization edge case) must be applied in ~40 places and will drift. `from None` plus str(e) destroys diagnosability in production — a sklearn convergence warning, a shape mismatch, and a genuine 500-class bug all surface identically. This is the single biggest maintainability liability in the service.
 - **Fix:** Extract a small registry: map model_type -> (estimator_factory, param_schema, task_hint) and one generic train_supervised()/train_unsupervised() runner. Preserve original exception context (raise ... from e, log traceback once) and reserve ValueError for genuine input validation; let unexpected errors become 500s.
 
 #### PY-4 — Outside MMM there are effectively zero tests; data_operations.py and ml_models.py are untested
-- **Status:** ⬜ TODO · **Severity:** high · **Wave:** EX14 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX14 · **Effort:** L
 - **Evidence:** All four real test files (tests/test_fit.py, test_optimize.py, test_transforms.py, and __init__.py) cover only the mmm package. There is no test for data_operations.py (~2,370 LOC: aggregate_data, pivot_table, create_derived_column, treat_outliers, the date/numeric inference in get_summary) nor for ml_models.py (~3,285 LOC) nor for any FastAPI route (no httpx/TestClient suite). The bulk of the ~7.7K real LOC and all of the request-handling/validation logic is unexercised.
 - **Impact:** The most intricate, bug-prone code (semantic column classification, the multi-branch pivot 'primary status' reconstruction at data_operations.py:1899-1958, derived-column ternary→np.where regex rewriting at :894-969, ID/price/boolean heuristics) has no regression safety net. Refactoring PY-3 or fixing PY-5/PY-6 is high-risk without it. CI runs the MMM tests only, giving false confidence.
 - **Fix:** Add a FastAPI TestClient suite covering happy-path + validation errors for each route, and unit tests for aggregate_data/pivot_table/create_derived_column/get_summary type inference and treat_outliers index handling. Target the heuristics with table-driven cases.
@@ -866,13 +886,13 @@
 - **Fix:** Return a generic 500 body ('Internal server error') plus a correlation id; log the full traceback server-side (already printed). Keep specific messages only for validated 400s where the text is intentionally user-facing.
 
 #### PY-8 — mypy is permanently report-only and the code is largely untyped at the boundaries
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** M
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** M
 - **Evidence:** pyproject.toml:19-28 sets disallow_untyped_defs=false, check_untyped_defs=false; CI runs `mypy .` as 'report-only until typing-adoption wave' (ci.yml:121-122). Many functions return bare `dict` / `tuple` with no shape (ml_models.py _prepare_data returns `tuple` at :102; train_* return dict[str, Any]); fit.py FitResult.diagnostics is untyped `dict` (fit.py:54). So the type checker provides no enforcement on the response contracts the Node tier consumes.
 - **Impact:** The Node/Python boundary is a JSON contract with no machine-checked shape on the Python side. Field renames or accidental key changes (very plausible given PY-3's duplication) will not be caught until runtime in the client. The 'tighten over time' intent (pyproject.toml:23) has not advanced (ruff was made blocking in Wave R32; mypy was not).
 - **Fix:** Introduce TypedDict/pydantic response models for the train_* and data-ops outputs and turn on check_untyped_defs, then make mypy blocking on the typed modules first. This pairs naturally with the PY-3 refactor.
 
 #### PY-9 — CORS allow_origins combined with allow_credentials and wildcard methods/headers is overly permissive for an internal service
-- **Status:** ⬜ TODO · **Severity:** low · **Wave:** — · **Effort:** S
+- **Status:** ✅ DONE · **Severity:** low · **Wave:** EX21 · **Effort:** S
 - **Evidence:** main.py:75-81 sets allow_credentials=True with allow_methods=['*'] and allow_headers=['*']; allowed origins default to http://localhost:3000 but are env-overridable via a comma-split string (config.py:13-16). This is a server-to-server API (Node calls it with X-Internal-Api-Key); browser CORS with credentials is not needed here.
 - **Impact:** An internal-only data-ops service does not need browser CORS at all, let alone credentialed wildcard methods/headers. A misconfigured CORS_ORIGINS env (e.g. a stray '*' or an attacker-controlled origin) plus allow_credentials=True is a classic cross-origin exposure; the broad surface is unnecessary attack surface.
 - **Fix:** Drop the CORS middleware entirely for the internal API (rely on the API-key gate), or if a browser ever calls it, set allow_credentials=False and explicitly enumerate the small set of methods/headers actually used.

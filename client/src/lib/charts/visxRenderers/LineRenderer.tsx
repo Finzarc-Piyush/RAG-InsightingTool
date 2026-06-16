@@ -9,7 +9,7 @@
  * Dual-axis Y2 is wired via encoding.y2 (separate scale; same X).
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Group } from "@visx/group";
 import { LinePath } from "@visx/shape";
 import { scaleLinear, scalePoint, scaleTime } from "@visx/scale";
@@ -135,7 +135,7 @@ function asTime(value: unknown): number {
   return Number.NaN;
 }
 
-export function LineRenderer({
+function LineRendererImpl({
   spec,
   data,
   width,
@@ -1194,3 +1194,10 @@ export function LineRenderer({
     </div>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const LineRenderer = memo(LineRendererImpl);
+LineRenderer.displayName = "LineRenderer";

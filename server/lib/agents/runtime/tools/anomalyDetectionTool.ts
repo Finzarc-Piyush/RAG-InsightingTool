@@ -44,6 +44,7 @@ import type { ToolRegistry, ToolRunContext } from "../toolRegistry.js";
 import { detectAnomalies } from "../../../anomalyDetection.js";
 import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { filterRowsByDimensionFilters } from "../../../dataTransform.js";
+import { isFlagOn } from "../../../featureFlags.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -77,7 +78,7 @@ export function registerAnomalyDetectionTool(registry: ToolRegistry) {
     "detect_anomalies",
     anomalyDetectionArgsSchema as unknown as z.ZodType<Record<string, unknown>>,
     async (ctx: ToolRunContext, args: Record<string, unknown>) => {
-      if (process.env.ANOMALY_DETECTION_ENABLED !== "true") {
+      if (!isFlagOn("ANOMALY_DETECTION_ENABLED")) {
         return {
           ok: false,
           summary:

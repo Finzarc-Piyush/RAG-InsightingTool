@@ -6,6 +6,7 @@ import { Response } from "express";
 import { validateSseEvent, isKnownSseEventKind } from "../shared/sseEvents.js";
 import { getRequestContext } from "../lib/telemetry/requestContext.js";
 import { logger } from "../lib/logger.js";
+import { getErrorCode } from "./errorMessage.js";
 
 /**
  * Send SSE event to client
@@ -72,9 +73,10 @@ export function sendSSE(res: Response, event: string, data: any): boolean {
       logger.debug(`📤 SSE payload: ${event}`, data);
     }
     return true;
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Ignore errors from client disconnections (ECONNRESET, EPIPE are expected)
-    if (error.code === 'ECONNRESET' || error.code === 'EPIPE' || error.code === 'ECONNABORTED') {
+    const code = getErrorCode(error);
+    if (code === 'ECONNRESET' || code === 'EPIPE' || code === 'ECONNABORTED') {
       closedResponses.add(res);
       return false;
     }

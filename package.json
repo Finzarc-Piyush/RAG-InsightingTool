@@ -1,1 +1,13 @@
-{}
+{
+  "name": "marico-insight",
+  "private": true,
+  "type": "module",
+  "description": "Cross-service entrypoint for the Marico RAG Insighting Tool. Not an npm workspace — each service keeps its own package.json + lockfile; these scripts simply fan out to them.",
+  "scripts": {
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
+    "test": "npm --prefix server test && npm --prefix client test",
+    "lint": "npm --prefix server run lint && npm --prefix client run lint",
+    "format:check": "npm --prefix server run format:check && npm --prefix client run format:check"
+  }
+}

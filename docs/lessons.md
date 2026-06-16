@@ -157,6 +157,14 @@
 
 **How to apply:** For any future strict-flag adoption (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, …) use the measure→partition→fan-out→verify-centrally→revert-if-red loop. For any multi-file shell command, build a zsh array or quote globs.
 
+## L-017 — Targeted verification silently misses **source-inspection tests** that brittly pin code shape; a legitimate refactor breaks them and only the FULL suite catches it.
+
+**Rule:** Several suites in this repo assert against the *source text* of a file (read via `repoFile()`/`readFileSync`, not behaviour) — e.g. `wi4Wiring*.test.ts` pins the exact React import `import { useEffect, useMemo, useRef, useState } from "react"`; the telemetry/`insightRegen` server tests pin `app.use('/api', telemetryRoutes)`; `registriesManifest.test.ts` parses `routes/index.ts` for `app.use('/api…', router)` to count route modules. A perfectly correct refactor that changes the *shape* (FE-4 prepending `memo,` to the import; API-7 replacing explicit `app.use` mounts with a `mount('<sub>', router)` helper that loops `/api` + `/api/v1`) makes these tests red even though runtime behaviour is identical — AND it silently breaks the **registry generator** (`extractRoutes()` returned 0 groups → `registries.generated.md` would show no routes). Targeted per-file test runs during a batch never exercised these files, so the regressions sat undetected across several batches until a full `npm test` surfaced 7 of them at once.
+
+**Why:** "Verified green" via a handful of targeted files is a false signal when a change has wide source-shape blast radius (a shared import convention, a route-mount pattern, anything a generator/source-test parses). The full suite is the only thing that exercises the brittle source-inspection assertions and the registry-extraction tooling together.
+
+**How to apply:** (1) After any cross-cutting refactor that changes an **import convention, a mount/registration pattern, or anything a generator parses**, run the FULL `npm test` (accept the known end-of-run Cosmos-handle stall — TAP `ok`/`not ok` lines stream before it; grep `^not ok`), not just targeted files, before declaring the batch done. (2) When a source-inspection test breaks on a *shape* change that preserves behaviour, fix the **test/parser to tolerate the new shape** (widen the regex: `\{\s*(?:memo\s*,\s*)?useEffect…`; teach `extractRoutes()` the `mount(...)` form) rather than contorting the source back. (3) Prefer behaviour assertions over source-text assertions when writing new tests; if you must pin source, pin the *minimum* invariant (the symbol is imported / the router is mounted), not the exact surrounding punctuation.
+
 ## Adding new lessons
 
 When the user corrects Claude on something non-obvious (an approach that failed, a rule they didn't articulate before, an invariant Claude tripped):

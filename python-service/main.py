@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from config import config
 from data_operations import (
@@ -24,6 +25,7 @@ from data_operations import (
     treat_outliers,
 )
 from ml_models import (
+    MissingDependencyError,
     train_arima,
     train_bayesian_regression,
     train_catboost,
@@ -73,12 +75,15 @@ from ml_models import (
 app = FastAPI(title="Data Operations Service", version="1.0.0")
 
 # CORS middleware
+# PY-9: this is a server-to-server API (Node authenticates with X-Internal-Api-Key),
+# so the wildcard methods/headers + allow_credentials combo is overly permissive.
+# Disable credentials and enumerate exactly the methods/headers actually used.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Internal-Api-Key", "X-Trace-Id"],
 )
 
 
@@ -323,11 +328,14 @@ async def remove_nulls_endpoint(request: RemoveNullsRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = remove_nulls(
+        # PERF-8/PY-1: offload the blocking pandas work off the event loop so
+        # one request cannot stall every other concurrent request.
+        result = await run_in_threadpool(
+            remove_nulls,
             data=request.data,
             column=request.column,
             method=request.method,
-            custom_value=request.custom_value
+            custom_value=request.custom_value,
         )
         return result
     except ValueError as e:
@@ -350,7 +358,8 @@ async def preview_endpoint(request: PreviewRequest):
         if request.limit > config.MAX_PREVIEW_ROWS:
             request.limit = config.MAX_PREVIEW_ROWS
 
-        result = get_preview(data=request.data, limit=request.limit)
+        # PERF-8/PY-1: offload blocking pandas work off the event loop.
+        result = await run_in_threadpool(get_preview, data=request.data, limit=request.limit)
         return result
     except Exception as e:
         logger.error(f"Error in preview: {traceback.format_exc()}")
@@ -372,7 +381,8 @@ async def summary_endpoint(request: dict[str, Any]):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = get_summary(data=data, column=column)
+        # PERF-8/PY-1: offload blocking pandas work off the event loop.
+        result = await run_in_threadpool(get_summary, data=data, column=column)
         return result
     except Exception as e:
         logger.error(f"Error in summary: {traceback.format_exc()}")
@@ -391,9 +401,14 @@ async def initial_analysis_endpoint(request: dict[str, Any]):
                 status_code=400,
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
-        summary_response = get_summary(data=data)
-        chart_suggestions = suggest_initial_charts(summary_response)
-        return {"summary": summary_response.get("summary", []), "chart_suggestions": chart_suggestions}
+        # PERF-8/PY-1: run both blocking steps in one threadpool hop so the
+        # chained pandas/rule-based CPU work all stays off the event loop.
+        def _initial_analysis() -> dict[str, Any]:
+            summary_response = get_summary(data=data)
+            chart_suggestions = suggest_initial_charts(summary_response)
+            return {"summary": summary_response.get("summary", []), "chart_suggestions": chart_suggestions}
+
+        return await run_in_threadpool(_initial_analysis)
     except Exception as e:
         logger.error(f"Error in initial-analysis: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
@@ -409,10 +424,12 @@ async def create_derived_column_endpoint(request: CreateDerivedColumnRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = create_derived_column(
+        # PERF-8/PY-1: offload blocking pandas work off the event loop.
+        result = await run_in_threadpool(
+            create_derived_column,
             data=request.data,
             new_column_name=request.new_column_name,
-            expression=request.expression
+            expression=request.expression,
         )
 
         if result.get("errors") and len(result["errors"]) > 0:
@@ -439,10 +456,12 @@ async def convert_type_endpoint(request: ConvertTypeRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = convert_type(
+        # PERF-8/PY-1: offload blocking pandas work off the event loop.
+        result = await run_in_threadpool(
+            convert_type,
             data=request.data,
             column=request.column,
-            target_type=request.target_type
+            target_type=request.target_type,
         )
         return result
     except ValueError as e:
@@ -462,16 +481,24 @@ async def aggregate_endpoint(request: AggregateRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = aggregate_data(
-            data=request.data,
-            group_by_column=request.group_by_column,
-            agg_columns=request.agg_columns,
-            agg_funcs=request.agg_funcs,
-            order_by_column=request.order_by_column,
-            order_by_direction=request.order_by_direction,
-            user_intent=request.user_intent
-        )
+        # PERF-8/PY-1: offload blocking pandas work off the event loop, WRAPPED by
+        # the same training gate as MMM (concurrency semaphore → 503 when full,
+        # per-call timeout) so a heavy aggregation cannot starve the worker pool.
+        async def _run():
+            return await run_in_threadpool(
+                aggregate_data,
+                data=request.data,
+                group_by_column=request.group_by_column,
+                agg_columns=request.agg_columns,
+                agg_funcs=request.agg_funcs,
+                order_by_column=request.order_by_column,
+                order_by_direction=request.order_by_direction,
+                user_intent=request.user_intent,
+            )
+        result = await _with_training_gate(_run, timeout_s=180)
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
@@ -489,13 +516,21 @@ async def pivot_endpoint(request: PivotRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = pivot_table(
-            data=request.data,
-            index_column=request.index_column,
-            value_columns=request.value_columns,
-            pivot_funcs=request.pivot_funcs
-        )
+        # PERF-8/PY-1: offload blocking pandas work off the event loop, WRAPPED by
+        # the same training gate as MMM (concurrency semaphore → 503 when full,
+        # per-call timeout) so a heavy pivot cannot starve the worker pool.
+        async def _run():
+            return await run_in_threadpool(
+                pivot_table,
+                data=request.data,
+                index_column=request.index_column,
+                value_columns=request.value_columns,
+                pivot_funcs=request.pivot_funcs,
+            )
+        result = await _with_training_gate(_run, timeout_s=180)
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
@@ -513,11 +548,13 @@ async def identify_outliers_endpoint(request: IdentifyOutliersRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = identify_outliers(
+        # PERF-8/PY-1: offload blocking pandas/sklearn work off the event loop.
+        result = await run_in_threadpool(
+            identify_outliers,
             data=request.data,
             column=request.column,
             method=request.method,
-            threshold=request.threshold
+            threshold=request.threshold,
         )
         return result
     except ValueError as e:
@@ -537,15 +574,23 @@ async def treat_outliers_endpoint(request: TreatOutliersRequest):
                 detail=f"Data exceeds maximum rows limit of {config.MAX_ROWS}"
             )
 
-        result = treat_outliers(
-            data=request.data,
-            column=request.column,
-            method=request.method,
-            threshold=request.threshold,
-            treatment=request.treatment,
-            treatment_value=request.treatment_value
-        )
+        # PERF-8/PY-1: offload blocking pandas/sklearn work off the event loop,
+        # WRAPPED by the same training gate as MMM (concurrency semaphore → 503 when
+        # full, per-call timeout) so heavy outlier treatment cannot starve the pool.
+        async def _run():
+            return await run_in_threadpool(
+                treat_outliers,
+                data=request.data,
+                column=request.column,
+                method=request.method,
+                threshold=request.threshold,
+                treatment=request.treatment,
+                treatment_value=request.treatment_value,
+            )
+        result = await _with_training_gate(_run, timeout_s=180)
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
@@ -601,491 +646,25 @@ async def train_model_endpoint(request: TrainModelRequest):
                     detail="Target variable cannot be in the features list"
                 )
 
-        # Train model based on type
-        if request.model_type == "linear":
-            result = train_linear_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "log_log":
-            result = train_log_log_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "logistic":
-            result = train_logistic_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "ridge":
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_ridge_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "lasso":
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_lasso_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "random_forest":
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            result = train_random_forest(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_estimators=n_estimators,
-                max_depth=request.max_depth,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "decision_tree":
-            result = train_decision_tree(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                max_depth=request.max_depth,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "gradient_boosting":
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
-            max_depth = request.max_depth if request.max_depth is not None else 3
-            result = train_gradient_boosting(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_estimators=n_estimators,
-                learning_rate=learning_rate,
-                max_depth=max_depth,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "elasticnet":
-            alpha = request.alpha if request.alpha is not None else 1.0
-            l1_ratio = request.l1_ratio if request.l1_ratio is not None else 0.5
-            result = train_elasticnet(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                alpha=alpha,
-                l1_ratio=l1_ratio,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "svm":
-            kernel = request.kernel if request.kernel is not None else 'rbf'
-            C = request.C if request.C is not None else 1.0
-            result = train_svm(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                kernel=kernel,
-                C=C,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "knn":
-            n_neighbors = request.n_neighbors if request.n_neighbors is not None else 5
-            result = train_knn(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_neighbors=n_neighbors,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        # Additional regression models
-        elif request.model_type == "polynomial":
-            degree = request.degree if request.degree is not None else 2
-            result = train_polynomial_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                degree=degree,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "bayesian":
-            result = train_bayesian_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "quantile":
-            quantile = request.quantile if request.quantile is not None else 0.5
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_quantile_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                quantile=quantile,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "poisson":
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_poisson_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "gamma":
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_gamma_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "tweedie":
-            power = request.power if request.power is not None else 0.0
-            alpha = request.alpha if request.alpha is not None else 1.0
-            result = train_tweedie_regression(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                power=power,
-                alpha=alpha,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "extra_trees":
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            result = train_extra_trees(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_estimators=n_estimators,
-                max_depth=request.max_depth,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "xgboost":
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            max_depth = request.max_depth if request.max_depth is not None else 3
-            learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
-            result = train_xgboost(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "lightgbm":
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            max_depth = request.max_depth if request.max_depth is not None else -1
-            learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
-            result = train_lightgbm(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                n_estimators=n_estimators,
-                max_depth=max_depth,
-                learning_rate=learning_rate,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "catboost":
-            iterations = request.iterations if request.iterations is not None else 100
-            depth = request.depth if request.depth is not None else 6
-            learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
-            result = train_catboost(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                iterations=iterations,
-                depth=depth,
-                learning_rate=learning_rate,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "gaussian_process":
-            result = train_gaussian_process(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "mlp":
-            hidden_layer_sizes = tuple(request.hidden_layer_sizes) if request.hidden_layer_sizes else (100,)
-            activation = request.activation if request.activation else 'relu'
-            solver = request.solver if request.solver else 'adam'
-            max_iter = request.max_iter if request.max_iter else 200
-            result = train_mlp(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                hidden_layer_sizes=hidden_layer_sizes,
-                activation=activation,
-                solver=solver,
-                alpha=request.alpha if request.alpha else 0.0001,
-                learning_rate='constant',
-                max_iter=max_iter,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        # Additional classification models
-        elif request.model_type == "multinomial_logistic":
-            result = train_multinomial_logistic(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type.startswith("naive_bayes_"):
-            variant = request.model_type.replace("naive_bayes_", "")
-            result = train_naive_bayes(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                variant=variant,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "lda":
-            result = train_lda(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "qda":
-            result = train_qda(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        # Unsupervised learning - Clustering
-        elif request.model_type == "kmeans":
-            n_clusters = request.n_clusters if request.n_clusters is not None else 3
-            result = train_kmeans(
-                data=request.data,
-                features=request.features,
-                n_clusters=n_clusters,
-                random_state=request.random_state
-            )
-        elif request.model_type == "dbscan":
-            eps = request.eps if request.eps is not None else 0.5
-            min_samples = request.min_samples if request.min_samples is not None else 5
-            result = train_dbscan(
-                data=request.data,
-                features=request.features,
-                eps=eps,
-                min_samples=min_samples
-            )
-        elif request.model_type == "hierarchical_clustering":
-            n_clusters = request.n_clusters if request.n_clusters is not None else 3
-            linkage = request.linkage if request.linkage else 'ward'
-            result = train_hierarchical_clustering(
-                data=request.data,
-                features=request.features,
-                n_clusters=n_clusters,
-                linkage=linkage
-            )
-        # Unsupervised learning - Dimensionality Reduction
-        elif request.model_type == "pca":
-            result = train_pca(
-                data=request.data,
-                features=request.features,
-                n_components=request.n_components
-            )
-        elif request.model_type == "tsne":
-            n_components = request.n_components if request.n_components is not None else 2
-            perplexity = request.perplexity if request.perplexity is not None else 30.0
-            result = train_tsne(
-                data=request.data,
-                features=request.features,
-                n_components=n_components,
-                perplexity=perplexity,
-                random_state=request.random_state
-            )
-        elif request.model_type == "umap":
-            n_components = request.n_components if request.n_components is not None else 2
-            min_dist = request.min_dist if request.min_dist is not None else 0.1
-            n_neighbors = request.n_neighbors if request.n_neighbors is not None else 15
-            result = train_umap(
-                data=request.data,
-                features=request.features,
-                n_components=n_components,
-                n_neighbors=n_neighbors,
-                min_dist=min_dist,
-                random_state=request.random_state
-            )
-        # Time series models
-        elif request.model_type in ["arima", "sarima"]:
-            order = tuple(request.order) if request.order and len(request.order) == 3 else (1, 1, 1)
-            seasonal_order = tuple(request.seasonal_order) if request.seasonal_order and len(request.seasonal_order) == 4 else None
-            result = train_arima(
-                data=request.data,
-                target_variable=request.target_variable,
-                date_column=request.date_column,
-                order=order,
-                seasonal_order=seasonal_order
-            )
-        elif request.model_type == "exponential_smoothing":
-            result = train_exponential_smoothing(
-                data=request.data,
-                target_variable=request.target_variable,
-                date_column=request.date_column,
-                trend=request.trend,
-                seasonal=request.seasonal,
-                seasonal_periods=request.seasonal_periods
-            )
-        elif request.model_type == "lstm":
-            sequence_length = request.sequence_length if request.sequence_length is not None else 10
-            lstm_units = request.lstm_units if request.lstm_units is not None else 50
-            epochs = request.epochs if request.epochs is not None else 50
-            result = train_lstm(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                sequence_length=sequence_length,
-                lstm_units=lstm_units,
-                epochs=epochs,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        elif request.model_type == "gru":
-            sequence_length = request.sequence_length if request.sequence_length is not None else 10
-            gru_units = request.gru_units if request.gru_units is not None else 50
-            epochs = request.epochs if request.epochs is not None else 50
-            result = train_gru(
-                data=request.data,
-                target_variable=request.target_variable,
-                features=request.features,
-                sequence_length=sequence_length,
-                gru_units=gru_units,
-                epochs=epochs,
-                test_size=request.test_size,
-                random_state=request.random_state
-            )
-        # Anomaly detection models
-        elif request.model_type == "isolation_forest":
-            contamination = request.contamination if request.contamination is not None else 0.1
-            n_estimators = request.n_estimators if request.n_estimators is not None else 100
-            result = train_isolation_forest(
-                data=request.data,
-                features=request.features,
-                contamination=contamination,
-                n_estimators=n_estimators,
-                random_state=request.random_state
-            )
-        elif request.model_type == "one_class_svm":
-            nu = request.nu if request.nu is not None else 0.1
-            kernel = request.kernel if request.kernel is not None else 'rbf'
-            result = train_one_class_svm(
-                data=request.data,
-                features=request.features,
-                nu=nu,
-                kernel=kernel,
-                random_state=request.random_state
-            )
-        elif request.model_type == "local_outlier_factor":
-            n_neighbors = request.n_neighbors if request.n_neighbors is not None else 20
-            contamination = request.contamination if request.contamination is not None else 0.1
-            result = train_local_outlier_factor(
-                data=request.data,
-                features=request.features,
-                n_neighbors=n_neighbors,
-                contamination=contamination
-            )
-        elif request.model_type == "elliptic_envelope":
-            contamination = request.contamination if request.contamination is not None else 0.1
-            result = train_elliptic_envelope(
-                data=request.data,
-                features=request.features,
-                contamination=contamination,
-                random_state=request.random_state
-            )
-        # Recommendation systems
-        elif request.model_type == "matrix_factorization":
-            if not request.user_column or not request.item_column or not request.rating_column:
-                raise HTTPException(
-                    status_code=400,
-                    detail="user_column, item_column, and rating_column are required for matrix factorization"
-                )
-            n_factors = request.n_factors if request.n_factors is not None else 50
-            n_epochs = request.n_epochs if request.n_epochs is not None else 20
-            learning_rate = request.learning_rate if request.learning_rate is not None else 0.01
-            regularization = request.regularization if request.regularization is not None else 0.1
-            result = train_matrix_factorization(
-                data=request.data,
-                user_column=request.user_column,
-                item_column=request.item_column,
-                rating_column=request.rating_column,
-                n_factors=n_factors,
-                n_epochs=n_epochs,
-                learning_rate=learning_rate,
-                regularization=regularization
-            )
-        # Survival analysis
-        elif request.model_type == "cox_proportional_hazards":
-            if not request.duration_column or not request.event_column:
-                raise HTTPException(
-                    status_code=400,
-                    detail="duration_column and event_column are required for Cox Proportional Hazards"
-                )
-            result = train_cox_proportional_hazards(
-                data=request.data,
-                duration_column=request.duration_column,
-                event_column=request.event_column,
-                features=request.features
-            )
-        elif request.model_type == "kaplan_meier":
-            if not request.duration_column or not request.event_column:
-                raise HTTPException(
-                    status_code=400,
-                    detail="duration_column and event_column are required for Kaplan-Meier"
-                )
-            result = train_kaplan_meier(
-                data=request.data,
-                duration_column=request.duration_column,
-                event_column=request.event_column,
-                group_column=request.group_column
-            )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported model type: {request.model_type}"
-            )
+        # PERF-8/PY-1: dispatch + fit (blocking sklearn/heavy-ML CPU work) runs in
+        # the threadpool so a long-running training job cannot stall the event loop
+        # and starve every other concurrent request. HTTPException/ValueError raised
+        # inside _dispatch_train_model propagate back through await and are handled
+        # by the same except clauses below — behavior is identical.
+        # PY-1: the threadpool offload is WRAPPED by the same training gate as MMM —
+        # a concurrency semaphore (queue-full → 503) plus a per-call timeout, so a
+        # burst of ML fits cannot saturate every worker thread.
+        async def _run():
+            return await run_in_threadpool(_dispatch_train_model, request)
+        result = await _with_training_gate(_run, timeout_s=180)
 
         return result
+    except MissingDependencyError as e:
+        # PY-2: the requested model type's backing library is not installed in
+        # this image. Return a distinct 501 Not-Implemented (not 400/500) so an
+        # operator can tell "unsupported in this deployment" from "bad input".
+        logger.warning(f"MissingDependency in train_model: model_type={request.model_type}: {str(e)}")
+        raise HTTPException(status_code=501, detail=str(e)) from None
     except ValueError as e:
         logger.error(f"ValueError in train_model: {str(e)}")
         logger.debug(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
@@ -1096,6 +675,497 @@ async def train_model_endpoint(request: TrainModelRequest):
         logger.error(f"Error in train_model: {traceback.format_exc()}")
         logger.debug(f"Request details: model_type={request.model_type}, target_variable={request.target_variable}, features={request.features}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
+
+
+def _dispatch_train_model(request: TrainModelRequest) -> dict[str, Any]:
+    """PERF-8/PY-1: synchronous dispatch + fit for /train-model. Runs in the
+    threadpool (off the event loop) via run_in_threadpool. Behavior is identical
+    to the previous inline chain; HTTPException/ValueError propagate to the caller."""
+    # Train model based on type
+    if request.model_type == "linear":
+        result = train_linear_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "log_log":
+        result = train_log_log_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "logistic":
+        result = train_logistic_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "ridge":
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_ridge_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "lasso":
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_lasso_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "random_forest":
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        result = train_random_forest(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_estimators=n_estimators,
+            max_depth=request.max_depth,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "decision_tree":
+        result = train_decision_tree(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            max_depth=request.max_depth,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "gradient_boosting":
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
+        max_depth = request.max_depth if request.max_depth is not None else 3
+        result = train_gradient_boosting(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "elasticnet":
+        alpha = request.alpha if request.alpha is not None else 1.0
+        l1_ratio = request.l1_ratio if request.l1_ratio is not None else 0.5
+        result = train_elasticnet(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            alpha=alpha,
+            l1_ratio=l1_ratio,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "svm":
+        kernel = request.kernel if request.kernel is not None else 'rbf'
+        C = request.C if request.C is not None else 1.0
+        result = train_svm(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            kernel=kernel,
+            C=C,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "knn":
+        n_neighbors = request.n_neighbors if request.n_neighbors is not None else 5
+        result = train_knn(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_neighbors=n_neighbors,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    # Additional regression models
+    elif request.model_type == "polynomial":
+        degree = request.degree if request.degree is not None else 2
+        result = train_polynomial_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            degree=degree,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "bayesian":
+        result = train_bayesian_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "quantile":
+        quantile = request.quantile if request.quantile is not None else 0.5
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_quantile_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            quantile=quantile,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "poisson":
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_poisson_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "gamma":
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_gamma_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "tweedie":
+        power = request.power if request.power is not None else 0.0
+        alpha = request.alpha if request.alpha is not None else 1.0
+        result = train_tweedie_regression(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            power=power,
+            alpha=alpha,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "extra_trees":
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        result = train_extra_trees(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_estimators=n_estimators,
+            max_depth=request.max_depth,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "xgboost":
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        max_depth = request.max_depth if request.max_depth is not None else 3
+        learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
+        result = train_xgboost(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "lightgbm":
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        max_depth = request.max_depth if request.max_depth is not None else -1
+        learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
+        result = train_lightgbm(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            learning_rate=learning_rate,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "catboost":
+        iterations = request.iterations if request.iterations is not None else 100
+        depth = request.depth if request.depth is not None else 6
+        learning_rate = request.learning_rate if request.learning_rate is not None else 0.1
+        result = train_catboost(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            iterations=iterations,
+            depth=depth,
+            learning_rate=learning_rate,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "gaussian_process":
+        result = train_gaussian_process(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "mlp":
+        hidden_layer_sizes = tuple(request.hidden_layer_sizes) if request.hidden_layer_sizes else (100,)
+        activation = request.activation if request.activation else 'relu'
+        solver = request.solver if request.solver else 'adam'
+        max_iter = request.max_iter if request.max_iter else 200
+        result = train_mlp(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            hidden_layer_sizes=hidden_layer_sizes,
+            activation=activation,
+            solver=solver,
+            alpha=request.alpha if request.alpha else 0.0001,
+            learning_rate='constant',
+            max_iter=max_iter,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    # Additional classification models
+    elif request.model_type == "multinomial_logistic":
+        result = train_multinomial_logistic(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type.startswith("naive_bayes_"):
+        variant = request.model_type.replace("naive_bayes_", "")
+        result = train_naive_bayes(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            variant=variant,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "lda":
+        result = train_lda(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "qda":
+        result = train_qda(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    # Unsupervised learning - Clustering
+    elif request.model_type == "kmeans":
+        n_clusters = request.n_clusters if request.n_clusters is not None else 3
+        result = train_kmeans(
+            data=request.data,
+            features=request.features,
+            n_clusters=n_clusters,
+            random_state=request.random_state
+        )
+    elif request.model_type == "dbscan":
+        eps = request.eps if request.eps is not None else 0.5
+        min_samples = request.min_samples if request.min_samples is not None else 5
+        result = train_dbscan(
+            data=request.data,
+            features=request.features,
+            eps=eps,
+            min_samples=min_samples
+        )
+    elif request.model_type == "hierarchical_clustering":
+        n_clusters = request.n_clusters if request.n_clusters is not None else 3
+        linkage = request.linkage if request.linkage else 'ward'
+        result = train_hierarchical_clustering(
+            data=request.data,
+            features=request.features,
+            n_clusters=n_clusters,
+            linkage=linkage
+        )
+    # Unsupervised learning - Dimensionality Reduction
+    elif request.model_type == "pca":
+        result = train_pca(
+            data=request.data,
+            features=request.features,
+            n_components=request.n_components
+        )
+    elif request.model_type == "tsne":
+        n_components = request.n_components if request.n_components is not None else 2
+        perplexity = request.perplexity if request.perplexity is not None else 30.0
+        result = train_tsne(
+            data=request.data,
+            features=request.features,
+            n_components=n_components,
+            perplexity=perplexity,
+            random_state=request.random_state
+        )
+    elif request.model_type == "umap":
+        n_components = request.n_components if request.n_components is not None else 2
+        min_dist = request.min_dist if request.min_dist is not None else 0.1
+        n_neighbors = request.n_neighbors if request.n_neighbors is not None else 15
+        result = train_umap(
+            data=request.data,
+            features=request.features,
+            n_components=n_components,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            random_state=request.random_state
+        )
+    # Time series models
+    elif request.model_type in ["arima", "sarima"]:
+        order = tuple(request.order) if request.order and len(request.order) == 3 else (1, 1, 1)
+        seasonal_order = tuple(request.seasonal_order) if request.seasonal_order and len(request.seasonal_order) == 4 else None
+        result = train_arima(
+            data=request.data,
+            target_variable=request.target_variable,
+            date_column=request.date_column,
+            order=order,
+            seasonal_order=seasonal_order
+        )
+    elif request.model_type == "exponential_smoothing":
+        result = train_exponential_smoothing(
+            data=request.data,
+            target_variable=request.target_variable,
+            date_column=request.date_column,
+            trend=request.trend,
+            seasonal=request.seasonal,
+            seasonal_periods=request.seasonal_periods
+        )
+    elif request.model_type == "lstm":
+        sequence_length = request.sequence_length if request.sequence_length is not None else 10
+        lstm_units = request.lstm_units if request.lstm_units is not None else 50
+        epochs = request.epochs if request.epochs is not None else 50
+        result = train_lstm(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            sequence_length=sequence_length,
+            lstm_units=lstm_units,
+            epochs=epochs,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    elif request.model_type == "gru":
+        sequence_length = request.sequence_length if request.sequence_length is not None else 10
+        gru_units = request.gru_units if request.gru_units is not None else 50
+        epochs = request.epochs if request.epochs is not None else 50
+        result = train_gru(
+            data=request.data,
+            target_variable=request.target_variable,
+            features=request.features,
+            sequence_length=sequence_length,
+            gru_units=gru_units,
+            epochs=epochs,
+            test_size=request.test_size,
+            random_state=request.random_state
+        )
+    # Anomaly detection models
+    elif request.model_type == "isolation_forest":
+        contamination = request.contamination if request.contamination is not None else 0.1
+        n_estimators = request.n_estimators if request.n_estimators is not None else 100
+        result = train_isolation_forest(
+            data=request.data,
+            features=request.features,
+            contamination=contamination,
+            n_estimators=n_estimators,
+            random_state=request.random_state
+        )
+    elif request.model_type == "one_class_svm":
+        nu = request.nu if request.nu is not None else 0.1
+        kernel = request.kernel if request.kernel is not None else 'rbf'
+        result = train_one_class_svm(
+            data=request.data,
+            features=request.features,
+            nu=nu,
+            kernel=kernel,
+            random_state=request.random_state
+        )
+    elif request.model_type == "local_outlier_factor":
+        n_neighbors = request.n_neighbors if request.n_neighbors is not None else 20
+        contamination = request.contamination if request.contamination is not None else 0.1
+        result = train_local_outlier_factor(
+            data=request.data,
+            features=request.features,
+            n_neighbors=n_neighbors,
+            contamination=contamination
+        )
+    elif request.model_type == "elliptic_envelope":
+        contamination = request.contamination if request.contamination is not None else 0.1
+        result = train_elliptic_envelope(
+            data=request.data,
+            features=request.features,
+            contamination=contamination,
+            random_state=request.random_state
+        )
+    # Recommendation systems
+    elif request.model_type == "matrix_factorization":
+        if not request.user_column or not request.item_column or not request.rating_column:
+            raise HTTPException(
+                status_code=400,
+                detail="user_column, item_column, and rating_column are required for matrix factorization"
+            )
+        n_factors = request.n_factors if request.n_factors is not None else 50
+        n_epochs = request.n_epochs if request.n_epochs is not None else 20
+        learning_rate = request.learning_rate if request.learning_rate is not None else 0.01
+        regularization = request.regularization if request.regularization is not None else 0.1
+        result = train_matrix_factorization(
+            data=request.data,
+            user_column=request.user_column,
+            item_column=request.item_column,
+            rating_column=request.rating_column,
+            n_factors=n_factors,
+            n_epochs=n_epochs,
+            learning_rate=learning_rate,
+            regularization=regularization
+        )
+    # Survival analysis
+    elif request.model_type == "cox_proportional_hazards":
+        if not request.duration_column or not request.event_column:
+            raise HTTPException(
+                status_code=400,
+                detail="duration_column and event_column are required for Cox Proportional Hazards"
+            )
+        result = train_cox_proportional_hazards(
+            data=request.data,
+            duration_column=request.duration_column,
+            event_column=request.event_column,
+            features=request.features
+        )
+    elif request.model_type == "kaplan_meier":
+        if not request.duration_column or not request.event_column:
+            raise HTTPException(
+                status_code=400,
+                detail="duration_column and event_column are required for Kaplan-Meier"
+            )
+        result = train_kaplan_meier(
+            data=request.data,
+            duration_column=request.duration_column,
+            event_column=request.event_column,
+            group_column=request.group_column
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported model type: {request.model_type}"
+        )
+
+    return result
 
 
 class BudgetRedistributeRequest(BaseModel):
@@ -1129,34 +1199,9 @@ async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
         if len(set(request.spend_columns)) != len(request.spend_columns):
             raise HTTPException(status_code=400, detail="Duplicate entries in spend_columns")
 
-        import pandas as pd  # local import — pd not used elsewhere in main.py
-
-        df = pd.DataFrame(request.data)
-        for col in [*request.spend_columns, request.outcome_column, request.time_column]:
-            if col not in df.columns:
-                raise HTTPException(status_code=400, detail=f"Column '{col}' not present in data")
-
-        df[request.time_column] = pd.to_datetime(df[request.time_column], errors="coerce")
-        df = df.dropna(subset=[request.time_column])
-        for col in [*request.spend_columns, request.outcome_column]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=[*request.spend_columns, request.outcome_column])
-        if len(df) < 12:
-            raise HTTPException(status_code=400, detail=f"Need at least 12 valid observations after cleaning; got {len(df)}")
-
-        weekly = (
-            df.set_index(request.time_column)
-              .sort_index()
-              .resample("W-MON")
-              .agg({**{c: "sum" for c in request.spend_columns}, request.outcome_column: "sum"})
-              .dropna()
-        )
-        if len(weekly) < 12:
-            raise HTTPException(status_code=400, detail=f"Need at least 12 weekly observations; got {len(weekly)}")
-
-        spend_df = weekly[request.spend_columns].astype(float).reset_index(drop=True)
-        y = weekly[request.outcome_column].astype(float).values
-        dates = weekly.index.values
+        # PERF-8/PY-1: the pandas cleaning/resampling is blocking CPU work; run it
+        # off the event loop too (the MMM fit was already offloaded below).
+        spend_df, y, dates = await run_in_threadpool(_prepare_mmm_frame, request)
 
         from mmm.fit import channel_response_curve, fit_mmm
         from mmm.optimize import optimize_allocation
@@ -1173,6 +1218,41 @@ async def budget_redistribute_endpoint(request: BudgetRedistributeRequest):
     except Exception as e:
         logger.error(f"Error in budget_redistribute: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") from None
+
+
+def _prepare_mmm_frame(request: BudgetRedistributeRequest):
+    """PERF-8/PY-1: synchronous pandas cleaning + weekly resampling for
+    /mmm/budget-redistribute. Runs in the threadpool. Returns (spend_df, y, dates);
+    raises HTTPException on validation failures (propagated through await)."""
+    import pandas as pd  # local import — pd not used elsewhere in main.py
+
+    df = pd.DataFrame(request.data)
+    for col in [*request.spend_columns, request.outcome_column, request.time_column]:
+        if col not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Column '{col}' not present in data")
+
+    df[request.time_column] = pd.to_datetime(df[request.time_column], errors="coerce")
+    df = df.dropna(subset=[request.time_column])
+    for col in [*request.spend_columns, request.outcome_column]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=[*request.spend_columns, request.outcome_column])
+    if len(df) < 12:
+        raise HTTPException(status_code=400, detail=f"Need at least 12 valid observations after cleaning; got {len(df)}")
+
+    weekly = (
+        df.set_index(request.time_column)
+          .sort_index()
+          .resample("W-MON")
+          .agg({**{c: "sum" for c in request.spend_columns}, request.outcome_column: "sum"})
+          .dropna()
+    )
+    if len(weekly) < 12:
+        raise HTTPException(status_code=400, detail=f"Need at least 12 weekly observations; got {len(weekly)}")
+
+    spend_df = weekly[request.spend_columns].astype(float).reset_index(drop=True)
+    y = weekly[request.outcome_column].astype(float).values
+    dates = weekly.index.values
+    return spend_df, y, dates
 
 
 def _run_mmm_pipeline(spend_df, y, dates, request: BudgetRedistributeRequest, fit_mmm, channel_response_curve, optimize_allocation):

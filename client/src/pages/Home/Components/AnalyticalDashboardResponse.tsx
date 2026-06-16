@@ -220,14 +220,14 @@ export function AnalyticalDashboardResponse({
   temporalFacetColumns,
   thinkingSteps = [],
 }: AnalyticalDashboardResponseProps) {
-  const charts = message.charts ?? [];
+  const charts = useMemo(() => message.charts ?? [], [message.charts]);
   const insights = message.insights ?? [];
 
   // Pivot tab: only show if pivotDefaults AND there is data to pivot on
+  const messagePreview = (message as any).preview;
   const pivotData = useMemo(() => {
-    const preview = (message as any).preview;
-    return Array.isArray(preview) && preview.length > 0 ? preview : (sampleRows ?? []);
-  }, [(message as any).preview, sampleRows]);
+    return Array.isArray(messagePreview) && messagePreview.length > 0 ? messagePreview : (sampleRows ?? []);
+  }, [messagePreview, sampleRows]);
 
   const hasPivot = !!(message.pivotDefaults && pivotData.length > 0);
 

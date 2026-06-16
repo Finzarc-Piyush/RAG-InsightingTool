@@ -55,10 +55,8 @@
  */
 import { z } from "zod";
 import type { ToolRegistry, ToolResult } from "../toolRegistry.js";
-import {
-  ColumnarStorageService,
-  isDuckDBAvailable,
-} from "../../../columnarStorage.js";
+import { isDuckDBAvailable } from "../../../columnarStorage.js";
+import { getTurnColumnarStorage } from "../turnColumnarStorage.js";
 import { resolveSessionDataTable } from "../../../activeFilter/resolveSessionDataTable.js";
 import { buildSeasonalityAggSql } from "../../../seasonality/buildSeasonalityAggSql.js";
 import {
@@ -354,11 +352,10 @@ export function registerDetectSeasonalityTool(registry: ToolRegistry) {
         ctx.exec.sessionId &&
         isDuckDBAvailable()
       ) {
-        const storage = new ColumnarStorageService({
-          sessionId: ctx.exec.sessionId,
-        });
+        // PERF-10 · Reuse the per-turn shared DuckDB handle instead of opening
+        // and closing our own; the turn owner closes it at turn end.
+        const { storage } = await getTurnColumnarStorage(ctx.exec);
         try {
-          await storage.initialize();
           await storage.assertTableExists("data");
           const tableName = ctx.exec.chatDocument
             ? await resolveSessionDataTable(storage, {
@@ -389,10 +386,6 @@ export function registerDetectSeasonalityTool(registry: ToolRegistry) {
           agentLog("detect_seasonality_duckdb_fallback", {
             sessionId: ctx.exec.sessionId,
             error: e instanceof Error ? e.message.slice(0, 400) : String(e),
-          });
-        } finally {
-          await storage.close().catch(() => {
-            /* ignore */
           });
         }
       }

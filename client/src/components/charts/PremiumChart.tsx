@@ -12,7 +12,7 @@
  * <ChartEmpty>, <ChartError> components (WC1.6).
  */
 
-import { Component, type ReactNode } from "react";
+import { Component, type ComponentType, type ReactNode } from "react";
 import { ParentSize } from "@visx/responsive";
 import { ECHARTS_MARKS } from "@/lib/charts/featureFlags";
 import type { ChartSpecV2 } from "@/shared/schema";
@@ -83,8 +83,11 @@ type VisxRendererProps = {
   ariaLabel?: string;
 };
 
+// FE-4 · leaf renderers are now wrapped in React.memo, so the registry
+// value type must accept a React component (plain function OR
+// MemoExoticComponent) rather than a bare call signature.
 const VISX_RENDERERS: Partial<
-  Record<ChartSpecV2["mark"], (p: VisxRendererProps) => JSX.Element | null>
+  Record<ChartSpecV2["mark"], ComponentType<VisxRendererProps>>
 > = {
   // Visx primary
   bar: BarRenderer,

@@ -80,7 +80,7 @@ describe("Wave Dup3 · large-file coercion parity with the <50MB path", () => {
     const prevFlag = process.env.LARGE_FILE_COERCION_ENABLED;
     const sessionId = `dup3-parity-on-${process.pid}-${Date.now()}`;
     let pathBRows: Record<string, unknown>[] = [];
-    let pathBTypeByName = new Map<string, string>();
+    const pathBTypeByName = new Map<string, string>();
     let storagePath = "";
     try {
       process.env.LARGE_FILE_COERCION_ENABLED = "true";

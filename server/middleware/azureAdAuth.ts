@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 import { timingSafeEqual, createHash } from "crypto";
 import { logger } from "../lib/logger.js";
+import { isFlagOn } from "../lib/featureFlags.js";
 
 const MAX_CACHE_TTL_MS = 5 * 60 * 1000; // revoked tokens valid for at most 5 min
 
@@ -41,7 +42,7 @@ function getTokenFromRequest(req: Request): string | null {
   // short-lived ticket (POST /api/auth/sse-ticket → ?sse_ticket). The
   // deprecated path can be re-opened ONLY for emergency rollback by setting
   // ALLOW_JWT_QUERY=true.
-  if (process.env.ALLOW_JWT_QUERY !== "true") return null;
+  if (!isFlagOn("ALLOW_JWT_QUERY")) return null;
   const q = req.query.access_token;
   if (typeof q === "string" && q.trim()) {
     logger.warn(
@@ -135,7 +136,7 @@ export async function requireAzureAdAuth(
     return;
   }
 
-  if (process.env.DISABLE_AUTH === "true") {
+  if (isFlagOn("DISABLE_AUTH")) {
     // P-009 / SEC-3: belt-and-braces guards against accidental production bypass.
     // (1) Fail SAFE: only honour the bypass when the environment is EXPLICITLY
     //     development or test. An unset/unknown NODE_ENV (or Vercel) is treated

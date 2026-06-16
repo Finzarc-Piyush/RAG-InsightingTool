@@ -3,8 +3,10 @@
  * Handles intent parsing, clarification flow, and coordinates data operations
  */
 import { Message, DataSummary } from '../../shared/schema.js';
-import { removeNulls, getDataPreview, getDataSummary, convertDataType, createDerivedColumn, trainMLModel, aggregateData, createPivotTable, identifyOutliers, treatOutliers } from './pythonService.js';
+import { removeNulls, getDataPreview, convertDataType, createDerivedColumn, trainMLModel, aggregateData, createPivotTable, treatOutliers } from './pythonService.js';
+import type { TrainModelResponse, SummaryResponse } from './pythonService.js';
 import { saveModifiedData } from './dataPersistence.js';
+import type { DataRow } from './dataOpsTypes.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { callLlm } from '../agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from '../agents/runtime/llmCallPurpose.js';
@@ -23,6 +25,13 @@ import {
   findMatchingColumn,
   normalizeNumericValue,
 } from "./dataOpsValueHelpers.js";
+// ARCH-2 / CQ-2 · per-operation handlers extracted to sibling modules. Each is
+// a behaviour-preserving move of one switch branch into a function taking a
+// single typed args object; the orchestrator switch dispatches to them.
+import { handleCountNulls } from "./handlers/countNulls.js";
+import { handleDescribe } from "./handlers/describe.js";
+import { handleSummary } from "./handlers/summary.js";
+import { handleIdentifyOutliers } from "./handlers/identifyOutliers.js";
 
 /**
  * Wave-FA4 · Translator from the legacy LLM-parsed `intent.filterConditions`
@@ -112,7 +121,7 @@ const ROW_LEVEL_PREVIEW_MAX_ROWS = 500;
 /**
  * Get preview data from saved rawData (first 50 rows)
  */
-async function getPreviewFromSavedData(sessionId: string, fallbackData: Record<string, any>[]): Promise<Record<string, any>[]> {
+async function getPreviewFromSavedData(sessionId: string, fallbackData: DataRow[]): Promise<DataRow[]> {
   try {
     const updatedDoc = await getChatBySessionIdEfficient(sessionId);
     if (updatedDoc?.rawData && Array.isArray(updatedDoc.rawData) && updatedDoc.rawData.length > 0) {
@@ -130,9 +139,9 @@ async function getPreviewFromSavedData(sessionId: string, fallbackData: Record<s
  * Streaming helper: Process data in batches
  */
 async function processInBatches<T>(
-  data: Record<string, any>[],
+  data: DataRow[],
   batchSize: number,
-  processor: (batch: Record<string, any>[]) => Promise<T> | T
+  processor: (batch: DataRow[]) => Promise<T> | T
 ): Promise<T[]> {
   const results: T[] = [];
   for (let i = 0; i < data.length; i += batchSize) {
@@ -151,14 +160,14 @@ async function processInBatches<T>(
  * handles the imputation correctly. For delete operations, we can safely process in batches.
  */
 async function removeNullsStreaming(
-  data: Record<string, any>[],
+  data: DataRow[],
   column?: string,
   method: 'delete' | 'mean' | 'median' | 'mode' | 'custom' = 'delete',
   customValue?: any
-): Promise<{ data: Record<string, any>[]; nulls_removed: number; rows_before: number; rows_after: number }> {
+): Promise<{ data: DataRow[]; nulls_removed: number; rows_before: number; rows_after: number }> {
   const rowsBefore = data.length;
   let totalNullsRemoved = 0;
-  const processedBatches: Record<string, any>[][] = [];
+  const processedBatches: DataRow[][] = [];
   
   // For imputation methods, the Python service needs the full dataset to calculate
   // accurate statistics (mean/median/mode). However, for very large datasets, we
@@ -2368,13 +2377,15 @@ Return ONLY valid JSON, no other text.`;
     // Add filter-specific fields
     if (parsed.filterConditions) {
       // Map column names in filter conditions
-      intent.filterConditions = parsed.filterConditions.map((condition: any) => {
-        const matchedColumn = findMatchingColumn(condition.column, availableColumns);
-        return {
-          ...condition,
-          column: matchedColumn || condition.column,
-        };
-      });
+      intent.filterConditions = parsed.filterConditions.map(
+        (condition: NonNullable<DataOpsIntent['filterConditions']>[number]) => {
+          const matchedColumn = findMatchingColumn(condition.column, availableColumns);
+          return {
+            ...condition,
+            column: matchedColumn || condition.column,
+          };
+        }
+      );
     }
     if (parsed.logicalOperator) {
       intent.logicalOperator = parsed.logicalOperator;
@@ -2599,6 +2610,14 @@ export {
   findMatchingColumn,
   normalizeNumericValue,
 } from "./dataOpsValueHelpers.js";
+
+// ARCH-2 / CQ-2 · per-operation handlers extracted to `handlers/*`. Re-exported
+// from this path so any future caller (or test) can import them from either the
+// handler module or the orchestrator without breaking the existing seam.
+export { handleCountNulls } from "./handlers/countNulls.js";
+export { handleDescribe } from "./handlers/describe.js";
+export { handleSummary } from "./handlers/summary.js";
+export { handleIdentifyOutliers } from "./handlers/identifyOutliers.js";
 
 /**
  * Extract column details (name and default value) using AI
@@ -2868,7 +2887,7 @@ Return JSON:
  * Format ML model response
  */
 function formatMLModelResponse(
-  result: any,
+  result: TrainModelResponse,
   modelType: string,
   targetCol: string,
   features: string[]
@@ -2895,10 +2914,10 @@ function formatMLModelResponse(
     }
   } else {
     const testMetrics = result.metrics.test;
-    answer += `- Accuracy: ${(testMetrics.accuracy * 100)?.toFixed(2) || 'N/A'}%\n`;
-    answer += `- Precision: ${(testMetrics.precision * 100)?.toFixed(2) || 'N/A'}%\n`;
-    answer += `- Recall: ${(testMetrics.recall * 100)?.toFixed(2) || 'N/A'}%\n`;
-    answer += `- F1 Score: ${(testMetrics.f1_score * 100)?.toFixed(2) || 'N/A'}%\n`;
+    answer += `- Accuracy: ${(testMetrics.accuracy! * 100)?.toFixed(2) || 'N/A'}%\n`;
+    answer += `- Precision: ${(testMetrics.precision! * 100)?.toFixed(2) || 'N/A'}%\n`;
+    answer += `- Recall: ${(testMetrics.recall! * 100)?.toFixed(2) || 'N/A'}%\n`;
+    answer += `- F1 Score: ${(testMetrics.f1_score! * 100)?.toFixed(2) || 'N/A'}%\n`;
     
     if (result.metrics.cross_validation?.mean_accuracy) {
       answer += `- Cross-Validation Accuracy (mean): ${(result.metrics.cross_validation.mean_accuracy * 100).toFixed(2)}%\n`;
@@ -2943,7 +2962,7 @@ function formatMLModelResponse(
   // Add insights
   answer += `**Key Insights:**\n`;
   if (result.task_type === 'regression') {
-    const r2 = result.metrics.test.r2_score;
+    const r2 = result.metrics.test.r2_score!;
     if (r2 > 0.8) {
       answer += `- The model explains ${(r2 * 100).toFixed(1)}% of the variance, indicating excellent fit.\n`;
     } else if (r2 > 0.6) {
@@ -2954,7 +2973,7 @@ function formatMLModelResponse(
       answer += `- The model explains ${(r2 * 100).toFixed(1)}% of the variance, indicating poor fit. Consider feature engineering or different model types.\n`;
     }
   } else {
-    const accuracy = result.metrics.test.accuracy;
+    const accuracy = result.metrics.test.accuracy!;
     if (accuracy > 0.9) {
       answer += `- The model achieves ${(accuracy * 100).toFixed(1)}% accuracy, indicating excellent performance.\n`;
     } else if (accuracy > 0.7) {
@@ -3199,16 +3218,16 @@ function isDataModificationOperation(operation: DataOpsIntent['operation']): boo
  */
 export async function executeDataOperation(
   intent: DataOpsIntent,
-  data: Record<string, any>[],
+  data: DataRow[],
   sessionId: string,
   sessionDoc?: ChatDocument,
   originalMessage?: string,
   chatHistory?: Message[]
 ): Promise<{
   answer: string;
-  data?: Record<string, any>[];
-  preview?: Record<string, any>[];
-  summary?: any[];
+  data?: DataRow[];
+  preview?: DataRow[];
+  summary?: SummaryResponse['summary'];
   saved?: boolean;
   // For operations like aggregate/pivot that only return a table,
   // the table will be included in "data" and "saved" will be false.
@@ -3306,7 +3325,7 @@ export async function executeDataOperation(
       );
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ ${actionVerb} ${result.nulls_removed} null value(s)${isImputation ? ` with ${intent.method}` : ''}. Rows: ${result.rows_before} → ${result.rows_after}.`;
       
       if (shouldShowPreview) {
@@ -3323,7 +3342,7 @@ export async function executeDataOperation(
     }
     
     case 'preview': {
-      let previewData: Record<string, any>[];
+      let previewData: DataRow[];
       let answer: string;
       let workingData = data; // Start with original data
       let filteredCount = 0;
@@ -3463,128 +3482,18 @@ export async function executeDataOperation(
     }
     
     case 'count_nulls': {
-      // Count null values in data
-      let nullCount = 0;
-      let columnNulls: Array<{ column: string; count: number }> = [];
-      
-      if (intent.column) {
-        // Count nulls in specific column
-        const columnNullCount = data.filter(row => 
-          row[intent.column!] === null || 
-          row[intent.column!] === undefined || 
-          row[intent.column!] === ''
-        ).length;
-        nullCount = columnNullCount;
-        
-        return {
-          answer: `There are ${nullCount} null/missing values in the "${intent.column}" column out of ${data.length} total rows.`
-        };
-      } else {
-        // Count nulls across all columns
-        const columns = Object.keys(data[0] || {});
-        columnNulls = columns.map(col => {
-          const count = data.filter(row => 
-            row[col] === null || row[col] === undefined || row[col] === ''
-          ).length;
-          return { column: col, count };
-        });
-        
-        nullCount = columnNulls.reduce((sum, item) => sum + item.count, 0);
-        const columnsWithNulls = columnNulls.filter(item => item.count > 0);
-        
-        if (columnsWithNulls.length === 0) {
-          return {
-            answer: `Great! There are no null or missing values in your dataset. All ${data.length} rows have complete data across all ${columns.length} columns.`
-          };
-        } else {
-          const nullDetails = columnsWithNulls
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 10)
-            .map(item => `  • ${item.column}: ${item.count} null${item.count !== 1 ? 's' : ''}`)
-            .join('\n');
-          
-          const moreText = columnsWithNulls.length > 10 
-            ? `\n  ... and ${columnsWithNulls.length - 10} more column(s) with nulls`
-            : '';
-          
-          return {
-            answer: `There are ${nullCount} null/missing value(s) in your dataset across ${columnsWithNulls.length} column(s) out of ${columns.length} total columns.\n\nColumns with null values:\n${nullDetails}${moreText}\n\nTotal rows: ${data.length}`
-          };
-        }
-      }
+      // ARCH-2 · delegated to handlers/countNulls.ts (pure, behaviour-preserving)
+      return handleCountNulls({ data, column: intent.column });
     }
-    
+
     case 'describe': {
-      // Provide conversational description of the data
-      const totalRows = data.length;
-      const columns = Object.keys(data[0] || {});
-      const totalColumns = columns.length;
-      
-      // Count nulls
-      const nullCounts = columns.map(col => ({
-        column: col,
-        count: data.filter(row => row[col] === null || row[col] === undefined || row[col] === '').length
-      }));
-      const totalNulls = nullCounts.reduce((sum, item) => sum + item.count, 0);
-      const columnsWithNulls = nullCounts.filter(item => item.count > 0).length;
-      
-      // Get data types (simple inference)
-      const columnTypes = columns.map(col => {
-        const sampleValues = data.slice(0, 100).map(row => row[col]).filter(v => v != null);
-        if (sampleValues.length === 0) return 'unknown';
-        
-        const firstValue = sampleValues[0];
-        if (typeof firstValue === 'number') return 'numeric';
-        if (typeof firstValue === 'boolean') return 'boolean';
-        if (firstValue instanceof Date || (typeof firstValue === 'string' && /^\d{4}-\d{2}-\d{2}/.test(firstValue))) return 'date';
-        return 'text';
-      });
-      
-      const numericCols = columns.filter((col, idx) => columnTypes[idx] === 'numeric').length;
-      const textCols = columns.filter((col, idx) => columnTypes[idx] === 'text').length;
-      const dateCols = columns.filter((col, idx) => columnTypes[idx] === 'date').length;
-      
-      let answer = `Your dataset contains:\n`;
-      answer += `  • **${totalRows.toLocaleString()} rows** of data\n`;
-      answer += `  • **${totalColumns} columns**: ${numericCols} numeric, ${textCols} text, ${dateCols} date\n`;
-      
-      if (totalNulls > 0) {
-        answer += `  • **${totalNulls.toLocaleString()} null/missing values** across ${columnsWithNulls} column(s)\n`;
-      } else {
-        answer += `  • **No null or missing values** - complete dataset! ✅\n`;
-      }
-      
-      answer += `\nColumn names: ${columns.slice(0, 10).join(', ')}${columns.length > 10 ? `, ... and ${columns.length - 10} more` : ''}`;
-      
-      return {
-        answer
-      };
+      // ARCH-2 · delegated to handlers/describe.ts (pure, behaviour-preserving)
+      return handleDescribe({ data });
     }
-    
+
     case 'summary': {
-      const result = await getDataSummary(data, intent.column);
-      
-      if (intent.column) {
-        // Single column summary
-        const columnSummary = result.summary.find((s: any) => s.variable === intent.column);
-        if (columnSummary) {
-          return {
-            answer: `Here's a summary for column "${intent.column}":`,
-            summary: [columnSummary] // Return as array with single item for consistency
-          };
-        } else {
-          return {
-            answer: `Column "${intent.column}" not found. Here's a summary of all columns:`,
-            summary: result.summary
-          };
-        }
-      } else {
-        // All columns summary
-        return {
-          answer: 'Here\'s a summary of your data:',
-          summary: result.summary
-        };
-      }
+      // ARCH-2 · delegated to handlers/summary.ts (behaviour-preserving)
+      return await handleSummary({ data, column: intent.column });
     }
     
     case 'create_column': {
@@ -3649,7 +3558,7 @@ export async function executeDataOperation(
       }
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Successfully created column "${newColumnName}"${defaultValue !== undefined ? ` with value "${defaultValue}"` : ''}.`;
       
       if (shouldShowPreview) {
@@ -3745,7 +3654,7 @@ export async function executeDataOperation(
       }
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Successfully created column "${newColumnName}" with expression: ${expression}.`;
       
       if (shouldShowPreview) {
@@ -3818,7 +3727,7 @@ export async function executeDataOperation(
       );
 
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Normalized column "${intent.column}" using min-max scaling (0-1).`;
       
       if (shouldShowPreview) {
@@ -3890,7 +3799,7 @@ export async function executeDataOperation(
       );
 
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Updated column "${intent.column}" by ${intent.transformType === 'add' ? 'adding' : intent.transformType === 'subtract' ? 'subtracting' : intent.transformType === 'multiply' ? 'multiplying by' : 'dividing by'} ${intent.transformValue}.`;
       
       if (shouldShowPreview) {
@@ -4275,7 +4184,7 @@ export async function executeDataOperation(
       );
 
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       
       if (shouldShowPreview) {
         previewData = await getPreviewFromSavedData(sessionId, modifiedData);
@@ -4292,7 +4201,7 @@ export async function executeDataOperation(
 
     case 'add_row': {
       const template = data[0] || {};
-      const newRow: Record<string, any> = {};
+      const newRow: DataRow = {};
       for (const key of Object.keys(template)) {
         newRow[key] = null;
       }
@@ -4309,7 +4218,7 @@ export async function executeDataOperation(
       );
 
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Added a new empty row at the bottom.`;
       
       if (shouldShowPreview) {
@@ -4387,7 +4296,7 @@ export async function executeDataOperation(
       );
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Replaced ${replacedCount} occurrence(s) of "${intent.oldValue}" with "${intent.newValue}"${intent.column ? ` in column "${intent.column}"` : ' across all columns'}.`;
       
       if (shouldShowPreview) {
@@ -4434,7 +4343,7 @@ export async function executeDataOperation(
       );
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Successfully removed column "${intent.column}".`;
       
       if (shouldShowPreview) {
@@ -4496,7 +4405,7 @@ export async function executeDataOperation(
             await updateChatDocument(sessionDoc);
           }
           
-          let previewData: Record<string, any>[] | undefined;
+          let previewData: DataRow[] | undefined;
           let answerText = `✅ Successfully renamed column "${resolvedColumn}" to "${newName}".`;
           
           if (shouldShowPreview) {
@@ -4568,7 +4477,7 @@ export async function executeDataOperation(
       }
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       let answerText = `✅ Successfully renamed column "${columnToRename}" to "${newName}".`;
       
       if (shouldShowPreview) {
@@ -4603,7 +4512,7 @@ export async function executeDataOperation(
       );
       
       // Only show preview if user explicitly requested it
-      let previewData: Record<string, any>[] | undefined;
+      let previewData: DataRow[] | undefined;
       const errorMsg = result.conversion_info.errors.length > 0
         ? ` Note: ${result.conversion_info.errors.join(', ')}`
         : '';
@@ -4789,70 +4698,13 @@ export async function executeDataOperation(
     }
     
     case 'identify_outliers': {
-      // Validate input data
-      if (!data || data.length === 0) {
-        return {
-          answer: '❌ No data available to process. Please ensure your dataset has been loaded correctly.',
-        };
-      }
-
-      try {
-        const method = intent.outlierMethod || 'iqr';
-        const threshold = intent.outlierThreshold || (method === 'zscore' ? 3 : 1.5);
-        
-        const result = await identifyOutliers(
-          data,
-          intent.column,
-          method,
-          threshold
-        );
-
-        // Format response
-        let answer = `📊 Outlier Analysis Results:\n\n`;
-        answer += `**Method Used:** ${method.toUpperCase()}\n`;
-        answer += `**Threshold:** ${threshold}\n`;
-        answer += `**Total Outliers Found:** ${result.summary.total_outliers}\n\n`;
-
-        if (result.summary.outliers_by_column && Object.keys(result.summary.outliers_by_column).length > 0) {
-          answer += `**Outliers by Column:**\n`;
-          Object.entries(result.summary.outliers_by_column).forEach(([col, count]) => {
-            answer += `- ${col}: ${count} outlier(s)\n`;
-          });
-          answer += `\n`;
-        }
-
-        if (result.outliers.length > 0) {
-          answer += `**Outlier Details (showing first 20):**\n`;
-          result.outliers.slice(0, 20).forEach((outlier, idx) => {
-            answer += `${idx + 1}. Row ${outlier.row_index + 1}, Column "${outlier.column}": ${outlier.value}`;
-            if (outlier.z_score !== undefined) {
-              answer += ` (z-score: ${outlier.z_score.toFixed(2)})`;
-            }
-            if (outlier.iqr_lower !== undefined && outlier.iqr_upper !== undefined) {
-              answer += ` (bounds: ${outlier.iqr_lower.toFixed(2)} - ${outlier.iqr_upper.toFixed(2)})`;
-            }
-            answer += `\n`;
-          });
-          
-          if (result.outliers.length > 20) {
-            answer += `\n... and ${result.outliers.length - 20} more outliers.\n`;
-          }
-          
-          answer += `\n💡 Would you like me to treat these outliers? I can remove them, cap them, or replace them with mean/median values.`;
-        } else {
-          answer += `✅ No outliers detected using the ${method} method with threshold ${threshold}.`;
-        }
-
-        return {
-          answer,
-          saved: false, // Identification doesn't modify data
-        };
-      } catch (error) {
-        logger.error('Outlier identification error:', error);
-        return {
-          answer: `Failed to identify outliers: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`,
-        };
-      }
+      // ARCH-2 · delegated to handlers/identifyOutliers.ts (behaviour-preserving)
+      return await handleIdentifyOutliers({
+        data,
+        column: intent.column,
+        outlierMethod: intent.outlierMethod,
+        outlierThreshold: intent.outlierThreshold,
+      });
     }
 
     case 'treat_outliers': {
@@ -5159,7 +5011,7 @@ export async function executeDataOperation(
             sessionDoc.dataSummary
           );
           if (wfApplied.remelted) {
-            originalData = wfApplied.rows as Record<string, any>[];
+            originalData = wfApplied.rows as DataRow[];
             logger.log(
               `[dataOps:revert] re-applied wide-format melt → ${originalData.length} long rows`
             );

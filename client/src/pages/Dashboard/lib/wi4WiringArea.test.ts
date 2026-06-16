@@ -68,7 +68,7 @@ describe("WI4-wiring-area · explainSlice imports", () => {
     // any of them and silently break the brush.
     assert.match(
       areaSrc,
-      /import\s*\{\s*useEffect\s*,\s*useMemo\s*,\s*useRef\s*,\s*useState\s*\}\s*from\s*["']react["']/,
+      /import\s*\{\s*(?:memo\s*,\s*)?useEffect\s*,\s*useMemo\s*,\s*useRef\s*,\s*useState\s*\}\s*from\s*["']react["']/,
     );
   });
 });

@@ -243,8 +243,10 @@ export function ChartModal({
     (typeof chart.keyInsight === 'string' && chart.keyInsight.trim()) || fetchedKeyInsight;
 
   // Use filtered data if available, otherwise use original data
-  const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
-  const allData = Array.isArray(baseData) ? baseData : [];
+  const allData = useMemo(() => {
+    const baseData = enableFilters && Array.isArray(chartData) ? chartData : chartDataSource;
+    return Array.isArray(baseData) ? baseData : [];
+  }, [enableFilters, chartData, chartDataSource]);
   
   // Process scatter plot data for display (only outlier filtering) - show ALL data points
   const processedScatterData = useMemo(() => {
@@ -322,7 +324,8 @@ export function ChartModal({
   );
 
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
-  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeys?.join(',')]); // reset on chart change
+  const specSeriesKeysSig = specSeriesKeys?.join(',');
+  useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeysSig]); // reset on chart change
 
   const handleToggleSeriesLegend = useCallback((key: string) => {
     setHiddenSeries((prev) => {

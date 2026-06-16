@@ -28,6 +28,7 @@ import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
 import { buildChatPivotNavEntries } from '@/pages/Home/lib/chatPivotNav';
 import { buildPivotMessage } from '@/pages/Home/lib/buildPivotMessage';
 import type { PivotBuilderAddPayload } from '@/pages/Home/Components/DataPreviewTable';
+import type { LoadedSessionData } from '@/pages/Analysis/types';
 
 type PreviewSnapshot = {
   capturedAt: number;
@@ -43,7 +44,7 @@ type PreviewSource = 'none' | 'local' | 'server';
 
 interface HomeProps {
   resetTrigger?: number;
-  loadedSessionData?: any;
+  loadedSessionData?: LoadedSessionData | null;
   onSessionChange?: (sessionId: string | null, fileName: string | null) => void;
   /**
    * sessionId parsed from the URL (`/analysis/:sessionId`). When set, the

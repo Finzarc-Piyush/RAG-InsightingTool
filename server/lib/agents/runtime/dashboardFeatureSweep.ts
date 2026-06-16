@@ -48,6 +48,7 @@ import {
   resolveTrendGrain,
   buildDateRangeByColumn,
 } from "../../temporalGrainAuthority.js";
+import { isFlagOn } from "../../featureFlags.js";
 
 /**
  * Cardinality regime (how many distinct values a dimension has):
@@ -425,8 +426,7 @@ function tryBuildChart(
  * the LLM-brief's lists, and not only on explicit dashboard asks).
  */
 export function isExhaustiveBreadthEnabled(): boolean {
-  const v = process.env.EXHAUSTIVE_BREADTH_ENABLED;
-  return v === "true" || v === "1";
+  return isFlagOn("EXHAUSTIVE_BREADTH_ENABLED");
 }
 
 /**

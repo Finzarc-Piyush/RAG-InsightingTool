@@ -247,6 +247,13 @@ export async function extractAndPersistUserHierarchies(params: {
   );
   if (prevHashable === nextHashable) return undefined;
 
+  // SEC-2 / invariant #9 — DELIBERATELY retained on `withSessionWriteLock` +
+  // user-scoped `getChatBySessionIdForUser` rather than the `mutateChatDocument`
+  // seam: the seam reads by sessionId ONLY (`getChatBySessionIdEfficient`), which
+  // would DROP the per-user access-control scoping this SAC merge depends on.
+  // This path is intra-instance safe via the lock; ETag multi-instance hardening
+  // for the user-scoped SAC writes is the documented invariant-#9 follow-up (it
+  // needs a user-scoped variant of the seam). Do not "simplify" to mutateChatDocument.
   return withSessionWriteLock(params.sessionId, async () => {
     const { getChatBySessionIdForUser, updateChatDocument } = await import(
       "../models/chat.model.js"

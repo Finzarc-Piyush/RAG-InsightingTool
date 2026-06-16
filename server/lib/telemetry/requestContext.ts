@@ -22,6 +22,15 @@ export interface RequestContext {
    * be correlated end-to-end.
    */
   traceId?: string;
+  /**
+   * RESIL-1 · The turn's abort signal (fired on client disconnect). Stamped onto
+   * the context by `processStreamChat` once its `turnAbortController` exists, so
+   * shared downstream helpers — `pythonServiceFetch`, the DuckDB query executor —
+   * can cancel in-flight work AMBIENTLY without threading the signal through every
+   * intermediate signature (the deep dataOps orchestrator call tree). Explicit
+   * `signal` params still take precedence where a caller passes one.
+   */
+  abortSignal?: AbortSignal;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

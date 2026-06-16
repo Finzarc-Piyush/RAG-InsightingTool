@@ -851,15 +851,28 @@ export async function executeQueryPlanOnDuckDb(
   sessionId: string,
   plan: QueryPlanBody,
   summary: DataSummary,
-  chat?: ChatDocument | null
+  chat?: ChatDocument | null,
+  // RESIL-1 · Turn abort signal (from `ctx.abortSignal`). Forwarded to the
+  // long-running count + aggregate queries so a client disconnect interrupts the
+  // in-flight DuckDB work. Optional — `executeQuery` also inherits the ambient
+  // turn signal from the request context, so omitting it is safe.
+  signal?: AbortSignal,
+  // PERF-10 · Optional per-turn shared, already-`initialize()`d handle (from
+  // `getTurnColumnarStorage`). When supplied we reuse it and DO NOT close it —
+  // the turn owner closes it once at turn end. When omitted we fall back to the
+  // original behaviour: construct + initialize + close our own handle.
+  sharedStorage?: ColumnarStorageService
 ): Promise<ExecuteQueryPlanOnDuckDbResult> {
   if (!isDuckDBAvailable()) {
     return { ok: false, error: "DuckDB not available" };
   }
 
-  const storage = new ColumnarStorageService({ sessionId });
+  const ownsStorage = !sharedStorage;
+  const storage = sharedStorage ?? new ColumnarStorageService({ sessionId });
   try {
-    await storage.initialize();
+    if (ownsStorage) {
+      await storage.initialize();
+    }
     if (chat) {
       try {
         await ensureAuthoritativeDataTable(storage, chat);
@@ -885,12 +898,12 @@ export async function executeQueryPlanOnDuckDb(
       return { ok: false, error: "Plan not supported on DuckDB executor" };
     }
 
-    const cntRows = await storage.executeQuery<{ cnt: bigint | number }>(built.countSql);
+    const cntRows = await storage.executeQuery<{ cnt: bigint | number }>(built.countSql, signal);
     const rawCnt = cntRows[0]?.cnt ?? 0;
     const inputRowCount =
       typeof rawCnt === "bigint" ? Number(rawCnt) : Number(rawCnt);
 
-    const rawRows = await storage.executeQuery<Record<string, unknown>>(built.aggregateSql);
+    const rawRows = await storage.executeQuery<Record<string, unknown>>(built.aggregateSql, signal);
     // WPF3 · Strip hidden columns (e.g. PeriodIso added for chronological
     // ORDER BY) so callers see only the planner-requested groupBy + aggregations.
     const rows =
@@ -914,6 +927,11 @@ export async function executeQueryPlanOnDuckDb(
     const msg = errorMessage(e);
     return { ok: false, error: msg };
   } finally {
-    await storage.close();
+    // PERF-10 · Only close handles we own. A shared per-turn handle is closed
+    // once by the turn owner (agentLoop) — closing it here would yank it out
+    // from under sibling tools later in the same turn.
+    if (ownsStorage) {
+      await storage.close();
+    }
   }
 }

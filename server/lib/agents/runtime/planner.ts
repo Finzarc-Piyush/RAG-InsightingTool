@@ -1076,7 +1076,7 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
         ctx.summary
       );
       if (rebind.repaired) {
-        step.args.plan = rebind.plan as unknown as PlanStep["args"]["plan"];
+        step.args.plan = rebind.plan;
         agentLog("plan.boolean_indicator_rate_repair", { turnId, stepId: step.id });
       }
     }

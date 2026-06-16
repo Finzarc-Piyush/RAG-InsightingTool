@@ -11,7 +11,7 @@ import {
   isAgenticLoopEnabled,
   isAgenticStrictEnabled,
   loadAgentConfigFromEnv,
-} from "../lib/agents/runtime/types.js";
+} from "../lib/agents/runtime/runtimeConfig.js";
 import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
 import {
   formatUserAndSessionJsonBlocks,

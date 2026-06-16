@@ -30,6 +30,7 @@ import {
 } from "../../models/llmUsage.model.js";
 import { logger } from "../logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
+import { isFlagOn } from "../featureFlags.js";
 
 const DEFAULT_MAX_BUFFER = 100;
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
@@ -168,7 +169,7 @@ let defaultSink: LlmUsageSink | null = null;
  * or when already started. Called once from `createApp`.
  */
 export function startDefaultLlmUsageSink(): void {
-  if (process.env.LLM_USAGE_TELEMETRY_ENABLED === "false") {
+  if (!isFlagOn("LLM_USAGE_TELEMETRY_ENABLED")) {
     return;
   }
   if (defaultSink) return;

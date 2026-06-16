@@ -23,7 +23,7 @@
  * BEHAVIOUR: identical to the originals — moved verbatim, no logic change.
  */
 import type { AgentExecutionContext, AgentTrace } from "./types.js";
-import { AGENT_TRACE_MAX_BYTES } from "./types.js";
+import { AGENT_TRACE_MAX_BYTES } from "./runtimeConfig.js";
 import type { ToolResult } from "./toolRegistry.js";
 import type { Finding } from "./analyticalBlackboard.js";
 

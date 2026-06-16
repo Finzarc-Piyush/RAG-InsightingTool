@@ -47,6 +47,7 @@ import { agentLog } from "../agentLogger.js";
 import { wrapUntrusted } from "../untrustedContent.js";
 import { addDomainContext } from "../analyticalBlackboard.js";
 import { errorMessage } from "../../../../utils/errorMessage.js";
+import { isFlagOn } from "../../../featureFlags.js";
 
 export const webSearchArgsSchema = z
   .object({
@@ -74,7 +75,7 @@ const KNOWLEDGE_FLOOR_GUIDANCE =
   " Answer the external/world-knowledge part of the question from your own background knowledge up to your training cutoff, and clearly caveat that this is general knowledge, not live retrieval. Do NOT invent specific citations, figures, or URLs.";
 
 export function isWebSearchEnabled(): boolean {
-  return process.env.WEB_SEARCH_ENABLED === "true";
+  return isFlagOn("WEB_SEARCH_ENABLED");
 }
 
 /**

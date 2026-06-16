@@ -4,8 +4,10 @@
  */
 import { SharedAnalysisInvite } from "../shared/schema.js";
 import { waitForSharedAnalysesContainer } from "./database.config.js";
-import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from "./chat.model.js";
+import { getChatBySessionIdEfficient, mutateChatDocument, type ChatDocument } from "./chat.model.js";
 import { logger } from "../lib/logger.js";
+import { sharedAnalysisInviteReadSchema, safeParseRead } from "./persistedSchemas.js";
+import { errorMessage, getErrorCode } from "../utils/errorMessage.js";
 
 const normalizeEmail = (value: string) => value?.trim().toLowerCase();
 
@@ -22,23 +24,24 @@ const retryOnConnectionError = async <T>(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
-    } catch (error: any) {
+    } catch (error: unknown) {
       lastError = error;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
+      const message = errorMessage(error);
+      const code = getErrorCode(error);
+
       // Check if it's a connection error that might be retryable
-      const isRetryableError = 
-        error.code === "ECONNREFUSED" || 
-        error.code === "ETIMEDOUT" || 
-        error.code === "ENOTFOUND" ||
-        error.code === "ECONNRESET" ||
-        errorMessage.includes("ECONNREFUSED") ||
-        errorMessage.includes("ETIMEDOUT") ||
-        errorMessage.includes("ENOTFOUND");
-      
+      const isRetryableError =
+        code === "ECONNREFUSED" ||
+        code === "ETIMEDOUT" ||
+        code === "ENOTFOUND" ||
+        code === "ECONNRESET" ||
+        message.includes("ECONNREFUSED") ||
+        message.includes("ETIMEDOUT") ||
+        message.includes("ENOTFOUND");
+
       if (isRetryableError && attempt < maxRetries) {
         const delay = attempt * 1000; // Exponential backoff: 1s, 2s, 3s
-        logger.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, errorMessage);
+        logger.warn(`⚠️ ${operationName} connection error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`, message);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -188,13 +191,13 @@ export const createSharedAnalysisInvite = async ({
               permission,
               note: note ? `Shared along with analysis: ${note}` : "Shared along with analysis",
             });
-          } catch (dashboardError: any) {
+          } catch (dashboardError: unknown) {
             // Log error but continue with other dashboards
             logger.error(`Failed to create dashboard share invite for ${dashboardId}:`, dashboardError);
           }
         })
       );
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Log error but don't fail the analysis share if dashboard share fails
       logger.error("Failed to create dashboard share invites:", error);
       // Continue with analysis share even if dashboard share fails
@@ -220,7 +223,13 @@ export const listSharedAnalysesForUser = async (targetEmail: string): Promise<Sh
         parameters: [{ name: "@targetEmail", value: normalizedTarget }],
       }).fetchAll(); // Remove enableCrossPartitionQuery for better performance
 
-      return resources as SharedAnalysisInvite[];
+      return resources.map((r) =>
+        safeParseRead<SharedAnalysisInvite>(
+          "listSharedAnalysesForUser",
+          sharedAnalysisInviteReadSchema,
+          r,
+        ),
+      );
     }, 3, "listSharedAnalysesForUser");
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -260,7 +269,13 @@ export const listSharedAnalysesForOwner = async (ownerEmail: string): Promise<Sh
       )
       .fetchAll();
 
-    return resources as SharedAnalysisInvite[];
+    return resources.map((r) =>
+      safeParseRead<SharedAnalysisInvite>(
+        "listSharedAnalysesForOwner",
+        sharedAnalysisInviteReadSchema,
+        r,
+      ),
+    );
   }, 3, "listSharedAnalysesForOwner");
 };
 
@@ -277,10 +292,15 @@ export const getSharedAnalysisInviteById = async (
   try {
     return await retryOnConnectionError(async () => {
       const { resource } = await sharedContainer.item(id, normalizedTarget).read();
-      return resource as unknown as SharedAnalysisInvite;
+      return safeParseRead<SharedAnalysisInvite>(
+        "getSharedAnalysisInviteById",
+        sharedAnalysisInviteReadSchema,
+        resource,
+      );
     }, 3, "getSharedAnalysisInviteById");
-  } catch (error: any) {
-    if (error.code === 404) {
+  } catch (error: unknown) {
+    // Cosmos 404 surfaces as a numeric `code`; getErrorCode stringifies it.
+    if (getErrorCode(error) === "404") {
       return null;
     }
     throw error;
@@ -317,24 +337,32 @@ export const acceptSharedAnalysisInvite = async (
     throw error;
   }
 
-  const collaborators = ensureCollaborators(sourceChat);
-  if (!collaborators.includes(normalizedTarget)) {
-    sourceChat.collaborators = [...collaborators, normalizedTarget];
-    await updateChatDocument(sourceChat);
-  }
+  // SEC-2: add the collaborator through the `mutateChatDocument` seam (invariant
+  // #9) so the read-modify-write takes the per-session lock + IfMatch `_etag`
+  // retry. Previously this was a bare get→mutate→update: two invites accepted
+  // concurrently could each read the same collaborator list and clobber the
+  // other's append (lost update). The mutator re-reads the FRESH doc inside the
+  // lock, so the list only ever grows.
+  const updatedChat = await mutateChatDocument(invite.sourceSessionId, (doc) => {
+    const collaborators = ensureCollaborators(doc);
+    if (collaborators.includes(normalizedTarget)) return false; // already present — no write
+    doc.collaborators = [...collaborators, normalizedTarget];
+    return true;
+  });
+  const newSession = updatedChat ?? sourceChat;
 
   const updatedInvite: SharedAnalysisInvite = {
     ...invite,
     status: "accepted",
     acceptedAt: Date.now(),
-    acceptedSessionId: sourceChat.sessionId,
+    acceptedSessionId: newSession.sessionId,
   };
 
   const { resource } = await sharedContainer.items.upsert(updatedInvite);
 
   return {
     invite: resource as unknown as SharedAnalysisInvite,
-    newSession: sourceChat,
+    newSession,
   };
 };
 

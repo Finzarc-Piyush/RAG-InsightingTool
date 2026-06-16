@@ -30,6 +30,8 @@ export {
   isInterAgentPromptFeedbackEnabled,
   loadAgentConfigFromEnv,
   AGENT_TRACE_MAX_BYTES,
+} from "./runtimeConfig.js";
+export {
   type AgentConfig,
   type AgentExecutionContext,
   type AgentMidTurnSessionPayload,

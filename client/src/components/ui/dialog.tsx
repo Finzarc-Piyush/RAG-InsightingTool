@@ -53,10 +53,21 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+interface DialogContentProps
+  extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  /**
+   * FE-7 · optional accessible name for dialogs that don't render their own
+   * visible <DialogTitle>. When supplied, it's rendered as a visually-hidden
+   * title. Typed `string` to stay compatible with the inherited HTML `title`
+   * attribute. Sighted-user output is unchanged either way.
+   */
+  title?: string
+}
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+  DialogContentProps
+>(({ className, children, title, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -76,6 +87,20 @@ const DialogContent = React.forwardRef<
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
+      {/*
+        FE-7 · a11y guarantee. Radix logs a console warning and leaves the
+        dialog without an accessible name when no <DialogTitle> exists. This
+        visually-hidden fallback gives every dialog a name. It renders LAST so
+        that callers who DO pass their own <DialogTitle> in `children` keep
+        labelling the dialog — every DialogTitle shares Radix's single
+        `titleId`, and aria-labelledby resolves to the first matching element
+        in DOM order, so a real title always wins over this fallback. The
+        `sr-only` class (already used by the Close button above) hides it from
+        sighted users, so visual output is unchanged.
+      */}
+      <DialogPrimitive.Title className="sr-only">
+        {title ?? "Dialog"}
+      </DialogPrimitive.Title>
     </DialogPrimitive.Content>
   </DialogPortal>
 ))

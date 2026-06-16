@@ -85,10 +85,27 @@ function extractRoutes(): RouteGroup[] {
   for (const m of indexText.matchAll(/^import\s+(\w+)\s+from\s+["']\.\/([\w.]+)\.js["']/gm)) {
     importMap.set(m[1]!, m[2]!);
   }
-  const groups: RouteGroup[] = [];
+  // Collect (prefix, var) mount entries from BOTH mount forms:
+  //  - API-7 helper form: `mount('<subpath>', <router>)` → mounted at `/api<subpath>`
+  //    (the helper also adds a `/api/v1<subpath>` alias resolving to the same
+  //    handlers; the registry lists the canonical `/api` prefix only).
+  //  - Legacy explicit form: `app.use('/api/x', <router>)`.
+  // The `mount` helper's own body (`app.use(`/api${path}`, …)`) uses template
+  // literals, so the legacy single/double-quote regex never matches it → no
+  // double-counting.
+  const mounts: { prefix: string; varName: string }[] = [];
+  for (const m of indexText.matchAll(/\bmount\(\s*["'`]([^"'`]*)["'`]\s*,\s*(\w+)\s*\)/g)) {
+    // `m[1]` is "" for a bare `mount('', router)`, which yields `/api` — the
+    // template literal is always truthy, so no `|| "/api"` fallback is needed.
+    mounts.push({ prefix: `/api${m[1]!}`, varName: m[2]! });
+  }
   for (const m of indexText.matchAll(/app\.use\(\s*["']([^"']+)["']\s*,\s*(\w+)\s*\)/g)) {
-    const prefix = m[1]!;
-    const stem = importMap.get(m[2]!);
+    mounts.push({ prefix: m[1]!, varName: m[2]! });
+  }
+
+  const groups: RouteGroup[] = [];
+  for (const { prefix, varName } of mounts) {
+    const stem = importMap.get(varName);
     if (!stem) continue;
     let text: string;
     try {

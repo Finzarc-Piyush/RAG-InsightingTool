@@ -69,6 +69,7 @@ import {
   executeQueryPlanOnDuckDb,
   canExecuteQueryPlanOnDuckDb,
 } from "../../queryPlanDuckdbExecutor.js";
+import { getTurnColumnarStorage } from "./turnColumnarStorage.js";
 import {
   injectRollupExcludeFilters,
   injectCompoundShapeMetricGuard,
@@ -318,11 +319,16 @@ export async function tryQuickAnswer(
     canExecuteQueryPlanOnDuckDb(normalizedPlan);
 
   if (tryDuck) {
+    // PERF-10 · Reuse the per-turn shared DuckDB handle (closed by the agent
+    // loop's fast-path teardown when this path returns).
+    const { storage: sharedStorage } = await getTurnColumnarStorage(ctx);
     const duck = await executeQueryPlanOnDuckDb(
       ctx.sessionId,
       normalizedPlan,
       ctx.summary,
-      ctx.chatDocument
+      ctx.chatDocument,
+      ctx.abortSignal,
+      sharedStorage
     );
     if (duck.ok) {
       rows = duck.rows;

@@ -1,0 +1,26 @@
+{
+  "//": "CICD-10 · Typecheck the Vercel serverless wrappers (api/index.ts wraps server/createApp). Mirrors server/tsconfig.json module-resolution so the cross-service `../server/index.js` import resolves to the .ts source. tsc is run from repo root; node_modules resolves from server/.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "jsx": "react-jsx",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowJs": false,
+    "baseUrl": ".",
+    "types": ["node"],
+    "typeRoots": ["../server/node_modules/@types"]
+  },
+  "include": ["index.ts", "../server/types/**/*.d.ts"]
+}

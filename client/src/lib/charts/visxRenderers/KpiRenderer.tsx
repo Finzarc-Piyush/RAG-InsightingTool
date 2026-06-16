@@ -8,7 +8,7 @@
  *   color → optional categorical sub-grouping (collapses to first group's mean)
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { LinePath } from "@visx/shape";
 import { scaleLinear, scalePoint } from "@visx/scale";
 import { curveMonotoneX } from "@visx/curve";
@@ -31,7 +31,7 @@ export interface KpiRendererProps {
   ariaLabel?: string;
 }
 
-export function KpiRenderer({
+function KpiRendererImpl({
   spec,
   data,
   width,
@@ -147,3 +147,10 @@ export function KpiRenderer({
     </div>
   );
 }
+
+// FE-4 · Memoized leaf renderer. Props (spec / data / width / height /
+// ariaLabel) are stable value props supplied by <PremiumChart>, so a
+// shallow prop comparison safely skips re-renders when an unrelated
+// sibling in a mapped chart list updates.
+export const KpiRenderer = memo(KpiRendererImpl);
+KpiRenderer.displayName = "KpiRenderer";

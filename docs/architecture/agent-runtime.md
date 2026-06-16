@@ -172,3 +172,5 @@ Per-wave history lives in [`docs/WAVES.md`](../WAVES.md) (search the wave id). T
 pre-2026-06 subsystem changelog was moved out of this routing doc to keep `/load` cheap —
 see [`docs/archive/agent-runtime-changelog.md`](../archive/agent-runtime-changelog.md). Keep new
 entries here to ONE line each; full prose belongs in `docs/WAVES.md`.
+
+- PERF-10 (partial) — `turnColumnarStorage.ts` memoises ONE DuckDB handle per turn shared by all read-only analytical tools (`compute_growth`, `detect_seasonality`, `run_readonly_sql`, `run_analytical_query`, `execute_query_plan`, quick-answer); closed once by `runAgentTurn` at turn end. `add_computed_columns` (mutating DDL) keeps its own handle. Per-row coercion-into-DuckDB-types remainder staged.

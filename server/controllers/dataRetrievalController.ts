@@ -6,6 +6,7 @@ import {
 } from "../models/chat.model.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { applyActiveFilter } from "../lib/activeFilter/applyActiveFilter.js";
+import { parsePagination } from "../lib/pagination.js";
 import { logger } from "../lib/logger.js";
 
 // Get all analysis sessions for a user
@@ -194,8 +195,14 @@ export const getRawData = async (req: Request, res: Response) => {
   try {
     const { chatId } = req.params;
     const username = requireUsername(req);
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 100;
+    // API-6 · clamp page (>=1) and limit ([1, 1000]) via the shared parser so a
+    // malicious/garbled `?limit=99999999` can't force a huge slice. Defaults
+    // (page=1, limit=100) match the previous behaviour. Output field names are
+    // unchanged below — the client still reads `pagination.{page,limit,...}`.
+    const { page, limit } = parsePagination(req.query, {
+      maxLimit: 1000,
+      defaultLimit: 100,
+    });
 
     const chatDocument = await getChatDocument(chatId!, username);
 

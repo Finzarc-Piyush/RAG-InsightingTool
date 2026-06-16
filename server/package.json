@@ -14,6 +14,9 @@
         "start": "NODE_ENV=production NODE_OPTIONS='--max-old-space-size=4096' node dist/index.js",
         "preview": "npm run build && npm run start",
         "test": "node scripts/runTests.mjs",
+        "coverage": "COVERAGE=1 node scripts/runTests.mjs",
+        "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md}\"",
+        "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs,json,md}\"",
         "check:invariants": "node --import tsx scripts/check-invariants.ts",
         "check:type-escapes": "node --import tsx scripts/check-type-escapes.ts",
         "orient": "node --import tsx scripts/generate-bootstrap.ts",
@@ -70,6 +73,7 @@
         "esbuild": "^0.25.0",
         "eslint": "^9.39.4",
         "globals": "^15.15.0",
+        "prettier": "^3.8.4",
         "tsx": "^4.20.5",
         "typescript": "5.6.3",
         "typescript-eslint": "^8.61.0"

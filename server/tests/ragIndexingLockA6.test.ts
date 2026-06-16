@@ -18,12 +18,19 @@ import { dirname, resolve } from "node:path";
  *   5. set ragIndex.status = "ready" + new dataVersion
  *   6. updateChatDocument(doc)  // ← clobbers concurrent changes
  *
- * Now (post-A6):
+ * Now (post-A6, hardened by SEC-2):
  *   1. read doc
  *   2. `ver = dataVersion(doc)` captured immediately
- *   3. updateRagIndexField(status: "indexing")  // ← lock + re-fetch + targeted write
+ *   3. updateRagIndexField(status: "indexing")  // ← mutateChatDocument: lock + re-fetch + ETag
  *   4. embed for ~3s
- *   5. updateRagIndexField(status: "ready", dataVersion: ver)  // ← lock + re-fetch + targeted write
+ *   5. updateRagIndexField(status: "ready", dataVersion: ver)  // ← mutateChatDocument: lock + re-fetch + ETag
+ *
+ * SEC-2 routed `updateRagIndexField` through the `mutateChatDocument` seam
+ * (invariant #9) instead of a hand-rolled `withSessionWriteLock` + bare
+ * `updateChatDocument`. The seam still acquires the per-session lock and
+ * re-fetches the doc inside it (preserving the A6 anti-clobber guarantee), and
+ * ADDITIONALLY writes with an IfMatch `_etag` precondition so concurrent writes
+ * are safe ACROSS instances, not just intra-instance.
  *
  * The embeddings are still tagged with the version of the data we
  * actually SAMPLED at step 1 — not a later version that bumped during
@@ -42,37 +49,36 @@ const indexSessionSrc = resolve(
   "indexSession.ts"
 );
 
-describe("Wave A6 · RAG indexing uses the unified write lock for ragIndex writes", () => {
-  it("indexSession.ts imports withSessionWriteLock from the unified module", () => {
+describe("Wave A6 · RAG indexing uses the unified write seam for ragIndex writes", () => {
+  it("indexSession.ts imports the mutateChatDocument seam (which owns lock + re-fetch + ETag)", () => {
+    // SEC-2: A6's hand-rolled `withSessionWriteLock` + `updateChatDocument` was
+    // replaced by the `mutateChatDocument` seam, which encapsulates the lock,
+    // the fresh re-read, AND an IfMatch `_etag` precondition (invariant #9).
     const src = readFileSync(indexSessionSrc, "utf8");
     assert.match(
       src,
-      /import\s*\{\s*withSessionWriteLock\s*\}\s*from\s*['"]\.\.\/sessionWriteLock\.js['"]/,
-      "indexSession.ts must import withSessionWriteLock"
+      /import\s*\{[^}]*\bmutateChatDocument\b[^}]*\}\s*from\s*['"]\.\.\/\.\.\/models\/chat\.model\.js['"]/,
+      "indexSession.ts must import mutateChatDocument from chat.model"
     );
   });
 
-  it("declares a `updateRagIndexField` helper that uses the lock + re-fetches the doc", () => {
+  it("declares a `updateRagIndexField` helper that routes through the mutateChatDocument seam", () => {
     const src = readFileSync(indexSessionSrc, "utf8");
     assert.match(
       src,
       /async\s+function\s+updateRagIndexField/,
       "updateRagIndexField helper must exist"
     );
-    // The helper must acquire the lock AND re-fetch before mutating.
+    // The helper must delegate to the seam (which re-fetches the fresh doc under
+    // the per-session lock before mutating, so concurrent changes are preserved).
     const helperMatch = src.match(
       /async\s+function\s+updateRagIndexField[\s\S]+?^\}/m
     );
     assert.ok(helperMatch, "updateRagIndexField body must be findable");
     assert.match(
       helperMatch![0],
-      /withSessionWriteLock\s*\(\s*sessionId\s*,/,
-      "updateRagIndexField must wrap its body in withSessionWriteLock"
-    );
-    assert.match(
-      helperMatch![0],
-      /getChatBySessionIdEfficient\s*\(\s*sessionId\s*\)/,
-      "updateRagIndexField must re-fetch inside the lock so concurrent changes are preserved"
+      /mutateChatDocument\s*\(\s*sessionId\s*,/,
+      "updateRagIndexField must route its write through mutateChatDocument(sessionId, …)"
     );
   });
 
