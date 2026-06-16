@@ -69,6 +69,112 @@ interface UploadJob {
   blobPersisted?: boolean;
 }
 
+/**
+ * DATA-2 · instance-independent status source.
+ *
+ * The in-memory `jobs` Map is the fast path but is instance-pinned: on
+ * serverless a status poll that lands on a different instance (or after a
+ * cold start) sees an empty Map. Every job ALSO persists `enrichmentStatus`
+ * onto the Cosmos chat doc (preview → in_progress, understanding/save →
+ * complete, failure → failed), so the doc is a faithful, durable status
+ * source keyed by sessionId.
+ *
+ * `UploadJobStatusView` is the minimal read-only shape the status endpoint
+ * needs. The full in-memory `UploadJob` is a superset (so the Map fast path
+ * satisfies it directly), and `deriveStatusFromEnrichment` projects a doc's
+ * persisted `enrichmentStatus` onto the same shape for the cross-instance
+ * fallback. The Map stays the source of truth ONLY on the owning instance;
+ * the doc is the source of truth everywhere else.
+ */
+export interface UploadJobStatusView {
+  jobId: string;
+  sessionId: string;
+  username: string;
+  status: UploadJob['status'];
+  progress: number;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+  enrichmentStep?: UploadJobEnrichmentStep;
+  understandingReady?: boolean;
+  understandingReadyAt?: number;
+  suggestedQuestions?: string[];
+  warnings?: string[];
+  /** True when this snapshot was reconstructed from the Cosmos doc, not the Map. */
+  fromDoc?: boolean;
+}
+
+/**
+ * DATA-2 · Map a persisted enrichment state (Cosmos `enrichmentStatus`) onto
+ * the same status-view shape the in-memory job exposes, so a cross-instance
+ * poll can answer from the doc alone. Pure function — no I/O.
+ *
+ * The job-phase vocabulary the client reads (`pending`/`analyzing`/`completed`
+ * /`failed`) is recovered from the coarse `enrichmentStatus`:
+ *   - 'pending'     → 'pending'   (queued; not yet picked up)
+ *   - 'in_progress' → 'analyzing' (preview persisted, enrichment running)
+ *   - 'complete'    → 'completed' (terminal success)
+ *   - 'failed'      → 'failed'    (terminal failure)
+ * Progress is a coarse estimate (the fine-grained 0–100 lives only in the
+ * Map); the controller layers preview/enrichmentStatus details from the same
+ * doc on top, so the client UX is unchanged in shape.
+ */
+export function deriveStatusFromEnrichment(args: {
+  jobId: string;
+  sessionId: string;
+  username: string;
+  enrichmentStatus?: 'pending' | 'in_progress' | 'complete' | 'failed';
+  createdAt?: number;
+  lastUpdatedAt?: number;
+  suggestedQuestions?: string[];
+}): UploadJobStatusView {
+  const { jobId, sessionId, username, enrichmentStatus } = args;
+  let status: UploadJob['status'];
+  let progress: number;
+  let understandingReady: boolean | undefined;
+  switch (enrichmentStatus) {
+    case 'complete':
+      status = 'completed';
+      progress = 100;
+      understandingReady = true;
+      break;
+    case 'failed':
+      status = 'failed';
+      progress = 100;
+      break;
+    case 'in_progress':
+      status = 'analyzing';
+      progress = 50;
+      break;
+    case 'pending':
+    default:
+      status = 'pending';
+      progress = 0;
+      break;
+  }
+  return {
+    jobId,
+    sessionId,
+    username,
+    status,
+    progress,
+    createdAt: args.createdAt ?? 0,
+    completedAt:
+      enrichmentStatus === 'complete' || enrichmentStatus === 'failed'
+        ? args.lastUpdatedAt
+        : undefined,
+    understandingReady,
+    understandingReadyAt:
+      understandingReady && args.lastUpdatedAt ? args.lastUpdatedAt : undefined,
+    suggestedQuestions:
+      Array.isArray(args.suggestedQuestions) && args.suggestedQuestions.length > 0
+        ? args.suggestedQuestions
+        : undefined,
+    fromDoc: true,
+  };
+}
+
 class UploadQueue {
   private jobs: Map<string, UploadJob> = new Map();
   private processing: Set<string> = new Set();
@@ -153,7 +259,15 @@ class UploadQueue {
   }
 
   /**
-   * Get job status
+   * Get job status from the in-memory Map.
+   *
+   * DATA-2 · This is the FAST PATH and a write-through cache, not the source
+   * of truth. It only resolves on the instance that owns the job; on any
+   * other instance (or after a cold start) it returns null and the caller
+   * MUST fall back to the persisted `enrichmentStatus` on the Cosmos doc via
+   * `deriveStatusFromEnrichment` (see `getUploadStatus`). Keep this read
+   * Map-only — do not make it async / hit Cosmos here, so the same-instance
+   * poll stays a synchronous cache hit.
    */
   getJob(jobId: string): UploadJob | null {
     return this.jobs.get(jobId) || null;

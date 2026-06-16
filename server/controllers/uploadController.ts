@@ -1,6 +1,10 @@
 import { Request, Response } from "express";
 import multer from "multer";
-import { uploadQueue } from "../utils/uploadQueue.js";
+import {
+  uploadQueue,
+  deriveStatusFromEnrichment,
+  type UploadJobStatusView,
+} from "../utils/uploadQueue.js";
 import { requireUsername, AuthenticationError } from "../utils/auth.helper.js";
 import { isSuperadminRequest } from "../lib/superadmin.js";
 import { mergeSuggestedQuestions } from "../lib/suggestedQuestions.js";
@@ -137,18 +141,69 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Job ID is required' });
     }
 
+    // DATA-2 · the client tracks both jobId and sessionId; it passes the
+    // sessionId so a poll that lands on a NON-owning instance (or after a
+    // cold start) can resolve from the durable Cosmos doc instead of the
+    // instance-pinned in-memory Map.
+    const sessionIdHint =
+      typeof req.query?.sessionId === "string" ? req.query.sessionId.trim() : undefined;
+
+    const requesterEmail = email.trim().toLowerCase();
+
+    // DATA-2 · the durable Cosmos doc, read once and reused. It is the
+    // cross-instance status source (persisted `enrichmentStatus`) AND the
+    // source of preview/suggested-questions detail layered on below. We read
+    // it lazily: the Map fast path needs it for the detail block; the doc
+    // fallback needs it for the status itself.
+    const { getChatBySessionIdEfficient } = await import(
+      "../models/chat.model.js"
+    );
+
+    // Fast path: in-memory job on the owning instance (write-through cache).
     const job = uploadQueue.getJob(jobId);
 
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
+    // Resolve the status source — Map first, then the persisted doc.
+    let source: UploadJobStatusView | null = job;
+    let session: Awaited<ReturnType<typeof getChatBySessionIdEfficient>> | null =
+      null;
+
+    if (!source) {
+      // DATA-2 · cross-instance fallback. Without a sessionId hint we cannot
+      // map jobId → doc (the Map is the only jobId index), so a true cold
+      // poll without the hint still 404s — but the client always supplies it.
+      if (!sessionIdHint) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      try {
+        session = await getChatBySessionIdEfficient(sessionIdHint);
+      } catch {
+        session = null;
+      }
+      if (!session?.enrichmentStatus) {
+        // No durable status to report — behave as before (existence-hiding).
+        return res.status(404).json({ error: 'Job not found' });
+      }
+      const docSuggestedQuestions = mergeSuggestedQuestions(
+        session.sessionAnalysisContext?.suggestedFollowUps,
+        session.datasetProfile?.suggestedQuestions
+      );
+      source = deriveStatusFromEnrichment({
+        jobId,
+        sessionId: sessionIdHint,
+        username: session.username ?? "",
+        enrichmentStatus: session.enrichmentStatus,
+        createdAt: session.createdAt,
+        lastUpdatedAt: session.lastUpdatedAt,
+        suggestedQuestions: docSuggestedQuestions,
+      });
     }
 
-    // SEC-1: tenant-isolation check. The job carries the owner's email; a
-    // requester may only poll their own job (superadmins may shadow-view).
-    // Respond 404 (not 403) on mismatch so the endpoint does not confirm the
-    // existence of another tenant's job to an attacker enumerating ids.
-    const ownerEmail = (job.username ?? "").trim().toLowerCase();
-    const requesterEmail = email.trim().toLowerCase();
+    // SEC-1: tenant-isolation check. The status source carries the owner's
+    // email (from the Map job or the doc); a requester may only poll their
+    // own job (superadmins may shadow-view). Respond 404 (not 403) on
+    // mismatch so the endpoint does not confirm the existence of another
+    // tenant's job to an attacker enumerating ids.
+    const ownerEmail = (source.username ?? "").trim().toLowerCase();
     if (ownerEmail !== requesterEmail && !isSuperadminRequest(req)) {
       logger.warn(
         `⚠️ [uploadStatus] cross-tenant access blocked: requester=${requesterEmail} owner=${ownerEmail} job=${jobId}`
@@ -157,11 +212,11 @@ export const getUploadStatus = async (req: Request, res: Response) => {
     }
 
     const response: any = {
-      jobId: job.jobId,
-      sessionId: job.sessionId,
-      status: job.status,
-      progress: job.progress,
-      createdAt: job.createdAt,
+      jobId: source.jobId,
+      sessionId: source.sessionId,
+      status: source.status,
+      progress: source.progress,
+      createdAt: source.createdAt,
     };
     const phaseByStatus: Record<string, { phase: string; message: string }> = {
       pending: { phase: "queued", message: "Waiting for a worker slot." },
@@ -173,37 +228,41 @@ export const getUploadStatus = async (req: Request, res: Response) => {
       completed: { phase: "completed", message: "Upload processing complete." },
       failed: { phase: "failed", message: "Upload processing failed." },
     };
-    const phaseInfo = phaseByStatus[job.status] || { phase: "queued", message: "Processing upload." };
+    const phaseInfo = phaseByStatus[source.status] || { phase: "queued", message: "Processing upload." };
     response.phase = phaseInfo.phase;
     response.phaseMessage = phaseInfo.message;
 
-    if (job.startedAt) {
-      response.startedAt = job.startedAt;
+    if (source.startedAt) {
+      response.startedAt = source.startedAt;
     }
 
-    if (job.completedAt) {
-      response.completedAt = job.completedAt;
+    if (source.completedAt) {
+      response.completedAt = source.completedAt;
     }
 
-    if (job.error) {
-      response.error = job.error;
+    if (source.error) {
+      response.error = source.error;
     }
 
-    if (job.enrichmentStep) {
-      response.enrichmentStep = job.enrichmentStep;
+    if (source.enrichmentStep) {
+      response.enrichmentStep = source.enrichmentStep;
     }
-    if (job.understandingReady) {
+    if (source.understandingReady) {
       response.understandingReady = true;
-      response.understandingReadyAt = job.understandingReadyAt;
-      if (Array.isArray(job.suggestedQuestions) && job.suggestedQuestions.length > 0) {
-        response.suggestedQuestions = job.suggestedQuestions;
+      response.understandingReadyAt = source.understandingReadyAt;
+      if (Array.isArray(source.suggestedQuestions) && source.suggestedQuestions.length > 0) {
+        response.suggestedQuestions = source.suggestedQuestions;
       }
     }
-    if (job.warnings && job.warnings.length > 0) {
-      response.warnings = job.warnings;
+    if (source.warnings && source.warnings.length > 0) {
+      response.warnings = source.warnings;
     }
 
-    if (job.status === 'completed' && job.result) {
+    // `result` lives only in the Map (it is not persisted on the doc); when
+    // the fast-path job is present and completed, surface it. The doc
+    // fallback recovers the same client-facing completion via
+    // enrichmentStatus + previewReady + suggestedQuestions below.
+    if (job?.status === 'completed' && job.result) {
       response.result = job.result;
     }
 
@@ -211,15 +270,18 @@ export const getUploadStatus = async (req: Request, res: Response) => {
     // analyzing/saving before completed. Clients poll this endpoint — treat all post-preview
     // phases as preview-ready so the UI does not miss the narrow preview_ready window.
     response.previewReady =
-      job.status === "preview_ready" ||
-      job.status === "analyzing" ||
-      job.status === "saving" ||
-      job.status === "completed";
+      source.status === "preview_ready" ||
+      source.status === "analyzing" ||
+      source.status === "saving" ||
+      source.status === "completed";
     response.previewPayloadState = "none";
 
     try {
-      const { getChatBySessionIdEfficient } = await import("../models/chat.model.js");
-      const session = await getChatBySessionIdEfficient(job.sessionId);
+      // Reuse the doc already read on the fallback path; otherwise read it now
+      // for the Map fast path (preview/suggested-questions detail).
+      if (!session) {
+        session = await getChatBySessionIdEfficient(source.sessionId);
+      }
       if (session?.enrichmentStatus) {
         response.enrichmentStatus = session.enrichmentStatus;
       }
@@ -271,7 +333,7 @@ export const getUploadStatus = async (req: Request, res: Response) => {
 
     if (response.previewReady) {
       logger.log(
-        `[uploadStatus] job=${job.jobId} status=${job.status} previewPayloadState=${response.previewPayloadState} rows=${response.previewSampleRows?.length ?? 0}`
+        `[uploadStatus] job=${source.jobId} status=${source.status} src=${source.fromDoc ? "doc" : "map"} previewPayloadState=${response.previewPayloadState} rows=${response.previewSampleRows?.length ?? 0}`
       );
     }
 

@@ -18,7 +18,6 @@ import {
   remapGroupByToTemporalFacet,
 } from '../temporalFacetColumns.js';
 import { coerceTemporalFacetKeysToStrings } from "../temporalFacetKeyNormalization.js";
-import type { ActiveFilterCondition } from "../../shared/schema.js";
 import {
   extractCustomValue,
   findMentionedColumn,
@@ -32,75 +31,21 @@ import { handleCountNulls } from "./handlers/countNulls.js";
 import { handleDescribe } from "./handlers/describe.js";
 import { handleSummary } from "./handlers/summary.js";
 import { handleIdentifyOutliers } from "./handlers/identifyOutliers.js";
+// ARCH-2 / CQ-2 · pure intent helpers extracted to `dataOps/intent/*`. These are
+// side-effect-free predicates/translators over the message / intent shape with
+// zero coupling to the orchestrator's locals or session state. Re-exported below
+// so existing internal call sites (and the characterization test) keep working.
+import { isCorrelationRequest } from "./intent/isCorrelationRequest.js";
+import { userRequestedPreview } from "./intent/userRequestedPreview.js";
+import { isDataModificationOperation } from "./intent/isDataModificationOperation.js";
+import { translateLegacyFilterToActiveFilter } from "./intent/translateLegacyFilterToActiveFilter.js";
 
-/**
- * Wave-FA4 · Translator from the legacy LLM-parsed `intent.filterConditions`
- * shape to the new `ActiveFilterCondition[]` overlay shape. Returns ok:false
- * with a reason when at least one condition uses an operator the overlay
- * can't model — caller falls back to the legacy destructive `saveModifiedData`
- * path so behaviour stays exactly as before for `!=`, `contains`, etc.
- *
- * Operator mappings (loose; preserves user intent for the natural-language
- * path which was never operator-precise to begin with):
- *   `=`, `in`           → `kind: "in"`
- *   `>`, `>=`, `<`, `<=`, `between` (numeric) → `kind: "range"`
- *   `between` on a date column                → `kind: "dateRange"`
- *   `!=`, `contains`, `startsWith`, `endsWith` → not modelable → fall back
- */
-function translateLegacyFilterToActiveFilter(
-  rawConditions: NonNullable<DataOpsIntent["filterConditions"]>
-): { ok: true; conditions: ActiveFilterCondition[] } | { ok: false; reason: string } {
-  const out: ActiveFilterCondition[] = [];
-  for (const c of rawConditions) {
-    if (!c.column) return { ok: false, reason: "missing column" };
-    const column = c.column;
-    const op = c.operator;
-    if (op === "=") {
-      out.push({ kind: "in", column, values: [String(c.value)] });
-      continue;
-    }
-    if (op === "in") {
-      const vals = Array.isArray(c.values) ? c.values.map(String) : [];
-      out.push({ kind: "in", column, values: vals });
-      continue;
-    }
-    if (op === ">=" || op === ">") {
-      const n = Number(c.value);
-      if (!Number.isFinite(n)) return { ok: false, reason: `non-numeric ${op} bound` };
-      out.push({ kind: "range", column, min: n });
-      continue;
-    }
-    if (op === "<=" || op === "<") {
-      const n = Number(c.value);
-      if (!Number.isFinite(n)) return { ok: false, reason: `non-numeric ${op} bound` };
-      out.push({ kind: "range", column, max: n });
-      continue;
-    }
-    if (op === "between") {
-      // Treat YYYY-MM-DD-looking strings as date range; otherwise numeric range.
-      const isIsoDate =
-        typeof c.value === "string" && /^\d{4}-\d{2}-\d{2}/.test(c.value);
-      if (isIsoDate) {
-        out.push({
-          kind: "dateRange",
-          column,
-          from: String(c.value),
-          to: typeof c.value2 === "string" ? c.value2 : undefined,
-        });
-      } else {
-        const lo = Number(c.value);
-        const hi = Number(c.value2);
-        if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-          return { ok: false, reason: "between requires two numeric bounds" };
-        }
-        out.push({ kind: "range", column, min: lo, max: hi });
-      }
-      continue;
-    }
-    return { ok: false, reason: `operator '${op}' not representable as active filter` };
-  }
-  return { ok: true, conditions: out };
-}
+export {
+  isCorrelationRequest,
+  userRequestedPreview,
+  isDataModificationOperation,
+  translateLegacyFilterToActiveFilter,
+};
 
 async function loadActiveFilterPersistModule() {
   const translateModule = await import("../activeFilter/persistActiveFilter.js");
@@ -292,20 +237,6 @@ export interface DataOpsContext {
 /**
  * Parse user intent for data operations
  */
-/**
- * Returns true if the message is clearly asking for correlation analysis (not aggregation).
- * Correlation = relationship between variables; must be handled by Analysis, not Data Ops.
- */
-function isCorrelationRequest(message: string): boolean {
-  const lower = message.toLowerCase().trim();
-  return (
-    /\bcorrelation\s+(of|between|with|for)\b/i.test(lower) ||
-    /\bcorrelate\s+/i.test(lower) ||
-    /\b(what\s+)(affects?|impacts?|influences?)\s+/i.test(lower) ||
-    /\brelationship\s+(between|of)\s+/i.test(lower)
-  );
-}
-
 export async function parseDataOpsIntent(
   message: string,
   chatHistory: Message[],
@@ -3165,52 +3096,6 @@ Return JSON:
     logger.error('Error extracting derived column details:', error);
     return null;
   }
-}
-
-/**
- * Check if user explicitly requested to see/preview the data
- */
-function userRequestedPreview(message: string | undefined): boolean {
-  if (!message) return false;
-  const lowerMessage = message.toLowerCase();
-  
-  // Check for explicit preview/show requests
-  const previewPatterns = [
-    /show\s+(?:me\s+)?(?:the\s+)?(?:data|dataset|result|updated\s+data|new\s+data)/i,
-    /preview/i,
-    /display/i,
-    /see\s+(?:the\s+)?(?:data|dataset|result)/i,
-    /view\s+(?:the\s+)?(?:data|dataset)/i,
-    /give\s+me\s+(?:a\s+)?(?:preview|look)/i,
-  ];
-  
-  return previewPatterns.some(pattern => pattern.test(lowerMessage));
-}
-
-/**
- * Check if an operation modifies data and should automatically show preview
- */
-function isDataModificationOperation(operation: DataOpsIntent['operation']): boolean {
-  const dataModificationOperations: DataOpsIntent['operation'][] = [
-    'remove_nulls',
-    'create_column',
-    'create_derived_column',
-    'normalize_column',
-    'modify_column',
-    'remove_column',
-    'rename_column',
-    'remove_rows',
-    'add_row',
-    'replace_value',
-    'convert_type',
-    'aggregate',
-    'pivot',
-    'treat_outliers',
-    'filter',
-    'revert',
-  ];
-  
-  return dataModificationOperations.includes(operation);
 }
 
 /**

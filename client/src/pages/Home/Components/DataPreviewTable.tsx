@@ -42,7 +42,6 @@ import { AddPivotToDashboardModal } from './DashboardModal/AddPivotToDashboardMo
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import {
   facetColumnHeaderLabelForColumn,
-  formatTemporalFacetValue,
   isTemporalFacetFieldId,
 } from '@/lib/temporalFacetDisplay';
 import {
@@ -56,7 +55,6 @@ import {
 import { downloadPivotGridAsXlsx } from '@/lib/pivot/exportPivotToXlsx';
 import { logger } from '@/lib/logger';
 import type { FilterSelections, PivotModel, PivotUiConfig } from '@/lib/pivot/types';
-import { formatAnalysisNumber, parseNumericCell } from '@/lib/formatAnalysisNumber';
 import { api } from '@/lib/httpClient';
 import { withInflightLimit } from '@/lib/inflightLimiter';
 import {
@@ -84,6 +82,11 @@ import {
   inferDateLikeColumns,
 } from './DataPreviewTable/columnHelpers';
 import { ChartKeyInsightCallout } from './DataPreviewTable/ChartKeyInsightCallout';
+import { renderFlatAnalysisCell as renderFlatAnalysisCellPure } from './DataPreviewTable/FlatAnalysisCell';
+import {
+  PivotDrillthroughPanel,
+  type DrillthroughState,
+} from './DataPreviewTable/PivotDrillthroughPanel';
 import { PivotFieldPanel } from './pivot/PivotFieldPanel';
 import { PivotFilterChips } from './pivot/PivotFilterChips';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
@@ -348,12 +351,7 @@ export function DataPreviewTable({
   const [showValuesAs, setShowValuesAs] = useState<PivotShowValuesAsMode>('raw');
   const [showSubtotals, setShowSubtotals] = useState(true);
   const [showGrandTotal, setShowGrandTotal] = useState(true);
-  const [drillthrough, setDrillthrough] = useState<{
-    loading: boolean;
-    error: string | null;
-    count: number | null;
-    rows: Record<string, unknown>[];
-  } | null>(null);
+  const [drillthrough, setDrillthrough] = useState<DrillthroughState | null>(null);
   /** Row-level rows from columnar store when sessionId is set (defense in depth vs aggregated-only preview). */
   const [sessionSampleRows, setSessionSampleRows] = useState<
     Record<string, unknown>[] | null
@@ -2259,27 +2257,13 @@ export function DataPreviewTable({
     });
   }, [chartPreview, onChartAdded, toast]);
 
-  const renderFlatAnalysisCell = (col: string, raw: unknown): ReactNode => {
-    if (raw === null || raw === undefined) {
-      return <span className="text-muted-foreground italic">null</span>;
-    }
-    const facetMeta = facetMetaByName[col];
-    if (facetMeta) {
-      const formatted = formatTemporalFacetValue(raw, facetMeta.grain);
-      return formatted ?? String(raw);
-    }
-    if (effectiveDateColumns.includes(col)) {
-      const g = resolvedGrainsByColumn[col];
-      const formatted =
-        g !== undefined ? formatDateCellForGrain(raw, g) : null;
-      return formatted ?? String(raw);
-    }
-    if (numericColumns.includes(col)) {
-      const n = parseNumericCell(raw);
-      return n !== null ? formatAnalysisNumber(n) : String(raw);
-    }
-    return String(raw);
-  };
+  const renderFlatAnalysisCell = (col: string, raw: unknown): ReactNode =>
+    renderFlatAnalysisCellPure(col, raw, {
+      facetMetaByName,
+      effectiveDateColumns,
+      resolvedGrainsByColumn,
+      numericColumns,
+    });
 
   const chartPreviewForRender = useMemo<ChartSpec | null>(() => {
     if (!chartPreview) return null;
@@ -2535,62 +2519,10 @@ export function DataPreviewTable({
         onHideColumnMember={sessionId ? handlePivotHideColumnMember : undefined}
       />
 
-      {drillthrough && (
-        <div className="mt-3 rounded-lg border border-border/60 bg-background/70 p-3 shrink-0">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <div>
-              <div className="text-xs text-muted-foreground">Drillthrough rows</div>
-              <div className="text-sm font-semibold">
-                {drillthrough.loading ? 'Loading...' : `${drillthrough.count ?? 0} rows`}
-              </div>
-              {drillthrough.error && (
-                <div className="text-xs text-destructive mt-1">{drillthrough.error}</div>
-              )}
-            </div>
-            <button
-              type="button"
-              className="text-xs rounded border border-border/60 px-2 py-1 hover:bg-muted"
-              onClick={() => setDrillthrough(null)}
-            >
-              Close
-            </button>
-          </div>
-
-          {drillthrough.loading ? null : (
-            <div className="overflow-x-auto max-h-[260px]">
-              <table className="w-full border-collapse text-xs">
-                <thead className="sticky top-0 bg-muted/30 z-10">
-                  <tr>
-                    {drillthrough.rows[0]
-                      ? Object.keys(drillthrough.rows[0]!).map((c) => (
-                          <th
-                            key={c}
-                            className="text-left px-2 py-1 border-b border-border/60 whitespace-nowrap"
-                          >
-                            {c}
-                          </th>
-                        ))
-                      : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {drillthrough.rows.slice(0, 50).map((r, idx) => (
-                    <tr key={idx} className="border-b border-border/40">
-                      {drillthrough.rows[0]
-                        ? Object.keys(drillthrough.rows[0]!).map((c) => (
-                            <td key={c} className="px-2 py-1 whitespace-nowrap">
-                              {String((r as any)[c] ?? '')}
-                            </td>
-                          ))
-                        : null}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      <PivotDrillthroughPanel
+        drillthrough={drillthrough}
+        onClose={() => setDrillthrough(null)}
+      />
     </div>
     );
   };

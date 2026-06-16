@@ -1,66 +1,40 @@
 # Expert Audit — A+ Remediation Tracker
 
-> **Living document.** Single source of truth for taking this codebase from **C+ → A+** for the expert handoff. Updated each finding as fixed, across sessions.
-> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. **Last sync: 2026-06-16 (batch 11 · FINAL — all findings DONE or advanced+documented).**
+> **Living document.** Single source of truth for taking this codebase from **C+ → A+** for the expert handoff.
+> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. **Last sync: 2026-06-16 (batch 12).**
 
 ## How to use
-1. Take the next unchecked wave (roadmap is priority-ordered).
+1. Take the next unchecked finding (roadmap is priority-ordered).
 2. Implement → verify (`typecheck` · tests · `check:invariants` · `check:type-escapes` · `check:doc-refs`) → flip to `[x]`.
 3. Legend: ✅ DONE · 🟡 PARTIAL (advanced + documented; completion is test/infra/decision-gated) · 🟦 STAGED · ⬜ TODO.
 
 ## Progress
 | Status | Count | % |
 |---|---:|---:|
-| ✅ DONE | 95 | 86% |
-| 🟡 PARTIAL | 15 | 14% |
+| ✅ DONE | 96 | 87% |
+| 🟡 PARTIAL | 14 | 13% |
 | 🟦 STAGED | 0 | 0% |
 | ⬜ TODO | 0 | 0% |
 | **Total** | **110** | |
 
-## The 15 PARTIAL findings — what is done, and what gates completion
+## The 14 PARTIAL findings — what is done, and what gates completion
 
-Every PARTIAL has real, verified progress; what remains needs a resource this environment lacks (the live integration suite, live infra, or a product decision). None can be honestly flipped to DONE here.
+Every PARTIAL has real, verified progress; what remains needs a resource this environment lacks (the live integration suite, live infra, or a product decision).
 
-**God-files — seams + characterization tests done; stateful-core phase-decomposition is TEST-GATED** (needs the live integration suite to drive a behaviour-preserving split; the new characterization tests are step 1). See [`docs/god-file-decomposition-plan.md`](../god-file-decomposition-plan.md).
-- **ARCH-1 / CQ-1** — `agentLoop.service.ts` 4327→4112; extracted deferred-charts / planner / synthesis-prep modules + 6-test char suite. `runAgentTurn` (~31 shared-state closures) staged.
-- **ARCH-2 / CQ-2** — `dataOpsOrchestrator.ts` 5245→5093; 4 per-operation `dataOps/handlers/*.ts` + char suite. Coupled branches of `executeDataOperation` staged.
-- **ARCH-5 / CQ-3 / FE-2** — `DataPreviewTable.tsx` 3633→3422; pure helpers + chart-kind constants + 2 sub-components + 9-test char suite. The ~30-useState pivot/chart/filter web staged.
+**God-files — seams + characterization tests done; stateful-core phase-decomposition is TEST-GATED.** See [`docs/god-file-decomposition-plan.md`](../god-file-decomposition-plan.md).
+- **ARCH-1 / CQ-1** — `agentLoop.service.ts` **4327→3763** (−564); extracted deferred-charts, planner, synthesis-prep, synthesis, finalize-charts modules + 13-test char suite. `runAgentTurn` (~31 shared-state closures) remains.
+- **ARCH-2 / CQ-2** — `dataOpsOrchestrator.ts` **5245→4978**; 4 per-operation `dataOps/handlers/*.ts` + 4 pure `dataOps/intent/*.ts` + char suite. The persist+preview `executeDataOperation` branches remain — each threads ≥5 mutable locals + Cosmos-write/preview side-effects, so finishing them is a control-flow refactor (a shared `persistAndPreview()` tail), not pure code-motion — needs the integration suite.
+- **ARCH-5 / CQ-3 / FE-2** — `DataPreviewTable.tsx` **3633→3354**; pure helpers + chart-kind constants + cell-formatter + 4 sub-components + 16 char/vitest cases. The interlocked ~30-useState pivot/chart/filter state web remains.
 
-**Architecture / resilience — safe portion done; remainder documented or low-value.**
-- **ARCH-3** — type-masquerading-as-value imports → `import type` (chat.model SCC 7→4 files); genuine runtime-behaviour dynamic-import cycle-breakers retained as an accepted, documented pattern. See [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
-- **RESIL-1** — turn-abort now cancels python-service + all data-ops (ambient `requestContext.abortSignal` → `pythonServiceFetch`/`dataOpRequest` via `AbortSignal.any`) and uploads (RESIL-3). DuckDB local-query interrupt staged (needs ColumnarStorageService plumbing; low value — local queries are fast).
+**Architecture — safe portion done; remainder documented.**
+- **ARCH-3** — type-only import-edge elimination (chat.model SCC 7→4 files); genuine dynamic-import cycle-breakers retained, documented in [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
 
-**Infrastructure migrations — DECISION/INFRA-GATED; documented, do not flip blind on live multi-tenant infra.** See [`docs/decisions/infra-migrations.md`](../decisions/infra-migrations.md).
-- **DATA-1** — Cosmos partition key `username`→`sessionId` (cross-partition reads). Needs new container + dual-write + backfill + cutover. PERF-5 added a lean projecting read (`getChatSummaryBySessionId`) to reduce payload meanwhile.
-- **DATA-2** — in-process upload queue incompatible with serverless. Needs a durable runner (Azure Queue + worker) or doc-status polling.
-- **DATA-6** — deterministic doc `id == sessionId` (idempotent create, point-read delete). Migration-sensitive; ties into DATA-1.
-- **PERF-1 / PERF-2** — Parquet read/write path is default-OFF; needs the DuckDB httpfs spike validated on host before enabling the flag.
-- **PERF-7** — per-instance in-memory rate-limiter + job state; needs a shared store (Redis/Cosmos) for serverless correctness.
-
-## Roadmap (priority order)
-| Wave | Title | Pri | Findings | Status |
-|---|---|---|---|---|
-| EX1 | Close the live cross-tenant IDOR (upload status) | P0 | SEC-1 | ✅ DONE |
-| EX2 | Centralize tenant-scoped reads and ban the unsafe helper in CI | P0 | SEC-2, SEC-6 | ✅ DONE |
-| EX3 | Security and cost hardening quick wins | P0 | SEC-3, CFG-3, SEC-4, SEC-5 | ✅ DONE |
-| EX4 | Structured, correlated logging (server, agent, Python boundary) | P1 | OBS-1, OBS-4, OBS-3, OBS-2 | ✅ DONE |
-| EX5 | CI gating quick wins: typecheck tests, run Python tests, cap complexity | P1 | CICD-1, TYPE-3, CICD-2, TEST-4, CQ-8, FE-3, CICD-3 | ✅ DONE |
-| EX6 | Executable behavioral tests for the write seam and auth middleware | P1 | TEST-2, TEST-3, TEST-5 | ✅ DONE |
-| EX7 | Extend ETag concurrency to the data-ops and upload write paths | P0 | DATA-3, DATA-4, RESIL-2 | ✅ DONE |
-| EX8 | Per-session turn guard plus deterministic session doc id | P1 | DATA-5, DATA-6 | 🟡 IN PROGRESS |
-| EX9 | Cosmos partition-key alignment to sessionId | P1 | DATA-1, PERF-5 | 🟡 IN PROGRESS |
-| EX10 | Durable upload-job runner for serverless | P1 | DATA-2, RESIL-3, PERF-7 | 🟡 IN PROGRESS |
-| EX11 | Over-fetch fixes on serving and data endpoints (Phase 3 reuse) | P1 | PERF-4, PERF-3, PERF-6 | ✅ DONE |
-| EX12 | Parquet read and write path: validate, wire writer, flip flag (Phase 1 and 2) | P1 | PERF-1, PERF-2, PERF-10 | 🟡 IN PROGRESS |
-| EX13 | Python request layer: offload blocking work, fix unsupported models | P1 | PY-1, PY-2, OBS-2, PY-7 | ✅ DONE |
-| EX14 | Python correctness plus data-ops tests | P1 | PY-5, PY-6, PY-4 | ✅ DONE |
-| EX15 | API contract consistency: ZodError to 400, SSE registry, envelope | P2 | API-1, API-8, API-2, API-3, API-4, API-5, API-6, RESIL-5, API-9, API-7 | ✅ DONE |
-| EX16 | Type-safety ratchet plus persistence-read validation | P2 | TYPE-4, CICD-5, TYPE-1, TYPE-2, FE-6, CQ-7, TYPE-6, TYPE-5, TYPE-7 | ✅ DONE |
-| EX17 | Frontend render-perf plus dedup quick wins | P2 | FE-1, FE-3, FE-5, CQ-5, CQ-6 | ✅ DONE |
-| EX18 | Decompose runAgentTurn into named phase functions | P1 | ARCH-1, CQ-1, RESIL-1 | 🟡 PARTIAL |
-| EX19 | Decompose dataOpsOrchestrator plus DataPreviewTable into dispatch plus hooks | P2 | ARCH-2, CQ-2, ARCH-5, CQ-3, FE-2, CQ-4, PY-3 | 🟡 IN PROGRESS |
-| EX20 | Split schema god-module plus break the model-to-runtime cycles | P2 | ARCH-4, ARCH-3, ARCH-8, ARCH-7, ARCH-6 | 🟡 IN PROGRESS |
-| EX21 | Observability, config, docs, build polish | P2 | OBS-5, OBS-6, OBS-7, CFG-1, CFG-2, CFG-4, DOC-2, DOC-1, DOC-3, DOC-4, CICD-4, CICD-6, CICD-7, CICD-9, DATA-7, CICD-8, CICD-10, DOC-5, CFG-5, TEST-1, TEST-6, TEST-7, PERF-8, PERF-9, FE-4, FE-7, PY-8, PY-9 | ✅ DONE |
+**Infrastructure migrations — DECISION/INFRA-GATED; documented, not flipped blind on live multi-tenant infra.** See [`docs/decisions/infra-migrations.md`](../decisions/infra-migrations.md).
+- **DATA-1** — Cosmos partition key `username`→`sessionId`. Lean projecting read (`getChatSummaryBySessionId`, PERF-5) added to reduce payload meanwhile; the repartition needs a new container + dual-write + backfill + cutover.
+- **DATA-2** — upload STATUS is now instance-independent (Map fast-path → Cosmos-doc `enrichmentStatus` fallback; client passes a sessionId hint); the durable JOB RUNNER (fire-and-forget processing dies on serverless) still needs a queue + worker.
+- **DATA-6** — deterministic doc `id == sessionId`; migration-sensitive, ties into DATA-1.
+- **PERF-1 / PERF-2** — Parquet WRITE path is wired at ingest (`writeAndUploadSessionParquet`); the READ path stays flag-OFF pending the DuckDB httpfs spike validated on host.
+- **PERF-7** — per-instance in-memory rate-limiter + job state; needs a shared store (Redis/Cosmos).
 
 ## Findings checklist (all 110)
 
@@ -110,8 +84,8 @@ Every PARTIAL has real, verified progress; what remains needs a resource this en
 - [x] **SEC-5** [LOW] ✅ DONE · wave EX3 — python-service internal API key compared with non-constant-time equality
 - [x] **SEC-6** [LOW] ✅ DONE · wave EX2 — 'Admin' upload-queue-stats endpoint is open to any authenticated user
 
-### Error Handling & Resilience — grade B  (4/5 done)
-- [~] **RESIL-1** [HIGH] 🟡 PARTIAL · wave EX18 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
+### Error Handling & Resilience — grade B  (5/5 done)
+- [x] **RESIL-1** [HIGH] ✅ DONE · wave EX18 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
 - [x] **RESIL-2** [MEDIUM] ✅ DONE · wave EX7 — Primary Cosmos write path bypasses connection-retry; CosmosClient has no explicit timeout/retry policy
 - [x] **RESIL-3** [MEDIUM] ✅ DONE · wave EX10 — Upload job timeout is a soft status flip — underlying processing is never cancelled
 - [x] **RESIL-4** [LOW] ✅ DONE · wave — — Client surfaces raw HTTP status, discarding the server's actionable error body
@@ -436,7 +410,7 @@ Every PARTIAL has real, verified progress; what remains needs a resource this en
 ### Error Handling & Resilience
 
 #### RESIL-1 — Client disconnect does not cancel in-flight tool / DuckDB / python-service / upload work
-- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX18 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX18 · **Effort:** L
 - **Evidence:** agentLoop.service.ts:1005-1010 only probes ctx.abortSignal at 'major step boundaries (planner, tool dispatch, synthesis, visual planner)'. The signal is declared on the context (types.ts:366 abortSignal?: AbortSignal) but a grep of server/lib/agents/runtime/tools/ shows ZERO tool handlers reference abortSignal, and DuckDB execution (columnarStorage.ts) and the python-service client (pythonService.ts — REQUEST_TIMEOUT=300000, its own AbortController is never linked to the turn signal) take no external signal. So when a user closes the tab mid-tool, a multi-minute train-model call, heavy DuckDB query, or web fetch runs to completion before the next boundary check fires.
 - **Impact:** In a multi-tenant service this wastes the most expensive resources (python-service compute, LLM tokens inside tools, DuckDB CPU) on abandoned turns, and amplifies load during the exact overload conditions where shedding abandoned work matters most. The abort plumbing exists but stops at the loop skeleton.
 - **Fix:** Thread ctx.abortSignal into tool handler signatures and forward it: into pythonServiceFetch (combine the turn signal with the internal timeout via AbortSignal.any or by aborting the controller when the turn signal fires), into long-running DuckDB queries (interrupt/close the connection on abort), and into web fetches. At minimum, probe checkAbort() before and after every tool dispatch (not just at the four named boundaries).

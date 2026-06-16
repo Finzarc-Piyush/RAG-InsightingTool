@@ -70,3 +70,22 @@ them, repeat the pattern one cohesive cluster per wave per the table above.
     dashboardCapsDPF6, the verifier-wiring tests). These need the integration
     suite to drive a test-first phase decomposition — the characterization tests
     above are the first step.
+- **EX-batch12/13 (2026-06-16) · further L-017 carving (cores now reached).**
+  - `agentLoop.service.ts` 4112→**3763** → `agentLoop/synthesis.ts` (synthesize
+    + narrative/plaintext retries + magnitude/envelope schemas + SynthesisSource)
+    and `agentLoop/finalizeCharts.ts` (finalizeMergedCharts + DASHBOARD_CHART_HARD_CAP);
+    the two pinning grep tests (synthesisRetry, dashboardCapsDPF6) were repointed
+    to the new modules + the char suite grew to 13.
+  - `dataOpsOrchestrator.ts` 5093→**4978** → `dataOps/intent/*.ts` (isCorrelationRequest,
+    userRequestedPreview, isDataModificationOperation, translateLegacyFilterToActiveFilter).
+  - `DataPreviewTable.tsx` 3422→**3354** → `DataPreviewTable/FlatAnalysisCell.tsx`
+    (pure cell formatter, +7-case vitest) + `DataPreviewTable/PivotDrillthroughPanel.tsx`.
+  - **SAFE-CARVING LIMIT REACHED.** What remains in all three is the genuinely
+    closure-coupled core: `runAgentTurn`'s 31-closure body, `executeDataOperation`'s
+    persist+preview branches (each threading sessionId/sessionDoc/shouldShowPreview/
+    saveModifiedData/getPreviewFromSavedData — a shared `persistAndPreview()` tail
+    refactor, not code-motion), and the DataPreviewTable pivot/filter state web.
+    Completing these is a **control-flow refactor that needs the live integration
+    suite** (which hangs here on the missing Cosmos connection) — NOT safely
+    automatable by pure code-motion. The ~40 characterization tests added across
+    batches 9/12/13 are the test-first foundation for that future work.

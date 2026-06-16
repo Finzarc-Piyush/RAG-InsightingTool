@@ -214,22 +214,16 @@ export class ColumnarStorageService {
    * the SQL they pass is safe (built via the helpers in `activeFilter/` that
    * compose `quoteIdent` / `escapeSqlStringLiteral`); never concatenate user
    * input directly into a string here.
+   *
+   * RESIL-1 · Honors the ambient turn abort signal (or an explicit one) so a
+   * long DDL/CHECKPOINT op is cancelled on client disconnect.
    */
-  async executeStatement(sql: string): Promise<void> {
-    return this.runStatement(sql);
+  async executeStatement(sql: string, signal?: AbortSignal): Promise<void> {
+    return this.runStatement(sql, signal);
   }
 
-  private async runStatement(sql: string): Promise<void> {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call initialize() first.');
-    }
-    await new Promise<void>((resolve, reject) => {
-      const conn = this.db!.connect();
-      conn.run(sql, (err: Error | null) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+  private async runStatement(sql: string, signal?: AbortSignal): Promise<void> {
+    await this.runOnConnection<void>(sql, 'run', signal, () => undefined);
   }
 
   /**
@@ -276,6 +270,87 @@ export class ColumnarStorageService {
 
   private normalizeDuckRows<T = any>(rows: any[]): T[] {
     return rows.map((row) => this.normalizeDuckValue(row) as T);
+  }
+
+  /**
+   * RESIL-1 · Resolve the effective abort signal for a query: the explicit
+   * caller signal if given, else the ambient turn signal stamped on the request
+   * context by `processStreamChat` (client-disconnect cancellation). Returns
+   * `undefined` outside a turn scope so the happy path is unchanged.
+   */
+  private resolveAbortSignal(signal?: AbortSignal): AbortSignal | undefined {
+    return signal ?? getRequestContext().abortSignal;
+  }
+
+  /**
+   * RESIL-1 · Run a DuckDB statement/query through the shared connection with
+   * abort handling. When the resolved signal is already aborted we fail fast
+   * before issuing work; if it aborts mid-flight we call `db.interrupt()` to
+   * cancel the in-flight query and reject with an abort error. The DuckDB
+   * callback that fires afterwards is ignored (the promise is already settled).
+   * `run` (no rows) vs `all` (rows) is selected by the `mode` arg. Happy path —
+   * no signal bound, or bound-but-not-aborted — is byte-identical to a bare
+   * `conn.run` / `conn.all`.
+   */
+  private runOnConnection<R>(
+    sql: string,
+    mode: 'run' | 'all',
+    signal: AbortSignal | undefined,
+    onRows: (rows: any[]) => R
+  ): Promise<R> {
+    if (!this.db) {
+      throw new Error('Database not initialized. Call initialize() first.');
+    }
+    const abortSignal = this.resolveAbortSignal(signal);
+    if (abortSignal?.aborted) {
+      throw new Error('DuckDB query aborted before execution');
+    }
+
+    return new Promise<R>((resolve, reject) => {
+      const conn = this.db!.connect();
+      let settled = false;
+      let onAbort: (() => void) | undefined;
+
+      const cleanup = () => {
+        if (onAbort && abortSignal) {
+          abortSignal.removeEventListener('abort', onAbort);
+        }
+      };
+
+      if (abortSignal) {
+        onAbort = () => {
+          if (settled) return;
+          settled = true;
+          // Cancel the running query; the conn callback will fire with an error
+          // which we ignore (already rejected here).
+          try {
+            this.db?.interrupt();
+          } catch {
+            // best-effort: interrupt may throw if the db is already closing
+          }
+          cleanup();
+          reject(new Error('DuckDB query aborted'));
+        };
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const callback = (err: Error | null, rows?: any[]) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(onRows(rows ?? []));
+        }
+      };
+
+      if (mode === 'all') {
+        conn.all(sql, callback);
+      } else {
+        conn.run(sql, (err: Error | null) => callback(err));
+      }
+    });
   }
 
   /**
@@ -648,26 +723,15 @@ export class ColumnarStorageService {
    */
   async getSampleRows(
     limit: number = 50,
-    tableName: string = 'data'
+    tableName: string = 'data',
+    signal?: AbortSignal
   ): Promise<Record<string, any>[]> {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call initialize() first.');
-    }
-
-    return new Promise((resolve, reject) => {
-      const conn = this.db!.connect();
-      
-      conn.all(
-        `SELECT * FROM ${tableName} LIMIT ${limit}`,
-        (err: Error | null, rows: any[]) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(this.normalizeDuckRows<Record<string, any>>(rows));
-          }
-        }
-      );
-    });
+    return this.runOnConnection<Record<string, any>[]>(
+      `SELECT * FROM ${tableName} LIMIT ${limit}`,
+      'all',
+      signal,
+      (rows) => this.normalizeDuckRows<Record<string, any>>(rows)
+    );
   }
 
   /**
@@ -676,54 +740,31 @@ export class ColumnarStorageService {
    */
   async getAllRows(
     tableName: string = 'data',
-    columns?: string[]
+    columns?: string[],
+    signal?: AbortSignal
   ): Promise<Record<string, any>[]> {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call initialize() first.');
-    }
-
     const columnsStr = columns && columns.length > 0
       ? columns.map(col => `"${col.replace(/"/g, '""')}"`).join(', ')
       : '*';
 
-    return new Promise((resolve, reject) => {
-      const conn = this.db!.connect();
-      
-      conn.all(
-        `SELECT ${columnsStr} FROM ${tableName}`,
-        (err: Error | null, rows: any[]) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(this.normalizeDuckRows<Record<string, any>>(rows));
-          }
-        }
-      );
-    });
+    return this.runOnConnection<Record<string, any>[]>(
+      `SELECT ${columnsStr} FROM ${tableName}`,
+      'all',
+      signal,
+      (rows) => this.normalizeDuckRows<Record<string, any>>(rows)
+    );
   }
 
   /**
    * Get row count for a table
    */
-  async getRowCount(tableName: string = 'data'): Promise<number> {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call initialize() first.');
-    }
-
-    return new Promise((resolve, reject) => {
-      const conn = this.db!.connect();
-      
-      conn.all(
-        `SELECT COUNT(*) as count FROM ${tableName}`,
-        (err: Error | null, rows: any[]) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(Number(rows[0]?.count ?? 0));
-          }
-        }
-      );
-    });
+  async getRowCount(tableName: string = 'data', signal?: AbortSignal): Promise<number> {
+    return this.runOnConnection<number>(
+      `SELECT COUNT(*) as count FROM ${tableName}`,
+      'all',
+      signal,
+      (rows) => Number(rows[0]?.count ?? 0)
+    );
   }
 
   /**
@@ -771,54 +812,9 @@ export class ColumnarStorageService {
    * path (no signal / not aborted) is unchanged.
    */
   async executeQuery<T = any>(query: string, signal?: AbortSignal): Promise<T[]> {
-    if (!this.db) {
-      throw new Error('Database not initialized. Call initialize() first.');
-    }
-
-    const abortSignal = signal ?? getRequestContext().abortSignal;
-    if (abortSignal?.aborted) {
-      throw new Error('DuckDB query aborted before execution');
-    }
-
-    return new Promise((resolve, reject) => {
-      const conn = this.db!.connect();
-      let settled = false;
-      let onAbort: (() => void) | undefined;
-
-      const cleanup = () => {
-        if (onAbort && abortSignal) {
-          abortSignal.removeEventListener('abort', onAbort);
-        }
-      };
-
-      if (abortSignal) {
-        onAbort = () => {
-          if (settled) return;
-          settled = true;
-          // Cancel the running query; the conn.all callback will fire with an
-          // error which we ignore (already rejected here).
-          try {
-            this.db?.interrupt();
-          } catch {
-            // best-effort: interrupt may throw if the db is already closing
-          }
-          cleanup();
-          reject(new Error('DuckDB query aborted'));
-        };
-        abortSignal.addEventListener('abort', onAbort, { once: true });
-      }
-
-      conn.all(query, (err: Error | null, rows: any[]) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (err) {
-          reject(err);
-        } else {
-          resolve(this.normalizeDuckRows<T>(rows));
-        }
-      });
-    });
+    return this.runOnConnection<T[]>(query, 'all', signal, (rows) =>
+      this.normalizeDuckRows<T>(rows)
+    );
   }
 
   /**

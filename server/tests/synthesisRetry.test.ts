@@ -51,9 +51,15 @@ describe("synthesizer body.min(1) schema (Wave W2)", () => {
 
 describe("synthesizer retry chain (Wave W2)", () => {
   let src = "";
-  it("loads agentLoop source", async () => {
+  it("loads synthesizer source", async () => {
+    // Wave (ARCH-1/CQ-1, deepened) · the synthesizer cluster moved out of the
+    // agentLoop.service.ts god-file into ./agentLoop/synthesis.ts (L-017 pattern:
+    // extract the cohesive cluster + re-point the pinning grep test). The
+    // synthesizeFinalAnswerEnvelope call SITE still lives in agentLoop.service.ts
+    // (pinned by tests/chartAnalysisAlign.test.ts + synthesisFallbackFlow.test.ts);
+    // the DEFINITIONS the asserts below pin now live in the sibling module.
     const here = dirname(fileURLToPath(import.meta.url));
-    const srcPath = join(here, "../lib/agents/runtime/agentLoop.service.ts");
+    const srcPath = join(here, "../lib/agents/runtime/agentLoop/synthesis.ts");
     src = await readFile(srcPath, "utf8");
     assert.ok(src.length > 0);
   });

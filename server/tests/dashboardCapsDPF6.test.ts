@@ -100,8 +100,12 @@ describe("DPF6 · finalizeMergedCharts default cap is 24 (raised from 14)", () =
     const path = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const here = path.dirname(fileURLToPath(import.meta.url));
+    // Wave (ARCH-1/CQ-1, deepened) · finalizeMergedCharts + DASHBOARD_CHART_HARD_CAP
+    // moved out of the agentLoop.service.ts god-file into ./agentLoop/finalizeCharts.ts
+    // (L-017 pattern: extract the cohesive cap cluster + re-point the pinning grep
+    // test). The cap is still 24; only the file that holds the literals changed.
     const src = await fs.readFile(
-      path.resolve(here, "../lib/agents/runtime/agentLoop.service.ts"),
+      path.resolve(here, "../lib/agents/runtime/agentLoop/finalizeCharts.ts"),
       "utf8"
     );
     // Two distinct sites must both read 24 (parsing the env, and the

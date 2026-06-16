@@ -518,7 +518,7 @@ export const useHomeMutations = ({
       if (uploadPollInFlightRef.current) return;
       uploadPollInFlightRef.current = true;
       try {
-        const st = await getUploadJobStatus(jobId);
+        const st = await getUploadJobStatus(jobId, sessionId);
         const phase = deriveClientPhase(st);
         setEnrichmentPollSnapshot?.({
           uploadProgress: st.progress,

@@ -50,7 +50,14 @@ export interface UploadJobStatusResponse {
 }
 
 export async function getUploadJobStatus(
-  jobId: string
+  jobId: string,
+  sessionId?: string
 ): Promise<UploadJobStatusResponse> {
-  return api.get<UploadJobStatusResponse>(`/api/upload/status/${jobId}`);
+  // DATA-2 · pass the sessionId so a status poll that lands on a non-owning
+  // server instance (or after a cold start) can resolve from the durable
+  // Cosmos doc's persisted enrichmentStatus instead of the instance-pinned
+  // in-memory job Map. Backward-compatible: omitting it preserves the old
+  // jobId-only URL.
+  const qs = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
+  return api.get<UploadJobStatusResponse>(`/api/upload/status/${jobId}${qs}`);
 }

@@ -55,6 +55,10 @@ describe("RESIL-1 · pythonServiceFetch caller-signal cancellation", () => {
 });
 
 describe("RESIL-1 · DuckDB executeQuery pre-execution abort", () => {
+  const isAbortRejection = (err: unknown) =>
+    err instanceof Error &&
+    /aborted before execution|not initialized/i.test(err.message);
+
   it("throws before issuing the query when the caller signal is already aborted", async () => {
     const storage = new ColumnarStorageService({ sessionId: "resil-test" });
     try {
@@ -65,12 +69,40 @@ describe("RESIL-1 · DuckDB executeQuery pre-execution abort", () => {
     }
     const ctrl = new AbortController();
     ctrl.abort();
-    await assert.rejects(
-      storage.executeQuery("SELECT 1", ctrl.signal),
-      (err: unknown) =>
-        err instanceof Error &&
-        /aborted before execution|not initialized/i.test(err.message)
-    );
+    await assert.rejects(storage.executeQuery("SELECT 1", ctrl.signal), isAbortRejection);
+    await storage.close().catch(() => {});
+  });
+
+  it("throws when the AMBIENT turn signal is already aborted (no explicit signal)", async () => {
+    const storage = new ColumnarStorageService({ sessionId: "resil-test-ambient" });
+    try {
+      await storage.initialize();
+    } catch {
+      // DuckDB optional dependency unavailable — guard still applies.
+    }
+    const ctrl = new AbortController();
+    ctrl.abort();
+    // No explicit signal passed: the executor must read the ambient turn signal
+    // off the request context and fail fast.
+    await withRequestContext({ abortSignal: ctrl.signal }, async () => {
+      await assert.rejects(storage.executeQuery("SELECT 1"), isAbortRejection);
+    });
+    await storage.close().catch(() => {});
+  });
+
+  it("aborts getSampleRows and executeStatement via the ambient signal too", async () => {
+    const storage = new ColumnarStorageService({ sessionId: "resil-test-paths" });
+    try {
+      await storage.initialize();
+    } catch {
+      // DuckDB optional dependency unavailable — guard still applies.
+    }
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await withRequestContext({ abortSignal: ctrl.signal }, async () => {
+      await assert.rejects(storage.getSampleRows(50), isAbortRejection);
+      await assert.rejects(storage.executeStatement("CHECKPOINT"), isAbortRejection);
+    });
     await storage.close().catch(() => {});
   });
 });
