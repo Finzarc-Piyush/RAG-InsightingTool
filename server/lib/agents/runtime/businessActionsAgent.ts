@@ -118,7 +118,13 @@ NEVER:
 OUTPUT: JSON exactly matching \`{ items: BusinessActionItem[] }\`. Empty array is valid and preferred to weak output.`;
 
 const ENVELOPE_SECTION_CHAR_CAP = 6000;
-const DOMAIN_CONTEXT_CHAR_CAP = 2500;
+// Domain context the user authored ("Give Additional Context"). The main
+// answer (synthesis/narrator) reads up to 9 000 chars; this post-answer
+// business-actions step kept a much tighter 2 500-char slot, which made the
+// "context trimmed" toast fire for ordinary-length notes. 6 000 chars (~1.5K
+// tokens) fits typical domain notes while staying well under the per-prompt
+// DEFAULT_PROMPT_BUDGET — so the toast now fires only for genuinely large input.
+const DOMAIN_CONTEXT_CHAR_CAP = 6000;
 const PERMANENT_CONTEXT_CHAR_CAP = 1200;
 const PRIOR_INVESTIGATION_CHAR_CAP = 800;
 

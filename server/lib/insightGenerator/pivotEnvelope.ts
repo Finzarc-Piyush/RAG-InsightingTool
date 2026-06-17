@@ -193,7 +193,7 @@ export async function generatePivotEnvelope(
 TASK: Produce a structured "key insight" envelope for the pivot view that summarises THIS chart's data for a decision-maker. Each entry must ground in DATA FACTS and PIVOT PATTERNS — never invent numbers.
 
 VOICE — your reader is a manager / CXO, NOT a statistician:
-- Never use these terms in user-visible output: HHI, CV, IQR, P25, P50, P75, "long tail", "Pearson r", "percentile". Use plain English instead ("concentrated", "varies a lot", "fairly stable", "in the bottom quartile", "moves in the same direction").
+- Never use these terms in user-visible output: HHI, CV, IQR, P25, P50, P75, "quartile", "mass", "trough", "long tail", "Pearson r", "percentile". Use plain English instead ("concentrated", "varies a lot", "fairly stable", "clearly behind", "moves in the same direction").
 - Never assert decline, weakness, or risk in a way that sounds accusatory. Use neutral, observational language ("South contributed 17% of the total" — not "South is underperforming and signals distribution failures").
 - Frame magnitudes in K / M / B, never raw decimals (e.g. "710K", not "710,212.40").
 
@@ -233,7 +233,7 @@ Aim for 1–3 findings, 1–3 implications, 1–3 recommendations. Quality > qua
           {
             role: "system",
             content:
-              `You are a senior analyst writing the "key insight" envelope shown above a pivot table for a manager / CXO reader. Return JSON with keys "findings", "implications", "recommendations". Each entry must ground in the provided numbers — never invent. Plain-English vocabulary only: never use HHI, CV, IQR, P25/P50/P75, "long tail", "Pearson r", or "percentile" in user-visible output; say "concentrated / spread out", "varies a lot / fairly stable", "in the top/bottom quartile", "moves in the same direction" instead. Always abbreviate magnitudes ≥1000 with K / M / B; never raw decimals like 710,212.40. Recommendations must be ANALYTICAL next steps grounded in columns that actually exist in DATA FACTS — never invent mechanisms (channel, distribution, brand, competition, premiumisation, etc.) the data does not contain, and never recommend executive decisions like launching products or entering categories. Tone is neutral and observational, never accusatory. No markdown.`,
+              `You are a senior analyst writing the "key insight" envelope shown above a pivot table for a manager / CXO reader. Return JSON with keys "findings", "implications", "recommendations". Each entry must ground in the provided numbers — never invent. Plain-English vocabulary only: never use HHI, CV, IQR, P25/P50/P75, "quartile", "mass", "trough", "long tail", "Pearson r", or "percentile" in user-visible output; say "concentrated / spread out", "varies a lot / fairly stable", "clearly ahead / behind", "moves in the same direction" instead. Always abbreviate magnitudes ≥1000 with K / M / B; never raw decimals like 710,212.40. Recommendations must be ANALYTICAL next steps grounded in columns that actually exist in DATA FACTS — never invent mechanisms (channel, distribution, brand, competition, premiumisation, etc.) the data does not contain, and never recommend executive decisions like launching products or entering categories. Tone is neutral and observational, never accusatory. No markdown.`,
           },
           { role: "user", content: userPrompt },
         ],

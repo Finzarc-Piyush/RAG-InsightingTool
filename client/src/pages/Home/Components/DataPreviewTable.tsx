@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePreviewTableSort } from '@/hooks/usePreviewTableSort';
@@ -79,6 +79,10 @@ import {
   inferNumericColumns,
   inferDateLikeColumns,
 } from './DataPreviewTable/columnHelpers';
+import {
+  initialPivotChartState,
+  pivotChartReducer,
+} from './DataPreviewTable/state/pivotChartReducer';
 import { ChartKeyInsightCallout } from './DataPreviewTable/ChartKeyInsightCallout';
 import { renderFlatAnalysisCell as renderFlatAnalysisCellPure } from './DataPreviewTable/FlatAnalysisCell';
 import { useSessionFilterDistincts } from './DataPreviewTable/hooks/useSessionFilterDistincts';
@@ -278,16 +282,27 @@ export function DataPreviewTable({
       });
     }
   }, [pivotViewRequest, isLatestAnalysis]);
-  const [chartType, setChartType] = useState<PivotChartKind>('bar');
-  const [chartTitle, setChartTitle] = useState('Pivot chart');
-  const [chartXCol, setChartXCol] = useState('');
-  const [chartYCol, setChartYCol] = useState('');
-  const [chartZCol, setChartZCol] = useState('');
-  const [chartSeriesCol, setChartSeriesCol] = useState('');
-  const [chartBarLayout, setChartBarLayout] = useState<'stacked' | 'grouped'>('stacked');
-  const [chartRecommendationReason, setChartRecommendationReason] = useState<string | null>(
-    null
+  // ARCH-5 / CQ-3 / FE-2 · the cohesive chart-config sub-cluster (formerly 8
+  // separate useStates: type/title/x/y/z/series/barLayout/reason) is now one
+  // typed useReducer. The 8 names below are destructured aliases so every READ
+  // site is unchanged; WRITE sites dispatch a typed action. The reducer is pure
+  // and unit-tested in state/pivotChartReducer.vitest.test.ts. See
+  // docs/decisions/datapreviewtable-chart-config-reducer.md.
+  const [chartConfig, dispatchChart] = useReducer(
+    pivotChartReducer,
+    undefined,
+    initialPivotChartState
   );
+  const {
+    type: chartType,
+    title: chartTitle,
+    xCol: chartXCol,
+    yCol: chartYCol,
+    zCol: chartZCol,
+    seriesCol: chartSeriesCol,
+    barLayout: chartBarLayout,
+    recommendationReason: chartRecommendationReason,
+  } = chartConfig;
   const [chartPreview, setChartPreview] = useState<ChartSpec | ChartSpecV2 | null>(null);
   const [chartPreviewLoading, setChartPreviewLoading] = useState(false);
   const [chartPreviewError, setChartPreviewError] = useState<string | null>(null);
@@ -881,17 +896,12 @@ export function DataPreviewTable({
       filterDistinctProvenanceRef.current = {};
       setCollapsedPivotGroups(new Set());
       setAnalysisView(pivotBuilderMode ? 'pivot' : 'chart');
-      setChartType('bar');
+      // RESET collapses the former 8 chart-config setters (type→'bar',
+      // title→'Pivot chart', empty axes, 'stacked', null reason).
+      dispatchChart({ type: 'RESET' });
       // PV6 · No persisted state → auto-track effect should drive chartType
       // from the recommendation as soon as pivot data materializes.
       chartTypeUserPickedRef.current = false;
-      setChartTitle('Pivot chart');
-      setChartXCol('');
-      setChartYCol('');
-      setChartZCol('');
-      setChartSeriesCol('');
-      setChartBarLayout('stacked');
-      setChartRecommendationReason(null);
       setChartPreview(null);
       setExpandedWorkspaceTab(pivotBuilderMode ? 'pivot' : 'chart');
       lastChartConfigRef.current = '';
@@ -958,15 +968,23 @@ export function DataPreviewTable({
 
     if (initialPivotState.chart) {
       const c = initialPivotState.chart;
-      setChartType(c.type);
+      // HYDRATE collapses the former type + 5 axis setters (zCol falls back to
+      // '' when absent; title/reason are intentionally left untouched, matching
+      // the original block).
+      dispatchChart({
+        type: 'HYDRATE',
+        chart: {
+          type: c.type,
+          xCol: c.xCol,
+          yCol: c.yCol,
+          zCol: c.zCol,
+          seriesCol: c.seriesCol,
+          barLayout: c.barLayout,
+        },
+      });
       // PV6 · Respect the persisted user pick — block the auto-track effect
       // from clobbering it on first render.
       chartTypeUserPickedRef.current = true;
-      setChartXCol(c.xCol);
-      setChartYCol(c.yCol);
-      setChartZCol(c.zCol ?? '');
-      setChartSeriesCol(c.seriesCol);
-      setChartBarLayout(c.barLayout);
       // Lock auto-recommend so the restored axes survive subsequent renders.
       chartMappingManualRef.current = true;
     }
@@ -1087,7 +1105,7 @@ export function DataPreviewTable({
 
   useEffect(() => {
     if (pivotQueryRequest && chartType === 'scatter') {
-      setChartType('bar');
+      dispatchChart({ type: 'SET_CHART_TYPE', chartType: 'bar' });
     }
   }, [pivotQueryRequest, chartType]);
 
@@ -1271,31 +1289,22 @@ export function DataPreviewTable({
     // pivot layout, so don't auto-flip there even if the recommender returns
     // scatter — would oscillate against the coercion effect at L1107.
     if (pivotQueryRequest && recommendedPivotChart.chartType === 'scatter') return;
-    setChartType(recommendedPivotChart.chartType);
+    dispatchChart({ type: 'SET_CHART_TYPE', chartType: recommendedPivotChart.chartType });
   }, [chartUiActive, recommendedPivotChart, chartType, pivotQueryRequest]);
 
   useEffect(() => {
     if (!(chartUiActive || pivotExpanded) || !chartLayoutForPreview) return;
     if (chartMappingManualRef.current) return;
-    setChartTitle('Pivot chart');
-    setChartXCol(chartLayoutForPreview.x ?? '');
-    setChartYCol(chartLayoutForPreview.y ?? '');
-    setChartZCol(chartLayoutForPreview.z ?? '');
-    setChartSeriesCol(chartLayoutForPreview.seriesColumn ?? '');
-    setChartBarLayout(chartLayoutForPreview.barLayout);
-    setChartRecommendationReason(chartLayoutForPreview.reason);
+    // APPLY_RECOMMENDATION collapses the former 7-setter axis block (title +
+    // x/y/z/series/barLayout/reason); the reducer applies the same `?? ''`
+    // coercions and short-circuits when nothing changed.
+    dispatchChart({ type: 'APPLY_RECOMMENDATION', layout: chartLayoutForPreview });
   }, [chartUiActive, pivotExpanded, chartLayoutForPreview]);
 
   const resetChartMappingToRecommended = useCallback(() => {
     chartMappingManualRef.current = false;
     if (!chartLayoutForPreview) return;
-    setChartTitle('Pivot chart');
-    setChartXCol(chartLayoutForPreview.x ?? '');
-    setChartYCol(chartLayoutForPreview.y ?? '');
-    setChartZCol(chartLayoutForPreview.z ?? '');
-    setChartSeriesCol(chartLayoutForPreview.seriesColumn ?? '');
-    setChartBarLayout(chartLayoutForPreview.barLayout);
-    setChartRecommendationReason(chartLayoutForPreview.reason);
+    dispatchChart({ type: 'APPLY_RECOMMENDATION', layout: chartLayoutForPreview });
   }, [chartLayoutForPreview]);
 
   // Help debug: pivot fields present in schema but missing from preview row keys won't show data until rows include them.
@@ -2674,7 +2683,7 @@ export function DataPreviewTable({
                       onChange={(e) => {
                         chartMappingManualRef.current = true;
                         chartTypeUserPickedRef.current = true;
-                        setChartType(e.target.value as PivotChartKind);
+                        dispatchChart({ type: 'SET_CHART_TYPE', chartType: e.target.value as PivotChartKind });
                       }}
                     >
                       {CHART_KIND_DROPDOWN_ORDER.map((m) => {
@@ -2702,7 +2711,7 @@ export function DataPreviewTable({
                         value={chartBarLayout}
                         onChange={(e) => {
                           chartMappingManualRef.current = true;
-                          setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                          dispatchChart({ type: 'SET_BAR_LAYOUT', barLayout: e.target.value as 'stacked' | 'grouped' });
                         }}
                       >
                         <option value="stacked">Stacked</option>
@@ -3071,7 +3080,7 @@ export function DataPreviewTable({
                             onChange={(e) => {
                               chartMappingManualRef.current = true;
                               chartTypeUserPickedRef.current = true;
-                              setChartType(e.target.value as PivotChartKind);
+                              dispatchChart({ type: 'SET_CHART_TYPE', chartType: e.target.value as PivotChartKind });
                             }}
                           >
                             {CHART_KIND_DROPDOWN_ORDER.map((m) => {
@@ -3099,7 +3108,7 @@ export function DataPreviewTable({
                               value={chartBarLayout}
                               onChange={(e) => {
                                 chartMappingManualRef.current = true;
-                                setChartBarLayout(e.target.value as 'stacked' | 'grouped');
+                                dispatchChart({ type: 'SET_BAR_LAYOUT', barLayout: e.target.value as 'stacked' | 'grouped' });
                               }}
                             >
                               <option value="stacked">Stacked</option>

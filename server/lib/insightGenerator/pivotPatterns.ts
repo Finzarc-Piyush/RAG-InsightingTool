@@ -340,9 +340,9 @@ export function renderPivotPatternsBlock(
 
   if (p.top1Share !== undefined && p.top3Share !== undefined && p.hhi !== undefined) {
     const concentrationLabel =
-      p.hhi > 0.25 ? "concentrated" : p.hhi < 0.1 ? "spread out" : "moderately concentrated";
+      p.hhi > 0.25 ? "one group dominates" : p.hhi < 0.1 ? "spread fairly evenly" : "moderately uneven";
     lines.push(
-      `- Concentration (${concentrationLabel}): top segment ${fmtPct(p.top1Share)} of total; top three ${fmtPct(p.top3Share)}`
+      `- Leadership (${concentrationLabel}): top segment ${fmtPct(p.top1Share)} of total; top three ${fmtPct(p.top3Share)}`
     );
   }
   const gapParts: string[] = [];
@@ -367,10 +367,10 @@ export function renderPivotPatternsBlock(
   if (p.segmentsAboveP75.length > 0 || p.segmentsBelowP25.length > 0) {
     const segParts: string[] = [];
     if (p.segmentsAboveP75.length > 0)
-      segParts.push(`top quartile → ${p.segmentsAboveP75.join(", ")}`);
+      segParts.push(`clearly ahead → ${p.segmentsAboveP75.join(", ")}`);
     if (p.segmentsBelowP25.length > 0)
-      segParts.push(`bottom quartile → ${p.segmentsBelowP25.join(", ")}`);
-    lines.push(`- Segments: ${segParts.join("; ")}`);
+      segParts.push(`clearly behind → ${p.segmentsBelowP25.join(", ")}`);
+    lines.push(`- Standouts: ${segParts.join("; ")}`);
   }
 
   if (p.isTemporal) {
@@ -381,7 +381,7 @@ export function renderPivotPatternsBlock(
       tParts.push(`recent vs prior ${sign}${(p.recentVsPriorDelta * 100).toFixed(1)}%`);
     }
     if (p.peakLabel) tParts.push(`peak ${p.peakLabel}`);
-    if (p.troughLabel) tParts.push(`trough ${p.troughLabel}`);
+    if (p.troughLabel) tParts.push(`low point ${p.troughLabel}`);
     if (tParts.length > 0) lines.push(`- Temporal: ${tParts.join(", ")}`);
   }
 

@@ -161,7 +161,7 @@ function dispersionNarrative({ patterns: p, chartSpec, dimensionLabel, formatY }
 
   const driver =
     p.segmentsAboveP75.length > 0 || p.segmentsBelowP25.length > 0
-      ? `The gap is wide and consistent: ${p.segmentsAboveP75.length > 0 ? `${namedSegments(p.segmentsAboveP75)} sit clearly in the top quartile` : ""}${p.segmentsAboveP75.length > 0 && p.segmentsBelowP25.length > 0 ? "; " : ""}${p.segmentsBelowP25.length > 0 ? `${namedSegments(p.segmentsBelowP25)} sit clearly in the bottom quartile` : ""}.`
+      ? `The gap is wide and consistent: ${p.segmentsAboveP75.length > 0 ? `${namedSegments(p.segmentsAboveP75)} are clearly ahead` : ""}${p.segmentsAboveP75.length > 0 && p.segmentsBelowP25.length > 0 ? "; " : ""}${p.segmentsBelowP25.length > 0 ? `${namedSegments(p.segmentsBelowP25)} are clearly behind` : ""}.`
       : `The spread is wide enough that an average-based plan will miss in either direction depending on the segment.`;
 
   const risk = `Comparing the bottom directly to the top assumes they face the same conditions — they often don't, so the achievable lift is usually less than the gap suggests.`;

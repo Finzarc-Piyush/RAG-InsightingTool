@@ -245,11 +245,12 @@ export function countWords(s: string): number {
   return trimmed.split(/\s+/).length;
 }
 
-export function formatAnswerFromEnvelope(body: string, keyInsight: string | null | undefined): string {
-  const parts: string[] = [body.trim()];
-  const ki = keyInsight?.trim();
-  if (ki) {
-    parts.push("", `**Key insight:** ${ki}`);
-  }
-  return parts.join("\n").trim();
+export function formatAnswerFromEnvelope(body: string, _keyInsight?: string | null): string {
+  // The key insight is surfaced exactly once — in the "Key Insights" section
+  // (InsightCard, fed by appendEnvelopeInsight) — so it is NOT appended to the
+  // answer body here. Appending it produced a visible duplicate: a bolded
+  // "Key insight:" line inside the answer block AND the same sentence again in
+  // Key Insights. `_keyInsight` is kept for call-site compatibility but is
+  // intentionally unused.
+  return body.trim();
 }

@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import {
   ChevronDown,
   ChevronRight,
-  Lightbulb,
+  Star,
   AlertTriangle,
   BookOpen,
   Sparkles,
@@ -101,29 +101,34 @@ export function AnswerCard({
         </div>
       )}
 
-      {env.tldr && (
-        <div
-          className="rounded-brand-md border border-primary/30 bg-primary/10 px-4 py-3"
-          aria-label="Headline answer"
-        >
-          <div className="flex items-start gap-2">
-            <Lightbulb
-              className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-              aria-hidden="true"
-            />
-            <p className="text-[15px] font-medium leading-[22px] text-foreground">
-              {/* RNK-f6 · tldr is plain text (not markdown-rendered), so strip
-                  stray internal [fN] finding refs here too. */}
-              {env.tldr.replace(/\s?\[f\d+\]/gi, "")}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {supplementaryMarkdown?.trim() && (
-        <div className="text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
-          <MarkdownRenderer content={supplementaryMarkdown} />
-        </div>
+      {/* "Highlight Summary" — the headline answer, given its own titled
+          section (icon + name) the way Key Insights is. The narrator's key
+          insight is intentionally NOT shown here anymore (it lives once, in
+          the Key Insights section), so this block no longer duplicates it. */}
+      {(env.tldr?.trim() || supplementaryMarkdown?.trim()) && (
+        <section aria-label="Highlight summary">
+          <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+            <Star className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+            Highlight Summary
+          </h3>
+          {env.tldr?.trim() && (
+            <div
+              className="rounded-brand-md border border-primary/30 bg-primary/10 px-4 py-3"
+              aria-label="Headline answer"
+            >
+              <p className="text-[15px] font-medium leading-[22px] text-foreground">
+                {/* RNK-f6 · tldr is plain text (not markdown-rendered), so strip
+                    stray internal [fN] finding refs here too. */}
+                {env.tldr.replace(/\s?\[f\d+\]/gi, "")}
+              </p>
+            </div>
+          )}
+          {supplementaryMarkdown?.trim() && (
+            <div className="mt-3 text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
+              <MarkdownRenderer content={supplementaryMarkdown} />
+            </div>
+          )}
+        </section>
       )}
 
       {/* RNK2 · leaderboard hint — present when the agent answered a ranking

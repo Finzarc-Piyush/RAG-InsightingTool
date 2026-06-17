@@ -1199,10 +1199,14 @@ export const useHomeMutations = ({
                 };
                 const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
                 if (blocks.length > 0) {
-                  const ids = blocks.map((b) => b.id).slice(0, 3).join(', ');
+                  // Informational, not alarming: the main answer uses the full
+                  // context; only a later enrichment step may use a shortened
+                  // copy when the added notes are long. Internal block ids are
+                  // not shown — they mean nothing to the user.
                   toast({
-                    title: 'Some background context was trimmed',
-                    description: `${blocks.length} block${blocks.length === 1 ? '' : 's'} clipped to fit (${ids}${blocks.length > 3 ? ', …' : ''}).`,
+                    title: 'Heads up — your added context was long',
+                    description:
+                      'A later step used a shortened version of the extra context you provided. Your main answer used all of it.',
                   });
                 }
               }

@@ -58,15 +58,17 @@ describe("computePivotPatterns — categorical X with skewed data", () => {
     assert.equal(p.variability, "high");
   });
 
-  it("renders a non-empty prompt block with concentration, gap, spread, segments (G3-P2: plain English labels)", () => {
+  it("renders a non-empty prompt block with leadership, gap, spread, standouts (G3-P2: plain English labels)", () => {
     const p = computePivotPatterns(chartData, spec);
     const block = renderPivotPatternsBlock(p, formatY);
     assert.match(block, /PIVOT PATTERNS/);
-    assert.match(block, /Concentration/);
+    // G3-P2 — "Concentration" relabelled to "Leadership" for non-statistician readers.
+    assert.match(block, /Leadership/);
     assert.match(block, /Gap/);
     // G3-P2 — "Dispersion" relabelled to "Spread" for non-statistician readers.
     assert.match(block, /Spread/);
-    assert.match(block, /Segments/);
+    // G3-P2 — "Segments / quartile" relabelled to "Standouts / clearly ahead-behind".
+    assert.match(block, /Standouts/);
     assert.match(block, /West/); // top performer named
     // G3-P2 — banned jargon must not surface in the rendered block.
     assert.doesNotMatch(block, /\bHHI\b/);
@@ -74,6 +76,9 @@ describe("computePivotPatterns — categorical X with skewed data", () => {
     assert.doesNotMatch(block, /\bIQR\b/);
     assert.doesNotMatch(block, /\bP25\b|\bP75\b|\bP90\b|\bP10\b/);
     assert.doesNotMatch(block, /long tail/i);
+    assert.doesNotMatch(block, /quartile/i);
+    assert.doesNotMatch(block, /concentration/i);
+    assert.doesNotMatch(block, /\btrough\b/i);
   });
 });
 

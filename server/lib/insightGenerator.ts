@@ -467,11 +467,11 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 
   const prompt = `Return JSON with the listed fields.
 
-TASK: Write 3–5 substantive sentences (plain text, no markdown headings) that interpret THIS chart for someone making a business or operational decision. Ground every number in DATA FACTS / PIVOT PATTERNS / blocks below—do not invent metrics. Each sentence must carry its own claim, ordered as:
-  1. HEADLINE — the topline magnitude with a comparative anchor (% of total, multiplier vs median, top:bottom ratio, or recent vs prior delta — pick whichever the data supports).
-  2. DRIVER — what specific segment / time bucket / mix is producing the headline, named explicitly. Use PIVOT PATTERNS (segments above P75, peak / trough labels, concentration share) as your driver vocabulary.
-  3. RISK — what the pattern implies for concentration, volatility, dependence, or sustainability (e.g. high HHI = single-segment risk; high CV = unstable benchmarking; long-tail share = limited near-term lift).
-  4. NEXT-CHECK — one concrete, *quantified* diagnostic (e.g. "split {topX} by channel to test whether the 8× lead is structural", "compare {peakLabel} vs {troughLabel} on {factor}"). Never propose a generic action.
+TASK: Write 3–5 plain-English sentences (plain text, no markdown headings) that explain THIS chart to a busy manager who is NOT a statistician. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Cover, in this order, only the parts that genuinely apply:
+  1. HEADLINE — the main comparison in plain words with the actual numbers (e.g. "Women survived at 74% versus 19% for men — nearly 4× higher").
+  2. SHAPE — which specific segment / time bucket / mix drives the headline, named explicitly, and whether it is broad-based or down to just one or two groups — said in plain words.
+  3. LIKELY REASON — a brief, plausible explanation for WHY this pattern probably exists, using the question and general real-world / business knowledge. Frame it as a likely reason, not a measured fact; reason qualitatively and never attach invented numbers. Omit if there is no credible reason.
+  4. WHAT TO DO — one concrete, useful next step ONLY when the reader could actually act on it. If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this entirely rather than forcing a generic action.
 
 Use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
 
@@ -488,7 +488,7 @@ ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}$
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Plain sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters. Use numeric values from above; never output labels like P75/P90—use the actual numbers. For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS, then explain what that concentration means and what to investigate next."${businessCommentaryRequest}
+  "keyInsight": "Plain-English sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters, no statistics jargon. Use the actual numbers from above (never labels like P75/P90). For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS, explain in plain words what the pattern means, add a likely reason when there is a credible one, and a next step only if the reader can act on it."${businessCommentaryRequest}
 }`;
 
   try {
@@ -498,16 +498,20 @@ OUTPUT JSON (exact keys only):
         messages: [
           {
             role: 'system',
-            content: `You are a senior analyst. Output JSON with a single key "keyInsight": 3–5 substantive sentences interpreting the chart using ONLY provided numbers. Each sentence carries its own claim — headline, driver, risk, next-check — using PIVOT PATTERNS as the driver / risk vocabulary (concentration share, HHI, CV, long-tail count, segments above P75, peak / trough, recent-vs-prior delta).
+            content: `You are a senior analyst briefing a busy manager who is NOT a statistician. Output JSON with a single key "keyInsight": 3–5 plain-English sentences interpreting the chart using ONLY the provided numbers. Tell the story in this order, including only the parts that genuinely apply: the headline comparison (with real numbers), what drives it, a likely real-world reason for it, and — only when the reader can actually act on it — one concrete next step.
+
+WRITE FOR A NON-MATH READER — translate the analysis, never parrot jargon:
+- BANNED words (must never appear in the output): mass, quartile, upper-quartile, lower-quartile, bottom-quartile, percentile, P25, P75, P90, HHI, CV, coefficient of variation, concentration index, long-tail, dispersion, trough. PIVOT PATTERNS labels are internal signals only — read them, then say it plainly.
+- Prefer plain phrasing: "nearly 4× higher", "about 3 in 4", "drives most of the total", "spread fairly evenly", "just one group does most of it", "the highest / lowest point" — not index or percentile language.
 
 ANTI-PATTERNS — do NOT write any of these:
 - "Increase {y} where {y} is low" / "improve underperformers" / "lift weaker segments" — generic, not a mechanism.
 - "Focus on {top}" / "prioritize {leader}" without naming a *mechanism* (price, distribution, mix, segment, channel, cadence, season).
-- Sentences that only restate which value is highest or lowest.
-- Suggestions that ignore concentration / dispersion / temporal signals when those signals are present in PIVOT PATTERNS.
-- Vague next-actions ("monitor", "investigate further", "look deeper"). Always quantify the next-check (a target multiple, a comparison split, a time window).
+- Sentences that only restate which value is highest or lowest with no interpretation.
+- Vague next-actions ("monitor", "investigate further", "look deeper"). If you give a next step, make it specific and clearly worth doing.
+- A forced next step when nothing can be done: if the pattern is a fixed historical or structural fact the reader cannot change, OMIT the next step instead of inventing a generic one.
 
-If the data does not support a credible mechanism, propose a *diagnostic question* (a specific split or comparison) instead of a recommendation — never a generic push.
+A "likely reason" is a plausible cause drawn from the question and general world / business knowledge (e.g. why one group leads, why a season spikes). Frame it as a likely explanation, not a measured fact, and never attach invented numbers to it.
 
 NEVER META-HEDGE: do not describe your OWN reasoning or the evidence as uncertain/undefined/incomplete (banned: "HHI is undefined", "CV not informative", "cannot be stated from the supplied evidence", "the data may be mis-coded or not populated", "from this slice alone"). When a series is ALL ZERO (or every value is the same), do not analyze its (non-existent) spread — state the plain, likely DOMAIN reason for the flatness in one sentence (e.g. "Adherence is 0% for every planned type here because it is only recorded on Market-Working days — the other types are not measurement opportunities, not low performers."), then stop. A flat-zero metric is an expected structural fact, not a data-quality problem to speculate about.
 
