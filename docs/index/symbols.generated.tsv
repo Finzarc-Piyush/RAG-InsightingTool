@@ -355,6 +355,7 @@ automationTurnSchema	const	server/shared/schema.ts	414
 availableFilterDefinitions	function	client/src/pages/Dashboard/dashboardGlobalFilters.ts	215
 AvailableModelsDialog	function	client/src/components/AvailableModelsDialog.tsx	118
 BadgeProps	interface	client/src/components/ui/badge.tsx	49
+BarLayout	type	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	32
 BarRenderer	const	client/src/lib/charts/visxRenderers/BarRenderer.tsx	1330
 BarRendererProps	interface	client/src/lib/charts/visxRenderers/BarRenderer.tsx	113
 BaseColumnProfile	interface	client/src/lib/api/data.ts	73
@@ -1712,6 +1713,7 @@ HierarchyEditorProps	interface	client/src/pages/Admin/components/HierarchyEditor
 HierarchyIntent	interface	server/lib/agents/runtime/planArgRepairs.ts	338
 Home	function	client/src/pages/Home/Home.tsx	57
 HomeState	interface	client/src/pages/Home/modules/useHomeState.ts	13
+HydratedChart	interface	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	63
 hydrateDirectivesForSession	function	server/models/datasetDirectives.model.ts	169
 Hypothesis	interface	server/lib/agents/runtime/analyticalBlackboard.ts	51
 HypothesisId	type	server/lib/agents/runtime/investigationState.ts	64
@@ -1753,6 +1755,7 @@ initDuckDBEager	function	server/lib/columnarStorage.ts	51
 InitialAnalysisResponse	interface	server/lib/dataOps/pythonService.ts	232
 initializeBlobStorage	const	server/lib/blobStorage.ts	28
 initializeCosmosDB	const	server/models/database.config.ts	131
+initialPivotChartState	function	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	92
 injectCompoundShapeMetricGuard	function	server/lib/agents/runtime/planArgRepairs.ts	587
 injectMultiPerIntent	function	server/lib/agents/runtime/planArgRepairs.ts	1774
 InjectMultiPerResult	interface	server/lib/agents/runtime/planArgRepairs.ts	1743
@@ -2304,10 +2307,13 @@ PivotBlobUploader	type	server/lib/pastAnalysisPivotArtifact.ts	55
 PivotBuilderAddPayload	interface	client/src/pages/Home/Components/DataPreviewTable.tsx	204
 PivotBuilderLauncher	function	client/src/pages/Home/Components/PivotBuilderLauncher.tsx	33
 pivotCache	const	server/lib/pivotCache.ts	53
+PivotChartAction	type	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	72
 PivotChartKind	type	server/shared/pivot/chartRecommendation.ts	35
 PivotChartPreviewResult	type	server/lib/chartPreviewFromPivot.ts	289
 PivotChartRecommendation	interface	server/shared/pivot/chartRecommendation.ts	83
 PivotChartRecommendationInput	interface	server/shared/pivot/chartRecommendation.ts	58
+pivotChartReducer	function	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	119
+PivotChartState	interface	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	35
 PivotChartValidityMap	type	server/shared/pivot/chartTypeValidity.ts	47
 PivotConfigForRecommendation	type	server/shared/pivot/chartRecommendation.ts	29
 PivotDefaults	type	server/shared/schema/charts.ts	1276
@@ -2517,6 +2523,7 @@ rechartsTooltipValueFormatter	function	client/src/lib/chartNumberFormat.ts	48
 RechartsWideLegendContent	function	client/src/lib/rechartsWideLegend.tsx	38
 RecommendationConfidence	type	server/lib/agents/runtime/selectTool.ts	81
 RecommendationsPage	function	server/lib/exports/pdf/layouts/recommendations.tsx	33
+RecommendedChartLayout	interface	client/src/pages/Home/Components/DataPreviewTable/state/pivotChartReducer.ts	53
 recommendPivotChart	function	server/shared/pivot/chartRecommendation.ts	327
 recommendPivotChartForType	function	server/shared/pivot/chartRecommendation.ts	529
 recordAndCheckTurn	function	server/lib/telemetry/costAnomalyDetector.ts	143
@@ -2723,8 +2730,8 @@ RunAutomationRequest	type	server/shared/schema.ts	528
 runAutomationRequestSchema	const	server/shared/schema.ts	523
 runAutomationStream	const	client/src/lib/api/automations.ts	77
 runBudgetRedistribute	function	server/lib/dataOps/mmmService.ts	76
-runBusinessActions	function	server/lib/agents/runtime/businessActionsAgent.ts	309
-RunBusinessActionsOptions	interface	server/lib/agents/runtime/businessActionsAgent.ts	293
+runBusinessActions	function	server/lib/agents/runtime/businessActionsAgent.ts	315
+RunBusinessActionsOptions	interface	server/lib/agents/runtime/businessActionsAgent.ts	299
 runCohortAnalysis	function	server/lib/agents/runtime/tools/cohortAnalysisTool.ts	148
 runContextAgentRound2	function	server/lib/agents/runtime/contextAgent.ts	91
 runDataOpsFromAgentContext	function	server/lib/agents/runDataOpsFromAgent.ts	67

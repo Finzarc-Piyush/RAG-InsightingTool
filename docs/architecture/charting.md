@@ -459,6 +459,7 @@ mid-flight.
 
 ## Recent changes
 
+- 2026-06-17 · Wave IUX1 — chart-insight prompt (`generateChartInsights`) rewritten for plain-language, manager-readable output (banned mass/quartile/HHI/CV/P75/trough); `renderPivotPatternsBlock`, pivot-envelope, and deterministic-fallback labels de-jargoned. See [`docs/WAVES.md`](../WAVES.md).
 - 2026-06-14 · Charting/pivot dedup audit: the table→ChartSpec builders now share leaf authorities — `chartMeasurePick` (scoreMeasure/isNumericishOnSample, fixed a latent y-axis-pick drift), `isTemporalFacetColumnKey` (temporal-x detection in 4 sites), and `chartSpecFinish.finishChartSpec` (the domains+labels tail, 5 builders). Client scatter decimation → `scatterDecimation.ts`; export palette → `brandPalette.ts`; export series extraction → `chartSpecSeries.ts`. See [`docs/decisions/centralized-chart-builders.md`](../decisions/centralized-chart-builders.md).
 
 Per-wave history lives in [`docs/WAVES.md`](../WAVES.md) (search the wave id). The detailed
