@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import {
   downloadModifiedDataset,
-  fetchPivotColumnDistincts,
   fetchSessionSampleRows,
   pivotQuery,
   pivotDrillthrough,
@@ -83,6 +82,7 @@ import {
 } from './DataPreviewTable/columnHelpers';
 import { ChartKeyInsightCallout } from './DataPreviewTable/ChartKeyInsightCallout';
 import { renderFlatAnalysisCell as renderFlatAnalysisCellPure } from './DataPreviewTable/FlatAnalysisCell';
+import { useSessionFilterDistincts } from './DataPreviewTable/hooks/useSessionFilterDistincts';
 import {
   PivotDrillthroughPanel,
   type DrillthroughState,
@@ -254,18 +254,6 @@ export function DataPreviewTable({
   const filterDistinctProvenanceRef = useRef<
     Record<string, "authoritative" | "sample">
   >({});
-  const filterDistinctFetchSeqRef = useRef(0);
-  const [sessionFilterDistincts, setSessionFilterDistincts] = useState<
-    Record<string, string[]>
-  >({});
-  const [sessionFilterDistinctsErrors, setSessionFilterDistinctsErrors] =
-    useState<Record<string, string>>({});
-  /**
-   * Bumping this counter forces the per-field distincts fetch to re-fire even
-   * when `pivotDistinctFieldsSignature` is unchanged. Used by the popover's
-   * "Retry" button after a prior fetch failed.
-   */
-  const [filterDistinctsRetryNonce, setFilterDistinctsRetryNonce] = useState(0);
   const [collapsedPivotGroups, setCollapsedPivotGroups] = useState<Set<string>>(
     () => new Set()
   );
@@ -649,6 +637,21 @@ export function DataPreviewTable({
     [pivotSyncFields]
   );
 
+  // ARCH-5 / CQ-3 / FE-2 · authoritative per-field DuckDB distinct-value fetch
+  // for the FILTERS shelf, extracted to a self-contained hook. Owns
+  // sessionFilterDistincts + the fetch sequence/retry refs; the rest of the
+  // pivot web consumes these three outputs read-only.
+  const {
+    sessionFilterDistincts,
+    filterDistinctsResolution,
+    handleRetryFilterDistincts,
+  } = useSessionFilterDistincts({
+    variant,
+    sessionId,
+    pivotSyncFields,
+    pivotDistinctFieldsSignature,
+  });
+
   const canPivot = useMemo(() => {
     if (variant !== 'analysis') return false;
     return (
@@ -1024,99 +1027,6 @@ export function DataPreviewTable({
       clearTimeout(t);
     };
   }, [pivotQueryRequest, sessionId]);
-
-  useEffect(() => {
-    if (variant !== 'analysis' || !sessionId) {
-      setSessionFilterDistincts({});
-      setSessionFilterDistinctsErrors({});
-      return;
-    }
-    const fields = [...new Set(pivotSyncFields)];
-    if (fields.length === 0) {
-      setSessionFilterDistincts({});
-      setSessionFilterDistinctsErrors({});
-      return;
-    }
-    let cancelled = false;
-    const seq = ++filterDistinctFetchSeqRef.current;
-    // Clear any prior error markers for the fields we're about to refetch so
-    // the popover doesn't flash "Couldn't load values" while the retry is in
-    // flight.
-    setSessionFilterDistinctsErrors((prev) => {
-      if (fields.every((f) => !(f in prev))) return prev;
-      const next = { ...prev };
-      for (const f of fields) delete next[f];
-      return next;
-    });
-    void (async () => {
-      const values: Record<string, string[]> = {};
-      const errors: Record<string, string> = {};
-      await Promise.all(
-        fields.map(async (f) => {
-          try {
-            // Full DuckDB distincts (no pagination, no cap that bites in
-            // practice). Same authoritative table the agent's tools see.
-            values[f] = await fetchPivotColumnDistincts(sessionId, f);
-          } catch (e) {
-            errors[f] =
-              e instanceof Error ? e.message : 'Failed to load filter values';
-          }
-        })
-      );
-      if (cancelled || seq !== filterDistinctFetchSeqRef.current) return;
-      setSessionFilterDistincts(values);
-      setSessionFilterDistinctsErrors((prev) => {
-        const next = { ...prev };
-        for (const [f, msg] of Object.entries(errors)) next[f] = msg;
-        return next;
-      });
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // `pivotSyncFields` is intentionally read via its stable string signature
-    // (`pivotDistinctFieldsSignature`) so we refetch distincts only when the
-    // field SET changes, not on every array-identity churn.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    variant,
-    sessionId,
-    pivotDistinctFieldsSignature,
-    filterDistinctsRetryNonce,
-  ]);
-
-  // Per-field render-time resolution: every field in the FILTERS shelf is
-  // either 'loading' (we haven't completed a fetch attempt yet), 'loaded'
-  // (sessionFilterDistincts has the key — value list is authoritative), or
-  // 'error' (last fetch attempt failed). Derived synchronously from
-  // pivotSyncFields membership rather than effect-set state, so the popover
-  // can never render "No values to filter" in the sub-frame window before
-  // the fetch effect runs.
-  const filterDistinctsResolution = useMemo<
-    Record<string, 'loading' | 'loaded' | 'error'>
-  >(() => {
-    const out: Record<string, 'loading' | 'loaded' | 'error'> = {};
-    for (const f of pivotSyncFields) {
-      if (Object.prototype.hasOwnProperty.call(sessionFilterDistincts, f)) {
-        out[f] = 'loaded';
-      } else if (Object.prototype.hasOwnProperty.call(sessionFilterDistinctsErrors, f)) {
-        out[f] = 'error';
-      } else {
-        out[f] = 'loading';
-      }
-    }
-    return out;
-  }, [pivotSyncFields, sessionFilterDistincts, sessionFilterDistinctsErrors]);
-
-  const handleRetryFilterDistincts = useCallback((field: string) => {
-    setSessionFilterDistinctsErrors((prev) => {
-      if (!(field in prev)) return prev;
-      const next = { ...prev };
-      delete next[field];
-      return next;
-    });
-    setFilterDistinctsRetryNonce((n) => n + 1);
-  }, []);
 
   useEffect(() => {
     if (variant !== 'analysis') return;

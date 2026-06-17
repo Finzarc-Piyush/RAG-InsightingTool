@@ -261,6 +261,36 @@ export function stringifyFiniteJson(value: unknown): string {
   );
 }
 
+/**
+ * TEST SEAM · let hermetic integration tests (e.g. the dataOps persist+preview
+ * suite) drive `saveModifiedData` end-to-end through the in-memory Cosmos double
+ * WITHOUT a real Azure account — the only otherwise-networked step in the tail
+ * is the blob upload below. When an override is installed, `updateProcessedDataBlob`
+ * delegates to it and never touches `blockBlobClient.upload`. Mirrors
+ * `__setContainerForTesting` in `models/database.config.ts`. Production MUST NOT
+ * call this (guarded under `NODE_ENV=production`). Pass `null` to restore the real
+ * Azure write path.
+ */
+type ProcessedDataBlobWriter = (
+  sessionId: string,
+  data: Record<string, any>[] | Buffer,
+  version: number,
+  username: string,
+) => Promise<{ blobUrl: string; blobName: string }>;
+
+let processedDataBlobWriterOverride: ProcessedDataBlobWriter | null = null;
+
+export function __setProcessedDataBlobWriterForTesting(
+  fake: ProcessedDataBlobWriter | null,
+): void {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "__setProcessedDataBlobWriterForTesting must not be called in production",
+    );
+  }
+  processedDataBlobWriterOverride = fake;
+}
+
 // Update processed data blob (for data operations)
 export const updateProcessedDataBlob = async (
   sessionId: string,
@@ -268,10 +298,15 @@ export const updateProcessedDataBlob = async (
   version: number,
   username: string
 ): Promise<{ blobUrl: string; blobName: string }> => {
+  // TEST SEAM: when a writer override is installed (hermetic tests), delegate
+  // and skip the real Azure upload entirely.
+  if (processedDataBlobWriterOverride) {
+    return processedDataBlobWriterOverride(sessionId, data, version, username);
+  }
   try {
     let buffer: Buffer;
     let rowCount: number;
-    
+
     // Handle both data array and pre-serialized buffer
     if (Buffer.isBuffer(data)) {
       buffer = data;

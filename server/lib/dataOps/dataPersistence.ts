@@ -275,6 +275,69 @@ async function saveModifiedDataLocked(
   };
 }
 
+/**
+ * Get preview data from the SAVED rawData (first 50 rows).
+ *
+ * Pure-Cosmos: reads the freshly-persisted doc via `getChatBySessionIdEfficient`
+ * and returns `doc.rawData.slice(0, 50)`. Falls back to the caller's in-memory
+ * `fallbackData` (also sliced to 50) if the doc isn't found or carries no
+ * rawData. Moved here from the orchestrator (ARCH-2 / CQ-2) so it sits next to
+ * `persistAndPreview`, the shared persist tail that consumes it.
+ */
+export async function getPreviewFromSavedData(
+  sessionId: string,
+  fallbackData: DataRow[],
+): Promise<DataRow[]> {
+  try {
+    const updatedDoc = await getChatBySessionIdEfficient(sessionId);
+    if (updatedDoc?.rawData && Array.isArray(updatedDoc.rawData) && updatedDoc.rawData.length > 0) {
+      // Return first 50 rows from saved rawData
+      return updatedDoc.rawData.slice(0, 50);
+    }
+  } catch (error) {
+    logger.error('⚠️ Failed to get preview from saved data, using fallback:', error);
+  }
+  // Fallback to provided data if document not found
+  return fallbackData.slice(0, 50);
+}
+
+/**
+ * Shared persist+preview TAIL for the ~dozen `executeDataOperation` data-mutation
+ * branches (ARCH-2 / CQ-2). Every collapsible branch computes its branch-specific
+ * `modifiedData` + final `answer` (with its own verbatim wording, including the
+ * "…preview…" suffix when `shouldShowPreview`), then delegates the IDENTICAL tail
+ * here:
+ *   1. `saveModifiedData(sessionId, modifiedData, op, description, sessionDoc)`
+ *      — persist via the per-session write lock + ETag-safe upsert;
+ *   2. when `shouldShowPreview`, fetch `getPreviewFromSavedData(sessionId, modifiedData)`
+ *      (the SAME 50-row slice + fallback-on-error as before);
+ *   3. return the canonical `{ answer, data, preview, saved: true }` shape.
+ *
+ * Behaviour-identical to the inlined tail: `preview` is `undefined` unless
+ * `shouldShowPreview`, `data` is the passed `modifiedData`, `saved` is always
+ * `true`. The caller owns the answer string entirely — this helper never edits it.
+ */
+export async function persistAndPreview(args: {
+  sessionId: string;
+  sessionDoc?: ChatDocument;
+  modifiedData: DataRow[];
+  op: string;
+  description: string;
+  shouldShowPreview: boolean;
+  answer: string;
+}): Promise<{ answer: string; data: DataRow[]; preview?: DataRow[]; saved: true }> {
+  const { sessionId, sessionDoc, modifiedData, op, description, shouldShowPreview, answer } = args;
+
+  await saveModifiedData(sessionId, modifiedData, op, description, sessionDoc);
+
+  let preview: DataRow[] | undefined;
+  if (shouldShowPreview) {
+    preview = await getPreviewFromSavedData(sessionId, modifiedData);
+  }
+
+  return { answer, data: modifiedData, preview, saved: true };
+}
+
 /** True for a Cosmos 412 Precondition Failed (IfMatch `_etag` mismatch). */
 function isPreconditionFailed(err: unknown): boolean {
   const e = err as { code?: number; statusCode?: number } | null;

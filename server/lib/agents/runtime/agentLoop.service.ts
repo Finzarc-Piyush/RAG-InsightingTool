@@ -303,6 +303,13 @@ export {
 
 export type AgentSseEmitter = (event: string, data: unknown) => void;
 
+// Wave (ARCH-1/CQ-1) · the two zero-mutable-state per-turn helpers (safeEmit +
+// checkAbort) extracted to ./agentLoop/emit.ts as explicit factories. Their
+// returned closures have byte-identical bodies to the former inline versions;
+// `onLlmCall` stays inline because it owns the mutable LLM-budget counter that
+// is also read at the final return.
+import { makeSafeEmit, makeCheckAbort } from "./agentLoop/emit.js";
+
 // Wave (ARCH-1/CQ-1) · plan-time build_chart deferral + materialisation extracted
 // to a sibling module (low-coupling: depends only on EXTERNAL chart modules + the
 // shared ChartSpec / AgentExecutionContext types, never on runAgentTurn closure
@@ -414,24 +421,14 @@ export async function runAgentTurn(
     }
   };
 
-  const safeEmit = (event: string, data: unknown) => {
-    try {
-      emit?.(event, data);
-    } catch {
-      /* ignore client errors */
-    }
-  };
-
-  // F3 · client-disconnect abort. Throws AGENT_CLIENT_ABORTED when the SSE
-  // stream's owner has hung up; caller maps this to a clean early-return.
-  // Probed at major step boundaries (planner, tool dispatch, synthesis,
-  // visual planner) so we don't burn LLM budget for a tab the user closed.
-  const checkAbort = (label: string): void => {
-    if (ctx.abortSignal?.aborted) {
-      agentLog("agent.client_aborted", { turnId, label });
-      throw new Error("AGENT_CLIENT_ABORTED");
-    }
-  };
+  // Wave (ARCH-1/CQ-1) · safeEmit + checkAbort are now built by explicit
+  // factories in ./agentLoop/emit.ts (zero mutable shared state; identical
+  // bodies). F3 client-disconnect abort: checkAbort throws AGENT_CLIENT_ABORTED
+  // when the SSE stream's owner has hung up (caller maps to a clean early-
+  // return); it's probed at major step boundaries so we don't burn LLM budget
+  // for a tab the user closed.
+  const safeEmit = makeSafeEmit(emit);
+  const checkAbort = makeCheckAbort(ctx, turnId);
 
   const observations: string[] = [];
   let agentSuggestionHints: string[] = [];

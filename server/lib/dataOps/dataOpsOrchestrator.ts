@@ -5,7 +5,7 @@
 import { Message, DataSummary } from '../../shared/schema.js';
 import { removeNulls, getDataPreview, convertDataType, createDerivedColumn, trainMLModel, aggregateData, createPivotTable, treatOutliers } from './pythonService.js';
 import type { TrainModelResponse, SummaryResponse } from './pythonService.js';
-import { saveModifiedData } from './dataPersistence.js';
+import { saveModifiedData, persistAndPreview, getPreviewFromSavedData } from './dataPersistence.js';
 import type { DataRow } from './dataOpsTypes.js';
 import { getChatBySessionIdEfficient, updateChatDocument, ChatDocument } from '../../models/chat.model.js';
 import { callLlm } from '../agents/runtime/callLlm.js';
@@ -62,23 +62,6 @@ const BATCH_SIZE = 10000; // Process 10k rows at a time
 
 /** Max rows from the pre-aggregation / pre-transform input to send as chat preview for pivot UI (keeps dims like City). */
 const ROW_LEVEL_PREVIEW_MAX_ROWS = 500;
-
-/**
- * Get preview data from saved rawData (first 50 rows)
- */
-async function getPreviewFromSavedData(sessionId: string, fallbackData: DataRow[]): Promise<DataRow[]> {
-  try {
-    const updatedDoc = await getChatBySessionIdEfficient(sessionId);
-    if (updatedDoc?.rawData && Array.isArray(updatedDoc.rawData) && updatedDoc.rawData.length > 0) {
-      // Return first 50 rows from saved rawData
-      return updatedDoc.rawData.slice(0, 50);
-    }
-  } catch (error) {
-    logger.error('⚠️ Failed to get preview from saved data, using fallback:', error);
-  }
-  // Fallback to provided data if document not found
-  return fallbackData.slice(0, 50);
-}
 
 /**
  * Streaming helper: Process data in batches
@@ -3200,32 +3183,22 @@ export async function executeDataOperation(
       const actionVerb = isImputation ? 'Imputed' : 'Removed';
       const actionVerbLower = isImputation ? 'imputed' : 'removed';
       
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        result.data,
-        'remove_nulls',
-        `${actionVerb} nulls from ${intent.column || 'all columns'} using ${intent.method || 'delete'}`,
-        sessionDoc
-      );
-      
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ ${actionVerb} ${result.nulls_removed} null value(s)${isImputation ? ` with ${intent.method}` : ''}. Rows: ${result.rows_before} → ${result.rows_after}.`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, result.data);
         answerText += ` Here's a preview of the updated data:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData: result.data,
+        op: 'remove_nulls',
+        description: `${actionVerb} nulls from ${intent.column || 'all columns'} using ${intent.method || 'delete'}`,
+        shouldShowPreview,
         answer: answerText,
-        data: result.data,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
-    
+
     case 'preview': {
       let previewData: DataRow[];
       let answer: string;
@@ -3602,30 +3575,20 @@ export async function executeDataOperation(
         return newRow;
       });
 
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'normalize_column',
-        `Normalized column "${intent.column}" using min-max scaling`,
-        sessionDoc
-      );
-
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ Normalized column "${intent.column}" using min-max scaling (0-1).`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'normalize_column',
+        description: `Normalized column "${intent.column}" using min-max scaling`,
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
 
     case 'modify_column': {
@@ -3674,30 +3637,20 @@ export async function executeDataOperation(
         return newRow;
       });
 
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'modify_column',
-        `Adjusted column "${intent.column}" by ${intent.transformType} ${intent.transformValue}`,
-        sessionDoc
-      );
-
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ Updated column "${intent.column}" by ${intent.transformType === 'add' ? 'adding' : intent.transformType === 'subtract' ? 'subtracting' : intent.transformType === 'multiply' ? 'multiplying by' : 'dividing by'} ${intent.transformValue}.`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview of the updated data:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'modify_column',
+        description: `Adjusted column "${intent.column}" by ${intent.transformType} ${intent.transformValue}`,
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
 
     case 'aggregate': {
@@ -4059,29 +4012,19 @@ export async function executeDataOperation(
         answerText = `✅ Removed ${description}.`;
       }
 
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'remove_rows',
-        isKeepFirst ? `Kept first ${keptCount} rows, removed ${removedCount} rows` : `Removed ${description}`,
-        sessionDoc
-      );
-
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview of the updated data:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'remove_rows',
+        description: isKeepFirst ? `Kept first ${keptCount} rows, removed ${removedCount} rows` : `Removed ${description}`,
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
 
     case 'add_row': {
@@ -4093,32 +4036,22 @@ export async function executeDataOperation(
 
       const modifiedData = [...data, newRow];
 
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'add_row',
-        'Added a new empty row at the end of the dataset',
-        sessionDoc
-      );
-
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ Added a new empty row at the bottom.`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'add_row',
+        description: 'Added a new empty row at the end of the dataset',
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
-    
+
     case 'replace_value': {
       if (intent.oldValue === undefined) {
         return {
@@ -4171,32 +4104,22 @@ export async function executeDataOperation(
         return newRow;
       });
       
-      // Save modified data
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'replace_value',
-        `Replaced ${replacedCount} occurrence(s) of "${intent.oldValue}" with "${intent.newValue}"${intent.column ? ` in column "${intent.column}"` : ' across all columns'}`,
-        sessionDoc
-      );
-      
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ Replaced ${replacedCount} occurrence(s) of "${intent.oldValue}" with "${intent.newValue}"${intent.column ? ` in column "${intent.column}"` : ' across all columns'}.`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview of the updated data:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'replace_value',
+        description: `Replaced ${replacedCount} occurrence(s) of "${intent.oldValue}" with "${intent.newValue}"${intent.column ? ` in column "${intent.column}"` : ' across all columns'}`,
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
-    
+
     case 'remove_column': {
       if (!intent.column) {
         return {
@@ -4218,32 +4141,22 @@ export async function executeDataOperation(
         return newRow;
       });
       
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        modifiedData,
-        'remove_column',
-        `Removed column "${intent.column}"`,
-        sessionDoc
-      );
-      
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       let answerText = `✅ Successfully removed column "${intent.column}".`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, modifiedData);
         answerText += ` Here's a preview of the updated data:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData,
+        op: 'remove_column',
+        description: `Removed column "${intent.column}"`,
+        shouldShowPreview,
         answer: answerText,
-        data: modifiedData,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
-    
+
     case 'rename_column': {
       // Determine which column to rename
       const columnToRename = intent.oldColumnName || intent.column;
@@ -4387,35 +4300,25 @@ export async function executeDataOperation(
       
       const result = await convertDataType(data, intent.column, intent.targetType);
       
-      // Save modified data first
-      const saveResult = await saveModifiedData(
-        sessionId,
-        result.data,
-        'convert_type',
-        `Converted ${intent.column} to ${intent.targetType}`,
-        sessionDoc
-      );
-      
-      // Only show preview if user explicitly requested it
-      let previewData: DataRow[] | undefined;
       const errorMsg = result.conversion_info.errors.length > 0
         ? ` Note: ${result.conversion_info.errors.join(', ')}`
         : '';
       let answerText = `✅ Converted "${intent.column}" to ${intent.targetType}.${errorMsg}`;
-      
       if (shouldShowPreview) {
-        previewData = await getPreviewFromSavedData(sessionId, result.data);
         answerText += ` Here's a preview:`;
       }
-      
-      return {
+
+      return persistAndPreview({
+        sessionId,
+        sessionDoc,
+        modifiedData: result.data,
+        op: 'convert_type',
+        description: `Converted ${intent.column} to ${intent.targetType}`,
+        shouldShowPreview,
         answer: answerText,
-        data: result.data,
-        preview: previewData,
-        saved: true
-      };
+      });
     }
-    
+
     case 'train_model': {
       // Extract model parameters from intent or use AI to extract from message
       let modelType: 'linear' | 'log_log' | 'logistic' | 'ridge' | 'lasso' | 'random_forest' | 'decision_tree' | 'gradient_boosting' | 'elasticnet' | 'svm' | 'knn' | 'polynomial' | 'bayesian' | 'quantile' | 'poisson' | 'gamma' | 'tweedie' | 'extra_trees' | 'xgboost' | 'lightgbm' | 'catboost' | 'gaussian_process' | 'mlp' | 'multinomial_logistic' | 'naive_bayes_gaussian' | 'naive_bayes_multinomial' | 'naive_bayes_bernoulli' | 'lda' | 'qda' = intent.modelType || 'linear';

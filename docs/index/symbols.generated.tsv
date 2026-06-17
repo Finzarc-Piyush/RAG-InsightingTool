@@ -44,6 +44,7 @@ __setDashboardListerForUserForTesting	function	server/controllers/adminSemanticM
 __setLlmStubResolver	function	server/lib/agents/runtime/callLlm.ts	113
 __setPersistSleeper	function	server/lib/persistenceQueue.ts	87
 __setPersistWriter	function	server/lib/persistenceQueue.ts	70
+__setProcessedDataBlobWriterForTesting	function	server/lib/blobStorage.ts	283
 __setSemanticModelDetailFetcherForTesting	function	server/controllers/adminSemanticModelController.ts	222
 __setSemanticModelListerForTesting	function	server/controllers/adminSemanticModelController.ts	212
 __setSemanticModelUpdaterForTesting	function	server/controllers/adminSemanticModelController.ts	232
@@ -133,6 +134,9 @@ AdminSemanticModelListSnapshot	interface	client/src/lib/api/admin.ts	142
 AdminSemanticModelReferencesResponse	interface	client/src/lib/api/admin.ts	340
 AdminSemanticModelReferencesResponse	interface	server/controllers/adminSemanticModelController.ts	162
 AdminSemanticModels	function	client/src/pages/Admin/AdminSemanticModels.tsx	42
+AGENT_TRACE_MAX_BYTES	const	server/lib/agents/runtime/runtimeConfig.ts	41
+AGENT_WORKBENCH_ENTRY_CODE_MAX	const	server/lib/agents/runtime/runtimeConfig.ts	50
+AGENT_WORKBENCH_MAX_BYTES	const	server/lib/agents/runtime/runtimeConfig.ts	44
 AgentConfig	interface	server/lib/agents/runtime/types.ts	106
 agentCriticVerdictEventSchema	const	server/lib/agents/runtime/schemas.ts	181
 AgentExecutionContext	interface	server/lib/agents/runtime/types.ts	170
@@ -142,7 +146,7 @@ agentLog	function	server/lib/agents/runtime/agentLogger.ts	30
 AgentLoopResult	interface	server/lib/agents/runtime/types.ts	458
 AgentMidTurnSessionPayload	type	server/lib/agents/runtime/types.ts	74
 agentPlanEventSchema	const	server/lib/agents/runtime/schemas.ts	157
-AgentSseEmitter	type	server/lib/agents/runtime/agentLoop.service.ts	320
+AgentSseEmitter	type	server/lib/agents/runtime/agentLoop.service.ts	304
 agentSseEventToWorkbenchEntries	function	server/services/chat/agentWorkbench.util.ts	214
 AgentSseLikeEmitter	type	server/lib/agents/runtime/interAgentMessages.ts	36
 AgentState	interface	server/lib/agents/runtime/types.ts	393
@@ -240,6 +244,7 @@ API_BASE_URL	const	client/src/lib/config.ts	13
 apiClient	const	client/src/lib/httpClient.ts	8
 apiRequest	function	client/src/lib/httpClient.ts	144
 ApiRequestOptions	interface	client/src/lib/httpClient.ts	136
+apiV1Envelope	function	server/middleware/apiV1Envelope.ts	85
 appendDirective	function	server/models/datasetDirectives.model.ts	278
 appendEnvelopeInsight	function	server/lib/agents/runtime/insightHelpers.ts	29
 appendInterAgentMessage	function	server/lib/agents/runtime/interAgentMessages.ts	84
@@ -385,6 +390,7 @@ buildAnalyticalChartSpecs	function	server/lib/analyticalChartBuilders.ts	64
 buildAndVerifyDeckPlan	function	server/lib/exports/buildDashboardDeck.ts	62
 buildArtifactId	function	server/lib/pastAnalysisPivotArtifact.ts	68
 buildAuditEntrySummary	function	client/src/pages/Admin/lib/semanticModelAuditHistory.ts	67
+buildAutoPivotSpec	function	server/lib/agents/runtime/agentLoopSynthesisPrep.ts	36
 buildAutoPivotSpecFromPreview	function	server/lib/autoPivotSpec.ts	15
 buildBibliographyBlock	function	server/lib/agents/runtime/tools/webSearchTool.ts	89
 buildCachedResponsePayload	function	server/lib/cache/buildCachedResponsePayload.ts	64
@@ -454,6 +460,7 @@ buildPivotModel	function	client/src/lib/pivot/buildPivotModel.ts	460
 buildPivotTree	function	client/src/lib/pivot/buildPivotModel.ts	417
 buildPivotWorkbook	function	client/src/lib/pivot/exportPivotToXlsx.ts	202
 buildPlannerHintsBlock	function	server/lib/agents/runtime/plannerHintsBlock.ts	199
+buildPreSynthesisMidTurnSummary	function	server/lib/agents/runtime/agentLoopSynthesisPrep.ts	55
 buildPreviewCaption	function	client/src/lib/datasetPreviewModel.ts	53
 buildPriorInvestigationDigest	function	server/lib/agents/runtime/priorInvestigations.ts	74
 buildPriorTurnHandle	function	server/lib/agents/runtime/priorTurnState.ts	45
@@ -545,6 +552,8 @@ categoryForPurpose	function	server/lib/agents/runtime/llmCallPurpose.ts	292
 CausalNode	interface	server/lib/agents/runtime/investigationState.ts	312
 ChannelFitOut	interface	server/lib/dataOps/mmmService.ts	10
 CHART_DUAL_AXIS_STROKES	const	client/src/lib/chartRechartsShared.ts	15
+CHART_KIND_DROPDOWN_ORDER	const	client/src/pages/Home/Components/DataPreviewTable/chartKinds.ts	8
+CHART_KIND_LABEL	const	client/src/pages/Home/Components/DataPreviewTable/chartKinds.ts	21
 CHART_SERIES_COLORS	const	client/src/lib/chartRechartsShared.ts	12
 CHART_SERIES_VISIBILITY_FILTER_KEY	const	client/src/lib/chartFilters.ts	58
 chartA11ySummary	function	client/src/lib/charts/a11ySummary.ts	52
@@ -591,6 +600,7 @@ ChartIdResolver	interface	server/lib/exports/pptx/layouts/chartWithInsight.ts	33
 ChartInsightSynthesisContext	type	server/lib/insightSynthesis/types.ts	4
 chartIntentGuardEnabled	function	server/lib/agents/runtime/chartIntentGuard.ts	160
 ChartIntentGuardResult	type	server/lib/agents/runtime/chartIntentGuard.ts	37
+ChartKeyInsightCallout	function	client/src/pages/Home/Components/DataPreviewTable/ChartKeyInsightCallout.tsx	9
 ChartLayer	type	server/shared/schema/charts.ts	595
 chartLayerSchema	const	server/shared/schema/charts.ts	549
 ChartLayoutDeps	interface	server/lib/exports/pptx/layouts/chartWithInsight.ts	52
@@ -603,7 +613,7 @@ ChartModal	function	client/src/pages/Home/Components/ChartModal.tsx	107
 ChartOnlyModal	function	client/src/pages/Dashboard/Components/ChartOnlyModal.tsx	83
 chartOpacityEncodingSchema	const	server/shared/schema/charts.ts	431
 ChartProposalXY	type	server/lib/agents/runtime/chartProposalValidation.ts	31
-ChartReference	interface	server/lib/blobStorage.ts	368
+ChartReference	interface	server/lib/blobStorage.ts	403
 ChartRenderer	function	client/src/pages/Home/Components/ChartRenderer.tsx	104
 ChartRenderer	interface	server/lib/exports/pptx/layouts/chartWithInsight.ts	38
 chartRowsForProposal	function	server/lib/agents/runtime/chartProposalValidation.ts	119
@@ -648,6 +658,7 @@ ChatAnalysisResult	interface	server/lib/chatAnalyzer.ts	13
 ChatChartCard	function	client/src/components/charts/ChatChartCard.tsx	32
 ChatChartCardProps	interface	client/src/components/charts/ChatChartCard.tsx	21
 ChatDocument	interface	server/models/chat.model.ts	56
+chatDocumentReadSchema	const	server/models/persistedSchemas.ts	59
 ChatInterface	function	client/src/pages/Home/Components/ChatInterface.tsx	171
 chatPivotAnchorId	function	client/src/pages/Home/lib/chatPivotNav.ts	9
 ChatPivotNavEntry	type	client/src/pages/Home/lib/chatPivotNav.ts	65
@@ -707,10 +718,16 @@ clearRedundantDateAggregationForTemporalFacets	function	server/lib/queryPlanExec
 clearTurnCheckpoint	function	server/lib/turnCheckpoint.ts	121
 clearTurnRefreshBudget	function	server/lib/agents/runtime/contextRefresh.ts	80
 clearUserEmail	const	client/src/utils/userStorage.ts	22
+clientErrorController	function	server/routes/clientError.ts	49
+ClientErrorReport	interface	client/src/lib/errorSink.ts	25
+ClientErrorRequest	type	server/routes/clientError.ts	42
+clientErrorRequestSchema	const	server/routes/clientError.ts	32
+closeTurnColumnarStorage	function	server/lib/agents/runtime/turnColumnarStorage.ts	102
 cn	function	client/src/lib/utils.ts	4
 coalesceQueryPlanSteps	function	server/lib/agents/runtime/coalescePlanSteps.ts	106
 CoarseTimeIntent	type	server/lib/temporalFacetColumns.ts	33
 coarseTimeIntentFromQueryPlanDatePeriod	function	server/lib/temporalFacetColumns.ts	767
+coerceChartTypeForPersistence	function	client/src/pages/Home/Components/DataPreviewTable/chartKinds.ts	43
 coerceDataTableInPlace	function	server/lib/largeFileProcessor.ts	283
 coerceTemporalFacetKeysToStrings	function	server/lib/temporalFacetKeyNormalization.ts	10
 CohortAnalysisArgs	type	server/lib/agents/runtime/tools/cohortAnalysisTool.ts	87
@@ -817,6 +834,7 @@ CostAlertDoc	interface	server/lib/telemetry/costAnomalyDetector.ts	45
 countDashboardReferences	function	server/lib/semantic/semanticModelDashboardReferences.ts	88
 countEntriesBySource	function	client/src/pages/Admin/lib/semanticModelSourceFilter.ts	59
 countMemoryEntries	function	server/models/analysisMemory.model.ts	172
+CountNullsArgs	interface	server/lib/dataOps/handlers/countNulls.ts	11
 countReferencesInChartSpec	function	server/lib/semantic/semanticModelReferences.ts	58
 countReferencesInChartSpecV2	function	server/lib/semantic/semanticModelReferences.ts	90
 countSemanticModelReferences	function	server/lib/semantic/semanticModelReferences.ts	161
@@ -873,6 +891,7 @@ DailyPoint	interface	server/lib/admin/metricsAggregator.ts	31
 DailyRange	interface	server/lib/admin/metricsAggregator.ts	36
 Dashboard	function	client/src/pages/Dashboard/Dashboard.tsx	13
 Dashboard	type	server/shared/schema/charts.ts	2667
+DASHBOARD_CHART_HARD_CAP	const	server/lib/agents/runtime/agentLoop/finalizeCharts.ts	43
 DASHBOARD_SYSTEM_PROMPT	const	server/lib/agents/runtime/buildDashboardPrompt.ts	75
 DashboardActionTile	interface	client/src/pages/Dashboard/types.ts	53
 DashboardAnswerEnvelope	type	server/shared/schema/charts.ts	2542
@@ -912,6 +931,7 @@ DashboardPivotSpec	type	server/shared/schema/charts.ts	2463
 dashboardPivotSpecSchema	const	server/shared/schema/charts.ts	2451
 DashboardPivotTile	interface	client/src/pages/Dashboard/types.ts	62
 DashboardProvider	function	client/src/pages/Dashboard/context/DashboardContext.tsx	69
+dashboardReadSchema	const	server/models/persistedSchemas.ts	47
 DashboardReferenceCount	interface	server/lib/semantic/semanticModelDashboardReferences.ts	69
 DashboardReorderSheetsRequest	type	server/shared/schema/charts.ts	2892
 dashboardReorderSheetsRequestSchema	const	server/shared/schema/charts.ts	2889
@@ -947,13 +967,15 @@ DashboardTileProviderProps	interface	client/src/pages/Dashboard/lib/dashboardTil
 DashboardTiles	const	client/src/pages/Dashboard/Components/DashboardTiles.tsx	281
 DashboardView	function	client/src/pages/Dashboard/Components/DashboardView.tsx	88
 dataApi	const	client/src/lib/api/data.ts	34
+DataOpResult	interface	server/lib/dataOps/dataOpsTypes.ts	29
 dataOpsChatWithAI	const	server/controllers/dataOpsController.ts	27
 dataOpsChatWithAIStream	const	server/controllers/dataOpsController.ts	60
-DataOpsContext	interface	server/lib/dataOps/dataOpsOrchestrator.ts	281
-DataOpsIntent	interface	server/lib/dataOps/dataOpsOrchestrator.ts	204
+DataOpsContext	interface	server/lib/dataOps/dataOpsOrchestrator.ts	209
+DataOpsIntent	interface	server/lib/dataOps/dataOpsOrchestrator.ts	132
 DataOpsResponse	interface	client/src/lib/api/chat.ts	396
 DataPreview	function	client/src/pages/Home/Components/DataPreview.tsx	81
-DataPreviewTable	function	client/src/pages/Home/Components/DataPreviewTable.tsx	203
+DataPreviewTable	function	client/src/pages/Home/Components/DataPreviewTable.tsx	206
+DataRow	type	server/lib/dataOps/dataOpsTypes.ts	14
 DATASET_ENRICHMENT_LOADING_CONTENT	const	client/src/pages/Home/modules/uploadSystemMessages.ts	8
 DATASET_ENRICHMENT_MESSAGE_KEY	const	client/src/pages/Home/modules/uploadSystemMessages.ts	4
 DATASET_PREVIEW_LOADING_CONTENT	const	client/src/pages/Home/modules/uploadSystemMessages.ts	6
@@ -977,6 +999,7 @@ datasetProfileSchema	const	server/shared/schema/charts.ts	897
 DataSummary	type	server/shared/schema/charts.ts	2009
 DataSummaryModal	function	client/src/pages/Home/Components/DataSummaryModal.tsx	524
 dataSummarySchema	const	server/shared/schema/charts.ts	1910
+DataSummaryTable	function	client/src/pages/Home/Components/DataPreviewTable/DataSummaryTable.tsx	24
 DateBucketResolution	type	server/lib/dataTransform.ts	549
 DateColumnProfile	interface	client/src/lib/api/data.ts	110
 DateColumnProfile	interface	server/lib/richColumnProfile.ts	67
@@ -1014,12 +1037,14 @@ DeepInvestigationConfig	interface	server/lib/agents/runtime/investigationTree.ts
 DEFAULT_FACET_PREFERENCE	const	server/lib/temporalGrainAuthority.ts	89
 DEFAULT_PROMPT_BUDGET	const	server/lib/agents/runtime/promptBudget.ts	73
 DEFAULT_Y_TICKS	const	client/src/lib/charts/yAxisTickCount.ts	23
+DeferredBuildChartTemplate	type	server/lib/agents/runtime/agentLoopDeferredCharts.ts	40
+deferredTemplateFromBuiltChart	function	server/lib/agents/runtime/agentLoopDeferredCharts.ts	53
 defineMaster	function	server/lib/exports/pptx/master.ts	64
 DELETE_AUDIT_LOG_REASSURANCE	const	client/src/pages/Admin/lib/semanticModelDeleteConfirmation.ts	202
 deleteActiveFilterEndpoint	const	server/controllers/activeFilterController.ts	215
 deleteAutomation	const	server/models/automation.model.ts	193
 deleteAutomationController	const	server/controllers/automationController.ts	276
-deleteChartsFromBlob	const	server/lib/blobStorage.ts	475
+deleteChartsFromBlob	const	server/lib/blobStorage.ts	510
 deleteChat	const	server/controllers/chatManagementController.ts	72
 deleteChatDocument	const	server/models/chat.model.ts	1528
 deleteDashboard	const	server/models/dashboard.model.ts	396
@@ -1051,7 +1076,9 @@ derivePivotDefaultsFromPreviewRows	function	server/lib/pivotDefaultsFromPreview.
 derivePivotDefaultsHint	function	server/services/chat/chatStreamPivotDefaults.ts	97
 deriveRawColumnsFromDataSummary	const	server/lib/automations/buildRecipeFromChat.ts	99
 deriveSeriesKeysFromWideDataRow	function	server/lib/ensureChartSpecSeriesKeys.ts	24
+deriveStatusFromEnrichment	function	server/utils/uploadQueue.ts	123
 deriveTileRecommendations	function	client/src/pages/Dashboard/lib/tileRecommendations.ts	179
+DescribeArgs	interface	server/lib/dataOps/handlers/describe.ts	12
 detectAISuggestion	function	server/lib/agents/contextResolver.ts	113
 detectAnomalies	function	server/lib/anomalyDetection.ts	86
 detectCoarseTimeIntentFromMessage	function	server/lib/temporalFacetColumns.ts	699
@@ -1142,6 +1169,7 @@ DrillThroughResponse	interface	client/src/pages/Dashboard/hooks/useDrillThroughR
 DrillThroughResponse	interface	server/services/dashboardDrillThrough.service.ts	80
 DrillThroughRowTable	function	client/src/pages/Dashboard/Components/DrillThroughRowTable.tsx	34
 DrillThroughSheet	function	client/src/pages/Dashboard/Components/DrillThroughSheet.tsx	81
+DrillthroughState	interface	client/src/pages/Home/Components/DataPreviewTable/PivotDrillthroughPanel.tsx	8
 drillThroughTelemetryController	function	server/routes/telemetry.ts	87
 DrillThroughTelemetryPayload	interface	client/src/lib/telemetry.ts	24
 DrillThroughTelemetryRequest	type	server/routes/telemetry.ts	83
@@ -1201,6 +1229,7 @@ envInt	function	server/lib/envFlags.ts	38
 envKeyForPurpose	function	server/lib/agents/runtime/llmCallPurpose.ts	186
 envPositiveInt	function	server/config/uploadLimits.ts	16
 ErrorBoundary	class	client/src/components/ErrorBoundary.tsx	20
+ErrorEnvelope	interface	server/lib/responseEnvelope.ts	30
 errorMessage	function	server/utils/errorMessage.ts	8
 ErrorResponse	interface	server/lib/agents/utils/errorRecovery.ts	46
 escapeSqlStringLiteral	function	server/lib/pivotFilterSql.ts	5
@@ -1219,7 +1248,7 @@ ExclusionFilter	interface	server/shared/queryTypes.ts	28
 ExclusionIntent	interface	server/lib/agents/runtime/types.ts	145
 ExecSummaryPage	function	server/lib/exports/pdf/layouts/execSummary.tsx	14
 executeAnalyticalQuery	function	server/lib/analyticalQueryExecutor.ts	155
-executeDataOperation	function	server/lib/dataOps/dataOpsOrchestrator.ts	3219
+executeDataOperation	function	server/lib/dataOps/dataOpsOrchestrator.ts	3087
 ExecuteMetricQueryArgs	type	server/lib/agents/runtime/tools/executeMetricQueryTool.ts	85
 executeMetricQueryArgsSchema	const	server/lib/agents/runtime/tools/executeMetricQueryTool.ts	69
 executePivotQuery	function	server/lib/pivotQueryService.ts	473
@@ -1302,8 +1331,10 @@ Fact	interface	server/lib/agents/runtime/investigationState.ts	257
 FactsMetricDecision	interface	server/lib/factsMetricResolver.ts	25
 FactSource	type	server/lib/agents/runtime/investigationState.ts	250
 FACTUAL_LEADER_RES	const	server/lib/agents/runtime/queryIntentAuthority.ts	155
+fail	function	server/lib/responseEnvelope.ts	47
 fallbackInsightsFromRaw	function	server/lib/correlationAnalyzer.ts	421
 FallbackRender	interface	server/lib/agents/runtime/synthesisFallback.ts	35
+FEATURE_FLAGS	const	server/lib/featureFlags.ts	58
 FeatureSweepOptions	interface	server/lib/agents/runtime/dashboardFeatureSweep.ts	81
 FeatureSweepReport	interface	server/lib/agents/runtime/dashboardFeatureSweep.ts	107
 Feedback	type	client/src/lib/api/feedback.ts	6
@@ -1358,8 +1389,10 @@ filterRowsByPivotSelections	function	server/lib/pivotRowFilters.ts	23
 FilterSelections	type	client/src/lib/pivot/types.ts	32
 FilterSpawnedOptions	interface	server/lib/agents/runtime/filterSpawnedQuestions.ts	37
 filterSpawnedQuestions	function	server/lib/agents/runtime/filterSpawnedQuestions.ts	122
+finalAnswerEnvelopeSchema	const	server/lib/agents/runtime/agentLoop/synthesis.ts	59
 finaliseCurrencyForColumn	function	server/lib/fileParser.ts	123
 finalizeAdminSemanticModelEntry	const	server/models/chat.model.ts	2037
+finalizeMergedCharts	function	server/lib/agents/runtime/agentLoop/finalizeCharts.ts	57
 findBusinessActionsTargetIndex	function	client/src/lib/chat/findBusinessActionsTarget.ts	39
 findChartByTileId	function	server/services/dashboardDrillThrough.service.ts	173
 findExactPastAnalysisMatch	function	server/lib/rag/pastAnalysesStore.ts	138
@@ -1388,6 +1421,12 @@ finishChartSpec	function	server/lib/chartSpecFinish.ts	48
 fitLinearTrend	function	client/src/lib/charts/layers.ts	88
 fitLogLogElasticity	function	server/lib/agents/runtime/tools/priceElasticityTool.ts	183
 FitMetrics	interface	server/lib/dataOps/mmmService.ts	30
+flagDefault	function	server/lib/featureFlags.ts	295
+FlagLifecycle	type	server/lib/featureFlags.ts	36
+FlagListing	interface	server/lib/featureFlags.ts	280
+FlagName	type	server/lib/featureFlags.ts	261
+FlagSpec	interface	server/lib/featureFlags.ts	39
+FlatAnalysisCellLookups	interface	client/src/pages/Home/Components/DataPreviewTable/FlatAnalysisCell.tsx	13
 flattenPivotTree	function	client/src/lib/pivot/buildPivotModel.ts	493
 flexibleBudget	function	server/lib/agents/runtime/promptBudget.ts	93
 FlexibleSlot	type	server/lib/agents/runtime/promptBudget.ts	42
@@ -1535,8 +1574,9 @@ getMemoryEntry	function	server/models/analysisMemory.model.ts	155
 getModelForTask	function	server/lib/agents/models.ts	49
 getNumericValues	const	client/src/lib/charts/chartFilterHelpers.ts	44
 getPastAnalysisDoc	function	server/models/pastAnalysis.model.ts	184
+getPreviewFromSavedData	function	server/lib/dataOps/dataPersistence.ts	287
 getQueryFn	const	client/src/lib/queryClient.ts	8
-getQueueStats	const	server/controllers/uploadController.ts	290
+getQueueStats	const	server/controllers/uploadController.ts	352
 getRagTopK	function	server/lib/rag/config.ts	58
 getRawData	const	server/controllers/dataRetrievalController.ts	194
 getReadyNodes	function	server/lib/agents/runtime/investigationTree.ts	300
@@ -1572,8 +1612,9 @@ getSourceBadgeVariant	function	client/src/pages/Admin/lib/semanticModelSourceBad
 getSuperadminFeedbackStream	function	server/controllers/superadminMetricsController.ts	221
 getSuperadminMetricsOverview	function	server/controllers/superadminMetricsController.ts	84
 getToggleOverrides	function	server/models/domainContextToggles.model.ts	115
+getTurnColumnarStorage	function	server/lib/agents/runtime/turnColumnarStorage.ts	67
 getUploadJobStatus	function	client/src/lib/api/uploadStatus.ts	52
-getUploadStatus	const	server/controllers/uploadController.ts	122
+getUploadStatus	const	server/controllers/uploadController.ts	126
 getUserAnalysisSessions	const	server/controllers/dataRetrievalController.ts	13
 getUserChatHistory	const	server/controllers/chatManagementController.ts	11
 getUserChats	const	server/models/chat.model.ts	1204
@@ -1599,6 +1640,10 @@ groupedMarks	function	client/src/lib/charts/markMeta.ts	263
 groupSortedStepsForExecution	function	server/lib/agents/runtime/workingMemory.ts	66
 GrowthGrain	type	server/lib/growth/periodShift.ts	26
 GrowthMode	type	server/lib/growth/buildGrowthSql.ts	28
+handleCountNulls	function	server/lib/dataOps/handlers/countNulls.ts	17
+handleDescribe	function	server/lib/dataOps/handlers/describe.ts	16
+handleIdentifyOutliers	function	server/lib/dataOps/handlers/identifyOutliers.ts	21
+handleSummary	function	server/lib/dataOps/handlers/summary.ts	18
 hasActiveFilters	const	client/src/lib/chartFilters.ts	512
 hasAnyOverride	function	client/src/pages/Admin/lib/semanticModelSectionFilters.ts	124
 hasAnySummaryContent	function	client/src/pages/Dashboard/Components/DashboardSummaryDrawer.tsx	43
@@ -1634,6 +1679,7 @@ HypothesisStatus	type	server/lib/agents/runtime/analyticalBlackboard.ts	49
 HypothesisStatusV2	type	server/lib/agents/runtime/investigationState.ts	175
 HypothesisTree	interface	server/lib/agents/runtime/investigationState.ts	202
 identifyOutliers	function	server/lib/dataOps/pythonService.ts	1237
+IdentifyOutliersArgs	interface	server/lib/dataOps/handlers/identifyOutliers.ts	14
 ImplicationsByHorizonPage	function	server/lib/exports/pdf/layouts/implicationsByHorizon.tsx	52
 importSnowflakeTable	const	server/controllers/snowflakeController.ts	84
 incrementQuestionsUsed	function	server/models/userBudget.model.ts	116
@@ -1649,10 +1695,12 @@ inferAnalystIntent	function	server/lib/agents/runtime/plannerHintsBlock.ts	107
 inferAutoLayers	function	server/lib/charts/autoAttachLayers.ts	80
 inferConfidenceTier	function	server/lib/insightRegen.ts	188
 inferDatasetProfile	function	server/lib/datasetProfile.ts	92
+inferDateLikeColumns	function	client/src/pages/Home/Components/DataPreviewTable/columnHelpers.ts	46
 inferFiltersFromQuestion	function	server/lib/agents/utils/inferFiltersFromQuestion.ts	126
 inferFormatHint	function	client/src/lib/charts/format.ts	76
 inferMetricApplicability	function	server/lib/inferMetricApplicability.ts	60
 inferModel	function	server/lib/semantic/inferModel.ts	409
+inferNumericColumns	function	client/src/pages/Home/Components/DataPreviewTable/columnHelpers.ts	9
 inferOptimalPeriodForChartColumn	function	server/lib/chartDownsampling.ts	206
 inferPeriodFilterFromQuestion	function	server/lib/agents/utils/inferPeriodFilterFromQuestion.ts	132
 InferredFilter	interface	server/lib/agents/utils/inferFiltersFromQuestion.ts	46
@@ -1713,6 +1761,8 @@ InvestigationTree	interface	server/lib/agents/runtime/investigationTree.ts	174
 isActiveFilterEffective	function	server/lib/activeFilter/applyActiveFilter.ts	16
 isAdminEmail	function	server/utils/admin.helper.ts	20
 isAdminRequest	function	server/utils/admin.helper.ts	24
+isAgenticLoopEnabled	function	server/lib/agents/runtime/runtimeConfig.ts	55
+isAgenticStrictEnabled	function	server/lib/agents/runtime/runtimeConfig.ts	62
 isAnalyticalQuery	function	server/lib/analyticalQueryEngine.ts	77
 isAnthropicModel	function	server/lib/agents/runtime/anthropicProvider.ts	81
 isBrushDrag	function	client/src/pages/Dashboard/lib/explainSlice.ts	165
@@ -1722,9 +1772,11 @@ isCanonicalPeriodKey	function	client/src/lib/temporalPeriodDisplay.ts	42
 isChartSpecV2	function	server/shared/schema/charts.ts	755
 isCoalesceEnabled	function	server/lib/agents/runtime/coalescePlanSteps.ts	37
 isConverged	function	server/lib/agents/runtime/analyticalBlackboard.ts	245
+isCorrelationRequest	function	server/lib/dataOps/intent/isCorrelationRequest.ts	15
 isCrashReporterActive	function	server/lib/observability/crashReporter.ts	53
 isCrossFilterActive	function	client/src/pages/Dashboard/lib/crossFilter.ts	74
 isDashboardAutogenEnabled	function	server/lib/agents/runtime/dashboardAutogenGate.ts	39
+isDataModificationOperation	function	server/lib/dataOps/intent/isDataModificationOperation.ts	15
 isDatasetEnrichmentSystemMessage	function	client/src/pages/Home/modules/uploadSystemMessages.ts	19
 isDatasetPreviewSystemMessage	function	client/src/pages/Home/modules/uploadSystemMessages.ts	11
 isDateColumnName	function	server/lib/dateUtils.ts	521
@@ -1740,10 +1792,14 @@ isDuckDBAvailable	function	server/lib/columnarStorage.ts	47
 isEditableTarget	function	client/src/pages/Dashboard/context/DashboardEditModeContext.tsx	67
 isExhaustiveBreadthEnabled	function	server/lib/agents/runtime/dashboardFeatureSweep.ts	428
 isExplicitDateLikeForPreview	function	client/src/lib/localPreviewParser.ts	88
+isFlagOn	function	server/lib/featureFlags.ts	271
 isIdColumn	function	server/lib/columnIdHeuristics.ts	4
 isIdentifierLikeNumericColumn	function	server/lib/columnIdHeuristics.ts	56
+isIdLikeColumn	function	client/src/pages/Home/Components/DataPreviewTable/columnHelpers.ts	31
 isInformationSeekingQuery	function	server/lib/analyticalQueryEngine.ts	14
 isInitialAnalysisMessage	function	client/src/lib/initialAnalysisMessage.ts	8
+isInterAgentPromptFeedbackEnabled	function	server/lib/agents/runtime/runtimeConfig.ts	75
+isInterAgentTraceEnabled	function	server/lib/agents/runtime/runtimeConfig.ts	67
 isIntermediatePivotCoalesceEnabled	function	server/services/chat/intermediatePivotPolicy.ts	17
 isKnownSseEventKind	function	server/shared/sseEvents.ts	312
 isLargeFileCoercionEnabled	function	server/lib/largeFileProcessor.ts	35
@@ -1824,6 +1880,7 @@ listCitedPackIds	function	client/src/lib/citationTokens.ts	86
 listDashboardsController	const	server/controllers/dashboardController.ts	89
 listDatabases	function	server/lib/snowflakeService.ts	242
 listDomainContextPacks	function	server/controllers/adminDomainContextController.ts	37
+listFlags	function	server/lib/featureFlags.ts	288
 listMemoryEntries	function	server/models/analysisMemory.model.ts	119
 ListMemoryOptions	interface	server/models/analysisMemory.model.ts	108
 listPastAnalysesForSession	function	server/models/pastAnalysis.model.ts	387
@@ -1846,7 +1903,8 @@ LlmCallUsage	interface	server/lib/agents/runtime/llmUsageEmitter.ts	31
 LlmUsageDoc	interface	server/models/llmUsage.model.ts	16
 LlmUsageSink	interface	server/lib/telemetry/llmUsageSink.ts	48
 LlmUsageSinkConfig	interface	server/lib/telemetry/llmUsageSink.ts	39
-loadChartsFromBlob	const	server/lib/blobStorage.ts	444
+loadAgentConfigFromEnv	function	server/lib/agents/runtime/runtimeConfig.ts	79
+loadChartsFromBlob	const	server/lib/blobStorage.ts	479
 loadChunkData	function	server/lib/chunkingService.ts	457
 loadChunkIndex	function	server/lib/chunkingService.ts	296
 loadDataForColumns	function	server/utils/dataLoader.ts	491
@@ -1878,6 +1936,7 @@ MagnitudeCheckResult	type	server/lib/agents/runtime/checkMagnitudesAgainstObserv
 MagnitudeClaim	interface	server/lib/agents/runtime/investigationState.ts	113
 MagnitudeForCheck	interface	server/lib/agents/runtime/checkMagnitudesAgainstObservations.ts	46
 MagnitudeItem	interface	client/src/pages/Home/Components/MagnitudesRow.tsx	17
+magnitudeSchema	const	server/lib/agents/runtime/agentLoop/synthesis.ts	49
 MagnitudesRow	function	client/src/pages/Home/Components/MagnitudesRow.tsx	38
 MagnitudesRowProps	interface	client/src/pages/Home/Components/MagnitudesRow.tsx	23
 makeAxisTickFormatter	function	client/src/lib/charts/format.ts	247
@@ -1909,6 +1968,7 @@ MarkValidity	interface	server/shared/pivot/chartTypeValidity.ts	42
 MASTER_NAME	const	server/lib/exports/pptx/master.ts	53
 matchMetric	function	server/lib/wideFormat/metricVocabulary.ts	181
 matchPeriod	function	server/lib/wideFormat/periodVocabulary.ts	561
+materializeDeferredBuildCharts	function	server/lib/agents/runtime/agentLoopDeferredCharts.ts	90
 materializePivotArtifact	function	server/lib/pastAnalysisPivotArtifact.ts	130
 MAX_FAST_PATH_QUESTION_LENGTH	const	server/lib/agents/runtime/queryIntentAuthority.ts	93
 MAX_HISTORY_PER_TILE	const	client/src/pages/Dashboard/lib/insightHistory.ts	54
@@ -2019,6 +2079,7 @@ NumericFilterSelection	interface	client/src/lib/chartFilters.ts	47
 NumericFilterSelection	interface	server/services/dashboardDrillThrough.service.ts	48
 NumericStats	interface	server/lib/schemaIndex.ts	18
 ObservationId	type	server/lib/agents/runtime/investigationState.ts	66
+ok	function	server/lib/responseEnvelope.ts	42
 onSemanticModelVersionBumped	function	server/lib/semantic/semanticModelInvalidate.ts	59
 openai	const	server/lib/openai.ts	151
 OpenChatButton	function	client/src/pages/Dashboard/Components/OpenChatButton.tsx	54
@@ -2039,12 +2100,14 @@ PackSummary	interface	server/lib/domainContext/types.ts	38
 paddedDomain	function	client/src/lib/charts/encodingResolver.ts	116
 PageFooter	function	server/lib/exports/pdf/master.tsx	148
 PageHeader	function	server/lib/exports/pdf/master.tsx	125
+PaginatedResult	interface	server/lib/pagination.ts	37
+Pagination	interface	server/lib/pagination.ts	27
 PairedTInput	interface	server/lib/significanceTests.ts	46
 ParallelRenderer	function	client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx	375
 ParallelResolveResult	interface	server/lib/agents/runtime/skills/parallelResolve.ts	42
 parquetBlobName	function	server/lib/sessionParquet.ts	42
 parseComputedAggregationExpression	function	server/lib/queryPlanExecutor.ts	187
-parseDataOpsIntent	function	server/lib/dataOps/dataOpsOrchestrator.ts	309
+parseDataOpsIntent	function	server/lib/dataOps/dataOpsOrchestrator.ts	223
 parseDateLike	function	client/src/lib/parseDateLike.ts	18
 ParsedPackInput	interface	server/lib/domainContext/packSchema.ts	94
 ParsedQuery	interface	server/shared/queryTypes.ts	103
@@ -2061,6 +2124,8 @@ parseLocalPreview	function	client/src/lib/localPreviewParser.ts	265
 parseNumericCell	function	server/shared/parseNumericCell.ts	10
 parseNumericValue	const	client/src/lib/charts/chartFilterHelpers.ts	31
 parsePack	function	server/lib/domainContext/packSchema.ts	100
+parsePagination	function	server/lib/pagination.ts	63
+ParsePaginationOptions	interface	server/lib/pagination.ts	20
 parsePythonResponse	function	server/lib/dataOps/pythonResponseSchemas.ts	70
 parseQueuedQuestion	function	client/src/lib/chat/earlyQuestionRefire.ts	64
 parseRowDate	function	server/lib/temporalFacetColumns.ts	546
@@ -2146,6 +2211,7 @@ PeriodKind	type	server/lib/growth/buildGrowthSql.ts	30
 PeriodKind	type	server/lib/wideFormat/periodVocabulary.ts	17
 PeriodMatch	interface	server/lib/wideFormat/periodVocabulary.ts	35
 periodsPerYearForKind	function	server/lib/growth/periodShift.ts	238
+persistAndPreview	function	server/lib/dataOps/dataPersistence.ts	320
 persistDirectivesFromUserMessage	function	server/services/chat/chatStreamDirectivePersist.ts	96
 PersistDirectivesParams	interface	server/services/chat/chatStreamDirectivePersist.ts	30
 PersistDirectivesResult	interface	server/services/chat/chatStreamDirectivePersist.ts	79
@@ -2187,7 +2253,7 @@ pivotAggRowSchema	const	server/shared/schema.ts	38
 pivotAggSchema	const	server/shared/schema.ts	28
 pivotAutoName	function	client/src/pages/Home/lib/pivotAutoName.ts	26
 PivotBlobUploader	type	server/lib/pastAnalysisPivotArtifact.ts	55
-PivotBuilderAddPayload	interface	client/src/pages/Home/Components/DataPreviewTable.tsx	197
+PivotBuilderAddPayload	interface	client/src/pages/Home/Components/DataPreviewTable.tsx	200
 PivotBuilderLauncher	function	client/src/pages/Home/Components/PivotBuilderLauncher.tsx	33
 pivotCache	const	server/lib/pivotCache.ts	53
 PivotChartKind	type	server/shared/pivot/chartRecommendation.ts	35
@@ -2203,6 +2269,7 @@ pivotDefaultsSchema	const	server/shared/schema/charts.ts	1238
 pivotDimensionStringKey	function	client/src/lib/pivot/pivotDimensionStringKey.ts	2
 pivotDimensionStringKeyForChartFilter	function	server/lib/pivotRowFilters.ts	5
 pivotDrillthrough	function	client/src/lib/api/data.ts	247
+PivotDrillthroughPanel	function	client/src/pages/Home/Components/DataPreviewTable/PivotDrillthroughPanel.tsx	15
 PivotDrillthroughRequest	interface	client/src/lib/api/data.ts	230
 PivotDrillthroughResponse	interface	client/src/lib/api/data.ts	241
 PivotEnvelope	type	server/lib/insightGenerator/pivotEnvelope.ts	29
@@ -2378,6 +2445,7 @@ RawDataResponse	type	server/shared/schema/charts.ts	2305
 rawDataResponseSchema	const	server/shared/schema/charts.ts	2291
 RawDataState	interface	client/src/lib/charts/RawDataProvider.tsx	33
 RawPivotArtifact	interface	server/lib/pastAnalysisPivotArtifact.ts	34
+RawQuery	type	server/lib/pagination.ts	18
 readCachedProfile	function	server/models/datasetProfileCache.model.ts	81
 readDimensionFiltersFromParsed	function	server/lib/pivotSliceDefaultsFromDimensionFilters.ts	18
 readExcelObjectRows	function	server/lib/excelReader.ts	143
@@ -2487,6 +2555,7 @@ renderDeckPlanToPdfBuffer	function	server/lib/exports/pdf/render.tsx	59
 renderDeckPlanToPptxBuffer	function	server/lib/exports/pptx/render.ts	103
 renderExecSummary	function	server/lib/exports/pptx/layouts/execSummary.ts	19
 renderFallbackAnswer	function	server/lib/agents/runtime/synthesisFallback.ts	61
+renderFlatAnalysisCell	function	client/src/pages/Home/Components/DataPreviewTable/FlatAnalysisCell.tsx	25
 renderImplicationsByHorizon	function	server/lib/exports/pptx/layouts/implicationsByHorizon.ts	21
 renderKpiRow	function	server/lib/exports/pptx/layouts/kpiRow.ts	22
 renderMethodology	function	server/lib/exports/pptx/layouts/methodology.ts	19
@@ -2513,6 +2582,7 @@ ReplaySseEmit	type	server/lib/automations/replayLoop.service.ts	97
 ReplaySseEvent	type	server/lib/automations/replayLoop.service.ts	76
 REPORT_USER_INTENT_RE	const	client/src/lib/reportIntent.ts	2
 REPORT_USER_INTENT_RE	const	server/lib/reportIntent.ts	2
+reportClientError	function	client/src/lib/errorSink.ts	77
 RequestContext	interface	server/lib/telemetry/requestContext.ts	14
 requestLogger	function	server/middleware/requestLogger.ts	20
 requireAzureAdAuth	function	server/middleware/azureAdAuth.ts	123
@@ -2588,11 +2658,12 @@ roundTo	function	server/lib/numberCoercion.ts	57
 Row	type	client/src/lib/charts/dataEngine.ts	17
 Row	type	client/src/lib/charts/encodingResolver.ts	12
 RowDeleteButton	function	client/src/pages/Admin/components/semanticModelCells.tsx	265
+rowFrameSupportsDeferredTemplate	function	server/lib/agents/runtime/agentLoopDeferredCharts.ts	70
 rowKeysFromFirstRow	function	server/lib/agents/runtime/agentLoopFormatters.ts	169
 RowRef	interface	server/lib/agents/runtime/investigationState.ts	78
 RowSetRef	interface	server/lib/agents/runtime/rowSetRef.ts	31
 rowsFromSource	function	client/src/lib/charts/RawDataProvider.tsx	139
-runAgentTurn	function	server/lib/agents/runtime/agentLoop.service.ts	743
+runAgentTurn	function	server/lib/agents/runtime/agentLoop.service.ts	387
 RunAutomationCallbacks	interface	client/src/lib/api/automations.ts	43
 runAutomationController	const	server/controllers/automationController.ts	205
 RunAutomationOptions	interface	client/src/lib/api/automations.ts	71
@@ -2611,8 +2682,11 @@ runHierarchicalDrill	function	server/lib/agents/runtime/tools/hierarchicalDrillT
 runHypothesisAndBriefMerged	function	server/lib/agents/runtime/runHypothesisAndBrief.ts	92
 runInvariantChecks	function	server/scripts/check-invariants.ts	137
 runMarketBasket	function	server/lib/agents/runtime/tools/marketBasketTool.ts	125
+runNarrativeRetry	function	server/lib/agents/runtime/agentLoop/synthesis.ts	285
 runNarrator	function	server/lib/agents/runtime/narratorAgent.ts	214
+runPlainTextRetry	function	server/lib/agents/runtime/agentLoop/synthesis.ts	326
 runPlanner	function	server/lib/agents/runtime/planner.ts	529
+runPlannerWithOneRetry	function	server/lib/agents/runtime/agentLoopPlanner.ts	49
 runPriceElasticity	function	server/lib/agents/runtime/tools/priceElasticityTool.ts	301
 runQuickLookupPlanner	function	server/lib/agents/runtime/quickAnswerPlanner.ts	293
 runReflector	function	server/lib/agents/runtime/reflector.ts	46
@@ -2622,6 +2696,7 @@ runSignificanceTest	function	server/lib/significanceTests.ts	239
 runSpawnedFollowUpPass	function	server/lib/agents/runtime/spawnedFollowUpPass.ts	93
 runSubInvestigation	function	server/lib/agents/runtime/investigationOrchestrator.ts	47
 runVerifier	function	server/lib/agents/runtime/verifier.ts	155
+safeParseRead	function	server/models/persistedSchemas.ts	82
 sample	function	client/src/lib/charts/dataEngine.ts	233
 sampleCsvRows	function	server/lib/streamingFileParser.ts	125
 sampleRowsForVerification	function	server/lib/agents/runtime/magnitudeAudit.ts	216
@@ -2638,7 +2713,7 @@ sanitizeStringLiteral	function	server/lib/snowflakeService.ts	182
 SankeyRenderer	function	client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx	236
 SaveAutomationModal	const	client/src/components/SaveAutomationModal.tsx	51
 SaveAutomationModalProps	interface	client/src/components/SaveAutomationModal.tsx	29
-saveChartsToBlob	const	server/lib/blobStorage.ts	378
+saveChartsToBlob	const	server/lib/blobStorage.ts	413
 SaveDataResult	interface	server/lib/dataOps/dataPersistence.ts	17
 saveModifiedData	function	server/lib/dataOps/dataPersistence.ts	48
 scanCalendarCoverage	function	server/lib/growth/temporalCoverage.ts	30
@@ -2745,12 +2820,14 @@ SharedAnalysesPanel	const	client/src/pages/Analysis/SharedAnalysesPanel.tsx	53
 SharedAnalysesResponse	type	server/shared/schema/charts.ts	2137
 sharedAnalysesResponseSchema	const	server/shared/schema/charts.ts	2132
 SharedAnalysisInvite	type	server/shared/schema/charts.ts	2130
+sharedAnalysisInviteReadSchema	const	server/models/persistedSchemas.ts	41
 sharedAnalysisInviteSchema	const	server/shared/schema/charts.ts	2112
 sharedAnalysisPreviewSchema	const	server/shared/schema/charts.ts	2102
 sharedAnalysisStatusSchema	const	server/shared/schema/charts.ts	2100
 shareDashboardController	const	server/controllers/sharedDashboardController.ts	51
 ShareDashboardDialog	const	client/src/pages/Dashboard/Components/ShareDashboardDialog.tsx	33
 SharedDashboardInvite	type	server/shared/schema/charts.ts	2166
+sharedDashboardInviteReadSchema	const	server/models/persistedSchemas.ts	44
 sharedDashboardInviteSchema	const	server/shared/schema/charts.ts	2152
 sharedDashboardPermissionSchema	const	server/shared/schema/charts.ts	2140
 sharedDashboardPreviewSchema	const	server/shared/schema/charts.ts	2144
@@ -2872,6 +2949,7 @@ SubInvestigationResult	interface	server/lib/agents/runtime/investigationOrchestr
 submitFeedback	function	client/src/lib/api/feedback.ts	40
 SubQuestion	interface	server/lib/agents/runtime/investigationState.ts	211
 SubQuestionId	type	server/lib/agents/runtime/investigationState.ts	65
+SuccessEnvelope	interface	server/lib/responseEnvelope.ts	25
 suggestAlternatives	function	client/src/lib/charts/suggestedAlts.ts	79
 SuggestedAlts	function	client/src/components/charts/SuggestedAlts.tsx	20
 SuggestedAltsProps	interface	client/src/components/charts/SuggestedAlts.tsx	14
@@ -2892,6 +2970,7 @@ summarizeNarratorConfidence	function	server/lib/agents/runtime/narratorHintsBloc
 summarizePastAnalysisRows	function	server/lib/admin/metricsAggregator.ts	233
 summarizeSeasonality	function	server/lib/seasonality/computeSeasonality.ts	289
 summarizeTree	function	server/lib/agents/runtime/investigationTree.ts	335
+SummaryArgs	interface	server/lib/dataOps/handlers/summary.ts	12
 SummaryBandData	interface	client/src/pages/Dashboard/lib/summaryBandData.ts	49
 SummaryBandFinding	interface	client/src/pages/Dashboard/lib/summaryBandData.ts	44
 SummaryResponse	interface	server/lib/dataOps/pythonService.ts	184
@@ -2911,8 +2990,10 @@ SupportedDateAggregationPeriod	type	server/lib/agentTemporalCapabilities.ts	17
 SvgFallbackRenderer	interface	server/lib/exports/pptx/layouts/chartWithInsight.ts	48
 syncFilterSelectionsWithFilters	function	client/src/lib/pivot/buildPivotModel.ts	238
 SynthesisContextBundle	interface	server/lib/agents/runtime/buildSynthesisContext.ts	64
+SynthesisSource	type	server/lib/agents/runtime/agentLoop/synthesis.ts	96
 synthesizeAggregationStep	function	server/lib/agents/runtime/planArgRepairs.ts	2167
 SynthesizedAggregationStep	interface	server/lib/agents/runtime/planArgRepairs.ts	1907
+synthesizeFinalAnswerEnvelope	function	server/lib/agents/runtime/agentLoop/synthesis.ts	102
 TableData	interface	server/lib/exports/pptx/layouts/tableSlide.ts	23
 TableIdResolver	interface	server/lib/exports/pptx/layouts/tableSlide.ts	29
 TableLayoutDeps	interface	server/lib/exports/pptx/layouts/tableSlide.ts	34
@@ -2988,6 +3069,7 @@ toSnakeCase	function	server/lib/semantic/inferModel.ts	83
 touchAutomationLastRun	const	server/models/automation.model.ts	174
 trainMLModel	function	server/lib/dataOps/pythonService.ts	910
 TrainModelResponse	interface	server/lib/dataOps/pythonService.ts	347
+translateLegacyFilterToActiveFilter	function	server/lib/dataOps/intent/translateLegacyFilterToActiveFilter.ts	22
 treatOutliers	function	server/lib/dataOps/pythonService.ts	1312
 TreemapRenderer	function	client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx	53
 TreemapRendererProps	interface	client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx	34
@@ -3007,6 +3089,7 @@ tryQuickAnswer	function	server/lib/agents/runtime/quickAnswerPath.ts	101
 TryQuickAnswerInput	interface	server/lib/agents/runtime/quickAnswerPath.ts	84
 trySemanticQuestionCacheHit	function	server/lib/cache/questionCacheLookup.ts	137
 TURN_LEASE_TTL_MS	const	server/models/chat.model.ts	872
+TurnColumnarStorageCtx	type	server/lib/agents/runtime/turnColumnarStorage.ts	52
 TurnEndContext	interface	server/lib/agents/runtime/memoryEntryBuilders.ts	57
 TurnUsageTotals	interface	server/lib/telemetry/turnUsageAggregator.ts	21
 TwoChartComparePage	function	server/lib/exports/pdf/layouts/twoChartCompare.tsx	43
@@ -3018,7 +3101,7 @@ updateChatDocument	const	server/models/chat.model.ts	766
 updateDashboard	const	server/models/dashboard.model.ts	384
 updateMessageAndTruncate	const	server/models/chat.model.ts	1159
 updateMessagePivotStateEndpoint	const	server/controllers/sessionController.ts	768
-updateProcessedDataBlob	const	server/lib/blobStorage.ts	265
+updateProcessedDataBlob	const	server/lib/blobStorage.ts	295
 updateRequestContext	function	server/lib/telemetry/requestContext.ts	56
 updateSessionContextEndpoint	const	server/controllers/sessionController.ts	574
 updateSessionDimensionHierarchies	function	server/lib/sessionAnalysisContext.ts	348
@@ -3032,13 +3115,14 @@ updateTableCaptionController	const	server/controllers/dashboardController.ts	445
 updateTableCaptionRequestSchema	const	server/shared/schema/charts.ts	2708
 uploadBufferToBlobAtExactPath	const	server/lib/blobStorage.ts	110
 uploadFile	function	client/src/lib/httpClient.ts	214
-uploadFile	const	server/controllers/uploadController.ts	15
+uploadFile	const	server/controllers/uploadController.ts	19
 uploadFileToBlob	const	server/lib/blobStorage.ts	49
 UploadJobStatusResponse	interface	client/src/lib/api/uploadStatus.ts	16
+UploadJobStatusView	interface	server/utils/uploadQueue.ts	89
 uploadLimits	const	server/config/uploadLimits.ts	25
 UploadPath	type	server/utils/uploadTelemetry.ts	11
 UploadPhase	type	client/src/lib/api/uploadStatus.ts	4
-uploadQueue	const	server/utils/uploadQueue.ts	1626
+uploadQueue	const	server/utils/uploadQueue.ts	1740
 UploadResponse	type	server/shared/schema/charts.ts	2190
 uploadResponseSchema	const	server/shared/schema/charts.ts	2176
 UploadTelemetry	interface	server/utils/uploadTelemetry.ts	18
@@ -3099,6 +3183,7 @@ UserDirectiveStructured	type	server/shared/userDirectiveSchema.ts	70
 userDirectiveStructuredSchema	const	server/shared/userDirectiveSchema.ts	65
 userMessageHasReportIntent	function	client/src/lib/reportIntent.ts	5
 userMessageHasReportIntent	function	server/lib/reportIntent.ts	5
+userRequestedPreview	function	server/lib/dataOps/intent/userRequestedPreview.ts	11
 useSessionBroadcast	function	client/src/lib/sessionBroadcast.hook.ts	31
 useSessionFilters	const	client/src/pages/Analysis/modules/useSessionFilters.ts	14
 useSessionLoader	const	client/src/pages/Home/modules/useSessionLoader.ts	61
@@ -3110,11 +3195,13 @@ useSuperadmin	function	client/src/auth/useSuperadmin.ts	22
 useTileAutoFit	function	client/src/pages/Dashboard/hooks/useTileAutoFit.ts	16
 V1_CHART_TYPES	const	client/src/lib/charts/featureFlags.ts	20
 V1_PIVOT_CHART_KINDS	const	server/shared/pivot/chartRecommendation.ts	52
+V1ChartType	type	client/src/pages/Home/Components/DataPreviewTable/chartKinds.ts	34
 V1PivotChartKind	type	server/shared/pivot/chartRecommendation.ts	53
 V2_MARKS	const	client/src/lib/charts/featureFlags.ts	34
 V2ConversionResult	interface	client/src/lib/charts/v1ToV2.ts	107
 vagueTemporalTrendQuestion	function	server/lib/questionAggregationPolicy.ts	38
 valDndId	function	client/src/pages/Home/Components/pivot/PivotFieldPanel.tsx	59
+validate	function	server/middleware/validate.ts	23
 validateAndEnrichResponse	function	server/services/chat/chatResponse.service.ts	266
 validateChartAgainstIntent	function	server/lib/agents/runtime/chartIntentGuard.ts	65
 validateChartProposal	function	server/lib/agents/runtime/chartProposalValidation.ts	70
@@ -3128,6 +3215,7 @@ validateLevelName	function	client/src/pages/Admin/lib/semanticModelHierarchyLeve
 validateLevels	function	client/src/pages/Admin/lib/semanticModelHierarchyLevels.ts	77
 validateName	function	client/src/pages/Admin/lib/semanticModelEditValidation.ts	139
 validateReferences	function	client/src/pages/Admin/lib/semanticModelEditValidation.ts	188
+ValidateSchemas	interface	server/middleware/validate.ts	17
 validateSseEvent	function	server/shared/sseEvents.ts	298
 VALUE_SALES_METRIC_RE	const	server/lib/factsMetricResolver.ts	46
 ValueFilter	interface	server/shared/queryTypes.ts	20
