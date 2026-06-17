@@ -2,10 +2,9 @@
  * Chat Response Service
  * Handles response validation, enrichment, and formatting
  */
-import { chatResponseSchema, ThinkingStep, SessionAnalysisContext } from "../../shared/schema.js";
-import { resolveChartDataRowsForEnrichment } from "../../lib/chartEnrichmentRows.js";
-import { capChartDataPoints } from "../../lib/chartDownsampling.js";
-import { generateChartInsights } from "../../lib/insightGenerator.js";
+import { chatResponseSchema, ThinkingStep } from "../../shared/schema.js";
+import { generateInsightForCharts, type ChartEnrichmentContext } from "../../lib/generateInsightForCharts.js";
+export type { ChartEnrichmentContext };
 import { generatePivotEnvelope } from "../../lib/insightGenerator/pivotEnvelope.js";
 import { formatCompactNumber } from "../../lib/formatCompactNumber.js";
 import type { ChatDocument } from "../../models/chat.model.js";
@@ -13,21 +12,15 @@ import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
 import { logger } from "../../lib/logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
 
-export type ChartEnrichmentContext = {
-  userQuestion?: string;
-  sessionAnalysisContext?: SessionAnalysisContext;
-  permanentContext?: string;
-  /**
-   * W12 · composed FMCG/Marico domain context. When set, chart insight
-   * generation gains a `businessCommentary` field framing the metric
-   * against the domain pack glossary.
-   */
-  domainContext?: string;
-};
-
 /**
- * Enrich charts with data and insights
- * Memory-optimized for large datasets
+ * Enrich charts with data and insights (memory-optimized for large datasets).
+ *
+ * Thin caller over the reusable `generateInsightForCharts` seam
+ * (lib/generateInsightForCharts.ts): it resolves the active-filtered row slice
+ * from the chat document, then delegates per-chart data resolution + idempotent
+ * insight generation. Every server chart path (dashboard build, budget tool,
+ * feature sweep, …) shares that seam, so insight coverage is a pipeline
+ * guarantee rather than a chat-only side effect.
  */
 export async function enrichCharts(
   charts: any[],
@@ -40,13 +33,7 @@ export async function enrichCharts(
     return [];
   }
 
-  const MAX_CHART_DATA_POINTS = 50000; // Default limit to prevent memory issues
-  const MAX_CORRELATION_POINTS = 300000; // Higher limit for correlation scatter charts
-
   try {
-    // Process charts sequentially to avoid memory spikes from parallel processing
-    const enrichedCharts: any[] = [];
-    
     // Wave-FA5 · The chart enrichment fallback reaches into chatDocument.rawData
     // directly (i.e. bypassing loadLatestData). Apply the active-filter overlay
     // so chart insights derived here see the same slice as analytical tools.
@@ -55,65 +42,19 @@ export async function enrichCharts(
       chatDocument.activeFilter
     );
 
-    for (const c of charts) {
-      try {
-        let dataForChart = resolveChartDataRowsForEnrichment(
-          c,
-          filteredRawData,
-          chatDocument.dataSummary?.dateColumns,
-          analyticalFallbackRows
-        );
-
-        // Limit data size for memory efficiency.
-        // For general charts, cap at MAX_CHART_DATA_POINTS.
-        // For correlation scatter charts (marked with _isCorrelationChart),
-        // allow a much higher cap so users can see more points.
-        const isCorrelationChart = Boolean((c as any)._isCollisionChart || (c as any)._isCorrelationChart);
-        const effectiveMax =
-          isCorrelationChart && chatDocument?.dataSummary?.rowCount
-            ? Math.max(MAX_CHART_DATA_POINTS, Math.min(MAX_CORRELATION_POINTS, chatDocument.dataSummary.rowCount))
-            : MAX_CHART_DATA_POINTS;
-
-        if (dataForChart.length > effectiveMax) {
-          logger.log(
-            `⚠️ Chart "${c.title}" has ${dataForChart.length} data points, limiting to ${effectiveMax}`
-          );
-          dataForChart = capChartDataPoints(dataForChart, c.type, effectiveMax);
-        }
-        
-        const hasUsableKeyInsight =
-          typeof c.keyInsight === "string" && c.keyInsight.trim().length > 0;
-        const insights = !hasUsableKeyInsight
-          ? await generateChartInsights(c, dataForChart, chatDocument.dataSummary, chatLevelInsights, {
-              userQuestion: enrichmentContext?.userQuestion,
-              sessionAnalysisContext:
-                enrichmentContext?.sessionAnalysisContext ?? chatDocument.sessionAnalysisContext,
-              permanentContext: enrichmentContext?.permanentContext,
-              domainContext: enrichmentContext?.domainContext,
-            })
-          : null;
-
-        // W12 · prefer existing businessCommentary on the chart, then the
-        // newly-generated one, then leave undefined.
-        const businessCommentary =
-          (typeof c.businessCommentary === "string" && c.businessCommentary.trim().length > 0
-            ? c.businessCommentary
-            : insights?.businessCommentary) ?? undefined;
-
-        enrichedCharts.push({
-          ...c,
-          data: dataForChart,
-          keyInsight: hasUsableKeyInsight ? c.keyInsight : (insights?.keyInsight ?? c.keyInsight),
-          ...(businessCommentary ? { businessCommentary } : {}),
-        });
-      } catch (chartError) {
-        logger.error(`Error enriching chart "${c.title}":`, chartError);
-        // Include chart without enrichment rather than failing completely
-        enrichedCharts.push(c);
-      }
-    }
-    
-    return enrichedCharts;
+    return await generateInsightForCharts(charts, {
+      filteredRawData,
+      dataSummary: chatDocument.dataSummary,
+      chatLevelInsights,
+      analyticalFallbackRows,
+      context: {
+        userQuestion: enrichmentContext?.userQuestion,
+        sessionAnalysisContext:
+          enrichmentContext?.sessionAnalysisContext ?? chatDocument.sessionAnalysisContext,
+        permanentContext: enrichmentContext?.permanentContext,
+        domainContext: enrichmentContext?.domainContext,
+      },
+    });
   } catch (e) {
     logger.error('Final enrichment of chat charts failed:', e);
     return charts;

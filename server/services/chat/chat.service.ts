@@ -21,6 +21,7 @@ import queryCache from "../../lib/cache.js";
 import { resolveAnswerQuestionDataLoad } from "./answerQuestionContext.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/runtimeConfig.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
+import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
 import { logger } from "../../lib/logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
 
@@ -225,6 +226,19 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     >[0]["response"],
     username,
     logLabel: "(non-streaming) ",
+    // A3 · born-insighted dashboards: reuse chat insights, then generate one for
+    // any orphan sweep tile. Rows resolved lazily (only when an orphan exists).
+    generation: {
+      resolveRows: () =>
+        applyActiveFilter(chatDocument.rawData ?? [], chatDocument.activeFilter),
+      dataSummary: chatDocument.dataSummary,
+      context: {
+        userQuestion: message,
+        sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+        permanentContext,
+        domainContext: perTurnDomainContext,
+      },
+    },
   });
 
   // W25 · per-step LLM-enriched insights on the non-streaming path. Same

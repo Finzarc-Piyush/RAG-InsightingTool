@@ -96,6 +96,7 @@ import {
 } from "./chatStreamPivotDefaults.js";
 export { mergePivotDefaultsForResponse } from "./chatStreamPivotDefaults.js";
 import { applyEnrichedChartsToDashboard } from "../../lib/applyDashboardChartInsights.js";
+import { applyActiveFilter } from "../../lib/activeFilter/applyActiveFilter.js";
 import { logger } from "../../lib/logger.js";
 import { errorMessage, getErrorCode, getErrorStatus } from "../../utils/errorMessage.js";
 import { isFlagOn } from "../../lib/featureFlags.js";
@@ -1602,6 +1603,20 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
         typeof applyEnrichedChartsToDashboard
       >[0]["response"],
       username,
+      // A3 · born-insighted dashboards: reuse the chat answer's insights, then
+      // generate one for any sweep/gap-fill tile with no chat twin. Rows are
+      // resolved lazily — only paid when an orphan actually exists.
+      generation: {
+        resolveRows: () =>
+          applyActiveFilter(chatDocument.rawData ?? [], chatDocument.activeFilter),
+        dataSummary: chatDocument.dataSummary,
+        context: {
+          userQuestion: message,
+          sessionAnalysisContext: chatDocument.sessionAnalysisContext,
+          permanentContext,
+          domainContext: domainContextForCharts,
+        },
+      },
     });
 
     // ── PHASE 3: Persistence ──────────────────────────────────────────
