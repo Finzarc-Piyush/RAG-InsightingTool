@@ -1007,8 +1007,13 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                 </>
               ) : undefined}
             />
-            <CardContent className="flex-1 overflow-auto pt-0 px-4 pb-4">
-              <div className="max-h-[220px] overflow-y-auto rounded-md border bg-background/50">
+            <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pt-0 px-4 pb-4">
+              {/* EXD6 · the table body fills its content-sized card (the tile's
+                  grid height is already seeded from header + row count) and
+                  scrolls only when the rows exceed that — instead of a fixed
+                  max-h-[220px] that left dead space under short tables and a
+                  220px window unrelated to the box for tall ones. */}
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-md border bg-background/50">
                 {/* Reuse the existing table primitive for consistent styling */}
                 <Table>
                   <TableHeader>

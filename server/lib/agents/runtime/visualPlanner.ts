@@ -84,7 +84,7 @@ const visualPlannerOutputSchema = z.object({
 
 export type VisualPlannerOutput = z.infer<typeof visualPlannerOutputSchema>;
 
-const SYSTEM = `You are a visualization advisor. Given the user question, column list, analytical snippet, and (when present) the final answer draft, propose at most \`maxCharts\` charts (see input) that support that answer. When \`maxCharts\` is 3, the user has explicitly asked for a dashboard — span complementary angles (e.g. trend, segmentation, drivers/outliers) rather than three views of the same metric.
+const SYSTEM = `You are a visualization advisor. Given the user question, column list, analytical snippet, and (when present) the final answer draft, propose at most \`maxCharts\` charts (see input) that support that answer. \`maxCharts\` reflects how much breadth the request and data warrant: when it is large the user wants a broad dashboard — span complementary angles (e.g. trend, segmentation, drivers/outliers) rather than repeating the same metric; when it is small, propose only the most decision-relevant view(s). Use the full budget when distinct, non-redundant angles exist.
 
 Rules:
 - Use ONLY exact column names from AVAILABLE_COLUMNS and/or ANALYTICAL_RESULT_COLUMNS when the latter is present.
@@ -228,10 +228,12 @@ export async function proposeAndBuildExtraCharts(
   synthesizedAnswerPreview?: string
 ): Promise<{ charts: ChartSpec[]; note?: string }> {
   // When the user explicitly asked for a dashboard, allow up to 8 extra
-  // charts so the dashboard can reach exhaustive coverage across the brief's
-  // segmentationDimensions ∪ candidateDriverDimensions. The downstream
-  // deterministic feature sweep fills any further gaps. For plain analytical
-  // answers keep the original 2-chart cap to control latency.
+  // complementary charts (the output schema's hard max) so the dashboard can
+  // span the brief's segmentationDimensions ∪ candidateDriverDimensions. This
+  // is a SUPPLEMENT to the deterministic feature sweep (the per-dimension
+  // breadth engine) and to the data-driven featured-chart count on the
+  // Executive Summary sheet — not the cap the user ultimately sees. For plain
+  // analytical answers keep the original 2-chart cap to control latency.
   const dashboardMode = ctx.analysisBrief?.requestsDashboard === true;
   const ceiling = dashboardMode ? 8 : 2;
   const envCap = parseInt(

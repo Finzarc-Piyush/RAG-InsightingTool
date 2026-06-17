@@ -6,6 +6,7 @@ import {
   TemporalDisplayGrain,
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
+import { planChartLayout } from '@/shared/dashboardLayout';
 import { MagnitudesRow, type MagnitudeItem } from './MagnitudesRow';
 import { InsightCard } from './InsightCard';
 import { Settle } from '@/components/ui/motion';
@@ -31,12 +32,6 @@ const ChartRenderer = lazy(() =>
 );
 
 // ---- helpers ---------------------------------------------------------------
-
-function isFullWidthChart(chart: ChartSpec): boolean {
-  if (chart.type === 'line' || chart.type === 'area' || chart.type === 'heatmap') return true;
-  if (chart.type === 'bar' && (chart.data?.length ?? 0) > 10) return true;
-  return false;
-}
 
 function extractCorrelationLoadingState(
   chart: ChartSpec,
@@ -223,6 +218,14 @@ export function AnalyticalDashboardResponse({
   const charts = useMemo(() => message.charts ?? [], [message.charts]);
   const insights = message.insights ?? [];
 
+  // EXD7 · column spans decided by the shared layout authority — content-aware
+  // (time-series / heatmap / many-category charts span both columns; pie /
+  // scatter / small bar take one) AND orphan-free (the last row is filled so a
+  // lone trailing chart goes full-width instead of leaving a half-empty cell).
+  // Replaces the old per-type `isFullWidthChart` boolean that produced ragged,
+  // misaligned rows. Two columns to mirror the `lg:grid-cols-2` CSS grid.
+  const chartLayout = useMemo(() => planChartLayout(charts, { columns: 2 }), [charts]);
+
   // Pivot tab: only show if pivotDefaults AND there is data to pivot on
   const messagePreview = (message as any).preview;
   const pivotData = useMemo(() => {
@@ -297,12 +300,18 @@ export function AnalyticalDashboardResponse({
           </TabsList>
 
           <TabsContent value="charts" className="mt-0">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* items-start: cards are content-sized (header + chart + optional
+                insight) and top-aligned, so the charts line up across a row
+                without forcing equal card heights — the inline chart renders at
+                a fixed preview height, so stretching the card would only add
+                dead space below it. Column spans (and orphan-free rows) come
+                from the shared planner above. */}
+            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
               {charts.map((chart, idx) => (
                 <Settle
                   key={idx}
                   delayMs={idx * 55}
-                  className={cn(isFullWidthChart(chart) && 'lg:col-span-2')}
+                  className={cn(chartLayout[idx]?.span === 2 && 'lg:col-span-2')}
                 >
                   <ChartCard
                     chart={chart}

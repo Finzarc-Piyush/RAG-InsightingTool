@@ -1,133 +1,115 @@
 /**
  * ============================================================================
- * dashboardTemplates.ts — places chart tiles on a dashboard grid by hand
+ * dashboardTemplates.ts — places chart tiles on a dashboard grid by code
  * ============================================================================
  * WHAT THIS FILE DOES
  *   When the agent builds a dashboard, the LLM only decides the story and which
  *   "template" to use (executive / deep_dive / monitoring). It does NOT decide
- *   where each chart sits on the page. This file does that part with plain code:
- *   given a template name and how many charts there are, it computes a grid
- *   layout — x/y position, width, height — for each chart tile. "Grid layout"
- *   here means the coordinates the front-end library react-grid-layout uses to
- *   arrange tiles on a 12-column grid.
+ *   where each chart sits. This file does that with plain code: given a template
+ *   and the actual charts, it computes a 12-column react-grid-layout placement
+ *   (x/y/width/height) for each chart tile.
+ *
+ *   Box WIDTH is content-aware: it delegates to the shared layout authority
+ *   (planChartLayout in shared/dashboardLayout.ts), so a time-series / heatmap /
+ *   many-category chart gets a wide box and a pie / scatter / small-bar a
+ *   standard one, with the executive template leading on a full-width hero. Rows
+ *   always fill the grid width — no orphan gaps (the old rigid 3-up left a hole
+ *   when the last row was short). Box HEIGHT here is only a SEED: the client
+ *   recomputes each chart's height from its placed width (chartAspectRows) on
+ *   load, so a too-tall/short server value never survives into the render.
  *
  * WHY IT MATTERS
- *   Layout math is deterministic and cheap, so keeping it off the LLM saves
- *   tokens, avoids hallucinated/overlapping coordinates, and gives every
- *   dashboard a consistent look per template. The chart tile ids it emits
- *   ("chart-0", "chart-1", ...) must match what the client's DashboardView.tsx
- *   expects, or tiles won't render.
+ *   Centralising the width decision in ONE shared authority means the saved
+ *   /dashboard and the inline chat answer compose charts identically, and there
+ *   are no more hardcoded per-template cell coordinates to drift. Tile ids
+ *   ("chart-0", "chart-1", …) must match what DashboardView.tsx expects.
  *
  * KEY PIECES
- *   - chartGridItemsForTemplate — returns grid entries for N charts under a
- *     given template (executive = hero + 3-up; deep_dive = uniform 3-up;
- *     monitoring = compact 3-up).
- *   - applyDashboardTemplateLayout — mutates a DashboardSpec in place, adding an
- *     `lg`-breakpoint layout to each sheet that has charts. Idempotent: skips
- *     sheets that already have a sufficient layout.
- *
- * HOW IT CONNECTS
- *   Types come from shared/schema.js (DashboardSpec, DashboardTemplate). Called
- *   by the dashboard builder after the LLM returns its narrative+template. Only
- *   the `lg` (large) breakpoint is set here; smaller screens fall back to the
- *   client's own stable-place helper. Narrative tiles are not laid out here.
+ *   - chartGridItemsForTemplate — grid entries for a sheet's charts under a
+ *     template. executive = hero + content-aware grid; deep_dive = content-aware
+ *     grid; monitoring = compact content-aware grid.
+ *   - applyDashboardTemplateLayout — stamps an `lg` layout onto each chart-
+ *     bearing sheet. Idempotent: skips sheets that already have enough layout.
  */
-import type { DashboardSpec, DashboardTemplate } from "../../../shared/schema.js";
+import type {
+  ChartSpec,
+  DashboardSpec,
+  DashboardTemplate,
+} from "../../../shared/schema.js";
+import { planChartLayout, chartRowsForSpan } from "../../../shared/dashboardLayout.js";
 
-type GridItem = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number };
-
-const COLS = 12;
-// 3-up: charts span 4 of 12 columns by default. Height bumped to 16 to leave
-// room for the inline keyInsight rendered below each chart in DashboardTiles.tsx.
-const CHART_DEFAULT = { w: 4, h: 16, minW: 3, minH: 6 };
-
-interface ChartCell {
+type GridItem = {
+  i: string;
   x: number;
   y: number;
   w: number;
   h: number;
-}
-
-function executiveCells(count: number): ChartCell[] {
-  const cells: ChartCell[] = [];
-  if (count === 0) return cells;
-  // Hero: full-width, slightly taller.
-  cells.push({ x: 0, y: 0, w: 12, h: 16 });
-  if (count === 1) return cells;
-  // Remaining charts in a 3-up grid below the hero.
-  const remaining = count - 1;
-  for (let i = 0; i < remaining; i++) {
-    const row = Math.floor(i / 3);
-    const col = i % 3;
-    cells.push({ x: col * 4, y: 16 + row * 16, w: 4, h: 16 });
-  }
-  return cells;
-}
-
-function deepDiveCells(count: number): ChartCell[] {
-  // Uniform 3-column grid, w=4 h=16 (chart + inline insight).
-  const cells: ChartCell[] = [];
-  for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / 3);
-    const col = i % 3;
-    cells.push({ x: col * 4, y: row * 16, w: 4, h: 16 });
-  }
-  return cells;
-}
-
-function monitoringCells(count: number): ChartCell[] {
-  // Uniform 3-column compact grid, w=4 h=8.
-  const cells: ChartCell[] = [];
-  for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / 3);
-    const col = i % 3;
-    cells.push({ x: col * 4, y: row * 8, w: 4, h: 8 });
-  }
-  return cells;
-}
-
-const CELLS_BY_TEMPLATE: Record<
-  DashboardTemplate,
-  (count: number) => ChartCell[]
-> = {
-  executive: executiveCells,
-  deep_dive: deepDiveCells,
-  monitoring: monitoringCells,
+  minW?: number;
+  minH?: number;
 };
 
+const COLS = 12;
+const CHART_MIN = { minW: 3, minH: 6 };
+
+// Monitoring tiles are intentionally compact (a denser KPI wall); every other
+// template sizes each chart's height to its placed WIDTH via the shared
+// aspect-ratio authority (chartRowsForSpan) — identical to what the client
+// renderer computes — so a wide hero is tall and a third-width box is short,
+// with no fixed tall slot leaving dead space.
+const COMPACT_ROWS = 8; // monitoring template
+
+function seedRows(span: number, compact: boolean): number {
+  return compact ? COMPACT_ROWS : chartRowsForSpan(span);
+}
+
 /**
- * Produces grid-layout entries for each chart tile on the given sheet based
- * on the spec's template. Returns undefined when the sheet has no charts.
+ * Produce grid-layout entries for a sheet's charts under the given template.
+ * Widths come from the shared content-aware planner; this function only packs
+ * those spans into x/y coordinates row by row (the planner already makes each
+ * row's spans sum to COLS, so a row advances x by each span and wraps when
+ * full). Returns undefined when the sheet has no charts.
  */
 export function chartGridItemsForTemplate(
   template: DashboardTemplate,
-  chartCount: number
+  charts: ReadonlyArray<ChartSpec>,
 ): GridItem[] | undefined {
-  if (chartCount <= 0) return undefined;
-  const cells = (CELLS_BY_TEMPLATE[template] ?? deepDiveCells)(chartCount);
-  return cells.map((c, i) => ({
-    i: `chart-${i}`,
-    x: c.x,
-    y: c.y,
-    w: c.w,
-    h: c.h,
-    minW: CHART_DEFAULT.minW,
-    minH: CHART_DEFAULT.minH,
-  }));
+  if (charts.length === 0) return undefined;
+  const compact = template === "monitoring";
+  const plan = planChartLayout(charts, {
+    columns: COLS,
+    emphasizeFirst: template === "executive",
+  });
+
+  const items: GridItem[] = [];
+  let x = 0;
+  let y = 0;
+  let rowHeight = 0;
+  plan.forEach((p, i) => {
+    if (x + p.span > COLS) {
+      x = 0;
+      y += rowHeight;
+      rowHeight = 0;
+    }
+    const h = seedRows(p.span, compact);
+    items.push({ i: `chart-${i}`, x, y, w: p.span, h, ...CHART_MIN });
+    x += p.span;
+    rowHeight = Math.max(rowHeight, h);
+  });
+  return items;
 }
 
 /**
- * Mutates (in place) the sheet containing charts so it carries a gridLayout
- * for the `lg` breakpoint. Sheets without charts are skipped. Idempotent:
- * existing `lg` layout is preserved if present.
+ * Mutates (in place) each chart-bearing sheet so it carries a `lg`-breakpoint
+ * gridLayout. Sheets without charts are skipped. Idempotent: an existing `lg`
+ * layout with enough entries is preserved (covers user edits / agent layouts).
  */
 export function applyDashboardTemplateLayout(spec: DashboardSpec): void {
   for (const sheet of spec.sheets) {
-    const chartCount = Array.isArray(sheet.charts) ? sheet.charts.length : 0;
-    if (chartCount === 0) continue;
+    const charts = Array.isArray(sheet.charts) ? sheet.charts : [];
+    if (charts.length === 0) continue;
     const existingLg = sheet.gridLayout?.lg;
-    if (Array.isArray(existingLg) && existingLg.length >= chartCount) continue;
-    const items = chartGridItemsForTemplate(spec.template, chartCount);
+    if (Array.isArray(existingLg) && existingLg.length >= charts.length) continue;
+    const items = chartGridItemsForTemplate(spec.template, charts);
     if (!items) continue;
     sheet.gridLayout = {
       ...(sheet.gridLayout ?? {}),

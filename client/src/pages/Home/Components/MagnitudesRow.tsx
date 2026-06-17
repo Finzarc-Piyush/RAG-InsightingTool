@@ -27,6 +27,9 @@ export interface MagnitudesRowProps {
   label?: string;
 }
 
+/** A KPI strip stays scannable as a strip, not a wall — cap the cards. */
+const MAX_KPI_CARDS = 6;
+
 function confidenceVariant(
   c: MagnitudeItem["confidence"]
 ): "secondary" | "success" | "outline" {
@@ -41,12 +44,15 @@ export function MagnitudesRow({ items, className, label = "Magnitudes" }: Magnit
   return (
     <div className={cn("mt-4", className)}>
       <Eyebrow className="mb-2 block">{label}</Eyebrow>
-      <div className="flex flex-wrap gap-3">
-        {items.slice(0, 6).map((m, idx) => (
+      {/* EXD8 · equal-width/height grid (auto-rows-fr) instead of a ragged
+          flex-wrap: KPI cards line up in clean columns and share a row height,
+          so the band reads as an aligned strip rather than uneven cards. */}
+      <div className="grid auto-rows-fr grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3">
+        {items.slice(0, MAX_KPI_CARDS).map((m, idx) => (
           <div
             key={`${m.label}-${idx}`}
             className={cn(
-              "relative flex min-w-[140px] flex-col gap-1",
+              "relative flex flex-col gap-1",
               "rounded-brand-md border border-[hsl(var(--accent-gold)/0.35)]",
               "bg-[hsl(var(--accent-gold)/0.08)]",
               "px-3 py-2.5"

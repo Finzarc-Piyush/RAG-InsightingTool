@@ -12,8 +12,8 @@
  *   deterministically by code so it's predictable.
  *
  *   The two sheets it always builds:
- *     - "Executive Summary": a KPI strip + LLM-curated narrative + up to 3
- *       featured charts + the user's pivot.
+ *     - "Executive Summary": a KPI strip + LLM-curated narrative + a data-driven
+ *       number of featured charts (decided from analytical breadth) + the pivot.
  *     - "All Artefacts": every chart from the turn + the pivot (deterministic).
  *
  * WHY IT MATTERS
@@ -28,8 +28,9 @@
  *   - buildDashboardFromTurn — public entry. Builds prompts, calls the LLM,
  *     decorates the result (or fallback) into the final DashboardSpec.
  *   - buildFallbackSpec — deterministic minimal spec used when the LLM fails.
- *   - pickFeaturedCharts — chooses up to 3 charts for the Executive Summary
- *     (priority: "Top drivers of…" tile → first time-series → first remaining).
+ *   - pickFeaturedCharts — chooses a data-driven number of charts for the
+ *     Executive Summary (priority: "Top drivers of…" → first time-series →
+ *     breadth), counted by the shared dashboardLayout authority.
  *   - buildAllArtefactsNarrativeBlocks — now a hard no-op (returns []); see its
  *     own comment for why the per-step "Step N" blocks were removed.
  *   - Re-exports: prompt builders (from buildDashboardPrompt.js) and the gate
@@ -54,9 +55,15 @@ import {
   type DashboardPivotSpec,
   type DashboardSheetSpec,
   type DashboardSpec,
+  type DashboardTemplate,
   type InvestigationSummary,
   type PriorInvestigationItem,
 } from "../../../shared/schema.js";
+import {
+  decideFeaturedCount,
+  selectFeaturedCharts,
+  type DepthBudget,
+} from "../../../shared/dashboardLayout.js";
 import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { agentLog } from "./agentLogger.js";
@@ -95,6 +102,12 @@ export interface BuildDashboardArgs {
   charts: ChartSpec[];
   magnitudes?: MagnitudeLike[];
   brief?: AnalysisBrief;
+  /**
+   * The turn's depth budget (queryIntentAuthority, invariant #12). Modulates how
+   * many charts the Executive Summary sheet features — a quick lookup stays lean,
+   * a deep ask earns full breadth. Optional; defaults to generous when absent.
+   */
+  depthBudget?: DepthBudget;
   turnId: string;
   onLlmCall: () => void;
   /**
@@ -181,41 +194,21 @@ function pickOrCreateSheet(
 }
 
 /**
- * Deterministic featured-chart picker for Sheet 1. Priority order:
- *   1. Any chart whose title starts with "Top drivers of" (W6 tile).
- *   2. The first temporal chart (line / area).
- *   3. The first remaining chart (typically a breakdown).
- * Up to 3 charts. Returns the same `ChartSpec` objects from `authoritative`
- * so chart data and provenance stay intact.
+ * Featured-chart picker for the Executive Summary sheet. The COUNT is no longer
+ * a hardcoded 3 — it is decided by the shared layout authority from the number
+ * of distinct analytical angles the turn produced (bounded by the depth budget
+ * and a comfortable grid ceiling). The ORDER preserves the legacy priority
+ * (top-drivers tile → first time-series → breadth) and dedupes exact repeats.
+ * Returns the same `ChartSpec` objects so chart data and provenance stay intact.
+ * See dashboardLayout.ts (decideFeaturedCount / selectFeaturedCharts).
  */
-function pickFeaturedCharts(authoritative: ChartSpec[]): ChartSpec[] {
-  const out: ChartSpec[] = [];
-  const used = new Set<number>();
-
-  const topDriversIdx = authoritative.findIndex((c) =>
-    (c.title ?? "").toLowerCase().startsWith("top drivers of")
-  );
-  if (topDriversIdx >= 0) {
-    out.push(authoritative[topDriversIdx]!);
-    used.add(topDriversIdx);
-  }
-
-  const temporalIdx = authoritative.findIndex(
-    (c, i) => !used.has(i) && (c.type === "line" || c.type === "area")
-  );
-  if (temporalIdx >= 0) {
-    out.push(authoritative[temporalIdx]!);
-    used.add(temporalIdx);
-  }
-
-  for (let i = 0; i < authoritative.length && out.length < 3; i++) {
-    if (!used.has(i)) {
-      out.push(authoritative[i]!);
-      used.add(i);
-    }
-  }
-
-  return out;
+function pickFeaturedCharts(
+  authoritative: ChartSpec[],
+  template: DashboardTemplate,
+  depthBudget?: DepthBudget,
+): ChartSpec[] {
+  const count = decideFeaturedCount(authoritative, { template, depthBudget });
+  return selectFeaturedCharts(authoritative, count);
 }
 
 /** Intentionally a hard no-op: always returns `[]`.
@@ -322,7 +315,7 @@ async function runDashboardCompletion(
     // Always populate charts/pivots deterministically — the prompt tells the
     // LLM NOT to emit them, so any leftover artefacts on the LLM's sheet are
     // discarded.
-    summarySheet.charts = pickFeaturedCharts(args.charts);
+    summarySheet.charts = pickFeaturedCharts(args.charts, spec.template, args.depthBudget);
     summarySheet.pivots = args.pivot ? [args.pivot] : [];
 
     // Prepend the deterministic KPI strip from envelope magnitudes (or the
@@ -398,7 +391,7 @@ async function runDashboardCompletion(
       const spec = buildFallbackSpec(args);
       const summarySheet = pickOrCreateSheet(spec, "sheet_summary", "Executive Summary");
       const allSheet = pickOrCreateSheet(spec, "sheet_all", "All Artefacts");
-      summarySheet.charts = pickFeaturedCharts(args.charts);
+      summarySheet.charts = pickFeaturedCharts(args.charts, spec.template, args.depthBudget);
       summarySheet.pivots = args.pivot ? [args.pivot] : [];
       const kpi = buildKpiStripBlock(args.envelope?.magnitudes ?? args.magnitudes);
       if (kpi) {
