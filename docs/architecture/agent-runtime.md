@@ -173,5 +173,6 @@ pre-2026-06 subsystem changelog was moved out of this routing doc to keep `/load
 see [`docs/archive/agent-runtime-changelog.md`](../archive/agent-runtime-changelog.md). Keep new
 entries here to ONE line each; full prose belongs in `docs/WAVES.md`.
 
+- 2026-06-17 · Wave IUX2 — envelope-repair loop keeps the seeded "Key Insights" entry in sync with a repaired `keyInsight` (it was dropped after the IUX1 body-suffix removal), via a function-scoped `seededKeyInsightText`. See [`docs/WAVES.md`](../WAVES.md).
 - 2026-06-17 · Wave IUX1 — `formatAnswerFromEnvelope` no longer appends the `**Key insight:**` suffix (deduped: the key insight renders once, in the Key Insights section); `businessActions` domain-context cap 2500→6000; `context_trimmed` toast softened. See [`docs/WAVES.md`](../WAVES.md).
 - PERF-10 (partial) — `turnColumnarStorage.ts` memoises ONE DuckDB handle per turn shared by all read-only analytical tools (`compute_growth`, `detect_seasonality`, `run_readonly_sql`, `run_analytical_query`, `execute_query_plan`, quick-answer); closed once by `runAgentTurn` at turn end. `add_computed_columns` (mutating DDL) keeps its own handle. Per-row coercion-into-DuckDB-types remainder staged.

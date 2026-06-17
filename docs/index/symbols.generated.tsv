@@ -455,8 +455,8 @@ buildLessons	function	server/scripts/lib/bootstrapSections.ts	141
 buildMagnitudesFromBudgetOptimizer	function	server/lib/agents/runtime/budgetOptimizerAdapter.ts	129
 buildMemoryEntryId	function	server/models/analysisMemory.model.ts	73
 buildNarratorConfidenceBlock	function	server/lib/agents/runtime/narratorHintsBlock.ts	154
-buildPatternDrivenEnvelope	function	server/lib/insightGenerator/deterministicNarratives.ts	249
-buildPatternDrivenFallback	function	server/lib/insightGenerator/deterministicNarratives.ts	230
+buildPatternDrivenEnvelope	function	server/lib/insightGenerator/deterministicNarratives.ts	254
+buildPatternDrivenFallback	function	server/lib/insightGenerator/deterministicNarratives.ts	235
 BuildPivotChartSpecInput	interface	client/src/lib/pivot/buildPivotChartSpec.ts	32
 buildPivotChartSpecV2	function	client/src/lib/pivot/buildPivotChartSpec.ts	46
 buildPivotFilterWhereSql	function	server/lib/pivotFilterSql.ts	10
@@ -802,7 +802,7 @@ computeDimensionLeaders	function	server/lib/agents/runtime/dashboardFeatureSweep
 computeFeedbackTurnId	function	client/src/pages/Home/Components/computeFeedbackTurnId.ts	20
 computeGrowthArgsSchema	const	server/lib/agents/runtime/tools/computeGrowthTool.ts	93
 computePeakConsistency	function	server/lib/seasonality/computeSeasonality.ts	190
-computePivotPatterns	function	server/lib/insightGenerator/pivotPatterns.ts	100
+computePivotPatterns	function	server/lib/insightGenerator/pivotPatterns.ts	102
 ComputeRemapOptions	interface	server/lib/agents/runtime/automationRemap.ts	100
 computeSeasonalityIndex	function	server/lib/seasonality/computeSeasonality.ts	105
 computeShapeStats	function	client/src/lib/charts/suggestedAlts.ts	44
@@ -1527,14 +1527,14 @@ formatTimeOfDayBlock	function	server/lib/agents/runtime/context.ts	513
 formatUserAndSessionJsonBlocks	function	server/lib/agents/runtime/context.ts	285
 formatWideFormatShapeBlock	function	server/lib/agents/runtime/context.ts	412
 formatWorkingMemoryBlock	function	server/lib/agents/runtime/workingMemory.ts	38
-FourClaim	type	server/lib/insightGenerator/deterministicNarratives.ts	50
+FourClaim	type	server/lib/insightGenerator/deterministicNarratives.ts	55
 FULL_PREVIEW_CAP	const	server/lib/activeFilter/selectPreviewRows.ts	20
 FunnelRenderer	const	client/src/lib/charts/visxRenderers/FunnelRenderer.tsx	186
 FunnelRendererProps	interface	client/src/lib/charts/visxRenderers/FunnelRenderer.tsx	34
 gapFillSchema	const	server/lib/agents/runtime/schemas.ts	76
 GaugeRenderer	function	client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx	761
 generateAISuggestions	function	server/lib/suggestionGenerator.ts	25
-generateChartInsights	function	server/lib/insightGenerator.ts	73
+generateChartInsights	function	server/lib/insightGenerator.ts	77
 generateColumnStatistics	const	server/models/chat.model.ts	2236
 generateFileAccessUrl	const	server/controllers/blobController.ts	92
 generateHypotheses	function	server/lib/agents/runtime/hypothesisPlanner.ts	166
@@ -2617,7 +2617,7 @@ renderFlatAnalysisCell	function	client/src/pages/Home/Components/DataPreviewTabl
 renderImplicationsByHorizon	function	server/lib/exports/pptx/layouts/implicationsByHorizon.ts	21
 renderKpiRow	function	server/lib/exports/pptx/layouts/kpiRow.ts	22
 renderMethodology	function	server/lib/exports/pptx/layouts/methodology.ts	19
-renderPivotPatternsBlock	function	server/lib/insightGenerator/pivotPatterns.ts	332
+renderPivotPatternsBlock	function	server/lib/insightGenerator/pivotPatterns.ts	344
 renderRecommendations	function	server/lib/exports/pptx/layouts/recommendations.ts	32
 renderResultTableForAnswer	function	server/services/chat/chatResponse.service.ts	237
 renderTableSlide	function	server/lib/exports/pptx/layouts/tableSlide.ts	38
