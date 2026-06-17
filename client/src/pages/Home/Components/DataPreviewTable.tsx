@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import {
   downloadModifiedDataset,
-  fetchSessionSampleRows,
   pivotQuery,
   pivotDrillthrough,
   sessionsApi,
@@ -83,6 +82,7 @@ import {
 import { ChartKeyInsightCallout } from './DataPreviewTable/ChartKeyInsightCallout';
 import { renderFlatAnalysisCell as renderFlatAnalysisCellPure } from './DataPreviewTable/FlatAnalysisCell';
 import { useSessionFilterDistincts } from './DataPreviewTable/hooks/useSessionFilterDistincts';
+import { useSessionSampleRows } from './DataPreviewTable/hooks/useSessionSampleRows';
 import {
   PivotDrillthroughPanel,
   type DrillthroughState,
@@ -340,40 +340,18 @@ export function DataPreviewTable({
   const [showSubtotals, setShowSubtotals] = useState(true);
   const [showGrandTotal, setShowGrandTotal] = useState(true);
   const [drillthrough, setDrillthrough] = useState<DrillthroughState | null>(null);
-  /** Row-level rows from columnar store when sessionId is set (defense in depth vs aggregated-only preview). */
-  const [sessionSampleRows, setSessionSampleRows] = useState<
-    Record<string, unknown>[] | null
-  >(null);
-  const [sessionSampleError, setSessionSampleError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (variant !== 'analysis' || !sessionId) {
-      setSessionSampleRows(null);
-      setSessionSampleError(null);
-      return;
-    }
-    let cancelled = false;
-    setSessionSampleError(null);
-    void (async () => {
-      try {
-        const res = await fetchSessionSampleRows(sessionId, 2000);
-        if (!cancelled && Array.isArray(res.rows)) {
-          setSessionSampleRows(res.rows as Record<string, unknown>[]);
-          setSessionSampleError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setSessionSampleRows(null);
-          setSessionSampleError(
-            e instanceof Error ? e.message : 'Failed to fetch session sample rows'
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [variant, sessionId]);
+  // ARCH-5 / CQ-3 / FE-2 · row-level session-sample fetch (defense in depth vs
+  // aggregated-only preview), extracted to a self-contained hook. Owns
+  // sessionSampleRows + sessionSampleError; the rest of the pivot web consumes
+  // them read-only (pivotRows fallback memo + the pivot-unavailable banner).
+  // `clearSessionSampleError` is invoked by the reset-on-data-shape effect below
+  // (where the inline `setSessionSampleError(null)` used to live).
+  const {
+    sessionSampleRows,
+    sessionSampleError,
+    clearSessionSampleError,
+  } = useSessionSampleRows({ variant, sessionId });
 
   /** Analysis pivot defaults prefer message-local preview rows before global session sample rows. */
   const pivotRows = useMemo((): Record<string, unknown>[] => {
@@ -923,7 +901,7 @@ export function DataPreviewTable({
     setServerPivotError(null);
     setServerPivotLoading(false);
     setDrillthrough(null);
-    setSessionSampleError(null);
+    clearSessionSampleError();
     setChartPreviewError(null);
     setChartPreviewLoading(false);
     // Intentionally keyed off `pivotDataSignature` (a stable string already

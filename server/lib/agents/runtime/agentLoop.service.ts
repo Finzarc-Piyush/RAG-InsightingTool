@@ -175,7 +175,6 @@ import {
 import { buildSynthesisContext } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
 import { buildAgentInternals } from "./buildAgentInternals.js";
-import { scheduleTurnCheckpoint } from "../../turnCheckpoint.js";
 import { auditMagnitude } from "./magnitudeAudit.js";
 import { detectContradictions } from "./inconsistencyWatcher.js";
 import {
@@ -205,14 +204,6 @@ import {
   formatInterAgentHandoffsForPrompt,
 } from "./interAgentMessages.js";
 import { proposeAndBuildExtraCharts } from "./visualPlanner.js";
-import {
-  buildChartFromAnalyticalTable,
-  chartAxisSignature,
-} from "./chartFromTable.js";
-import {
-  validateChartAgainstIntent,
-  chartIntentGuardEnabled,
-} from "./chartIntentGuard.js";
 import {
   type ChartSpec,
   type DashboardPivotSpec,
@@ -309,6 +300,14 @@ export type AgentSseEmitter = (event: string, data: unknown) => void;
 // `onLlmCall` stays inline because it owns the mutable LLM-budget counter that
 // is also read at the final return.
 import { makeSafeEmit, makeCheckAbort } from "./agentLoop/emit.js";
+
+// Wave (ARCH-1/CQ-1) · the per-turn mutable-state bundle + the cohesive phases
+// extracted out of `runAgentTurn`. `createTurnState` builds the accumulator
+// bundle once; the phase fns take it (+ explicit read-only collaborators) and
+// move their bodies VERBATIM out of the orchestrator (locals → state.x).
+import { createTurnState } from "./agentLoop/turnState.js";
+import { persistTurnCheckpoint } from "./agentLoop/checkpointPhase.js";
+import { promoteIntermediateAnalyticalChart } from "./agentLoop/promoteChartPhase.js";
 
 // Wave (ARCH-1/CQ-1) · plan-time build_chart deferral + materialisation extracted
 // to a sibling module (low-coupling: depends only on EXTERNAL chart modules + the
@@ -430,15 +429,35 @@ export async function runAgentTurn(
   const safeEmit = makeSafeEmit(emit);
   const checkAbort = makeCheckAbort(ctx, turnId);
 
-  const observations: string[] = [];
-  let agentSuggestionHints: string[] = [];
-  let followUpPrompts: string[] | undefined;
-  // W8: accumulated sub-questions from reflector spawning decisions.
-  const accumulatedSpawnedQuestions: import("./investigationTree.js").SpawnedQuestion[] = [];
-  // Which spawned sub-questions the follow-up pass investigated (+ chart count),
-  // captured for the return so chatStream persists them onto the message and the
-  // "Investigated" badge survives reload.
-  const investigatedSubQuestionsOut: Array<{ id: string; question: string; chartCount: number }> = [];
+  // Wave (ARCH-1/CQ-1) · the ~30 mutable per-turn accumulators are bundled into
+  // ONE `TurnState` object created here, so extracted phases can take it instead
+  // of a dozen positional args. The REFERENCE-TYPE accumulators (arrays / the
+  // blackboard-style logs) are destructured back into local `const` bindings:
+  // destructuring an array copies the *reference*, so `mergedCharts.push(...)`
+  // and `state.mergedCharts.push(...)` mutate the SAME instance — the rename is
+  // behaviour-identical. The reassigned SCALARS (`let table`, `let
+  // delegateAnswer`, the envelope/dashboard surfaces, the counters) stay as
+  // locals AND are mirrored back onto `state` at the points the extracted phases
+  // read them (currently: the checkpoint phase reads `state.stepsWalked`).
+  const state = createTurnState();
+  const {
+    observations,
+    accumulatedSpawnedQuestions,
+    investigatedSubQuestionsOut,
+    workingMemory,
+    reflectorVerdicts,
+    verifierVerdicts,
+    toolIOEntries,
+    structuredObservations,
+    structuredFindings,
+    magnitudeAudits,
+    turnContradictions,
+    mergedCharts,
+    mergedInsights,
+    deferredPlanCharts,
+  } = state;
+  let agentSuggestionHints: string[] = state.agentSuggestionHints;
+  let followUpPrompts: string[] | undefined = state.followUpPrompts;
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
@@ -456,37 +475,8 @@ export async function runAgentTurn(
   // Used to short-circuit the chat-side "Create dashboard" CTA and route the
   // user straight to /dashboard?open=<id>.
   let createdDashboardId: string | undefined;
-  const workingMemory: WorkingMemoryEntry[] = [];
-  // Wave A2 · structured per-step verdicts + tool I/O snapshots persisted via
-  // `agentInternals` at end-of-turn so the next turn's `priorTurnState`
-  // handle (Wave B9) can read typed prior state instead of TEXT digests.
-  const reflectorVerdicts: import("./buildAgentInternals.js").ReflectorVerdictRecord[] = [];
-  const verifierVerdicts: import("./buildAgentInternals.js").VerifierVerdictRecord[] = [];
-  const toolIOEntries: import("./buildAgentInternals.js").ToolIORecord[] = [];
-  // Wave B3 · lossless structured observation log. The legacy `observations[]`
-  // text array (capped at 80) survives for prompt rendering, but every tool
-  // result's full payload (table, charts, numericPayload, analyticalMeta) is
-  // preserved here for programmatic re-use by tools (B2 read accessors), the
-  // narrator (B4 magnitude audits), and verifier (C2 raw-row spot-checks).
-  const structuredObservations: import("./investigationState.js").StructuredObservation[] = [];
-  // Wave B4 · structured findings (independent from the legacy blackboard
-  // text findings; both populated for back-compat).
-  const structuredFindings: import("./investigationState.js").StructuredFinding[] = [];
-  // Wave B1/B8 · cross-step typed scratchpad.
-  const turnScratchpad: import("./investigationState.js").ScratchpadEntry[] = [];
-  // Wave B1/B7 · structured sub-questions emitted by reflector / orchestrator.
-  const turnSubQuestions: import("./investigationState.js").SubQuestion[] = [];
-  // Wave C2 · magnitude audits accumulated during the turn (one per
-  // structured finding with a magnitude). Drift > 5% downgrades the
-  // finding's confidence to "low".
-  const magnitudeAudits: import("./investigationState.js").MagnitudeAudit[] = [];
-  // Wave B10 · contradictions detected by the inconsistency watcher.
-  const turnContradictions: import("./investigationState.js").Contradiction[] = [];
-  const mergedCharts: ChartSpec[] = [];
-  const mergedInsights: Insight[] = [];
-  const deferredPlanCharts: DeferredBuildChartTemplate[] = [];
-  let table: any;
-  let operationResult: any;
+  let table: any = state.table;
+  let operationResult: any = state.operationResult;
   let lastNumeric = "";
   let delegateAnswer: string | undefined;
   let lastRagHitCount: number | undefined;
@@ -1863,124 +1853,10 @@ export async function runAgentTurn(
           // explicitly built. Dedupes by axis-signature against existing
           // mergedCharts. Final cap applied later via finalizeMergedCharts.
           // Env gate: AGENT_PROMOTE_INTERMEDIATE_CHARTS (default true).
-          if (
-            (step.tool === "execute_query_plan" ||
-              step.tool === "run_analytical_query" ||
-              // RNK-chart · promote ranking frames so "top performers" /
-              // "who has the highest X" answers lead with a bar chart. The
-              // tool already trims to topN, so cardinality stays within the
-              // chart-promotion guards; topN=1 (single entity) is rejected by
-              // the scalar guard → no awkward one-bar chart.
-              step.tool === "run_breakdown_ranking") &&
-            (process.env.AGENT_PROMOTE_INTERMEDIATE_CHARTS ?? "true")
-              .toLowerCase() !== "false"
-          ) {
-            try {
-              const promoted = buildChartFromAnalyticalTable({
-                table: {
-                  rows: ctx.lastAnalyticalTable.rows,
-                  columns: ctx.lastAnalyticalTable.columns,
-                },
-                summary: ctx.summary,
-                question: ctx.question,
-              });
-              if (promoted) {
-                // RD4 · chart-intent guard: if the promoted chart's leader
-                // (or only bar) is a value the user said to exclude, drop or
-                // re-filter before push. The narrator already produced the
-                // correct text; the chart layer must not contradict it.
-                let chartToPush: ChartSpec | null = promoted;
-                if (chartIntentGuardEnabled()) {
-                  const verdict = validateChartAgainstIntent(
-                    promoted,
-                    ctx.intentEnvelope
-                  );
-                  if (!verdict.ok) {
-                    if (verdict.drop) {
-                      agentLog("chart_promotion_dropped_by_intent_guard", {
-                        turnId,
-                        tool: step.tool,
-                        reason: verdict.reason,
-                        title: promoted.title,
-                        x: promoted.x,
-                        y: promoted.y,
-                        excluded: verdict.excludedValues?.join(",") ?? "",
-                      });
-                      chartToPush = null;
-                    } else if (verdict.cleanedRows?.length) {
-                      // filter_pollution — strip offending rows and rebuild
-                      // the chart from the cleaned subset. We re-invoke
-                      // buildChartFromAnalyticalTable so processChartData /
-                      // calculateSmartDomainsForChart run against the
-                      // cleaned data and the title remains coherent.
-                      const cleanedSpec = buildChartFromAnalyticalTable({
-                        table: {
-                          rows: verdict.cleanedRows,
-                          columns: ctx.lastAnalyticalTable.columns,
-                        },
-                        summary: ctx.summary,
-                        question: ctx.question,
-                      });
-                      if (cleanedSpec) {
-                        chartToPush = cleanedSpec;
-                        agentLog("chart_promotion_recovered_by_intent_guard", {
-                          turnId,
-                          tool: step.tool,
-                          reason: verdict.reason,
-                          removedRows:
-                            ctx.lastAnalyticalTable.rows.length -
-                            verdict.cleanedRows.length,
-                          excluded:
-                            verdict.excludedValues?.join(",") ?? "",
-                        });
-                      } else {
-                        agentLog("chart_promotion_dropped_by_intent_guard", {
-                          turnId,
-                          tool: step.tool,
-                          reason: "recovery_yielded_no_chart",
-                          title: promoted.title,
-                        });
-                        chartToPush = null;
-                      }
-                    }
-                  }
-                }
-                if (chartToPush) {
-                  const sig = chartAxisSignature(chartToPush);
-                  const existingSigs = new Set(
-                    mergedCharts.map(chartAxisSignature)
-                  );
-                  if (!existingSigs.has(sig)) {
-                    const tagged: ChartSpec = {
-                      ...chartToPush,
-                      ...(finalCallId
-                        ? {
-                            _agentEvidenceRef: finalCallId,
-                            _agentTurnId: turnId,
-                          }
-                        : {}),
-                    };
-                    mergedCharts.push(tagged);
-                    agentLog("chart_promoted_from_intermediate", {
-                      turnId,
-                      tool: step.tool,
-                      title: chartToPush.title,
-                      x: chartToPush.x,
-                      y: chartToPush.y,
-                      type: chartToPush.type,
-                    });
-                  }
-                }
-              }
-            } catch (promoteErr) {
-              agentLog("chart_promotion_failed", {
-                turnId,
-                tool: step.tool,
-                err:
-                  errorMessage(promoteErr),
-              });
-            }
-          }
+          // Wave (ARCH-1/CQ-1) · extracted VERBATIM to ./agentLoop/
+          // promoteChartPhase.ts; mutates the SAME `state.mergedCharts` array
+          // the loop destructured from `state`.
+          promoteIntermediateAnalyticalChart(state, ctx, step.tool, finalCallId, turnId);
         }
 
         if (stepResult.ok && step.tool === "derive_dimension_bucket") {
@@ -2192,26 +2068,12 @@ export async function runAgentTurn(
           // agentInternals to `chatDocument.currentTurnCheckpoint` so a
           // mid-turn process crash leaves a partial answer the next session
           // load can render. Best-effort, non-blocking, debounced (3s).
-          if (ctx.sessionId && ctx.username) {
-            try {
-              scheduleTurnCheckpoint({
-                sessionId: ctx.sessionId,
-                username: ctx.username,
-                question: ctx.question,
-                agentInternals: buildAgentInternals({
-                  workingMemory,
-                  reflectorVerdicts,
-                  verifierVerdicts,
-                  blackboard: ctx.blackboard,
-                  toolIO: toolIOEntries,
-                }),
-                stepsCompleted: stepsWalked,
-                startedAt: trace.startedAt,
-              });
-            } catch {
-              // Best-effort only.
-            }
-          }
+          // Wave (ARCH-1/CQ-1) · extracted VERBATIM to ./agentLoop/checkpointPhase.ts;
+          // mirror the `let stepsWalked` local onto state.stepsWalked so the
+          // phase reads the live count (the array accumulators it reads are the
+          // SAME instances destructured from `state`).
+          state.stepsWalked = stepsWalked;
+          persistTurnCheckpoint(state, ctx, trace.startedAt);
           // Wave A2 · structured reflector verdict for agentInternals.
           reflectorVerdicts.push({
             stepIndex: stepsWalked,

@@ -41,6 +41,8 @@ __setContainerForTesting	function	server/models/database.config.ts	551
 __setContainerForTesting	function	server/models/datasetDirectives.model.ts	363
 __setContainerForTesting	function	server/models/datasetProfileCache.model.ts	144
 __setDashboardListerForUserForTesting	function	server/controllers/adminSemanticModelController.ts	245
+__setFetchFnForTesting	function	server/lib/dataOps/pythonService.ts	45
+__setIntentAiDetectorForTesting	function	server/lib/dataOps/dataOpsOrchestrator.ts	104
 __setLlmStubResolver	function	server/lib/agents/runtime/callLlm.ts	113
 __setPersistSleeper	function	server/lib/persistenceQueue.ts	87
 __setPersistWriter	function	server/lib/persistenceQueue.ts	70
@@ -146,7 +148,8 @@ agentLog	function	server/lib/agents/runtime/agentLogger.ts	30
 AgentLoopResult	interface	server/lib/agents/runtime/types.ts	458
 AgentMidTurnSessionPayload	type	server/lib/agents/runtime/types.ts	74
 agentPlanEventSchema	const	server/lib/agents/runtime/schemas.ts	157
-AgentSseEmitter	type	server/lib/agents/runtime/agentLoop.service.ts	304
+AgentSseEmitter	type	server/lib/agents/runtime/agentLoop.service.ts	295
+AgentSseEmitter	type	server/lib/agents/runtime/agentLoop/emit.ts	22
 agentSseEventToWorkbenchEntries	function	server/services/chat/agentWorkbench.util.ts	214
 AgentSseLikeEmitter	type	server/lib/agents/runtime/interAgentMessages.ts	36
 AgentState	interface	server/lib/agents/runtime/types.ts	393
@@ -162,7 +165,7 @@ agentWorkbenchSchema	const	server/shared/schema/charts.ts	892
 AGG_SUFFIX	const	server/shared/pivot/aggregationPatterns.ts	12
 AGG_SUFFIX_CAPTURE	const	server/shared/pivot/aggregationPatterns.ts	15
 aggregate	function	client/src/lib/charts/dataEngine.ts	58
-aggregateData	function	server/lib/dataOps/pythonService.ts	629
+aggregateData	function	server/lib/dataOps/pythonService.ts	653
 aggregateFeedbackCountsBySession	function	server/models/pastAnalysis.model.ts	417
 aggregateGroups	function	client/src/lib/charts/dataEngine.ts	106
 aggregateLlmMetrics	function	server/lib/admin/metricsAggregator.ts	121
@@ -303,7 +306,7 @@ assertAgenticRagConfiguration	function	server/lib/agents/runtime/assertAgenticRa
 assertDashboardAutogenConfiguration	function	server/lib/agents/runtime/assertAgenticRag.ts	59
 assertDashboardCoverage	function	server/lib/agents/runtime/dashboardCoverageGate.ts	236
 assertDocSizeUnderLimit	function	server/models/cosmosDocSizeGuard.ts	29
-assertPythonServiceConfigured	function	server/lib/dataOps/pythonService.ts	41
+assertPythonServiceConfigured	function	server/lib/dataOps/pythonService.ts	65
 assertRequiredEnv	function	server/config/env.ts	60
 assessConfidence	function	server/lib/agents/runtime/scaleNarrativeByConfidence.ts	97
 AssociationEntry	interface	server/lib/schemaIndex.ts	62
@@ -634,7 +637,7 @@ chartSpecToEchartsOption	function	server/lib/exports/chartSsr.ts	114
 chartSpecToPivotConfig	function	client/src/components/charts/chartSpecToPivotConfig.ts	43
 ChartSpecV2	type	server/shared/schema/charts.ts	752
 chartSpecV2Schema	const	server/shared/schema/charts.ts	739
-ChartSuggestion	interface	server/lib/dataOps/pythonService.ts	200
+ChartSuggestion	interface	server/lib/dataOps/pythonService.ts	224
 ChartTheme	interface	client/src/lib/charts/echartsRenderers/EChartsBase.tsx	43
 ChartTileBody	function	client/src/pages/Dashboard/Components/ChartTileBody.tsx	100
 ChartTilePivotView	function	client/src/components/charts/ChartTilePivotView.tsx	41
@@ -677,7 +680,7 @@ checkInferredFilterFidelity	function	server/lib/agents/runtime/verifierHelpers.t
 checkMagnitudesAgainstObservations	function	server/lib/agents/runtime/checkMagnitudesAgainstObservations.ts	107
 checkMissingFindings	function	server/lib/agents/runtime/verifierHelpers.ts	105
 checkMissingInferredFilters	function	server/lib/agents/runtime/planArgRepairs.ts	877
-checkPythonServiceHealth	function	server/lib/dataOps/pythonService.ts	374
+checkPythonServiceHealth	function	server/lib/dataOps/pythonService.ts	398
 CheckResult	interface	server/scripts/check-invariants.ts	25
 checkSSELimit	function	server/middleware/sseLimiter.ts	9
 checkTemporalTrendBuckets	function	server/lib/agents/runtime/checkTemporalTrendBuckets.ts	85
@@ -813,7 +816,7 @@ contentDrivenHeight	function	client/src/pages/Dashboard/contentDrivenHeight.ts	5
 ContextModal	function	client/src/pages/Home/Components/ContextModal.tsx	36
 Contradiction	interface	server/lib/agents/runtime/investigationState.ts	270
 convertDashToZeroForNumericColumns	function	server/lib/fileParser.ts	447
-convertDataType	function	server/lib/dataOps/pythonService.ts	591
+convertDataType	function	server/lib/dataOps/pythonService.ts	615
 convertV1ToV2	function	client/src/lib/charts/v1ToV2.ts	117
 CoordinatorOutput	type	server/lib/agents/runtime/coordinatorAgent.ts	54
 copyAnswerToClipboard	function	client/src/lib/chat/copyAnswer.ts	71
@@ -855,7 +858,7 @@ CreateDashboardFromSpecRequest	type	server/shared/schema/charts.ts	2822
 createDashboardFromSpecRequestSchema	const	server/shared/schema/charts.ts	2811
 createDashboardRequestSchema	const	server/shared/schema/charts.ts	2669
 createDataSummary	function	server/lib/fileParser.ts	647
-createDerivedColumn	function	server/lib/dataOps/pythonService.ts	553
+createDerivedColumn	function	server/lib/dataOps/pythonService.ts	577
 createErrorResponse	function	server/lib/agents/utils/errorRecovery.ts	58
 createErrorResponse	function	server/services/chat/chatResponse.service.ts	434
 createInitialPivotConfig	function	client/src/lib/pivot/buildPivotModel.ts	573
@@ -867,7 +870,7 @@ createLlmUsageSink	function	server/lib/telemetry/llmUsageSink.ts	82
 createMsalConfig	const	client/src/auth/msalConfig.ts	9
 createOrUpdatePastAnalysesIndex	function	server/lib/rag/createPastAnalysesIndex.ts	108
 createOrUpdateRagSearchIndex	function	server/lib/rag/createSearchIndex.ts	64
-createPivotTable	function	server/lib/dataOps/pythonService.ts	680
+createPivotTable	function	server/lib/dataOps/pythonService.ts	704
 createPlaceholderSession	const	server/models/chat.model.ts	574
 createReportDashboardController	const	server/controllers/dashboardController.ts	467
 createReportDashboardFromAnalysis	const	server/models/dashboard.model.ts	1200
@@ -970,8 +973,8 @@ dataApi	const	client/src/lib/api/data.ts	34
 DataOpResult	interface	server/lib/dataOps/dataOpsTypes.ts	29
 dataOpsChatWithAI	const	server/controllers/dataOpsController.ts	27
 dataOpsChatWithAIStream	const	server/controllers/dataOpsController.ts	60
-DataOpsContext	interface	server/lib/dataOps/dataOpsOrchestrator.ts	209
-DataOpsIntent	interface	server/lib/dataOps/dataOpsOrchestrator.ts	132
+DataOpsContext	interface	server/lib/dataOps/dataOpsOrchestrator.ts	262
+DataOpsIntent	interface	server/lib/dataOps/dataOpsOrchestrator.ts	185
 DataOpsResponse	interface	client/src/lib/api/chat.ts	396
 DataPreview	function	client/src/pages/Home/Components/DataPreview.tsx	81
 DataPreviewTable	function	client/src/pages/Home/Components/DataPreviewTable.tsx	206
@@ -1248,7 +1251,7 @@ ExclusionFilter	interface	server/shared/queryTypes.ts	28
 ExclusionIntent	interface	server/lib/agents/runtime/types.ts	145
 ExecSummaryPage	function	server/lib/exports/pdf/layouts/execSummary.tsx	14
 executeAnalyticalQuery	function	server/lib/analyticalQueryExecutor.ts	155
-executeDataOperation	function	server/lib/dataOps/dataOpsOrchestrator.ts	3087
+executeDataOperation	function	server/lib/dataOps/dataOpsOrchestrator.ts	1322
 ExecuteMetricQueryArgs	type	server/lib/agents/runtime/tools/executeMetricQueryTool.ts	85
 executeMetricQueryArgsSchema	const	server/lib/agents/runtime/tools/executeMetricQueryTool.ts	69
 executePivotQuery	function	server/lib/pivotQueryService.ts	473
@@ -1547,9 +1550,9 @@ getDashboardsCreatedByDay	function	server/lib/admin/metricsAggregator.ts	96
 getDashboardsSharedByDay	function	server/lib/admin/metricsAggregator.ts	433
 getDatabase	const	server/models/database.config.ts	540
 getDataForAnalysis	function	server/lib/largeFileProcessor.ts	367
-getDataPreview	function	server/lib/dataOps/pythonService.ts	455
+getDataPreview	function	server/lib/dataOps/pythonService.ts	479
 getDatasetDirectivesDoc	function	server/models/datasetDirectives.model.ts	111
-getDataSummary	function	server/lib/dataOps/pythonService.ts	496
+getDataSummary	function	server/lib/dataOps/pythonService.ts	520
 getDataSummaryEndpoint	const	server/controllers/sessionController.ts	895
 getDefaultSuggestions	function	server/lib/suggestionGenerator.ts	121
 getDynamicDomain	const	client/src/lib/charts/chartFilterHelpers.ts	52
@@ -1565,7 +1568,7 @@ getFilterLabel	function	client/src/pages/Admin/lib/semanticModelSourceFilter.ts	
 getIncomingSharedAnalysesController	const	server/controllers/sharedAnalysisController.ts	115
 getIncomingSharedDashboardsController	const	server/controllers/sharedDashboardController.ts	84
 getInFlightCount	function	server/lib/persistenceQueue.ts	189
-getInitialAnalysis	function	server/lib/dataOps/pythonService.ts	525
+getInitialAnalysis	function	server/lib/dataOps/pythonService.ts	549
 getInsightModel	function	server/lib/insightSynthesis/insightModelConfig.ts	7
 getInsightTemperature	function	server/lib/insightSynthesis/insightModelConfig.ts	12
 getInsightTemperatureConservative	function	server/lib/insightSynthesis/insightModelConfig.ts	19
@@ -1678,7 +1681,7 @@ HypothesisNode	interface	server/lib/agents/runtime/investigationState.ts	182
 HypothesisStatus	type	server/lib/agents/runtime/analyticalBlackboard.ts	49
 HypothesisStatusV2	type	server/lib/agents/runtime/investigationState.ts	175
 HypothesisTree	interface	server/lib/agents/runtime/investigationState.ts	202
-identifyOutliers	function	server/lib/dataOps/pythonService.ts	1237
+identifyOutliers	function	server/lib/dataOps/pythonService.ts	1261
 IdentifyOutliersArgs	interface	server/lib/dataOps/handlers/identifyOutliers.ts	14
 ImplicationsByHorizonPage	function	server/lib/exports/pdf/layouts/implicationsByHorizon.tsx	52
 importSnowflakeTable	const	server/controllers/snowflakeController.ts	84
@@ -1709,7 +1712,7 @@ inferTemporalGrainFromDates	function	server/lib/temporalGrain.ts	35
 inferTemporalGrainFromSample	function	client/src/lib/temporalDisplayFormat.ts	57
 initCrashReporter	function	server/lib/observability/crashReporter.ts	27
 initDuckDBEager	function	server/lib/columnarStorage.ts	51
-InitialAnalysisResponse	interface	server/lib/dataOps/pythonService.ts	208
+InitialAnalysisResponse	interface	server/lib/dataOps/pythonService.ts	232
 initializeBlobStorage	const	server/lib/blobStorage.ts	28
 initializeCosmosDB	const	server/models/database.config.ts	131
 injectCompoundShapeMetricGuard	function	server/lib/agents/runtime/planArgRepairs.ts	587
@@ -1942,8 +1945,10 @@ MagnitudesRowProps	interface	client/src/pages/Home/Components/MagnitudesRow.tsx	
 makeAxisTickFormatter	function	client/src/lib/charts/format.ts	247
 makeBox2dRegion	function	client/src/pages/Dashboard/lib/explainSlice.ts	239
 makeCategoricalRegion	function	client/src/pages/Dashboard/lib/explainSlice.ts	216
+makeCheckAbort	function	server/lib/agents/runtime/agentLoop/emit.ts	48
 makeNumericRegion	function	client/src/pages/Dashboard/lib/explainSlice.ts	181
 makeRowSetRef	function	server/lib/agents/runtime/rowSetRef.ts	45
+makeSafeEmit	function	server/lib/agents/runtime/agentLoop/emit.ts	29
 makeSectionFilters	function	client/src/pages/Admin/lib/semanticModelSectionFilters.ts	63
 makeTemporalRegion	function	client/src/pages/Dashboard/lib/explainSlice.ts	198
 mapFullRowsResponse	function	client/src/lib/filteredFullRows.ts	21
@@ -2107,7 +2112,7 @@ ParallelRenderer	function	client/src/lib/charts/echartsRenderers/SpecialtyRender
 ParallelResolveResult	interface	server/lib/agents/runtime/skills/parallelResolve.ts	42
 parquetBlobName	function	server/lib/sessionParquet.ts	42
 parseComputedAggregationExpression	function	server/lib/queryPlanExecutor.ts	187
-parseDataOpsIntent	function	server/lib/dataOps/dataOpsOrchestrator.ts	223
+parseDataOpsIntent	function	server/lib/dataOps/dataOpsOrchestrator.ts	276
 parseDateLike	function	client/src/lib/parseDateLike.ts	18
 ParsedPackInput	interface	server/lib/domainContext/packSchema.ts	94
 ParsedQuery	interface	server/shared/queryTypes.ts	103
@@ -2405,7 +2410,7 @@ putActiveFilterEndpoint	const	server/controllers/activeFilterController.ts	172
 putSessionHierarchiesEndpoint	const	server/controllers/sessionController.ts	1448
 putSessionSchemaAnnotationsEndpoint	const	server/controllers/sessionController.ts	1507
 PX_PER_Y_TICK	const	client/src/lib/charts/yAxisTickCount.ts	22
-pythonServiceFetch	function	server/lib/dataOps/pythonService.ts	83
+pythonServiceFetch	function	server/lib/dataOps/pythonService.ts	107
 PythonServiceShapeError	class	server/lib/dataOps/pythonResponseSchemas.ts	14
 QUALITATIVE_PALETTE_SIZE	const	client/src/lib/charts/palette.ts	19
 qualitativeColor	function	client/src/lib/charts/palette.ts	29
@@ -2531,7 +2536,7 @@ removeChartFromDashboardController	const	server/controllers/dashboardController.
 removeChartFromDashboardRequestSchema	const	server/shared/schema/charts.ts	2679
 removeCrossFilter	function	client/src/pages/Dashboard/lib/crossFilter.ts	140
 removeLevel	function	client/src/pages/Admin/lib/semanticModelHierarchyLevels.ts	124
-removeNulls	function	server/lib/dataOps/pythonService.ts	394
+removeNulls	function	server/lib/dataOps/pythonService.ts	418
 removeNullsResponseSchema	const	server/lib/dataOps/pythonResponseSchemas.ts	58
 removePivotFromDashboard	const	server/models/dashboard.model.ts	1072
 removePivotFromDashboardController	const	server/controllers/dashboardController.ts	249
@@ -2663,7 +2668,7 @@ rowKeysFromFirstRow	function	server/lib/agents/runtime/agentLoopFormatters.ts	16
 RowRef	interface	server/lib/agents/runtime/investigationState.ts	78
 RowSetRef	interface	server/lib/agents/runtime/rowSetRef.ts	31
 rowsFromSource	function	client/src/lib/charts/RawDataProvider.tsx	139
-runAgentTurn	function	server/lib/agents/runtime/agentLoop.service.ts	387
+runAgentTurn	function	server/lib/agents/runtime/agentLoop.service.ts	386
 RunAutomationCallbacks	interface	client/src/lib/api/automations.ts	43
 runAutomationController	const	server/controllers/automationController.ts	205
 RunAutomationOptions	interface	client/src/lib/api/automations.ts	71
@@ -2973,7 +2978,7 @@ summarizeTree	function	server/lib/agents/runtime/investigationTree.ts	335
 SummaryArgs	interface	server/lib/dataOps/handlers/summary.ts	12
 SummaryBandData	interface	client/src/pages/Dashboard/lib/summaryBandData.ts	49
 SummaryBandFinding	interface	client/src/pages/Dashboard/lib/summaryBandData.ts	44
-SummaryResponse	interface	server/lib/dataOps/pythonService.ts	184
+SummaryResponse	interface	server/lib/dataOps/pythonService.ts	208
 summaryResponseSchema	const	server/lib/dataOps/pythonResponseSchemas.ts	34
 SunburstRenderer	function	client/src/lib/charts/echartsRenderers/SpecialtyRenderers.tsx	88
 SuperadminDashboardRow	interface	client/src/lib/api/superadmin.ts	58
@@ -3067,10 +3072,10 @@ toPersistedSpawnedQuestions	function	server/lib/agents/runtime/spawnedQuestionPe
 topNAndOther	function	client/src/lib/charts/dataEngine.ts	208
 toSnakeCase	function	server/lib/semantic/inferModel.ts	83
 touchAutomationLastRun	const	server/models/automation.model.ts	174
-trainMLModel	function	server/lib/dataOps/pythonService.ts	910
-TrainModelResponse	interface	server/lib/dataOps/pythonService.ts	347
+trainMLModel	function	server/lib/dataOps/pythonService.ts	934
+TrainModelResponse	interface	server/lib/dataOps/pythonService.ts	371
 translateLegacyFilterToActiveFilter	function	server/lib/dataOps/intent/translateLegacyFilterToActiveFilter.ts	22
-treatOutliers	function	server/lib/dataOps/pythonService.ts	1312
+treatOutliers	function	server/lib/dataOps/pythonService.ts	1336
 TreemapRenderer	function	client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx	53
 TreemapRendererProps	interface	client/src/lib/charts/echartsRenderers/TreemapRenderer.tsx	34
 TreeSummary	interface	server/lib/agents/runtime/investigationTree.ts	324
@@ -3185,6 +3190,7 @@ userMessageHasReportIntent	function	client/src/lib/reportIntent.ts	5
 userMessageHasReportIntent	function	server/lib/reportIntent.ts	5
 userRequestedPreview	function	server/lib/dataOps/intent/userRequestedPreview.ts	11
 useSessionBroadcast	function	client/src/lib/sessionBroadcast.hook.ts	31
+useSessionFilterDistincts	function	client/src/pages/Home/Components/DataPreviewTable/hooks/useSessionFilterDistincts.ts	35
 useSessionFilters	const	client/src/pages/Analysis/modules/useSessionFilters.ts	14
 useSessionLoader	const	client/src/pages/Home/modules/useSessionLoader.ts	61
 useSessionManagement	const	client/src/pages/Analysis/modules/useSessionManagement.ts	19

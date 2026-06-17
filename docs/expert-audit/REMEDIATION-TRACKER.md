@@ -1,48 +1,41 @@
 # Expert Audit — A+ Remediation Tracker
 
 > **Living document.** Single source of truth for taking this codebase from **C+ → A+** for the expert handoff.
-> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. **Last sync: 2026-06-16 (batch 12).**
+> 15-dimension multi-agent audit (53 agents, adversarial verification), 2026-06-15. **Last sync: 2026-06-17 (batch 18 · dataOps god-file fully decomposed).**
 
 ## How to use
-1. Take the next unchecked finding (roadmap is priority-ordered).
-2. Implement → verify (`typecheck` · tests · `check:invariants` · `check:type-escapes` · `check:doc-refs`) → flip to `[x]`.
-3. Legend: ✅ DONE · 🟡 PARTIAL (advanced + documented; completion is test/infra/decision-gated) · 🟦 STAGED · ⬜ TODO.
+1. Take the next unchecked finding. 2. Implement → verify (`typecheck` · tests · `check:invariants` · `check:type-escapes` · `check:doc-refs`) → flip to `[x]`. 3. Legend: ✅ DONE · 🟡 PARTIAL (advanced + documented; completion is test/infra/decision-gated).
 
 ## Progress
 | Status | Count | % |
 |---|---:|---:|
-| ✅ DONE | 96 | 87% |
-| 🟡 PARTIAL | 14 | 13% |
-| 🟦 STAGED | 0 | 0% |
-| ⬜ TODO | 0 | 0% |
+| ✅ DONE | 98 | 89% |
+| 🟡 PARTIAL | 12 | 11% |
 | **Total** | **110** | |
 
-## The 14 PARTIAL findings — what is done, and what gates completion
+## Test infrastructure built this session (the unlock)
 
-Every PARTIAL has real, verified progress; what remains needs a resource this environment lacks (the live integration suite, live infra, or a product decision).
+A hermetic in-memory Cosmos `Container` double ([`server/tests/helpers/inMemoryCosmosContainer.ts`](../../server/tests/helpers/inMemoryCosmosContainer.ts), faithfulness contract vs `@azure/cosmos` 4.7.0, 22 semantics + 2 real-seam 412-retry proofs) + production-guarded test seams (`__setContainerForTesting`, `__setProcessedDataBlobWriterForTesting`, `__setFetchFnForTesting`, `__setIntentAiDetectorForTesting`) let integration tests that drove the chat-doc write / python / DuckDB paths run green in <1s instead of hanging on `waitForContainer()`. This unblocked **test-first decomposition of the god-file cores**: it was used to fully decompose the dataOps god-file (ARCH-2/CQ-2 → DONE) behind ~78 new characterization/integration tests, and to build the `runAgentTurnCharacterization` full-turn gate.
 
-**Test infrastructure built this session (the unlock).** A hermetic in-memory Cosmos `Container` double ([`server/tests/helpers/inMemoryCosmosContainer.ts`](../../server/tests/helpers/inMemoryCosmosContainer.ts), faithfulness contract vs `@azure/cosmos` 4.7.0, 22 semantics + 2 real-seam 412-retry proofs) lets integration tests that drove the chat-doc write path run green in <1s instead of hanging on `waitForContainer()`. This unblocked test-first decomposition of the cores: the dataOps persist+preview integration tests and the **`runAgentTurnCharacterization` full-turn gate** (2 turns via llmStub + the double, ~0.5s, pins SSE order + envelope shape) — the gates a future sustained effort needs to finish the cores safely.
+## The 12 PARTIAL findings — what is done, and what gates completion
 
-**God-files — seams + characterization/integration tests done; stateful-core phase-decomposition continues test-first.** See [`docs/god-file-decomposition-plan.md`](../god-file-decomposition-plan.md).
-- **ARCH-1 / CQ-1** — `agentLoop.service.ts` **4327→3760** (−567); extracted deferred-charts, planner, synthesis-prep, synthesis, finalize-charts, emit modules + a 13-test char suite + the `runAgentTurnCharacterization` full-turn integration gate. `runAgentTurn`'s ~31-closure core remains (now behind the gate).
-- **ARCH-2 / CQ-2** — `dataOpsOrchestrator.ts` **5245→4881**; 4 per-operation `dataOps/handlers/*.ts` + 4 pure `dataOps/intent/*.ts` + the shared **`persistAndPreview()` tail** extracted to `dataPersistence.ts` (8 of 15 canonical persist branches collapsed — TEST-FIRST via the new Cosmos double, 4 integration char tests pin behaviour). 7 non-canonical branches (create_column/create_derived_column/rename_column mutate `dataOpsContext` mid-tail; treat_outliers/filter/revert preview unconditionally) deliberately left + the big AI branches (aggregate/pivot/train_model) + the dispatch remain — further decomposition continues test-first against the double.
-- **ARCH-5 / CQ-3 / FE-2** — `DataPreviewTable.tsx` **3633→3264**; pure helpers + chart-kind constants + cell-formatter + drillthrough panel + 4 sub-components + the `useSessionFilterDistincts` hook + 23 char/vitest cases. Still coupled (future lanes): `filterSelections` (~10 handlers), `pivotConfig` + its ~15-memo fan-out, the ~12-useState chart cluster.
+**God-files — still being decomposed test-first (the dataOps god-file `dataOpsOrchestrator.ts` is now DONE: 5245→1954, executeDataOperation → 14 typed handlers, parseDataOpsIntent → 18 ordered detectors).**
+- **ARCH-1 / CQ-1** — `agentLoop.service.ts` **4327→3622**; 8 sibling modules (incl. `turnState.ts` + 2 extracted leaf phases) + a **5-shape `runAgentTurn` characterization gate** (plain/one-chart/multi-step/synthesis-repair-retry/abort, via llmStub + Cosmos double, ~0.5s). **Code-motion ceiling reached:** the step-execution loop body (break/continue/return labels, ~25 shared locals) and the synthesis orchestration (interleaved across ~1000 lines, grep-pinned by `synthesisFallbackFlow`/`synthesisRetry`) need a reviewed control-flow restructure (state-machine / loop-body-returns-signal), not code-motion — the gate is the safety net for that future effort.
+- **ARCH-5 / CQ-3 / FE-2** — `DataPreviewTable.tsx` **3633→3242**; pure helpers + chart-kind constants + cell-formatter + drillthrough panel + sub-components + `useSessionFilterDistincts` + `useSessionSampleRows` hooks + 29 char/vitest cases. **Code-motion ceiling reached:** the `pivotConfig`↔`filterSelections`↔chart memo web (coupled via shared reset/hydration/debounced-PATCH effects) needs a reviewed reducer/state-machine consolidation, not code-motion.
+- **ARCH-3** — type-only import-edge elimination (chat.model SCC 7→4 files); runtime cycle-breakers retained + documented in [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
 
-**Architecture — safe portion done; remainder documented.**
-- **ARCH-3** — type-only import-edge elimination (chat.model SCC 7→4 files); genuine dynamic-import cycle-breakers retained, documented in [`docs/decisions/import-cycles.md`](../decisions/import-cycles.md).
-
-**Infrastructure migrations — DECISION/INFRA-GATED; documented, not flipped blind on live multi-tenant infra.** See [`docs/decisions/infra-migrations.md`](../decisions/infra-migrations.md).
-- **DATA-1** — Cosmos partition key `username`→`sessionId`. Lean projecting read (`getChatSummaryBySessionId`, PERF-5) added to reduce payload meanwhile; the repartition needs a new container + dual-write + backfill + cutover.
-- **DATA-2** — upload STATUS is now instance-independent (Map fast-path → Cosmos-doc `enrichmentStatus` fallback; client passes a sessionId hint); the durable JOB RUNNER (fire-and-forget processing dies on serverless) still needs a queue + worker.
-- **DATA-6** — deterministic doc `id == sessionId`; migration-sensitive, ties into DATA-1.
-- **PERF-1 / PERF-2** — Parquet WRITE path is wired at ingest (`writeAndUploadSessionParquet`); the READ path stays flag-OFF pending the DuckDB httpfs spike validated on host.
+**Infrastructure migrations — DECISION/INFRA-GATED; documented in [`docs/decisions/infra-migrations.md`](../decisions/infra-migrations.md), not flipped blind on live multi-tenant infra.**
+- **DATA-1** — Cosmos partition key `username`→`sessionId` (lean projecting read added meanwhile; repartition needs new container + dual-write + backfill).
+- **DATA-2** — upload STATUS now instance-independent (Cosmos-doc fallback); durable job RUNNER needs a queue + worker.
+- **DATA-6** — deterministic doc `id == sessionId`; migration-sensitive (core create/read path — deliberately not risked autonomously).
+- **PERF-1 / PERF-2** — Parquet WRITE path wired at ingest; READ path stays flag-OFF pending the DuckDB httpfs spike validated on host.
 - **PERF-7** — per-instance in-memory rate-limiter + job state; needs a shared store (Redis/Cosmos).
 
 ## Findings checklist (all 110)
 
-### Architecture & Modularity — grade C+  (4/8 done)
+### Architecture & Modularity — grade C+  (5/8 done)
 - [~] **ARCH-1** [HIGH] 🟡 PARTIAL · wave EX18 — runAgentTurn is a single ~3,378-line function (the entire agent orchestration loop inlined)
-- [~] **ARCH-2** [HIGH] 🟡 PARTIAL · wave EX19 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
+- [x] **ARCH-2** [HIGH] ✅ DONE · wave EX19 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
 - [~] **ARCH-3** [MEDIUM] 🟡 PARTIAL · wave EX20 — 17 server-side circular dependencies masked by ~83 dynamic await import() cycle-breakers
 - [x] **ARCH-4** [HIGH] ✅ DONE · wave EX20 — shared/schema.ts is a 3479-line god-module imported by 616 files
 - [~] **ARCH-5** [HIGH] 🟡 PARTIAL · wave EX19 — DataPreviewTable.tsx is a 3,200-line React god component (37 useState, 25 useEffect) owning pivot+chart+filter+sort
@@ -50,9 +43,9 @@ Every PARTIAL has real, verified progress; what remains needs a resource this en
 - [x] **ARCH-7** [LOW] ✅ DONE · wave EX20 — Genuinely dead modules: stratifiedSample.ts and dataProvenance.ts (referenced only in comments)
 - [x] **ARCH-8** [MEDIUM] ✅ DONE · wave EX20 — agents/runtime/types.ts (the central type module) sits on a behavior-import cycle
 
-### Code Quality & Readability — grade C+  (5/8 done)
+### Code Quality & Readability — grade C+  (6/8 done)
 - [~] **CQ-1** [HIGH] 🟡 PARTIAL · wave EX18 — runAgentTurn is a ~3,378-line single function — the system's core orchestrator is one unreviewable body
-- [~] **CQ-2** [HIGH] 🟡 PARTIAL · wave EX19 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
+- [x] **CQ-2** [HIGH] ✅ DONE · wave EX19 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
 - [~] **CQ-3** [HIGH] 🟡 PARTIAL · wave EX19 — DataPreviewTable.tsx: ~3,200-line React component with 133 hook calls
 - [x] **CQ-4** [MEDIUM] ✅ DONE · wave EX19 — Massive copy-paste across 25+ python train_* functions (~2,000 LOC of near-identical skeleton)
 - [x] **CQ-5** [MEDIUM] ✅ DONE · wave EX17 — Byte-identical parseNumericCell duplicated across client and server (known, still unresolved)
@@ -192,7 +185,7 @@ Every PARTIAL has real, verified progress; what remains needs a resource this en
 - **Fix:** Execute the existing plan (docs/god-file-decomposition-plan.md): extract per-tool dispatch -> agentLoop/executeStep.ts, SSE emit helpers -> agentLoop/emit.ts, reflector/verifier wiring -> agentLoop/flowControl.ts, checkpoint/persistence glue -> agentLoop/checkpoint.ts. Pass an explicit turn-state object between phase functions instead of closure-captured mutable locals. Target: runAgentTurn becomes a <200-line orchestrator that calls named phase functions.
 
 #### ARCH-2 — dataOpsOrchestrator.ts (5238 LOC) mixes intent parsing, AI detection, and execution dispatch in 2 mega-functions
-- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** server/lib/dataOps/dataOpsOrchestrator.ts has only 2 exports: parseDataOpsIntent (lines 299-3196, ~2,900 lines) and executeDataOperation (3197+). The single file contains 91 regex/match intent tests, an LLM intent detector (detectDataOpsIntentWithAI at 1802), per-operation extractors (extractMLModelDetails 2742, extractDerivedColumnDetails 2970, extractColumnDetails 2603), response formatters (formatMLModelResponse 2867), and streaming batch helpers (processInBatches 131, removeNullsStreaming 152) — three distinct concerns (NL parsing, LLM orchestration, data execution) in one module.
 - **Impact:** Single-responsibility is violated at the file level: a change to derived-column SQL generation, a regex tweak for replace-value intent, and a model-training response format all live in the same 5K-line file, so every dataOps change risks the whole surface. parseDataOpsIntent at ~2,900 lines cannot be reasoned about or covered cleanly.
 - **Fix:** Per the decomposition plan: split per-operation handlers (removeNulls/aggregate/pivot/convertType/derivedColumn) into dataOps/handlers/*.ts, move the regex+LLM intent detection into dataOps/intent/, and keep the orchestrator as a thin dispatch loop. The 91 regexes are a parsing concern that should not sit next to execution.
@@ -242,7 +235,7 @@ Every PARTIAL has real, verified progress; what remains needs a resource this en
 - **Fix:** Extract the loop phases into named, independently testable functions taking an explicit phase-state object: planning, skill/parallel dispatch, tool-step execution, reflection, synthesis, visual-planning, envelope assembly. Target <150 lines per extracted phase. The 31 inner closures are natural seams. Pair with adding a `complexity`/`max-lines-per-function` ESLint warn so it cannot regrow.
 
 #### CQ-2 — executeDataOperation: ~2,000-line function with 161 if-branches and a 6-parameter weakly-typed signature
-- **Status:** 🟡 PARTIAL · **Severity:** high · **Wave:** EX19 · **Effort:** L
+- **Status:** ✅ DONE · **Severity:** high · **Wave:** EX19 · **Effort:** L
 - **Evidence:** server/lib/dataOps/dataOpsOrchestrator.ts:3197 `executeDataOperation(intent, data, sessionId, sessionDoc?, originalMessage?, chatHistory?)` runs to file end (5238). The body has 161 `if (`/`else if (` branches and 48 `case` labels (measured over lines 3197-5238). Signature mixes required and 4 optional positional params and returns `{ answer; data?; preview?; summary?: any[]; saved? }` with `summary?: any[]` and `data: Record<string, any>[]` (3199, 3208). The sibling parseDataOpsIntent (299) and detectDataOpsIntentWithAI (1802) are similarly ~600-1500 lines each, making dataOpsOrchestrator.ts a 5,238-LOC file of ~5 giant functions.
 - **Impact:** Per-operation dispatch buried in a 161-branch if/switch maze is the textbook case where adding an operation means editing a 2,000-line function and risking unrelated branches. The 6-positional-param signature (4 optional) is easy to mis-call (positional drift) and `any[]`/`Record<string,any>` defeats the type checker exactly where data correctness matters most.
 - **Fix:** Replace the operation if/switch with a registry/dispatch table keyed by `intent.operation` mapping to small per-operation handlers (mirrors the existing tool-registry pattern in the agent runtime). Collapse the 6 positional params into a single typed `ExecuteDataOpArgs` object and give the return a named interface with concrete `summary` typing.

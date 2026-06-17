@@ -31,6 +31,30 @@ const REQUEST_TIMEOUT = 300000; // 5 minutes
 const PYTHON_SERVICE_API_KEY = process.env.PYTHON_SERVICE_API_KEY?.trim();
 
 /**
+ * Hermetic test seam (mirrors `__setProcessedDataBlobWriterForTesting` in
+ * `lib/blobStorage.ts` and `__setContainerForTesting` in
+ * `models/database.config.ts`). Every data-ops call in this module — aggregate,
+ * pivot, train-model, summary, … — routes its HTTP through `callFetchFn`, so an
+ * integration test can inject a canned `fetch` and exercise the orchestrator's
+ * Python branches without a live Python service (no network, no hang).
+ * Production MUST NOT call this (guarded under `NODE_ENV=production`). Pass
+ * `null` to restore the real `fetchFn`.
+ */
+let fetchFnOverride: typeof fetch | null = null;
+
+export function __setFetchFnForTesting(fake: typeof fetch | null): void {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '__setFetchFnForTesting must not be called in production',
+    );
+  }
+  fetchFnOverride = fake;
+}
+
+const callFetchFn: typeof fetch = ((input: any, init?: any) =>
+  (fetchFnOverride ?? fetchFn)(input, init)) as typeof fetch;
+
+/**
  * Wave R17 · In production the internal API key is MANDATORY. The Python
  * data-ops service authenticates callers via `X-Internal-Api-Key`; if the key
  * is unset the server would ship an unauthenticated internal endpoint, so any
@@ -463,7 +487,7 @@ export async function getDataPreview(
     };
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/preview`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/preview`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
@@ -563,7 +587,7 @@ export async function createDerivedColumn(
     };
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/create-derived-column`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/create-derived-column`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
@@ -647,7 +671,7 @@ export async function aggregateData(
     };
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/aggregate`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/aggregate`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
@@ -692,7 +716,7 @@ export async function createPivotTable(
     };
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/pivot`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/pivot`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
@@ -1160,7 +1184,7 @@ export async function trainMLModel(
     }
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/train-model`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/train-model`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
@@ -1337,7 +1361,7 @@ export async function treatOutliers(
     }
     
     const { timeoutId, signal } = dataOpRequest();
-    const response = await fetchFn(`${PYTHON_SERVICE_URL}/treat-outliers`, {
+    const response = await callFetchFn(`${PYTHON_SERVICE_URL}/treat-outliers`, {
       method: 'POST',
       headers: pythonServiceHeaders({
         'Content-Type': 'application/json',
