@@ -22,7 +22,12 @@ export function selectFallbackFamily(p: PivotPatterns): DeterministicFallbackFam
   ) {
     return "trend";
   }
-  if ((p.hhi !== undefined && p.hhi > 0.25) || (p.top1Share !== undefined && p.top1Share > 0.4)) {
+  // IUX2 · concentration (share-of-total) framing is meaningless for a rate /
+  // share / average metric — prefer the gap/dispersion narrative there.
+  if (
+    !p.isRateMetric &&
+    ((p.hhi !== undefined && p.hhi > 0.25) || (p.top1Share !== undefined && p.top1Share > 0.4))
+  ) {
     return "concentration";
   }
   if (p.cv !== undefined && p.cv > 0.3) {

@@ -96,8 +96,9 @@ describe("buildDeterministicChartInsightFallback", () => {
       formatY,
     });
 
-    assert.match(fallback, /Top Category "Technology"/);
-    assert.match(fallback, /prioritize Category "Technology"/);
+    assert.match(fallback, /Category "Technology" leads on/);
+    // IUX2 · the de-jargoned fallback must not emit banned vocabulary / anti-patterns.
+    assert.doesNotMatch(fallback, /\bp75\b|prioritize|weaker segments/i);
     assert.doesNotMatch(
       fallback,
       /Region/i,
@@ -120,12 +121,12 @@ describe("buildDeterministicChartInsightFallback", () => {
       formatY,
     });
 
-    assert.match(fallback, /Top Region "West"/);
-    assert.match(fallback, /prioritize Region "West"/);
+    assert.match(fallback, /Region "West" leads on/);
+    assert.doesNotMatch(fallback, /\bp75\b|prioritize|weaker segments/i);
     assert.doesNotMatch(fallback, /Category/i);
   });
 
-  it("includes the formatted (K/M/B) top, avg, p75, and bottom-threshold values", () => {
+  it("formats the top and avg values as K/M/B (no raw digits, no p75/threshold jargon)", () => {
     const chartSpec: Pick<ChartSpec, "x" | "y" | "seriesColumn" | "seriesKeys"> = {
       x: "Region",
       y: "Sales",
@@ -144,9 +145,8 @@ describe("buildDeterministicChartInsightFallback", () => {
 
     assert.match(fallback, /827K/);
     assert.match(fallback, /188K/);
-    assert.match(fallback, /224K/);
-    assert.match(fallback, /705K/);
     assert.doesNotMatch(fallback, /827456|188461|224431|705415/);
+    assert.doesNotMatch(fallback, /\bp75\b|prioritize|weaker segments/i);
   });
 
   it("uses the literal 'series' label when seriesColumn is missing", () => {
@@ -165,7 +165,7 @@ describe("buildDeterministicChartInsightFallback", () => {
       formatY,
     });
 
-    assert.match(fallback, /Top series "A"/);
+    assert.match(fallback, /series "A" leads on/);
     assert.doesNotMatch(fallback, /Region/);
   });
 });

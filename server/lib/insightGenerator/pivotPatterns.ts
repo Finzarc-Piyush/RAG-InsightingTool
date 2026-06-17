@@ -8,6 +8,8 @@ export type PivotPatterns = {
   isCategoricalX: boolean;
   isTemporal: boolean;
   dualAxis: boolean;
+  /** Y is a rate/share/average bounded in [0,1] — NOT additive (no "% of total"). */
+  isRateMetric?: boolean;
 
   topPerformers: PerformerRow[];
   bottomPerformers: PerformerRow[];
@@ -125,6 +127,15 @@ export function computePivotPatterns(
     }));
   }
   ranked = ranked.filter((r) => Number.isFinite(r.value));
+
+  // IUX2 · a rate / share / average metric (values bounded in [0,1]) is NOT
+  // additive — summing categories is meaningless, so downstream text must avoid
+  // "X% of the total" / concentration framing for it.
+  const rankedValues = ranked.map((r) => r.value);
+  const isRateMetric =
+    rankedValues.length > 0 &&
+    rankedValues.every((v) => v >= 0 && v <= 1) &&
+    rankedValues.some((v) => v > 0 && v < 1);
 
   const positiveValues = ranked.map((r) => Math.max(0, r.value));
   const total = positiveValues.reduce((s, v) => s + v, 0);
@@ -297,6 +308,7 @@ export function computePivotPatterns(
     isCategoricalX,
     isTemporal,
     dualAxis,
+    isRateMetric,
     topPerformers,
     bottomPerformers,
     top1Share,
@@ -338,7 +350,11 @@ export function renderPivotPatternsBlock(
     "PIVOT PATTERNS (use these to find drivers, risks, and gaps — do NOT default to the formulaic 'leader-vs-laggard' pattern):"
   );
 
-  if (p.top1Share !== undefined && p.top3Share !== undefined && p.hhi !== undefined) {
+  // IUX2 · "% of total" / leadership-share framing is only meaningful for an
+  // additive metric (counts, sums). For a rate/share/average it is a category
+  // error — the categories don't sum to a total — so skip it. (The model was
+  // parroting "top segment 80% of total" for rate-by-category charts.)
+  if (!p.isRateMetric && p.top1Share !== undefined && p.top3Share !== undefined && p.hhi !== undefined) {
     const concentrationLabel =
       p.hhi > 0.25 ? "one group dominates" : p.hhi < 0.1 ? "spread fairly evenly" : "moderately uneven";
     lines.push(
@@ -356,7 +372,7 @@ export function renderPivotPatternsBlock(
     const variabilityLabel =
       p.variability === "high" ? "varies a lot" : p.variability === "low" ? "fairly stable" : "moderately variable";
     const cvParts: string[] = [`${variabilityLabel}`];
-    if (p.longTailCount !== undefined && p.longTailShare !== undefined && p.longTailCount > 0) {
+    if (!p.isRateMetric && p.longTailCount !== undefined && p.longTailShare !== undefined && p.longTailCount > 0) {
       cvParts.push(
         `${p.longTailCount} smaller segment${p.longTailCount === 1 ? "" : "s"} contribute only ${fmtPct(p.longTailShare)}`
       );

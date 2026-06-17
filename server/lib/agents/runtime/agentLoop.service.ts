@@ -461,6 +461,11 @@ export async function runAgentTurn(
   // PR 1.G — rich envelope surfaces populated only during Phase-1 shapes.
   let envelopeMagnitudes: z.infer<typeof magnitudeSchema>[] | undefined;
   let envelopeUnexplained: string | undefined;
+  // IUX2 · the key-insight text most recently seeded into mergedInsights, so the
+  // envelope-repair loop (a sibling scope to the synthesis block where the
+  // block-scoped envKeyInsight lives) can replace it in place rather than leave
+  // a stale pre-repair insight in the Key Insights card.
+  let seededKeyInsightText: string | undefined;
   // W3 · structured AnswerEnvelope emitted by narrator (optional). Threaded
   // through the agent return → chatStream → assistantSave → Cosmos so the
   // client can render an AnswerCard.
@@ -2602,6 +2607,7 @@ export async function runAgentTurn(
           safeEmit("unexplained", { note: envUnexplained });
         }
         appendEnvelopeInsight(mergedInsights, envKeyInsight ?? undefined);
+        seededKeyInsightText = envKeyInsight?.trim() || undefined;
         appendInterAgentMessage(
           trace,
           {
@@ -2819,6 +2825,20 @@ export async function runAgentTurn(
         if (Object.keys(envFresh).length) envelopeAnswerEnvelope = envFresh;
         if (repaired.magnitudes?.length) envelopeMagnitudes = repaired.magnitudes;
         if (repaired.unexplained) envelopeUnexplained = repaired.unexplained;
+        // IUX2 · keep the visible "Key Insights" entry in sync with the repaired
+        // narration. The key insight is no longer mirrored into the answer body
+        // (it lives only in mergedInsights → InsightCard), so a repair pass that
+        // changes keyInsight must update the entry seeded earlier — otherwise the
+        // user sees the STALE pre-repair insight. Replace in place (no duplicate
+        // card); append if it wasn't already present.
+        if (repaired.keyInsight?.trim()) {
+          const repairedKi = repaired.keyInsight.trim();
+          const prevKi = (seededKeyInsightText ?? "").trim();
+          const idx = prevKi ? mergedInsights.findIndex((i) => i.text === prevKi) : -1;
+          if (idx >= 0) mergedInsights[idx] = { ...mergedInsights[idx]!, text: repairedKi };
+          else appendEnvelopeInsight(mergedInsights, repairedKi);
+          seededKeyInsightText = repairedKi;
+        }
         if (repairedCtas.length && !minimalDepth) followUpPrompts = repairedCtas;
       }
     }

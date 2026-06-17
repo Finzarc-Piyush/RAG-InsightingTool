@@ -54,9 +54,13 @@ export function buildDeterministicChartInsightFallback(args: {
   bottomThreshold: string;
   formatY: (n: number) => string;
 }): string {
-  const { chartSpec, topX, topY, avgY, yP75, bottomThreshold, formatY } = args;
+  const { chartSpec, topX, topY, avgY, formatY } = args;
   const dim = resolveTopPerfDimension(chartSpec);
-  return `Top ${dim} "${topX}" has the highest ${chartSpec.y} at ${formatY(topY)} (avg ${formatY(avgY)}, p75 ${formatY(yP75)}). To lift ${chartSpec.y}, prioritize ${dim} "${topX}" and target moving weaker segments above ${bottomThreshold}.`;
+  // IUX2 · plain-English, no banned jargon. Was "p75 …, prioritize …, moving
+  // weaker segments above …" — which contradicted the manager-friendly ban
+  // list this work introduced. Still names the leader + its value so the
+  // grounding contract (name the top category/value) holds.
+  return `${dim} "${topX}" leads on ${chartSpec.y} at ${formatY(topY)}, clearly ahead of the typical ${formatY(avgY)} across the rest.`;
 }
 
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
@@ -468,10 +472,12 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
   const prompt = `Return JSON with the listed fields.
 
 TASK: Write 3–5 plain-English sentences (plain text, no markdown headings) that explain THIS chart to a busy manager who is NOT a statistician. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Cover, in this order, only the parts that genuinely apply:
-  1. HEADLINE — the main comparison in plain words with the actual numbers (e.g. "Women survived at 74% versus 19% for men — nearly 4× higher").
+  1. HEADLINE — the main comparison in plain words with the actual numbers, naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher").
   2. SHAPE — which specific segment / time bucket / mix drives the headline, named explicitly, and whether it is broad-based or down to just one or two groups — said in plain words.
   3. LIKELY REASON — a brief, plausible explanation for WHY this pattern probably exists, using the question and general real-world / business knowledge. Frame it as a likely reason, not a measured fact; reason qualitatively and never attach invented numbers. Omit if there is no credible reason.
   4. WHAT TO DO — one concrete, useful next step ONLY when the reader could actually act on it. If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this entirely rather than forcing a generic action.
+
+If ${chartSpec.y} is a rate, share, ratio or average, the categories do NOT add up to a meaningful total — compare them directly (e.g. "X is about 4× Y"), render any 0–1 value as a percentage (e.g. 0.742 → 74%, 0.189 → 19%) rather than a raw decimal, and never say "X% of the total".
 
 Use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
 
@@ -488,7 +494,7 @@ ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}$
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Plain-English sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters, no statistics jargon. Use the actual numbers from above (never labels like P75/P90). For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS, explain in plain words what the pattern means, add a likely reason when there is a credible one, and a next step only if the reader can act on it."${businessCommentaryRequest}
+  "keyInsight": "Plain-English sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters, no statistics jargon. Use the actual numbers from above (never labels like P75/P90). For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) so it ties back to the chart, explain in plain words what the pattern means, add a likely reason when there is a credible one, and a next step only if the reader can act on it."${businessCommentaryRequest}
 }`;
 
   try {
@@ -567,14 +573,24 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
     const topY = topPerformers.length > 0 ? topPerformers[0]!.y : undefined;
     const topXNorm = topX === undefined || topX === null ? '' : String(topX).toLowerCase().trim();
     const topYStr = typeof topY === 'number' && !isNaN(topY) ? formatY(topY) : '';
+    // IUX2 · accept multiple renderings of the top value when grounding. A
+    // manager-friendly answer renders a 0–1 rate/share as a percentage
+    // ("74.2%" / "74%"), never the raw "0.742" that formatY emits for such a
+    // column — so a correct, plain-English answer must still count as grounded.
+    // Without this the de-jargoned LLM output is rejected and the statistical
+    // fallback ships for every rate-by-category chart.
+    const topYForms = topYStr ? [topYStr.toLowerCase()] : [];
+    if (typeof topY === 'number' && !isNaN(topY) && topY >= 0 && topY <= 1) {
+      topYForms.push(`${(topY * 100).toFixed(1)}%`, `${Math.round(topY * 100)}%`);
+    }
 
     const candidateLower = candidate.toLowerCase();
     let passes = true;
     const rVal = bothNumeric && !isCorrelationChart ? pearsonR(numericX, numericY) : NaN;
     const rStr = !isNaN(rVal) ? roundSmart(rVal).toLowerCase() : '';
 
-    if (topYStr) {
-      passes = passes && candidateLower.includes(topYStr.toLowerCase());
+    if (topYForms.length > 0) {
+      passes = passes && topYForms.some((f) => candidateLower.includes(f));
     }
     if (isCategoricalX && topXNorm) {
       passes = passes && candidateLower.includes(topXNorm);
