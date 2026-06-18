@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { ChartInsightBody } from "@/components/charts/ChartInsightBody";
 import { CitationHoverCard } from "@/components/CitationHoverCard";
 import { cn } from "@/lib/utils";
 import type { ActiveChartFilters } from "@/lib/chartFilters";
@@ -246,7 +246,7 @@ export function TileInsightFooter({
            */}
           {(() => {
             const footerText = pickFooterText(regen?.entry?.text, insight);
-            if (footerText) return <MarkdownRenderer content={footerText} />;
+            if (footerText) return <ChartInsightBody keyInsight={footerText} />;
             if (emptyState) {
               return (
                 <p className="text-muted-foreground italic">

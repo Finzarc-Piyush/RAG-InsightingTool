@@ -54,6 +54,7 @@ const ChartRenderer = lazy(() => import('./ChartRenderer').then(module => ({ def
 // WC9 · v1→v2 shim sits inside InteractiveChartCard; chat charts route through
 // the toolbar wrapper so users can switch mark / stacked-grouped without a roundtrip.
 import { InteractiveChartCard } from '@/components/charts/InteractiveChartCard';
+import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { logger } from "@/lib/logger";
 
 const PREVIEW_SIGNATURE_SLICE = 3500;
@@ -828,20 +829,15 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                       </Suspense>
                       {/* W12 · per-chart business commentary — 1–2 sentences
                           framing the chart's metric against the FMCG/Marico
-                          domain context. Renders only when the server-side
-                          insight generator produced one (gated on enabled
-                          domain packs + relevant metric). */}
-                      {(chart as { businessCommentary?: string }).businessCommentary && (
-                        <p
-                          className="rounded-brand-md border border-border/40 bg-muted/30 px-3 py-2 text-[12px] italic leading-snug text-foreground/80"
-                          aria-label="Business commentary"
-                        >
-                          <span className="not-italic font-semibold text-muted-foreground mr-1">
-                            Business context:
-                          </span>
-                          {(chart as { businessCommentary?: string }).businessCommentary}
-                        </p>
-                      )}
+                          domain context. Rendered via the shared
+                          <ChartInsightBody> so chat and the dashboard tile
+                          footer show insight prose identically; it renders
+                          nothing when the server produced no commentary. */}
+                      <ChartInsightBody
+                        businessCommentary={
+                          (chart as { businessCommentary?: string }).businessCommentary
+                        }
+                      />
                       {/* W8 · Perplexity-style provenance pill (rows / cols / tools).
                           Renders nothing when the agent didn't emit _agentProvenance. */}
                       <SourcePillRow chart={chart} />
