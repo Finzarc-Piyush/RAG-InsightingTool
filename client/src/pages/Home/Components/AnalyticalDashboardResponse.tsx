@@ -11,6 +11,7 @@ import { MagnitudesRow, type MagnitudeItem } from './MagnitudesRow';
 import { InsightCard } from './InsightCard';
 import { Settle } from '@/components/ui/motion';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { DataPreviewTable } from './DataPreviewTable';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -171,17 +172,29 @@ function ChartCard({
       {/* DR14 · keyInsight footer aligned with DR3's saved-tile redesign
           (top-border + muted surface, `text-sm`, "Insight" label) so the
           chat preview is visually identical to the persisted tile. */}
-      {!suppressKeyInsight && chart.keyInsight && (
-        <div className="border-t border-border/40 bg-muted/30 px-4 py-2 max-h-[200px] overflow-y-auto">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-            <span aria-hidden="true">✦</span>
-            Insight
+      {!suppressKeyInsight &&
+        (chart.keyInsight ||
+          (chart as { businessCommentary?: string }).businessCommentary) && (
+          <div className="border-t border-border/40 bg-muted/30 px-4 py-2 max-h-[200px] overflow-y-auto">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+              <span aria-hidden="true">✦</span>
+              Insight
+            </div>
+            {/* CI9 · per-chart insight prose renders through the shared
+                <ChartInsightBody> (same component as the chat bubble + dashboard
+                tile footer), now also surfacing businessCommentary inline. The
+                suppressKeyInsight anti-plethora gate (invariant #12) is
+                preserved verbatim. */}
+            <div className="mt-1 text-sm leading-relaxed text-foreground/90">
+              <ChartInsightBody
+                keyInsight={chart.keyInsight}
+                businessCommentary={
+                  (chart as { businessCommentary?: string }).businessCommentary
+                }
+              />
+            </div>
           </div>
-          <div className="mt-1 text-sm leading-relaxed text-foreground/90">
-            <MarkdownRenderer content={chart.keyInsight} />
-          </div>
-        </div>
-      )}
+        )}
     </div>
   );
 }

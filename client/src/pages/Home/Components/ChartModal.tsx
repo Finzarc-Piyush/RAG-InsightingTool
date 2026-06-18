@@ -34,7 +34,7 @@ import {
   getDynamicDomain,
   formatAxisLabelFieldBlind as formatAxisLabel,
 } from '@/lib/charts/chartFilterHelpers';
-import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
+import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
@@ -1575,7 +1575,16 @@ export function ChartModal({
                           : '';
                         return (
                           <div className="text-sm leading-relaxed text-blue-800 dark:text-blue-200 break-words">
-                            <MarkdownRenderer content={nextStep ? body : displayKeyInsight} />
+                            {/* CI10 · prose renders through the shared
+                                <ChartInsightBody> (key insight + business
+                                context); the 'Next' follow-up chip below stays
+                                surface chrome, not part of the shared body. */}
+                            <ChartInsightBody
+                              keyInsight={nextStep ? body : displayKeyInsight}
+                              businessCommentary={
+                                (chart as { businessCommentary?: string }).businessCommentary
+                              }
+                            />
                             {nextStep && onSuggestedQuestionClick && composerText ? (
                               <div className="mt-3 flex flex-wrap gap-2">
                                 <Button

@@ -11,6 +11,7 @@ import { Slider } from '@/components/ui/slider';
 import { Filter, X, Settings2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec } from '@/shared/schema';
+import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import {
   CHART_SERIES_COLORS,
   CHART_DUAL_AXIS_STROKES,
@@ -1215,6 +1216,27 @@ export function ChartOnlyModal({
               {renderChart()}
             </div>
           </div>
+          {/* CI7 · the dashboard zoom view now shows the chart's auto-generated
+              insight (same shared <ChartInsightBody> as the tile footer + chat),
+              where it previously showed none. Display-only: the chart is
+              born-insighted server-side, so no on-demand fetch is wired here. */}
+          {(chart.keyInsight ||
+            (chart as { businessCommentary?: string }).businessCommentary) && (
+            <div className="flex-shrink-0 border-t border-border/40 bg-muted/30 px-4 py-3 max-h-[30vh] overflow-y-auto">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                <span aria-hidden="true">✦</span>
+                Insight
+              </div>
+              <div className="mt-1 text-sm leading-relaxed text-foreground/90">
+                <ChartInsightBody
+                  keyInsight={chart.keyInsight}
+                  businessCommentary={
+                    (chart as { businessCommentary?: string }).businessCommentary
+                  }
+                />
+              </div>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
