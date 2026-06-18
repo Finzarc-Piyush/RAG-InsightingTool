@@ -10,7 +10,7 @@ import {
   CONTENT_BOX, MASTER_NAME, PPTX_BRAND, PPTX_FONT, PPTX_TYPE,
   addCard, renderActionTitle, attachSpeakerNotes,
 } from "../master.js";
-import type { PptxPres, PptxRectShape } from "../types.js";
+import type { PptxPres, PptxSlide, PptxRectShape } from "../types.js";
 import type { SlideSpec } from "../../../../shared/exportSchema.js";
 import type { ChartSpec } from "../../../../shared/schema.js";
 
@@ -45,7 +45,7 @@ export interface ChartLayoutDeps {
 
 /** Draw a chart into `box`, or a muted "unavailable" placeholder card. */
 export function placeChartOrPlaceholder(
-  slide: PptxPres extends never ? never : ReturnType<PptxPres["addSlide"]>,
+  slide: PptxSlide,
   chart: ChartSpec | null,
   box: PptxRectShape,
   deps: Pick<ChartLayoutDeps, "renderChartInto">

@@ -117,21 +117,22 @@ export async function renderDeckPlanToPptxBuffer(
     generatedAt: plan.generatedAt,
   });
 
-  // Centralised chart placement: render the rich on-brand SVG by default
-  // (vector, multi-series, branded — what "clean charts" needs); native
-  // pptxgenjs charts only when explicitly opted in via PPTX_NATIVE_CHARTS.
-  // SVG is embedded with `sizing:contain` so it never distorts to the box.
-  const useNativeCharts = process.env.PPTX_NATIVE_CHARTS === "true";
+  // Centralised chart placement. Native pptxgenjs charts are the DEFAULT —
+  // they render in every viewer (PowerPoint / Keynote / Google Slides) and
+  // ship an editable embedded XLSX. The rich SVG renderer is the fallback for
+  // types native can't do (heatmap, dual-axis) and the `PPTX_SVG_CHARTS=true`
+  // opt-in. SVG must be embedded as base64 (pptxgenjs silently drops `;utf8,`).
+  const preferSvg = process.env.PPTX_SVG_CHARTS === "true";
   const renderChartInto = (
     spec: Parameters<typeof renderChartSpecToSvg>[0],
     slide: { addChart: (...args: unknown[]) => unknown; addImage: (opts: Record<string, unknown>) => unknown },
     box: { x: number; y: number; w: number; h: number }
   ): boolean => {
-    if (useNativeCharts && chartSpecToAddChart(spec, slide, box)) return true;
+    if (!preferSvg && chartSpecToAddChart(spec, slide, box)) return true;
     const svg = renderChartSpecToSvg(spec, { width: Math.round(box.w * 200), height: Math.round(box.h * 200) });
     if (!svg) return false;
-    const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-    slide.addImage({ x: box.x, y: box.y, w: box.w, h: box.h, data: dataUrl, sizing: { type: "contain", w: box.w, h: box.h } });
+    const base64 = Buffer.from(svg, "utf8").toString("base64");
+    slide.addImage({ x: box.x, y: box.y, w: box.w, h: box.h, data: `data:image/svg+xml;base64,${base64}` });
     return true;
   };
 

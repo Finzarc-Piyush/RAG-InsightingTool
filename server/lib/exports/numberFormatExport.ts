@@ -79,6 +79,10 @@ export function formatCell(value: unknown, columnName?: string): string {
     const v = Math.abs(value) <= 1 ? value * 100 : value;
     return `${trimZeros(v.toFixed(1))}%`;
   }
+  // Large money/figures read cleaner without cents.
+  if (kind === "currency" && Math.abs(value) >= 1000) {
+    return groupedInt.format(Math.round(value));
+  }
   return Number.isInteger(value) ? groupedInt.format(value) : groupedDec.format(value);
 }
 
