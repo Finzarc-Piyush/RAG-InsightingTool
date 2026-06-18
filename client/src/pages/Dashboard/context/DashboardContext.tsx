@@ -34,7 +34,7 @@ interface DashboardContextType {
   reorderSheets: (dashboardId: string, orderedSheetIds: string[]) => Promise<DashboardData>;
   addSheet: (dashboardId: string, name: string) => Promise<DashboardData>;
   removeSheet: (dashboardId: string, sheetId: string) => Promise<DashboardData>;
-  updateChartInsightOrRecommendation: (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) => Promise<DashboardData>;
+  updateChartInsightOrRecommendation: (dashboardId: string, chartIndex: number, updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" } }, sheetId?: string) => Promise<DashboardData>;
   updateTableCaption: (dashboardId: string, tableIndex: number, updates: { caption?: string }, sheetId?: string) => Promise<DashboardData>;
   patchSheetContent: (
     dashboardId: string,

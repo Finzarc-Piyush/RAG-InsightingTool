@@ -44,7 +44,11 @@ export const dashboardsApi = {
   updateChartInsightOrRecommendation: (
     dashboardId: string,
     chartIndex: number,
-    updates: { keyInsight?: string },
+    updates: {
+      keyInsight?: string;
+      /** Wave S6 · persist the chart's "Sort by" choice. */
+      sort?: { by: "value" | "category"; direction: "asc" | "desc" };
+    },
     sheetId?: string
   ) =>
     api.patch<Dashboard>(`/api/dashboards/${dashboardId}/charts/${chartIndex}`, {

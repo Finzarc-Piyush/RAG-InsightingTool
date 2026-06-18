@@ -301,6 +301,7 @@ export type PivotChartPreviewResult = {
     | "barLayout"
     | "aggregate"
     | "seriesKeys"
+    | "sort"
   >;
 };
 
@@ -420,6 +421,11 @@ export async function tryProcessChartDataFromPivotQuery(
         ...(specForProcess.seriesKeys?.length
           ? { seriesKeys: specForProcess.seriesKeys }
           : {}),
+        // Wave S7 fix · processChartData bakes the resolved sort onto
+        // specForProcess in place; surface it so the pivot-query preview's
+        // returned spec reflects how its rows are actually ordered (matches the
+        // non-pivot branch). Otherwise the toolbar opens on the wrong option.
+        ...(specForProcess.sort ? { sort: specForProcess.sort } : {}),
       },
     };
   } catch (e) {

@@ -15,6 +15,7 @@ import {
 import { logger } from "./logger.js";
 import { KEY_SEP } from "./compositeKey.js";
 import { toNumber } from "./numberCoercion.js";
+import { applyChartSort, resolveSort } from "../shared/chartSort.js";
 
 export type ProcessChartDataOptions = {
   /** Used to pick date bucket (year/month/...) for aggregated line charts and downsampling. */
@@ -748,11 +749,21 @@ export function processChartData(
         );
         result = applyTemporalXAxisLabels(result, xCol, xIsDateCol);
       } else {
-        const sk = chartSpec.seriesKeys || [];
-        const sortKey = sk[0] || yCol;
-        result = [...wideRows].sort(
-          (a, b) => toNumber(b[sortKey]) - toNumber(a[sortKey])
+        // Wave S3 · same authority as single-series. "value" now means the ROW
+        // TOTAL across all seriesKeys (tallest stacked / biggest group first),
+        // fixing the prior first-series-only sort that ignored sortDirection.
+        // seriesKeys (legend/stack order) is never touched — only rows reorder.
+        const sort = resolveSort(
+          { sort: chartSpec.sort, sortDirection: chartSpec.sortDirection },
+          { xValues: wideRows.map((r) => r[xCol]) },
         );
+        chartSpec.sort = sort;
+        result = applyChartSort(wideRows, sort, {
+          xCol,
+          yCol,
+          seriesKeys: chartSpec.seriesKeys,
+          maxRows: chartSpec.maxRows,
+        });
       }
       logger.log(`   Multi-series bar result: ${result.length} groups`);
       return result;
@@ -781,16 +792,22 @@ export function processChartData(
       logger.log(`   X-axis is a profile date column; sorting chronologically (including string dates)`);
       result = aggregated.sort((a, b) => compareValues(a[xCol], b[xCol], true));
     } else {
-      // MW3 · sortDirection "asc" surfaces the WORST performers first (bottom-N
-      // for management-by-exception); "desc" (default) is best-first.
-      const dir = chartSpec.sortDirection === "asc" ? 1 : -1;
-      result = aggregated.sort((a, b) => (toNumber(a[yCol]) - toNumber(b[yCol])) * dir);
-      // MW3 · optional cap (e.g. a "Worst 10" view). Omitted = ALL categories —
-      // the primary breakdowns must never silently truncate a manager's data.
-      const maxRows = chartSpec.maxRows;
-      if (typeof maxRows === "number" && maxRows > 0 && result.length > maxRows) {
-        result = result.slice(0, maxRows);
-      }
+      // Wave S3 · ONE ordering authority. resolveSort honours an explicit
+      // chartSpec.sort, then the legacy sortDirection alias, then the auto
+      // axis-order default (numeric/bucket x like age → 0→100). The resolved
+      // choice is BAKED back onto the spec so it persists across reloads and the
+      // client toolbar opens on the right option. maxRows still selects the
+      // top-N BY VALUE first; applyChartSort then orders that set by the choice.
+      const sort = resolveSort(
+        { sort: chartSpec.sort, sortDirection: chartSpec.sortDirection },
+        { xValues: aggregated.map((r) => r[xCol]) },
+      );
+      chartSpec.sort = sort;
+      result = applyChartSort(aggregated, sort, {
+        xCol,
+        yCol,
+        maxRows: chartSpec.maxRows,
+      });
     }
 
     // Convert Date objects to strings for schema validation

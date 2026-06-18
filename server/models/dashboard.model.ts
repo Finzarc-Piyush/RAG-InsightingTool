@@ -8,6 +8,7 @@ import {
   Dashboard,
   DashboardTableSpec,
   DashboardPivotSpec,
+  type BarSortSpec,
   type CreateReportDashboardRequest,
   type DashboardNarrativeBlock,
   type DashboardSpec,
@@ -801,7 +802,7 @@ export const updateChartInsightOrRecommendation = async (
   username: string,
   chartIndex: number,
   sheetId: string | undefined,
-  updates: { keyInsight?: string }
+  updates: { keyInsight?: string; sort?: BarSortSpec }
 ): Promise<Dashboard> => {
   const normalizedUsername = username.toLowerCase();
   
@@ -865,16 +866,24 @@ export const updateChartInsightOrRecommendation = async (
     // If empty string, set to undefined to remove it
     chart.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
   }
+  // Wave S6 · persist the chart's "Sort by" choice so the dashboard reopens in
+  // the curator's chosen order. Display order itself is applied client-side.
+  if (updates.sort !== undefined) {
+    chart.sort = updates.sort;
+  }
 
   // Also update in the legacy charts array for backward compatibility
   // Find the matching chart in the main charts array
-  const mainChartIndex = dashboard.charts.findIndex(c => 
+  const mainChartIndex = dashboard.charts.findIndex(c =>
     c.title === chart.title && c.type === chart.type
   );
   if (mainChartIndex >= 0) {
     if (updates.keyInsight !== undefined) {
       // If empty string, set to undefined to remove it
       dashboard.charts[mainChartIndex]!.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
+    }
+    if (updates.sort !== undefined) {
+      dashboard.charts[mainChartIndex]!.sort = updates.sort;
     }
   }
 

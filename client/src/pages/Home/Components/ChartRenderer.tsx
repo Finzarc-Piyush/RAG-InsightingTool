@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChartSpec } from '@/shared/schema';
+import { applyChartSort } from '@/shared/chartSort';
 import { ChartModal } from './ChartModal';
 import { ChartOnlyModal } from '@/pages/Dashboard/Components/ChartOnlyModal';
 import { DashboardModal } from './DashboardModal/DashboardModal';
@@ -436,6 +437,17 @@ export function ChartRenderer({
   const compactBarData = useMemo(() => {
     if (!shouldCompactView) return chartData;
     if (typeof x !== 'string') return chartData.slice(0, compactBarLimit);
+    // Wave S6 · when the user explicitly sorted by the CATEGORY axis, the data
+    // is axis-ordered, so a plain head-slice would drop the biggest bars and
+    // keep the smallest categories. Pick the top-N BY VALUE, then restore the
+    // chosen axis order for display (applyChartSort owns both steps).
+    if (chart.sort?.by === "category" && typeof y === "string") {
+      return applyChartSort(
+        chartData as Array<Record<string, unknown>>,
+        chart.sort,
+        { xCol: x, yCol: y, seriesKeys: specSeriesKeys, maxRows: compactBarLimit },
+      ) as typeof chartData;
+    }
     const xLower = x.toLowerCase();
     const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xLower);
     const sample = chartData
@@ -461,7 +473,7 @@ export function ChartRenderer({
       );
     });
     return sorted.slice(0, compactBarLimit);
-  }, [chartData, shouldCompactView, x, compactBarLimit]);
+  }, [chartData, shouldCompactView, x, y, specSeriesKeys, chart.sort, compactBarLimit]);
   const visibleBarData = shouldCompactView ? compactBarData : chartData;
 
   const lineAreaXTicks = useMemo(() => {

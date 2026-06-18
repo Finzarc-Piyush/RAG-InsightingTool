@@ -847,6 +847,23 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                 text: tile.chart.keyInsight ?? '',
               })
             }
+            onSortChange={
+              canEdit
+                ? (sort) => {
+                    void updateChartInsightOrRecommendation(
+                      dashboardId,
+                      tile.index,
+                      { sort },
+                      sheetId,
+                    )
+                      .then(() => onUpdate?.())
+                      .catch(() => {
+                        // Best-effort persistence; the visual re-order already
+                        // applied locally via useChartSort.
+                      });
+                  }
+                : undefined
+            }
             insightRegenCache={insightRegenCache}
             insightHistoryStore={insightHistoryStore}
           />,

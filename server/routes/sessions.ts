@@ -9,6 +9,7 @@ import {
   updateSessionNameEndpoint,
   updateSessionContextEndpoint,
   updateMessagePivotStateEndpoint,
+  updateMessageChartSortEndpoint,
   deleteSessionEndpoint,
   getDataSummaryEndpoint,
   getSessionAnalysisContextEndpoint,
@@ -99,6 +100,13 @@ router.put(
 router.patch(
   '/sessions/:sessionId/messages/:messageTimestamp/pivot-state',
   updateMessagePivotStateEndpoint
+);
+
+// Wave S5 · persist a chart's "Sort by" choice. Body: `{ sort: { by, direction } }`.
+// `chartIndex` is the chart's position in the assistant message's `charts` array.
+router.patch(
+  '/sessions/:sessionId/messages/:messageTimestamp/charts/:chartIndex/sort',
+  updateMessageChartSortEndpoint
 );
 
 // Wave W-UD9 · per-dataset user directives. List + revoke. The directives

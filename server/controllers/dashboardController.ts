@@ -11,6 +11,8 @@ import {
   patchDashboardSheetRequestSchema,
   removeChartFromDashboardRequestSchema,
   dashboardReorderSheetsRequestSchema,
+  barSortSpecSchema,
+  type BarSortSpec,
 } from "../shared/schema.js";
 import {
   addTableToDashboardRequestSchema,
@@ -409,20 +411,29 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
   try {
     const username = requireUsername(req);
     const { dashboardId, chartIndex: chartIndexParam } = req.params as { dashboardId: string; chartIndex: string };
-    const { sheetId, keyInsight } = req.body;
+    const { sheetId, keyInsight, sort } = req.body;
     const chartIndex = parseInt(chartIndexParam, 10);
 
     if (isNaN(chartIndex) || chartIndex < 0) {
       return res.status(400).json({ error: 'Valid chartIndex is required' });
     }
 
-    if (keyInsight === undefined) {
-      return res.status(400).json({ error: 'keyInsight must be provided' });
+    // Wave S6 · this endpoint now also persists a chart's "Sort by" choice, so
+    // accept EITHER a keyInsight or a sort patch (reject only when both absent).
+    if (keyInsight === undefined && sort === undefined) {
+      return res.status(400).json({ error: 'keyInsight or sort must be provided' });
     }
 
-    const updates: { keyInsight?: string } = {};
+    const updates: { keyInsight?: string; sort?: BarSortSpec } = {};
     if (keyInsight !== undefined) {
       updates.keyInsight = typeof keyInsight === 'string' ? keyInsight : undefined;
+    }
+    if (sort !== undefined) {
+      const parsed = barSortSpecSchema.safeParse(sort);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid sort payload', details: parsed.error.flatten() });
+      }
+      updates.sort = parsed.data;
     }
 
     const updated = await updateChartInsightOrRecommendation(

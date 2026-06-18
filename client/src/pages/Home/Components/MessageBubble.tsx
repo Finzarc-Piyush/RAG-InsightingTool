@@ -46,6 +46,7 @@ import {
 import { chatPivotAnchorId } from '@/pages/Home/lib/chatPivotNav';
 import { splitAssistantFollowUpPrompts } from '@/lib/chat/splitAssistantFollowUpPrompts';
 import { dashboardsApi } from '@/lib/api/dashboards';
+import { sessionsApi } from '@/lib/api/sessions';
 import { useLocation } from 'wouter';
 import { userMessageHasReportIntent } from '@/lib/reportIntent';
 
@@ -813,6 +814,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                         <InteractiveChartCard
                           chart={chart}
                           keyInsightSessionId={sessionId ?? null}
+                          onSortPersist={
+                            sessionId && typeof message.timestamp === "number"
+                              ? (sort) => {
+                                  void sessionsApi
+                                    .updateMessageChartSort(
+                                      sessionId,
+                                      message.timestamp as number,
+                                      idx,
+                                      sort,
+                                    )
+                                    .catch(() => {
+                                      // Persistence is best-effort; the visual
+                                      // re-order already applied locally.
+                                    });
+                                }
+                              : undefined
+                          }
                           renderLegacy={(localSpec) => (
                             <ChartRenderer
                               chart={localSpec}

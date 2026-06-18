@@ -159,6 +159,22 @@ export const sessionsApi = {
     ),
 
   /**
+   * Wave S5 · persist a chart's "Sort by" choice on a chat message. The visual
+   * re-order is instant client-side (useChartSort); this is the durability
+   * write so the choice survives a reload.
+   */
+  updateMessageChartSort: (
+    sessionId: string,
+    messageTimestamp: number,
+    chartIndex: number,
+    sort: { by: "value" | "category"; direction: "asc" | "desc" }
+  ) =>
+    api.patch(
+      `/api/sessions/${sessionId}/messages/${messageTimestamp}/charts/${chartIndex}/sort`,
+      { sort }
+    ),
+
+  /**
    * Wave-FA3 · Per-session non-destructive filter overlay. Clearing returns the
    * canonical row count; setting returns the filtered count + 50-row preview.
    */

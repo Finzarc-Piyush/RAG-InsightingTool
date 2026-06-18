@@ -96,6 +96,9 @@ import { PivotFilterChips } from './pivot/PivotFilterChips';
 import { PivotGrid, type PivotShowValuesAsMode } from './pivot/PivotGrid';
 import { ChartRenderer } from './ChartRenderer';
 import { ChartShim } from '@/components/charts/ChartShim';
+import { ChartSortControl } from '@/components/charts/ChartSortControl';
+import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
+import { pivotRowSortToChartSort } from '@/lib/pivot/pivotRowSortToChartSort';
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 
 interface DataPreviewTableProps {
@@ -199,6 +202,10 @@ interface DataPreviewTableProps {
   /** Pivot Builder · close the whole builder (unmount); used by the portal's close affordances. */
   onCloseBuilder?: () => void;
 }
+
+// Wave S7 · stable fallback so the chart-preview useChartSort hook can be
+// called unconditionally even when the preview is a v2 spec or absent.
+const EMPTY_PREVIEW_SORT_SPEC: ChartSpec = { type: "bar", title: "", x: "", y: "", data: [] };
 
 /** Payload emitted by the Pivot Builder's "Add to chat" action. */
 export interface PivotBuilderAddPayload {
@@ -1865,6 +1872,13 @@ export function DataPreviewTable({
         body.seriesColumn = chartSeriesCol;
         body.barLayout = chartBarLayout;
       }
+      // Wave S7 · carry the pivot's row sort into the chart so a pivot sorted by
+      // a row label (or measure) opens its chart in the same order. Bar/column
+      // only — the server applies sort to those (processChartData / S3).
+      if (chartType === 'bar') {
+        const seededSort = pivotRowSortToChartSort(normalizedPivotConfig.rowSort);
+        if (seededSort) body.sort = seededSort;
+      }
       const res = await withInflightLimit('chart-preview', () =>
         api.post<{ chart: ChartSpec }>(
           `/api/sessions/${sessionId}/chart-preview`,
@@ -1903,6 +1917,7 @@ export function DataPreviewTable({
     pivotFilterPayloadForChart.pivotFilterFields,
     pivotFilterPayloadForChart.pivotFilterSelections,
     pivotQueryRequest,
+    normalizedPivotConfig.rowSort,
   ]);
 
   useEffect(() => {
@@ -2141,19 +2156,6 @@ export function DataPreviewTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pivotFlatRows, pivotInsightConfigHash, sessionId, variant, userQuestion]);
 
-  const addChartToChat = useCallback(() => {
-    if (!chartPreview || !onChartAdded) return;
-    // PV3 · v2-only marks aren't supported by the chat ChartSpec contract yet;
-    // the user can still preview them in the pivot card. "Add to chat" stays
-    // disabled for v2 specs (handled at the button level).
-    if (isChartSpecV2(chartPreview)) return;
-    onChartAdded(chartPreview);
-    toast({
-      title: 'Chart added',
-      description: 'Chart was added to this chat.',
-    });
-  }, [chartPreview, onChartAdded, toast]);
-
   const renderFlatAnalysisCell = (col: string, raw: unknown): ReactNode =>
     renderFlatAnalysisCellPure(col, raw, {
       facetMetaByName,
@@ -2172,6 +2174,35 @@ export function DataPreviewTable({
     if (!text) return chartPreview;
     return { ...chartPreview, keyInsight: text };
   }, [chartPreview, chartInsight?.text]);
+
+  // Wave S7 · interactive "Sort by" for the pivot chart preview. The preview is
+  // a v1 ChartSpec built server-side (already auto axis-ordered + seeded from
+  // the pivot's row sort); useChartSort lets the user re-order it instantly
+  // client-side without a re-fetch. A stable fallback keeps the hook order
+  // constant when the preview is a v2 spec or absent.
+  const { sortedSpec: sortedChartPreview, sort: previewSort, setSort: setPreviewSort } =
+    useChartSort(chartPreviewForRender ?? EMPTY_PREVIEW_SORT_SPEC);
+  const previewSpecForRender: ChartSpec | null = chartPreviewForRender
+    ? sortedChartPreview
+    : null;
+  const showPreviewSortControl =
+    !!chartPreviewForRender && chartSupportsSort(chartPreviewForRender);
+
+  const addChartToChat = useCallback(() => {
+    if (!chartPreview || !onChartAdded) return;
+    // PV3 · v2-only marks aren't supported by the chat ChartSpec contract yet;
+    // the user can still preview them in the pivot card. "Add to chat" stays
+    // disabled for v2 specs (handled at the button level).
+    if (isChartSpecV2(chartPreview)) return;
+    // Wave S7 fix · carry the user's interactive Sort-by choice into the added
+    // chart (previewSpecForRender = the re-sorted v1 spec), matching the
+    // dashboard add. Falls back to the raw preview when not a sortable v1.
+    onChartAdded(previewSpecForRender ?? (chartPreview as ChartSpec));
+    toast({
+      title: 'Chart added',
+      description: 'Chart was added to this chat.',
+    });
+  }, [chartPreview, previewSpecForRender, onChartAdded, toast]);
 
   // Early return after all hooks:
   // - For dataset preview, keep the existing "No data to display" behavior.
@@ -2739,6 +2770,15 @@ export function DataPreviewTable({
                   ) : null}
                   {chartPreview ? (
                     <div className="flex flex-1 min-h-0 flex-col">
+                      {showPreviewSortControl ? (
+                        <div className="mb-1.5 flex items-center justify-end">
+                          <ChartSortControl
+                            value={previewSort ?? chartPreviewForRender?.sort}
+                            onChange={setPreviewSort}
+                            axisLabel={chartPreviewForRender?.xLabel || chartPreviewForRender?.x}
+                          />
+                        </div>
+                      ) : null}
                       {/* PremiumChart's `height` prop defaults to 280 px when
                           omitted — that's smaller than this 480 px container, so
                           v2 marks (donut/radar/bubble/waterfall) used to render
@@ -2747,11 +2787,11 @@ export function DataPreviewTable({
                           an explicit height (480 - 16 padding - 2 border ≈ 460)
                           so both paths fill the box. */}
                       <ChartShim
-                        spec={chartPreview}
+                        spec={previewSpecForRender ?? chartPreview}
                         height={460}
                         legacy={() => (
                           <ChartRenderer
-                            chart={chartPreviewForRender ?? (chartPreview as ChartSpec)}
+                            chart={previewSpecForRender ?? (chartPreview as ChartSpec)}
                             index={0}
                             isSingleChart
                             showAddButton
@@ -3136,11 +3176,20 @@ export function DataPreviewTable({
                         ) : null}
                         {chartPreview ? (
                           <div className="flex flex-1 min-h-0 flex-col">
+                            {showPreviewSortControl ? (
+                              <div className="mb-1.5 flex items-center justify-end">
+                                <ChartSortControl
+                                  value={previewSort ?? chartPreviewForRender?.sort}
+                                  onChange={setPreviewSort}
+                                  axisLabel={chartPreviewForRender?.xLabel || chartPreviewForRender?.x}
+                                />
+                              </div>
+                            ) : null}
                             <ChartShim
-                              spec={chartPreview}
+                              spec={previewSpecForRender ?? chartPreview}
                               legacy={() => (
                                 <ChartRenderer
-                                  chart={chartPreviewForRender ?? (chartPreview as ChartSpec)}
+                                  chart={previewSpecForRender ?? (chartPreview as ChartSpec)}
                                   index={0}
                                   isSingleChart
                                   showAddButton

@@ -12,6 +12,12 @@ import { TileHeader } from "./TileHeader";
 import { TileInsightFooter } from "./TileInsightFooter";
 import { ChartTilePivotView } from "@/components/charts/ChartTilePivotView";
 import { chartSpecToPivotConfig } from "@/components/charts/chartSpecToPivotConfig";
+import { ChartSortControl } from "@/components/charts/ChartSortControl";
+import {
+  useChartSort,
+  chartSupportsSort,
+  type ChartSortSpec,
+} from "@/lib/charts/useChartSort";
 import { useChartTileViewMode } from "../hooks/useChartTileViewMode";
 import { DashboardTileProvider } from "../lib/dashboardTileContext";
 import {
@@ -82,6 +88,12 @@ interface ChartTileBodyProps {
   onDeleteClick: () => void;
   onEditInsight: () => void;
   /**
+   * Wave S6 · persist the chart's "Sort by" choice (parent owns sheetId + the
+   * dashboards PATCH + refetch). Omitted → the re-sort is an ephemeral view
+   * change (still instant), e.g. for viewers without edit permission.
+   */
+  onSortChange?: (sort: ChartSortSpec) => void;
+  /**
    * Wave WI2-wire-bind · shared LRU+TTL insight regen cache passed
    * down from `DashboardView`. When omitted the `useInsightRegen`
    * hook falls back to a per-tile cache, which is fine but loses
@@ -107,10 +119,22 @@ export function ChartTileBody({
   onFiltersChange,
   onDeleteClick,
   onEditInsight,
+  onSortChange,
   insightRegenCache,
   insightHistoryStore,
 }: ChartTileBodyProps) {
   const { mode, toggle } = useChartTileViewMode(dashboardId, tile.id);
+  // Wave S6 · interactive sort. Re-orders tile.chart.data instantly client-side;
+  // `onSortChange` (parent) persists the choice to the dashboard.
+  const { sortedSpec, sort, setSort } = useChartSort(tile.chart);
+  const showSortControl = chartSupportsSort(tile.chart);
+  const handleSortChange = useCallback(
+    (next: ChartSortSpec) => {
+      setSort(next);
+      onSortChange?.(next);
+    },
+    [setSort, onSortChange],
+  );
   const [isExpandOpen, setIsExpandOpen] = useState(false);
   const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
   // Force chart view when this chart can't be pivoted, even if a
@@ -276,6 +300,13 @@ export function ChartTileBody({
 
   const headerActions = (
     <div className="flex items-center gap-1">
+      {showSortControl ? (
+        <ChartSortControl
+          value={sort ?? tile.chart.sort}
+          onChange={handleSortChange}
+          axisLabel={tile.chart.xLabel || tile.chart.x}
+        />
+      ) : null}
       {canPivot ? (
         <div className="inline-flex rounded-md border border-border overflow-hidden">
           <button
@@ -353,7 +384,7 @@ export function ChartTileBody({
         <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
           <DashboardTileProvider tileId={tile.id} filters={filters}>
           {effectiveMode === "pivot" ? (
-            <ChartTilePivotView chart={tile.chart} filters={filters} />
+            <ChartTilePivotView chart={sortedSpec} filters={filters} />
           ) : (
             <ErrorBoundary
               fallback={
@@ -373,10 +404,10 @@ export function ChartTileBody({
             >
               <Suspense fallback={<Skeleton className="h-full w-full" />}>
                 <ChartShim
-                  spec={tile.chart}
+                  spec={sortedSpec}
                   legacy={() => (
                     <ChartRenderer
-                      chart={tile.chart}
+                      chart={sortedSpec}
                       index={tile.index}
                       isSingleChart={false}
                       showAddButton={false}
@@ -445,7 +476,7 @@ export function ChartTileBody({
             isOpen={isExpandOpen}
             onClose={() => setIsExpandOpen(false)}
             {...buildExpandModalProps(
-              tile.chart,
+              sortedSpec,
               filters,
               filteredRows as Record<string, unknown>[],
             )}

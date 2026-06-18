@@ -11,6 +11,7 @@ import {
   updateSessionFileName,
   updateSessionPinned,
   updateSessionPermanentContext,
+  mutateChatDocument,
   ChatDocument
 } from "../models/chat.model.js";
 import {
@@ -25,6 +26,7 @@ import { uploadLimits } from "../config/uploadLimits.js";
 import { buildRichDataSummary } from "../lib/richColumnProfile.js";
 import {
   chartSpecSchema,
+  barSortSpecSchema,
   dateTimeColumnPairSchema,
   dimensionHierarchySchema,
   pivotStateSchema,
@@ -866,6 +868,102 @@ export const updateMessagePivotStateEndpoint = async (req: Request, res: Respons
   }
 };
 
+/**
+ * Wave S5 · persist a chart's "Sort by" choice onto an assistant message's
+ * chart. Body: `{ sort: { by, direction } }`. The visual re-order already
+ * happened client-side (useChartSort), so this is a fire-and-forget durability
+ * write that lets the choice survive a reload. Routes through
+ * `mutateChatDocument` (invariant #9: fresh read + ETag precondition + retry)
+ * for multi-instance safety; ownership is pre-checked exactly as the sibling
+ * pivot-state endpoint does.
+ */
+export const updateMessageChartSortEndpoint = async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const ts = Number(req.params.messageTimestamp);
+    const chartIndex = Number(req.params.chartIndex);
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    if (!Number.isFinite(ts)) {
+      return res.status(400).json({ error: "messageTimestamp must be numeric" });
+    }
+    if (!Number.isInteger(chartIndex) || chartIndex < 0) {
+      return res.status(400).json({ error: "chartIndex must be a non-negative integer" });
+    }
+
+    const username = requireUsername(req);
+
+    const parsed = barSortSpecSchema.safeParse(req.body?.sort);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid sort payload",
+        details: parsed.error.flatten(),
+      });
+    }
+    const sort = parsed.data;
+
+    // Ownership gate (mirrors pivot-state): 404 if the session isn't the
+    // caller's. We also resolve the 404 cases (missing message / chart) from
+    // this owned snapshot; the mutate below re-reads FRESH inside the write
+    // lock and defensively no-ops if the target raced away.
+    const owned = await getChatBySessionIdForUser(sessionId, username);
+    if (!owned) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    const ownedMessages = Array.isArray(owned.messages) ? owned.messages : [];
+    const ownedIdx = ownedMessages.findIndex(
+      (m) => m && m.role === "assistant" && m.timestamp === ts
+    );
+    if (ownedIdx < 0) {
+      return res.status(404).json({ error: "Assistant message not found for given timestamp" });
+    }
+    const ownedCharts = Array.isArray(ownedMessages[ownedIdx]!.charts)
+      ? ownedMessages[ownedIdx]!.charts!
+      : [];
+    if (chartIndex >= ownedCharts.length || !ownedCharts[chartIndex]) {
+      return res.status(404).json({ error: "Chart index out of range" });
+    }
+
+    const updated = await mutateChatDocument(sessionId, (doc) => {
+      const messages = Array.isArray(doc.messages) ? doc.messages : [];
+      const idx = messages.findIndex(
+        (m) => m && m.role === "assistant" && m.timestamp === ts
+      );
+      if (idx < 0) return false;
+      const charts = Array.isArray(messages[idx]!.charts) ? messages[idx]!.charts! : [];
+      if (chartIndex >= charts.length || !charts[chartIndex]) return false;
+      const nextCharts = charts.slice();
+      nextCharts[chartIndex] = { ...nextCharts[chartIndex]!, sort };
+      messages[idx] = { ...messages[idx]!, charts: nextCharts };
+      doc.messages = messages;
+      return true;
+    });
+
+    if (!updated) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    return res.json({ ok: true, sort });
+  } catch (err: unknown) {
+    if (err instanceof AuthenticationError) {
+      return res.status(401).json({ error: err.message });
+    }
+    // Mirror the pivot-state endpoint: surface ownership denials as 403, not 500
+    // (getChatBySessionIdForUser throws a statusCode-403 Error for non-collaborators).
+    if (getErrorStatus(err) === 404) {
+      return res.status(404).json({ error: errorMessage(err) });
+    }
+    if (getErrorStatus(err) === 403 || /unauthorized/i.test(errorMessage(err))) {
+      return res.status(403).json({ error: errorMessage(err) });
+    }
+    logger.error("Update message chart sort error:", err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to update chart sort",
+    });
+  }
+};
+
 // Get the rolling session analysis context (lightweight — no messages/charts)
 export const getSessionAnalysisContextEndpoint = async (req: Request, res: Response) => {
   try {
@@ -1064,6 +1162,9 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       y2: body.y2,
       y2Series: body.y2Series,
       y2Label: body.y2Label,
+      // Wave S7 · honour an explicit sort (e.g. seeded from the pivot's row
+      // sort). Absent → processChartData bakes the auto axis-order default.
+      sort: body.sort,
     });
 
     const dataVersion =
@@ -1220,6 +1321,10 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     spec = chartSpecSchema.parse({
       ...spec,
       ...mergedPatches,
+      // Wave S7 · surface the order processChartData baked (auto axis-order for
+      // ordered axes) so the returned preview spec reflects how its data is
+      // actually ordered and the client toolbar opens on the right option.
+      sort: specProcessing.sort ?? spec.sort,
     });
 
     let extra: Partial<ChartSpec> = {};

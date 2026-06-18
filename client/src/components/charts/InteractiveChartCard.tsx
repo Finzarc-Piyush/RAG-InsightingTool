@@ -20,6 +20,16 @@ import { cn } from "@/lib/utils";
 import { ChartShim } from "./ChartShim";
 import { ChartTilePivotView } from "./ChartTilePivotView";
 import { chartSpecToPivotConfig } from "./chartSpecToPivotConfig";
+import { ChartSortControl } from "./ChartSortControl";
+import {
+  useChartSort,
+  chartSupportsSort,
+  type ChartSortSpec,
+} from "@/lib/charts/useChartSort";
+
+// Stable fallback so the useChartSort hook can be called unconditionally even
+// when there is no v1 spec to sort (v2 marks). Module-level → stable identity.
+const EMPTY_SORT_SPEC: ChartSpec = { type: "bar", title: "", x: "", y: "", data: [] };
 
 type SwitchableMark = "bar" | "line" | "area";
 const SWITCHABLE_MARKS: readonly SwitchableMark[] = ["bar", "line", "area"];
@@ -33,6 +43,11 @@ function coerceMarkType(spec: ChartSpec, next: SwitchableMark): ChartSpec {
   const out: ChartSpec = { ...spec, type: next };
   if (next !== "bar") {
     delete out.barLayout;
+    // The "Sort by" control is bar/column-only; carrying a value-sort onto a
+    // line/area would draw its points out of natural (e.g. chronological)
+    // order, and the user can't see/undo it (control hidden for lines). Strip
+    // it on leaving bar, mirroring barLayout.
+    delete out.sort;
   }
   return out;
 }
@@ -97,10 +112,18 @@ export interface InteractiveChartCardProps {
     pivotToggle?: boolean;
     /** W-GMK9 · "Show value labels" checkbox. Defaults visible. */
     dataLabels?: boolean;
+    /** Wave S5 · "Sort by" dropdown. Defaults visible for bar/column charts. */
+    sort?: boolean;
   };
   /** Caller-supplied legacy renderer; receives the locally-mutated spec. */
   renderLegacy: (spec: ChartSpec) => ReactNode;
   className?: string;
+  /**
+   * Wave S5 · invoked when the user changes the "Sort by" dropdown. The visual
+   * re-order is already applied locally; the caller persists the choice (chat →
+   * sessionsApi.updateMessageChartSort). Omitted = ephemeral (no persistence).
+   */
+  onSortPersist?: (sort: ChartSortSpec) => void;
 }
 
 export function InteractiveChartCard({
@@ -109,6 +132,7 @@ export function InteractiveChartCard({
   controls,
   renderLegacy,
   className,
+  onSortPersist,
 }: InteractiveChartCardProps) {
   const showChartType = controls?.chartType !== false;
   const showBarLayout = controls?.barLayout !== false;
@@ -167,8 +191,10 @@ export function InteractiveChartCard({
     const hasDataLabelsSwitch =
       showDataLabelsToggle &&
       ["bar", "line", "area", "scatter", "point"].includes(localV1.type);
-    return hasMarkSwitch || hasLayoutSwitch || hasDataLabelsSwitch;
-  }, [canPivot, localV1, showChartType, showBarLayout, showDataLabelsToggle]);
+    const hasSortControl =
+      controls?.sort !== false && chartSupportsSort(localV1);
+    return hasMarkSwitch || hasLayoutSwitch || hasDataLabelsSwitch || hasSortControl;
+  }, [canPivot, localV1, showChartType, showBarLayout, showDataLabelsToggle, controls?.sort]);
 
   const handleMarkChange = (next: SwitchableMark) => {
     setLocalV1((prev) => (prev ? coerceMarkType(prev, next) : prev));
@@ -187,6 +213,18 @@ export function InteractiveChartCard({
     setLocalV1((prev) => (prev ? { ...prev, dataLabels: next } : prev));
   };
   const currentDataLabels = localV1?.dataLabels !== false; // default true
+
+  // Wave S5 · interactive "Sort by" for bar/column charts. The hook re-orders
+  // the spec's rows instantly client-side; `onSortPersist` (if given) durably
+  // saves the choice. Called unconditionally with a stable fallback so the hook
+  // order is constant across v1/v2 renders.
+  const { sortedSpec, sort, setSort } = useChartSort(localV1 ?? EMPTY_SORT_SPEC);
+  const showSortControl =
+    !!localV1 && controls?.sort !== false && chartSupportsSort(localV1);
+  const handleSortChange = (next: ChartSortSpec) => {
+    setSort(next);
+    onSortPersist?.(next);
+  };
 
   // When the toggle is in pivot view, the chart-type and bar-layout dropdowns
   // are irrelevant (they only mutate chart-rendering choices). Hide them so
@@ -264,6 +302,13 @@ export function InteractiveChartCard({
               </label>
             </div>
           ) : null}
+          {chartControlsVisible && localV1 && showSortControl ? (
+            <ChartSortControl
+              value={sort ?? localV1.sort}
+              onChange={handleSortChange}
+              axisLabel={localV1.xLabel || localV1.x}
+            />
+          ) : null}
           {canPivot ? (
             <div
               className="ml-auto inline-flex rounded-md border border-border overflow-hidden"
@@ -323,9 +368,9 @@ export function InteractiveChartCard({
         </div>
       ) : (
         <ChartShim
-          spec={activeSpec}
+          spec={localV1 ? sortedSpec : activeSpec}
           keyInsightSessionId={keyInsightSessionId}
-          legacy={() => renderLegacy(localV1 ?? (chart as ChartSpec))}
+          legacy={() => renderLegacy(localV1 ? sortedSpec : (chart as ChartSpec))}
         />
       )}
     </div>

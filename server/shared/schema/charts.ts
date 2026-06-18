@@ -87,6 +87,24 @@ export function legacyKeyInsightToInsightSpec(
   return { default: trimmed.slice(0, 500) };
 }
 
+/**
+ * Wave S2 · how a categorical bar/column chart is ordered (the legacy v1
+ * `ChartSpec` row-ordering preference). `by:"value"` orders by the measured
+ * value (sum across series for multi-series); `by:"category"` orders by the
+ * x-axis itself (numeric → 0→100, dates → chronological, buckets → 0-10/10-20…,
+ * else A→Z). This shape MUST stay in lock-step with the `ChartSortSpec`
+ * interface in server/shared/chartSort.ts (linked structurally, not imported,
+ * so the comparator module stays dependency-free).
+ *
+ * NB: distinct from `chartSortSpecSchema` below, which is the ChartSpecV2
+ * encoding-sort grammar (`{field, op, order}`).
+ */
+export const barSortSpecSchema = z.object({
+  by: z.enum(["value", "category"]),
+  direction: z.enum(["asc", "desc"]),
+});
+export type BarSortSpec = z.infer<typeof barSortSpecSchema>;
+
 export const chartSpecSchema = z.object({
   type: chartTypeSchema,
   title: z.string(),
@@ -112,6 +130,15 @@ export const chartSpecSchema = z.object({
    * client renderer's top↔bottom toggle.
    */
   sortDirection: z.enum(["asc", "desc"]).optional(),
+  /**
+   * Wave S2 · user-selectable / server-baked chart ordering. Supersedes the
+   * value-only `sortDirection` (which is kept as a back-compat alias —
+   * `resolveSort` reads `sort ?? sortDirection ?? auto-default`). Newly built
+   * bar/column charts bake their resolved sort here so the choice persists;
+   * pre-existing specs that lack this field render in their saved row order and
+   * are never retroactively reordered. See server/shared/chartSort.ts.
+   */
+  sort: barSortSpecSchema.optional(),
   /**
    * MW3 · optional cap on charted categories (e.g. a "Worst 10" view). Omitted
    * = ALL categories — a manager must be able to reach every record, so the
