@@ -1246,7 +1246,16 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
             />
           </div>
         )}
-        {!isUser && !isDashboardMode && !hasAggPreview && message.insights && message.insights.length > 0 && (
+        {/* W-CW2 · the legacy "Key Insights" card duplicates the structured
+            envelope (its findings / implications / likelyDrivers ARE the
+            insights, and its keyInsight restated the tldr). Suppress it whenever
+            an answerEnvelope is present; keep it only for no-envelope legacy /
+            synthesis-fallback turns. Server W-CW1 also stops seeding keyInsight
+            for enveloped turns — this render gate is the defense-in-depth that
+            also covers already-persisted messages. */}
+        {!isUser && !isDashboardMode && !hasAggPreview &&
+          !(message as Message & { answerEnvelope?: NonNullable<Message['answerEnvelope']> }).answerEnvelope &&
+          message.insights && message.insights.length > 0 && (
           <div className="mt-3">
             <InsightCard insights={message.insights} />
           </div>

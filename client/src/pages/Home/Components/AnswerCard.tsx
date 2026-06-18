@@ -29,8 +29,10 @@ import {
   Sparkles,
   Target,
   ListOrdered,
+  HelpCircle,
 } from "lucide-react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { cleanEvidenceNumbers } from "@/lib/cleanEvidenceNumbers";
 
 interface AnswerCardProps {
   message: Message;
@@ -53,6 +55,17 @@ const CONFIDENCE_TONE: Record<NonNullable<NonNullable<Message["answerEnvelope"]>
   low: "border-border bg-muted/20 text-muted-foreground",
 };
 
+// W-CP1/W-CR1 · the "Why this might be happening" causal lane. The basis chip
+// tells a CXO at a glance how grounded each hedged explanation is, and a standing
+// disclaimer keeps it unmistakably separate from the measured findings.
+const DRIVER_BASIS_LABEL: Record<"data" | "domain" | "general", string> = {
+  data: "from the data",
+  domain: "industry knowledge",
+  general: "general knowledge",
+};
+const LIKELY_DRIVERS_DISCLAIMER =
+  "Plausible explanations — hypotheses, not measured in this data unless marked “from the data”.";
+
 export function AnswerCard({
   message,
   onSuggestedQuestionClick,
@@ -62,6 +75,15 @@ export function AnswerCard({
   const [methodologyOpen, setMethodologyOpen] = useState(false);
 
   if (!env) return null;
+
+  // W-CW2 · the narrator's `body` (supplementaryMarkdown) restates the tldr +
+  // structured findings, so when the envelope carries structured findings the
+  // body is a duplicate paragraph — drop it. Keep it for the degenerate /
+  // synthesis-fallback envelope (no findings), where the body IS the answer and
+  // dropping it would render a blank card. Keys on findings, NOT on envelope
+  // presence (a fallback envelope has no findings but still needs its body).
+  const hasFindings = Boolean(env.findings && env.findings.length > 0);
+  const showBody = Boolean(supplementaryMarkdown?.trim()) && !hasFindings;
 
   // W9 · group recommendations by horizon for the "Do now / This quarter /
   // Strategic" sections. Recommendations without a horizon fall under "Other"
@@ -105,7 +127,7 @@ export function AnswerCard({
           section (icon + name) the way Key Insights is. The narrator's key
           insight is intentionally NOT shown here anymore (it lives once, in
           the Key Insights section), so this block no longer duplicates it. */}
-      {(env.tldr?.trim() || supplementaryMarkdown?.trim()) && (
+      {(env.tldr?.trim() || showBody) && (
         <section aria-label="Highlight summary">
           <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
             <Star className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
@@ -123,9 +145,9 @@ export function AnswerCard({
               </p>
             </div>
           )}
-          {supplementaryMarkdown?.trim() && (
+          {showBody && (
             <div className="mt-3 text-[15px] leading-[24px] text-foreground whitespace-pre-wrap">
-              <MarkdownRenderer content={supplementaryMarkdown} />
+              <MarkdownRenderer content={supplementaryMarkdown!} />
             </div>
           )}
         </section>
@@ -211,13 +233,13 @@ export function AnswerCard({
                       </span>
                       {f.magnitude && (
                         <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                          {f.magnitude}
+                          {cleanEvidenceNumbers(f.magnitude)}
                         </span>
                       )}
                     </div>
                     {f.evidence && (
                       <p className="mt-1 text-[13px] leading-[20px] text-muted-foreground">
-                        {f.evidence}
+                        {cleanEvidenceNumbers(f.evidence)}
                       </p>
                     )}
                   </div>
@@ -225,6 +247,42 @@ export function AnswerCard({
               </li>
             ))}
           </ol>
+        </section>
+      )}
+
+      {env.likelyDrivers && env.likelyDrivers.length > 0 && (
+        <section aria-label="Why this might be happening">
+          <h3 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-1.5">
+            <HelpCircle className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+            Why this might be happening
+          </h3>
+          <p className="mb-2 text-[11px] italic leading-[16px] text-muted-foreground">
+            {LIKELY_DRIVERS_DISCLAIMER}
+          </p>
+          <ul className="space-y-2">
+            {env.likelyDrivers.map((d, i) => (
+              <li
+                key={i}
+                className="rounded-brand-md border border-dashed border-border/70 bg-muted/20 px-4 py-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[13px] leading-[20px] text-foreground">
+                    {d.explanation}
+                  </p>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {DRIVER_BASIS_LABEL[d.basis] ?? d.basis}
+                    </span>
+                    {d.testable && (
+                      <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                        testable here
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

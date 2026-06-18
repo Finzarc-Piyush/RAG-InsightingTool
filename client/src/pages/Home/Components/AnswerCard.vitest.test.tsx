@@ -50,4 +50,88 @@ describe('AnswerCard — Highlight Summary', () => {
     // The findings section still renders independently.
     expect(screen.getByText('A finding')).toBeTruthy();
   });
+
+  // W-CW2 · the narrator body restates tldr + findings. When structured findings
+  // exist, the body paragraph is a duplicate and must be dropped; without
+  // findings (synthesis fallback) the body IS the answer and must be kept.
+  test('drops the body paragraph when structured findings exist', () => {
+    render(
+      <AnswerCard
+        message={msg({
+          tldr: 'Survival was highest in Pclass 1 at 63%.',
+          findings: [{ headline: 'Pclass 1 led at 63%', evidence: 'Grouped results.' }],
+        })}
+        supplementaryMarkdown="Survival rate was 63% in Pclass 1 — a near-verbatim restatement."
+      />
+    );
+    expect(screen.getByText(/Survival was highest/)).toBeTruthy();
+    expect(screen.queryByText(/near-verbatim restatement/)).toBeNull();
+  });
+
+  test('keeps the body paragraph when there are no structured findings (fallback)', () => {
+    render(
+      <AnswerCard
+        message={msg({ tldr: 'A headline.' })}
+        supplementaryMarkdown="This fallback body must still render."
+      />
+    );
+    expect(screen.getByText(/This fallback body must still render/)).toBeTruthy();
+  });
+
+  // W-CP1/W-CR1 · the hedged causal lane renders as a distinct, labeled "Why
+  // this might be happening" section with a standing disclaimer + per-item basis
+  // chip, clearly separate from the measured findings.
+  test('renders the "Why this might be happening" section with basis chips', () => {
+    render(
+      <AnswerCard
+        message={msg({
+          findings: [{ headline: 'Pclass 1 led at 63%', evidence: 'Grouped results.' }],
+          likelyDrivers: [
+            {
+              explanation:
+                'more women survived, consistent with women-and-children-first',
+              basis: 'general',
+              confidence: 'low',
+            },
+            {
+              explanation: 'likely the Sex split explains part of the gap',
+              basis: 'data',
+              confidence: 'high',
+              testable: true,
+            },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText('Why this might be happening')).toBeTruthy();
+    expect(screen.getByText(/women-and-children-first/)).toBeTruthy();
+    expect(screen.getByText('general knowledge')).toBeTruthy();
+    expect(screen.getByText('from the data')).toBeTruthy();
+    expect(screen.getByText('testable here')).toBeTruthy();
+    expect(screen.getByText(/Plausible explanations/)).toBeTruthy();
+  });
+
+  test('omits the "Why" section when there are no drivers', () => {
+    render(<AnswerCard message={msg({ tldr: 'Just a headline.' })} />);
+    expect(screen.queryByText('Why this might be happening')).toBeNull();
+  });
+
+  // W-CW2 · machine-precision decimal leaks in finding evidence/magnitude are
+  // compacted at render so "0.6296296296296297" never reaches the reader.
+  test('compacts raw machine-precision decimals in finding evidence', () => {
+    render(
+      <AnswerCard
+        message={msg({
+          findings: [
+            {
+              headline: 'Pclass 1 survival',
+              evidence: 'Grouped results show survival_rate = 0.6296296296296297.',
+            },
+          ],
+        })}
+      />
+    );
+    expect(screen.getByText(/0\.6296\b/)).toBeTruthy();
+    expect(screen.queryByText(/0\.6296296296296297/)).toBeNull();
+  });
 });

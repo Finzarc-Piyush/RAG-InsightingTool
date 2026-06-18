@@ -62,12 +62,22 @@ export interface SummaryBandAction {
   horizon?: "now" | "this_quarter" | "strategic";
 }
 
+/** W-DX1 · a hedged "why this might be happening" explanation, sourced ONLY from
+ *  the persisted, verifier-passed envelope (the band never re-generates one). */
+export interface SummaryBandDriver {
+  explanation: string;
+  basis: "data" | "domain" | "general";
+  testable?: boolean;
+}
+
 export interface SummaryBandData {
   tldr: string | null;
   magnitudes: MagnitudeItem[];
   findings: SummaryBandFinding[];
   /** IUX3 · top "so what" implications — the decision chain's middle link. */
   implications: SummaryBandImplication[];
+  /** W-DX1 · top hedged "why this might be happening" drivers. */
+  likelyDrivers: SummaryBandDriver[];
   /** IUX3 · top priority actions (recommendations), most-urgent horizon first. */
   priorityActions: SummaryBandAction[];
 }
@@ -75,6 +85,7 @@ export interface SummaryBandData {
 const DEFAULT_MAX_FINDINGS = 3;
 const MAX_MAGNITUDES = 6;
 const MAX_IMPLICATIONS = 2;
+const MAX_DRIVERS = 2;
 const MAX_PRIORITY_ACTIONS = 2;
 const EVIDENCE_SNIPPET_MAX = 160;
 
@@ -103,6 +114,7 @@ export function hasSummaryBandContent(envelope?: DashboardAnswerEnvelope): boole
     (envelope.magnitudes?.length ?? 0) > 0 ||
     (envelope.findings?.length ?? 0) > 0 ||
     (envelope.implications?.length ?? 0) > 0 ||
+    (envelope.likelyDrivers?.length ?? 0) > 0 ||
     (envelope.recommendations?.length ?? 0) > 0
   );
 }
@@ -136,6 +148,18 @@ export function selectSummaryBandData(
     .slice(0, MAX_IMPLICATIONS)
     .map((i) => ({ statement: i.statement.trim(), soWhat: i.soWhat.trim() }));
 
+  // W-DX1 · lift the hedged causal lane straight from the persisted, verified
+  // envelope (no re-generation on the dashboard → no unverified hallucination
+  // channel). Basis/testable are preserved so the band can chip them.
+  const likelyDrivers: SummaryBandDriver[] = (envelope?.likelyDrivers ?? [])
+    .filter((d) => hasText(d?.explanation))
+    .slice(0, MAX_DRIVERS)
+    .map((d) => ({
+      explanation: snippet(d.explanation, EVIDENCE_SNIPPET_MAX),
+      basis: d.basis,
+      ...(d.testable ? { testable: true } : {}),
+    }));
+
   const priorityActions: SummaryBandAction[] = (envelope?.recommendations ?? [])
     .filter((r) => hasText(r?.action))
     .map((r, idx) => ({ r, idx }))
@@ -152,5 +176,5 @@ export function selectSummaryBandData(
       ...(r.horizon ? { horizon: r.horizon } : {}),
     }));
 
-  return { tldr, magnitudes, findings, implications, priorityActions };
+  return { tldr, magnitudes, findings, implications, likelyDrivers, priorityActions };
 }

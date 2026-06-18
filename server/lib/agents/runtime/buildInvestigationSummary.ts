@@ -65,7 +65,15 @@ export function buildInvestigationSummary(
 ): InvestigationSummary | undefined {
   if (!blackboard) return undefined;
 
+  // W-CW1 · drop never-tested (OPEN) hypotheses from the digest. An untested
+  // hypothesis carries no signal for the reader — surfacing "4 OPEN hypotheses"
+  // is exactly the "adds nothing" clutter the investigation summary was accused
+  // of. Only hypotheses the loop actually acted on (confirmed / refuted /
+  // partial) earn a place. When that leaves no hypotheses AND there are no
+  // findings or open questions, the existing all-empty gate below collapses the
+  // whole summary to `undefined`.
   const hypotheses = blackboard.hypotheses
+    .filter((h) => h.status !== "open")
     .slice(0, MAX_HYPOTHESES)
     .map((h) => ({
       text: clip(h.text, MAX_HYPOTHESIS_TEXT),

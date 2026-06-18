@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Compass,
+  HelpCircle,
   ListChecks,
   Sparkles,
 } from "lucide-react";
@@ -39,6 +40,16 @@ const HORIZON_LABEL: Record<"now" | "this_quarter" | "strategic", string> = {
   this_quarter: "This quarter",
   strategic: "Strategic",
 };
+
+// W-DX1 · the hedged causal lane on the dashboard band. Same labels + standing
+// disclaimer as the chat AnswerCard so a CXO reads "why" identically everywhere.
+const DRIVER_BASIS_LABEL: Record<"data" | "domain" | "general", string> = {
+  data: "from the data",
+  domain: "industry knowledge",
+  general: "general knowledge",
+};
+const LIKELY_DRIVERS_DISCLAIMER =
+  "Plausible explanations — hypotheses, not measured in this data unless marked “from the data”.";
 
 function readOpen(dashboardId: string): boolean {
   if (typeof sessionStorage === "undefined") return true;
@@ -87,7 +98,7 @@ export function DashboardSummaryBand({
     });
   }, [dashboardId]);
 
-  const { tldr, magnitudes, findings, implications, priorityActions } =
+  const { tldr, magnitudes, findings, implications, likelyDrivers, priorityActions } =
     selectSummaryBandData(envelope);
   const attention = selectAttentionAreas(attentionAreas);
   if (
@@ -96,6 +107,7 @@ export function DashboardSummaryBand({
     findings.length === 0 &&
     attention.length === 0 &&
     implications.length === 0 &&
+    likelyDrivers.length === 0 &&
     priorityActions.length === 0
   )
     return null;
@@ -219,6 +231,40 @@ export function DashboardSummaryBand({
                         {f.evidence}
                       </p>
                     ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {likelyDrivers.length > 0 ? (
+            <div className="mt-4">
+              <Eyebrow className="mb-1 flex items-center gap-1.5">
+                <HelpCircle className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                Why it might be happening
+              </Eyebrow>
+              <p className="mb-2 text-[11px] italic leading-[15px] text-muted-foreground">
+                {LIKELY_DRIVERS_DISCLAIMER}
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {likelyDrivers.map((d, i) => (
+                  <div
+                    key={`band-driver-${i}`}
+                    className="rounded-brand-sm border border-dashed border-border bg-muted/20 px-3 py-2"
+                  >
+                    <div className="text-sm leading-snug text-foreground">
+                      {d.explanation}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {DRIVER_BASIS_LABEL[d.basis] ?? d.basis}
+                      </span>
+                      {d.testable ? (
+                        <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          testable here
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>

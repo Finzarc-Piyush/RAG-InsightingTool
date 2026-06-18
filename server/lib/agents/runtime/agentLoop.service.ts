@@ -174,6 +174,7 @@ import {
 } from "./budgetOptimizerAdapter.js";
 import { buildSynthesisContext } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
+import { sanitizeLikelyDrivers } from "./verifierCausalCheck.js";
 import { buildAgentInternals } from "./buildAgentInternals.js";
 import { auditMagnitude } from "./magnitudeAudit.js";
 import { detectContradictions } from "./inconsistencyWatcher.js";
@@ -746,7 +747,19 @@ export async function runAgentTurn(
   // mutates blackboard + ctx.analysisBrief in-place, mirroring the
   // per-task post-processing. On any failure it falls back to the
   // per-task path (so the merged option is always strictly safer).
-  if (ctx.mode === "analysis") {
+  // W-CW1 · hypothesis brainstorming is depth-gated. A `minimal` ask (plain
+  // lookup / direct-factual) never tests hypotheses and never gets an
+  // investigation summary, so generating them is wasted LLM work that only
+  // produces OPEN-status clutter. Skip the hypothesis block for minimal, but
+  // still build the analysis brief when warranted — only the merged path hasn't
+  // already built it at the earlier maybeRunAnalysisBrief call (L609), so the
+  // non-merged path needs nothing here. Planner column-resolution is unaffected.
+  // (invariant #12: gate at the call site on ctx.depthBudget; no private regex.)
+  if (ctx.mode === "analysis" && minimalDepth) {
+    if (isMergedPrePlannerEnabled() && shouldBuildAnalysisBrief(ctx)) {
+      await maybeRunAnalysisBrief(ctx, turnId, onLlmCall);
+    }
+  } else if (ctx.mode === "analysis") {
     const briefStepLabel = isMergedPrePlannerEnabled()
       ? "Drafting analysis brief & hypotheses"
       : "Generating hypotheses";
@@ -2496,6 +2509,18 @@ export async function runAgentTurn(
               env.recommendations = narResult.recommendations;
             }
             if (narResult.domainLens) env.domainLens = narResult.domainLens;
+            // W-CP1 · the hedged "Why this might be happening" lane. Sanitize at
+            // emit (drop unhedged / number-bearing drivers, demote falsely
+            // data-grounded ones) so a bad mechanism can never persist even if it
+            // slipped past the model and the verifier. Available at ALL depths —
+            // a minimal lookup still gets a tight causal "why" when one exists.
+            {
+              const drivers = sanitizeLikelyDrivers(
+                narResult.likelyDrivers,
+                ctx.summary.columns.map((c) => c.name)
+              );
+              if (drivers.length) env.likelyDrivers = drivers;
+            }
             // W54 · deterministic recommendations + magnitudes when the
             // run_budget_optimizer tool produced a payload. The numbers must
             // come from the optimizer, not the LLM, so we override.
@@ -2553,6 +2578,15 @@ export async function runAgentTurn(
               synthEnv.recommendations = env.recommendations;
             }
             if (env.domainLens) synthEnv.domainLens = env.domainLens;
+            // W-CP1 · synthesizer-fallback path emits the same sanitized causal
+            // lane so the AnswerCard "Why" section renders identically.
+            {
+              const drivers = sanitizeLikelyDrivers(
+                env.likelyDrivers,
+                ctx.summary.columns.map((c) => c.name)
+              );
+              if (drivers.length) synthEnv.likelyDrivers = drivers;
+            }
             // W54 · same deterministic override as the narrator branch — the
             // synthesizer fallback path also needs optimizer-derived numbers.
             if (isBudgetRedistributeOperationResult(operationResult)) {
@@ -2607,8 +2641,16 @@ export async function runAgentTurn(
           envelopeUnexplained = envUnexplained;
           safeEmit("unexplained", { note: envUnexplained });
         }
-        appendEnvelopeInsight(mergedInsights, envKeyInsight ?? undefined);
-        seededKeyInsightText = envKeyInsight?.trim() || undefined;
+        // W-CW1 · the narrator's keyInsight restates the tldr / implications the
+        // structured envelope already carries, and the "Key Insights" card is
+        // suppressed whenever an answerEnvelope is present (MessageBubble). Only
+        // seed the legacy InsightCard when there is NO envelope (synthesis-
+        // fallback / legacy turns) AND the ask warrants the fuller output — so a
+        // minimal lookup never gets a duplicate headline card.
+        if (!minimalDepth && !envelopeAnswerEnvelope) {
+          appendEnvelopeInsight(mergedInsights, envKeyInsight ?? undefined);
+          seededKeyInsightText = envKeyInsight?.trim() || undefined;
+        }
         appendInterAgentMessage(
           trace,
           {
@@ -2823,6 +2865,14 @@ export async function runAgentTurn(
         if (repaired.recommendations?.length && !minimalDepth)
           envFresh.recommendations = repaired.recommendations;
         if (repaired.domainLens) envFresh.domainLens = repaired.domainLens;
+        // W-CP1 · re-emit the sanitized causal lane on the verifier-revise path.
+        {
+          const drivers = sanitizeLikelyDrivers(
+            repaired.likelyDrivers,
+            ctx.summary.columns.map((c) => c.name)
+          );
+          if (drivers.length) envFresh.likelyDrivers = drivers;
+        }
         if (Object.keys(envFresh).length) envelopeAnswerEnvelope = envFresh;
         if (repaired.magnitudes?.length) envelopeMagnitudes = repaired.magnitudes;
         if (repaired.unexplained) envelopeUnexplained = repaired.unexplained;
@@ -2832,7 +2882,10 @@ export async function runAgentTurn(
         // changes keyInsight must update the entry seeded earlier — otherwise the
         // user sees the STALE pre-repair insight. Replace in place (no duplicate
         // card); append if it wasn't already present.
-        if (repaired.keyInsight?.trim()) {
+        // W-CW1 · mirror the initial seed's gate: only the no-envelope legacy
+        // path shows a "Key Insights" card, so only it needs the repaired
+        // insight kept in sync. Enveloped turns are a no-op here.
+        if (!minimalDepth && !envelopeAnswerEnvelope && repaired.keyInsight?.trim()) {
           const repairedKi = repaired.keyInsight.trim();
           const prevKi = (seededKeyInsightText ?? "").trim();
           const idx = prevKi ? mergedInsights.findIndex((i) => i.text === prevKi) : -1;
@@ -3220,10 +3273,16 @@ export async function runAgentTurn(
         // `chatDocument.sessionAnalysisContext.sessionKnowledge.priorInvestigations`
         // still reflects what the agent knew BEFORE this turn ran (parity with
         // chatStream.service.ts:1500-1503).
-        const dashInvestigationSummary = buildInvestigationSummary(
-          ctx.blackboard,
-          ctx.summary.columns.map((c) => c.name)
-        );
+        // W-CW1 · a minimal-depth ask never tested hypotheses, so an
+        // investigation summary would be pure OPEN-status clutter. Gate it here
+        // (the dashboard mirror) AND at the message-persist site below so both
+        // producer paths inherit the same rule (L-019: gate every path).
+        const dashInvestigationSummary = minimalDepth
+          ? undefined
+          : buildInvestigationSummary(
+              ctx.blackboard,
+              ctx.summary.columns.map((c) => c.name)
+            );
         const dashPriorInvestigations =
           ctx.chatDocument?.sessionAnalysisContext?.sessionKnowledge?.priorInvestigations;
         const spec = await buildDashboardFromTurn({
@@ -3601,6 +3660,11 @@ export async function runAgentTurn(
       // the client can render an "Investigation summary" card. Returns
       // undefined when blackboard has nothing material to show.
       ...((() => {
+        // W-CW1 · minimal asks get no investigation summary (see the dashboard
+        // mirror above). buildInvestigationSummary itself now also drops
+        // OPEN-only digests at source, so even standard/full asks stop showing
+        // "N OPEN hypotheses that add nothing".
+        if (minimalDepth) return {};
         const cols = ctx.summary.columns.map((c) => c.name);
         const summ = buildInvestigationSummary(ctx.blackboard, cols);
         return summ ? { investigationSummary: summ } : {};

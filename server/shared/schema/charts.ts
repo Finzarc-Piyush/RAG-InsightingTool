@@ -1516,6 +1516,54 @@ export type AgentInternals = z.infer<typeof agentInternalsSchema>;
  * order. Caps are loose by design (WTL3) — the deterministic gates
  * enforce *presence*, not length.
  */
+/**
+ * W-SR1 · "Why this might be happening" — the quarantined, hedged causal lane.
+ *
+ * The measured layer (findings / implications / magnitudes) stays strictly
+ * causation-free; plausible MECHANISMS live ONLY here, clearly separated and
+ * labeled, so a reader never mistakes a hedged guess for a measured fact.
+ *
+ *   - `explanation` — the hedged "why" (the contract requires a hedge term and
+ *     forbids a number inside it; the deterministic verifier rail enforces both).
+ *   - `basis` — grounding source: "data" (a real dataset column supports it),
+ *     "domain" (a cited FMCG/Marico pack), or "general" (world knowledge, e.g.
+ *     "women-and-children-first"). `general` is permitted ONLY in this field.
+ *   - `confidence` — clamped to what the basis can support: data→up to high,
+ *     domain→up to medium, general→up to low. The clamp is a structural,
+ *     unbypassable parse-time guard against confidence inflation (it normalizes
+ *     DOWN, never rejects, so a single over-claim never nukes an answer).
+ *   - `testable` — true when the data could (partly) confirm the mechanism.
+ *
+ * One shared definition reused by the narrator, synthesizer-fallback, message,
+ * and dashboard envelopes — so a driver that parses on one parses on all
+ * (no drift; L-019). Optional everywhere → old persisted messages validate.
+ */
+const LIKELY_DRIVER_MAX_CONFIDENCE = {
+  data: "high",
+  domain: "medium",
+  general: "low",
+} as const;
+const LIKELY_DRIVER_CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 } as const;
+
+export const likelyDriverSchema = z
+  .object({
+    explanation: z.string().max(600),
+    basis: z.enum(["data", "domain", "general"]),
+    confidence: z.enum(["low", "medium", "high"]),
+    testable: z.boolean().optional(),
+  })
+  .transform((d) => {
+    const cap = LIKELY_DRIVER_MAX_CONFIDENCE[d.basis];
+    return LIKELY_DRIVER_CONFIDENCE_RANK[d.confidence] >
+      LIKELY_DRIVER_CONFIDENCE_RANK[cap]
+      ? { ...d, confidence: cap }
+      : d;
+  });
+
+export type LikelyDriver = z.infer<typeof likelyDriverSchema>;
+
+export const likelyDriversSchema = z.array(likelyDriverSchema).max(5).optional();
+
 export const messageAnswerEnvelopeSchema = z.object({
   tldr: z.string().max(600).optional(),
   findings: z
@@ -1572,6 +1620,9 @@ export const messageAnswerEnvelopeSchema = z.object({
    * as an italic preamble pill above the body.
    */
   domainLens: z.string().max(2000).optional(),
+  // W-SR1 · the hedged "Why this might be happening" causal lane (see
+  // likelyDriversSchema). Optional → legacy persisted messages validate.
+  likelyDrivers: likelyDriversSchema,
 });
 
 export type MessageAnswerEnvelope = z.infer<typeof messageAnswerEnvelopeSchema>;
@@ -2534,6 +2585,11 @@ export const dashboardAnswerEnvelopeSchema = z.object({
   methodology: z.string().max(3500).optional(),
   caveats: z.array(z.string().max(400)).max(10).optional(),
   domainLens: z.string().max(2000).optional(),
+  // W-SR1 · the hedged causal lane MUST be declared here too — this is a
+  // SEPARATE z.object from messageAnswerEnvelopeSchema and zod strips unknown
+  // keys, so without this the chat→dashboard round-trip would silently lose the
+  // drivers and the dashboard "Why" band (W-DX1) would never populate.
+  likelyDrivers: likelyDriversSchema,
   magnitudes: z
     .array(
       z.object({

@@ -76,7 +76,10 @@ export function InvestigationSummaryCard({
 }: InvestigationSummaryCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   if (!summary) return null;
-  const hyps = summary.hypotheses ?? [];
+  // W-CW2 · defensively drop never-tested (OPEN) hypotheses for already-persisted
+  // messages — the server (W-CW1) now filters them at source, this covers docs
+  // saved before that shipped. An untested hypothesis carries no reader signal.
+  const hyps = (summary.hypotheses ?? []).filter((h) => h.status !== "open");
   const opens = summary.openQuestions ?? [];
   // UX · the raw "Findings" list (often internal tool names like
   // "run_breakdown_ranking:") was removed; only hypotheses + open questions

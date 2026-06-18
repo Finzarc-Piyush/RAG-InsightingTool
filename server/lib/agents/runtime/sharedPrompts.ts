@@ -41,6 +41,39 @@
  */
 
 /**
+ * W-SR2 · CAUSAL_HEDGE_TERMS — the frozen vocabulary that marks a causal
+ * explanation as a HEDGED hypothesis rather than an asserted fact. Every
+ * `likelyDrivers[].explanation` must contain at least one of these (the
+ * deterministic verifierCausalCheck rail enforces it; the answer-envelope
+ * contract instructs the model to use them).
+ *
+ * NOTE: this is a CONTENT vocabulary — it polices the wording of generated
+ * prose. It is NOT a question-intent vocabulary, so it does NOT belong in
+ * queryIntentAuthority and does NOT trip invariant #12 (which forbids private
+ * INTENT regex outside that authority). It never reclassifies a question.
+ */
+export const CAUSAL_HEDGE_TERMS: readonly string[] = Object.freeze([
+  "likely",
+  "may ",
+  "may reflect",
+  "might",
+  "could",
+  "consistent with",
+  "plausibl", // plausible / plausibly
+  "tends to",
+  "tend to",
+  "appears to",
+  "associated with",
+  "one reason",
+  "a likely reason",
+  "probably",
+  "suggests",
+  "thought to",
+  "commonly attributed",
+  "often attributed",
+]);
+
+/**
  * ~520 tokens of universal analyst rules. Safe to prepend to any agent purpose
  * that produces JSON output grounded in tool evidence.
  */
@@ -135,6 +168,29 @@ W8 · Decision-grade extensions — emit only those grounded in the findings:
   domain context. Cite the pack id verbatim when you reference it (e.g.
   "Per \`marico-haircare-portfolio\`, …"). Omit when no domain pack is materially
   relevant. Treat domain packs as orientation only — never invent domain facts.
+- "likelyDrivers": THE ONLY place a plausible CAUSE / MECHANISM may appear — a
+  short "Why this might be happening" list (0–4 entries) that explains WHY the
+  observed pattern might exist. The measured layer (body / findings / implications /
+  magnitudes / methodology) stays strictly factual: it states WHAT the numbers
+  show, NEVER why. Each entry is {explanation, basis, confidence, testable?} under
+  THREE HARD RAILS:
+  • ALWAYS HEDGE — open every \`explanation\` with a hedge ("likely", "consistent
+    with", "one plausible reason", "may reflect", "commonly attributed to"). Never a
+    bare causal verb ("X caused Y"). It is a hypothesis, not a measured fact.
+  • DECLARE GROUNDING via \`basis\` — "data" ONLY when a column in DATA UNDERSTANDING
+    supports the mechanism (name that column in the explanation); "domain" when a
+    cited FMCG/Marico pack supports it; "general" for ordinary world knowledge
+    (e.g. "women-and-children-first"). \`general\` is allowed HERE and nowhere else.
+  • NEVER A NUMBER IN A MECHANISM — explanations are qualitative. Statistics
+    (percentages, decimals, multipliers) belong in findings/magnitudes, never inside
+    a "why". Category labels ("1st-class", "Pclass 3") are fine; fabricated figures
+    are not.
+  Set \`confidence\` honestly: it is capped to the grounding (data→up to high,
+  domain→up to medium, general→up to low — over-claims are normalized down). Set
+  \`testable\` true when the dataset could (partly) confirm the mechanism. Emit an
+  empty array when no credible "why" exists — never pad. This is what lets the
+  answer explain itself ("more women survived, consistent with women-and-children-
+  first") WITHOUT contaminating the measured findings.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
 - "magnitudes": entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent. Emit zero when the answer carries no numeric backbone. When a magnitude comes from a ranked / per-entity finding, the \`label\` MUST name the entity and its metric in the form "EntityName · metric" (e.g. "Arindam Mazumdar · GCPC"), taking the name verbatim from the finding — NEVER a generic ordinal like "Top performer" / "Second-ranked". \`value\` carries the number (e.g. "257").
@@ -172,10 +228,14 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   segment X") without naming the specific dimension, metric, cohort, region, or threshold
   it applies to — a recommendation that could be pasted onto any dataset is decoration,
   not advice.
-- Never speculate about causes the data does not show. The data has the columns
-  listed in DATA UNDERSTANDING — do not invent channel, distribution, brand,
-  competition, customer demographics, supply-chain, or pricing mechanisms unless
-  those columns are in the data.
+- CAUSATION IS SEGREGATED, NOT BANNED. The measured layer (body, findings,
+  implications, magnitudes, methodology) must NOT assert WHY — do not invent
+  channel, distribution, brand, competition, customer-demographic, supply-chain, or
+  pricing mechanisms there unless that column is in DATA UNDERSTANDING. The "why"
+  belongs ONLY in \`likelyDrivers\` (the hedged "Why this might be happening" lane,
+  specified above), where a plausible mechanism — including ordinary world knowledge
+  — is welcome PROVIDED it is hedged, basis-tagged, and number-free. So: explain the
+  likely reason in \`likelyDrivers\`; keep findings to the facts.
 - NEVER META-HEDGE about your own evidence. Do not write caveats like "the
   supplied evidence does not include the full dashboard field list", "the exact
   layout/filter cannot be finalized from this turn", "cannot be stated from the

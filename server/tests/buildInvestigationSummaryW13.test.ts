@@ -101,7 +101,10 @@ describe("W13 · buildInvestigationSummary", () => {
   it("clips overly long hypothesis text and truncates with ellipsis", () => {
     const bb = createBlackboard();
     const long = "a".repeat(400);
-    addHypothesis(bb, long);
+    // W-CW1 · the digest now drops OPEN (never-tested) hypotheses, so resolve
+    // this one first — the clip behaviour applies to the hypotheses that survive.
+    const h = addHypothesis(bb, long);
+    resolveHypothesis(bb, h.id, "partial", "tool:1");
     const out = buildInvestigationSummary(bb);
     assert.ok(out);
     assert.equal(out.hypotheses?.[0].text.length, 280);

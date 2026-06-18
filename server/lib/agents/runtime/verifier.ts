@@ -60,6 +60,7 @@ import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { checkInferredFilterFidelity } from "./verifierHelpers.js";
 import { detectConfidenceOverclaims } from "./verifierConfidenceCheck.js";
+import { detectUnsupportedCausalClaims } from "./verifierCausalCheck.js";
 import type { NarratorOutput } from "./narratorAgent.js";
 export { checkInferredFilterFidelity };
 
@@ -250,6 +251,35 @@ export async function runVerifier(
     }
   }
 
+  // W-SR2 · deterministic causal-claim rail. The hedged "Why" lane
+  // (likelyDrivers) must never let a mechanism masquerade as a fact, carry a
+  // fabricated statistic, or claim false data-grounding. This rail ships BEFORE
+  // the contract opens the speculation permission (W-CP1), so a gate always
+  // exists. Driver-level violations short-circuit to revise_narrative; measured-
+  // layer causal connectives are reported (info) and left to the LLM verifier
+  // below to avoid revise loops on borderline phrasing it can adjudicate.
+  if (params.narratorOutput) {
+    const causal = detectUnsupportedCausalClaims(
+      params.narratorOutput,
+      ctx.summary.columns.map((c) => c.name)
+    );
+    const blocking = causal.flags.filter(
+      (f) => f.severity === "warning" || f.severity === "block"
+    );
+    if (causal.shouldRevise && blocking.length > 0) {
+      return {
+        verdict: VERIFIER_VERDICT.reviseNarrative,
+        issues: blocking.map((f) => ({
+          code: "UNSUPPORTED_CAUSAL_CLAIM",
+          severity: f.severity === "block" ? "high" : "medium",
+          description: f.message,
+          evidenceRefs: [],
+        })),
+        course_correction: VERIFIER_VERDICT.reviseNarrative,
+      };
+    }
+  }
+
   // Catch numerical fabrication (the agent quoted a figure no chart supports).
   // Cheap pure-logic check — fires only when there's actual chart data to
   // anchor against AND multiple unsupported claims (single outliers could be a
@@ -294,7 +324,7 @@ user_visible_note: optional string
 
 If evidence includes output from run_analytical_query (numeric/tabular results), treat those numbers as authoritative over retrieved RAG text snippets when they conflict. Use code NUMERIC_MISMATCH when the candidate contradicts analytical evidence.
 If evidence states zero rows with diagnostic distinct samples, pass verdict "pass" when the candidate explains that outcome and uses those samples (do not force revise_narrative for grounded empty-result explanations).
-When ANALYSIS_BRIEF_JSON is provided, flag UNSUPPORTED_CAUSAL_CLAIM if the candidate states definitive root causes not backed by experimental design; prefer "consistent with" / "largest downward contribution" language aligned with epistemicNotes in the brief.
+CAUSATION IS SEGREGATED. Flag UNSUPPORTED_CAUSAL_CLAIM ONLY for definitive, unhedged causation in the MEASURED layer (body, tldr, findings[], implications[], magnitudes, methodology) — that layer must state WHAT the numbers show, never WHY. The likelyDrivers[] section ("Why this might be happening") is the EXPECTED home for hedged mechanism language and must NOT be flagged when each entry is hedged ("likely" / "consistent with" / "may reflect") and carries a basis tag; basis="general" world knowledge is permitted there and ONLY there. Separately, flag FABRICATED_MECHANISM_NUMBER if any likelyDrivers explanation contains a statistic — numbers belong in findings/magnitudes, never inside a mechanism. Prefer "consistent with" / "largest downward contribution" language aligned with epistemicNotes in the brief.
 
 Phase-1 completeness checks (only when ANALYSIS_BRIEF_JSON.questionShape is set):
 - questionShape="driver_discovery": the candidate should discuss each column in candidateDriverDimensions — at least note whether it was tested. Flag INCOMPLETE_DRIVERS (severity "medium") when one or more candidates are ignored without justification.

@@ -47,6 +47,9 @@
  */
 
 import { z } from "zod";
+// W-SR1 · single shared definition of the hedged "Why this might be happening"
+// causal lane (imported from the schema module directly to avoid a barrel cycle).
+import { likelyDriversSchema } from "../../../shared/schema/charts.js";
 import { completeJson, completeJsonStreaming, isStreamingNarratorEnabled } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE, ANSWER_ENVELOPE_CONTRACT } from "./sharedPrompts.js";
@@ -69,7 +72,9 @@ import type { AgentExecutionContext } from "./types.js";
 
 export { shouldUseNarrator } from "./analyticalBlackboard.js";
 
-const narratorOutputSchema = z.object({
+// Exported so the W-SR1 forward-parity test can pin that a likelyDrivers array
+// which parses on the persisted/dashboard/synthesis schemas also parses here.
+export const narratorOutputSchema = z.object({
   body: z.string(),
   keyInsight: z.string().nullable().optional(),
   // `.optional()` (rather than `.default([])`) avoids a TS input/output type
@@ -132,6 +137,10 @@ const narratorOutputSchema = z.object({
     .optional(),
   // One-paragraph framing of the findings against FMCG/Marico priors.
   domainLens: z.string().max(2000).optional(),
+  // W-SR1 · the hedged "Why this might be happening" causal lane. The narrator
+  // is the primary producer; this is the field the AnswerCard's "Why" section
+  // reads. Empty/omitted when the answer has no plausible mechanism to offer.
+  likelyDrivers: likelyDriversSchema,
 });
 
 export type NarratorOutput = z.infer<typeof narratorOutputSchema>;
@@ -182,6 +191,11 @@ function stripFindingRefs(out: NarratorOutput): NarratorOutput {
     })),
     magnitudes: out.magnitudes?.map((m) => ({ ...m, label: stripRef(m.label) })),
     ctas: out.ctas?.map(stripRef),
+    // W-SR1 · scrub internal [fN] refs from the causal lane's prose too.
+    likelyDrivers: out.likelyDrivers?.map((d) => ({
+      ...d,
+      explanation: stripRef(d.explanation),
+    })),
   };
 }
 
@@ -340,7 +354,17 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
   // hedge into prose for medium / low findings.
   const confidenceBlock = buildNarratorConfidenceBlock(blackboard);
   const confidenceSection = confidenceBlock ? `\n\n${confidenceBlock}` : "";
-  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${bundleSection}${hierarchySection}${repairBlock}`;
+  // W-CP1 · thread the analysis brief's epistemic notes (e.g. "avoid claiming
+  // causation from observational data alone") into the USER message so the
+  // narrator calibrates its likelyDrivers hedging. Kept in the user block (not
+  // the system prompt) so the cacheable system prefix stays byte-stable.
+  const epistemicNotes = ctx.analysisBrief?.epistemicNotes ?? [];
+  const epistemicSection = epistemicNotes.length
+    ? `\n\nEPISTEMIC NOTES (calibrate hedging; the measured layer must stay causation-free, the "why" goes only in likelyDrivers):\n${epistemicNotes
+        .map((n) => `- ${n}`)
+        .join("\n")}`
+    : "";
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${bundleSection}${hierarchySection}${epistemicSection}${repairBlock}`;
 
   // Use the streaming variant when (1) the env flag is on, (2) the caller
   // supplied a streaming hook, AND (3) this is the initial call (not a repair).

@@ -29,6 +29,9 @@
  *   (answerSource tracking, verifier skip) knows what produced the answer.
  */
 import { z } from "zod";
+// W-SR1 · single shared definition of the hedged causal lane, imported directly
+// from the schema module (not the barrel) to stay clear of import cycles.
+import { likelyDriversSchema } from "../../../../shared/schema/charts.js";
 import type { AgentExecutionContext } from "../types.js";
 import {
   buildSynthesisContext,
@@ -87,6 +90,9 @@ export const finalAnswerEnvelopeSchema = z.object({
     .max(12)
     .optional(),
   domainLens: z.string().max(2000).optional(),
+  // W-SR1 · the synthesizer fallback emits the same hedged causal lane as the
+  // narrator, so the AnswerCard renders an identical "Why" section either way.
+  likelyDrivers: likelyDriversSchema,
 });
 
 /**
@@ -116,6 +122,7 @@ export async function synthesizeFinalAnswerEnvelope(
   implications?: z.infer<typeof finalAnswerEnvelopeSchema>["implications"];
   recommendations?: z.infer<typeof finalAnswerEnvelopeSchema>["recommendations"];
   domainLens?: string;
+  likelyDrivers?: z.infer<typeof finalAnswerEnvelopeSchema>["likelyDrivers"];
   source: SynthesisSource;
 }> {
   // W8 · the W7 bundle replaces the previous raw SessionAnalysisContext JSON
@@ -202,7 +209,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
     };
   }
 
-  const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, domainLens } = out.data;
+  const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, domainLens, likelyDrivers } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
   const cleanedMagnitudes =
@@ -228,6 +235,12 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
           .slice(0, 4)
       : undefined;
   const cleanedDomainLens = domainLens?.trim()?.slice(0, 500) || undefined;
+  // W-CP1 · pass the hedged causal lane through (non-empty only); the agent loop
+  // applies the deterministic sanitize uniformly across narrator + synth paths.
+  const cleanedLikelyDrivers =
+    Array.isArray(likelyDrivers) && likelyDrivers.length > 0
+      ? likelyDrivers.filter((d) => d && d.explanation?.trim()).slice(0, 5)
+      : undefined;
   // `body.min(1)` in the schema means `body` is guaranteed non-empty here,
   // but `formatAnswerFromEnvelope` is the same fn used by the narrator
   // elsewhere — keeping the empty-trim guard as a defence costs us nothing
@@ -247,6 +260,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
         ...(cleanedImplications ? { implications: cleanedImplications } : {}),
         ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
         ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
+        ...(cleanedLikelyDrivers ? { likelyDrivers: cleanedLikelyDrivers } : {}),
         source: "narrative_retry",
       };
     }
@@ -273,6 +287,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
     ...(cleanedImplications ? { implications: cleanedImplications } : {}),
     ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
     ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
+    ...(cleanedLikelyDrivers ? { likelyDrivers: cleanedLikelyDrivers } : {}),
     source: "json_envelope",
   };
 }

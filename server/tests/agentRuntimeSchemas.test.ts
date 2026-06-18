@@ -141,12 +141,14 @@ describe("context appendix for reflector / planner", () => {
     assert.ok(s.includes("Sales by region"));
   });
 
-  it("appendixForReflectorPrompt truncates long user notes", () => {
+  it("appendixForReflectorPrompt passes long user notes through IN FULL (no cap — W-UC1)", () => {
+    // W-UC1 removed every cap on user-provided "Give Additional Context"
+    // (`permanentContext`): it must reach the reflector/planner verbatim, not a
+    // shortened slice. `maxUserChars` is retained on the interface but unused.
     const longNote = "x".repeat(5000);
     const ctx = minimalExecCtx({ permanentContext: longNote });
     const a = appendixForReflectorPrompt(ctx);
     assert.ok(a.includes("User-provided notes"));
-    assert.ok(!a.includes("xxxx".repeat(1000)));
-    assert.ok(a.length < longNote.length + 500);
+    assert.ok(a.includes(longNote), "the full user note is present (not truncated)");
   });
 });

@@ -22,6 +22,10 @@ describe("queryIntentAuthority · classifyQueryIntent", () => {
       "Show me the top 5 by compliance visits",
       "Tell me the average for each region",
       "Name the cluster with the most non-compliance visits",
+      // W-CW1 · the exact bug-report query — a grouped breakdown phrased as a
+      // plain "what is" lookup. Pinning it minimal locks in the conciseness fix
+      // (no investigation summary / hypothesis padding for this shape).
+      "What is the survival rate by Pclass?",
     ];
     for (const q of cases) {
       const r = classifyQueryIntent(q);

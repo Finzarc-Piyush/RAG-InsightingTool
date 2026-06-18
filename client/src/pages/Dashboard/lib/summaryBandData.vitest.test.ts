@@ -100,8 +100,35 @@ describe("Wave ES1 · selectSummaryBandData", () => {
       magnitudes: [],
       findings: [],
       implications: [],
+      likelyDrivers: [],
       priorityActions: [],
     });
+  });
+
+  // W-DX1 · the hedged causal lane is lifted straight from the persisted,
+  // verified envelope (capped, blank-filtered, basis/testable preserved).
+  it("lifts likelyDrivers from the envelope, capped at 2", () => {
+    const data = selectSummaryBandData({
+      likelyDrivers: [
+        { explanation: "likely lifeboat access", basis: "general", confidence: "low", testable: false },
+        { explanation: "likely the Sex split", basis: "data", confidence: "high", testable: true },
+        { explanation: "likely fare effects", basis: "domain", confidence: "medium" },
+        { explanation: "   ", basis: "general", confidence: "low" },
+      ],
+    });
+    expect(data.likelyDrivers).toHaveLength(2);
+    expect(data.likelyDrivers[0]).toMatchObject({ basis: "general" });
+    expect(data.likelyDrivers[1]).toMatchObject({ basis: "data", testable: true });
+  });
+});
+
+describe("W-DX1 · hasSummaryBandContent counts likelyDrivers", () => {
+  it("is true when only likelyDrivers are present", () => {
+    expect(
+      hasSummaryBandContent({
+        likelyDrivers: [{ explanation: "likely x", basis: "general", confidence: "low" }],
+      })
+    ).toBe(true);
   });
 });
 
