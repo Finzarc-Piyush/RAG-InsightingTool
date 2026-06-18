@@ -63,3 +63,27 @@ build red.
   facet COLUMN, never a formatted label, and never down-converts a genuine coarse grain.
 - Risk: row-derived span over a clustered sample can under-estimate; bounded to 200 rows
   and harmless for the short-span thresholds. Documented in the wave plan.
+
+## Recent changes
+
+- **2026-06-18 · The columnar ingest path was still STARVING the authority of its candidate
+  list (regression of the very bug this ADR prevents, through a new gap).** The authority is
+  the sole *decider*, but it enumerates candidate time-axes ONLY from `summary.columns`
+  (every caller passes `summary.columns.map(c => c.name)` as `availableColumns`). The
+  in-memory [`createDataSummary`](../../server/lib/fileParser.ts) merges the derived facet
+  columns (`Day · Date`, …) INTO `summary.columns`; the columnar / large-file / metadata-reload
+  [`metadataService.convertToDataSummary`](../../server/lib/metadataService.ts) listed them
+  ONLY in `summary.temporalFacetColumns` and never in `columns`. So on that path the authority
+  saw no `Day · Date` candidate → `bySourceGrain` empty → `source:"none"` → the dashboard
+  sweep fell back to the raw date column, which [`chartGenerator`](../../server/lib/chartGenerator.ts)
+  hard-buckets to Month → **one Month dot for a single month of daily data.** Fix: `convertToDataSummary`
+  now merges the facet column infos into `columns` (unconditionally — the columnar facets are
+  virtual, computed inline via `facetColumnInlineDuckDbExpr`, so always "available"), making the
+  two ingest paths byte-equivalent for facet enumeration. Tested by
+  [`convertToDataSummaryFacetColumns.test.ts`](../../server/tests/convertToDataSummaryFacetColumns.test.ts).
+- **Companion hardening in the authority:** `bucketCount` no longer treats a materialized count
+  of `0` (facet NAME present but values all-null on the sampled rows — e.g. a virtual columnar
+  facet) as authoritative; it falls through to the span-derived count when a real date span
+  exists, so a present-but-unmaterialized daily facet plus a 29-day span still resolves to Day.
+  The L-007 all-null-coarse-grain guard is preserved because a label-only column (quarterly
+  `Period`) yields no parseable span, so the fallthrough never fires there.
