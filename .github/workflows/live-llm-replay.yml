@@ -91,7 +91,7 @@ jobs:
 
       - name: Upload recordings artifact (recording mode only)
         if: ${{ github.event.inputs.recording_mode == 'true' && always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: live-llm-recordings-${{ github.run_id }}
           path: server/tests/fixtures/golden-replay/*.recorded.json
