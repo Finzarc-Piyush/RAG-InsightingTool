@@ -148,10 +148,12 @@ describe("WI2-wire · TileInsightFooter regen surface", () => {
   it("regenerated entry text takes precedence over the static keyInsight", () => {
     // The footer prose comes from `pickFooterText(regen?.entry?.text, insight)`
     // (a fresh regen entry wins over the static keyInsight — see
-    // insightFooterState.pickFooterText) and renders via MarkdownRenderer, so
-    // the static prose stays visible until the first regen lands.
+    // insightFooterState.pickFooterText) and renders via the shared
+    // <ChartInsightBody> (Wave CI4 — which itself uses MarkdownRenderer
+    // internally, so inline citation hover-cards still flow through), so the
+    // static prose stays visible until the first regen lands.
     assert.match(footerSrc, /pickFooterText\(regen\?\.entry\?\.text, insight\)/);
-    assert.match(footerSrc, /<MarkdownRenderer content=\{footerText\} \/>/);
+    assert.match(footerSrc, /<ChartInsightBody[\s\S]*?keyInsight=\{footerText\}/);
   });
 
   it("Re-explain button renders only when `regen` is provided", () => {
