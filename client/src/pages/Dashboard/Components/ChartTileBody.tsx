@@ -412,6 +412,9 @@ export function ChartTileBody({
          */}
         <TileInsightFooter
           insight={tile.chart.keyInsight ?? ""}
+          businessCommentary={
+            (tile.chart as { businessCommentary?: string }).businessCommentary
+          }
           emptyState={
             resolveInsightFooterMode(
               tile.chart.keyInsight,

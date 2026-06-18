@@ -133,6 +133,13 @@ export interface TileInsightFooterRegenProps {
 interface TileInsightFooterProps {
   insight: string;
   /**
+   * Wave CI5 · optional 1–2 sentence domain framing (W12 businessCommentary).
+   * Rendered via the shared <ChartInsightBody> beneath the key insight, so a
+   * dashboard tile shows the same full insight (prose + business context) a
+   * chat chart does. Omitted/empty → nothing renders.
+   */
+  businessCommentary?: string;
+  /**
    * Wave Z3 · when true AND there's no insight/regen text yet, the body shows
    * a muted "no insight yet" line + the regen button relabelled "Generate
    * insight". Lets the footer always render (so the collapsible chrome is
@@ -170,6 +177,7 @@ interface TileInsightFooterProps {
 
 export function TileInsightFooter({
   insight,
+  businessCommentary,
   emptyState = false,
   dashboardId,
   tileId,
@@ -246,7 +254,14 @@ export function TileInsightFooter({
            */}
           {(() => {
             const footerText = pickFooterText(regen?.entry?.text, insight);
-            if (footerText) return <ChartInsightBody keyInsight={footerText} />;
+            if (footerText || businessCommentary) {
+              return (
+                <ChartInsightBody
+                  keyInsight={footerText}
+                  businessCommentary={businessCommentary}
+                />
+              );
+            }
             if (emptyState) {
               return (
                 <p className="text-muted-foreground italic">
