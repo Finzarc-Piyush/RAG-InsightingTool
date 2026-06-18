@@ -21,6 +21,8 @@
  */
 import * as echarts from "echarts";
 import type { ChartSpec } from "../../shared/schema.js";
+import { isChartSpecV2 } from "../../shared/schema.js";
+import { agentLog } from "../agents/runtime/agentLogger.js";
 import { toFiniteNumber } from "../numberCoercion.js";
 import { cartesianSeries, scatterSeries, pivotSeries } from "./chartSpecSeries.js";
 import { formatPeriodKeyForDisplay } from "../dateUtils.js";
@@ -60,6 +62,18 @@ export function renderChartSpecToSvg(
 ): string | null {
   const width = opts.width ?? 1024;
   const height = opts.height ?? 576;
+  // Wave V0 · this renderer is v1-only. A v2 ChartSpecV2 (e.g. a converted or
+  // natively-v2 chart that reaches a persisted `charts` array) would otherwise
+  // fall through to a silent null → an INVISIBLE gap in a shared PPTX/PDF.
+  // Make it loud + visible: log and emit a placeholder rather than nothing.
+  // (The real v2→export adapter is a later wave; this is the safety net.)
+  if (isChartSpecV2(spec)) {
+    agentLog("chartSsr.v2SpecUnsupported", {
+      mark: String((spec as { mark?: unknown }).mark ?? ""),
+      title: (spec as { config?: { title?: { text?: string } } }).config?.title?.text,
+    });
+    return placeholderSvg(width, height);
+  }
   const option = chartSpecToEchartsOption(spec, opts);
   if (!option) return null;
   const chart = echarts.init(null, null, { renderer: "svg", ssr: true, width, height });
@@ -79,6 +93,12 @@ export function chartSpecToEchartsOption(
   spec: ChartSpec,
   opts: RenderChartSvgOptions = {}
 ): EchartsLikeOption | null {
+  // Wave V0 · v1-only. v2 specs have no `.type` and would hit the `default`
+  // branch silently; surface it explicitly so the drop is observable.
+  if (isChartSpecV2(spec)) {
+    agentLog("chartSsr.v2SpecUnsupported", { mark: String((spec as { mark?: unknown }).mark ?? "") });
+    return null;
+  }
   const data = spec.data ?? [];
   if (data.length === 0) return null;
   const showTitle = opts.suppressTitle === false;
@@ -99,6 +119,28 @@ export function chartSpecToEchartsOption(
       return null;
     }
   }
+}
+
+/**
+ * Wave V0 · a visible, on-brand "unavailable in this format" tile, drawn when a
+ * chart can't be rendered for export (currently: a v2 spec). Beats an invisible
+ * gap on a slide a manager is presenting from.
+ */
+function placeholderSvg(width: number, height: number): string {
+  const cx = width / 2;
+  const cy = height / 2;
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
+    `viewBox="0 0 ${width} ${height}">` +
+    `<rect x="1" y="1" width="${width - 2}" height="${height - 2}" rx="12" ` +
+    `fill="${EXPORT_BRAND.background}" stroke="${EXPORT_BRAND.border}" stroke-width="1.5" ` +
+    `stroke-dasharray="6 5"/>` +
+    `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" ` +
+    `font-family="${FONT_FAMILY}" font-size="16" font-weight="600" ` +
+    `fill="${EXPORT_BRAND.inkSoft}">${esc("Chart not available in this export format")}</text>` +
+    `</svg>`
+  );
 }
 
 type DataRow = Record<string, string | number | null>;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { convertV1ToV2 } from "./v1ToV2";
+import { applyTransforms } from "./dataEngine";
+import { resolveBarEncoding, distinctOrdered } from "./encodingResolver";
 import type { ChartSpec } from "@/shared/schema";
 
 function v1(spec: Partial<ChartSpec>): ChartSpec {
@@ -186,5 +188,72 @@ describe("v1ToV2 · Fix-1 parity (heatmap value, barLayout, seriesKeys)", () => 
   it("clean spec produces no warnings", () => {
     const r = convertV1ToV2(v1({ type: "bar", x: "Region", y: "Revenue" }));
     expect(r.warnings).toEqual([]);
+  });
+});
+
+describe("v1ToV2 · Wave V3 — wide-format multi-series fold (C1 fix)", () => {
+  // Mirrors processChartData's multi-series bar output: WIDE rows (series as
+  // columns = seriesKeys), seriesColumn set, y = the measure name.
+  const wide = (): ChartSpec =>
+    v1({
+      type: "bar",
+      x: "Age",
+      y: "N",
+      seriesColumn: "Gender",
+      seriesKeys: ["M", "F"],
+      data: [
+        { Age: "5", M: 2, F: 3 },
+        { Age: "10", M: 7, F: 1 },
+      ],
+    } as Partial<ChartSpec>);
+
+  it("emits a fold transform folding the seriesKeys into (seriesColumn, y)", () => {
+    const r = convertV1ToV2(wide());
+    const t = r.spec.transform?.[0] as { type: string; fields: string[]; as: [string, string] };
+    expect(t?.type).toBe("fold");
+    expect(t.fields).toEqual(["M", "F"]);
+    expect(t.as).toEqual(["Gender", "N"]);
+  });
+
+  it("routes color to the folded key field so v2 renders N series", () => {
+    const r = convertV1ToV2(wide());
+    expect(r.spec.encoding.color?.field).toBe("Gender");
+    expect(r.spec.encoding.y?.field).toBe("N");
+  });
+
+  it("END-TO-END: folded rows + color yield 2 distinct series (no renderer change)", () => {
+    const r = convertV1ToV2(wide());
+    const rows = (r.spec.source as { rows: Array<Record<string, unknown>> }).rows;
+    const long = applyTransforms(rows, r.spec.transform);
+    expect(long.length).toBe(4); // 2 categories × 2 series
+    const enc = resolveBarEncoding(r.spec);
+    expect(enc.color).toBeTruthy();
+    expect(distinctOrdered(long, enc.color!.accessor)).toEqual(["M", "F"]); // seriesKeys order
+  });
+
+  it("does NOT fold long-format data (seriesKeys not present as columns)", () => {
+    const r = convertV1ToV2(
+      v1({
+        type: "bar",
+        x: "Age",
+        y: "N",
+        seriesColumn: "Gender",
+        seriesKeys: ["M", "F"],
+        data: [
+          { Age: "5", Gender: "M", N: 2 },
+          { Age: "5", Gender: "F", N: 3 },
+        ],
+      } as Partial<ChartSpec>),
+    );
+    expect(r.spec.transform).toBeUndefined();
+    expect(r.spec.encoding.color?.field).toBe("Gender"); // long path unchanged
+  });
+
+  it("KNOWN LOSSES (future waves): y2Series + maxRows still drop", () => {
+    const r = convertV1ToV2(
+      v1({ type: "bar", y2Series: ["m"], maxRows: 10 } as Partial<ChartSpec>),
+    );
+    expect(r.warnings.join(" | ")).toMatch(/y2Series/); // V4
+    expect((r.spec.config as { maxRows?: number }).maxRows).toBeUndefined(); // V5
   });
 });

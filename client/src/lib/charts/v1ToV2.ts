@@ -15,10 +15,15 @@
  *        zLabel,xDomain,yDomain,data,_agentProvenance,
  *        _agentEvidenceRef,_agentTurnId} → v2 equivalents
  *
- * Fields that don't have a clean v2 home yet (barLayout, seriesKeys,
- * y2Series, trendLine, _useAnalyticalDataOnly) are preserved on a
- * `_v1Legacy` escape hatch so renderers can still read them. They'll
- * graduate to first-class encodings or transforms in subsequent waves.
+ * Field handling (no `_v1Legacy` escape hatch — that was never written):
+ *   - barLayout      → config.barLayout (first-class both sides).
+ *   - seriesKeys     → Wave V3: when the data is WIDE (series live as columns),
+ *                      emitted as a `fold` transform + a color channel so v2
+ *                      renders N series. Long-format seriesColumn data needs no
+ *                      fold (color points straight at the seriesColumn).
+ *   - y2Series       → DROPPED today (warned); v2 multi-y2 pending (Wave V4).
+ *   - trendLine      → DROPPED today (warned); v2 'trend' layer pending.
+ *   - maxRows        → DROPPED today; v2 config.maxRows pending (Wave V5).
  */
 
 import type {
@@ -161,17 +166,45 @@ export function convertV1ToV2(v1: ChartSpec): V2ConversionResult {
     }
   }
 
+  // Wave V3 (C1 fix) · WIDE-format multi-series. processChartData pivots a
+  // multi-series bar/line into WIDE rows whose series live as COLUMNS (the
+  // seriesKeys), not as a long seriesColumn value. The v1 color channel points
+  // at seriesColumn, but those wide rows have no such column → every accessor
+  // returns undefined → the chart silently collapses to ONE series. Fold the
+  // seriesKeys columns back into (key, value) so the existing v2 color-grouping
+  // path lights up N series with ZERO renderer change. Long-format data (series
+  // already in a seriesColumn) has the seriesKeys NOT present as columns → no
+  // fold; the seriesColumn color path below handles it unchanged.
+  const firstRow = (v1.data?.[0] ?? undefined) as Record<string, unknown> | undefined;
+  // Only fold when we can SEE the series as columns in real data — i.e. the
+  // rows actually carry the seriesKeys. No data, or long-format rows (series in
+  // a seriesColumn value, keys NOT present as columns) → no fold, keep the
+  // historical seriesColumn color path.
+  const isWideMultiSeries =
+    finalMark !== "rect" && // heatmap value lives on z, never on seriesKeys
+    !!v1.seriesKeys?.length &&
+    !!firstRow &&
+    v1.seriesKeys!.some((k) => k in firstRow);
+  const foldKeyField = v1.seriesColumn ?? "series";
+  const foldTransform: NonNullable<ChartSpecV2["transform"]> | undefined =
+    isWideMultiSeries
+      ? [{ type: "fold", fields: v1.seriesKeys!, as: [foldKeyField, v1.y] }]
+      : undefined;
+
   // seriesColumn → color (qualitative). For heatmap, the heatmap value
   // channel above takes precedence (a v1 heatmap with seriesColumn is
-  // rare but possible — drop the seriesColumn in that case).
+  // rare but possible — drop the seriesColumn in that case). For wide
+  // multi-series, color keys off the FOLDED key field.
   const color: ChartEncodingChannel | undefined = heatmapValueChannel
     ? heatmapValueChannel
-    : v1.seriesColumn
-      ? {
-          field: v1.seriesColumn,
-          type: "n",
-        }
-      : undefined;
+    : isWideMultiSeries
+      ? { field: foldKeyField, type: "n" }
+      : v1.seriesColumn
+        ? {
+            field: v1.seriesColumn,
+            type: "n",
+          }
+        : undefined;
 
   // y2 → second positional encoding
   const y2 = v1.y2
@@ -182,23 +215,22 @@ export function convertV1ToV2(v1: ChartSpec): V2ConversionResult {
   // this session). No data loss anymore — drop the warning.
   const barLayout = v1.barLayout;
 
-  // Forward seriesKeys onto color.sort so v2 multi-series renders in v1
-  // order. Schema's sortSpec accepts the categorical-order pattern via
-  // a custom field; we use the simpler `{ field, order }` shape here
-  // and let renderers respect or ignore it.
-  if (v1.seriesKeys?.length && color) {
+  // Long-format seriesColumn data: nudge color order so v2 multi-series renders
+  // in a stable order. WIDE multi-series is skipped — the fold emits rows in
+  // seriesKeys order and `distinctOrdered` preserves first-seen, so the legend
+  // already follows the canonical seriesKeys order; an ascending re-sort would
+  // scramble it.
+  if (v1.seriesKeys?.length && color && !isWideMultiSeries) {
     (color as ChartEncodingChannel).sort = {
       field: color.field,
       order: "ascending",
     } as ChartEncodingChannel["sort"];
   }
   if (v1.y2Series?.length) {
-    warnings.push(`y2Series preserved on _v1Legacy; v2 multi-y2 pending`);
+    warnings.push(`y2Series dropped; v2 multi-y2 pending (Wave V4)`);
   }
   if (v1.trendLine?.length) {
-    warnings.push(
-      `trendLine preserved on _v1Legacy; v2 will use 'trend' layer instead`,
-    );
+    warnings.push(`trendLine dropped; v2 'trend' layer pending`);
   }
 
   // Forward server-attached auto-layers (WC7) into v2.layers.
@@ -221,6 +253,7 @@ export function convertV1ToV2(v1: ChartSpec): V2ConversionResult {
     source: v1.data
       ? { kind: "inline", rows: v1.data as Record<string, unknown>[] as never }
       : { kind: "inline", rows: [] },
+    ...(foldTransform ? { transform: foldTransform } : {}),
     ...(layersOut?.length ? { layers: layersOut } : {}),
     config: {
       ...(v1.title
