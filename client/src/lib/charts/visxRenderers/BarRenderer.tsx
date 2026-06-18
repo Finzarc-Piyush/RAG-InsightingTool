@@ -62,7 +62,7 @@ import {
 } from "@/lib/charts/format";
 import { filterCollidingRects } from "@/lib/charts/labelCollision";
 import {
-  MAX_X_AXIS_LABELS,
+  maxXAxisLabels,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { resolveReferenceLines } from "@/lib/charts/layers";
@@ -210,14 +210,28 @@ function BarRendererImpl({
     () => distinctOrdered(data, enc.x.accessor),
     [data, enc.x],
   );
-  const xCategoryTicks = useMemo(
-    () => pickEvenlySpacedTicks(xValues, MAX_X_AXIS_LABELS),
-    [xValues],
-  );
   const orientation = pickOrientation(spec.config?.barOrientation, xValues);
   const MARGIN = orientation === "vertical" ? MARGIN_V : MARGIN_H;
   const innerWidth = Math.max(0, width - MARGIN.left - MARGIN.right);
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
+  // Width-aware category-label budget (no fixed cap). Categories sit on the X
+  // axis for vertical bars (horizontal labels — budget driven by label text
+  // width) and the Y axis for horizontal bars (labels stacked vertically —
+  // budget driven by line height, modeled as a 90° rotation), so size to
+  // whichever extent carries the labels.
+  const xCategoryTicks = useMemo(
+    () =>
+      pickEvenlySpacedTicks(
+        xValues,
+        maxXAxisLabels({
+          axisWidthPx: orientation === "vertical" ? innerWidth : innerHeight,
+          labels: xValues,
+          fontSizePx: 11,
+          rotationDeg: orientation === "vertical" ? 0 : 90,
+        }),
+      ),
+    [xValues, orientation, innerWidth, innerHeight],
+  );
   const grid = useChartGrid();
   // WD2-wiring-bar · when this bar chart renders inside a dashboard tile,
   // clicking a bar mark also dispatches a CROSS_FILTER_EVENT carrying

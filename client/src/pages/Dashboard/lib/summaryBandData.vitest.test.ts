@@ -44,16 +44,64 @@ describe("Wave ES1 · selectSummaryBandData", () => {
     expect(data.magnitudes[0].confidence).toBe("high");
   });
 
-  it("caps findings to maxFindings and carries the magnitude pill", () => {
+  it("caps findings to maxFindings and carries the magnitude pill + evidence snippet", () => {
     const data = selectSummaryBandData(envelope, 3);
     expect(data.findings).toHaveLength(3);
-    expect(data.findings[0]).toEqual({ headline: "Cluster 2 WEST lags", magnitude: "16%" });
+    expect(data.findings[0]).toEqual({
+      headline: "Cluster 2 WEST lags",
+      magnitude: "16%",
+      evidence: "16% vs 26% leader",
+    });
     expect(data.findings[1].magnitude).toBeUndefined();
+  });
+
+  it("truncates a long evidence snippet with an ellipsis and collapses whitespace", () => {
+    const long = "x".repeat(400);
+    const data = selectSummaryBandData({ findings: [{ headline: "h", evidence: long }] });
+    expect(data.findings[0].evidence!.length).toBeLessThanOrEqual(160);
+    expect(data.findings[0].evidence!.endsWith("…")).toBe(true);
+  });
+
+  it("surfaces top implications (so-what) capped at 2", () => {
+    const data = selectSummaryBandData({
+      implications: [
+        { statement: "S1", soWhat: "metro share at risk" },
+        { statement: "S2", soWhat: "margin exposure in East" },
+        { statement: "S3", soWhat: "ignored — over cap" },
+        { statement: "", soWhat: "dropped — blank statement" },
+      ],
+    });
+    expect(data.implications).toEqual([
+      { statement: "S1", soWhat: "metro share at risk" },
+      { statement: "S2", soWhat: "margin exposure in East" },
+    ]);
+  });
+
+  it("orders priority actions by horizon (now first) and carries expectedImpact", () => {
+    const data = selectSummaryBandData({
+      recommendations: [
+        { action: "Strategic rebrand", rationale: "r", horizon: "strategic" },
+        { action: "Audit metro pricing", rationale: "r", horizon: "now", expectedImpact: "recover ~2pp" },
+        { action: "Shift Q-spend East", rationale: "r", horizon: "this_quarter" },
+      ],
+    });
+    // now → this_quarter wins the 2 slots; strategic drops off.
+    expect(data.priorityActions.map((a) => a.action)).toEqual([
+      "Audit metro pricing",
+      "Shift Q-spend East",
+    ]);
+    expect(data.priorityActions[0].expectedImpact).toBe("recover ~2pp");
   });
 
   it("returns empty structures for an empty envelope", () => {
     const data = selectSummaryBandData({});
-    expect(data).toEqual({ tldr: null, magnitudes: [], findings: [] });
+    expect(data).toEqual({
+      tldr: null,
+      magnitudes: [],
+      findings: [],
+      implications: [],
+      priorityActions: [],
+    });
   });
 });
 

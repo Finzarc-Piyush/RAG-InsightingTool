@@ -287,6 +287,15 @@ export function AnswerCard({
                         <li key={i} className="text-[13px] leading-[20px] text-foreground">
                           <span className="font-medium">{r.action}</span>
                           <span className="ml-1 text-muted-foreground">— {r.rationale}</span>
+                          {r.expectedImpact ? (
+                            <span className="ml-1 text-muted-foreground">
+                              {" "}
+                              <span className="font-medium text-foreground">
+                                Expected impact:
+                              </span>{" "}
+                              {r.expectedImpact}
+                            </span>
+                          ) : null}
                           {/* W44 · "Try this" button. Only renders when
                               `onSuggestedQuestionClick` is wired (matches
                               the existing `nextSteps` pattern). Click

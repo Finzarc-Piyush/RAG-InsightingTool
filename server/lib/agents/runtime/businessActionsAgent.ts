@@ -99,7 +99,7 @@ ACTION CONTRACT — each item must:
 - have a RATIONALE that ties the action to a specific FINDING or MAGNITUDE from the envelope, citing it inline (e.g. "Q4 share fell 4.2pp vs Q3 (finding 2)"). NEVER invent numbers or mention metrics not in the envelope.
 - specify a HORIZON: "now" (this week), "this_quarter", or "strategic" (>1 quarter / requires investment / org change).
 - specify a CONFIDENCE per the rubric below.
-- be DISTINCT from anything already in the envelope's \`recommendations[]\` (those are analytical next steps inside the app — these are decisions to act on outside it).
+- be DISTINCT from anything already in the envelope's \`recommendations[]\`. Those now already capture the primary grounded business decisions, so emit ONLY additional moves they don't cover — broader, cross-cutting, or longer-horizon plays, or escalations that need investment / org change. If every worthwhile action is already a recommendation, return { items: [] } rather than restating them.
 - be GROUNDED in domain reality. If the FMCG / Marico domain context is provided, use it for vocabulary and plausibility (channels, formats, festive calendars, distribution mechanics) — but never invent domain facts the data doesn't support.
 
 CONFIDENCE RUBRIC:

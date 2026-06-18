@@ -37,7 +37,7 @@ import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
-  MAX_X_AXIS_LABELS,
+  maxXAxisLabels,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import {
@@ -435,16 +435,29 @@ function AreaRendererImpl({
     [xCh.field],
   );
 
+  // Width-aware x-axis label budget (no fixed cap) — see LineRenderer.
   const xTickValues = useMemo<Array<Date | string>>(() => {
     if (isTemporal) {
+      const maxLabels = maxXAxisLabels({
+        axisWidthPx: innerWidth,
+        avgLabelChars: 8,
+        fontSizePx: 11,
+        rotationDeg: 0,
+      });
       const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
-        MAX_X_AXIS_LABELS,
+        maxLabels,
       );
-      return pickEvenlySpacedTicks(candidates, MAX_X_AXIS_LABELS);
+      return pickEvenlySpacedTicks(candidates, maxLabels);
     }
     const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
-    return pickEvenlySpacedTicks(domain, MAX_X_AXIS_LABELS);
-  }, [xScale, isTemporal]);
+    const maxLabels = maxXAxisLabels({
+      axisWidthPx: innerWidth,
+      labels: domain,
+      fontSizePx: 11,
+      rotationDeg: 0,
+    });
+    return pickEvenlySpacedTicks(domain, maxLabels);
+  }, [xScale, isTemporal, innerWidth]);
   const yTickFormat = useMemo(
     () => makeAxisTickFormatter(yCh.field),
     [yCh.field],

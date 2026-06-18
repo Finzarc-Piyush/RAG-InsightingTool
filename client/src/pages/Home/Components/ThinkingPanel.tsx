@@ -16,7 +16,10 @@ import {
   GitBranch,
   Loader2,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useRotatingMessage } from "@/hooks/useRotatingMessage";
+import { DASHBOARD_BUILD_MESSAGES } from "./dashboardBuildMessages";
 import { FeedbackButtons } from "./FeedbackButtons";
 import type { Feedback, FeedbackTarget } from "@/lib/api/feedback";
 
@@ -39,10 +42,18 @@ interface ThinkingPanelProps {
 
 const GENERIC_WITTY_LABEL = "Working some magic…";
 
+// The server brackets the long post-answer dashboard-build phase with this
+// step (agentLoop.service.ts). The panel turns the matching pill into a live
+// rotating status (DASHBOARD_BUILD_MESSAGES) so the ~1 min doesn't sit silent.
+const DASHBOARD_BUILDING_STEP = "Building dashboard";
+const DASHBOARD_BUILDING_LABEL = "Assembling your dashboard…";
+
 function wittyLabelFor(rawStep: string): string {
   const step = rawStep.trim();
   if (/^Running tool:/i.test(step)) return "Crunching the numbers…";
   switch (step) {
+    case DASHBOARD_BUILDING_STEP:
+      return DASHBOARD_BUILDING_LABEL;
     case "Mapping columns from schema":
       return "Eyeballing the columns…";
     case "Analyzing user intent":
@@ -118,6 +129,25 @@ function StepRow({ label, status }: { label: string; status: ThinkingStep["statu
   );
 }
 
+/** The live, rotating witty line shown under the "Building dashboard" pill. */
+function DashboardBuildingTicker({ line }: { line: string }) {
+  return (
+    <div className="ml-6 min-h-[1.1rem] text-[11px] italic leading-relaxed text-primary/80">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={line}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -3 }}
+          transition={{ duration: 0.3 }}
+        >
+          {line}
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function ThinkingPanel({
   steps,
   isStreaming,
@@ -131,6 +161,11 @@ export function ThinkingPanel({
 }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
   const prevStreaming = useRef(false);
+  // Open the rotating dashboard-build status on a per-mount random line so two
+  // builds don't always start on the same quip.
+  const [tickerStart] = useState(() =>
+    Math.floor(Math.random() * DASHBOARD_BUILD_MESSAGES.length)
+  );
 
   useEffect(() => {
     if (variant === "archived") {
@@ -163,6 +198,17 @@ export function ThinkingPanel({
       labelMap.set(label, { label, status: step.status, timestamp: step.timestamp });
     }
   }
+
+  // While the dashboard-build pill is active and the turn is still streaming,
+  // play the rotating witty status both under the pill and in the (possibly
+  // collapsed) header summary — so the user sees movement even on mobile.
+  const buildEntry = labelMap.get(DASHBOARD_BUILDING_LABEL);
+  const buildingActive =
+    variant === "live" && isStreaming && buildEntry?.status === "active";
+  const buildLine = useRotatingMessage(DASHBOARD_BUILD_MESSAGES, {
+    enabled: buildingActive,
+    startIndex: tickerStart,
+  });
 
   const stepCount = labelOrder.length;
   const subQCount = spawnedSubQuestions.length;
@@ -197,9 +243,26 @@ export function ThinkingPanel({
           )}
         />
         <span className="flex-1 min-w-0">
-          <span className="text-foreground">Thinking</span>
+          <span className="text-foreground">
+            {buildingActive ? "Building dashboard" : "Thinking"}
+          </span>
           <span className="block text-[10px] font-normal text-muted-foreground mt-0.5 truncate">
-            {summary}
+            {buildingActive ? (
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={buildLine}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="text-primary/80"
+                >
+                  {buildLine}
+                </motion.span>
+              </AnimatePresence>
+            ) : (
+              summary
+            )}
           </span>
         </span>
       </CollapsibleTrigger>
@@ -212,7 +275,14 @@ export function ThinkingPanel({
             <div className="space-y-1.5">
               {labelOrder.map((label) => {
                 const entry = labelMap.get(label)!;
-                return <StepRow key={label} label={entry.label} status={entry.status} />;
+                const showTicker =
+                  buildingActive && label === DASHBOARD_BUILDING_LABEL;
+                return (
+                  <div key={label} className="space-y-1.5">
+                    <StepRow label={entry.label} status={entry.status} />
+                    {showTicker && <DashboardBuildingTicker line={buildLine} />}
+                  </div>
+                );
               })}
             </div>
           </div>

@@ -39,7 +39,7 @@ import {
 } from "@/lib/charts/format";
 import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import {
-  MAX_X_AXIS_LABELS,
+  maxXAxisLabels,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
@@ -318,19 +318,32 @@ function LineRendererImpl({
     });
   }, [isTemporal, data, xCh, innerWidth, zoomRange]);
 
-  // Cap x-axis labels at MAX_X_AXIS_LABELS in any view (default + zoomed).
-  // For temporal scales, ask D3 for nice ticks then thin to the cap.
-  // For categorical scales, thin the visible domain directly.
+  // Width-aware x-axis label budget (no fixed cap): fit as many labels as the
+  // plot width allows. Temporal — ask D3 for that many nice ticks, then thin.
+  // Categorical — thin the visible domain to the budget. Labels are horizontal
+  // (fontSize 11), so the budget scales with label text length.
   const xTickValues = useMemo<Array<Date | string>>(() => {
     if (isTemporal) {
+      const maxLabels = maxXAxisLabels({
+        axisWidthPx: innerWidth,
+        avgLabelChars: 8,
+        fontSizePx: 11,
+        rotationDeg: 0,
+      });
       const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
-        MAX_X_AXIS_LABELS,
+        maxLabels,
       );
-      return pickEvenlySpacedTicks(candidates, MAX_X_AXIS_LABELS);
+      return pickEvenlySpacedTicks(candidates, maxLabels);
     }
     const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
-    return pickEvenlySpacedTicks(domain, MAX_X_AXIS_LABELS);
-  }, [xScale, isTemporal]);
+    const maxLabels = maxXAxisLabels({
+      axisWidthPx: innerWidth,
+      labels: domain,
+      fontSizePx: 11,
+      rotationDeg: 0,
+    });
+    return pickEvenlySpacedTicks(domain, maxLabels);
+  }, [xScale, isTemporal, innerWidth]);
 
   const yScale = useMemo(() => {
     const flat: number[] = [];

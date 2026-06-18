@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowRight, ChevronDown, ChevronRight, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Compass,
+  ListChecks,
+  Sparkles,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, Heading } from "@/components/ui/typography";
@@ -25,6 +32,13 @@ import { selectSummaryBandData, selectAttentionAreas } from "../lib/summaryBandD
  */
 
 const STORAGE_PREFIX = "dashboard-summary-band-open:";
+
+/** IUX3 · horizon chip labels — mirrors the drawer's RecommendationsByHorizon. */
+const HORIZON_LABEL: Record<"now" | "this_quarter" | "strategic", string> = {
+  now: "Now",
+  this_quarter: "This quarter",
+  strategic: "Strategic",
+};
 
 function readOpen(dashboardId: string): boolean {
   if (typeof sessionStorage === "undefined") return true;
@@ -73,9 +87,17 @@ export function DashboardSummaryBand({
     });
   }, [dashboardId]);
 
-  const { tldr, magnitudes, findings } = selectSummaryBandData(envelope);
+  const { tldr, magnitudes, findings, implications, priorityActions } =
+    selectSummaryBandData(envelope);
   const attention = selectAttentionAreas(attentionAreas);
-  if (!tldr && magnitudes.length === 0 && findings.length === 0 && attention.length === 0)
+  if (
+    !tldr &&
+    magnitudes.length === 0 &&
+    findings.length === 0 &&
+    attention.length === 0 &&
+    implications.length === 0 &&
+    priorityActions.length === 0
+  )
     return null;
 
   return (
@@ -190,6 +212,78 @@ export function DashboardSummaryBand({
                         <span className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary tabular-nums">
                           {f.magnitude}
                         </span>
+                      ) : null}
+                    </div>
+                    {f.evidence ? (
+                      <p className="mt-1 text-xs leading-snug text-muted-foreground">
+                        {f.evidence}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {implications.length > 0 ? (
+            <div className="mt-4">
+              <Eyebrow className="mb-2 flex items-center gap-1.5">
+                <Compass className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                Why it matters
+              </Eyebrow>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {implications.map((imp, i) => (
+                  <div
+                    key={`band-impl-${i}`}
+                    className="rounded-brand-sm border border-border bg-muted/20 px-3 py-2 shadow-elev-1"
+                  >
+                    <div className="text-sm font-medium leading-snug text-foreground">
+                      {imp.statement}
+                    </div>
+                    <div className="mt-1 text-xs leading-snug text-muted-foreground">
+                      <span className="font-medium text-foreground">So what:</span>{" "}
+                      {imp.soWhat}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {priorityActions.length > 0 ? (
+            <div className="mt-4">
+              <Eyebrow className="mb-2 flex items-center gap-1.5">
+                <ListChecks className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                Priority actions
+              </Eyebrow>
+              <div className="space-y-2">
+                {priorityActions.map((a, i) => (
+                  <div
+                    key={`band-action-${i}`}
+                    className="flex items-start gap-2 rounded-brand-sm border border-primary/30 bg-primary/5 px-3 py-2 shadow-elev-1"
+                  >
+                    <ArrowRight
+                      className="mt-0.5 h-4 w-4 shrink-0 text-primary"
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-sm font-medium leading-snug text-foreground">
+                          {a.action}
+                        </span>
+                        {a.horizon ? (
+                          <span className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-primary">
+                            {HORIZON_LABEL[a.horizon]}
+                          </span>
+                        ) : null}
+                      </div>
+                      {a.expectedImpact ? (
+                        <div className="mt-1 text-xs leading-snug text-muted-foreground">
+                          <span className="font-medium text-foreground">
+                            Expected impact:
+                          </span>{" "}
+                          {a.expectedImpact}
+                        </div>
                       ) : null}
                     </div>
                   </div>

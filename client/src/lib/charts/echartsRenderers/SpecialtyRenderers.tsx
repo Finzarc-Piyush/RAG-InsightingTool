@@ -26,10 +26,7 @@ import {
   type ChartTheme,
   type EChartsType,
 } from "./EChartsBase";
-import {
-  MAX_X_AXIS_LABELS,
-  echartsLabelInterval,
-} from "@/lib/charts/xAxisLabelCap";
+import { MAX_X_AXIS_LABELS } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
 import {
   dispatchCrossFilter,
@@ -699,7 +696,10 @@ export function CandlestickRenderer({
           axisLabel: {
             color: theme.mutedForeground,
             fontSize: 10,
-            interval: echartsLabelInterval(xs.length),
+            // Width-aware: ECharts measures the axis and hides only the labels
+            // that would overlap, instead of thinning to a fixed count.
+            interval: "auto",
+            hideOverlap: true,
           },
         },
         yAxis: {

@@ -107,6 +107,30 @@ test("explicit 'monthly' WITH multiple months → Month honored (intent wins ove
   assert.equal(d.source, "intent");
 });
 
+test("facet NAME present but UNMATERIALIZED on sample + real span → Day via span (columnar runtime frame)", () => {
+  // The columnar runtime rows carry the raw date but NO materialized "Day · Date"
+  // value (facets are computed inline at render). materializedDistinct → 0; the
+  // authority must consult the real span rather than treat 0 as a single bucket —
+  // otherwise single-month daily collapses to Month even after the facet NAME is
+  // listed. Regression guard for the bucketCount span-fallthrough fix.
+  const sample = Array.from({ length: 30 }, (_, d) => ({
+    Date: `2026-04-${String(d + 1).padStart(2, "0")}`,
+    Sales: 1 + d,
+    // intentionally NO "Day · Date" / "Week · Date" / "Month · Date" values
+  }));
+  const d = resolveTrendGrain({
+    availableColumns: ["Day · Date", "Week · Date", "Month · Date", "Date", "Sales"],
+    dateColumns: ["Date"],
+    dateRangeByColumn: new Map([
+      ["Date", { spanDays: 29, distinctDayCount: 30, minIso: "2026-04-01", maxIso: "2026-04-30" }],
+    ]),
+    sample,
+  });
+  assert.equal(d.facetColumn, "Day · Date");
+  assert.equal(d.grain, "date");
+  assert.equal(d.source, "span");
+});
+
 test("multi-year MONTHLY-only data stays Month (no down-convert to Day/Week)", () => {
   const rows: Record<string, unknown>[] = [];
   for (let y = 2022; y <= 2024; y++) {

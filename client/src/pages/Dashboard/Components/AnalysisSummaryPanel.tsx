@@ -200,6 +200,14 @@ function RecommendationsByHorizon({
                   <div className="mt-1 text-xs text-muted-foreground">
                     {r.rationale}
                   </div>
+                  {r.expectedImpact ? (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        Expected impact:
+                      </span>{" "}
+                      {r.expectedImpact}
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -387,10 +395,9 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
 
       {envelope?.implications?.length ? (
         <CollapsibleSection
-          title="Implications"
+          title="Why it matters"
           Icon={Compass}
           meta={`${envelope.implications.length}`}
-          defaultOpen={false}
         >
           <ImplicationsList implications={envelope.implications} />
         </CollapsibleSection>
@@ -398,7 +405,7 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
 
       {envelope?.recommendations?.length ? (
         <CollapsibleSection
-          title="Analytical recommendations"
+          title="Recommended actions"
           Icon={ListChecks}
           meta={`${envelope.recommendations.length}`}
         >
@@ -427,7 +434,6 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
           title="Caveats"
           Icon={ShieldAlert}
           meta={`${envelope.caveats.length}`}
-          defaultOpen={false}
         >
           <ul className="space-y-1 text-sm text-muted-foreground italic">
             {envelope.caveats.map((c, i) => (

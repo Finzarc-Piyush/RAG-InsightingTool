@@ -1550,12 +1550,17 @@ export const messageAnswerEnvelopeSchema = z.object({
   /**
    * W8 · concrete recommended actions, grouped by horizon. Rendered as a
    * numbered list under headings ("Do now", "This quarter", "Strategic").
+   *
+   * IUX3 · `expectedImpact` is the manager-facing "what changes if we do this"
+   * (e.g. "recover ~2pp metro share"). Optional + back-compat (older persisted
+   * envelopes simply omit it). Named to mirror `businessActionItemSchema`.
    */
   recommendations: z
     .array(
       z.object({
         action: z.string().max(400),
         rationale: z.string().max(800),
+        expectedImpact: z.string().max(240).optional(),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )
@@ -2520,6 +2525,7 @@ export const dashboardAnswerEnvelopeSchema = z.object({
       z.object({
         action: z.string().max(400),
         rationale: z.string().max(800),
+        expectedImpact: z.string().max(240).optional(),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )

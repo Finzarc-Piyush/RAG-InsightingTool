@@ -34,7 +34,7 @@ import {
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
 import {
-  MAX_X_AXIS_LABELS,
+  maxXAxisLabels,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
@@ -130,9 +130,20 @@ function RectRendererImpl({
     }
     return { rows: rs, rowRawByKey: rRaw, cols: cs, colRawByKey: cRaw };
   }, [data, rowCh, colCh]);
+  // Width-aware column-label budget (no fixed cap): fit as many horizontal
+  // labels as the heatmap width allows.
   const colTicks = useMemo(
-    () => pickEvenlySpacedTicks(cols, MAX_X_AXIS_LABELS),
-    [cols],
+    () =>
+      pickEvenlySpacedTicks(
+        cols,
+        maxXAxisLabels({
+          axisWidthPx: innerWidth,
+          labels: cols,
+          fontSizePx: 10,
+          rotationDeg: 0,
+        }),
+      ),
+    [cols, innerWidth],
   );
 
   const valueExtent = useMemo(() => {

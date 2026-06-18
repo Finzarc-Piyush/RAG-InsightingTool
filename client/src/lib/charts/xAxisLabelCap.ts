@@ -1,4 +1,141 @@
-export const MAX_X_AXIS_LABELS = 10;
+/**
+ * Width-aware X-axis label budget.
+ *
+ * The old fixed `MAX_X_AXIS_LABELS = 10` was a one-size cap: it under-labelled
+ * wide charts (a 900px modal that could legibly show ~25 short labels still
+ * showed 10) and risked crowding narrow ones. The "10 or 11" the user sees is
+ * this constant plus the always-appended last tick.
+ *
+ * This mirrors the density-aware Y-axis budget (`yAxisTickCount.ts`): compute
+ * how many tick LABELS fit in the available axis pixel width given the label
+ * text lengths, font size, and rotation — never a magic number. The number of
+ * data points is never reduced; only the *labels* are thinned, and only as
+ * much as the available width demands.
+ *
+ * Footprint model (no DOM measurement; the char-width estimate matches
+ * `labelCollision.ts` so the two stay consistent):
+ *   - Horizontal labels (rotation ~0): each needs ≈ textWidth + gap px.
+ *     Longer labels ⇒ fewer fit; short labels ("2021", "Q1") ⇒ many fit.
+ *   - Rotated labels (e.g. -45° in the recharts renderer): adjacent slanted
+ *     labels clear each other once their anchors are ≥ labelHeight/sin(θ)
+ *     apart — a footprint driven by label HEIGHT, not text length, so far more
+ *     labels fit than when horizontal.
+ */
+
+/** Always show at least the first and last tick. */
+export const MIN_X_AXIS_LABELS = 2;
+
+/**
+ * Generous absolute guard so pathologically short labels (1–2 chars) on a very
+ * wide axis can't request hundreds of ticks. Not a UX target — a backstop.
+ */
+export const ABS_MAX_X_AXIS_LABELS = 60;
+
+/** Fallback budget used only when the axis pixel width is unknown. */
+export const DEFAULT_MAX_X_AXIS_LABELS = 10;
+
+/**
+ * Back-compat constant. Prefer the width-aware `maxXAxisLabels(...)`. Retained
+ * as the default `max` param for `pickEvenlySpacedTicks` / `echartsLabelInterval`
+ * so callers that genuinely cannot measure width keep the previous behavior, and
+ * for the `Math.max(2, MAX_X_AXIS_LABELS - 1)` arithmetic in the ECharts path.
+ */
+export const MAX_X_AXIS_LABELS = DEFAULT_MAX_X_AXIS_LABELS;
+
+// SF/Inter average glyph advance ≈ 0.55–0.6 × fontSize; 0.6 biases conservative.
+const CHAR_WIDTH_FACTOR = 0.6;
+const LINE_HEIGHT_FACTOR = 1.2;
+const MIN_GAP_PX = 8;
+const DEFAULT_FONT_PX = 11;
+const FALLBACK_LABEL_CHARS = 6;
+
+export interface XAxisLabelBudgetOpts {
+  /**
+   * Available pixel width of the x-axis band (e.g. visx `innerWidth`, or a
+   * measured container width for recharts). When omitted/invalid the budget
+   * falls back to `DEFAULT_MAX_X_AXIS_LABELS`.
+   */
+  axisWidthPx?: number;
+  /** The label values that will render — their text length drives the budget. */
+  labels?: ReadonlyArray<unknown>;
+  /** Fallback typical label length (chars) when `labels` is not provided. */
+  avgLabelChars?: number;
+  /** Axis label font size in px (default 11). */
+  fontSizePx?: number;
+  /** Label rotation in degrees (0 = horizontal; e.g. -45 for recharts bars). */
+  rotationDeg?: number;
+  /** Minimum gap between adjacent labels in px (default 8). */
+  minGapPx?: number;
+}
+
+/** Length (in chars) of the WIDEST label — the budget must guarantee it fits. */
+function widestLabelChars(
+  labels: ReadonlyArray<unknown> | undefined,
+  fallback: number
+): number {
+  if (!labels || labels.length === 0) return fallback;
+  let max = 0;
+  for (const l of labels) {
+    const len = String(l ?? '').length;
+    if (len > max) max = len;
+  }
+  return max > 0 ? max : fallback;
+}
+
+/**
+ * Maximum number of x-axis tick labels that fit legibly in `axisWidthPx`.
+ *
+ * Returns `DEFAULT_MAX_X_AXIS_LABELS` when width is unknown/invalid so callers
+ * that can't measure keep working. Result is always within
+ * `[MIN_X_AXIS_LABELS, ABS_MAX_X_AXIS_LABELS]`.
+ */
+export function maxXAxisLabels(opts: XAxisLabelBudgetOpts = {}): number {
+  const { axisWidthPx } = opts;
+  if (
+    typeof axisWidthPx !== 'number' ||
+    !Number.isFinite(axisWidthPx) ||
+    axisWidthPx <= 0
+  ) {
+    return DEFAULT_MAX_X_AXIS_LABELS;
+  }
+
+  // Every optional numeric input is validated for finiteness (a stray NaN /
+  // Infinity must never propagate to the result — see the contract above).
+  const fontSizePx =
+    Number.isFinite(opts.fontSizePx) && (opts.fontSizePx as number) > 0
+      ? (opts.fontSizePx as number)
+      : DEFAULT_FONT_PX;
+  const minGapPx =
+    Number.isFinite(opts.minGapPx) && (opts.minGapPx as number) >= 0
+      ? (opts.minGapPx as number)
+      : MIN_GAP_PX;
+  const rotation = Number.isFinite(opts.rotationDeg)
+    ? Math.abs(opts.rotationDeg as number)
+    : 0;
+  const fallbackChars =
+    Number.isFinite(opts.avgLabelChars) && (opts.avgLabelChars as number) > 0
+      ? (opts.avgLabelChars as number)
+      : FALLBACK_LABEL_CHARS;
+  const labelHeight = fontSizePx * LINE_HEIGHT_FACTOR;
+
+  let footprintPx: number;
+  if (rotation >= 1) {
+    // Rotated labels: spacing is bounded by label HEIGHT projected onto the
+    // axis, independent of text length. clamp sin away from 0 for tiny angles.
+    const sin = Math.sin((Math.min(rotation, 90) * Math.PI) / 180);
+    footprintPx = (labelHeight + minGapPx) / Math.max(sin, 0.2);
+  } else {
+    const chars = widestLabelChars(opts.labels, fallbackChars);
+    const textWidth = Math.max(8, chars * fontSizePx * CHAR_WIDTH_FACTOR);
+    footprintPx = textWidth + minGapPx;
+  }
+
+  if (!Number.isFinite(footprintPx) || footprintPx <= 0) {
+    return DEFAULT_MAX_X_AXIS_LABELS;
+  }
+  const raw = Math.floor(axisWidthPx / footprintPx);
+  return Math.max(MIN_X_AXIS_LABELS, Math.min(ABS_MAX_X_AXIS_LABELS, raw));
+}
 
 export function pickEvenlySpacedTicks<T>(values: readonly T[], max: number = MAX_X_AXIS_LABELS): T[] {
   const n = values.length;

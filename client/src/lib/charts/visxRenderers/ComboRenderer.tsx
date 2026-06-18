@@ -31,7 +31,7 @@ import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
-  MAX_X_AXIS_LABELS,
+  maxXAxisLabels,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
@@ -97,9 +97,20 @@ function ComboRendererImpl({
     () => distinctOrdered(data, xCh.accessor),
     [data, xCh],
   );
+  // Width-aware category-label budget (no fixed cap): fit as many horizontal
+  // labels as the plot width allows.
   const xCategoryTicks = useMemo(
-    () => pickEvenlySpacedTicks(xValues, MAX_X_AXIS_LABELS),
-    [xValues],
+    () =>
+      pickEvenlySpacedTicks(
+        xValues,
+        maxXAxisLabels({
+          axisWidthPx: innerWidth,
+          labels: xValues,
+          fontSizePx: 11,
+          rotationDeg: 0,
+        }),
+      ),
+    [xValues, innerWidth],
   );
 
   const xScale = useMemo(

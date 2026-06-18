@@ -107,13 +107,46 @@ export class MetadataService {
       };
     });
 
+    const temporalFacetColumns = temporalFacetMetadataForDateColumns(dateColumns);
+
+    // Merge the derived temporal facet columns ("Day · Date", "Month · Date", …)
+    // INTO `columns` so the single grain authority (`resolveTrendGrain`) can
+    // ENUMERATE them as candidate time axes. The in-memory `createDataSummary`
+    // path already does this (fileParser.ts:856-859); this columnar/metadata-reload
+    // path historically put facets ONLY in `temporalFacetColumns`, so the authority
+    // — which enumerates candidates solely from `summary.columns` — never saw a
+    // daily candidate, and a single month of daily data collapsed to one Month dot.
+    //
+    // Added UNCONDITIONALLY (not gated on materialized sample values like the
+    // in-memory path): on the columnar table the facets are VIRTUAL — computed
+    // inline from the source date column at query/render time
+    // (`facetColumnInlineDuckDbExpr`) — so they are always "available" even when the
+    // sampled rows carry no materialized facet values. Skip any whose name is
+    // already a physical column (a re-uploaded enriched file re-types "Day · Date").
+    const existingNames = new Set(columns.map((c) => c.name));
+    const facetColumnInfos = temporalFacetColumns
+      .filter((m) => !existingNames.has(m.name))
+      .map((m) => ({
+        name: m.name,
+        type: 'string' as const,
+        sampleValues: sampleRows
+          .slice(0, 3)
+          .map((row) => row[m.name])
+          .filter((v) => v !== null && v !== undefined),
+        temporalFacetGrain: m.grain,
+        temporalFacetSource: m.sourceColumn,
+      }));
+    const allColumns = [...columns, ...facetColumnInfos];
+
     return {
       rowCount: metadata.rowCount,
-      columnCount: metadata.columnCount,
-      columns,
+      // Keep columnCount === columns.length (the in-memory path and
+      // computedColumns.ts:323 both hold this); now that facets are listed they count.
+      columnCount: allColumns.length,
+      columns: allColumns,
       numericColumns,
       dateColumns,
-      temporalFacetColumns: temporalFacetMetadataForDateColumns(dateColumns),
+      temporalFacetColumns,
     };
   }
 

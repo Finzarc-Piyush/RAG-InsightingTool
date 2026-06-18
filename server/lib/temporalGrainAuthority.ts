@@ -338,11 +338,21 @@ function bucketCount(
   sample: readonly Record<string, unknown>[] | undefined,
 ): number {
   const col = sc.byGrain.get(grain);
-  if (!col) return 0; // facet not materialized on this frame
+  if (!col) return 0; // facet not present on this frame at all
   const mat = materializedDistinct(col, sample);
-  if (mat !== UNKNOWN) return mat;
+  if (mat > 0) return mat; // truthful materialized count
+  // mat is 0 (facet NAME present but all-null on the sample) or UNKNOWN (no sample).
+  // A 0 must NOT be treated as authoritative when a real date span exists: on the
+  // columnar path the facet column is virtual (computed inline at render), so the
+  // sampled runtime rows carry the raw date but no materialized "Day · Date" value
+  // — counting that as a single bucket is exactly what collapsed single-month daily
+  // data to one Month dot. Fall through to the span-derived count, which reads the
+  // backfilled/row-derived span off the SOURCE date column. When there is no span
+  // (e.g. a quarterly Period label that doesn't parse as a date — L-007), this still
+  // returns 0/UNKNOWN, so the materialized-null guard for genuinely fake-finer
+  // grains is preserved.
   if (sc.range) return distinctBucketsForGrain(sc.range, grain);
-  return UNKNOWN;
+  return mat; // 0 (present, all-null, no span) or UNKNOWN (no sample, no span)
 }
 
 const usableCount = (n: number) => n >= 2;

@@ -62,10 +62,10 @@ import { KEY_SEP } from '@/lib/charts/compositeKey';
 import {
   CHART_SERIES_COLORS as COLORS,
   evenlySpacedDataKeys,
-  LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
-import { MAX_X_AXIS_LABELS } from '@/lib/charts/xAxisLabelCap';
+import { maxXAxisLabels } from '@/lib/charts/xAxisLabelCap';
+import { useContainerWidth } from '@/hooks/useContainerWidth';
 import { formatChartTooltipValue, rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 
@@ -88,6 +88,18 @@ interface ChartRendererProps {
 }
 
 const MAX_COMPACT_X_TICKS = 6;
+// Approx horizontal axis margin subtracted from the measured container width to
+// estimate the usable x-axis plot width. MUST track the left+right `margin`
+// props on the <BarChart>/<LineChart>/<AreaChart>/<ComposedChart> in
+// renderChart(): left 50 + right 10 (+~4px buffer) for single-axis charts. If
+// those margins change, update this. Dual-axis (y2) charts add the extra below.
+const X_AXIS_MARGIN_PX = 64;
+// Extra right-axis margin a dual-axis (y2) line/area chart adds (right 50 vs 10).
+const DUAL_AXIS_EXTRA_MARGIN_PX = 40;
+// Min horizontal slot per bar in a compact chat tile so bars stay legible.
+const MIN_COMPACT_BAR_SLOT_PX = 14;
+// Upper guard on compact bars so a very wide tile doesn't render hairline mush.
+const MAX_COMPACT_BAR_LIMIT = 40;
 
 type FiltersUpdater = ActiveChartFilters | ((prev: ActiveChartFilters) => ActiveChartFilters);
 
@@ -391,10 +403,39 @@ export function ChartRenderer({
     return capScatterPoints(processedScatterData, pointDensity);
   }, [type, processedScatterData, pointDensity]);
 
-  const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > MAX_COMPACT_X_TICKS;
+  // Measure the rendered chart width so the x-axis label budget tracks the
+  // actual pixel width (recharts renders inside a width="100%" container).
+  const [chartWidthRef, chartWidth] = useContainerWidth<HTMLDivElement>();
+
+  // Width-aware x-axis label budget — fit as many rotated (-45°, fontSize 10)
+  // labels as the measured plot width allows instead of a fixed 10/11. Before
+  // the container is measured (first paint) it falls back to the default budget.
+  const maxXLabels = useMemo(() => {
+    // Dual-axis (y2) line/area charts use a wider right margin (50 vs 10), so
+    // the usable plot width is narrower — account for it or labels over-pack.
+    const marginPx = X_AXIS_MARGIN_PX + (chart.y2 ? DUAL_AXIS_EXTRA_MARGIN_PX : 0);
+    return maxXAxisLabels({
+      axisWidthPx: chartWidth > 0 ? chartWidth - marginPx : undefined,
+      fontSizePx: 10,
+      rotationDeg: -45,
+    });
+  }, [chartWidth, chart.y2]);
+
+  // In a small chat tile, a bar chart with many categories is reduced to its
+  // largest categories so each bar stays legible. The count is width-derived
+  // (never below the historical floor of MAX_COMPACT_X_TICKS), not a fixed 6 —
+  // a wider tile keeps more bars. Labels are still thinned by `maxXLabels`.
+  const compactBarLimit = useMemo(() => {
+    if (chartWidth <= 0) return MAX_COMPACT_X_TICKS;
+    const axisW = chartWidth - X_AXIS_MARGIN_PX;
+    const fit = Math.floor(axisW / MIN_COMPACT_BAR_SLOT_PX);
+    return Math.max(MAX_COMPACT_X_TICKS, Math.min(MAX_COMPACT_BAR_LIMIT, fit));
+  }, [chartWidth]);
+
+  const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > compactBarLimit;
   const compactBarData = useMemo(() => {
     if (!shouldCompactView) return chartData;
-    if (typeof x !== 'string') return chartData.slice(0, MAX_COMPACT_X_TICKS);
+    if (typeof x !== 'string') return chartData.slice(0, compactBarLimit);
     const xLower = x.toLowerCase();
     const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xLower);
     const sample = chartData
@@ -409,7 +450,7 @@ export function ChartRenderer({
       });
     const temporal = nameSuggestsDate || allLookLikeDates;
     if (!temporal) {
-      return chartData.slice(0, MAX_COMPACT_X_TICKS);
+      return chartData.slice(0, compactBarLimit);
     }
     const sorted = [...chartData].sort((a, b) => {
       const av = parseDateLike((a as Record<string, unknown>)[x]);
@@ -419,8 +460,8 @@ export function ChartRenderer({
         String((b as Record<string, unknown>)[x])
       );
     });
-    return sorted.slice(0, MAX_COMPACT_X_TICKS);
-  }, [chartData, shouldCompactView, x]);
+    return sorted.slice(0, compactBarLimit);
+  }, [chartData, shouldCompactView, x, compactBarLimit]);
   const visibleBarData = shouldCompactView ? compactBarData : chartData;
 
   const lineAreaXTicks = useMemo(() => {
@@ -429,42 +470,22 @@ export function ChartRenderer({
     return evenlySpacedDataKeys(
       lineAreaSortedData as Record<string, unknown>[],
       x,
-      LINE_AREA_MAX_X_TICKS
+      maxXLabels
     );
-  }, [type, lineAreaSortedData, x]);
+  }, [type, lineAreaSortedData, x, maxXLabels]);
 
-  const compactXAxisTicks = useMemo(() => {
-    if (!shouldCompactView || typeof x !== 'string') {
-      return undefined;
-    }
-
-    const values: Array<string | number> = [];
-    for (let i = 0; i < visibleBarData.length && values.length < MAX_COMPACT_X_TICKS; i += 1) {
-      const datum = visibleBarData[i] as Record<string, unknown>;
-      const rawValue = datum?.[x];
-      if (rawValue === undefined || rawValue === null) continue;
-      if (typeof rawValue === 'string' || typeof rawValue === 'number') {
-        values.push(rawValue);
-      } else {
-        values.push(String(rawValue));
-      }
-    }
-
-    return values.length > 0 ? values : undefined;
-  }, [visibleBarData, shouldCompactView, x]);
-
-  // Bar charts with many categories: cap x-axis labels at MAX_X_AXIS_LABELS
-  // even outside compact mode so a 50-SKU breakdown doesn't render 50 labels.
+  // Bar x-axis labels: thin the visible bars to the width-aware budget so a
+  // 50-SKU breakdown doesn't render 50 overlapping labels. The bars still
+  // render — only their labels are thinned.
   const barXTicks = useMemo(() => {
     if (type !== 'bar') return undefined;
-    if (compactXAxisTicks) return compactXAxisTicks;
     if (typeof x !== 'string') return undefined;
     return evenlySpacedDataKeys(
       visibleBarData as Record<string, unknown>[],
       x,
-      MAX_X_AXIS_LABELS
+      maxXLabels
     );
-  }, [type, compactXAxisTicks, visibleBarData, x]);
+  }, [type, visibleBarData, x, maxXLabels]);
 
   const showNoDataState = chartData.length === 0;
 
@@ -1736,7 +1757,7 @@ export function ChartRenderer({
               )}
             </div>
           ) : shouldRenderChart ? (
-            <div className={`w-full flex-1 ${fillParent ? 'min-h-0' : ''}`}>{renderChart()}</div>
+            <div ref={chartWidthRef} className={`w-full flex-1 ${fillParent ? 'min-h-0' : ''}`}>{renderChart()}</div>
           ) : (
             <div className={`w-full flex-1 flex items-center justify-center ${fillParent ? 'min-h-0' : 'min-h-[250px]'}`}>
               <Skeleton className="h-full w-full" />

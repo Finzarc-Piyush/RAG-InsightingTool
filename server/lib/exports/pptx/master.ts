@@ -1,35 +1,38 @@
 /**
- * W-EXP-5 · pptxgenjs slide-master + branding constants.
+ * pptxgenjs slide-master + the deck's shared visual LANGUAGE.
  *
- * One source of truth for palette, fonts, slide dimensions, and the
- * running header/footer applied to every non-title slide. Layout files
- * import from here and never from inline literals.
+ * One source of truth for palette, fonts, slide dimensions, the running
+ * header/footer, AND the reusable primitives every layout composes from:
+ * action titles (with optional kicker + gold accent tick), cards, chips,
+ * eyebrows, dividers, bullet lists, KPI/delta helpers, and a shared data-table
+ * renderer. Pushing the look into primitives is what keeps the ten layouts
+ * consistent BY CONSTRUCTION — a layout file just calls `addCard`/`chip`/…,
+ * never re-invents a rounded rectangle or a colour decision.
  *
- * The master uses pptxgenjs's `defineSlideMaster` which lets us add a
- * single named master ("MARICO_BASE") that every slide references — global
- * restyles (e.g. swapping accent colour) become a one-edit change. Note:
- * pptxgenjs's master support is solid for shapes/images but quirky for
- * tables (issue #655 lineage); we keep the master to header/footer/page
- * number only.
+ * Palette/number tokens come from the single sources in `../brandPalette.ts`
+ * and `../numberFormatExport.ts` (shared with the chartSsr + PDF masters).
+ * Bare hex (no `#`) per the pptxgenjs convention.
  */
-import type { PptxPres, PptxSlide, PptxRectShape } from "./types.js";
-import { EXPORT_HEX, EXPORT_CATEGORICAL } from "../brandPalette.js";
+import type { PptxPres, PptxSlide, PptxRectShape, PptxTextLine, PptxTextOptions } from "./types.js";
+import { EXPORT_HEX, EXPORT_CATEGORICAL, tint, shade, onColor } from "../brandPalette.js";
+import { formatCell, columnIsNumeric } from "../numberFormatExport.js";
 
-/**
- * Palette + font for the PPTX renderer, built from the single source in
- * `server/lib/exports/brandPalette.ts` (shared with the chartSsr and PDF
- * masters). Bare hex (no `#`) per the pptxgenjs convention.
- */
+/** Palette for the PPTX renderer, built from the single brand source. */
 export const PPTX_BRAND = {
   primary: EXPORT_HEX.primary,
   accent: EXPORT_HEX.accent,
   foreground: EXPORT_HEX.foreground,
+  inkSoft: EXPORT_HEX.inkSoft,
   muted: EXPORT_HEX.muted,
   border: EXPORT_HEX.border,
+  gridline: EXPORT_HEX.gridline,
   background: EXPORT_HEX.background,
-  /** Categorical palette (no `#` prefix per pptxgenjs convention). */
+  surfaceMuted: EXPORT_HEX.surfaceMuted,
+  surfaceWarm: EXPORT_HEX.surfaceWarm,
+  surfaceNavy: EXPORT_HEX.surfaceNavy,
+  positive: EXPORT_HEX.positive,
+  negative: EXPORT_HEX.negative,
   categorical: [...EXPORT_CATEGORICAL],
-  /** Horizon chips for ImplicationsByHorizon / Recommendations. */
   horizonNow: EXPORT_HEX.horizonNow,
   horizonThisQuarter: EXPORT_HEX.horizonThisQuarter,
   horizonStrategic: EXPORT_HEX.horizonStrategic,
@@ -37,104 +40,94 @@ export const PPTX_BRAND = {
 
 export const PPTX_FONT = "Inter";
 
-/**
- * 16:9 widescreen at LAYOUT_WIDE — pptxgenjs's "WIDE" layout = 13.33 × 7.5
- * inches (the modern presentation default). All layout files position
- * shapes assuming this layout.
- */
+/** Type scale (pt) — one ramp the whole deck shares. */
+export const PPTX_TYPE = {
+  kicker: 11,
+  title: 23,
+  sectionLabel: 12,
+  lead: 16,
+  body: 13.5,
+  bodyTight: 12,
+  caption: 9.5,
+  chip: 10.5,
+  kpiValue: 33,
+  kpiLabel: 11.5,
+  kpiDelta: 12,
+  table: 10,
+  tableHeader: 10.5,
+} as const;
+
+/** 16:9 widescreen — pptxgenjs "LAYOUT_WIDE" = 13.33 × 7.5 in. */
 export const PPTX_SLIDE = {
   widthIn: 13.33,
   heightIn: 7.5,
-  /** Outer margin used by every layout for left/right gutters. */
   marginIn: 0.5,
 } as const;
 
-/** Master-slide name. Layouts pass it via `pres.addSlide({ masterName })`. */
 export const MASTER_NAME = "MARICO_BASE";
+
+/** Soft, premium drop shadow for cards/tiles. */
+const CARD_SHADOW = {
+  type: "outer" as const,
+  color: "1B2A3F",
+  opacity: 0.16,
+  blur: 9,
+  offset: 3,
+  angle: 90,
+};
 
 /**
  * Define the slide master. Call once after `new pptxgenjs()`.
- * Adds:
- *   - Running header — light separator + tiny brand-line text on the left
- *   - Running footer — date · page x of N · confidentiality
- *
- * Footer fields use pptxgenjs's tokens (e.g. `<page>` / `<page-count>`)
- * which the engine resolves at write time. No runtime concatenation.
+ * A restrained running header (small gold mark + brand line) and a footer
+ * (hairline + date · confidentiality, slide x / N). No heavy full-width rule.
  */
 export function defineMaster(
   pres: PptxPres,
   ctx: { brandLine: string; confidentiality: string; generatedAt: string }
 ): void {
   if (!pres.defineSlideMaster) return; // pptxgenjs typing fallback path
+  const m = PPTX_SLIDE.marginIn;
   pres.defineSlideMaster({
     title: MASTER_NAME,
     background: { color: PPTX_BRAND.background },
     objects: [
-      // Top thin rule
-      {
-        rect: {
-          x: PPTX_SLIDE.marginIn,
-          y: 0.18,
-          w: PPTX_SLIDE.widthIn - PPTX_SLIDE.marginIn * 2,
-          h: 0.02,
-          fill: { color: PPTX_BRAND.primary },
-        },
-      },
-      // Brand line (running header)
+      // Brand mark — small gold square.
+      { rect: { x: m, y: 0.26, w: 0.13, h: 0.13, fill: { color: PPTX_BRAND.accent } } },
+      // Brand line (running header).
       {
         text: {
           text: ctx.brandLine,
           options: {
-            x: PPTX_SLIDE.marginIn,
-            y: 0.22,
-            w: PPTX_SLIDE.widthIn - PPTX_SLIDE.marginIn * 2,
-            h: 0.28,
-            fontFace: PPTX_FONT,
-            fontSize: 9,
-            color: PPTX_BRAND.muted,
-            align: "left",
+            x: m + 0.22, y: 0.2, w: PPTX_SLIDE.widthIn - m * 2 - 0.22, h: 0.26,
+            fontFace: PPTX_FONT, fontSize: 9, bold: true, color: PPTX_BRAND.primary,
+            charSpacing: 0.4, align: "left", valign: "middle",
           },
         },
       },
-      // Bottom thin rule
+      // Footer hairline.
       {
         rect: {
-          x: PPTX_SLIDE.marginIn,
-          y: PPTX_SLIDE.heightIn - 0.4,
-          w: PPTX_SLIDE.widthIn - PPTX_SLIDE.marginIn * 2,
-          h: 0.01,
-          fill: { color: PPTX_BRAND.border },
+          x: m, y: PPTX_SLIDE.heightIn - 0.42,
+          w: PPTX_SLIDE.widthIn - m * 2, h: 0.008, fill: { color: PPTX_BRAND.border },
         },
       },
-      // Footer left — date + confidentiality
+      // Footer left — date + confidentiality.
       {
         text: {
-          text: `${ctx.generatedAt} · ${ctx.confidentiality}`,
+          text: `${ctx.generatedAt}   ·   ${ctx.confidentiality}`,
           options: {
-            x: PPTX_SLIDE.marginIn,
-            y: PPTX_SLIDE.heightIn - 0.36,
-            w: 7,
-            h: 0.3,
-            fontFace: PPTX_FONT,
-            fontSize: 9,
-            color: PPTX_BRAND.muted,
-            align: "left",
+            x: m, y: PPTX_SLIDE.heightIn - 0.38, w: 8, h: 0.3,
+            fontFace: PPTX_FONT, fontSize: 8.5, color: PPTX_BRAND.muted, align: "left", valign: "middle",
           },
         },
       },
-      // Footer right — slide number
+      // Footer right — slide number.
       {
         text: {
-          text: "Slide <page> of <page-count>",
+          text: "Slide <page> / <page-count>",
           options: {
-            x: PPTX_SLIDE.widthIn - 3 - PPTX_SLIDE.marginIn,
-            y: PPTX_SLIDE.heightIn - 0.36,
-            w: 3,
-            h: 0.3,
-            fontFace: PPTX_FONT,
-            fontSize: 9,
-            color: PPTX_BRAND.muted,
-            align: "right",
+            x: PPTX_SLIDE.widthIn - 3 - m, y: PPTX_SLIDE.heightIn - 0.38, w: 3, h: 0.3,
+            fontFace: PPTX_FONT, fontSize: 8.5, color: PPTX_BRAND.muted, align: "right", valign: "middle",
           },
         },
       },
@@ -142,44 +135,284 @@ export function defineMaster(
   });
 }
 
-/**
- * Common content area — what each layout has to work with after master
- * header/footer reservations. Used by every layout's title-row + body
- * positioning.
- */
+/** Content area available to each layout after master header/footer. */
 export const CONTENT_BOX: PptxRectShape = {
   x: PPTX_SLIDE.marginIn,
-  y: 0.65,
+  y: 0.62,
   w: PPTX_SLIDE.widthIn - PPTX_SLIDE.marginIn * 2,
-  h: PPTX_SLIDE.heightIn - 0.65 - 0.55,
+  h: PPTX_SLIDE.heightIn - 0.62 - 0.52,
 };
 
+export interface ActionTitleOpts {
+  /** Small uppercase eyebrow above the title (e.g. "FINDINGS · 03"). */
+  kicker?: string;
+  /** Accent colour for the kicker + the tick under the title. Default gold. */
+  accent?: string;
+}
+
 /**
- * Render the action title at the top of the content area. Every non-title
- * layout calls this first to keep typography consistent.
+ * Render the action title block. Returns the Y (inches) where body content
+ * should begin — every non-cover layout uses this so spacing stays uniform.
  */
-export function renderActionTitle(slide: PptxSlide, actionTitle: string): void {
+export function renderActionTitle(
+  slide: PptxSlide,
+  actionTitle: string,
+  opts: ActionTitleOpts = {}
+): number {
+  const accent = opts.accent ?? PPTX_BRAND.accent;
+  let y = CONTENT_BOX.y;
+  if (opts.kicker) {
+    slide.addText(opts.kicker.toUpperCase(), {
+      x: CONTENT_BOX.x, y, w: CONTENT_BOX.w, h: 0.24,
+      fontFace: PPTX_FONT, fontSize: PPTX_TYPE.kicker, bold: true,
+      color: accent, charSpacing: 1.6, align: "left", valign: "middle",
+    });
+    y += 0.28;
+  }
   slide.addText(actionTitle, {
-    x: CONTENT_BOX.x,
-    y: CONTENT_BOX.y,
-    w: CONTENT_BOX.w,
-    h: 0.7,
-    fontFace: PPTX_FONT,
-    fontSize: 22,
-    bold: true,
-    color: PPTX_BRAND.foreground,
-    align: "left",
-    valign: "top",
+    x: CONTENT_BOX.x, y, w: CONTENT_BOX.w, h: 0.72,
+    fontFace: PPTX_FONT, fontSize: PPTX_TYPE.title, bold: true,
+    color: PPTX_BRAND.foreground, align: "left", valign: "top",
+    lineSpacingMultiple: 1.0, fit: "shrink",
+  });
+  const tickY = y + 0.72 + 0.04;
+  slide.addShape("roundRect", {
+    x: CONTENT_BOX.x, y: tickY, w: 0.5, h: 0.05,
+    rectRadius: 0.025, fill: { color: accent }, line: { color: accent },
+  });
+  return tickY + 0.22;
+}
+
+// ── Primitives ───────────────────────────────────────────────────────────────
+
+export interface CardOpts {
+  fill?: string;
+  border?: string;
+  radius?: number;
+  shadow?: boolean;
+  /** Left accent rail colour. */
+  accent?: string;
+}
+
+/** Rounded card — the universal container (KPI tile, list row, panel). */
+export function addCard(slide: PptxSlide, box: PptxRectShape, opts: CardOpts = {}): void {
+  slide.addShape("roundRect", {
+    x: box.x, y: box.y, w: box.w, h: box.h,
+    rectRadius: opts.radius ?? 0.09,
+    fill: { color: opts.fill ?? PPTX_BRAND.background },
+    line: { color: opts.border ?? PPTX_BRAND.border, width: 0.75 },
+    ...(opts.shadow === false ? {} : { shadow: CARD_SHADOW }),
+  });
+  if (opts.accent) {
+    slide.addShape("roundRect", {
+      x: box.x, y: box.y + 0.08, w: 0.07, h: box.h - 0.16,
+      rectRadius: 0.035, fill: { color: opts.accent }, line: { color: opts.accent },
+    });
+  }
+}
+
+/** Estimate a chip's width (inches) for a label at the chip font size. */
+export function chipWidth(label: string, fontSize: number = PPTX_TYPE.chip): number {
+  return Math.max(0.62, label.length * fontSize * 0.0095 + 0.34);
+}
+
+export interface ChipOpts {
+  solid?: boolean;
+  fontSize?: number;
+  align?: "left" | "center" | "right";
+  bold?: boolean;
+}
+
+/**
+ * Soft "badge" chip (default) or solid pill. One chip style across the deck.
+ * Soft = tinted fill + darkened-colour text; solid = colour fill + readable text.
+ */
+export function chip(
+  slide: PptxSlide,
+  box: { x: number; y: number; w: number; h?: number },
+  label: string,
+  color: string,
+  opts: ChipOpts = {}
+): void {
+  const h = box.h ?? 0.32;
+  const solid = opts.solid === true;
+  slide.addShape("roundRect", {
+    x: box.x, y: box.y, w: box.w, h,
+    rectRadius: Math.min(0.12, h / 2),
+    fill: { color: solid ? color : tint(color, 0.84) },
+    line: { color: solid ? color : tint(color, 0.55), width: 0.75 },
+  });
+  slide.addText(label, {
+    x: box.x, y: box.y, w: box.w, h,
+    fontFace: PPTX_FONT, fontSize: opts.fontSize ?? PPTX_TYPE.chip,
+    bold: opts.bold ?? true,
+    color: solid ? onColor(color) : shade(color, 0.12),
+    align: opts.align ?? "center", valign: "middle", fit: "shrink",
   });
 }
 
-/**
- * Attach speaker notes (PowerPoint presenter view). pptxgenjs exposes
- * `addNotes` on the slide object; some older versions named it differently.
- * We probe for the method to stay version-agnostic.
- */
-export function attachSpeakerNotes(slide: PptxSlide, notes: string): void {
-  if (typeof slide.addNotes === "function") {
-    slide.addNotes(notes);
-  }
+/** Small uppercase, letter-spaced eyebrow/label. */
+export function eyebrow(
+  slide: PptxSlide,
+  box: { x: number; y: number; w: number; h?: number },
+  text: string,
+  opts: { color?: string; align?: "left" | "center" | "right" } = {}
+): void {
+  slide.addText(text.toUpperCase(), {
+    x: box.x, y: box.y, w: box.w, h: box.h ?? 0.24,
+    fontFace: PPTX_FONT, fontSize: PPTX_TYPE.kicker, bold: true,
+    color: opts.color ?? PPTX_BRAND.muted, charSpacing: 1.4,
+    align: opts.align ?? "left", valign: "middle",
+  });
 }
+
+/** Hairline divider. */
+export function divider(
+  slide: PptxSlide,
+  box: { x: number; y: number; w: number },
+  color: string = PPTX_BRAND.border
+): void {
+  slide.addShape("rect", { x: box.x, y: box.y, w: box.w, h: 0.01, fill: { color }, line: { color } });
+}
+
+/**
+ * Bullet list with a coloured square glyph + ink text (real paragraphs).
+ * Autofits; meant for short scannable items (implications, caveats).
+ */
+export function bulletList(
+  slide: PptxSlide,
+  items: string[],
+  box: PptxRectShape,
+  opts: { fontSize?: number; color?: string; bulletColor?: string; gap?: number } = {}
+): void {
+  const fontSize = opts.fontSize ?? PPTX_TYPE.bodyTight;
+  const color = opts.color ?? PPTX_BRAND.foreground;
+  const bulletColor = opts.bulletColor ?? PPTX_BRAND.accent;
+  const gap = opts.gap ?? 7;
+  const runs: PptxTextLine[] = [];
+  items.forEach((item) => {
+    runs.push({ text: "▪  ", options: { color: bulletColor, fontSize, bold: true } });
+    runs.push({ text: item, options: { color, fontSize, breakLine: true, paraSpaceAfter: gap } });
+  });
+  slide.addText(runs, {
+    x: box.x, y: box.y, w: box.w, h: box.h,
+    fontFace: PPTX_FONT, valign: "top", lineSpacingMultiple: 1.04, fit: "shrink",
+  });
+}
+
+/** Colour for a +/- delta string (▲ green / ▼ red / – muted). */
+export function deltaColor(delta: string | undefined): string {
+  if (!delta) return PPTX_BRAND.muted;
+  const t = delta.trim();
+  if (/^[+▲]/.test(t) || /\bup\b/i.test(t)) return PPTX_BRAND.positive;
+  if (/^[-−▼]/.test(t) || /\bdown\b/i.test(t)) return PPTX_BRAND.negative;
+  return PPTX_BRAND.muted;
+}
+
+/** Prefix a delta string with a ▲/▼ arrow glyph if it doesn't already have one. */
+export function deltaWithArrow(delta: string): string {
+  const t = delta.trim();
+  if (/^[▲▼]/.test(t)) return t;
+  if (/^[+]/.test(t) || /\bup\b/i.test(t)) return `▲ ${t.replace(/^\+\s*/, "")}`;
+  if (/^[-−]/.test(t) || /\bdown\b/i.test(t)) return `▼ ${t.replace(/^[-−]\s*/, "")}`;
+  return t;
+}
+
+export const HORIZON = {
+  now: { color: PPTX_BRAND.horizonNow, label: "Now" },
+  this_quarter: { color: PPTX_BRAND.horizonThisQuarter, label: "This quarter" },
+  thisQuarter: { color: PPTX_BRAND.horizonThisQuarter, label: "This quarter" },
+  strategic: { color: PPTX_BRAND.horizonStrategic, label: "Strategic" },
+} as const;
+
+export interface DataTableOpts {
+  maxRows?: number;
+  fontSize?: number;
+  headerColor?: string;
+}
+
+/**
+ * Shared data-table renderer — ONE styling for TableSlide + Appendix.
+ * Primary header band, zebra rows, right-aligned & number-formatted numerics,
+ * proportional column widths, horizontal-rule-only grid, and an explicit
+ * "Showing N of M" note when rows are capped (never silent truncation).
+ * Returns the Y (inches) just below the table.
+ */
+export function renderDataTable(
+  slide: PptxSlide,
+  box: PptxRectShape,
+  data: { columns: string[]; rows: Array<Array<string | number | null>> },
+  opts: DataTableOpts = {}
+): number {
+  const maxRows = opts.maxRows ?? 14;
+  const fontSize = opts.fontSize ?? PPTX_TYPE.table;
+  const headerColor = opts.headerColor ?? PPTX_BRAND.primary;
+  const cols = data.columns;
+  const allRows = data.rows;
+  const shown = allRows.slice(0, maxRows);
+
+  const numericCol = cols.map((_, ci) => columnIsNumeric(allRows, ci));
+
+  // Proportional column widths from header + sampled cell text length.
+  const sample = shown.slice(0, 20);
+  const weights = cols.map((c, ci) => {
+    let w = String(c).length;
+    for (const r of sample) w = Math.max(w, String(r[ci] ?? "").length);
+    return Math.max(4, Math.min(w, 42));
+  });
+  const wsum = weights.reduce((a, b) => a + b, 0);
+  const colW = weights.map((w) => Math.max(0.7, (w / wsum) * box.w));
+
+  const hairline = { type: "solid" as const, pt: 0.5, color: PPTX_BRAND.border };
+  const noBorder = { type: "none" as const };
+  const cellBorder = [hairline, noBorder, hairline, noBorder] as const;
+
+  const headerRow = cols.map((c) => ({
+    text: String(c),
+    options: {
+      bold: true, color: onColor(headerColor), fill: { color: headerColor },
+      align: (numericCol[cols.indexOf(c)] ? "right" : "left") as "left" | "right",
+      valign: "middle" as const, fontSize: PPTX_TYPE.tableHeader,
+      margin: [3, 5, 3, 5] as [number, number, number, number],
+    },
+  }));
+
+  const bodyRows = shown.map((row, ri) =>
+    cols.map((_, ci) => ({
+      text: formatCell(row[ci], cols[ci]),
+      options: {
+        color: PPTX_BRAND.foreground,
+        fill: { color: ri % 2 === 0 ? PPTX_BRAND.background : PPTX_BRAND.surfaceMuted },
+        align: (numericCol[ci] ? "right" : "left") as "left" | "right",
+        valign: "middle" as const, fontSize,
+        margin: [3, 5, 3, 5] as [number, number, number, number],
+        border: cellBorder as unknown as PptxTextOptions["border"],
+      },
+    }))
+  );
+
+  const rowH = Math.max(0.26, Math.min(0.44, (box.h - 0.3) / (shown.length + 1)));
+  slide.addTable([headerRow, ...bodyRows], {
+    x: box.x, y: box.y, w: box.w, colW, rowH,
+    border: cellBorder, fontFace: PPTX_FONT, autoPage: false, valign: "middle",
+  });
+
+  const tableBottom = box.y + rowH * (shown.length + 1);
+  if (allRows.length > shown.length) {
+    slide.addText(`Showing ${shown.length} of ${allRows.length} rows`, {
+      x: box.x, y: tableBottom + 0.06, w: box.w, h: 0.26,
+      fontFace: PPTX_FONT, fontSize: PPTX_TYPE.caption, italic: true,
+      color: PPTX_BRAND.muted, align: "right", valign: "middle",
+    });
+    return tableBottom + 0.34;
+  }
+  return tableBottom + 0.1;
+}
+
+/** Attach speaker notes (probe for the method to stay version-agnostic). */
+export function attachSpeakerNotes(slide: PptxSlide, notes: string): void {
+  if (typeof slide.addNotes === "function") slide.addNotes(notes);
+}
+
+// Re-export colour helpers so layouts have one import source.
+export { tint, shade, onColor };

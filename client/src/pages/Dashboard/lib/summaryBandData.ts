@@ -44,19 +44,55 @@ export function selectAttentionAreas(
 export interface SummaryBandFinding {
   headline: string;
   magnitude?: string;
+  /** IUX3 · short "what we saw" snippet so a finding reads as evidence, not a
+   *  bare assertion. Truncated for the compact band; full text lives in the drawer. */
+  evidence?: string;
+}
+
+/** IUX3 · the "why it matters" link — the business consequence of the findings. */
+export interface SummaryBandImplication {
+  statement: string;
+  soWhat: string;
+}
+
+/** IUX3 · the "what to do" link — a grounded recommendation, surfaced on the band. */
+export interface SummaryBandAction {
+  action: string;
+  expectedImpact?: string;
+  horizon?: "now" | "this_quarter" | "strategic";
 }
 
 export interface SummaryBandData {
   tldr: string | null;
   magnitudes: MagnitudeItem[];
   findings: SummaryBandFinding[];
+  /** IUX3 · top "so what" implications — the decision chain's middle link. */
+  implications: SummaryBandImplication[];
+  /** IUX3 · top priority actions (recommendations), most-urgent horizon first. */
+  priorityActions: SummaryBandAction[];
 }
 
 const DEFAULT_MAX_FINDINGS = 3;
 const MAX_MAGNITUDES = 6;
+const MAX_IMPLICATIONS = 2;
+const MAX_PRIORITY_ACTIONS = 2;
+const EVIDENCE_SNIPPET_MAX = 160;
+
+/** Order recommendations so the most actionable horizon leads on the band. */
+const HORIZON_RANK: Record<string, number> = {
+  now: 0,
+  this_quarter: 1,
+  strategic: 2,
+};
 
 function hasText(s: string | undefined | null): boolean {
   return typeof s === "string" && s.trim().length > 0;
+}
+
+/** Collapse whitespace and truncate to a compact, manager-readable snippet. */
+function snippet(s: string, max: number): string {
+  const clean = s.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
 }
 
 /** True when the envelope has anything worth surfacing in the band. */
@@ -65,7 +101,9 @@ export function hasSummaryBandContent(envelope?: DashboardAnswerEnvelope): boole
   return (
     hasText(envelope.tldr) ||
     (envelope.magnitudes?.length ?? 0) > 0 ||
-    (envelope.findings?.length ?? 0) > 0
+    (envelope.findings?.length ?? 0) > 0 ||
+    (envelope.implications?.length ?? 0) > 0 ||
+    (envelope.recommendations?.length ?? 0) > 0
   );
 }
 
@@ -90,7 +128,29 @@ export function selectSummaryBandData(
     .map((f) => ({
       headline: f.headline,
       ...(hasText(f.magnitude) ? { magnitude: f.magnitude } : {}),
+      ...(hasText(f.evidence) ? { evidence: snippet(f.evidence, EVIDENCE_SNIPPET_MAX) } : {}),
     }));
 
-  return { tldr, magnitudes, findings };
+  const implications: SummaryBandImplication[] = (envelope?.implications ?? [])
+    .filter((i) => hasText(i?.statement) && hasText(i?.soWhat))
+    .slice(0, MAX_IMPLICATIONS)
+    .map((i) => ({ statement: i.statement.trim(), soWhat: i.soWhat.trim() }));
+
+  const priorityActions: SummaryBandAction[] = (envelope?.recommendations ?? [])
+    .filter((r) => hasText(r?.action))
+    .map((r, idx) => ({ r, idx }))
+    // Stable sort: most-actionable horizon first, original order within a horizon.
+    .sort(
+      (a, b) =>
+        (HORIZON_RANK[a.r.horizon ?? "now"] ?? 0) -
+          (HORIZON_RANK[b.r.horizon ?? "now"] ?? 0) || a.idx - b.idx,
+    )
+    .slice(0, MAX_PRIORITY_ACTIONS)
+    .map(({ r }) => ({
+      action: r.action.trim(),
+      ...(hasText(r.expectedImpact) ? { expectedImpact: r.expectedImpact!.trim() } : {}),
+      ...(r.horizon ? { horizon: r.horizon } : {}),
+    }));
+
+  return { tldr, magnitudes, findings, implications, priorityActions };
 }

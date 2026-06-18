@@ -19,11 +19,12 @@ import {
   CHART_SERIES_COLORS,
   CHART_DUAL_AXIS_STROKES,
   evenlySpacedDataKeys,
-  LINE_AREA_MAX_X_TICKS,
   sortRowsForLineAreaChart,
 } from '@/lib/chartRechartsShared';
 import { rechartsTooltipValueFormatter } from '@/lib/chartNumberFormat';
 import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
+import { maxXAxisLabels } from '@/lib/charts/xAxisLabelCap';
+import { useContainerWidth } from '@/hooks/useContainerWidth';
 import { capScatterPoints } from '@/lib/charts/scatterDecimation';
 import {
   formatDateForDisplay as formatDateForDisplayLocal,
@@ -307,16 +308,29 @@ export function ChartModal({
     [type, allData, x]
   );
 
+  // Measure the (wide) modal chart so the x-axis label budget tracks the actual
+  // rendered width instead of a fixed 10/11.
+  const [chartWidthRef, chartWidth] = useContainerWidth<HTMLDivElement>();
+  const maxXLabels = useMemo(
+    () =>
+      maxXAxisLabels({
+        axisWidthPx: chartWidth > 0 ? chartWidth - 80 : undefined,
+        fontSizePx: 12,
+        rotationDeg: -45,
+      }),
+    [chartWidth]
+  );
+
   const lineAreaXTicks = useMemo(() => {
     if (type !== 'line' && type !== 'area') return undefined;
     if (typeof x !== 'string') return undefined;
-    return evenlySpacedDataKeys(lineAreaSortedData, x, LINE_AREA_MAX_X_TICKS);
-  }, [type, lineAreaSortedData, x]);
+    return evenlySpacedDataKeys(lineAreaSortedData, x, maxXLabels);
+  }, [type, lineAreaSortedData, x, maxXLabels]);
 
   const barModalXTicks = useMemo(() => {
     if (type !== 'bar' || typeof x !== 'string') return undefined;
-    return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, LINE_AREA_MAX_X_TICKS);
-  }, [type, allData, x]);
+    return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, maxXLabels);
+  }, [type, allData, x, maxXLabels]);
 
   const modalVisibleSeriesKeys = useMemo(
     () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
@@ -1514,7 +1528,7 @@ export function ChartModal({
           <div className="flex gap-6 flex-1 min-h-0">
             {/* Left side - Chart or read-only pivot view */}
             <div className="flex flex-1 min-w-0 min-h-0 flex-col overflow-hidden">
-              <div className="flex flex-1 min-h-0 flex-col w-full pt-1">
+              <div ref={chartWidthRef} className="flex flex-1 min-h-0 flex-col w-full pt-1">
                 {effectiveView === 'pivot' ? (
                   <ChartTilePivotView
                     chart={chart}

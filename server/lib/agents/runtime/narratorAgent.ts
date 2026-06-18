@@ -117,12 +117,14 @@ const narratorOutputSchema = z.object({
     )
     .max(12)
     .optional(),
-  // Concrete next actions, grouped by horizon.
+  // IUX3 · Concrete recommended business moves, grouped by horizon. Each carries
+  // an optional `expectedImpact` (the manager-facing "what changes if we do this").
   recommendations: z
     .array(
       z.object({
         action: z.string().max(400),
         rationale: z.string().max(800),
+        expectedImpact: z.string().max(240).optional(),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )
@@ -176,6 +178,7 @@ function stripFindingRefs(out: NarratorOutput): NarratorOutput {
       ...r,
       action: stripRef(r.action),
       rationale: stripRef(r.rationale),
+      expectedImpact: stripRef(r.expectedImpact),
     })),
     magnitudes: out.magnitudes?.map((m) => ({ ...m, label: stripRef(m.label) })),
     ctas: out.ctas?.map(stripRef),

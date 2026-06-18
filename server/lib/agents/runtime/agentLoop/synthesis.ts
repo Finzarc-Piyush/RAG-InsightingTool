@@ -80,6 +80,7 @@ export const finalAnswerEnvelopeSchema = z.object({
       z.object({
         action: z.string().max(400),
         rationale: z.string().max(800),
+        expectedImpact: z.string().max(240).optional(),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
       })
     )

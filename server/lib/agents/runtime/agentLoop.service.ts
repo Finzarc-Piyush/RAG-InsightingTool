@@ -2847,6 +2847,28 @@ export async function runAgentTurn(
 
     materializeDeferredBuildCharts(ctx, deferredPlanCharts, mergedCharts);
 
+    // IUX · An explicit dashboard ask opens a long, previously-silent post-answer
+    // phase (visual planner → feature sweep → dashboard build + persist) that
+    // used to sit under a frozen "Synthesizing answer" pill for ~1 min. Bracket
+    // the WHOLE phase with one "Building dashboard" thinking step so the client
+    // can show a live rotating status. We emit `active` here (before the first
+    // sub-stage) and `completed` after the build try/catch below — paired on the
+    // same `announceDashboardBuild` guard so the pill always resolves, even on
+    // failure. The signal is the same explicit-ask the feature sweep + the
+    // auto_create dashboard track key off.
+    const isExplicitDashboardAsk =
+      DASHBOARD_EXPLICIT_RX.test(ctx.question) ||
+      ctx.analysisBrief?.requestsDashboard === true;
+    const announceDashboardBuild =
+      isExplicitDashboardAsk && Boolean(answer?.trim());
+    if (announceDashboardBuild) {
+      safeEmit("thinking", {
+        step: "Building dashboard",
+        status: "active",
+        timestamp: Date.now(),
+      });
+    }
+
     let visualExtra: Awaited<ReturnType<typeof proposeAndBuildExtraCharts>> = {
       charts: [],
     };
@@ -2891,9 +2913,8 @@ export async function runAgentTurn(
     // left behind. Bounded so total mergedCharts never exceeds the dashboard
     // cap. Only runs on the auto_create track (regex or brief flag); the
     // multi-chart "offer" track does NOT pad charts the user didn't request.
-    const isExplicitDashboardAsk =
-      DASHBOARD_EXPLICIT_RX.test(ctx.question) ||
-      ctx.analysisBrief?.requestsDashboard === true;
+    // (`isExplicitDashboardAsk` is computed once above, where it also gates the
+    // "Building dashboard" thinking step that brackets this whole phase.)
     // EXHAUSTIVE BREADTH (flag-gated · invariant #6). When on, ANALYSIS turns —
     // not just explicit dashboard asks — get one metric-sorted "outcome by
     // <dim>" chart for EVERY categorical dimension, plus a best/worst finding
@@ -3176,6 +3197,7 @@ export async function runAgentTurn(
           charts: mergedCharts,
           magnitudes: envelopeMagnitudes,
           brief: ctx.analysisBrief,
+          depthBudget: ctx.depthBudget,
           turnId,
           onLlmCall,
           intermediateSummaries,
@@ -3305,6 +3327,17 @@ export async function runAgentTurn(
       agentLog("buildDashboard.dispatch_failed", {
         turnId,
         error: errorMessage(dashErr),
+      });
+    }
+
+    // Resolve the "Building dashboard" pill (opened before the visual planner)
+    // on BOTH success and failure so the client's rotating status stops and the
+    // step settles to completed. Paired with the `active` emit above.
+    if (announceDashboardBuild) {
+      safeEmit("thinking", {
+        step: "Building dashboard",
+        status: "completed",
+        timestamp: Date.now(),
       });
     }
 

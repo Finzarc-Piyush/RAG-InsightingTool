@@ -152,7 +152,7 @@ export function buildDashboardUserPrompt(args: BuildDashboardPromptArgs): string
         .slice(0, 4)
         .map(
           (r, i) =>
-            `- #${i + 1} [${r.horizon ?? "now"}] ${r.action} — ${r.rationale}`
+            `- #${i + 1} [${r.horizon ?? "now"}] ${r.action} — ${r.rationale}${r.expectedImpact ? ` (expected impact: ${r.expectedImpact})` : ""}`
         )
         .join("\n")}`
     : "";

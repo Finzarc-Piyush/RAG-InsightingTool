@@ -15,6 +15,10 @@ import { AxisBottom, AxisLeft } from "@visx/axis";
 import { GridRows } from "@visx/grid";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
+  maxXAxisLabels,
+  pickEvenlySpacedTicks,
+} from "@/lib/charts/xAxisLabelCap";
+import {
   asNumber,
   asString,
   numericExtent,
@@ -112,6 +116,22 @@ function BoxRendererImpl({
         range: [0, innerWidth],
         padding: 0.4,
       }),
+    [xValues, innerWidth],
+  );
+
+  // Width-aware category-label budget (no fixed cap): fit as many horizontal
+  // labels as the plot width allows so a 30-group boxplot doesn't overlap.
+  const xTickValues = useMemo(
+    () =>
+      pickEvenlySpacedTicks(
+        xValues,
+        maxXAxisLabels({
+          axisWidthPx: innerWidth,
+          labels: xValues,
+          fontSizePx: 11,
+          rotationDeg: 0,
+        }),
+      ),
     [xValues, innerWidth],
   );
 
@@ -232,6 +252,7 @@ function BoxRendererImpl({
             fontFamily: "var(--font-sans)",
             textAnchor: "middle",
           })}
+          tickValues={xTickValues}
         />
         <AxisLeft
           scale={yScale}
