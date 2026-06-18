@@ -38,6 +38,8 @@ interface DashboardSummaryDrawerProps {
   followUpPrompts?: string[];
   investigationSummary?: InvestigationSummary;
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
+  /** IUX3 · click a suggested follow-up → send it to the source chat composer. */
+  onSelectFollowUp?: (question: string) => void;
 }
 
 export function hasAnySummaryContent(
@@ -78,6 +80,7 @@ export function DashboardSummaryDrawer({
   followUpPrompts,
   investigationSummary,
   priorInvestigationsSnapshot,
+  onSelectFollowUp,
 }: DashboardSummaryDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -103,6 +106,7 @@ export function DashboardSummaryDrawer({
             followUpPrompts={followUpPrompts}
             investigationSummary={investigationSummary}
             priorInvestigationsSnapshot={priorInvestigationsSnapshot}
+            onSelectFollowUp={onSelectFollowUp}
           />
         </div>
       </SheetContent>

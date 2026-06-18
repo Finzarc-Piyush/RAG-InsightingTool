@@ -242,7 +242,9 @@ function Router() {
         if (cancelled) return;
         logger.warn('Failed to rehydrate session from URL', err);
         setLoadedSessionData(null);
-        setLocation('/analysis', { replace: true });
+        // Preserve the query string (e.g. ?compose=…) so a follow-up draft
+        // survives the bounce and is re-applied once a composer mounts.
+        setLocation(`/analysis${window.location.search}`, { replace: true });
       }
     })();
     return () => {

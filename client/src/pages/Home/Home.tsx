@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { useSearch, useLocation } from 'wouter';
 import type { DatasetEnrichmentPollSnapshot } from '@/lib/api/uploadStatus';
 import { StartAnalysisView } from '@/pages/Home/Components/StartAnalysisView';
 import { SnowflakeImportFlow } from '@/pages/Home/Components/SnowflakeImportFlow';
@@ -106,9 +107,43 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   const replayControllerRef = useRef<{ abort: () => void } | null>(null);
   const dryRunFiredForSessionRef = useRef<string | null>(null);
 
+  // IUX3 · `?compose=<question>` bridge from a dashboard suggested follow-up:
+  // the dashboard navigates here with the question in the URL; we drop it into
+  // the chat composer (editable, NOT auto-sent) via the existing
+  // externalComposerDraft channel.
+  const composeSearch = useSearch();
+  const [composeLocation, navigateCompose] = useLocation();
+  const composeAppliedRef = useRef<string | null>(null);
+
+  const stripComposeParam = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.location.search.includes('compose=')) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete('compose');
+    const qs = params.toString();
+    navigateCompose(`${composeLocation}${qs ? `?${qs}` : ''}`, { replace: true });
+  }, [composeLocation, navigateCompose]);
+
   const handleComposerDraftConsumed = useCallback(() => {
     setExternalComposerDraft(null);
-  }, []);
+    // Strip ?compose only once the composer actually has the text. Deferring
+    // the strip to consume-time (instead of the read effect below) means a
+    // session-rehydration bounce can't drop the param before the chat mounts —
+    // the draft survives the remount and is re-applied from the still-present URL.
+    stripComposeParam();
+  }, [stripComposeParam]);
+
+  useEffect(() => {
+    const compose = new URLSearchParams(composeSearch).get('compose');
+    if (!compose) {
+      composeAppliedRef.current = null;
+      return;
+    }
+    if (composeAppliedRef.current === compose) return;
+    composeAppliedRef.current = compose;
+    composerDraftIdRef.current += 1;
+    setExternalComposerDraft({ text: compose, id: composerDraftIdRef.current });
+  }, [composeSearch]);
 
   const { toast } = useToast();
   const { setPivotEntries, setPivotMutationHandlers } = useChatSidebarNav();

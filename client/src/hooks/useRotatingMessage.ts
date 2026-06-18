@@ -24,7 +24,7 @@ export interface UseRotatingMessageOptions {
  * witty lines" instead of a copy per surface.
  */
 export function useRotatingMessage(
-  lines: string[],
+  lines: readonly string[],
   { intervalMs = 5200, enabled = true, startIndex = 0 }: UseRotatingMessageOptions = {}
 ): string {
   const len = lines.length;

@@ -299,9 +299,18 @@ Your job: narrate the investigation clearly in the following JSON format:
   Use null if nothing beyond the body adds value.
 - "ctas": 0 to 3 actionable follow-up prompts (empty array if none fit). Each MUST ask
   exactly ONE thing and be answerable in a single query. NEVER combine clauses with
-  "and" / "or" or list multiple dimensions (BAD: "How do compliance visits and total
-  visits vary by ASM or HQ?"; GOOD: "How do compliance visits vary by ASM?"). Split any
-  compound ask into separate single questions. Keep each short.
+  "and" / "or" or list multiple dimensions. Split any compound ask into separate single
+  questions. Keep each short.
+  Each cta must lead to a DEEPER dive — not a restatement of a breakdown the user can
+  already see. Do NOT suggest a plain "How does <metric> vary by <dimension>?" when that
+  breakdown is already covered by a finding or chart; that just re-asks what's answered.
+  Prefer the next question the findings provoke: WHY a gap exists ("What explains the gap
+  between the top and bottom <dimension> on <metric>?"), a CROSS-CUT the single-dimension
+  views can't show ("Within each <dimension A>, how does <metric> vary by <dimension B>?"),
+  an OUTLIER drill-down ("Which <dimension> values are the biggest outliers on <metric>,
+  and why?"), a TREND, or a relationship to ANOTHER metric.
+  BAD (flat restatement): "How do compliance visits vary by ASM?"
+  GOOD (deeper): "What explains why Cluster 2 NORTH's compliance runs 45% below average?"
 - Do NOT invent numbers not present in the findings. If a hypothesis has no evidence, say
   it remains open and explain why.
 

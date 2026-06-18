@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'wouter';
 import { DashboardData } from '../modules/useDashboardState';
 import { useToast } from '@/hooks/use-toast';
+import { dashboardSourceSessions } from '../dashboardSourceSessions';
+import { deepenFollowUps } from '@/shared/followUpDeepening';
 // W-EXP-12 · The client html-to-image + pptxgenjs imports were the engine
 // of the rastered-screenshot deck path. They're gone — the server now does
 // agentic deck composition (W-EXP-7) and ships a consultant-grade PPTX
@@ -201,7 +204,43 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   }, [activeSheetId, sheets]);
 
   const activeSheet = sheets.find(s => s.id === activeSheetId) || sheets[0];
-  
+
+  const [, setLocation] = useLocation();
+
+  // IUX3 · every chart on the dashboard, flattened across sheets — the ground
+  // truth for "what's already been answered", used to deepen the follow-ups.
+  const allDashboardCharts = useMemo(
+    () => sheets.flatMap((s) => s.charts ?? []),
+    [sheets],
+  );
+
+  // IUX3 · the suggested follow-ups actually shown: stored prompts with any
+  // chart-restating ones dropped, topped up with genuinely deeper questions
+  // generated from this dashboard's own charts. Recomputed live so EXISTING
+  // dashboards (whose stored prompts predate this fix) still get good ones.
+  const displayFollowUps = useMemo(
+    () => deepenFollowUps(dashboard.followUpPrompts ?? [], allDashboardCharts),
+    [dashboard.followUpPrompts, allDashboardCharts],
+  );
+
+  // IUX3 · clicking a follow-up opens the dashboard's source chat with the
+  // question pre-filled in the composer (editable, NOT auto-sent), mirroring
+  // chat suggestion chips. Carried via the `?compose=` param Home consumes.
+  const handleSelectFollowUp = useCallback(
+    (question: string) => {
+      const q = question.trim();
+      if (!q) return;
+      const sessionId =
+        dashboard.sessionId?.trim() || dashboardSourceSessions(dashboard)[0]?.sessionId;
+      setSummaryDrawerOpen(false);
+      const target = sessionId
+        ? `/analysis/${encodeURIComponent(sessionId)}?compose=${encodeURIComponent(q)}`
+        : `/analysis?compose=${encodeURIComponent(q)}`;
+      setLocation(target);
+    },
+    [dashboard, setLocation],
+  );
+
   // Ensure activeSheetId is always set when we have sheets
   const currentSheetId = activeSheetId || (sheets.length > 0 ? sheets[0].id : null);
 
@@ -753,6 +792,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           hasSummary={hasAnySummaryContent({
             envelope: dashboard.answerEnvelope,
             businessActions: dashboard.businessActions,
+            // Gate the summary trigger on STORED content — generated follow-ups
+            // alone shouldn't conjure an "Analysis summary" surface on an
+            // otherwise chart-only dashboard. The drawer still renders the
+            // deepened list (displayFollowUps) when it does open.
             followUpPrompts: dashboard.followUpPrompts,
             investigationSummary: dashboard.investigationSummary,
             priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
@@ -782,9 +825,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         onOpenChange={setSummaryDrawerOpen}
         envelope={dashboard.answerEnvelope}
         businessActions={dashboard.businessActions}
-        followUpPrompts={dashboard.followUpPrompts}
+        followUpPrompts={displayFollowUps}
         investigationSummary={dashboard.investigationSummary}
         priorInvestigationsSnapshot={dashboard.priorInvestigationsSnapshot}
+        onSelectFollowUp={handleSelectFollowUp}
       />
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">

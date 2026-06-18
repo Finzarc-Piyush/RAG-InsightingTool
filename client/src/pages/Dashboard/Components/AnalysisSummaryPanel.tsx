@@ -49,6 +49,13 @@ interface AnalysisSummaryPanelProps {
   investigationSummary?: InvestigationSummary;
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
   question?: string;
+  /**
+   * IUX3 · when provided, each suggested follow-up renders as a clickable row.
+   * Clicking sends the question to the chat composer (the dashboard navigates to
+   * its source chat with the text pre-filled), mirroring chat suggestion chips —
+   * it does NOT auto-send. Omitted → follow-ups render as plain read-only text.
+   */
+  onSelectFollowUp?: (question: string) => void;
 }
 
 const HORIZON_LABEL = {
@@ -324,6 +331,7 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
     investigationSummary,
     priorInvestigationsSnapshot,
     question,
+    onSelectFollowUp,
   } = props;
 
   const hasEnvelope =
@@ -469,11 +477,30 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
           <div className="text-xs uppercase tracking-wide text-muted-foreground">
             Suggested follow-ups
           </div>
-          <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-            {followUpPrompts!.map((p, i) => (
-              <li key={`fup-${i}`}>· {p}</li>
-            ))}
-          </ul>
+          {onSelectFollowUp ? (
+            <ul className="mt-1.5 space-y-1" data-testid="dashboard-followups">
+              {followUpPrompts!.map((p, i) => (
+                <li key={`fup-${i}`}>
+                  <button
+                    type="button"
+                    onClick={() => onSelectFollowUp(p)}
+                    aria-label={`Ask in chat: ${p}`}
+                    data-testid={`dashboard-followup-${i}`}
+                    className="group flex w-full items-start gap-2 rounded-brand-sm border border-transparent px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <HelpCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+                    <span className="flex-1">{p}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
+              {followUpPrompts!.map((p, i) => (
+                <li key={`fup-${i}`}>· {p}</li>
+              ))}
+            </ul>
+          )}
         </div>
       ) : null}
     </div>

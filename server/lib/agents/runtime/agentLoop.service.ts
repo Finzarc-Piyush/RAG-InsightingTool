@@ -212,6 +212,7 @@ import {
   type PivotAggLiteral,
   PIVOT_AGENT_RESULT_MAX_ROWS,
 } from "../../../shared/schema.js";
+import { filterAnsweredFollowUps } from "../../../shared/followUpDeepening.js";
 import { lintAfterAnalyticalTool } from "../../agentToolObservationLint.js";
 import { registerDerivedColumnOnSummary } from "../../deriveDimensionBucket.js";
 import {
@@ -3069,6 +3070,41 @@ export async function runAgentTurn(
           before: beforeCount,
           after: mergedCharts.length,
         });
+      }
+    }
+
+    // IUX3 · chart-aware follow-up cleanup. mergedCharts is now the canonical,
+    // final tile set (per-step + deferred build + visual planner + sweep). Drop
+    // any suggested follow-up that merely restates a breakdown the user can
+    // already SEE on a chart ("How does X vary by <already-charted dim>?") — a
+    // redundant chip that re-asks what the answer/dashboard already shows. The
+    // dashboard surface additionally GENERATES deeper questions client-side from
+    // these same charts (shared/followUpDeepening.deepenFollowUps); here we only
+    // filter, so the chat respects whatever deeper CTAs the narrator produced.
+    if (followUpPrompts?.length) {
+      const cleaned = filterAnsweredFollowUps(followUpPrompts, mergedCharts);
+      if (cleaned.length !== followUpPrompts.length) {
+        agentLog("follow_ups_chart_filtered", {
+          turnId,
+          before: followUpPrompts.length,
+          after: cleaned.length,
+        });
+      }
+      followUpPrompts = cleaned.length ? cleaned : undefined;
+    }
+    // Keep the envelope's parallel `nextSteps` (same CTA source; persisted to
+    // memory and surfaced in exports) in lockstep, so a redundant breakdown
+    // chip can't survive on one field after being dropped from the other.
+    if (envelopeAnswerEnvelope?.nextSteps?.length) {
+      const cleanedNs = filterAnsweredFollowUps(
+        envelopeAnswerEnvelope.nextSteps,
+        mergedCharts,
+      );
+      if (cleanedNs.length !== envelopeAnswerEnvelope.nextSteps.length) {
+        envelopeAnswerEnvelope = {
+          ...envelopeAnswerEnvelope,
+          nextSteps: cleanedNs.length ? cleanedNs : undefined,
+        };
       }
     }
 
