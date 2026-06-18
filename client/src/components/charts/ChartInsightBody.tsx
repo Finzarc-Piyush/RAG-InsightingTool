@@ -1,4 +1,5 @@
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { cn } from "@/lib/utils";
 
 /**
  * ChartInsightBody — the ONE presentational unit for a chart's auto-generated
@@ -6,9 +7,10 @@ import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
  * 1–2 sentence domain "business context" framing (W12).
  *
  * Shared so every surface that shows a chart's insight renders it identically:
- * the chat answer bubble ([MessageBubble]) and the dashboard tile footer
- * ([TileInsightFooter]) both render through this, instead of each owning a
- * private copy of the markup.
+ * the chat answer bubble ([MessageBubble]), the dashboard tile footer
+ * ([TileInsightFooter]), the chat + dashboard zoom modals, and the multi-chart
+ * chat response all render through this, instead of each owning a private copy
+ * of the markup.
  *
  * Pure & chrome-free by design: collapse/expand, regenerate, history, and the
  * "no insight yet" placeholder live in the surface wrapper (the dashboard footer
@@ -19,26 +21,50 @@ import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 export interface ChartInsightBodyProps {
   /** Plain-English key-insight prose (markdown). */
   keyInsight?: string;
-  /** Domain framing — rendered as a muted "Business context:" block. */
+  /** Domain framing — rendered as a "Business context:" block. */
   businessCommentary?: string;
+  /**
+   * `'on-accent'` = this body is hosted on a COLORED panel (e.g. the chat zoom's
+   * blue "Key Insight" card). The business-context block then drops its own
+   * neutral muted card and instead inherits the host surface (a hairline
+   * divider + inherited text) so it harmonizes instead of clashing. Default =
+   * the standalone neutral card used on muted/transparent surfaces.
+   */
+  tone?: "default" | "on-accent";
 }
 
-export function ChartInsightBody({ keyInsight, businessCommentary }: ChartInsightBodyProps) {
+export function ChartInsightBody({
+  keyInsight,
+  businessCommentary,
+  tone = "default",
+}: ChartInsightBodyProps) {
   const hasKey = typeof keyInsight === "string" && keyInsight.trim().length > 0;
   const hasCommentary =
     typeof businessCommentary === "string" && businessCommentary.trim().length > 0;
 
   if (!hasKey && !hasCommentary) return null;
 
+  const onAccent = tone === "on-accent";
+
   return (
     <>
       {hasKey ? <MarkdownRenderer content={keyInsight!} /> : null}
       {hasCommentary ? (
         <p
-          className="rounded-brand-md border border-border/40 bg-muted/30 px-3 py-2 text-[12px] italic leading-snug text-foreground/80"
+          className={cn(
+            "text-[12px] italic leading-snug",
+            onAccent
+              ? "mt-2 border-t border-current/15 pt-2"
+              : "rounded-brand-md border border-border/40 bg-muted/30 px-3 py-2 text-foreground/80",
+          )}
           aria-label="Business commentary"
         >
-          <span className="not-italic font-semibold text-muted-foreground mr-1">
+          <span
+            className={cn(
+              "not-italic font-semibold mr-1",
+              onAccent ? "opacity-70" : "text-muted-foreground",
+            )}
+          >
             Business context:
           </span>
           {businessCommentary}

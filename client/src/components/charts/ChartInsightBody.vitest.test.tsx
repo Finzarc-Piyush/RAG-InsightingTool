@@ -40,4 +40,29 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     const { container } = render(<ChartInsightBody />);
     expect(container.textContent).toBe("");
   });
+
+  test("on-accent tone still renders the commentary but drops the neutral muted card (harmonizes on colored panels)", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight="North grew fastest."
+        businessCommentary="Distribution expansion likely."
+        tone="on-accent"
+      />,
+    );
+    // Content still renders.
+    expect(screen.getByText("Business context:")).toBeTruthy();
+    expect(screen.getByText("Distribution expansion likely.")).toBeTruthy();
+    // The neutral muted-card background is NOT applied (so it inherits the host).
+    const commentary = container.querySelector('[aria-label="Business commentary"]');
+    expect(commentary).toBeTruthy();
+    expect(commentary!.className.includes("bg-muted/30")).toBe(false);
+  });
+
+  test("default tone keeps the neutral muted card", () => {
+    const { container } = render(
+      <ChartInsightBody businessCommentary="Domain framing." />,
+    );
+    const commentary = container.querySelector('[aria-label="Business commentary"]');
+    expect(commentary!.className.includes("bg-muted/30")).toBe(true);
+  });
 });

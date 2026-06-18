@@ -1584,6 +1584,7 @@ export function ChartModal({
                               businessCommentary={
                                 (chart as { businessCommentary?: string }).businessCommentary
                               }
+                              tone="on-accent"
                             />
                             {nextStep && onSuggestedQuestionClick && composerText ? (
                               <div className="mt-3 flex flex-wrap gap-2">
