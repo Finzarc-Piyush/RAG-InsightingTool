@@ -295,7 +295,9 @@ export function formatUserAndSessionJsonBlocks(
     s += directiveBlock;
   }
   if (ctx.permanentContext?.trim().length) {
-    s += `\nUser-provided notes (verbatim):\n${ctx.permanentContext.trim().slice(0, opts.maxUserChars)}`;
+    // User's "Give Additional Context" — surfaced VERBATIM, never capped
+    // (opts.maxUserChars is retained for the interface but intentionally unused).
+    s += `\nUser-provided notes (verbatim):\n${ctx.permanentContext.trim()}`;
   }
   if (ctx.domainContext?.trim().length) {
     const cap = opts.maxDomainChars ?? 12000;

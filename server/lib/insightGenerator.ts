@@ -421,7 +421,7 @@ SUGGESTION FORMAT:
     : '';
 
   const permBlock = synthesisContext?.permanentContext?.trim()
-    ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim().slice(0, 3000)}`
+    ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim()}`
     : '';
 
   // W12 · feed FMCG/Marico domain context to chart insight generation. When

@@ -51,15 +51,18 @@ import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { applyCap, type TrimmedBlockInfo } from "./promptBudget.js";
 
 // These caps are SOFT defaults wrapped in `applyCap`. They bound very-large
-// inputs (a multi-paragraph user note doesn't get inlined as 50 KB), and every
-// truncation records a `TrimmedBlockInfo` on
-// `BuildSynthesisContextInput.contextTrimmedSink` so the chatStream service can
-// emit a `context_trimmed` SSE row telling the user some context was dropped.
+// MACHINE / AUTHORED inputs (the RAG bundle, the authored FMCG/Marico domain
+// packs) so the prompt body can't balloon past the model window.
+//
+// User-PROVIDED context is intentionally NOT capped: the user's "Give Additional
+// Context" note (ctx.permanentContext) and the derived stated-intent / interpreted
+// constraints are surfaced VERBATIM in `buildUserBlock` — they reach the writer in
+// full in every step. (Earlier this file capped permanent notes at 4 000 chars,
+// which is what made a "context trimmed" notice fire for ordinary-length notes.)
 const DOMAIN_BLOCK_CHAR_CAP = 9_000;
 const RAG_BLOCK_CHAR_CAP = 9_000;
 const COLUMN_ROLES_MAX = 20;
 const SUGGESTED_FOLLOWUPS_MAX = 4;
-const PERMANENT_NOTES_CAP = 4_000;
 
 export interface SynthesisContextBundle {
   /** FMCG/Marico authored packs (already loaded into ctx.domainContext). */
@@ -464,27 +467,22 @@ function buildUserBlock(
   }
 
   if (ctx.permanentContext?.trim().length) {
-    const { content, trimmed } = applyCap(
-      "synthesis.permanentNotes",
-      ctx.permanentContext.trim(),
-      PERMANENT_NOTES_CAP
-    );
-    if (trimmed) input.contextTrimmedSink?.push(trimmed);
-    lines.push(`User notes (verbatim):\n${content}`);
+    // User-provided "Give Additional Context" — surfaced VERBATIM, never capped.
+    lines.push(`User notes (verbatim):\n${ctx.permanentContext.trim()}`);
   }
 
   // Surface userIntent.{verbatimNotes, interpretedConstraints} explicitly, so
   // the narrator always sees them. (Relying on the hypothesis planner to encode
   // them in the blackboard loses them when the blackboard is empty — the
   // synthesis-fallback path — or thin, e.g. a single-tool turn.) They ALWAYS
-  // appear in the user block when set. Caps mirror the other text blocks (800
-  // chars verbatim, 8 constraints × 200 chars each).
+  // appear in the user block when set, IN FULL — this is user-derived content
+  // and is never capped.
   const userIntent = ctx.sessionAnalysisContext?.userIntent;
   if (userIntent) {
     const verbatim = (userIntent.verbatimNotes ?? "").trim();
     if (verbatim) {
       lines.push(
-        `User-stated intent (verbatim from earlier turns):\n${verbatim.slice(0, 800)}`
+        `User-stated intent (verbatim from earlier turns):\n${verbatim}`
       );
     }
     const constraints = (userIntent.interpretedConstraints ?? [])
@@ -492,8 +490,8 @@ function buildUserBlock(
       .filter((c) => c.length > 0);
     if (constraints.length) {
       lines.push("User-stated constraints (interpreted from prior turns):");
-      for (const c of constraints.slice(0, 8)) {
-        lines.push(`  • ${c.slice(0, 200)}`);
+      for (const c of constraints) {
+        lines.push(`  • ${c}`);
       }
     }
   }

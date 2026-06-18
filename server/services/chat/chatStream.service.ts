@@ -37,10 +37,6 @@ import {
   hydrateDirectivesForSession,
 } from "../../models/datasetDirectives.model.js";
 import type { UserDirective } from "../../shared/schema.js";
-import {
-  formatContextTrimmedPayload,
-  type TrimmedBlockInfo,
-} from "../../lib/agents/runtime/promptBudget.js";
 import { extractColumnsFromHistory } from "../../lib/agents/utils/columnExtractor.js";
 import { isAgenticLoopEnabled } from "../../lib/agents/runtime/runtimeConfig.js";
 import {
@@ -1182,13 +1178,6 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     const activeDirectivesForTurn: UserDirective[] =
       (await kickoff.activeDirectives) ?? [];
 
-    // Wave W-UD8 · per-turn sink for prompt-budget truncation events.
-    // Threaded through `agentOptions.contextTrimmedSink` into the agent
-    // execution context, where the synthesis / narrator / business-actions
-    // helpers push one row per cap site that actually trimmed. After the
-    // turn ends we emit a single coalesced `context_trimmed` SSE row.
-    const contextTrimmedSink: TrimmedBlockInfo[] = [];
-
     const agentOptions = isAgenticLoopEnabled()
         ? {
             onAgentEvent,
@@ -1205,7 +1194,6 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
             chatDocument,
             dataBlobVersion: chatDocument.currentDataBlob?.version,
             activeDirectives: activeDirectivesForTurn,
-            contextTrimmedSink,
             // W27 · explicit annotations on the callback params so tsc can
             // type-check the body. Parameter shapes match the runtime
             // payloads emitted by the agent loop (see types.ts).
@@ -1454,14 +1442,9 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       return false;
     };
 
-    // Wave W-UD8 · emit a single coalesced `context_trimmed` SSE row when
-    // any of the prompt-budget cap sites trimmed user-bearing input during
-    // the turn. The client renders this as a non-blocking toast so the user
-    // knows their saved context was clipped to fit the model window.
-    {
-      const payload = formatContextTrimmedPayload(contextTrimmedSink);
-      if (payload) safeSSE("context_trimmed", payload);
-    }
+    // (Wave W-UD8's `context_trimmed` SSE row was removed: user-provided "added
+    // context" is no longer capped, so there is nothing user-facing to report.
+    // Machine/authored caps remain but are an internal model-window detail.)
 
     let domainContextForCharts: string | undefined;
     try {

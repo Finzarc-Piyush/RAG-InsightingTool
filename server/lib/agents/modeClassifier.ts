@@ -127,12 +127,12 @@ export async function classifyMode(
   // Build available columns context
   const allColumns = summary.columns.map(c => c.name).join(', ');
 
-  // Optional user-intent + domain blocks. Capped tightly because mode
-  // classification is a high-volume MINI-tier call; we want the prompt under
-  // ~3KB even with full context.
+  // Optional user-intent + domain blocks. User-provided context (notes, stated
+  // intent, interpreted constraints) is surfaced VERBATIM — never capped — so the
+  // user's added context is honoured in full even on this MINI-tier routing call.
   const userNotes = (context?.permanentContext ?? '').trim();
   const userNotesBlock = userNotes
-    ? `\n\nUSER NOTES (standing context the user set on this session — apply when relevant to the routing decision):\n${userNotes.slice(0, 600)}`
+    ? `\n\nUSER NOTES (standing context the user set on this session — apply when relevant to the routing decision):\n${userNotes}`
     : '';
   const userIntent = context?.userIntentVerbatim?.trim();
   const interpretedConstraints = (context?.userIntentConstraints ?? [])
@@ -141,10 +141,10 @@ export async function classifyMode(
   const userIntentBlock =
     userIntent || interpretedConstraints.length
       ? `\n\nUSER INTENT (interpreted from earlier turns; should bias short follow-ups toward the matching mode):${
-          userIntent ? `\n- stated: ${userIntent.slice(0, 400)}` : ''
+          userIntent ? `\n- stated: ${userIntent}` : ''
         }${
           interpretedConstraints.length
-            ? `\n- constraints:\n  - ${interpretedConstraints.slice(0, 8).join('\n  - ').slice(0, 800)}`
+            ? `\n- constraints:\n  - ${interpretedConstraints.join('\n  - ')}`
             : ''
         }`
       : '';

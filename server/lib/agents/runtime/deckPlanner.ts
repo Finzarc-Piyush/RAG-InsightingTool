@@ -434,7 +434,8 @@ export function buildDeckPlannerUserPrompt(inputs: DeckPlannerInputs): string {
   const sections: string[] = [formatSlimDashboardForPrompt(slim)];
 
   if (inputs.permanentContext?.trim()) {
-    const text = inputs.permanentContext.trim().slice(0, 800);
+    // User-provided notes — surfaced VERBATIM, never capped.
+    const text = inputs.permanentContext.trim();
     sections.push(
       `\n# USER PREFERENCES (standing notes the user set on this session — honour for deck framing and exec-summary phrasing; do NOT invent figures from these notes):\n${text}`
     );

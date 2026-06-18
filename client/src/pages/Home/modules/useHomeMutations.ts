@@ -1182,33 +1182,6 @@ export const useHomeMutations = ({
                     description: `${d.text.slice(0, 200)}${structSummary}`,
                   });
                 }
-              } else if (event === 'context_trimmed') {
-                // Wave W-UD8 · server emitted one row per flexible-slot
-                // prompt-budget cap that actually trimmed user-bearing
-                // input during the turn. Surface a non-blocking toast
-                // so the user knows their saved context was clipped to
-                // fit the model window. Directives are NEVER trimmed
-                // (they live in the reserved slot) so this is purely
-                // about RAG / blackboard / history.
-                const payload = data as {
-                  blocks?: Array<{
-                    id: string;
-                    inputChars: number;
-                    outputChars: number;
-                  }>;
-                };
-                const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
-                if (blocks.length > 0) {
-                  // Informational, not alarming: the main answer uses the full
-                  // context; only a later enrichment step may use a shortened
-                  // copy when the added notes are long. Internal block ids are
-                  // not shown — they mean nothing to the user.
-                  toast({
-                    title: 'Heads up — your added context was long',
-                    description:
-                      'A later step used a shortened version of the extra context you provided. Your main answer used all of it.',
-                  });
-                }
               }
             },
             onIntermediate: (payload: StreamIntermediatePayload) => {

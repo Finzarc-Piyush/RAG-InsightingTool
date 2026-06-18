@@ -27,18 +27,16 @@ function makeCtx(overrides: Partial<AgentExecutionContext> = {}): AgentExecution
   } as AgentExecutionContext;
 }
 
-test("buildSynthesisContext.permanentNotes — over-cap notes record a trim event", () => {
+test("buildSynthesisContext.permanentNotes — user notes are surfaced IN FULL, never trimmed", () => {
   const sink: TrimmedBlockInfo[] = [];
+  // A long "Give Additional Context" note must reach the writer verbatim — no cap.
   const ctx = makeCtx({ permanentContext: "x".repeat(5000) });
   const bundle = buildSynthesisContext(ctx, { contextTrimmedSink: sink });
-  // Verify userBlock contains the truncated content (4000 chars only).
-  assert.ok(bundle.userBlock.includes("x".repeat(4000)));
-  // Verify sink received the trim event.
+  // The full 5000 chars appear (would fail if any cap clipped it).
+  assert.ok(bundle.userBlock.includes("x".repeat(5000)));
+  // And NO trim event is recorded for user notes.
   const evt = sink.find((s) => s.id === "synthesis.permanentNotes");
-  assert.ok(evt, "expected synthesis.permanentNotes trim event");
-  assert.equal(evt!.inputChars, 5000);
-  assert.equal(evt!.outputChars, 4000);
-  assert.equal(evt!.reason, "budget");
+  assert.equal(evt, undefined, "user notes must not record a trim event");
 });
 
 test("buildSynthesisContext.domainBlock — over-cap domain context records a trim event", () => {

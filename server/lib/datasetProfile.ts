@@ -144,11 +144,12 @@ export async function inferDatasetProfile(
   const trimmedSink = options?.contextTrimmedSink;
   const pcRaw = options?.permanentContext?.trim();
   const dcRaw = options?.domainContext?.trim();
-  const pcResult = pcRaw ? applyCap("datasetProfile.permanentContext", pcRaw, 800) : undefined;
+  // User-provided "Give Additional Context" — used in full, never capped.
+  const permanentContext = pcRaw || undefined;
+  // Authored FMCG/Marico packs stay bounded so the upload-time profile call
+  // (which already carries the sample rows) can't balloon.
   const dcResult = dcRaw ? applyCap("datasetProfile.domainContext", dcRaw, 2000) : undefined;
-  if (pcResult?.trimmed) trimmedSink?.push(pcResult.trimmed);
   if (dcResult?.trimmed) trimmedSink?.push(dcResult.trimmed);
-  const permanentContext = pcResult?.content || undefined;
   const domainContext = dcResult?.content || undefined;
   const userContent = JSON.stringify({
     fileName: options?.fileName,

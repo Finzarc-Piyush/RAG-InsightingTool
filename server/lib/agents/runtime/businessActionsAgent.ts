@@ -118,14 +118,10 @@ NEVER:
 OUTPUT: JSON exactly matching \`{ items: BusinessActionItem[] }\`. Empty array is valid and preferred to weak output.`;
 
 const ENVELOPE_SECTION_CHAR_CAP = 6000;
-// Domain context the user authored ("Give Additional Context"). The main
-// answer (synthesis/narrator) reads up to 9 000 chars; this post-answer
-// business-actions step kept a much tighter 2 500-char slot, which made the
-// "context trimmed" toast fire for ordinary-length notes. 6 000 chars (~1.5K
-// tokens) fits typical domain notes while staying well under the per-prompt
-// DEFAULT_PROMPT_BUDGET — so the toast now fires only for genuinely large input.
+// Authored FMCG/Marico domain packs (ctx.domainContext). This is machine/authored
+// background, not the user's own notes, so it keeps a bound to protect the prompt
+// window. (User-provided notes — USER NOTES below — are NOT capped.)
 const DOMAIN_CONTEXT_CHAR_CAP = 6000;
-const PERMANENT_CONTEXT_CHAR_CAP = 1200;
 const PRIOR_INVESTIGATION_CHAR_CAP = 800;
 
 /**
@@ -243,15 +239,10 @@ function buildUserMessage(
     userNotesParts.push(`notes: ${permanent}`);
   }
   if (userNotesParts.length) {
-    const joined = userNotesParts.join("\n");
-    // Budget-driven cap; trim event surfaces via trimmedSink.
-    const { content, trimmed } = applyCap(
-      "businessActions.userNotes",
-      joined,
-      PERMANENT_CONTEXT_CHAR_CAP
-    );
-    if (trimmed) trimmedSink?.push(trimmed);
-    sections.push("USER NOTES:\n" + content);
+    // User-provided notes (permanent context + stated intent + constraints) are
+    // surfaced VERBATIM here — never capped. This post-answer step is the "later
+    // step" that previously shortened long notes (cap was 1 200 chars).
+    sections.push("USER NOTES:\n" + userNotesParts.join("\n"));
   }
   if (ctx.domainContext && ctx.domainContext.trim()) {
     const { content, trimmed } = applyCap(
