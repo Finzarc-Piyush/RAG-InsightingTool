@@ -138,4 +138,18 @@ describe("Wave Z1 · TileHeader action-slot gating", () => {
     // The persistent slot must NOT be wrapped by the edit-mode opacity gate.
     expect(src).toMatch(/persistentActions \? \(\s*<div className="flex items-center gap-1 flex-shrink-0">/);
   });
+
+  it("WD-ctrl · edit-mode action slot is always-visible, not hover-gated", () => {
+    // Pre-WD-ctrl the actions slot (delete / edit / pivot-toggle) was
+    // `opacity-0 group-hover:opacity-100` even in edit mode, so the
+    // controls were invisible until the user hovered the tile. The fix
+    // makes the slot render at full opacity whenever `showActions` is
+    // true. Pin the visible branch and assert the hover gate is gone.
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "src/pages/Dashboard/Components/TileHeader.tsx"),
+      "utf8",
+    );
+    expect(src).toMatch(/showActions\s*\?\s*"opacity-100"/);
+    expect(src).not.toContain("group-hover:opacity-100");
+  });
 });

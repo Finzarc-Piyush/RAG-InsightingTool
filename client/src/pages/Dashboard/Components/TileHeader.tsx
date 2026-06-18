@@ -17,8 +17,11 @@ import { shouldShowEditActions } from "./tileHeaderChrome";
  * In view mode the action slot is `aria-hidden` and `opacity-0` (with
  * `pointer-events-none`) rather than removed from the tree — keeps
  * screen-reader narration stable when the user toggles to/from edit
- * mode while focused on a tile, and avoids layout shifts. Hover in
- * edit mode reveals it via group-hover for ergonomics.
+ * mode while focused on a tile, and avoids layout shifts. In edit mode
+ * the slot is always visible (`opacity-100`) — pre-WD-ctrl it was
+ * hover-gated (`group-hover`), which hid delete/edit/pivot controls
+ * until the user happened to mouse over the tile. The authoring
+ * affordances now read as a persistent toolbar while editing.
  *
  * The drag-grip icon renders only in edit mode AND when the host
  * passes `dragHandleClassName` (the `dashboard-tile-grab-area` class
@@ -88,7 +91,7 @@ export function TileHeader({
             className={cn(
               "flex items-center gap-1 flex-shrink-0 transition-opacity",
               showActions
-                ? "opacity-0 group-hover:opacity-100"
+                ? "opacity-100"
                 : "opacity-0 pointer-events-none",
             )}
             aria-hidden={!showActions}

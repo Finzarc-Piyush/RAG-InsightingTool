@@ -412,7 +412,7 @@ export function TileInsightFooter({
               className={cn(
                 "absolute right-1 top-1 h-6 w-6 transition-opacity",
                 isEditing
-                  ? "opacity-0 group-hover/insight:opacity-100"
+                  ? "opacity-100"
                   : "opacity-0 pointer-events-none",
               )}
               aria-label="Edit insight"

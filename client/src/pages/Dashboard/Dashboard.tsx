@@ -20,6 +20,7 @@ export default function Dashboard() {
     deleteDashboard,
     removeChartFromDashboard,
     removeTableFromDashboard,
+    removePivotFromDashboard,
     fetchDashboardById,
     status,
     refetch,
@@ -113,6 +114,14 @@ export default function Dashboard() {
     }
   };
 
+  const handleDeletePivot = async (pivotIndex: number, sheetId?: string) => {
+    if (currentDashboard) {
+      const updatedDashboard = await removePivotFromDashboard(currentDashboard.id, pivotIndex, sheetId);
+      setCurrentDashboard(updatedDashboard);
+      await refetch();
+    }
+  };
+
   const handleSharedDashboardAccepted = async (data: { invite: any; dashboard: ServerDashboard }) => {
     try {
       // Normalize the dashboard data first
@@ -171,6 +180,7 @@ export default function Dashboard() {
         onBack={handleBackToList}
         onDeleteChart={handleDeleteChart}
         onDeleteTable={handleDeleteTable}
+        onDeletePivot={handleDeletePivot}
         isRefreshing={status.refreshing}
         onRefresh={refetch}
       />

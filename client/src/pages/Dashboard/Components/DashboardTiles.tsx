@@ -953,7 +953,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           <PivotTile
             pivot={tile.pivot}
             sessionId={sessionId}
-            canEdit={canEdit}
+            isEditing={isEditing}
             onDelete={canEdit ? () => handleDeleteClick(tile) : undefined}
           />
         );

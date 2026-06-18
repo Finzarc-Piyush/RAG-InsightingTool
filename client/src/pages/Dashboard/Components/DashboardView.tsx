@@ -80,12 +80,13 @@ interface DashboardViewProps {
   onBack: () => void;
   onDeleteChart: (chartIndex: number, sheetId?: string) => void;
   onDeleteTable: (tableIndex: number, sheetId?: string) => void;
+  onDeletePivot: (pivotIndex: number, sheetId?: string) => void;
   isRefreshing?: boolean;
   onRefresh?: () => Promise<any>;
   permission?: "view" | "edit"; // Optional permission, defaults to checking ownership
 }
 
-export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
+export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable, onDeletePivot, isRefreshing = false, onRefresh, permission }: DashboardViewProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [serverExportBusy, setServerExportBusy] = useState<"pdf" | "pptx" | null>(null);
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null);
@@ -121,6 +122,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const { toast } = useToast();
   const {
     addChartToDashboard,
+    addTableToDashboard,
     renameDashboard,
     renameSheet,
     reorderSheets,
@@ -873,6 +875,21 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                           throw e;
                         }
                       }}
+                      onAddTable={async (table) => {
+                        if (!currentSheetId) return;
+                        try {
+                          await addTableToDashboard(dashboard.id, table, currentSheetId);
+                          if (onRefresh) await onRefresh();
+                          await refetchDashboards();
+                        } catch (e) {
+                          toast({
+                            title: 'Could not add table',
+                            description: e instanceof Error ? e.message : 'Try again.',
+                            variant: 'destructive',
+                          });
+                          throw e;
+                        }
+                      }}
                     />
                   ) : null}
                 </div>
@@ -916,6 +933,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   onDeleteTable={canEdit ? (tableIndex) => {
                     const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
                     onDeleteTable(tableIndex, sheetIdToUse || undefined);
+                  } : undefined}
+                  onDeletePivot={canEdit ? (pivotIndex) => {
+                    const sheetIdToUse = currentSheetId || (sheets.length > 0 ? sheets[0].id : undefined);
+                    onDeletePivot(pivotIndex, sheetIdToUse || undefined);
                   } : undefined}
                   filtersByTile={tileFiltersForRender.effective}
                   inapplicableColumnsByTile={tileFiltersForRender.inapplicable}

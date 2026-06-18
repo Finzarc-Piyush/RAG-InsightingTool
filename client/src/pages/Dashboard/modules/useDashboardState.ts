@@ -241,6 +241,20 @@ export const useDashboardState = () => {
     },
   });
 
+  const removePivotMutation = useMutation({
+    mutationFn: async ({ dashboardId, pivotIndex, sheetId }: { dashboardId: string; pivotIndex: number; sheetId?: string }) => {
+      const updated = await dashboardsApi.removePivot(dashboardId, { index: pivotIndex, sheetId });
+      return normalizeDashboard(updated);
+    },
+    onSuccess: (updatedDashboard) => {
+      queryClient.setQueryData<DashboardData[]>(['dashboards', 'list'], (prev) => {
+        if (!prev) return [updatedDashboard];
+        return prev.map((dashboard) => (dashboard.id === updatedDashboard.id ? updatedDashboard : dashboard));
+      });
+      setCurrentDashboard((prev) => (prev?.id === updatedDashboard.id ? updatedDashboard : prev));
+    },
+  });
+
   const deleteDashboardMutation = useMutation({
     mutationFn: async (dashboardId: string) => {
       await dashboardsApi.remove(dashboardId);
@@ -298,6 +312,12 @@ export const useDashboardState = () => {
     (dashboardId: string, tableIndex: number, sheetId?: string) =>
       removeTableMutation.mutateAsync({ dashboardId, tableIndex, sheetId }),
     [removeTableMutation]
+  );
+
+  const removePivotFromDashboard = useCallback(
+    (dashboardId: string, pivotIndex: number, sheetId?: string) =>
+      removePivotMutation.mutateAsync({ dashboardId, pivotIndex, sheetId }),
+    [removePivotMutation]
   );
 
   const deleteDashboard = useCallback(
@@ -536,6 +556,7 @@ export const useDashboardState = () => {
     addTableToDashboard,
     removeChartFromDashboard,
     removeTableFromDashboard,
+    removePivotFromDashboard,
     deleteDashboard,
     renameDashboard,
     renameSheet,

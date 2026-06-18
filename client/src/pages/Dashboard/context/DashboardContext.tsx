@@ -27,6 +27,7 @@ interface DashboardContextType {
   addTableToDashboard: (dashboardId: string, table: any, sheetId?: string) => Promise<DashboardData>;
   removeChartFromDashboard: (dashboardId: string, chartIndex: number, sheetId?: string) => Promise<DashboardData>;
   removeTableFromDashboard: (dashboardId: string, tableIndex: number, sheetId?: string) => Promise<DashboardData>;
+  removePivotFromDashboard: (dashboardId: string, pivotIndex: number, sheetId?: string) => Promise<DashboardData>;
   deleteDashboard: (dashboardId: string) => Promise<void>;
   renameDashboard: (dashboardId: string, name: string) => Promise<DashboardData>;
   renameSheet: (dashboardId: string, sheetId: string, name: string) => Promise<DashboardData>;

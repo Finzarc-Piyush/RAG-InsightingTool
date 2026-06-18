@@ -6,6 +6,7 @@ import {
   Plus,
   Search,
   StickyNote,
+  Table2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +29,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useDashboardEditMode } from "../context/DashboardEditModeContext";
 import { sessionsApi } from "@/lib/api/sessions";
-import type { ChartSpec } from "@/shared/schema";
+import type { ChartSpec, DashboardTableSpec } from "@/shared/schema";
+import { chartSpecToTableSpec } from "../lib/chartSpecToTableSpec";
 import { cn } from "@/lib/utils";
 
 /**
@@ -61,6 +63,12 @@ interface AddTileMenuProps {
    * dashboard. Optional — when undefined the menu item is hidden.
    */
   onAddChart?: (chart: ChartSpec) => Promise<void>;
+  /**
+   * WD-add · add a TABLE derived from a session chart's data — the chart's
+   * underlying rows become a standalone table tile. Optional — when
+   * undefined the "Table from session" menu item is hidden.
+   */
+  onAddTable?: (table: DashboardTableSpec) => Promise<void>;
   /** Position the new block at this `order` value (default: prepend). */
   defaultOrder?: number;
 }
@@ -72,6 +80,7 @@ function generateId(prefix: string): string {
 export function AddTileMenu({
   onAddNarrative,
   onAddChart,
+  onAddTable,
   defaultOrder = 0,
 }: AddTileMenuProps) {
   const { mode, canToggle } = useDashboardEditMode();
@@ -80,6 +89,9 @@ export function AddTileMenu({
   const [noteBody, setNoteBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [chartPickerOpen, setChartPickerOpen] = useState(false);
+  // WD-add · the session picker serves both "Chart from session" and
+  // "Table from session"; `pickerKind` decides what a pick becomes.
+  const [pickerKind, setPickerKind] = useState<"chart" | "table">("chart");
 
   if (!(canToggle && mode === "edit")) return null;
 
@@ -131,9 +143,25 @@ export function AddTileMenu({
           <DropdownMenuLabel>Add to this sheet</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {onAddChart ? (
-            <DropdownMenuItem onSelect={() => setChartPickerOpen(true)}>
+            <DropdownMenuItem
+              onSelect={() => {
+                setPickerKind("chart");
+                setChartPickerOpen(true);
+              }}
+            >
               <BarChart3 className="h-4 w-4 mr-2" />
               Chart from session
+            </DropdownMenuItem>
+          ) : null}
+          {onAddTable ? (
+            <DropdownMenuItem
+              onSelect={() => {
+                setPickerKind("table");
+                setChartPickerOpen(true);
+              }}
+            >
+              <Table2 className="h-4 w-4 mr-2" />
+              Table from session
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem onSelect={() => setNoteOpen(true)}>
@@ -147,14 +175,25 @@ export function AddTileMenu({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {onAddChart ? (
+      {onAddChart || onAddTable ? (
         <ChartFromSessionPicker
           open={chartPickerOpen}
+          kind={pickerKind}
           onOpenChange={setChartPickerOpen}
           onPick={async (chart) => {
             setBusy(true);
             try {
-              await onAddChart(chart);
+              if (pickerKind === "table") {
+                const table = chartSpecToTableSpec(chart);
+                // The picker only surfaces charts with derivable rows in table
+                // mode, so `table` is normally non-null. If a degenerate chart
+                // slips through, leave the picker open rather than silently
+                // closing with nothing added.
+                if (!table) return;
+                await onAddTable?.(table);
+              } else {
+                await onAddChart?.(chart);
+              }
               setChartPickerOpen(false);
             } finally {
               setBusy(false);
@@ -240,10 +279,14 @@ interface SessionListItem {
 
 function ChartFromSessionPicker({
   open,
+  kind = "chart",
   onOpenChange,
   onPick,
 }: {
   open: boolean;
+  /** WD-add · "table" mode adds the picked chart's data as a table tile and
+   *  only surfaces charts that carry embedded rows. */
+  kind?: "chart" | "table";
   onOpenChange: (next: boolean) => void;
   onPick: (chart: ChartSpec) => Promise<void>;
 }) {
@@ -336,15 +379,36 @@ function ChartFromSessionPicker({
     ? sessions.filter((s) => (s.fileName ?? "").toLowerCase().includes(trimmed))
     : sessions;
 
+  // WD-add · in table mode only charts that carry embedded rows can become a
+  // table, so hide the data-less ones (agent charts whose rows weren't shipped).
+  const displayCharts =
+    kind === "table"
+      ? charts.filter((c) => {
+          const data = (c as { data?: unknown }).data;
+          // Mirror chartSpecToTableSpec's null condition: a derivable table
+          // needs at least one keyed object row, else it has zero columns.
+          return (
+            Array.isArray(data) &&
+            data.some(
+              (r) => r && typeof r === "object" && Object.keys(r).length > 0,
+            )
+          );
+        })
+      : charts;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>Add chart from a session</DialogTitle>
+          <DialogTitle>
+            {kind === "table"
+              ? "Add table from a session"
+              : "Add chart from a session"}
+          </DialogTitle>
           <DialogDescription>
-            Pick a chat session, then pick a chart to copy onto the active
-            sheet. The chart's data is captured at the time it's added —
-            edits in the source session won't affect the dashboard.
+            {kind === "table"
+              ? "Pick a chat session, then pick a chart to add its underlying data as a table on the active sheet. The data is captured at the time it's added — edits in the source session won't affect the dashboard."
+              : "Pick a chat session, then pick a chart to copy onto the active sheet. The chart's data is captured at the time it's added — edits in the source session won't affect the dashboard."}
           </DialogDescription>
         </DialogHeader>
         {pickedSessionId ? (
@@ -366,13 +430,15 @@ function ChartFromSessionPicker({
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {chartsError}
               </div>
-            ) : charts.length === 0 ? (
+            ) : displayCharts.length === 0 ? (
               <div className="rounded-md border border-border bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground">
-                No charts in this session yet.
+                {kind === "table"
+                  ? "No charts with data to add as a table in this session."
+                  : "No charts in this session yet."}
               </div>
             ) : (
               <ul className="max-h-[360px] overflow-y-auto space-y-1">
-                {charts.map((c, i) => (
+                {displayCharts.map((c, i) => (
                   <li key={`${c.type}::${c.title}::${i}`}>
                     <button
                       type="button"
@@ -390,7 +456,11 @@ function ChartFromSessionPicker({
                         "hover:bg-muted/50 disabled:opacity-50 disabled:cursor-progress",
                       )}
                     >
-                      <BarChart3 className="h-4 w-4 text-primary flex-shrink-0" />
+                      {kind === "table" ? (
+                        <Table2 className="h-4 w-4 text-primary flex-shrink-0" />
+                      ) : (
+                        <BarChart3 className="h-4 w-4 text-primary flex-shrink-0" />
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-foreground truncate">
                           {c.title}

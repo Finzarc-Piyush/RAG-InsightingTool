@@ -17,7 +17,12 @@ export interface PivotTileProps {
   /** Session whose DuckDB serves pivot data. Falls back to the pivot's own
    *  `sourceSessionId` when not supplied by the parent. */
   sessionId?: string | null;
-  canEdit?: boolean;
+  /**
+   * WD-ctrl · whether the dashboard is in edit mode. The delete control
+   * renders only while editing (View mode stays a clean presentation
+   * surface) and is always-visible there — no longer hover-gated.
+   */
+  isEditing?: boolean;
   onDelete?: () => void;
 }
 
@@ -56,7 +61,7 @@ function pivotConfigToQueryRequest(
 export function PivotTile({
   pivot,
   sessionId,
-  canEdit = false,
+  isEditing = false,
   onDelete,
 }: PivotTileProps) {
   const effectiveSessionId = sessionId ?? pivot.sourceSessionId ?? null;
@@ -108,8 +113,8 @@ export function PivotTile({
           <CardTitle className="text-base text-foreground flex-1 min-w-0 truncate">
             {pivot.title}
           </CardTitle>
-          {canEdit && onDelete && (
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+          {isEditing && onDelete && (
+            <div className="flex items-center gap-1 flex-shrink-0">
               <Button
                 variant="ghost"
                 size="icon"
