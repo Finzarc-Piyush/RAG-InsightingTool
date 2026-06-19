@@ -1100,6 +1100,21 @@ class UploadQueue {
           dataSummary: summary,
           datasetProfile,
           ...(semanticModel ? { semanticModel } : {}),
+          // Wave WR6 (incremental refresh) · persist the Snowflake table pointer
+          // so a one-click "Fetch latest" can re-query the SAME table without
+          // the import wizard. Only the non-secret locator — the connection
+          // stays env-based. Stamped only for Snowflake-sourced sessions.
+          ...(job.snowflakeImport
+            ? {
+                snowflakeSource: {
+                  database: job.snowflakeImport.database ?? "",
+                  schema: job.snowflakeImport.schema ?? "",
+                  tableName: job.snowflakeImport.tableName,
+                  importedAt: Date.now(),
+                  knownTotalRows: job.snowflakeImport.knownTotalRows,
+                },
+              }
+            : {}),
           sessionAnalysisContext: ctxForInitial,
           messages,
           enrichmentStatus: "complete" as const,

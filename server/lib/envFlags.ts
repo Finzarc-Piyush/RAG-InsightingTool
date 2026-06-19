@@ -75,3 +75,16 @@ export function isBusinessActionsEnabled(): boolean {
     ? envFlagEnabledByDefault(raw)
     : envFlagOn(raw);
 }
+
+/**
+ * `INCREMENTAL_REFRESH_ENABLED` — default OFF, case-insensitive. THE single
+ * accessor gating the incremental data-refresh feature (the "Update data"
+ * flow that re-ingests new data and replays the chat's recipe onto it). The
+ * default polarity is sourced from the typed registry so it is declared once.
+ */
+export function isIncrementalRefreshEnabled(): boolean {
+  const raw = process.env.INCREMENTAL_REFRESH_ENABLED;
+  return FEATURE_FLAGS.INCREMENTAL_REFRESH_ENABLED.default
+    ? envFlagEnabledByDefault(raw)
+    : envFlagOn(raw);
+}

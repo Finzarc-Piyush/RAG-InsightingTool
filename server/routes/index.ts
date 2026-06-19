@@ -17,6 +17,7 @@ import feedbackRoutes from "./feedback.js";
 import adminRoutes from "./admin.js";
 import superadminRoutes from "./superadmin.js";
 import automationRoutes from "./automations.js";
+import refreshRoutes from "./refresh.js";
 import pastAnalysesRoutes from "./pastAnalyses.js";
 import insightRegenRoutes from "./insightRegen.js";
 import telemetryRoutes from "./telemetry.js";
@@ -56,6 +57,7 @@ export function registerRoutes(app: Express): Server | void {
   mount('', adminRoutes);
   mount('', superadminRoutes);
   mount('', automationRoutes);
+  mount('', refreshRoutes);
   mount('', pastAnalysesRoutes);
   mount('', insightRegenRoutes);
   mount('', telemetryRoutes);

@@ -2758,6 +2758,29 @@ export const dashboardSchema = z.object({
    * `!isShared` to avoid surfacing dead links.
    */
   sessionId: z.string().max(200).optional(),
+  /**
+   * Wave WR0 (incremental refresh) · provenance + version-chain for a
+   * dashboard produced by a data refresh ("Update data"). All optional +
+   * back-compat — existing Cosmos documents parse unchanged.
+   *
+   * `dataRefreshSource` records the data-version transition + the chosen
+   * policy. `supersedesDashboardId` points at the PRIOR (e.g. April) dashboard
+   * this version replaced; `supersededByDashboardId` is stamped on that prior
+   * dashboard pointing forward to the new one — so the "Data: as of …" badge
+   * can walk the chain for rollback / compare. The prior dashboard is always
+   * RETAINED (never deleted), so a refresh is reversible.
+   */
+  dataRefreshSource: z
+    .object({
+      policy: z.enum(["replace", "append"]),
+      fromDataVersion: z.number().optional(),
+      toDataVersion: z.number().optional(),
+      versionLabel: z.string().max(120).optional(),
+      refreshedAt: z.number(),
+    })
+    .optional(),
+  supersedesDashboardId: z.string().max(200).optional(),
+  supersededByDashboardId: z.string().max(200).optional(),
 });
 
 export type Dashboard = z.infer<typeof dashboardSchema>;

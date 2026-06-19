@@ -12,6 +12,7 @@ import { DashboardSection, DashboardTile } from '../types';
 import type { Layouts } from 'react-grid-layout';
 import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
+import { RefreshDataModal } from './RefreshDataModal';
 import { DashboardTiles } from './DashboardTiles';
 // DPF4 · the analytical content lived above the canvas pre-DR2 via
 // `AnalysisSummaryPanel`. DR2 moved it to a right-side drawer triggered
@@ -108,6 +109,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [summaryDrawerOpen, setSummaryDrawerOpen] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  // Wave WR8 (incremental refresh) · "Update data" modal source (null = closed).
+  const [refreshSource, setRefreshSource] = useState<null | "file" | "snowflake">(
+    null,
+  );
   // Wave WD3-sheet · captured DrillThroughEvent at the dashboard
   // level. `null` means the drill sheet is closed. The
   // `DRILL_THROUGH_EVENT` listener below sets this; the sheet's
@@ -801,6 +806,16 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
             priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
           })}
           capturedActiveFilter={dashboard.capturedActiveFilter}
+          {...(import.meta.env.VITE_INCREMENTAL_REFRESH_ENABLED === "true" &&
+          canEdit &&
+          dashboard.sessionId
+            ? {
+                onUpdateDataFile: () => setRefreshSource("file"),
+                onUpdateDataSnowflake: () => setRefreshSource("snowflake"),
+                hasSnowflakeSource: true,
+                isUpdatingData: refreshSource !== null,
+              }
+            : {})}
           onRename={canEdit ? async (newName) => {
             try {
               await renameDashboard(dashboard.id, newName);
@@ -1241,6 +1256,27 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
         dashboardId={dashboard.id}
         dashboardName={dashboard.name}
       />
+      {/* Wave WR8 (incremental refresh) · "Update data" flow. Same-id, in-place
+          dashboard update, so a refetch shows it land on the new data. */}
+      {refreshSource && dashboard.sessionId ? (
+        <RefreshDataModal
+          open={true}
+          onOpenChange={(o) => {
+            if (!o) setRefreshSource(null);
+          }}
+          sessionId={dashboard.sessionId}
+          source={refreshSource}
+          snowflakeLabel={dashboard.name}
+          onComplete={async () => {
+            try {
+              if (onRefresh) await onRefresh();
+              await refetchDashboards();
+            } catch {
+              /* the modal already showed completion; refetch is best-effort */
+            }
+          }}
+        />
+      ) : null}
       {/* Wave WD3-sheet · drill-through receiver. Opens on
           cmd / ctrl-click of a chart mark inside any DashboardTile-
           wrapped renderer. Closes via overlay / Escape / Close

@@ -90,6 +90,42 @@ export const getUserDashboards = async (username: string): Promise<Dashboard[]> 
 };
 
 /**
+ * Wave WR4 (incremental refresh) · all dashboards a user owns that were
+ * created from `sessionId` (the Wave-DR15 backlink), newest-first. Used by the
+ * refresh re-versioning to find the dashboard(s) to supersede when
+ * `chat.lastCreatedDashboardId` is the primary pointer but a session may have
+ * spawned several. Returns [] on any error (best-effort, like the siblings).
+ */
+export const getDashboardsBySessionId = async (
+  sessionId: string,
+  username: string
+): Promise<Dashboard[]> => {
+  try {
+    const dashboardsContainer = await waitForDashboardsContainer();
+    const { resources } = await dashboardsContainer.items
+      .query(
+        {
+          query:
+            "SELECT * FROM c WHERE c.username = @username AND c.sessionId = @sessionId",
+          parameters: [
+            { name: "@username", value: username },
+            { name: "@sessionId", value: sessionId },
+          ],
+        },
+        { partitionKey: username }
+      )
+      .fetchAll();
+    const list = (resources ?? []).map((r) =>
+      safeParseRead<Dashboard>("getDashboardsBySessionId", dashboardReadSchema, r)
+    );
+    return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  } catch (error) {
+    logger.error("Failed to get dashboards by sessionId:", error);
+    return [];
+  }
+};
+
+/**
  * Superadmin shadow-viewer · cross-partition list of every dashboard. Caller
  * MUST verify `isSuperadminEmail(email)` before invoking. Read-only — same
  * write-surface guarantees as `getChatBySessionIdForSuperadmin`.

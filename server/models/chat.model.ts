@@ -106,6 +106,22 @@ export interface ChatDocument {
     blobUrl: string;
     blobName: string;
   };
+  /**
+   * Wave WR0 (incremental refresh) · provenance pointer for a Snowflake-sourced
+   * session. Persisted at the Snowflake understanding-ready checkpoint so a
+   * one-click "Fetch latest" can re-query the SAME table without the import
+   * wizard. Stores ONLY the non-secret `{database, schema, tableName}` locator —
+   * the connection (account/user/password) stays env-based (`snowflakeService`).
+   * Absent on file-sourced and legacy sessions.
+   */
+  snowflakeSource?: {
+    database: string;
+    schema: string;
+    tableName: string;
+    importedAt: number;
+    lastRefreshedAt?: number;
+    knownTotalRows?: number;
+  };
   currentDataBlob?: { // Current processed data blob (for data operations)
     blobUrl: string;
     blobName: string;
@@ -135,6 +151,13 @@ export interface ChatDocument {
     affectedColumns?: string[];
     rowsBefore?: number;
     rowsAfter?: number;
+    /**
+     * Wave WR0 (incremental refresh) · optional human-facing label for a
+     * version produced by a data refresh (e.g. "as of May 2026", "Jan+Feb").
+     * Surfaced in the dashboard "Data: as of …" badge + rollback menu. Absent
+     * on versions created by ordinary data-ops.
+     */
+    label?: string;
   }>;
   dataOpsContext?: unknown; // Context for data operations (pending operations, filters, etc.)
   analysisMetadata: { // Additional metadata about the analysis
@@ -244,6 +267,41 @@ export interface ChatDocument {
     turnId: string;
     startedAt: number;
   };
+  /**
+   * Wave WR0 (incremental refresh) · status of an in-flight / last data
+   * refresh. `running` is set while ingest+replay run (and gates a second
+   * refresh or a live turn — refresh mutates the dataset under the agent and
+   * must be exclusive); `complete`/`failed` are terminal. `fromDataVersion` →
+   * `toDataVersion` record the version transition so a halted refresh can roll
+   * `currentDataBlob` back. Absent on sessions never refreshed.
+   */
+  refreshState?: {
+    status: "running" | "complete" | "failed";
+    policy?: "replace" | "append";
+    startedAt?: number;
+    lastRefreshedAt?: number;
+    fromDataVersion?: number;
+    toDataVersion?: number;
+    error?: string;
+  };
+  /**
+   * Wave WR1 (incremental refresh) · prior message snapshots, newest-first,
+   * capped (2). The overwrite-mode replay (a data refresh) regenerates every
+   * analytical answer in place; before it truncates the chat it snapshots the
+   * prior messages + charts here so a rollback can restore the pre-refresh
+   * conversation coherently with a rolled-back data version. Absent on
+   * sessions never refreshed. Bounded to keep the Cosmos doc under its size
+   * ceiling — only the most recent snapshot(s) are retained.
+   */
+  messageVersions?: Array<{
+    versionId: string;
+    dataVersion?: number;
+    label?: string;
+    snapshotAt: number;
+    messages: Message[];
+    charts?: ChartSpec[];
+    chartReferences?: ChartReference[];
+  }>;
   /**
    * Wave-FA1 · Excel-style active filter overlay. Non-destructive — the
    * canonical `currentDataBlob` / `rawData` / `blobInfo` are never altered

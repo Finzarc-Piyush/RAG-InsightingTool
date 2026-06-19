@@ -64,12 +64,15 @@ import { saveModifiedData } from "../dataOps/dataPersistence.js";
 import { createDataSummary } from "../fileParser.js";
 import type {
   Automation,
+  AutomationColumnInfo,
   AutomationColumnMapping,
   AutomationTurn,
   ChartSpec,
   Insight,
   Message,
 } from "../../shared/schema.js";
+import { chartIdentityKey } from "../../shared/schema.js";
+import type { ChatDocument } from "../../models/chat.model.js";
 import { logger } from "../logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
 
@@ -119,13 +122,48 @@ export interface ReplayAutomationResult {
   error?: string;
 }
 
+/**
+ * Wave WR1 · the in-memory recipe the extracted `replayRecipe` consumes —
+ * exactly the fields `buildRecipeFromChat` produces and a persisted
+ * `Automation` carries. Lets one replay core target either a saved automation
+ * (replayed onto a NEW session) OR an in-place data refresh (the SAME session).
+ */
+export interface RecipeSource {
+  recipe: AutomationTurn[];
+  expectedSchema: Automation["expectedSchema"];
+  sessionTransformations: Automation["sessionTransformations"];
+  name: string;
+  /** Stamped onto turnIds + the `replayedFromAutomationId` provenance badge.
+   *  Automation → its id; refresh → a synthetic `refresh_<sessionId>_<ts>`. */
+  sourceId: string;
+}
+
+export interface ReplayRecipeArgs {
+  sessionId: string;
+  source: RecipeSource;
+  username: string;
+  columnMapping?: AutomationColumnMapping;
+  /** Optional ordinal to resume from (skip earlier turns). */
+  resumeFromOrdinal?: number;
+  /**
+   * `append-messages` (automation → new session) appends each turn's
+   * user+assistant message as it replays. `overwrite` (in-place refresh)
+   * snapshots the prior conversation into `messageVersions`, truncates the
+   * chat to its welcome prefix, then appends the regenerated turns — so the
+   * refreshed chat reflects ONLY the new data, with the prior kept for rollback.
+   */
+  mode: "append-messages" | "overwrite";
+  emit: ReplaySseEmit;
+  abortSignal?: AbortSignal;
+}
+
 const findUnresolvedColumns = (
-  automation: Automation,
+  finalColumns: AutomationColumnInfo[],
   mapping: AutomationColumnMapping,
   newColumnNames: Set<string>
 ): string[] => {
   const unresolved: string[] = [];
-  for (const col of automation.expectedSchema.finalColumns) {
+  for (const col of finalColumns) {
     const mapped = mapping[col.name];
     if (typeof mapped === "string" && mapped.length > 0) {
       if (!newColumnNames.has(mapped)) unresolved.push(col.name);
@@ -148,6 +186,83 @@ const validatePlanStep = (
     tool: parsed.data.tool,
     args: parsed.data.args,
   };
+};
+
+/**
+ * Wave WR5 · Rebind a saved dashboard draft's chart entries to the freshly
+ * emitted tool charts so the dashboard renders the NEW data, not the captured
+ * session's stale numbers.
+ *
+ * Matches by the axis-aware `chartIdentityKey` (`type::title::x::y::series`),
+ * NOT by title alone. Two charts that share a title but differ in breakdown —
+ * e.g. "Adherence Rate" by Cluster vs by ASM — get DISTINCT keys, so each
+ * rebinds to its OWN fresh data instead of one stealing the other's (the L-010
+ * trap; this is the load-bearing fix of WR5). A title fallback still applies,
+ * but ONLY when the title is UNIQUE among the fresh charts — never on a
+ * collision, which is exactly the case the identity key exists to disambiguate.
+ *
+ * Pure + exported for tests. Returns the draft unchanged when there's nothing
+ * to rebind.
+ */
+export const rebindDashboardDraftCharts = (
+  draft: Message["dashboardDraft"],
+  finalCharts: ChartSpec[] | undefined
+): Message["dashboardDraft"] => {
+  if (!draft || !finalCharts || finalCharts.length === 0) return draft;
+
+  const byKey = new Map<string, ChartSpec>();
+  const titleCounts = new Map<string, number>();
+  for (const c of finalCharts) {
+    byKey.set(chartIdentityKey(c), c);
+    if (typeof c.title === "string") {
+      titleCounts.set(c.title, (titleCounts.get(c.title) ?? 0) + 1);
+    }
+  }
+  const byUniqueTitle = new Map<string, ChartSpec>();
+  for (const c of finalCharts) {
+    if (typeof c.title === "string" && titleCounts.get(c.title) === 1) {
+      byUniqueTitle.set(c.title, c);
+    }
+  }
+
+  const pickLive = (chart: Record<string, unknown>): ChartSpec | undefined => {
+    const keyed = byKey.get(
+      chartIdentityKey(chart as Pick<ChartSpec, "type" | "title"> & {
+        x?: string | null;
+        y?: string | null;
+        seriesColumn?: string | null;
+      })
+    );
+    if (keyed) return keyed;
+    // Safe fallback: title match ONLY when unambiguous among the fresh charts.
+    return typeof chart.title === "string"
+      ? byUniqueTitle.get(chart.title)
+      : undefined;
+  };
+
+  const rebindChartList = (charts: Array<Record<string, unknown>>) =>
+    charts.map((chart) => {
+      const live = pickLive(chart);
+      return live ? { ...chart, data: live.data } : chart;
+    });
+
+  const draftAny = draft as Record<string, unknown>;
+  const rebound: Record<string, unknown> = { ...draftAny };
+  if (Array.isArray(draftAny.charts)) {
+    rebound.charts = rebindChartList(draftAny.charts as Array<Record<string, unknown>>);
+  }
+  if (Array.isArray(draftAny.sheets)) {
+    rebound.sheets = (draftAny.sheets as Array<Record<string, unknown>>).map(
+      (sheet) => {
+        if (!Array.isArray(sheet.charts)) return sheet;
+        return {
+          ...sheet,
+          charts: rebindChartList(sheet.charts as Array<Record<string, unknown>>),
+        };
+      }
+    );
+  }
+  return rebound as Message["dashboardDraft"];
 };
 
 /** Build a one-line label for a finding from a tool's args. */
@@ -343,44 +458,13 @@ const executeReplayTurn = async (args: {
       ? charts
       : turn.charts?.map((c) => ({ ...c, data: undefined }));
 
-  // Rebind any saved dashboard draft's chart entries to the freshly
-  // bound charts (by title match). The saved draft's `charts[]` carries
-  // OLD data from the capture session; without this, clicking the
-  // BuildDashboardCallout would create a dashboard with stale numbers.
-  // Title-match is the agreed key — same heuristic `addMessageToChat`
-  // uses for chart-list dedupe (chat.model.ts:662-666).
+  // Rebind any saved dashboard draft's chart entries to the freshly bound
+  // charts so the dashboard renders NEW data, not the captured session's
+  // numbers. Keyed by the axis-aware `chartIdentityKey` (WR5) so two same-title
+  // charts that differ in breakdown each rebind to their OWN data.
   const rebindDashboardDraft = (
     draft: Message["dashboardDraft"]
-  ): Message["dashboardDraft"] => {
-    if (!draft || finalCharts == null || finalCharts.length === 0) return draft;
-    const byTitle = new Map<string, ChartSpec>();
-    for (const c of finalCharts) byTitle.set(c.title, c);
-    const draftAny = draft as Record<string, unknown>;
-    const rebound: Record<string, unknown> = { ...draftAny };
-    if (Array.isArray(draftAny.charts)) {
-      rebound.charts = (draftAny.charts as Array<Record<string, unknown>>).map(
-        (chart) => {
-          const live = typeof chart.title === "string" ? byTitle.get(chart.title) : undefined;
-          return live ? { ...chart, data: live.data } : chart;
-        }
-      );
-    }
-    if (Array.isArray(draftAny.sheets)) {
-      rebound.sheets = (draftAny.sheets as Array<Record<string, unknown>>).map(
-        (sheet) => {
-          if (!Array.isArray(sheet.charts)) return sheet;
-          return {
-            ...sheet,
-            charts: (sheet.charts as Array<Record<string, unknown>>).map((chart) => {
-              const live = typeof chart.title === "string" ? byTitle.get(chart.title) : undefined;
-              return live ? { ...chart, data: live.data } : chart;
-            }),
-          };
-        }
-      );
-    }
-    return rebound as Message["dashboardDraft"];
-  };
+  ): Message["dashboardDraft"] => rebindDashboardDraftCharts(draft, finalCharts);
 
   // Cap the `steps` payload we attach to agentTrace so a 60-step recipe
   // with bulky tool args doesn't push the persisted message size up.
@@ -442,12 +526,14 @@ const executeReplayTurn = async (args: {
   };
 };
 
-/** Build a fresh AgentExecutionContext for the new session. */
+/** Build a fresh AgentExecutionContext for the target session. */
 const buildReplayContext = async (
-  chat: import("../../models/chat.model.js").ChatDocument,
+  chat: ChatDocument,
   username: string,
   question: string,
-  automation: Automation,
+  /** WR1 · the recipe's saved permanentContext (was `automation` — widened so
+   *  an in-place refresh, which has no Automation doc, can supply it directly). */
+  savedPermanentContext: string | undefined,
   abortSignal?: AbortSignal
 ): Promise<AgentExecutionContext> => {
   // Always read the canonical (unfiltered) dataset for replay. The
@@ -465,12 +551,12 @@ const buildReplayContext = async (
     text: "",
   }));
 
-  // Stitch in the saved permanentContext if the new chat doesn't have
-  // one. We don't overwrite — the user's new-session intent wins.
+  // Stitch in the saved permanentContext if the target chat doesn't have
+  // one. We don't overwrite — the target session's own intent wins.
   const permanentContext =
     chat.permanentContext?.trim().length
       ? chat.permanentContext
-      : automation.sessionTransformations.permanentContext;
+      : savedPermanentContext;
 
   return buildAgentExecutionContext({
     sessionId: chat.sessionId ?? chat.id,
@@ -502,12 +588,12 @@ const buildReplayContext = async (
  * persist failure is post-replay reload visibility.
  */
 const persistAutomationContextOntoChat = async (
-  chat: import("../../models/chat.model.js").ChatDocument,
-  automation: Automation,
+  chat: ChatDocument,
+  sessionTransformations: Automation["sessionTransformations"],
   username: string
 ): Promise<void> => {
   try {
-    const savedCtx = automation.sessionTransformations.permanentContext;
+    const savedCtx = sessionTransformations.permanentContext;
     if (
       typeof savedCtx === "string" &&
       savedCtx.trim().length > 0 &&
@@ -517,7 +603,7 @@ const persistAutomationContextOntoChat = async (
       chat.permanentContext = savedCtx;
     }
 
-    const seed = automation.sessionTransformations.seedSessionAnalysisContext;
+    const seed = sessionTransformations.seedSessionAnalysisContext;
     if (seed && !chat.sessionAnalysisContext) {
       // Best-effort merge — `seed` is a partial of the schema; cast
       // through unknown because the SAC type is more specific than
@@ -549,14 +635,89 @@ const getRegistry = (): ToolRegistry => {
   return __sharedRegistry;
 };
 
+/**
+ * Wave WR1 · OVERWRITE-mode pre-step (in-place data refresh). Snapshots the
+ * chat's current conversation + charts into `messageVersions` (newest-first,
+ * capped) for rollback, then truncates the chat to its WELCOME PREFIX (every
+ * message before the first user question) and clears the charts array.
+ *
+ * Clearing `charts` / `chartReferences` is load-bearing: `addMessageToChat`
+ * dedups incoming charts by the axis-aware `chartIdentityKey`, so if the stale
+ * pre-refresh charts stayed, the freshly-replayed charts with the SAME identity
+ * would be deduped OUT and the chat would keep the OLD data (the L-010 trap).
+ *
+ * Returns the welcome prefix so the caller can keep the in-memory `chat`
+ * consistent with what was persisted. Routes through `mutateChatDocument`
+ * (lock + IfMatch retry, invariant #9).
+ */
+/** Max retained pre-refresh message snapshots (Cosmos doc-size ceiling guard). */
+const MESSAGE_VERSIONS_CAP = 2;
+
+/**
+ * @internal Pure core of the overwrite-mode truncation (exported for tests).
+ * Computes the welcome prefix (every message before the first user question)
+ * and the new newest-first `messageVersions` array (capped), given the chat's
+ * prior state. `now` is injected for deterministic tests.
+ */
+export const computeRefreshTruncation = (
+  prior: Pick<
+    ChatDocument,
+    "messages" | "charts" | "chartReferences" | "currentDataBlob" | "messageVersions"
+  >,
+  now: number,
+  versionLabel?: string
+): {
+  welcomePrefix: Message[];
+  messageVersions: NonNullable<ChatDocument["messageVersions"]>;
+} => {
+  const msgs = (prior.messages ?? []) as Message[];
+  const firstUserIdx = msgs.findIndex((m) => m.role === "user");
+  const welcomePrefix =
+    firstUserIdx === -1 ? [...msgs] : msgs.slice(0, firstUserIdx);
+  const snapshot = {
+    versionId: `msgs_${prior.currentDataBlob?.version ?? 0}_${now}`,
+    dataVersion: prior.currentDataBlob?.version,
+    label: versionLabel,
+    snapshotAt: now,
+    messages: msgs,
+    charts: prior.charts ?? [],
+    chartReferences: prior.chartReferences ?? [],
+  };
+  const messageVersions = [snapshot, ...(prior.messageVersions ?? [])].slice(
+    0,
+    MESSAGE_VERSIONS_CAP
+  );
+  return { welcomePrefix, messageVersions };
+};
+
+const snapshotAndTruncateForRefresh = async (
+  chat: ChatDocument,
+  sessionId: string,
+  versionLabel?: string
+): Promise<Message[]> => {
+  let welcomePrefix: Message[] = [];
+  await mutateChatDocument(sessionId, (doc) => {
+    const result = computeRefreshTruncation(doc, Date.now(), versionLabel);
+    welcomePrefix = result.welcomePrefix;
+    doc.messageVersions = result.messageVersions;
+    // Truncate analytical history; charts rebuild as turns replay.
+    doc.messages = welcomePrefix;
+    doc.charts = [];
+    doc.chartReferences = [];
+    return true;
+  });
+  return welcomePrefix;
+};
+
+/**
+ * Wave A8 · Replay a saved Automation onto a (typically fresh) target session.
+ * Thin loader: resolves the Automation doc → `RecipeSource`, delegates to the
+ * extracted `replayRecipe` in append-messages mode, and touches lastRun.
+ */
 export async function replayAutomation(
   args: ReplayAutomationArgs
 ): Promise<ReplayAutomationResult> {
-  const { sessionId, automationId, username, emit, abortSignal } = args;
-  const mapping = args.columnMapping ?? {};
-  const aborted = () => abortSignal?.aborted === true;
-
-  // 1. Load + ownership check.
+  const { automationId, username } = args;
   const automation = await getAutomationById(automationId, username);
   if (!automation) {
     return {
@@ -566,6 +727,44 @@ export async function replayAutomation(
       error: "Automation not found",
     };
   }
+  const source: RecipeSource = {
+    recipe: automation.recipe,
+    expectedSchema: automation.expectedSchema,
+    sessionTransformations: automation.sessionTransformations,
+    name: automation.name,
+    sourceId: automation.id,
+  };
+  const result = await replayRecipe({
+    sessionId: args.sessionId,
+    source,
+    username,
+    columnMapping: args.columnMapping,
+    resumeFromOrdinal: args.resumeFromOrdinal,
+    mode: "append-messages",
+    emit: args.emit,
+    abortSignal: args.abortSignal,
+  });
+  if (result.ok) void touchAutomationLastRun(automationId, username);
+  return result;
+}
+
+/**
+ * Wave WR1 · the extracted deterministic replay core. Walks a `RecipeSource`
+ * turn by turn against a TARGET session, dispatching saved plan steps through
+ * the ToolRegistry and running the live narrator. Drives both automation
+ * replay (`mode: 'append-messages'`) and in-place data refresh
+ * (`mode: 'overwrite'`). Emits the same `automation_*` SSE events either way,
+ * so the existing `AutomationReplayBanner` renders both.
+ */
+export async function replayRecipe(
+  args: ReplayRecipeArgs
+): Promise<ReplayAutomationResult> {
+  const { sessionId, source, username, emit, abortSignal, mode } = args;
+  const automationId = source.sourceId;
+  const mapping = args.columnMapping ?? {};
+  const aborted = () => abortSignal?.aborted === true;
+
+  // 1. Load target chat + ownership check.
   const chat = await getChatDocument(sessionId, username);
   if (!chat) {
     return {
@@ -579,14 +778,18 @@ export async function replayAutomation(
   emit({
     type: "automation_started",
     automationId,
-    recipeLength: automation.recipe.length,
+    recipeLength: source.recipe.length,
   });
 
   // 2. Mapping validation.
   const newColumnNames = new Set(
     chat.dataSummary?.columns?.map((c) => c.name) ?? []
   );
-  const unresolved = findUnresolvedColumns(automation, mapping, newColumnNames);
+  const unresolved = findUnresolvedColumns(
+    source.expectedSchema.finalColumns,
+    mapping,
+    newColumnNames
+  );
   if (unresolved.length > 0) {
     const error = `Column mapping is incomplete or invalid. Unresolved: ${unresolved.join(", ")}.`;
     emit({ type: "automation_halted", ordinal: 0, error });
@@ -598,8 +801,17 @@ export async function replayAutomation(
     };
   }
 
+  // 2.5 OVERWRITE (in-place refresh): snapshot the prior conversation for
+  // rollback, then truncate the chat so the replayed turns land on a clean
+  // welcome prefix. No-op for append-messages (automation) mode.
+  if (mode === "overwrite") {
+    chat.messages = await snapshotAndTruncateForRefresh(chat, sessionId);
+    chat.charts = [];
+    chat.chartReferences = [];
+  }
+
   // 3. Apply mapping → live recipe (immutable input preserved).
-  const liveRecipe = applyColumnMappingToRecipe(automation.recipe, mapping);
+  const liveRecipe = applyColumnMappingToRecipe(source.recipe, mapping);
 
   // 4. Plan + APPLY upfront transformations.
   //    Critical contract from the user's clarification:
@@ -614,7 +826,7 @@ export async function replayAutomation(
   //    form AND the new dataset isn't already long, force the saved transform.
   const transformPlan = planSessionTransformations(
     chat.dataSummary,
-    automation
+    source
   );
   for (let i = 0; i < transformPlan.steps.length; i++) {
     if (aborted()) {
@@ -646,7 +858,7 @@ export async function replayAutomation(
     });
 
     if (step.kind === "wide_format_remelt") {
-      const wf = automation.sessionTransformations.wideFormatTransform;
+      const wf = source.sessionTransformations.wideFormatTransform;
       if (wf && chat.dataSummary) {
         try {
           // Load the canonical (unfiltered) row data so the melt sees
@@ -669,7 +881,7 @@ export async function replayAutomation(
               chat.sessionId,
               meltResult.rows,
               "wide_format_remelt_for_automation",
-              `Wide-format remelt forced by replay of automation "${automation.name}".`,
+              `Wide-format remelt forced by replay of "${source.name}".`,
               chat
             );
             const fresh = createDataSummary(meltResult.rows);
@@ -705,7 +917,11 @@ export async function replayAutomation(
   // Persist saved permanentContext + sessionAnalysisContext seed onto
   // the new chat (best-effort; never derails replay). Done after the
   // transform loop so a single Cosmos round-trip carries both.
-  await persistAutomationContextOntoChat(chat, automation, username);
+  await persistAutomationContextOntoChat(
+    chat,
+    source.sessionTransformations,
+    username
+  );
 
   if (aborted()) {
     emit({
@@ -734,7 +950,7 @@ export async function replayAutomation(
       chat,
       username,
       liveRecipe[startOrdinal]?.question ?? "",
-      automation,
+      source.sessionTransformations.permanentContext,
       abortSignal
     );
   } catch (err) {
@@ -857,13 +1073,14 @@ export async function replayAutomation(
     if (stepResult.dashboardCreated) dashboardsCreated += 1;
   }
 
-  // 7. Success.
+  // 7. Success. (`touchAutomationLastRun` is the automation loader's concern,
+  // applied in `replayAutomation` once this returns ok — a refresh has no
+  // Automation doc to touch.)
   emit({
     type: "automation_complete",
     questionsReplayed,
     dashboardsCreated,
   });
-  void touchAutomationLastRun(automationId, username);
   return {
     ok: true,
     questionsReplayed,

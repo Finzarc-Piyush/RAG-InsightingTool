@@ -12,9 +12,11 @@ import {
   Loader2,
   MoreHorizontal,
   Pencil,
+  RefreshCw,
   Share2,
   Sparkles,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -73,6 +75,15 @@ interface DashboardHeaderProps {
    * prop surface stable as the linkage logic evolves.
    */
   dashboard?: Pick<DashboardData, "sessionId" | "sheets" | "isShared">;
+  /**
+   * Wave WR8 (incremental refresh) · "Update data" affordance. When
+   * `onUpdateDataFile` is provided a split dropdown is shown: upload an updated
+   * file, or (when `hasSnowflakeSource`) re-query Snowflake. Absent → no button.
+   */
+  onUpdateDataFile?: () => void;
+  onUpdateDataSnowflake?: () => void;
+  hasSnowflakeSource?: boolean;
+  isUpdatingData?: boolean;
 }
 
 export function DashboardHeader({
@@ -92,6 +103,10 @@ export function DashboardHeader({
   hasSummary = false,
   capturedActiveFilter,
   dashboard,
+  onUpdateDataFile,
+  onUpdateDataSnowflake,
+  hasSnowflakeSource = false,
+  isUpdatingData = false,
 }: DashboardHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(name);
@@ -252,6 +267,46 @@ export function DashboardHeader({
         ) : null}
 
         {dashboard ? <OpenChatButton dashboard={dashboard} variant="header" /> : null}
+
+        {onUpdateDataFile ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isUpdatingData}
+                title="Update this analysis with new data"
+              >
+                {isUpdatingData ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Update data
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onUpdateDataFile}>
+                <Upload className="h-4 w-4 mr-2" />
+                Upload updated file…
+              </DropdownMenuItem>
+              {onUpdateDataSnowflake ? (
+                <DropdownMenuItem
+                  onClick={onUpdateDataSnowflake}
+                  disabled={!hasSnowflakeSource}
+                  title={
+                    hasSnowflakeSource
+                      ? "Re-query the table this analysis was built from"
+                      : "This analysis isn't connected to Snowflake"
+                  }
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Fetch latest from Snowflake
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
 
         {hasSummary && onOpenSummary ? (
           <Button

@@ -62,10 +62,13 @@ const newDatasetIsAlreadyLong = (
 
 export const planSessionTransformations = (
   newSummary: DataSummary | undefined,
-  automation: Automation
+  // Structural: an `Automation` OR a `RecipeSource` (in-place refresh) — both
+  // carry `.sessionTransformations`. Widened from `Automation` in Wave WR1 so
+  // the extracted `replayRecipe` can plan transforms without a persisted doc.
+  source: { sessionTransformations: Automation["sessionTransformations"] }
 ): SessionTransformationPlan => {
   const steps: SessionTransformationStep[] = [];
-  const transforms = automation.sessionTransformations;
+  const transforms = source.sessionTransformations;
 
   // Step 1: wide-format remelt
   if (transforms.wideFormatTransform?.detected) {

@@ -241,6 +241,12 @@ export const FEATURE_FLAGS = {
       "Auto-rename a new analysis from its first Q&A (LLM title, deterministic fallback). Off only on `=false`; user renames always win.",
     lifecycle: "stable",
   },
+  INCREMENTAL_REFRESH_ENABLED: {
+    default: false,
+    purpose:
+      "Incremental data refresh: 'Update data' on an existing chat/dashboard re-ingests new data (Replace or Append) and faithfully regenerates every answer + dashboard via the automation replay engine. Default OFF.",
+    lifecycle: "experimental",
+  },
 
   // ── HTTP / auth (middleware) ───────────────────────────────────────────────
   CORS_ALLOW_NO_ORIGIN: {
