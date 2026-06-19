@@ -34,6 +34,16 @@ Together they cover the read-in and write-out edges of a session:
    commit time** so drift never reaches a session, not just CI-on-push. Bypass
    with `git commit --no-verify`. Note: it gates code/doc-ref/registry drift, NOT
    that STATE.md/WAVES.md were updated for a wave — that pairing is layer 5's job.
+   **Registry handling (changed 2026-06-20):** the registry manifest is a
+   GENERATED artifact, so the hook now REGENERATES it and **auto-stages** the
+   refreshed copy into the commit rather than blocking with "stage it yourself +
+   re-commit". The generator is deterministic + environment-stable (sorted,
+   relative paths, no timestamps), so it only changes on a real tools/routes/skills
+   edit and never churns spuriously. Under the tiny-wave cadence the old block
+   tripped on nearly every commit (and a stale manifest left in the index
+   re-blocked every later commit); auto-stage keeps the manifest fresh in each
+   commit with zero friction. Only a generator FAILURE blocks. (CI still enforces
+   freshness via `git diff` on push — auto-stage just removes the local dance.)
 4. **SessionStart hook** (`.claude/hooks/session-warmup.sh`) — the **read-in**
    edge. Auto-injects the orient pack (incl. the firewall verdict) into every new
    session, so warmup is automatic, not opt-in. Advisory: it cannot force Claude

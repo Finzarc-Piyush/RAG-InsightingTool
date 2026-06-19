@@ -32,10 +32,20 @@ if ! npm --prefix server run --silent check:doc-refs >/dev/null 2>&1; then
 fi
 
 echo "pre-commit • registry manifest fresh…"
-npm --prefix server run --silent gen:registries >/dev/null 2>&1
-if ! git diff --quiet -- docs/index/registries.generated.md 2>/dev/null; then
-  echo "  ✗ registries.generated.md was stale (now regenerated). Stage it: git add docs/index/registries.generated.md" >&2
+# `registries.generated.md` is a GENERATED artifact (CLAUDE.md invariant #8 —
+# "never hand-edit"). Its generator is deterministic + environment-stable
+# (sorted, relative paths, no timestamps), so any change reflects a real
+# tools/routes/skills edit. During tiny-wave development that change happens on
+# most commits — so AUTO-STAGE the refreshed copy into THIS commit instead of
+# blocking. The old "regenerated; now stage it yourself + re-commit" dance
+# tripped on nearly every commit and compounded (a stale manifest left in the
+# index re-blocked every later commit). Only a generator FAILURE blocks now.
+if ! npm --prefix server run --silent gen:registries >/dev/null 2>&1; then
+  echo "  ✗ gen:registries failed — run: npm --prefix server run gen:registries" >&2
   fail=1
+elif ! git diff --quiet -- docs/index/registries.generated.md 2>/dev/null; then
+  git add docs/index/registries.generated.md
+  echo "  ↻ registries.generated.md refreshed + auto-staged (tools/routes/skills changed)" >&2
 fi
 
 if [ "$fail" -ne 0 ]; then

@@ -23,6 +23,17 @@ const REPO_ROOT = join(HERE, "..", "..");
 const SERVER = join(REPO_ROOT, "server");
 const OUT_REL = "docs/index/registries.generated.md";
 
+/**
+ * Locale-INDEPENDENT string order (UTF-16 code points). `String#localeCompare`
+ * orders differently across runtime locales (macOS en_US vs CI's C/POSIX), which
+ * would make this generated manifest order-unstable BETWEEN environments and read
+ * as perpetually "stale" on a machine whose locale differs from whoever last
+ * committed it. Code-point order is identical everywhere, matching the bare
+ * `Array#sort` used for the directory listing. (2026-06-20)
+ */
+function byCodePoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 function read(abs: string): string {
   return readFileSync(abs, "utf8");
 }
@@ -62,7 +73,7 @@ function extractTools(): { tools: Tool[]; duplicates: string[] } {
       });
     }
   }
-  tools.sort((a, b) => a.name.localeCompare(b.name));
+  tools.sort((a, b) => byCodePoint(a.name, b.name));
   const seen = new Set<string>();
   const duplicates: string[] = [];
   for (const t of tools) {
@@ -119,7 +130,7 @@ function extractRoutes(): RouteGroup[] {
       const full = `${prefix}${sub.startsWith("/") ? "" : "/"}${sub}`.replace(/\/{2,}/g, "/");
       handlers.push({ method: h[1]!.toUpperCase(), path: full });
     }
-    handlers.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+    handlers.sort((a, b) => byCodePoint(a.path, b.path) || byCodePoint(a.method, b.method));
     groups.push({ prefix, file: `server/routes/${stem}.ts`, handlers });
   }
   return groups;
@@ -154,7 +165,7 @@ function extractSkills(): SkillEntry[] {
     if (!/registerSkill\(/.test(text)) continue;
     out.push({ name: resolveSkillName(text, f), file: `server/lib/agents/runtime/skills/${f}` });
   }
-  out.sort((a, b) => a.name.localeCompare(b.name));
+  out.sort((a, b) => byCodePoint(a.name, b.name));
   return out;
 }
 
