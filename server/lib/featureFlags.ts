@@ -235,6 +235,12 @@ export const FEATURE_FLAGS = {
       "Persist answered analyses to the past-analyses store (off only on `=false`).",
     lifecycle: "stable",
   },
+  AUTO_TITLE_ANALYSIS_ENABLED: {
+    default: true,
+    purpose:
+      "Auto-rename a new analysis from its first Q&A (LLM title, deterministic fallback). Off only on `=false`; user renames always win.",
+    lifecycle: "stable",
+  },
 
   // ── HTTP / auth (middleware) ───────────────────────────────────────────────
   CORS_ALLOW_NO_ORIGIN: {

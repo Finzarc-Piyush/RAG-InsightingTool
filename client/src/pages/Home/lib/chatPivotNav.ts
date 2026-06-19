@@ -84,19 +84,31 @@ export function buildChatPivotNavEntries(
   let ordinal = 0;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
-    if (!messageHasNavigablePivotTable(m)) continue;
-    ordinal += 1;
     const pivotState = (m as Message & { pivotState?: { config?: unknown; pinned?: boolean; customName?: string } })
       .pivotState;
     const customName = pivotState?.customName?.trim() || null;
+    const isPinned = Boolean(pivotState?.pinned);
+    // A pivot earns a sidebar entry when it currently renders a navigable pivot
+    // table, OR when the user has explicitly pinned or renamed it. The latter two
+    // make an intentionally-kept pivot durable: without this, a pinned/renamed
+    // pivot that no longer meets the auto-show predicate on reload would silently
+    // vanish from the sidebar (the reported pin bug).
+    if (!messageHasNavigablePivotTable(m) && !isPinned && !customName) continue;
+    ordinal += 1;
+    // Frozen, context-derived label the server stamped from the question that
+    // produced this pivot. Shown ahead of the structural auto-name, behind a
+    // user rename — so `customName ?? contextLabel ?? pivotAutoName ?? Pivot N`.
+    const contextLabel =
+      (m as Message & { pivotDefaults?: { contextLabel?: string } })
+        .pivotDefaults?.contextLabel?.trim() || null;
     const auto = pivotState?.config
       ? pivotAutoName(pivotState.config as Parameters<typeof pivotAutoName>[0])
       : null;
-    const label = customName ?? auto ?? `Pivot ${ordinal}`;
+    const label = customName ?? contextLabel ?? auto ?? `Pivot ${ordinal}`;
     out.push({
       id: chatPivotAnchorId(m),
       label,
-      pinned: Boolean(pivotState?.pinned),
+      pinned: isPinned,
       messageTimestamp: m.timestamp,
       hasPivotState: Boolean(pivotState),
       customName,

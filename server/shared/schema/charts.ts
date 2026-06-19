@@ -1299,6 +1299,13 @@ export const pivotDefaultsSchema = z.object({
   agentResultRows: z.array(z.record(z.unknown())).optional(),
   /** Wave P1 · Column order for the embedded result (drives the pivot's available-fields list). */
   agentResultColumns: z.array(z.string()).optional(),
+  /**
+   * Wave V-PV1 · A frozen, context-derived display label for this pivot in the
+   * sidebar (e.g. the question that produced it). The client shows it ahead of
+   * the structural auto-name: `customName ?? contextLabel ?? pivotAutoName ?? Pivot N`.
+   * A user rename (`customName`) always wins; this is never auto-overwritten.
+   */
+  contextLabel: z.string().max(120).optional(),
 });
 export type PivotDefaults = z.infer<typeof pivotDefaultsSchema>;
 

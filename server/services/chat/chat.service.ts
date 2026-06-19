@@ -55,6 +55,10 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     throw new Error('Session not found. Please upload a file first.');
   }
 
+  // V-AT3 · message count BEFORE this turn appends — the auto-titler fires only
+  // on the first answered turn (=== 0). See the streaming-path counterpart.
+  const priorMessageCount = chatDocument.messages?.length ?? 0;
+
   const gate = decideEnrichmentGate(chatDocument.enrichmentStatus);
   if (gate === 'queued') {
     // The client holds + re-fires this once the data is ready (see client
@@ -420,6 +424,27 @@ export async function processChatMessage(params: ProcessChatMessageParams): Prom
     const persistChatOutcome = await persistChatPromise;
     if (persistChatOutcome === "succeeded") {
       logger.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+      // V-AT3 · auto-title a brand-new analysis from its first Q&A. No SSE on
+      // this path — the client's post-turn ['sessions'] refetch surfaces the new
+      // name. Gated to the first answered turn; never blocks/breaks the turn.
+      if (priorMessageCount === 0) {
+        try {
+          const { maybeAutoTitleAnalysis } = await import(
+            "./autoTitleAnalysis.js"
+          );
+          await maybeAutoTitleAnalysis({
+            sessionId,
+            username,
+            priorMessageCount,
+            question: message,
+            answer: validated.answer ?? "",
+            turnId: (answerResult.agentTrace as { turnId?: string } | undefined)
+              ?.turnId,
+          });
+        } catch (titleErr) {
+          logger.warn?.("autoTitle: non-stream fire failed:", titleErr);
+        }
+      }
     } else {
       // Non-streaming controller currently treats this as a hard error so
       // its catch block returns 5xx to the client. Same UX as today —

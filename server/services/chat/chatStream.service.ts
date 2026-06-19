@@ -177,6 +177,29 @@ async function serveCachedExactAnswer(params: {
   // unchanged; AMR5-aware clients pick up the envelope / charts / pivot /
   // business actions / provenance chip.
   sendSSE(res, "response", responsePayload);
+
+  // V-AT3 · a first-turn cache hit still gets auto-titled (path-independent).
+  // The titler write is independent of the message append below, so we run it
+  // here and emit `session_renamed` before `done` to ride the same stream.
+  if ((chatDocument.messages?.length ?? 0) === 0) {
+    try {
+      const { maybeAutoTitleAnalysis } = await import("./autoTitleAnalysis.js");
+      const newTitle = await maybeAutoTitleAnalysis({
+        sessionId,
+        username,
+        priorMessageCount: chatDocument.messages?.length ?? 0,
+        question: userMessage,
+        answer: cachedAnswer,
+        turnId: sourceTurnId,
+      });
+      if (newTitle) {
+        sendSSE(res, "session_renamed", { sessionId, fileName: newTitle });
+      }
+    } catch (titleErr) {
+      logger.warn?.("autoTitle: cache-hit fire failed:", titleErr);
+    }
+  }
+
   sendSSE(res, "done", {});
 
   // Persist the pair of messages so the session history stays correct across
@@ -533,6 +556,11 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     }
 
     logger.log('✅ Chat document found');
+
+    // V-AT3 · message count BEFORE this turn appends. The auto-titler fires only
+    // on the first answered turn (=== 0); capture from the fresh snapshot now,
+    // before any in-memory append, so it reflects the true prior state.
+    const priorMessageCount = chatDocument.messages?.length ?? 0;
 
     const gate = decideEnrichmentGate(chatDocument.enrichmentStatus);
     if (gate === "queued") {
@@ -1304,6 +1332,21 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
     if (executionPivotDefaults?.scalar === true) {
       transformedResponse.pivotAutoShow = false;
     }
+    // V-PV1 · freeze a context-derived label for the sidebar pivot list, derived
+    // from the question that produced it. The client shows it ahead of the
+    // structural auto-name; a user rename (customName) always overrides it and
+    // is never auto-touched. Deterministic — no extra LLM call.
+    if (transformedResponse.pivotDefaults) {
+      try {
+        const { deterministicTitleFromQuestion } = await import(
+          "./autoTitleAnalysis.js"
+        );
+        const label = deterministicTitleFromQuestion(message);
+        if (label) transformedResponse.pivotDefaults.contextLabel = label;
+      } catch {
+        /* labelling is best-effort; never break the response */
+      }
+    }
     // PVT5 · the agent ran an analytical step (we have a non-scalar trace
     // table) but `mergePivotDefaultsForResponse` couldn't ship a usable
     // pivot — the unified safety contract suppressed it. Signal the client
@@ -1846,6 +1889,32 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
       const persistOutcome = await persistPromise;
       if (persistOutcome === "succeeded") {
         logger.log(`✅ Messages saved to chat: ${chatDocument.id}`);
+        // V-AT3 · auto-title a brand-new analysis from its first Q&A. Inline so
+        // the new name can ride the same stream (session_renamed event); gated
+        // to the first answered turn + the flag, with a deterministic fallback —
+        // never blocks or breaks the turn.
+        if (priorMessageCount === 0) {
+          try {
+            const { maybeAutoTitleAnalysis } = await import(
+              "./autoTitleAnalysis.js"
+            );
+            const newTitle = await maybeAutoTitleAnalysis({
+              sessionId,
+              username,
+              priorMessageCount,
+              question: message,
+              answer: transformedResponse.answer ?? "",
+              turnId: (
+                transformedResponse as { agentTrace?: { turnId?: string } }
+              ).agentTrace?.turnId,
+            });
+            if (newTitle) {
+              sendSSE(res, "session_renamed", { sessionId, fileName: newTitle });
+            }
+          } catch (titleErr) {
+            logger.warn?.("autoTitle: stream fire failed:", titleErr);
+          }
+        }
       } else {
         logger.error(
           `❌ Messages persist failed for chat: ${chatDocument.id} (turn answer streamed; user-visible affordance via persist_status SSE event)`

@@ -69,6 +69,59 @@ function normalizeDataSummaryForLocalStats(ds: DataSummary): DataSummary {
   };
 }
 
+/** The lightweight shape returned by every session-list endpoint. */
+export interface SessionListItem {
+  id: string;
+  username: string;
+  fileName: string;
+  uploadedAt: number;
+  createdAt: number;
+  lastUpdatedAt: number;
+  collaborators: string[];
+  messageCount: number;
+  chartCount: number;
+  sessionId: string;
+  pinned?: boolean;
+  pinnedAt?: number;
+}
+
+/**
+ * Single source of truth for a session-list response item. The three list
+ * endpoints used to inline three near-identical maps; they drifted and dropped
+ * `pinned`/`pinnedAt` (the sidebar pin reverted on every refetch). Centralising
+ * the projection here stops that whole class of drift — add a list field once.
+ */
+export function toSessionListItem(
+  session: {
+    id: string;
+    username: string;
+    fileName: string;
+    uploadedAt: number;
+    createdAt: number;
+    lastUpdatedAt: number;
+    collaborators?: string[];
+    sessionId: string;
+    pinned?: boolean;
+    pinnedAt?: number;
+  },
+  counts: { messageCount: number; chartCount: number }
+): SessionListItem {
+  return {
+    id: session.id,
+    username: session.username,
+    fileName: session.fileName,
+    uploadedAt: session.uploadedAt,
+    createdAt: session.createdAt,
+    lastUpdatedAt: session.lastUpdatedAt,
+    collaborators: session.collaborators || [session.username],
+    messageCount: counts.messageCount,
+    chartCount: counts.chartCount,
+    sessionId: session.sessionId,
+    pinned: session.pinned,
+    pinnedAt: session.pinnedAt,
+  };
+}
+
 // Get all sessions
 export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
   try {
@@ -96,21 +149,15 @@ export const getAllSessionsEndpoint = async (req: Request, res: Response) => {
     const sessions = await getAllSessions(username);
     
     // Return simplified session list for better performance
-    const sessionList = sessions.map((session) => ({
-      id: session.id,
-      username: session.username,
-      fileName: session.fileName,
-      uploadedAt: session.uploadedAt,
-      createdAt: session.createdAt,
-      lastUpdatedAt: session.lastUpdatedAt,
-      collaborators: session.collaborators || [session.username],
-      messageCount: session.messageCount,
-      chartCount: session.chartCount,
-      sessionId: session.sessionId,
-    }));
+    const sessionList = sessions.map((session) =>
+      toSessionListItem(session, {
+        messageCount: session.messageCount,
+        chartCount: session.chartCount,
+      })
+    );
 
-    res.json({ 
-      sessions: sessionList, 
+    res.json({
+      sessions: sessionList,
       count: sessionList.length,
       message: `Retrieved ${sessionList.length} sessions for user: ${username}`
     });
@@ -152,18 +199,12 @@ export const getSessionsPaginatedEndpoint = async (req: Request, res: Response) 
     const result = await getAllSessionsPaginated(pageSize, continuationToken, username);
     
     // Return simplified session list
-    const sessionList = result.sessions.map((session) => ({
-      id: session.id,
-      username: session.username,
-      fileName: session.fileName,
-      uploadedAt: session.uploadedAt,
-      createdAt: session.createdAt,
-      lastUpdatedAt: session.lastUpdatedAt,
-      collaborators: session.collaborators || [session.username],
-      messageCount: session.messageCount,
-      chartCount: session.chartCount,
-      sessionId: session.sessionId,
-    }));
+    const sessionList = result.sessions.map((session) =>
+      toSessionListItem(session, {
+        messageCount: session.messageCount,
+        chartCount: session.chartCount,
+      })
+    );
 
     res.json({
       sessions: sessionList,
@@ -219,18 +260,12 @@ export const getSessionsFilteredEndpoint = async (req: Request, res: Response) =
     const sessions = await getSessionsWithFilters(options);
     
     // Return simplified session list
-    const sessionList = sessions.map((session) => ({
-      id: session.id,
-      username: session.username,
-      fileName: session.fileName,
-      uploadedAt: session.uploadedAt,
-      createdAt: session.createdAt,
-      lastUpdatedAt: session.lastUpdatedAt,
-      collaborators: session.collaborators || [session.username],
-      messageCount: session.messages.length,
-      chartCount: session.charts.length,
-      sessionId: session.sessionId,
-    }));
+    const sessionList = sessions.map((session) =>
+      toSessionListItem(session, {
+        messageCount: session.messages.length,
+        chartCount: session.charts.length,
+      })
+    );
 
     res.json({
       sessions: sessionList,

@@ -1182,6 +1182,12 @@ export const useHomeMutations = ({
                     description: `${d.text.slice(0, 200)}${structSummary}`,
                   });
                 }
+              } else if (event === 'session_renamed') {
+                // V-AT3 · the server auto-titled this analysis from its first
+                // Q&A. Refresh the sidebar so the new name appears immediately.
+                queryClient.invalidateQueries({
+                  queryKey: ['sessions', userEmail],
+                });
               }
             },
             onIntermediate: (payload: StreamIntermediatePayload) => {

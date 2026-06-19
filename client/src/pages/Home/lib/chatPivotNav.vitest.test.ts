@@ -100,6 +100,81 @@ describe('buildChatPivotNavEntries', () => {
     expect(labels(entries)).toEqual(['B', 'D', 'A', 'C']);
   });
 
+  it('keeps a pinned pivot in the sidebar even when no longer navigable', () => {
+    // No preview rows + pivotAutoShow false → not navigable, but pinned. Without
+    // the durability fix this entry would silently vanish on reload (the bug).
+    const m = makeAssistantMessage({
+      timestamp: 7,
+      preview: [],
+      pivotAutoShow: false,
+      pivotState: {
+        schemaVersion: 1,
+        config: { ...baseConfig },
+        pinned: true,
+      },
+    } as Partial<Message>);
+    const entries = buildChatPivotNavEntries([m]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].pinned).toBe(true);
+  });
+
+  it('keeps a renamed (customName) pivot even when not navigable', () => {
+    const m = makeAssistantMessage({
+      timestamp: 8,
+      preview: [],
+      pivotAutoShow: false,
+      pivotState: {
+        schemaVersion: 1,
+        config: { ...baseConfig },
+        customName: 'My saved view',
+      },
+    } as Partial<Message>);
+    const entries = buildChatPivotNavEntries([m]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].label).toBe('My saved view');
+  });
+
+  it('still excludes a non-navigable, unpinned, unnamed pivot message', () => {
+    const m = makeAssistantMessage({
+      timestamp: 9,
+      preview: [],
+      pivotAutoShow: false,
+      pivotState: {
+        schemaVersion: 1,
+        config: { ...baseConfig },
+      },
+    } as Partial<Message>);
+    const entries = buildChatPivotNavEntries([m]);
+    expect(entries).toHaveLength(0);
+  });
+
+  it('uses contextLabel ahead of the structural auto-name, behind customName', () => {
+    const withContext = makeAssistantMessage({
+      timestamp: 21,
+      pivotDefaults: { contextLabel: 'Top SKUs By Q3 Value' },
+      pivotState: {
+        schemaVersion: 1,
+        config: {
+          ...baseConfig,
+          rows: ['SKU'],
+          values: [{ id: 'v1', field: 'Value', agg: 'sum' as const }],
+        },
+      },
+    } as Partial<Message>);
+    const userRenamed = makeAssistantMessage({
+      timestamp: 22,
+      pivotDefaults: { contextLabel: 'Top SKUs By Q3 Value' },
+      pivotState: {
+        schemaVersion: 1,
+        config: { ...baseConfig },
+        customName: 'My pinned view',
+      },
+    } as Partial<Message>);
+    const [a, b] = buildChatPivotNavEntries([withContext, userRenamed]);
+    expect(a.label).toBe('Top SKUs By Q3 Value'); // contextLabel beats pivotAutoName
+    expect(b.label).toBe('My pinned view'); // customName beats contextLabel
+  });
+
   it('carries messageTimestamp for handler dispatch', () => {
     const m = makeAssistantMessage({
       timestamp: 12345,

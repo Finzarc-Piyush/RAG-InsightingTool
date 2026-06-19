@@ -129,6 +129,14 @@ export const LLM_PURPOSE = {
    * repeat sessions don't re-pay the LLM cost.
    */
   DIRECTIVE_EXTRACTION: "directive_extraction",
+  /**
+   * Analysis auto-title. Single MINI-tier call that turns the first question +
+   * first answer of a brand-new analysis into a concise 3–7 word title. Fires
+   * once per analysis (first answered turn only), is hard-capped (~24 tokens,
+   * 4s timeout) and falls back to a deterministic title on any failure, so it
+   * never blocks or breaks the turn.
+   */
+  ANALYSIS_TITLE: "analysis_title",
 } as const;
 
 export type LlmCallPurpose = (typeof LLM_PURPOSE)[keyof typeof LLM_PURPOSE];
@@ -180,6 +188,7 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.QUICK_LOOKUP_PLANNER]: "MINI",
   [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
   [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: "MINI",
+  [LLM_PURPOSE.ANALYSIS_TITLE]: "MINI",
 };
 
 /** Build the per-purpose override env-var name: `mode_classify` → `OPENAI_MODEL_FOR_MODE_CLASSIFY`. */

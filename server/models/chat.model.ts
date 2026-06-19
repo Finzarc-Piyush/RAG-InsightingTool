@@ -56,7 +56,18 @@ function invalidateSessionList(username: string) {
 export interface ChatDocument {
   id: string; // Unique chat ID (fileName + timestamp)
   username: string; // User email
-  fileName: string; // Original uploaded file name
+  fileName: string; // Display name of the analysis (creation name, then an auto/user title)
+  /** The unmodified creation name (upload filename, or `db.schema.table` for
+   *  Snowflake). Preserved so an auto- or user-rename of `fileName` never loses
+   *  the provenance of where the data came from. Absent on pre-feature docs. */
+  originalFileName?: string;
+  /** Provenance of `fileName`, governing the post-first-Q&A auto-titler:
+   *   undefined → still the default creation name → ELIGIBLE for one auto-title.
+   *   'auto'    → set by the auto-titler → never auto-titled again.
+   *   'user'    → user renamed it → never auto-titled (user owns the name).
+   *  Absence is the eligible default, so legacy docs need no backfill (they also
+   *  never trip the single-fire trigger, which only fires on the first answer). */
+  titleSource?: 'auto' | 'user';
   uploadedAt: number; // Upload timestamp
   createdAt: number; // Chat creation timestamp
   lastUpdatedAt: number; // Last update timestamp
@@ -510,6 +521,7 @@ export const createChatDocument = async (
     username: normalizedUsername,
     fsmrora: normalizedUsername, // Add partition key field to match partition key path /fsmrora
     fileName: uniqueFileName,
+    originalFileName: uniqueFileName, // preserve the creation name for provenance after auto/user rename
     uploadedAt: timestamp,
     createdAt: timestamp,
     lastUpdatedAt: timestamp,
@@ -593,6 +605,7 @@ export const createPlaceholderSession = async (
     username: normalizedUsername,
     fsmrora: normalizedUsername, // Partition key
     fileName: uniqueFileName,
+    originalFileName: uniqueFileName, // preserve the creation name for provenance after auto/user rename
     uploadedAt: timestamp,
     createdAt: timestamp,
     lastUpdatedAt: timestamp,
@@ -1551,12 +1564,54 @@ export const updateSessionFileName = async (
     if (doc.username !== username) {
       throw new Error('Unauthorized: Session does not belong to this user');
     }
+    if (!doc.originalFileName) doc.originalFileName = doc.fileName;
     doc.fileName = newFileName.trim();
+    // A manual rename — even before the first question — permanently opts the
+    // analysis out of the auto-titler. Only the user owns the name from here.
+    doc.titleSource = 'user';
   });
   if (!result) {
     throw new Error(`Session not found for sessionId: ${sessionId}`);
   }
   return result;
+};
+
+/**
+ * Pure decision for the auto-titler: may we (re)write this doc's `fileName`?
+ * Eligible ONLY while the name is still the default creation name (no provenance
+ * stamp). Once stamped `'auto'` or `'user'` it is owned and never re-titled —
+ * this is the "auto once, then only the user renames" rule. Exported for tests.
+ */
+export const isAutoTitleEligible = (
+  doc: { username: string; titleSource?: 'auto' | 'user' },
+  username: string
+): boolean => {
+  if (doc.username !== username) return false; // defensive auth
+  return doc.titleSource !== 'user' && doc.titleSource !== 'auto';
+};
+
+/**
+ * Auto-title seam (Wave V-AT2). Sets `fileName` to a context-derived title after
+ * the first Q&A — but ONLY if the analysis is still eligible (no prior auto/user
+ * title). The eligibility re-check runs against the FRESH doc inside
+ * `mutateChatDocument` (cache-bypass read + IfMatch _etag), so a user rename that
+ * races the background titler always wins: the mutator returns `false` and no
+ * write happens. Returns the new fileName when it renamed, else null.
+ */
+export const setAutoTitleIfEligible = async (
+  sessionId: string,
+  username: string,
+  newFileName: string
+): Promise<string | null> => {
+  const trimmed = newFileName.trim();
+  if (!trimmed) return null;
+  const result = await mutateChatDocument(sessionId, (doc) => {
+    if (!isAutoTitleEligible(doc, username)) return false; // already named or not owner → abort
+    if (!doc.originalFileName) doc.originalFileName = doc.fileName; // preserve provenance
+    doc.fileName = trimmed;
+    doc.titleSource = 'auto';
+  });
+  return result ? trimmed : null;
 };
 
 /**
