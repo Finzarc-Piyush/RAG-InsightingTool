@@ -1,0 +1,112 @@
+import { describe, it, expect } from "vitest";
+import {
+  addSummaryItem,
+  editSummaryItem,
+  deleteSummaryItem,
+  makeSummaryItem,
+  summaryItemToValues,
+} from "./summaryBandEdit";
+import type { DashboardAnswerEnvelope } from "@/shared/schema";
+
+const envelope = (): DashboardAnswerEnvelope =>
+  ({
+    tldr: "Sex dominates survival.",
+    magnitudes: [{ label: "female · survival", value: "74.2%" }],
+    findings: [{ headline: "Sex split", evidence: "0.742 vs 0.189" }],
+    recommendations: [
+      { action: "Keep the sex cut", rationale: "Largest gap.", horizon: "now" },
+    ],
+    likelyDrivers: [
+      { explanation: "Lifeboat priority", basis: "domain", confidence: "medium" },
+    ],
+  }) as DashboardAnswerEnvelope;
+
+describe("summaryBandEdit · pure mutations", () => {
+  it("adds a magnitude to the answerEnvelope (not attentionAreas)", () => {
+    const patch = addSummaryItem(
+      "magnitudes",
+      { value: "18.9%", label: "male · survival", confidence: "" },
+      envelope(),
+      undefined,
+    );
+    expect(patch.attentionAreas).toBeUndefined();
+    expect(patch.answerEnvelope?.magnitudes).toHaveLength(2);
+    expect(patch.answerEnvelope?.magnitudes?.[1]).toEqual({
+      label: "male · survival",
+      value: "18.9%",
+    });
+    // L-021 · other envelope fields ride along untouched.
+    expect(patch.answerEnvelope?.findings).toHaveLength(1);
+    expect(patch.answerEnvelope?.likelyDrivers).toHaveLength(1);
+  });
+
+  it("routes attentionAreas edits to the top-level field", () => {
+    const areas = [
+      {
+        dimension: "Embarked",
+        unit: "S",
+        metric: "survival_rate by Embarked",
+        value: 0.337,
+        benchmark: 0.57,
+        variancePct: -41,
+        status: "red" as const,
+      },
+    ];
+    const patch = addSummaryItem(
+      "attentionAreas",
+      { unit: "Q", metric: "survival_rate by Embarked", dimension: "Embarked", variancePct: "-32", status: "amber" },
+      envelope(),
+      areas,
+    );
+    expect(patch.answerEnvelope).toBeUndefined();
+    expect(patch.attentionAreas).toHaveLength(2);
+    expect(patch.attentionAreas?.[1]).toMatchObject({
+      unit: "Q",
+      variancePct: -32,
+      status: "amber",
+      value: 0,
+      benchmark: 0,
+    });
+  });
+
+  it("preserves a recommendation's hidden rationale on edit", () => {
+    const patch = editSummaryItem(
+      "recommendations",
+      0,
+      { action: "Lead with the sex cut", horizon: "this_quarter", expectedImpact: "" },
+      envelope(),
+      undefined,
+    );
+    const rec = patch.answerEnvelope?.recommendations?.[0] as Record<string, unknown>;
+    expect(rec.action).toBe("Lead with the sex cut");
+    expect(rec.horizon).toBe("this_quarter");
+    expect(rec.rationale).toBe("Largest gap."); // hidden field kept
+  });
+
+  it("derives a driver's confidence from its basis", () => {
+    const item = makeSummaryItem("likelyDrivers", {
+      explanation: "Boarding mix differs by port",
+      basis: "data",
+      testable: "true",
+    });
+    expect(item).toEqual({
+      explanation: "Boarding mix differs by port",
+      basis: "data",
+      confidence: "high",
+      testable: true,
+    });
+  });
+
+  it("deletes by index immutably", () => {
+    const env = envelope();
+    const patch = deleteSummaryItem("findings", 0, env, undefined);
+    expect(patch.answerEnvelope?.findings).toHaveLength(0);
+    expect(env.findings).toHaveLength(1); // original untouched
+  });
+
+  it("round-trips an item through toValues → makeSummaryItem", () => {
+    const original = { label: "female · survival", value: "74.2%", confidence: "high" };
+    const values = summaryItemToValues("magnitudes", original);
+    expect(makeSummaryItem("magnitudes", values)).toEqual(original);
+  });
+});

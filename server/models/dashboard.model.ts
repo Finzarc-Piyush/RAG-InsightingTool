@@ -1521,6 +1521,17 @@ export const patchDashboard = async (
     }
   }
 
+  // 4. Wave C1 · editable Executive Summary band. Whole-field replace of the
+  // two top-level fields that drive the band (the request body has already
+  // been validated against `dashboardAnswerEnvelopeSchema` / `attentionAreaSchema`
+  // by the controller, so the persisted shape is correct — no key stripping).
+  if (patch.answerEnvelope !== undefined) {
+    dashboard.answerEnvelope = patch.answerEnvelope;
+  }
+  if (patch.attentionAreas !== undefined) {
+    dashboard.attentionAreas = patch.attentionAreas;
+  }
+
   dashboard.sheets = sheets;
   dashboard.charts = sheets.flatMap((s) =>
     Array.isArray(s.charts) ? s.charts : []

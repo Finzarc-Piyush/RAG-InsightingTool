@@ -2979,6 +2979,14 @@ export const dashboardPatchSchema = z.object({
       name: z.string().min(1).max(200),
     })
     .optional(),
+  // Wave C1 · editable Executive Summary band. The band's six card groups all
+  // live on these two ALREADY-persisted top-level fields, so editing them is a
+  // whole-field replace. MUST be `dashboardAnswerEnvelopeSchema` (NOT the
+  // message variant) — that is the object the dashboard document persists; the
+  // message schema is a SEPARATE z.object and zod would strip its extra keys
+  // (magnitudes / likelyDrivers) on the round-trip. See lesson L-021.
+  answerEnvelope: dashboardAnswerEnvelopeSchema.optional(),
+  attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
 });
 
 export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;

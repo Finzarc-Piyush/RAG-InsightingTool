@@ -12,6 +12,7 @@ import { deepenFollowUps } from '@/shared/followUpDeepening';
 // with native editable charts + tables.
 import { DashboardSection, DashboardTile } from '../types';
 import type { Layouts } from 'react-grid-layout';
+import type { AttentionAreaSpec, DashboardAnswerEnvelope } from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
 import { RefreshDataModal } from './RefreshDataModal';
@@ -402,6 +403,33 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
       patchSheetContent,
       refetchDashboards,
     ]
+  );
+
+  // Wave C2 · persist edits to the Executive Summary band. The band's six card
+  // groups all live on two top-level dashboard fields (`answerEnvelope` +
+  // `attentionAreas`), so an edit/add/delete is a whole-field replace through
+  // the existing `POST /dashboards/:id/patch` route. Refreshes like the other
+  // dashboard mutations so the band re-renders from the persisted truth.
+  const handleSummaryUpdate = useCallback(
+    async (patch: {
+      answerEnvelope?: DashboardAnswerEnvelope;
+      attentionAreas?: AttentionAreaSpec[];
+    }) => {
+      if (!canEdit) return;
+      try {
+        await dashboardsApi.patch(dashboard.id, patch);
+        if (onRefresh) await onRefresh();
+        await refetchDashboards();
+      } catch (e) {
+        logger.error(e);
+        toast({
+          title: 'Could not save the summary',
+          description: e instanceof Error ? e.message : 'Try again.',
+          variant: 'destructive',
+        });
+      }
+    },
+    [canEdit, dashboard.id, onRefresh, refetchDashboards, toast],
   );
 
   // Wave DR6 · prepend a new narrative block via the existing
@@ -996,6 +1024,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                       dispatchCrossFilter({ column: area.dimension, value: area.unit })
                     }
                     onOpenSummary={() => setSummaryDrawerOpen(true)}
+                    onUpdate={canEdit ? handleSummaryUpdate : undefined}
                   />
                 ) : null}
 

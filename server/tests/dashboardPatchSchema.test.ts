@@ -77,3 +77,66 @@ describe("dashboardPatchSchema (Phase 2.E)", () => {
     assert.equal(parsed.success, true);
   });
 });
+
+describe("dashboardPatchSchema · editable Executive Summary band (Wave C1)", () => {
+  it("accepts an answerEnvelope patch and preserves magnitudes + likelyDrivers (L-021)", () => {
+    const parsed = dashboardPatchSchema.safeParse({
+      answerEnvelope: {
+        tldr: "Female survival far exceeds male.",
+        magnitudes: [{ label: "female · survival rate", value: "74.2%" }],
+        findings: [
+          { headline: "Sex is the dominant split", evidence: "0.742 vs 0.189." },
+        ],
+        implications: [
+          { statement: "Sex drives survival", soWhat: "Prioritise the lens." },
+        ],
+        likelyDrivers: [
+          { explanation: "Lifeboat prioritisation", basis: "domain", confidence: "medium" },
+        ],
+        recommendations: [
+          { action: "Keep sex as the headline cut", rationale: "Largest gap." },
+        ],
+      },
+    });
+    assert.equal(parsed.success, true);
+    if (parsed.success) {
+      // The dashboard envelope object (NOT the message variant) keeps these
+      // keys; a wrong-object parse would silently strip them.
+      assert.equal(parsed.data.answerEnvelope?.magnitudes?.length, 1);
+      assert.equal(parsed.data.answerEnvelope?.likelyDrivers?.length, 1);
+    }
+  });
+
+  it("accepts an attentionAreas patch", () => {
+    const parsed = dashboardPatchSchema.safeParse({
+      attentionAreas: [
+        {
+          dimension: "Embarked",
+          unit: "S",
+          metric: "survival_rate by Embarked",
+          value: 0.337,
+          benchmark: 0.57,
+          variancePct: -41,
+          status: "red",
+        },
+      ],
+    });
+    assert.equal(parsed.success, true);
+  });
+
+  it("caps attentionAreas at 12", () => {
+    const one = {
+      dimension: "d",
+      unit: "u",
+      metric: "m",
+      value: 1,
+      benchmark: 2,
+      variancePct: -10,
+      status: "amber" as const,
+    };
+    const parsed = dashboardPatchSchema.safeParse({
+      attentionAreas: Array.from({ length: 13 }, () => ({ ...one })),
+    });
+    assert.equal(parsed.success, false);
+  });
+});
