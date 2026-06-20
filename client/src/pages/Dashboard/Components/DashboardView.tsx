@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
+import { useQuery } from '@tanstack/react-query';
+import { refreshHistory } from '@/lib/api/refresh';
 import { DashboardData } from '../modules/useDashboardState';
 import { useToast } from '@/hooks/use-toast';
 import { dashboardSourceSessions } from '../dashboardSourceSessions';
@@ -13,6 +15,8 @@ import type { Layouts } from 'react-grid-layout';
 import { dashboardsApi } from '@/lib/api/dashboards';
 import { DashboardHeader } from './DashboardHeader';
 import { RefreshDataModal } from './RefreshDataModal';
+import { DataVersionBadge } from './DataVersionBadge';
+import { ScheduleRefreshDialog } from './ScheduleRefreshDialog';
 import { DashboardTiles } from './DashboardTiles';
 // DPF4 · the analytical content lived above the canvas pre-DR2 via
 // `AnalysisSummaryPanel`. DR2 moved it to a right-side drawer triggered
@@ -113,6 +117,20 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   const [refreshSource, setRefreshSource] = useState<null | "file" | "snowflake">(
     null,
   );
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  // WR8/WR13 · detect whether this analysis is Snowflake-connected so the
+  // header only offers the Snowflake re-query + auto-refresh items when they
+  // apply. Shares the query key with DataVersionBadge (TanStack dedups).
+  const refreshEnabled =
+    import.meta.env.VITE_INCREMENTAL_REFRESH_ENABLED === 'true' && Boolean(dashboard.sessionId);
+  const { data: refreshSourceInfo } = useQuery({
+    queryKey: ['refresh-history', dashboard.sessionId],
+    queryFn: () => refreshHistory(dashboard.sessionId as string),
+    enabled: refreshEnabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+  const hasSnowflakeSource = refreshSourceInfo?.hasSnowflakeSource === true;
   // Wave WD3-sheet · captured DrillThroughEvent at the dashboard
   // level. `null` means the drill sheet is closed. The
   // `DRILL_THROUGH_EVENT` listener below sets this; the sheet's
@@ -806,14 +824,28 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
             priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
           })}
           capturedActiveFilter={dashboard.capturedActiveFilter}
-          {...(import.meta.env.VITE_INCREMENTAL_REFRESH_ENABLED === "true" &&
-          canEdit &&
-          dashboard.sessionId
+          {...(refreshEnabled && canEdit && dashboard.sessionId
             ? {
                 onUpdateDataFile: () => setRefreshSource("file"),
-                onUpdateDataSnowflake: () => setRefreshSource("snowflake"),
-                hasSnowflakeSource: true,
+                // Only offer the Snowflake re-query + auto-refresh when the
+                // analysis is actually Snowflake-connected.
+                onUpdateDataSnowflake: hasSnowflakeSource
+                  ? () => setRefreshSource("snowflake")
+                  : undefined,
+                onScheduleRefresh: hasSnowflakeSource
+                  ? () => setScheduleOpen(true)
+                  : undefined,
+                hasSnowflakeSource,
                 isUpdatingData: refreshSource !== null,
+                dataVersionBadge: (
+                  <DataVersionBadge
+                    sessionId={dashboard.sessionId}
+                    onRolledBack={async () => {
+                      if (onRefresh) await onRefresh();
+                      await refetchDashboards();
+                    }}
+                  />
+                ),
               }
             : {})}
           onRename={canEdit ? async (newName) => {
@@ -1275,6 +1307,13 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
               /* the modal already showed completion; refetch is best-effort */
             }
           }}
+        />
+      ) : null}
+      {dashboard.sessionId ? (
+        <ScheduleRefreshDialog
+          open={scheduleOpen}
+          onOpenChange={setScheduleOpen}
+          sessionId={dashboard.sessionId}
         />
       ) : null}
       {/* Wave WD3-sheet · drill-through receiver. Opens on

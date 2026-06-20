@@ -24,6 +24,16 @@ import { computeAutomationColumnRemap } from "../lib/agents/runtime/automationRe
 import { fetchSnowflakeRefreshRows } from "../lib/refresh/ingestNewVersion.js";
 import { inferBusinessKey } from "../lib/refresh/unionAppend.js";
 import {
+  rollbackLastRefresh,
+  buildRefreshHistoryView,
+} from "../lib/refresh/rollbackRefresh.service.js";
+import { buildRefreshCompare } from "../lib/refresh/compareVersions.js";
+import { getDashboardById } from "../models/dashboard.model.js";
+import {
+  runDueScheduledRefreshes,
+  setRefreshSchedule,
+} from "../lib/refresh/scheduledRefresh.service.js";
+import {
   refreshSession,
   type RefreshSessionArgs,
 } from "../lib/refresh/refreshSession.service.js";
@@ -192,6 +202,7 @@ async function streamRefresh(
       toDataVersion: result.toDataVersion,
       questionsReplayed: result.questionsReplayed,
       dashboardId: result.dashboardId,
+      discovered: result.discovered,
     });
     sendSSE(res, "stream_end", { ok: result.ok });
     stopKeepalive?.();
@@ -252,6 +263,7 @@ export const refreshController = async (req: Request, res: Response) => {
     const policy = req.body?.policy === "append" ? "append" : "replace";
     const columnMapping = parseColumnMapping(req.body?.columnMapping);
     const appendKey = parseStringArray(req.body?.appendKey);
+    const discover = req.body?.discover === "true" || req.body?.discover === true;
     const versionLabel =
       typeof req.body?.versionLabel === "string"
         ? req.body.versionLabel.trim().slice(0, 120)
@@ -271,9 +283,137 @@ export const refreshController = async (req: Request, res: Response) => {
       columnMapping,
       appendKey,
       versionLabel,
+      discover,
     });
   } catch (error) {
     if (!res.headersSent) return handleError(res, error, 400);
+  }
+};
+
+/**
+ * GET /api/sessions/:sessionId/refresh/history
+ * Returns the version/label info the "Data: as of …" badge renders + whether a
+ * rollback target exists. No mutation.
+ */
+export const refreshHistoryController = async (req: Request, res: Response) => {
+  if (!isIncrementalRefreshEnabled()) return featureOff(res);
+  try {
+    const username = requireUsername(req);
+    const sessionId = req.params.sessionId;
+    if (!sessionId) return res.status(400).json({ message: "Missing sessionId" });
+    const chat = await getChatDocument(sessionId, username);
+    if (!chat) return res.status(404).json({ message: "Session not found" });
+    return res.json(buildRefreshHistoryView(chat));
+  } catch (error) {
+    return handleError(res, error, 400);
+  }
+};
+
+/**
+ * PUT /api/sessions/:sessionId/refresh/schedule
+ * Body: { enabled, intervalHours? } — set/clear the Snowflake auto-refresh.
+ */
+export const setRefreshScheduleController = async (
+  req: Request,
+  res: Response
+) => {
+  if (!isIncrementalRefreshEnabled()) return featureOff(res);
+  try {
+    const username = requireUsername(req);
+    const sessionId = req.params.sessionId;
+    if (!sessionId) return res.status(400).json({ message: "Missing sessionId" });
+    const enabled = req.body?.enabled === true;
+    const intervalHours =
+      typeof req.body?.intervalHours === "number" ? req.body.intervalHours : undefined;
+    const result = await setRefreshSchedule(sessionId, username, {
+      enabled,
+      intervalHours,
+    });
+    if (!result.ok) return res.status(400).json({ message: result.error });
+    return res.json({ ok: true });
+  } catch (error) {
+    return handleError(res, error, 400);
+  }
+};
+
+/**
+ * POST /api/cron/refresh
+ * Vercel-cron entry. Secured by `CRON_SECRET` (Authorization: Bearer …). Runs
+ * every due scheduled Snowflake refresh. Not user-scoped.
+ */
+export const cronRefreshController = async (req: Request, res: Response) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return res.status(503).json({ message: "Cron is not configured (CRON_SECRET unset)." });
+  }
+  const auth = req.headers.authorization;
+  const provided = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
+  if (provided !== secret) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  if (!isIncrementalRefreshEnabled()) {
+    return res.json({ due: 0, refreshed: 0, failed: 0, skipped: "feature disabled" });
+  }
+  try {
+    const result = await runDueScheduledRefreshes();
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error, 500);
+  }
+};
+
+/**
+ * GET /api/sessions/:sessionId/refresh/compare
+ * Diffs the prior dashboard charts against the current ones (per-chart totals +
+ * % change). Returns { available:false } when there's no prior to compare.
+ */
+export const refreshCompareController = async (req: Request, res: Response) => {
+  if (!isIncrementalRefreshEnabled()) return featureOff(res);
+  try {
+    const username = requireUsername(req);
+    const sessionId = req.params.sessionId;
+    if (!sessionId) return res.status(400).json({ message: "Missing sessionId" });
+    const chat = await getChatDocument(sessionId, username);
+    if (!chat) return res.status(404).json({ message: "Session not found" });
+
+    const snapshot = chat.messageVersions?.[0];
+    const priorCharts = snapshot?.priorDashboardCharts;
+    let currentCharts = chat.charts;
+    if (chat.lastCreatedDashboardId) {
+      const dash = await getDashboardById(chat.lastCreatedDashboardId, username);
+      if (dash?.charts?.length) currentCharts = dash.charts;
+    }
+    const currentLabel = chat.dataVersions?.find(
+      (v) => v.versionId === `v${chat.currentDataBlob?.version}`
+    )?.label;
+
+    return res.json(
+      buildRefreshCompare(priorCharts, currentCharts, {
+        priorLabel: snapshot?.label,
+        currentLabel,
+      })
+    );
+  } catch (error) {
+    return handleError(res, error, 400);
+  }
+};
+
+/**
+ * POST /api/sessions/:sessionId/refresh/rollback
+ * Undo the last refresh — restore the prior data + answers + dashboard.
+ */
+export const refreshRollbackController = async (req: Request, res: Response) => {
+  if (!isIncrementalRefreshEnabled()) return featureOff(res);
+  try {
+    const username = requireUsername(req);
+    const sessionId = req.params.sessionId;
+    if (!sessionId) return res.status(400).json({ message: "Missing sessionId" });
+    const result = await rollbackLastRefresh(sessionId, username);
+    if (result.busy) return res.status(409).json({ message: result.error });
+    if (!result.ok) return res.status(400).json({ message: result.error });
+    return res.json(result);
+  } catch (error) {
+    return handleError(res, error, 400);
   }
 };
 

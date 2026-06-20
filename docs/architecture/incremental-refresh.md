@@ -1,7 +1,7 @@
 # Incremental data refresh ("Update data")
 
 > Behind `INCREMENTAL_REFRESH_ENABLED` (server) + `VITE_INCREMENTAL_REFRESH_ENABLED` (client), both default OFF.
-> Shipped as Waves WR0–WR8 (2026-06-19). Plan: `/Users/tida/.claude/plans/an-extremely-new-functionality-pure-graham.md`.
+> Shipped as Waves WR0–WR8 (2026-06-19) + v1.1 WR9–WR13 (2026-06-20). Plan: `/Users/tida/.claude/plans/an-extremely-new-functionality-pure-graham.md`.
 
 ## What it is
 
@@ -35,10 +35,21 @@ This is ~70% a re-target of the existing **automation capture→replay** system.
 ## Endpoints ([refreshController.ts](../../server/controllers/refreshController.ts) / [routes/refresh.ts](../../server/routes/refresh.ts))
 
 - `POST /api/sessions/:id/refresh/preflight` — multipart; returns the diff (rows/cols before→after), the column-mapping dry-run, the inferred append key, and a recipe summary. No mutation.
-- `POST /api/sessions/:id/refresh` — multipart; SSE. Commits a file refresh.
+- `POST /api/sessions/:id/refresh` — multipart; SSE. Commits a file refresh. `discover=true` adds the WR11 fresh-planner pass.
 - `POST /api/sessions/:id/refresh/snowflake` — JSON; SSE. One-click Snowflake re-query.
+- `GET /api/sessions/:id/refresh/history` · `POST …/rollback` — WR10 version badge + undo.
+- `GET /api/sessions/:id/refresh/compare` — WR12 prior-vs-current per-chart deltas.
+- `PUT /api/sessions/:id/refresh/schedule` · `POST /api/cron/refresh` — WR13 schedule + the `CRON_SECRET`-secured Vercel-cron entry.
 
 SSE reuses the automation events (`automation_started/progress/halted/complete`) + a final `refresh_complete`, so the existing `AutomationReplayBanner` renders them.
+
+## v1.1 (WR9–WR13)
+
+- **WR9 Parquet sibling** ([ingestNewVersion.ts](../../server/lib/refresh/ingestNewVersion.ts) `maybeWriteRefreshParquet`) — flagged by `USE_PARQUET_READ_PATH`; keeps the durable Parquet aligned after a swap.
+- **WR10 rollback** ([rollbackRefresh.service.ts](../../server/lib/refresh/rollbackRefresh.service.ts)) — the newest `messageVersions` snapshot carries prior data + messages + (WR12) prior dashboard charts; rollback restores all three and pops it.
+- **WR11 discovery** ([discoverNewInsights.ts](../../server/lib/refresh/discoverNewInsights.ts)) — opt-in full-planner pass appending net-new turns on the combined data.
+- **WR12 compare** ([compareVersions.ts](../../server/lib/refresh/compareVersions.ts)) — per-chart total + %Δ, matched by `chartIdentityKey`.
+- **WR13 schedule** ([scheduledRefresh.service.ts](../../server/lib/refresh/scheduledRefresh.service.ts) + `findDueScheduledRefreshes`) — hourly cron re-queries due Snowflake sessions.
 
 ## Client ([refresh.ts](../../client/src/lib/api/refresh.ts) + [RefreshDataModal.tsx](../../client/src/pages/Dashboard/Components/RefreshDataModal.tsx))
 

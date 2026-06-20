@@ -134,10 +134,20 @@ export async function reversionDashboardForRefresh(
     if (targetId) {
       const existing = await getDashboardById(targetId, username);
       if (existing) {
+        // WR12 · snapshot the PRIOR charts (with data) onto the newest message
+        // version so the April-vs-May compare can diff them. Best-effort.
+        const priorCharts = [...(existing.charts ?? [])];
         applySpecToDashboard(existing, spec);
         existing.dataRefreshSource = refreshMeta;
         existing.updatedAt = Date.now();
         await updateDashboard(existing);
+        if (priorCharts.length > 0) {
+          await mutateChatDocument(sessionId, (doc) => {
+            const entry = doc.messageVersions?.[0];
+            if (!entry) return false;
+            entry.priorDashboardCharts = priorCharts;
+          });
+        }
         logger.log(`[refresh] updated dashboard ${existing.id} in place (${sessionId})`);
         return { dashboardId: existing.id };
       }

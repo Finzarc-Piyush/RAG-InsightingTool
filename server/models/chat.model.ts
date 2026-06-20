@@ -122,6 +122,19 @@ export interface ChatDocument {
     lastRefreshedAt?: number;
     knownTotalRows?: number;
   };
+  /**
+   * Wave WR13 (incremental refresh) · optional auto-refresh schedule for a
+   * Snowflake-sourced session. A Vercel-cron-driven job re-queries the table on
+   * the interval and regenerates. `nextRunAt`/`lastRunAt` are epoch ms; absent /
+   * `enabled:false` means manual-only.
+   */
+  refreshSchedule?: {
+    enabled: boolean;
+    intervalHours: number;
+    nextRunAt?: number;
+    lastRunAt?: number;
+    lastError?: string;
+  };
   currentDataBlob?: { // Current processed data blob (for data operations)
     blobUrl: string;
     blobName: string;
@@ -301,6 +314,24 @@ export interface ChatDocument {
     messages: Message[];
     charts?: ChartSpec[];
     chartReferences?: ChartReference[];
+    /**
+     * Wave WR10 (user-initiated rollback) · the data-side state as it was
+     * BEFORE the refresh, so a rollback restores data + messages + dashboard
+     * together (coherently). Patched onto the newest entry by `refreshSession`
+     * after a successful refresh. Absent on entries from before WR10 → those
+     * roll back messages only.
+     */
+    priorDataBlob?: ChatDocument["currentDataBlob"];
+    priorDataSummary?: DataSummary;
+    priorSampleRows?: Record<string, any>[];
+    priorColumnStatistics?: Record<string, any>;
+    /**
+     * Wave WR12 (compare view) · the PRIOR dashboard's charts (with data),
+     * captured just before the in-place dashboard overwrite, so the April-vs-May
+     * compare can diff them against the current charts. Absent when the analysis
+     * had no dashboard.
+     */
+    priorDashboardCharts?: ChartSpec[];
   }>;
   /**
    * Wave-FA1 · Excel-style active filter overlay. Non-destructive — the
@@ -834,6 +865,39 @@ export { CosmosDocSizeError } from "./cosmosDocSizeGuard.js";
  * `updateChatDocument` and inherits this cache freshness automatically.
  * This comment exists to keep that invariant load-bearing for future code.
  */
+/**
+ * Wave WR13 · cross-partition scan for sessions whose auto-refresh schedule is
+ * DUE (enabled, `nextRunAt <= now`, Snowflake-sourced). Used by the cron job;
+ * runs infrequently so the cross-partition cost is acceptable. Returns a light
+ * shape (only the ids the cron needs to drive a refresh).
+ */
+export const findDueScheduledRefreshes = async (
+  nowMs: number,
+  limit: number = 25
+): Promise<Array<{ sessionId: string; username: string }>> => {
+  try {
+    const containerInstance = await waitForContainer();
+    const query =
+      "SELECT c.sessionId, c.username FROM c " +
+      "WHERE c.refreshSchedule.enabled = true " +
+      "AND IS_DEFINED(c.snowflakeSource) " +
+      "AND (NOT IS_DEFINED(c.refreshSchedule.nextRunAt) OR c.refreshSchedule.nextRunAt <= @now)";
+    // Cross-partition is the default in Cosmos SDK v4 (no enableCrossPartitionQuery).
+    const { resources } = await containerInstance.items
+      .query(
+        { query, parameters: [{ name: "@now", value: nowMs }] },
+        { maxItemCount: limit }
+      )
+      .fetchNext();
+    return (resources ?? [])
+      .filter((r) => r?.sessionId && r?.username)
+      .map((r) => ({ sessionId: String(r.sessionId), username: String(r.username) }));
+  } catch (err) {
+    logger.error("findDueScheduledRefreshes failed:", err);
+    return [];
+  }
+};
+
 export const updateChatDocument = async (
   chatDocument: ChatDocument,
   options?: { ifMatchEtag?: string }

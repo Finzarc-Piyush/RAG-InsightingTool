@@ -9,9 +9,14 @@ import { Router } from "express";
 import multer from "multer";
 import express from "express";
 import {
+  cronRefreshController,
+  refreshCompareController,
   refreshController,
+  refreshHistoryController,
   refreshPreflightController,
+  refreshRollbackController,
   refreshSnowflakeController,
+  setRefreshScheduleController,
 } from "../controllers/refreshController.js";
 import { uploadLimits } from "../config/uploadLimits.js";
 
@@ -57,5 +62,13 @@ router.post(
 );
 // One-click Snowflake re-query (no file part).
 router.post("/sessions/:sessionId/refresh/snowflake", refreshSnowflakeController);
+// WR10 · version badge + rollback (no file part).
+router.get("/sessions/:sessionId/refresh/history", refreshHistoryController);
+router.post("/sessions/:sessionId/refresh/rollback", refreshRollbackController);
+// WR12 · April-vs-May compare (no file part).
+router.get("/sessions/:sessionId/refresh/compare", refreshCompareController);
+// WR13 · scheduled Snowflake auto-refresh.
+router.put("/sessions/:sessionId/refresh/schedule", setRefreshScheduleController);
+router.post("/cron/refresh", cronRefreshController); // → /api/cron/refresh (CRON_SECRET)
 
 export default router;

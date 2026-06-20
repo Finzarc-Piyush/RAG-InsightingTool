@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   BarChart3,
@@ -82,8 +82,11 @@ interface DashboardHeaderProps {
    */
   onUpdateDataFile?: () => void;
   onUpdateDataSnowflake?: () => void;
+  onScheduleRefresh?: () => void;
   hasSnowflakeSource?: boolean;
   isUpdatingData?: boolean;
+  /** Wave WR10 · "Data: as of …" version badge + rollback menu (self-contained). */
+  dataVersionBadge?: ReactNode;
 }
 
 export function DashboardHeader({
@@ -105,8 +108,10 @@ export function DashboardHeader({
   dashboard,
   onUpdateDataFile,
   onUpdateDataSnowflake,
+  onScheduleRefresh,
   hasSnowflakeSource = false,
   isUpdatingData = false,
+  dataVersionBadge,
 }: DashboardHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(name);
@@ -268,6 +273,8 @@ export function DashboardHeader({
 
         {dashboard ? <OpenChatButton dashboard={dashboard} variant="header" /> : null}
 
+        {dataVersionBadge}
+
         {onUpdateDataFile ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -303,6 +310,15 @@ export function DashboardHeader({
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Fetch latest from Snowflake
                 </DropdownMenuItem>
+              ) : null}
+              {onScheduleRefresh && hasSnowflakeSource ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={onScheduleRefresh}>
+                    <Calendar className="h-4 w-4 mr-2" />
+                    Auto-refresh…
+                  </DropdownMenuItem>
+                </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>

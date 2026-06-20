@@ -38,6 +38,7 @@ import {
 import { ingestReplaceFromRows, type RefreshPolicy } from "./ingestNewVersion.js";
 import { ingestAppendFromRows } from "./unionAppend.js";
 import { reversionDashboardForRefresh } from "./reversionDashboard.js";
+import { discoverNewInsights } from "./discoverNewInsights.js";
 import { logger } from "../logger.js";
 import { errorMessage } from "../../utils/errorMessage.js";
 
@@ -52,6 +53,8 @@ export interface RefreshSessionArgs {
   columnMapping?: Record<string, string>;
   /** Append-mode business key (overrides the inferred key). */
   appendKey?: string[];
+  /** WR11 · also run a fresh-planner discovery pass after the faithful replay. */
+  discover?: boolean;
   /** Human label for the new data version (e.g. "as of May 2026"). */
   versionLabel?: string;
   emit: ReplaySseEmit;
@@ -65,6 +68,8 @@ export interface RefreshSessionResult extends ReplayAutomationResult {
   busy?: boolean;
   /** The dashboard updated in place (WR4), when the analysis had/created one. */
   dashboardId?: string;
+  /** WR11 · number of net-new discovery turns appended. */
+  discovered?: number;
 }
 
 /** The session fields a refresh mutates — snapshotted for rollback. */
@@ -199,6 +204,11 @@ export async function refreshSession(
       return { ...result, fromDataVersion: fromVersion, toDataVersion: ingest.toVersion };
     }
 
+    // WR10 · enrich the newest message snapshot (written by the overwrite
+    // truncation) with the PRE-refresh data-side state, so a later user-initiated
+    // rollback restores data + messages + dashboard together. Best-effort.
+    await patchRollbackData(sessionId, prior);
+
     // Re-version the dashboard from the regenerated draft (best-effort — the
     // answers are already persisted; a dashboard-mirror failure never fails
     // the refresh).
@@ -210,6 +220,23 @@ export async function refreshSession(
       toDataVersion: ingest.toVersion,
       versionLabel: args.versionLabel,
     });
+
+    // WR11 · optional fresh-planner discovery pass on the combined data. Runs
+    // inside the same exclusive lease; never fails the refresh.
+    let discovered = 0;
+    if (args.discover) {
+      const fresh = await getChatDocument(sessionId, username);
+      if (fresh) {
+        const d = await discoverNewInsights({
+          sessionId,
+          username,
+          chat: fresh,
+          emit,
+          abortSignal,
+        });
+        discovered = d.discovered;
+      }
+    }
 
     await setRefreshState(sessionId, {
       status: "complete",
@@ -223,6 +250,7 @@ export async function refreshSession(
       fromDataVersion: fromVersion,
       toDataVersion: ingest.toVersion,
       dashboardId: reversion.dashboardId,
+      discovered,
     };
   } catch (err) {
     const error = errorMessage(err);
@@ -232,6 +260,29 @@ export async function refreshSession(
     return { ok: false, questionsReplayed: 0, dashboardsCreated: 0, error };
   } finally {
     await releaseTurnLease(sessionId, turnId);
+  }
+}
+
+/**
+ * WR10 · stamp the pre-refresh data-side state onto the newest `messageVersions`
+ * entry (the overwrite truncation already captured the prior messages+charts
+ * there). Makes that entry a COMPLETE rollback snapshot.
+ */
+async function patchRollbackData(
+  sessionId: string,
+  prior: PriorState
+): Promise<void> {
+  try {
+    await mutateChatDocument(sessionId, (doc) => {
+      const entry = doc.messageVersions?.[0];
+      if (!entry) return false; // nothing to enrich
+      entry.priorDataBlob = prior.currentDataBlob;
+      entry.priorDataSummary = prior.dataSummary;
+      entry.priorSampleRows = prior.sampleRows;
+      entry.priorColumnStatistics = prior.columnStatistics;
+    });
+  } catch (err) {
+    logger.warn(`[refresh] patchRollbackData failed (${sessionId}):`, err);
   }
 }
 

@@ -24,6 +24,11 @@ import type { DataSummary, DatasetProfile } from "../../shared/schema.js";
 import { applyUploadPipelineWithProfile } from "../fileParser.js";
 import { saveModifiedData } from "../dataOps/dataPersistence.js";
 import { mutateChatDocument } from "../../models/chat.model.js";
+import {
+  isParquetReadPathEnabled,
+  writeAndUploadSessionParquet,
+} from "../sessionParquet.js";
+import { ColumnarStorageService } from "../columnarStorage.js";
 import { logger } from "../logger.js";
 
 /**
@@ -121,6 +126,11 @@ export async function ingestReplaceFromRows(
     await stampVersionLabel(chat.sessionId, result.version, opts.versionLabel);
   }
 
+  // Wave WR9 · flag-gated · keep the durable Parquet sibling aligned with the
+  // new version so the USE_PARQUET_READ_PATH read path opens fresh data instead
+  // of stale. Default OFF → no-op in production. Non-fatal.
+  await maybeWriteRefreshParquet(chat, data, result.version);
+
   logger.log(
     `[refresh] replace ingest: session=${chat.sessionId} v${fromVersion}→v${result.version} rows=${data.length}`
   );
@@ -130,6 +140,43 @@ export async function ingestReplaceFromRows(
     toVersion: result.version,
     blobName: result.blobName,
   };
+}
+
+/**
+ * Wave WR9 · write the authoritative rows to a durable Parquet sibling for the
+ * new version + stamp `chat.parquetBlob`, ONLY when `USE_PARQUET_READ_PATH` is
+ * on. Mirrors the upload-time WG2.0 hook (`uploadQueue`). Best-effort: a failure
+ * never fails the refresh (the JSON blob + rematerialize remain the fallback).
+ */
+export async function maybeWriteRefreshParquet(
+  chat: ChatDocument,
+  rows: Record<string, unknown>[],
+  version: number
+): Promise<void> {
+  if (!isParquetReadPathEnabled()) return;
+  try {
+    const storage = new ColumnarStorageService({ sessionId: chat.sessionId });
+    await storage.initialize();
+    try {
+      await storage.materializeAuthoritativeDataTable(
+        rows as Record<string, any>[],
+        { tableName: "data" }
+      );
+      const blobName = await writeAndUploadSessionParquet(storage, {
+        username: chat.username,
+        sessionId: chat.sessionId,
+        version,
+      });
+      await mutateChatDocument(chat.sessionId, (doc) => {
+        doc.parquetBlob = { blobName, version, rowCount: rows.length };
+      });
+      logger.log(`[refresh] wrote Parquet sibling v${version} (${chat.sessionId})`);
+    } finally {
+      await storage.close();
+    }
+  } catch (err) {
+    logger.warn(`[refresh] Parquet sibling-write skipped (non-fatal):`, err);
+  }
 }
 
 /** Set the `label` on the `v{version}` entry of `dataVersions[]`. */

@@ -51,7 +51,55 @@ export interface RunRefreshOptions {
   columnMapping?: AutomationColumnMapping;
   appendKey?: string[];
   versionLabel?: string;
+  /** WR11 · also run a fresh-planner discovery pass for net-new insights. */
+  discover?: boolean;
 }
+
+export interface RefreshHistoryView {
+  canRollback: boolean;
+  currentVersion?: number;
+  currentLabel?: string;
+  priorVersion?: number;
+  priorLabel?: string;
+  hasSnowflakeSource: boolean;
+  scheduleEnabled: boolean;
+}
+
+/** GET the version/label info for the "Data: as of …" badge + rollback menu. */
+export const refreshHistory = (sessionId: string): Promise<RefreshHistoryView> =>
+  api.get<RefreshHistoryView>(`/api/sessions/${sessionId}/refresh/history`);
+
+/** Undo the last refresh — restores prior data + answers + dashboard. */
+export const rollbackRefresh = (
+  sessionId: string
+): Promise<{ ok: boolean; restoredLabel?: string; restoredToVersion?: number }> =>
+  api.post(`/api/sessions/${sessionId}/refresh/rollback`, {});
+
+export interface RefreshCompareRow {
+  title: string;
+  type: string;
+  priorTotal: number;
+  currentTotal: number;
+  delta: number;
+  deltaPct: number | null;
+}
+export interface RefreshCompareResult {
+  available: boolean;
+  priorLabel?: string;
+  currentLabel?: string;
+  rows: RefreshCompareRow[];
+}
+
+/** GET the prior-vs-current per-chart deltas for the compare view. */
+export const refreshCompare = (sessionId: string): Promise<RefreshCompareResult> =>
+  api.get<RefreshCompareResult>(`/api/sessions/${sessionId}/refresh/compare`);
+
+/** Set/clear the Snowflake auto-refresh schedule (WR13). */
+export const setRefreshSchedule = (
+  sessionId: string,
+  body: { enabled: boolean; intervalHours?: number }
+): Promise<{ ok: boolean }> =>
+  api.put(`/api/sessions/${sessionId}/refresh/schedule`, body);
 
 /** Preflight: returns the diff + drift mapping + recipe summary (no mutation). */
 export const refreshPreflight = (
@@ -139,6 +187,7 @@ export const runRefreshStream = (
   }
   if (options.appendKey) form.append("appendKey", JSON.stringify(options.appendKey));
   if (options.versionLabel) form.append("versionLabel", options.versionLabel);
+  if (options.discover) form.append("discover", "true");
   // No explicit Content-Type — the browser sets the multipart boundary.
   return streamSse(
     `/api/sessions/${sessionId}/refresh`,

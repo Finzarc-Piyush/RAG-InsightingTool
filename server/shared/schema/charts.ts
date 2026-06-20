@@ -2759,16 +2759,20 @@ export const dashboardSchema = z.object({
    */
   sessionId: z.string().max(200).optional(),
   /**
-   * Wave WR0 (incremental refresh) · provenance + version-chain for a
-   * dashboard produced by a data refresh ("Update data"). All optional +
-   * back-compat — existing Cosmos documents parse unchanged.
+   * Wave WR0 (incremental refresh) · provenance for a dashboard produced by a
+   * data refresh ("Update data"). All optional + back-compat — existing Cosmos
+   * documents parse unchanged.
    *
-   * `dataRefreshSource` records the data-version transition + the chosen
-   * policy. `supersedesDashboardId` points at the PRIOR (e.g. April) dashboard
-   * this version replaced; `supersededByDashboardId` is stamped on that prior
-   * dashboard pointing forward to the new one — so the "Data: as of …" badge
-   * can walk the chain for rollback / compare. The prior dashboard is always
-   * RETAINED (never deleted), so a refresh is reversible.
+   * `dataRefreshSource` records the data-version transition + the chosen policy
+   * + the "as of …" label; it is the field actually populated today (WR4
+   * updates the dashboard IN PLACE — same id — so a refresh keeps the user on
+   * the same URL; the data/answer history for rollback + compare lives on the
+   * CHAT's `messageVersions`, not a second dashboard doc).
+   *
+   * `supersedesDashboardId` / `supersededByDashboardId` are RESERVED (currently
+   * unpopulated): they exist for a possible future "keep a separate versioned
+   * dashboard per refresh" mode. Kept optional so enabling that mode needs no
+   * migration. Do not assume they are set when reading a refreshed dashboard.
    */
   dataRefreshSource: z
     .object({

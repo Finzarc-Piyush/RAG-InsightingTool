@@ -71,6 +71,7 @@ export function RefreshDataModal({
   const [file, setFile] = useState<File | null>(null);
   const [preflight, setPreflight] = useState<RefreshPreflightResult | null>(null);
   const [policy, setPolicy] = useState<Policy>("replace");
+  const [discover, setDiscover] = useState(false);
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -175,6 +176,7 @@ export function RefreshDataModal({
           policy,
           columnMapping: mapping,
           appendKey: policy === "append" ? preflight?.appendKey : undefined,
+          discover,
         },
         callbacks
       );
@@ -302,6 +304,25 @@ export function RefreshDataModal({
                 {preflight?.recipe.charts} chart
                 {preflight?.recipe.charts === 1 ? "" : "s"}.
               </div>
+
+              <label className="flex items-start gap-2 text-xs cursor-pointer rounded-lg border border-border p-2.5 hover:bg-muted/40">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={discover}
+                  onChange={(e) => setDiscover(e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium text-foreground">
+                    Also discover new insights
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    — after refreshing, run a fresh analysis pass to surface NEW
+                    questions the combined data now makes possible (slower).
+                  </span>
+                </span>
+              </label>
             </div>
           )}
 
