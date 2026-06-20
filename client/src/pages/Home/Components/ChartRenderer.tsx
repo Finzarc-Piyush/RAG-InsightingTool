@@ -86,6 +86,14 @@ interface ChartRendererProps {
   keyInsightSessionId?: string | null;
   /** Forwarded to ChartModal so the trailing "Next, …" insight chip can pre-fill the composer. */
   onSuggestedQuestionClick?: (question: string) => void;
+  /**
+   * A1 · whether a click on the chart card opens this renderer's own
+   * fullscreen modal. Default true (chat charts). The dashboard tile sets
+   * this false so its OWN expand modal (ChartTileBody) owns click-to-expand
+   * uniformly for both the v1 (ChartRenderer) and v2 (PremiumChart) paths —
+   * otherwise a v1 tile would open two modals on one click.
+   */
+  expandOnClick?: boolean;
 }
 
 const MAX_COMPACT_X_TICKS = 6;
@@ -128,6 +136,7 @@ export function ChartRenderer({
   loadingProgress,
   keyInsightSessionId = null,
   onSuggestedQuestionClick,
+  expandOnClick = true,
 }: ChartRendererProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDashboardModalOpen, setIsDashboardModalOpen] = useState(false);
@@ -742,13 +751,14 @@ export function ChartRenderer({
 
   const handleCardClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!expandOnClick) return;
       const target = event.target as HTMLElement;
       if (target.closest('[data-chart-filter-control="true"]')) {
         return;
       }
       setIsModalOpen(true);
     },
-    []
+    [expandOnClick]
   );
 
   const renderChart = () => {
@@ -1595,7 +1605,7 @@ export function ChartRenderer({
     <>
       <div
         ref={containerRef}
-        className="group relative flex h-full cursor-pointer flex-col rounded-lg border border-border bg-card p-4 shadow-sm transition-shadow hover:shadow-md"
+        className={`group relative flex h-full flex-col rounded-lg border border-border bg-card p-4 shadow-sm transition-shadow hover:shadow-md ${expandOnClick ? 'cursor-pointer' : ''}`}
         onClick={handleCardClick}
       >
         <div

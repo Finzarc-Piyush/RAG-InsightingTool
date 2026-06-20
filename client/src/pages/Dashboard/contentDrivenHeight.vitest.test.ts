@@ -47,6 +47,15 @@ describe("DR18A · contentDrivenHeight", () => {
     ).toBeLessThanOrEqual(20);
   });
 
+  it("A2 · caps a long narrative at its DEFAULT height (current height as max)", () => {
+    // A body that would compute to > the default h:10 must cap AT the default,
+    // not at the generic 20-row ceiling — the narrative's own height is the max.
+    const body = "x".repeat(60 * 50); // ~50 lines → would be 20 uncapped
+    expect(contentDrivenHeight(narrativeTile(body), NARRATIVE_BASE, 6)).toBe(
+      NARRATIVE_BASE.h,
+    );
+  });
+
   it("scales line-wrap budget with effective grid width", () => {
     const body = "x".repeat(120);
     // At full width (w=6 of 6 base) → 60 chars/line, body fits in 2 lines + 2 pad = 4.

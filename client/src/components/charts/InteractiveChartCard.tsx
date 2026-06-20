@@ -169,6 +169,19 @@ export function InteractiveChartCard({
   const v2Spec = isChartSpecV2(chart) ? (chart as ChartSpecV2) : null;
   const activeSpec: ChartSpec | ChartSpecV2 = v2Spec ?? (localV1 as ChartSpec);
 
+  // Wave B2 · the interactive "Sort by" control acts on the ACTIVE spec —
+  // v1 (`localV1`) OR v2 (`v2Spec`). Pre-B2 it was gated on `!!localV1`, so the
+  // v1→v2 convergence silently dropped sort from every chart that rendered as
+  // v2. `chartSupportsSort` + `useChartSort` are now v2-aware (Wave B1).
+  const sortableSpec = v2Spec ?? localV1;
+  const showSortControl =
+    !!sortableSpec &&
+    controls?.sort !== false &&
+    chartSupportsSort(sortableSpec);
+  const sortAxisLabel = localV1
+    ? localV1.xLabel || localV1.x
+    : v2Spec?.encoding.x?.axis?.title || v2Spec?.encoding.x?.field || "";
+
   const canPivot = useMemo(() => {
     if (!showPivotToggle) return false;
     const spec = isChartSpecV2(chart) ? null : (chart as ChartSpec);
@@ -180,6 +193,9 @@ export function InteractiveChartCard({
 
   const toolbarVisible = useMemo(() => {
     if (canPivot) return true;
+    // v2 (or v1) sortable bar → keep the toolbar so the sort control shows even
+    // when no v1-only toolbar (mark / layout / labels) applies.
+    if (showSortControl) return true;
     if (!localV1) return false;
     const hasMarkSwitch = showChartType && isSwitchableMark(localV1.type);
     // A bar is "stackable" if it has any series concept — explicit seriesKeys OR
@@ -191,10 +207,15 @@ export function InteractiveChartCard({
     const hasDataLabelsSwitch =
       showDataLabelsToggle &&
       ["bar", "line", "area", "scatter", "point"].includes(localV1.type);
-    const hasSortControl =
-      controls?.sort !== false && chartSupportsSort(localV1);
-    return hasMarkSwitch || hasLayoutSwitch || hasDataLabelsSwitch || hasSortControl;
-  }, [canPivot, localV1, showChartType, showBarLayout, showDataLabelsToggle, controls?.sort]);
+    return hasMarkSwitch || hasLayoutSwitch || hasDataLabelsSwitch || showSortControl;
+  }, [
+    canPivot,
+    localV1,
+    showSortControl,
+    showChartType,
+    showBarLayout,
+    showDataLabelsToggle,
+  ]);
 
   const handleMarkChange = (next: SwitchableMark) => {
     setLocalV1((prev) => (prev ? coerceMarkType(prev, next) : prev));
@@ -218,9 +239,12 @@ export function InteractiveChartCard({
   // the spec's rows instantly client-side; `onSortPersist` (if given) durably
   // saves the choice. Called unconditionally with a stable fallback so the hook
   // order is constant across v1/v2 renders.
-  const { sortedSpec, sort, setSort } = useChartSort(localV1 ?? EMPTY_SORT_SPEC);
-  const showSortControl =
-    !!localV1 && controls?.sort !== false && chartSupportsSort(localV1);
+  // Hook input is the ACTIVE spec (v1 or v2); `sortedSpec` comes back the same
+  // shape, re-ordered. Called unconditionally with a stable fallback so the
+  // hook order is constant across v1/v2 renders.
+  const { sortedSpec, sort, setSort } = useChartSort(
+    sortableSpec ?? EMPTY_SORT_SPEC,
+  );
   const handleSortChange = (next: ChartSortSpec) => {
     setSort(next);
     onSortPersist?.(next);
@@ -302,11 +326,11 @@ export function InteractiveChartCard({
               </label>
             </div>
           ) : null}
-          {chartControlsVisible && localV1 && showSortControl ? (
+          {chartControlsVisible && showSortControl ? (
             <ChartSortControl
-              value={sort ?? localV1.sort}
+              value={sort ?? localV1?.sort}
               onChange={handleSortChange}
-              axisLabel={localV1.xLabel || localV1.x}
+              axisLabel={sortAxisLabel}
             />
           ) : null}
           {canPivot ? (
@@ -368,9 +392,9 @@ export function InteractiveChartCard({
         </div>
       ) : (
         <ChartShim
-          spec={localV1 ? sortedSpec : activeSpec}
+          spec={sortedSpec}
           keyInsightSessionId={keyInsightSessionId}
-          legacy={() => renderLegacy(localV1 ? sortedSpec : (chart as ChartSpec))}
+          legacy={() => renderLegacy(localV1 ? (sortedSpec as ChartSpec) : (chart as ChartSpec))}
         />
       )}
     </div>

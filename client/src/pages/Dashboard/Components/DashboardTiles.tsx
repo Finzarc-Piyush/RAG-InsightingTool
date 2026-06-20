@@ -211,8 +211,18 @@ const persistLayouts = (dashboardId: string, layouts: Layouts, sheetId?: string)
   }
 };
 
-const ensureLayoutsForTiles = (layouts: Layouts, tiles: DashboardTile[], fallback: Layouts): Layouts => {
+const ensureLayoutsForTiles = (
+  layouts: Layouts,
+  tiles: DashboardTile[],
+  fallback: Layouts,
+  // A2 · when hydrating a saved layout, clamp narrative ("Key conclusion")
+  // tiles DOWN to their content-fit height so a stale persisted `h` (e.g. the
+  // old 10-row default) no longer floats text in an oversized box. Off during
+  // live drag/resize so a deliberate resize is never stomped mid-gesture.
+  opts?: { clampNarrativeToContent?: boolean },
+): Layouts => {
   const tileIds = new Set(tiles.map((tile) => tile.id));
+  const tileById = new Map(tiles.map((tile) => [tile.id, tile]));
   const next: Layouts = {};
 
   ResponsiveLayoutKeys.forEach((key) => {
@@ -248,7 +258,21 @@ const ensureLayoutsForTiles = (layouts: Layouts, tiles: DashboardTile[], fallbac
       }
     });
 
-    next[key] = filtered;
+    if (opts?.clampNarrativeToContent) {
+      next[key] = filtered.map((item) => {
+        const tile = tileById.get(item.i);
+        if (tile?.kind !== "narrative") return item;
+        const fitH = contentDrivenHeight(tile, TILE_CONFIG.narrative, item.w, {
+          cols: COLS[key],
+          rowHeight: ROW_HEIGHT,
+          gridMargin: GRID_MARGIN,
+        });
+        const nextH = Math.max(TILE_CONFIG.narrative.minH, Math.min(item.h, fitH));
+        return nextH === item.h ? item : { ...item, h: nextH };
+      });
+    } else {
+      next[key] = filtered;
+    }
   });
 
   return next;
@@ -367,7 +391,9 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     );
     if (!hasStoredLayout) return;
     layoutMigrateAttemptedRef.current.add(migrateKey);
-    const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts);
+    const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts, {
+      clampNarrativeToContent: true,
+    });
     void onSeedLayoutFromLocalStorage(merged)
       .then(() => {
         try {
@@ -391,13 +417,17 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
 
   useEffect(() => {
     if (serverGridLayout && Object.keys(serverGridLayout).length > 0) {
-      const merged = ensureLayoutsForTiles(serverGridLayout, visibleTiles, fallbackLayouts);
+      const merged = ensureLayoutsForTiles(serverGridLayout, visibleTiles, fallbackLayouts, {
+        clampNarrativeToContent: true,
+      });
       setLayouts(merged);
       return;
     }
     const stored = loadStoredLayouts(dashboardId, sheetId);
     if (stored) {
-      const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts);
+      const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts, {
+        clampNarrativeToContent: true,
+      });
       setLayouts(merged);
     } else {
       setLayouts(fallbackLayouts);
@@ -405,7 +435,11 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
   }, [dashboardId, sheetId, serverGridLayout, fallbackLayouts, visibleTiles]);
 
   useEffect(() => {
-    setLayouts((prev) => ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts));
+    setLayouts((prev) =>
+      ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts, {
+        clampNarrativeToContent: true,
+      }),
+    );
   }, [visibleTiles, fallbackLayouts]);
 
   // DR18G · drag-drop with vertical compaction. The grid is configured

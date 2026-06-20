@@ -12,6 +12,9 @@ import { Filter, X, Settings2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec } from '@/shared/schema';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
+import { ChartSortControl } from '@/components/charts/ChartSortControl';
+import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
+import { applyChartSort } from '@/shared/chartSort';
 import {
   CHART_SERIES_COLORS,
   CHART_DUAL_AXIS_STROKES,
@@ -122,6 +125,13 @@ export function ChartOnlyModal({
   } = chart;
   const chartColor = CHART_SERIES_COLORS[0];
 
+  // Wave B3 · the fullscreen view exposes the same "Sort by" control as the
+  // tile / chat card for bar/column charts (it never had one). Ephemeral: the
+  // tile owns persistence; this just re-orders the zoomed view. The modal is
+  // opened with the tile's already-sorted spec, so `sort` seeds to match.
+  const { sort, setSort } = useChartSort(chart);
+  const showSortControl = chartSupportsSort(chart);
+
   // Wave F3 · field-aware axis tick formatters (parity with ChartRenderer F2)
   // so the expand view formats rate columns as "%", currency with symbols, etc.
   const yTickFormatter = useMemo(() => makeAxisTickFormatter(y), [y]);
@@ -181,6 +191,19 @@ export function ChartOnlyModal({
     return displayData;
   }, [type, allData, hideOutliers, x, y]);
   
+  // Wave B3 · re-order bar rows by the active sort (category axis or value).
+  // Other marks keep their natural / chronological order.
+  const barData = useMemo(() => {
+    if (type !== 'bar' || !sort || typeof x !== 'string' || typeof y !== 'string') {
+      return allData;
+    }
+    return applyChartSort(
+      allData as Array<Record<string, unknown>>,
+      sort,
+      { xCol: x, yCol: y, seriesKeys: specSeriesKeys },
+    );
+  }, [type, sort, allData, x, y, specSeriesKeys]);
+
   const data = type === 'scatter' ? processedScatterData : allData;
 
   const lineAreaSortedData = useMemo(
@@ -214,8 +237,8 @@ export function ChartOnlyModal({
 
   const barModalXTicks = useMemo(() => {
     if (type !== 'bar' || typeof x !== 'string') return undefined;
-    return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, maxXLabels);
-  }, [type, allData, x, maxXLabels]);
+    return evenlySpacedDataKeys(barData as Record<string, unknown>[], x, maxXLabels);
+  }, [type, barData, x, maxXLabels]);
 
   const modalVisibleSeriesKeys = useMemo(
     () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
@@ -437,7 +460,7 @@ export function ChartOnlyModal({
         const stacked = barLayout !== 'grouped';
         return (
           <ResponsiveContainer width="100%" height={480}>
-            <BarChart accessibilityLayer data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
+            <BarChart accessibilityLayer data={barData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -841,6 +864,13 @@ export function ChartOnlyModal({
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {showSortControl && (
+              <ChartSortControl
+                value={sort ?? chart.sort}
+                onChange={setSort}
+                axisLabel={xLabel || (typeof x === 'string' ? x : '')}
+              />
+            )}
             {type === 'line' && (
               <div className="flex items-center gap-2 px-2">
                 <Checkbox

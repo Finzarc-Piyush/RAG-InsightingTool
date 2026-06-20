@@ -66,7 +66,14 @@ export function contentDrivenHeight(
 ): number {
   switch (tile.kind) {
     case "narrative":
-      return textRows(tile.block?.body ?? "", baseConfig, effectiveW);
+      // A2 · the narrative ("Key conclusion") tile sizes to its text, with the
+      // tile's DEFAULT height as the hard ceiling ("only have this current
+      // height as max height"). Longer bodies cap here and scroll inside the
+      // card rather than reserving a taller-than-default slot.
+      return Math.min(
+        textRows(tile.block?.body ?? "", baseConfig, effectiveW),
+        baseConfig.h,
+      );
     case "insight":
       return textRows(tile.narrative ?? "", baseConfig, effectiveW);
     case "action":

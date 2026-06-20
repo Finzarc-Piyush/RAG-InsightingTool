@@ -140,6 +140,38 @@ export function ChartTileBody({
   // Force chart view when this chart can't be pivoted, even if a
   // stale `pivot` value is in sessionStorage from a prior chart shape.
   const effectiveMode = canPivot ? mode : "chart";
+  // A1 · click anywhere on the chart body (view mode, chart view) to open the
+  // fullscreen modal. Disabled while editing (drag owns the gesture) and in
+  // pivot view (table cells stay interactive).
+  const canExpandOnBodyClick = !isEditing;
+  const handleBodyExpandClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (effectiveMode === "pivot") return;
+      const target = event.target as HTMLElement;
+      // Respect interactive children: filter controls, legend toggles, links,
+      // buttons, form controls — a click on those should do their own thing.
+      if (
+        target.closest(
+          '[data-chart-filter-control="true"], a, button, input, select, textarea, [role="button"]',
+        )
+      ) {
+        return;
+      }
+      setIsExpandOpen(true);
+    },
+    [effectiveMode],
+  );
+  const handleBodyExpandKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (effectiveMode === "pivot") return;
+      if (event.target !== event.currentTarget) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        setIsExpandOpen(true);
+      }
+    },
+    [effectiveMode],
+  );
 
   // Wave WI2-wire-bind · derive the lite spec from the tile's
   // ChartSpec. The field set on `InsightChartSpecLite` is a strict
@@ -381,7 +413,22 @@ export function ChartTileBody({
         persistentActions={expandAction}
       />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
-        <div className="flex-1 min-h-[120px] min-w-0" data-dashboard-chart-node>
+        <div
+          className={cn(
+            "flex-1 min-h-[120px] min-w-0",
+            // A1 · in view mode a click anywhere on the chart body opens the
+            // fullscreen modal (the same one the Maximize button uses). Gated
+            // off in edit mode so it never competes with grid drag, and off in
+            // pivot mode so table-cell interactions keep working.
+            !isEditing && effectiveMode !== "pivot" && "cursor-pointer",
+          )}
+          data-dashboard-chart-node
+          onClick={canExpandOnBodyClick ? handleBodyExpandClick : undefined}
+          onKeyDown={canExpandOnBodyClick ? handleBodyExpandKeyDown : undefined}
+          role={canExpandOnBodyClick ? "button" : undefined}
+          tabIndex={canExpandOnBodyClick ? 0 : undefined}
+          aria-label={canExpandOnBodyClick ? "Expand chart to fullscreen" : undefined}
+        >
           <DashboardTileProvider tileId={tile.id} filters={filters}>
           {effectiveMode === "pivot" ? (
             <ChartTilePivotView chart={sortedSpec} filters={filters} />
@@ -416,6 +463,11 @@ export function ChartTileBody({
                       enableFilters
                       filters={filters}
                       onFiltersChange={onFiltersChange}
+                      // A1 · the dashboard tile owns click-to-expand (the
+                      // chart-body div) so v1 + v2 charts behave identically;
+                      // disable ChartRenderer's own card-click modal to avoid
+                      // double-opening on a single click.
+                      expandOnClick={false}
                     />
                   )}
                 />

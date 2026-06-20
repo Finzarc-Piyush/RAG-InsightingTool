@@ -35,6 +35,9 @@ import {
   formatAxisLabelFieldBlind as formatAxisLabel,
 } from '@/lib/charts/chartFilterHelpers';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
+import { ChartSortControl } from '@/components/charts/ChartSortControl';
+import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
+import { applyChartSort } from '@/shared/chartSort';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
 import { DashboardModal } from './DashboardModal/DashboardModal';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
@@ -169,6 +172,11 @@ export function ChartModal({
   } = chart;
   const chartColor = CHART_SERIES_COLORS[(index ?? 0) % CHART_SERIES_COLORS.length];
 
+  // Wave B3 · the chat/analysis zoom view exposes the same "Sort by" control as
+  // the inline card for bar/column charts. Ephemeral (the card owns persistence).
+  const { sort, setSort } = useChartSort(chart);
+  const showSortControl = chartSupportsSort(chart);
+
   const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
     if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;
 
@@ -296,6 +304,18 @@ export function ChartModal({
     return displayData;
   }, [type, allData, hideOutliers, x, y]);
   
+  // Wave B3 · re-order bar rows by the active sort; other marks keep their order.
+  const barData = useMemo(() => {
+    if (type !== 'bar' || !sort || typeof x !== 'string' || typeof y !== 'string') {
+      return allData;
+    }
+    return applyChartSort(
+      allData as Array<Record<string, unknown>>,
+      sort,
+      { xCol: x, yCol: y, seriesKeys: specSeriesKeys },
+    );
+  }, [type, sort, allData, x, y, specSeriesKeys]);
+
   const data = type === 'scatter' ? processedScatterData : allData;
 
   const lineAreaSortedData = useMemo(
@@ -329,8 +349,8 @@ export function ChartModal({
 
   const barModalXTicks = useMemo(() => {
     if (type !== 'bar' || typeof x !== 'string') return undefined;
-    return evenlySpacedDataKeys(allData as Record<string, unknown>[], x, maxXLabels);
-  }, [type, allData, x, maxXLabels]);
+    return evenlySpacedDataKeys(barData as Record<string, unknown>[], x, maxXLabels);
+  }, [type, barData, x, maxXLabels]);
 
   const modalVisibleSeriesKeys = useMemo(
     () => visibleSeriesKeysFromFilters(specSeriesKeys, effectiveFilters),
@@ -587,7 +607,7 @@ export function ChartModal({
           <div className="flex flex-1 min-h-0 flex-col">
           <div className="flex-1 min-h-0">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart accessibilityLayer data={allData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
+            <BarChart accessibilityLayer data={barData as any} margin={{ left: 60, right: 20, top: 20, bottom: 100 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey={x}
@@ -1045,6 +1065,13 @@ export function ChartModal({
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {showSortControl && effectiveView === 'chart' && (
+                <ChartSortControl
+                  value={sort ?? chart.sort}
+                  onChange={setSort}
+                  axisLabel={xLabel || (typeof x === 'string' ? x : '')}
+                />
+              )}
               {canPivot && (
                 <div
                   className="inline-flex rounded-md border border-border overflow-hidden"

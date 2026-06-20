@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useChartSort, chartSupportsSort } from "./useChartSort";
-import type { ChartSpec } from "@/shared/schema";
+import type { ChartSpec, ChartSpecV2 } from "@/shared/schema";
 
 afterEach(() => cleanup());
 
@@ -79,5 +79,86 @@ describe("chartSupportsSort", () => {
   });
   it("false for a single-row bar", () => {
     expect(chartSupportsSort({ type: "bar", data: [{}] })).toBe(false);
+  });
+});
+
+// Wave B1 · v2 (Chart v1→v2 convergence) sort support.
+const v2BarSpec = (): ChartSpecV2 =>
+  ({
+    version: 2,
+    mark: "bar",
+    encoding: {
+      x: { field: "Sex", type: "n" },
+      y: { field: "Survived", type: "q" },
+    },
+    source: {
+      kind: "inline",
+      rows: [
+        { Sex: "female", Survived: 30 },
+        { Sex: "male", Survived: 50 },
+        { Sex: "other", Survived: 10 },
+      ],
+    },
+  }) as unknown as ChartSpecV2;
+
+const sexOrder = (spec: ChartSpecV2) =>
+  spec.source.kind === "inline"
+    ? spec.source.rows.map((r) => r.Sex)
+    : [];
+
+describe("useChartSort · v2 specs", () => {
+  it("chartSupportsSort true for a v2 bar with >1 inline rows", () => {
+    expect(chartSupportsSort(v2BarSpec())).toBe(true);
+  });
+  it("chartSupportsSort false for a v2 line mark", () => {
+    const line = { ...v2BarSpec(), mark: "line" } as ChartSpecV2;
+    expect(chartSupportsSort(line)).toBe(false);
+  });
+  it("chartSupportsSort false for a v2 bar with a non-inline (session-ref) source", () => {
+    const ref = {
+      ...v2BarSpec(),
+      source: { kind: "session-ref", sessionId: "s1" },
+    } as unknown as ChartSpecV2;
+    expect(chartSupportsSort(ref)).toBe(false);
+  });
+
+  it("starts in the server's source order (no baked interactive sort)", () => {
+    const { result } = renderHook(() => useChartSort(v2BarSpec()));
+    expect(sexOrder(result.current.sortedSpec)).toEqual([
+      "female",
+      "male",
+      "other",
+    ]);
+  });
+
+  it("re-orders the v2 source rows by value (desc)", () => {
+    const { result } = renderHook(() => useChartSort(v2BarSpec()));
+    act(() => result.current.setSort({ by: "value", direction: "desc" }));
+    expect(sexOrder(result.current.sortedSpec)).toEqual([
+      "male", // 50
+      "female", // 30
+      "other", // 10
+    ]);
+  });
+
+  it("re-orders the v2 source rows by category (asc)", () => {
+    const { result } = renderHook(() => useChartSort(v2BarSpec()));
+    act(() => result.current.setSort({ by: "category", direction: "asc" }));
+    expect(sexOrder(result.current.sortedSpec)).toEqual([
+      "female",
+      "male",
+      "other",
+    ]);
+  });
+
+  it("never re-orders a v2 line mark even if a sort is set", () => {
+    const line = { ...v2BarSpec(), mark: "line" } as ChartSpecV2;
+    const { result } = renderHook(() => useChartSort(line));
+    act(() => result.current.setSort({ by: "value", direction: "desc" }));
+    expect(sexOrder(result.current.sortedSpec)).toEqual([
+      "female",
+      "male",
+      "other",
+    ]);
   });
 });
