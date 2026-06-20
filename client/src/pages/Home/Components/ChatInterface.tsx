@@ -103,6 +103,8 @@ interface ChatInterfaceProps {
   postEnrichmentPreviewSnapshot?: PreviewSnapshot | null;
   /** WF9 — per-column currency tag (server-detected). */
   currencyByColumn?: Record<string, import('@/shared/schema').ColumnCurrency>;
+  /** DUR1 — per-column duration tag (server-detected elapsed-time measures). */
+  durationByColumn?: Record<string, import('@/shared/schema').ColumnDuration>;
   /** WF9 — wide-format auto-melt metadata (server-populated). */
   wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
   /** H6 — declared dimension hierarchies (from sessionAnalysisContext). */
@@ -207,6 +209,7 @@ export function ChatInterface({
   preEnrichmentPreviewSnapshot = null,
   postEnrichmentPreviewSnapshot = null,
   currencyByColumn,
+  durationByColumn,
   wideFormatTransform,
   dimensionHierarchies,
   onHierarchiesChange,
@@ -1179,6 +1182,7 @@ export function ChatInterface({
                   preEnrichmentPreviewSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentPreviewSnapshot={postEnrichmentPreviewSnapshot}
                   currencyByColumn={hasDatasetSchema ? currencyByColumn : undefined}
+                  durationByColumn={hasDatasetSchema ? durationByColumn : undefined}
                   wideFormatTransform={hasDatasetSchema ? wideFormatTransform : undefined}
                   dimensionHierarchies={hasDatasetSchema ? dimensionHierarchies : undefined}
                   hierarchyEditSessionId={hasDatasetSchema ? sessionId ?? undefined : undefined}

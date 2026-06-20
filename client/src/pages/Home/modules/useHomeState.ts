@@ -4,6 +4,7 @@ import {
   UploadResponse,
   TemporalDisplayGrain,
   type ColumnCurrency,
+  type ColumnDuration,
   type DateTimeColumnPair,
   type TemporalFacetColumnMeta,
   type WideFormatTransform,
@@ -25,6 +26,8 @@ export interface HomeState {
   totalRows: number;
   totalColumns: number;
   currencyByColumn: Record<string, ColumnCurrency>;
+  /** DUR1 · per-column duration tag for elapsed-time measures ("Working Hrs"). */
+  durationByColumn: Record<string, ColumnDuration>;
   wideFormatTransform?: WideFormatTransform;
   /** SU-UX1 · per-session date×time pair annotations (from dataSummary.dateTimeColumnPairs). */
   dateTimeColumnPairs: DateTimeColumnPair[];
@@ -49,6 +52,7 @@ export const useHomeState = () => {
   const [totalRows, setTotalRows] = useState<number>(0);
   const [totalColumns, setTotalColumns] = useState<number>(0);
   const [currencyByColumn, setCurrencyByColumn] = useState<Record<string, ColumnCurrency>>({});
+  const [durationByColumn, setDurationByColumn] = useState<Record<string, ColumnDuration>>({});
   const [wideFormatTransform, setWideFormatTransform] = useState<WideFormatTransform | undefined>(
     undefined
   );
@@ -70,6 +74,7 @@ export const useHomeState = () => {
     setTotalRows(0);
     setTotalColumns(0);
     setCurrencyByColumn({});
+    setDurationByColumn({});
     setWideFormatTransform(undefined);
     setDateTimeColumnPairs([]);
     setIndicators([]);
@@ -90,6 +95,7 @@ export const useHomeState = () => {
     totalRows,
     totalColumns,
     currencyByColumn,
+    durationByColumn,
     wideFormatTransform,
     dateTimeColumnPairs,
     indicators,
@@ -108,6 +114,7 @@ export const useHomeState = () => {
     setTotalRows,
     setTotalColumns,
     setCurrencyByColumn,
+    setDurationByColumn,
     setWideFormatTransform,
     setDateTimeColumnPairs,
     setIndicators,

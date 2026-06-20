@@ -26,6 +26,11 @@ import {
   stripCurrencyAndParse,
   isoForSymbol,
 } from './wideFormat/currencyVocabulary.js';
+import {
+  classifyAsDuration,
+  parseDurationToHours,
+  type DurationFormat,
+} from './durationColumns.js';
 
 /**
  * SU-FU1 · Canonicalise boolean-shaped cell values to "Yes"/"No" at parse time.
@@ -140,6 +145,78 @@ export function finaliseCurrencyForColumn(column: string):
     position: best.position,
     confidence: ratio,
   };
+}
+
+/** DUR2 · Per-column duration tally. Like the currency tally, this is a
+ * side-channel: applyDurationColumns converts HH:MM:SS cells to decimal-hours
+ * NUMBERS in place, so by the time the final createDataSummary runs the cells
+ * are numbers and the "this column is a duration" signal is gone from the
+ * values. We record it here and read it back via finaliseDurationForColumn.
+ * Reset at the start of applyUploadPipelineWithProfile. */
+const durationTallyByColumn: Map<string, { format: DurationFormat }> = new Map();
+
+function resetDurationTally(): void {
+  durationTallyByColumn.clear();
+}
+
+/** Finalise a duration column into its display annotation. Returns undefined
+ * for columns never recorded by applyDurationColumns. */
+export function finaliseDurationForColumn(
+  column: string
+): { unit: 'hours'; format: DurationFormat } | undefined {
+  const tally = durationTallyByColumn.get(column);
+  if (!tally) return undefined;
+  return { unit: 'hours', format: tally.format };
+}
+
+/**
+ * DUR2 · Detect the duration columns in `data` (HH:MM:SS elapsed-time strings),
+ * excluding columns already approved as dates. Pure read — no mutation.
+ */
+export function detectDurationColumns(
+  data: Record<string, any>[],
+  excludeColumns: ReadonlyArray<string> = []
+): string[] {
+  if (data.length === 0) return [];
+  const exclude = new Set(excludeColumns);
+  const cols = Object.keys(data[0] || {}).filter(
+    (c) => !isTemporalFacetColumnKey(c) && !exclude.has(c)
+  );
+  const sampleSize = Math.min(data.length, 1000);
+  const out: string[] = [];
+  for (const col of cols) {
+    const samples = data
+      .slice(0, sampleSize)
+      .map((r) => r[col])
+      .filter((v) => v !== null && v !== undefined && v !== '');
+    if (classifyAsDuration(col, samples).isDuration) out.push(col);
+  }
+  return out;
+}
+
+/**
+ * DUR2 · Convert each duration column's cells to decimal-hours NUMBERS in
+ * place, recording the column in the duration tally. Sentinels / unparseable
+ * cells become null (excluded from aggregation). After this the column is a
+ * real numeric measure: every aggregation path and DuckDB's TRY_CAST work
+ * unchanged, exactly like a native number column.
+ */
+export function applyDurationColumns(
+  data: Record<string, any>[],
+  durationColumns: ReadonlyArray<string>
+): void {
+  if (data.length === 0 || durationColumns.length === 0) return;
+  for (const col of durationColumns) {
+    durationTallyByColumn.set(col, { format: 'hm' });
+    for (const row of data) {
+      const v = row[col];
+      if (v === null || v === undefined || v === '') {
+        row[col] = null;
+        continue;
+      }
+      row[col] = parseDurationToHours(v);
+    }
+  }
 }
 
 /** Warn when preview sample Row IDs collapse — often misclassified date canonicalization. */
@@ -822,6 +899,12 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       }
     }
 
+    // DUR2 · duration annotation, read from the side-channel tally populated by
+    // applyDurationColumns (the cells are already numbers by now). Only on
+    // numeric columns — a duration is a real measure.
+    const duration =
+      type === 'number' ? finaliseDurationForColumn(col) : undefined;
+
     return {
       name: col,
       type,
@@ -830,6 +913,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       ...(temporalDisplayGrain !== undefined ? { temporalDisplayGrain } : {}),
       ...(currency ? { currency } : {}),
       ...(timeOfDayInfo ? { timeOfDay: timeOfDayInfo } : {}),
+      ...(duration ? { duration } : {}),
       ...(dateRange ? { dateRange } : {}),
     };
   });
@@ -1005,12 +1089,19 @@ export function applyUploadPipelineWithProfile(
   // generation. Real source columns ("Date", "Day", "TSOE-Date Combo") do not
   // match isTemporalFacetColumnKey and survive; exactly one clean facet
   // generation is then produced below from the genuine date columns.
+  resetDurationTally();
   stripTemporalFacetColumns(data);
   const interim = createDataSummary(data);
   const approvedDateCols = resolveApprovedDateColumns(data, profile, opts);
   const withDash = convertDashToZeroForNumericColumns(data, interim.numericColumns);
   canonicalizeDateColumnValues(withDash, approvedDateCols);
   applyTemporalFacetColumns(withDash, approvedDateCols);
+  // DUR2 · detect + convert duration columns (e.g. "Working Hrs" = "03:31:57")
+  // to decimal-hours numbers BEFORE the final summary. Excludes approved date
+  // columns. The final createDataSummary then sees real numbers → marks them
+  // numericColumns and reattaches the `duration` annotation from the tally.
+  const durationCols = detectDurationColumns(withDash, approvedDateCols);
+  applyDurationColumns(withDash, durationCols);
   const summary = createDataSummary(withDash);
   applyDateColumnSelectionToSummary(summary, approvedDateCols);
   return { data: withDash, summary };

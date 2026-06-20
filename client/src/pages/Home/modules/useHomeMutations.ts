@@ -58,6 +58,9 @@ interface UseHomeMutationsProps {
   setCurrencyByColumn?: (
     map: Record<string, import('@/shared/schema').ColumnCurrency>
   ) => void;
+  setDurationByColumn?: (
+    map: Record<string, import('@/shared/schema').ColumnDuration>
+  ) => void;
   setWideFormatTransform?: (
     t: import('@/shared/schema').WideFormatTransform | undefined
   ) => void;
@@ -104,6 +107,7 @@ export const useHomeMutations = ({
   setTotalRows,
   setTotalColumns,
   setCurrencyByColumn,
+  setDurationByColumn,
   setWideFormatTransform,
   setDateTimeColumnPairs,
   setIndicators,
@@ -331,6 +335,7 @@ export const useHomeMutations = ({
     summaryColumns?: Array<{
       name: string;
       currency?: import('@/shared/schema').ColumnCurrency;
+      duration?: import('@/shared/schema').ColumnDuration;
       indicator?: {
         kind: 'boolean' | 'categorical';
         positiveValues?: string[];
@@ -370,6 +375,14 @@ export const useHomeMutations = ({
           if (col.currency) map[col.name] = col.currency;
         }
         setCurrencyByColumn(map);
+      }
+      // DUR1 — derive per-column duration map so chips/cells render durations.
+      if (setDurationByColumn) {
+        const map: Record<string, import('@/shared/schema').ColumnDuration> = {};
+        for (const col of payload.summaryColumns) {
+          if (col.duration) map[col.name] = col.duration;
+        }
+        setDurationByColumn(map);
       }
     }
     if (payload.temporalFacetColumns !== undefined) {
@@ -696,6 +709,13 @@ export const useHomeMutations = ({
               if (col?.currency) map[col.name] = col.currency;
             }
             setCurrencyByColumn(map);
+          }
+          if (setDurationByColumn) {
+            const map: Record<string, import('@/shared/schema').ColumnDuration> = {};
+            for (const col of data.summary.columns ?? []) {
+              if (col?.duration) map[col.name] = col.duration;
+            }
+            setDurationByColumn(map);
           }
           if (setWideFormatTransform) {
             setWideFormatTransform(data.summary.wideFormatTransform);

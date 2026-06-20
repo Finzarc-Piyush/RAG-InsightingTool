@@ -56,6 +56,10 @@ import type { DimensionFilter } from "../../../../shared/queryTypes.js";
 import { runSignificanceTest } from "../../../significanceTests.js";
 import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
+import {
+  timeOfDayToSeconds,
+  formatSecondsAsClock,
+} from "../../../durationColumns.js";
 
 const dimensionFilterSchema = z
   .object({
@@ -234,11 +238,16 @@ function buildBreakdownRankingEvidence(
   return composeFindingDetail("", evidence);
 }
 
-function aggregate(
+/** Exported for unit tests (DUR1 time-of-day coercion). */
+export function aggregate(
   rows: Record<string, unknown>[],
   breakdownColumn: string,
   metricColumn: string,
-  mode: BreakdownArgs["aggregation"]
+  mode: BreakdownArgs["aggregation"],
+  /** DUR1 · when the metric is a time-of-day column ("Clock-In Time"), coerce
+   * its HH:MM:SS cells to seconds-since-midnight so the group can be averaged
+   * (the raw strings fail numericValue → would aggregate to 0). */
+  metricIsTimeOfDay = false
 ): Map<string, { sum: number; count: number; nRows: number }> {
   const m = new Map<string, { sum: number; count: number; nRows: number }>();
   for (const row of rows) {
@@ -251,7 +260,9 @@ function aggregate(
       m.set(key, cur);
       continue;
     }
-    const nv = numericValue(row[metricColumn]);
+    const nv = metricIsTimeOfDay
+      ? timeOfDayToSeconds(row[metricColumn])
+      : numericValue(row[metricColumn]);
     if (nv === null) {
       m.set(key, cur);
       continue;
@@ -483,11 +494,17 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
           },
         };
       }
+      // DUR1 · a time-of-day metric ("Clock-In Time") averages as
+      // seconds-since-midnight, then renders back as a clock ("09:51").
+      const metricIsTimeOfDay =
+        ctx.exec.summary.columns.find((c) => c.name === metricColumn)
+          ?.timeOfDay !== undefined;
       const aggMap = aggregate(
         frame as Record<string, unknown>[],
         breakdownColumn,
         metricColumn!,
-        aggregation
+        aggregation,
+        metricIsTimeOfDay
       );
       const rowsOut: Record<string, unknown>[] = [];
       for (const [label, { sum, count, nRows }] of aggMap) {
@@ -508,6 +525,16 @@ export function registerBreakdownRankingTool(registry: ToolRegistry) {
         (a, b) =>
           (Number(a[aggKey]) - Number(b[aggKey])) * sortMul
       );
+      // DUR1 · after ranking on the numeric seconds, render a time-of-day
+      // MEAN as a clock string so the narrator/table read "09:51", not
+      // "35460". A sum of clock times is meaningless (leave numeric); count
+      // is a row count, not a time.
+      if (metricIsTimeOfDay && aggregation === "mean") {
+        for (const r of rowsOut) {
+          const sec = Number(r[aggKey]);
+          if (Number.isFinite(sec)) r[aggKey] = formatSecondsAsClock(sec);
+        }
+      }
       const trimmed = rowsOut.slice(0, topN);
       const cols =
         trimmed.length > 0 ?

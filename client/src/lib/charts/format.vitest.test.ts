@@ -47,6 +47,12 @@ describe("format · inferFormatHint", () => {
     expect(inferFormatHint("created_at")).toBe("date");
   });
 
+  it("detects duration by column name (DUR1)", () => {
+    expect(inferFormatHint("Working Hrs")).toBe("duration");
+    expect(inferFormatHint("Total Hours")).toBe("duration");
+    expect(inferFormatHint("TAT")).toBe("duration");
+  });
+
   it("falls back to kmb for generic numeric columns", () => {
     expect(inferFormatHint("Volume")).toBe("kmb");
     expect(inferFormatHint("count")).toBe("kmb");
@@ -194,7 +200,12 @@ describe("Wave F1 · makeAxisTickFormatter (field-aware axis ticks)", () => {
   });
 
   it("renders plain numeric measures with K/M/B", () => {
-    expect(makeAxisTickFormatter("Working Hrs")(1500)).toBe("1.5K");
+    expect(makeAxisTickFormatter("Units Sold")(1500)).toBe("1.5K");
+  });
+
+  it("renders duration columns as durations (DUR1)", () => {
+    // "Working Hrs" is a decimal-hours measure → axis tick reads as a duration.
+    expect(makeAxisTickFormatter("Working Hrs")(3.5325)).toBe("3h 32m");
   });
 
   it("ignores the recharts tick index argument", () => {

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Database, Hash, Calendar, Type, DollarSign } from 'lucide-react';
 import type {
   ColumnCurrency,
+  ColumnDuration,
   DateTimeColumnPair,
   DimensionHierarchy,
   WideFormatTransform,
@@ -23,6 +24,8 @@ interface ColumnsDisplayProps {
   totalColumns?: number;
   /** WF9 — per-column currency tag for numeric columns. */
   currencyByColumn?: Record<string, ColumnCurrency>;
+  /** DUR1 — per-column duration tag for elapsed-time numeric columns. */
+  durationByColumn?: Record<string, ColumnDuration>;
   /** WF9 — banner above the column chips when the dataset was
    * auto-melted from wide format. */
   wideFormatTransform?: WideFormatTransform;
@@ -50,6 +53,7 @@ export function ColumnsDisplay({
   totalRows,
   totalColumns,
   currencyByColumn,
+  durationByColumn,
   wideFormatTransform,
   dimensionHierarchies,
   dateTimeColumnPairs,
@@ -89,6 +93,8 @@ export function ColumnsDisplay({
     let base: string;
     if (c) {
       base = `numeric · ${c.isoCode} (${c.symbol})`;
+    } else if (durationByColumn?.[column]) {
+      base = 'numeric · duration';
     } else if (numericColumns.includes(column)) {
       base = 'numeric';
     } else if (dateColumns.includes(column)) {

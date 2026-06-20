@@ -234,6 +234,8 @@ interface MessageBubbleProps {
   } | null;
   /** WF9 — per-column currency tag (from dataSummary.columns[].currency). */
   currencyByColumn?: Record<string, import('@/shared/schema').ColumnCurrency>;
+  /** DUR1 — per-column duration tag (from dataSummary.columns[].duration). */
+  durationByColumn?: Record<string, import('@/shared/schema').ColumnDuration>;
   /** WF9 — wide-format transform metadata (from dataSummary.wideFormatTransform). */
   wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
   /** H6 — declared dimension hierarchies (from sessionAnalysisContext.dataset.dimensionHierarchies). */
@@ -300,6 +302,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   preEnrichmentPreviewSnapshot,
   postEnrichmentPreviewSnapshot,
   currencyByColumn,
+  durationByColumn,
   wideFormatTransform,
   dimensionHierarchies,
   hierarchyEditSessionId,
@@ -1218,6 +1221,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   preEnrichmentSnapshot={preEnrichmentPreviewSnapshot}
                   postEnrichmentSnapshot={postEnrichmentPreviewSnapshot}
                   currencyByColumn={currencyByColumn}
+                  durationByColumn={durationByColumn}
                   wideFormatTransform={wideFormatTransform}
                   dimensionHierarchies={dimensionHierarchies}
                   sessionIdForHierarchyEdit={hierarchyEditSessionId}

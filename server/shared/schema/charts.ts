@@ -1960,6 +1960,18 @@ export const columnCurrencySchema = z.object({
 
 export type ColumnCurrency = z.infer<typeof columnCurrencySchema>;
 
+// DUR1 · duration annotation for elapsed-time columns ("Working Hrs" =
+// "03:31:57"). The column is STORED as a numeric measure in decimal hours so
+// it averages/sums like any number; this annotation tells display layers to
+// render it back as a duration ("3h 32m"). Distinct from `timeOfDay` (a clock
+// reading kept as text).
+export const columnDurationSchema = z.object({
+  unit: z.literal("hours"),
+  format: z.enum(["hm", "hms", "decimal"]).optional(),
+});
+
+export type ColumnDuration = z.infer<typeof columnDurationSchema>;
+
 // Wide-format transform metadata, populated by meltDataset when an
 // uploaded dataset is detected as wide and reshaped to long. See WF4.
 export const wideFormatTransformSchema = z.object({
@@ -2043,6 +2055,12 @@ export const dataSummarySchema = z.object({
         sentinelValues: z.array(z.string()).optional(),
       })
       .optional(),
+    /** DUR1 · duration columns (elapsed-time, e.g. "Working Hrs" = "03:31:57").
+     * Stored as a numeric measure in DECIMAL HOURS (so it averages/sums like
+     * any number); this annotation tells the display layers to render it back
+     * as a duration ("3h 32m"). Distinct from `timeOfDay`, which is a clock
+     * reading kept as text. */
+    duration: columnDurationSchema.optional(),
     /** SU-IC1 · structural classification for pre-computed "indicator"
      * columns — low-cardinality, boolean-like or shortlist-categorical
      * columns that directly answer common questions (e.g. "Clock-In <09:30"

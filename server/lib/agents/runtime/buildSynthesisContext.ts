@@ -226,7 +226,27 @@ function buildDataUnderstandingBlock(
     lines.push(
       `Time-of-day columns: ${todList}. These are HH:MM:SS strings, not calendar dates — ` +
         `phrase findings as clock times (e.g. "before 9:30 AM", "average clock-in 09:45") ` +
-        `and never frame them as dates.`,
+        `and never frame them as dates. Averages/rankings over these columns ARE computed ` +
+        `(via seconds-since-midnight) and surfaced already formatted as clock times ` +
+        `(e.g. "09:51") — cite them verbatim; do not treat a clock value as a raw number.`,
+    );
+  }
+
+  // Duration columns (e.g. "Working Hrs") are stored as decimal-HOURS numbers
+  // (so they average/sum like any measure). The narrator must phrase them as
+  // durations, not bare decimals, and read structural 0s as off-days.
+  const durationColumns = (summary?.columns ?? []).filter(
+    (c) => c.duration !== undefined,
+  );
+  if (durationColumns.length > 0) {
+    const durList = durationColumns.map((c) => `"${c.name}"`).join("; ");
+    lines.push(
+      `Duration columns: ${durList}. These are elapsed-time measures stored in ` +
+        `DECIMAL HOURS — average/sum them as quantities and phrase magnitudes as ` +
+        `durations (e.g. 3.53 → "3h 32m", "about 3.5 hours"), never as a bare ` +
+        `decimal or a clock time. A 0 (or null/"Absent") means no hours were ` +
+        `logged for that row (off-day / absent), not genuine zero productivity — ` +
+        `scope averages to rows that actually logged time.`,
     );
   }
 

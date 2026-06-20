@@ -15,10 +15,16 @@ import {
   formatTemporalPeriodKeyForDisplay,
   isCanonicalPeriodKey,
 } from "@/lib/temporalPeriodDisplay";
+import { formatHoursAsDuration } from "@/lib/duration";
 
 const CURRENCY_RE =
   /\b(revenue|sales|price|cost|margin|profit|spend|amount|cash|usd|inr|gbp|eur)\b/i;
 const PERCENT_RE = /\b(rate|percent|pct|share|ratio|conversion|growth)\b/i;
+// DUR1 · elapsed-time measures (e.g. "Working Hrs") are stored as decimal
+// hours; format axis/tooltip values as durations ("3h 32m"). Name-based,
+// symmetric with the currency/percent heuristics above.
+const DURATION_RE =
+  /\b(hrs|hours|duration|elapsed|worked|working|tat|turnaround)\b/i;
 // NOTE: the standalone token `day` is deliberately EXCLUDED. A column literally
 // named "Day" in these datasets is an ordinal counter (1..N), not a calendar
 // date — inferring "date" sent its numeric value through `new Date(15)` →
@@ -75,12 +81,13 @@ export function isDateFieldName(name: string | undefined): boolean {
 /** Detect the implicit format from a column name. */
 export function inferFormatHint(
   fieldName: string | undefined,
-): "currency" | "percent" | "date" | "kmb" | "raw" {
+): "currency" | "percent" | "date" | "duration" | "kmb" | "raw" {
   if (!fieldName) return "raw";
   if (isDateFieldName(fieldName)) return "date";
   const normalized = normalizeFieldName(fieldName);
   if (CURRENCY_RE.test(normalized)) return "currency";
   if (PERCENT_RE.test(normalized)) return "percent";
+  if (DURATION_RE.test(normalized)) return "duration";
   return "kmb";
 }
 
@@ -220,6 +227,9 @@ export function formatChartValue(
     return Number.isFinite(num)
       ? formatPercent(num, opts.precision ?? 1)
       : String(value);
+  }
+  if (hint === "duration") {
+    return Number.isFinite(num) ? formatHoursAsDuration(num) : String(value);
   }
   if (hint === "date") {
     // Magnitude guard. A date-NAMED axis ("Week", "Month", "Year", a leftover

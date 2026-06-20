@@ -4,6 +4,7 @@ import type {
   TemporalFacetColumnMeta,
   SessionAnalysisContext,
   ColumnCurrency,
+  ColumnDuration,
   DateTimeColumnPair,
   WideFormatTransform,
 } from '@/shared/schema';
@@ -48,6 +49,8 @@ interface UseSessionLoaderProps {
    */
   setWideFormatTransform?: (transform: WideFormatTransform | undefined) => void;
   setCurrencyByColumn?: (map: Record<string, ColumnCurrency>) => void;
+  /** DUR1 · populate the per-column duration map on session load. */
+  setDurationByColumn?: (map: Record<string, ColumnDuration>) => void;
   /** SU-UX1 · populate the date×time pair banner state on session load. */
   setDateTimeColumnPairs?: (next: DateTimeColumnPair[]) => void;
   /** SU-UX1 · populate the indicator-columns banner state on session load. */
@@ -78,6 +81,7 @@ export const useSessionLoader = ({
   setSessionAnalysisContext,
   setWideFormatTransform,
   setCurrencyByColumn,
+  setDurationByColumn,
   setDateTimeColumnPairs,
   setIndicators,
 }: UseSessionLoaderProps) => {
@@ -134,6 +138,13 @@ export const useSessionLoader = ({
           if (col?.currency) map[col.name] = col.currency;
         }
         setCurrencyByColumn(map);
+      }
+      if (setDurationByColumn && Array.isArray(session.dataSummary.columns)) {
+        const map: Record<string, ColumnDuration> = {};
+        for (const col of session.dataSummary.columns) {
+          if (col?.duration) map[col.name] = col.duration;
+        }
+        setDurationByColumn(map);
       }
       // SU-UX1 · publish the schema-annotation arrays so the banners survive
       // refresh, not just the upload-completion path.
@@ -221,6 +232,7 @@ export const useSessionLoader = ({
     setSuggestions,
     setCollaborators,
     setCurrencyByColumn,
+    setDurationByColumn,
     setDateTimeColumnPairs,
     setIndicators,
     setSessionAnalysisContext,

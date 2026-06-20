@@ -244,6 +244,25 @@ export function buildPatternDrivenFallback(args: Args): {
 }
 
 /**
+ * Manager-grade SHORT variant of `buildPatternDrivenFallback`. Emits only the
+ * HEADLINE plus a `DO:` lane built from the next-check — the verbose `driver`
+ * and `risk` claims (the old "SHAPE" wall the chart-insight rework removes) are
+ * dropped. It deliberately emits NO `WHY:` lane: a deterministic fallback must
+ * not speculate, so it never opens the hedged-causation lane. The result feeds
+ * straight into the shared `WHY:`/`DO:` lane wire format.
+ */
+export function buildPatternDrivenFallbackShort(args: Args): {
+  family: DeterministicFallbackFamily;
+  text: string;
+} {
+  const { family, claim } = selectFourClaim(args);
+  const action = claim.nextCheck.replace(/^Next:\s*/i, "").trim();
+  const lines = [claim.headline.trim()];
+  if (action) lines.push(`DO: ${action}`);
+  return { family, text: lines.join("\n") };
+}
+
+/**
  * Same family selection as `buildPatternDrivenFallback`, but emits the
  * 4-claim shape mapped to a structured envelope: the headline + driver
  * become the finding (with magnitude when available), the risk becomes

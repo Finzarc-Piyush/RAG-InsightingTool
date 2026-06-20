@@ -21,17 +21,20 @@ const src = readFileSync(
   "utf-8"
 );
 
-describe("W-DX2 · chart insight 'likely reason' is a hedged, number-free hypothesis", () => {
-  it("the LIKELY REASON step mandates a hedge", () => {
-    assert.match(src, /LIKELY REASON \(a clearly-hedged hypothesis\)/);
+describe("chart insight WHY: lane is a hedged, number-free hypothesis", () => {
+  it("the WHY: lane mandates a hedge", () => {
+    // The reason now lives in a dedicated optional "WHY: " lane (the chart-insight
+    // rework) rather than a free-prose "LIKELY REASON" step, but the discipline
+    // is unchanged: it must open with a hedge.
+    assert.match(src, /start the line literally with "WHY: "/);
     assert.match(src, /MUST open with a hedge/);
   });
 
-  it("forbids a number inside the reason", () => {
-    assert.match(src, /NEVER put a number inside the reason/);
+  it("forbids a number inside the WHY lane", () => {
+    assert.match(src, /MUST NOT contain any number/);
   });
 
-  it("the system prompt frames the likely reason as a hedged hypothesis", () => {
+  it("the system prompt frames the WHY line as a hedged hypothesis", () => {
     assert.match(src, /It is a HYPOTHESIS: ALWAYS introduce it with a hedge/);
     assert.match(src, /NEVER attach a number to it/);
   });

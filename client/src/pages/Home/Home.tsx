@@ -162,6 +162,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     totalRows,
     totalColumns,
     currencyByColumn,
+    durationByColumn,
     wideFormatTransform,
     setSessionId,
     setFileName,
@@ -177,6 +178,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTotalRows,
     setTotalColumns,
     setCurrencyByColumn,
+    setDurationByColumn,
     setWideFormatTransform,
     dateTimeColumnPairs,
     indicators,
@@ -215,6 +217,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setTotalRows,
     setTotalColumns,
     setCurrencyByColumn,
+    setDurationByColumn,
     setWideFormatTransform,
     setDateTimeColumnPairs,
     setIndicators,
@@ -610,6 +613,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setSessionAnalysisContext,
     setWideFormatTransform,
     setCurrencyByColumn,
+    setDurationByColumn,
     setDateTimeColumnPairs,
     setIndicators,
   });
@@ -1041,6 +1045,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         totalRows={totalRows}
         totalColumns={totalColumns}
         currencyByColumn={currencyByColumn}
+        durationByColumn={durationByColumn}
         wideFormatTransform={wideFormatTransform}
         dimensionHierarchies={
           sessionAnalysisContext?.dataset?.dimensionHierarchies

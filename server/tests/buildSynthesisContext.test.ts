@@ -91,6 +91,27 @@ test("dataUnderstanding lists grain, key columns, caveats, and applied filters",
   assert.ok(!/Distributor stockout in Mar-24/.test(block));
 });
 
+test("dataUnderstanding surfaces a duration block when a column carries the duration annotation", () => {
+  const ctx = baseCtx();
+  ctx.summary = {
+    ...baseSummary,
+    columns: [
+      ...baseSummary.columns,
+      {
+        name: "Working Hrs",
+        type: "number",
+        sampleValues: [3.53, 5.14],
+        duration: { unit: "hours", format: "hm" },
+      },
+    ],
+    numericColumns: [...baseSummary.numericColumns, "Working Hrs"],
+  };
+  const block = buildSynthesisContext(ctx).dataUnderstandingBlock;
+  assert.match(block, /Duration columns: "Working Hrs"/);
+  assert.match(block, /DECIMAL HOURS/);
+  assert.match(block, /3h 32m/);
+});
+
 test("userBlock surfaces username, permanent notes, and suggested follow-ups", () => {
   const bundle = buildSynthesisContext(baseCtx());
   assert.match(bundle.userBlock, /Authenticated user: piyush@finzarc\.com/);

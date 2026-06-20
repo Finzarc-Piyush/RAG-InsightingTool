@@ -6,7 +6,9 @@ import type { ChartInsightSynthesisContext } from './insightSynthesis/types.js';
 import { formatSessionAnalysisContextForInsight } from './insightSynthesis/formatSessionContext.js';
 import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
 import { computePivotPatterns, renderPivotPatternsBlock } from './insightGenerator/pivotPatterns.js';
-import { buildPatternDrivenFallback } from './insightGenerator/deterministicNarratives.js';
+import { buildPatternDrivenFallbackShort } from './insightGenerator/deterministicNarratives.js';
+import { hasHedge, STAT_NUMBER_RE } from './agents/runtime/verifierCausalCheck.js';
+import { splitChartInsightLanes, joinChartInsightLanes } from '../shared/chartInsightLanes.js';
 import { logger } from "./logger.js";
 
 /**
@@ -19,8 +21,13 @@ function insertSentenceBreaks(s: string): string {
   return s.replace(/([.!?])\s+(?=[A-Z(])/g, '$1\n\n');
 }
 
-// keyInsight: grounded numbers + LLM interpretation (3–5 substantive sentences typical).
-const KEY_INSIGHT_MAX_CHARS = 2200;
+// keyInsight: grounded numbers + LLM interpretation, now manager-grade and
+// SHORT — up to 3 lanes (HEADLINE / optional hedged WHY: / optional DO:),
+// emitted via the shared WHY:/DO: wire format. 550 chars comfortably fits three
+// tight lanes; the old 2200 produced the "wall of text nobody reads" managers
+// complained about. `enforceInsightLimit`/`truncateInsight`/the prompt all read
+// this constant — never hardcode the number elsewhere.
+const KEY_INSIGHT_MAX_CHARS = 550;
 
 /**
  * Pick the dimension name to use when narrating "top performers". For multi-series charts
@@ -73,6 +80,23 @@ const enforceInsightLimit = (value: string) => {
   }
   return value;
 };
+
+/**
+ * Hold the in-`keyInsight` WHY lane to the SAME rail as the answer envelope's
+ * likelyDrivers: a `WHY:` lane that is not clearly hedged, or that smuggles a
+ * statistic-shaped number into the mechanism, is DROPPED entirely (the HEADLINE
+ * and any DO lane are kept). This is the deterministic gate behind the prompt's
+ * WHY permission (L-022) — reusing the exported `hasHedge` / `STAT_NUMBER_RE`
+ * from the verifier rather than a private copy. Pure; a no-op on legacy untagged
+ * strings (no WHY lane → nothing to gate).
+ */
+export function sanitizeChartWhyLane(keyInsight: string): string {
+  const lanes = splitChartInsightLanes(keyInsight);
+  if (!lanes.why) return keyInsight;
+  const whyOk = hasHedge(lanes.why) && !STAT_NUMBER_RE.test(lanes.why);
+  if (whyOk) return keyInsight;
+  return joinChartInsightLanes({ headline: lanes.headline, do: lanes.do });
+}
 
 export async function generateChartInsights(
   chartSpec: ChartSpec,
@@ -439,7 +463,7 @@ SUGGESTION FORMAT:
     ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
 ${chatInsights.map((insight, idx) => `${idx + 1}. ${insight.text}`).join('\n')}
 
-The keyInsight should connect this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) to the analysis with 3–5 substantive sentences: the headline number, what it implies for segment / risk / opportunity, and one concrete next-check or next-action. ≤${KEY_INSIGHT_MAX_CHARS} characters total.`
+The keyInsight should connect this chart (${chartSpec.x}, ${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) to the analysis as the HEADLINE line plus, where they genuinely apply, an optional hedged 'WHY: ' line and an optional 'DO: ' next step. ≤${KEY_INSIGHT_MAX_CHARS} characters total.`
     : '';
 
   const dataFactsContext = `
@@ -471,11 +495,12 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 
   const prompt = `Return JSON with the listed fields.
 
-TASK: Write 3–5 plain-English sentences (plain text, no markdown headings) that explain THIS chart to a busy manager who is NOT a statistician. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Cover, in this order, only the parts that genuinely apply:
-  1. HEADLINE — the main comparison in plain words with the actual numbers, naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher").
-  2. SHAPE — which specific segment / time bucket / mix drives the headline, named explicitly, and whether it is broad-based or down to just one or two groups — said in plain words.
-  3. LIKELY REASON (a clearly-hedged hypothesis) — a brief, plausible explanation for WHY this pattern might exist, drawn from the question and general real-world / business knowledge. It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST stay qualitative — NEVER put a number inside the reason (numbers belong in the headline). Omit if there is no credible reason.
-  4. WHAT TO DO — one concrete, useful next step ONLY when the reader could actually act on it. If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this entirely rather than forcing a generic action.
+TASK: Brief a busy manager (NOT a statistician) on THIS chart in AT MOST 3 short lines. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Emit these lanes, each on its OWN line, omitting any optional lane that does not genuinely apply:
+  Line 1 — HEADLINE (REQUIRED): the single most important comparison in plain words WITH the actual number(s), naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher"). One sentence. No hedge here; no "WHY:"/"DO:" prefix.
+  Line 2 — start the line literally with "WHY: " then ONE clearly-hedged hypothesis for why the pattern might exist, drawn from the question and general real-world / business knowledge (OPTIONAL). It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST NOT contain any number (numbers belong in the headline). Omit the whole line if there is no credible reason.
+  Line 3 — start the line literally with "DO: " then ONE concrete next step the reader could actually act on (OPTIONAL). If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this line entirely rather than forcing a generic action.
+
+Keep it tight — a manager should absorb all of it in a few seconds. Drop a lane rather than padding it.
 
 If ${chartSpec.y} is a rate, share, ratio or average, the categories do NOT add up to a meaningful total — compare them directly (e.g. "X is about 4× Y"), render any 0–1 value as a percentage (e.g. 0.742 → 74%, 0.189 → 19%) rather than a raw decimal, and never say "X% of the total".
 
@@ -494,7 +519,7 @@ ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}$
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Plain-English sentences (3–5), ≤${KEY_INSIGHT_MAX_CHARS} characters, no statistics jargon. Use the actual numbers from above (never labels like P75/P90). For categorical X, name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) so it ties back to the chart, explain in plain words what the pattern means, add a likely reason when there is a credible one (a clearly-hedged hypothesis, never with a number inside it), and a next step only if the reader can act on it."${businessCommentaryRequest}
+  "keyInsight": "Up to 3 lines (≤${KEY_INSIGHT_MAX_CHARS} characters total), no statistics jargon, no markdown headings. Line 1 is the HEADLINE: name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) with the real number (never labels like P75/P90). Then, ONLY where each genuinely applies, a line starting 'WHY: ' (one clearly-hedged, number-free reason) and a line starting 'DO: ' (one concrete action). Omit the WHY and/or DO line when they do not apply."${businessCommentaryRequest}
 }`;
 
   try {
@@ -504,7 +529,11 @@ OUTPUT JSON (exact keys only):
         messages: [
           {
             role: 'system',
-            content: `You are a senior analyst briefing a busy manager who is NOT a statistician. Output JSON with a single key "keyInsight": 3–5 plain-English sentences interpreting the chart using ONLY the provided numbers. Tell the story in this order, including only the parts that genuinely apply: the headline comparison (with real numbers), what drives it, a likely real-world reason for it, and — only when the reader can actually act on it — one concrete next step.
+            content: `You are a senior analyst briefing a busy manager who is NOT a statistician. Output JSON with a single key "keyInsight": AT MOST 3 short lines interpreting the chart using ONLY the provided numbers, each lane on its OWN line and any optional lane omitted when it does not apply:
+  • the HEADLINE — the main comparison with real numbers (no hedge, no prefix);
+  • optionally a line starting "WHY: " — ONE clearly-hedged real-world reason for the pattern;
+  • optionally a line starting "DO: " — ONE concrete next step, only when the reader can actually act on it.
+Keep it tight: a manager should grasp all of it in a few seconds. Drop any lane rather than padding it.
 
 WRITE FOR A NON-MATH READER — translate the analysis, never parrot jargon:
 - BANNED words (must never appear in the output): mass, quartile, upper-quartile, lower-quartile, bottom-quartile, percentile, P25, P75, P90, HHI, CV, coefficient of variation, concentration index, long-tail, dispersion, trough. PIVOT PATTERNS labels are internal signals only — read them, then say it plainly.
@@ -517,7 +546,7 @@ ANTI-PATTERNS — do NOT write any of these:
 - Vague next-actions ("monitor", "investigate further", "look deeper"). If you give a next step, make it specific and clearly worth doing.
 - A forced next step when nothing can be done: if the pattern is a fixed historical or structural fact the reader cannot change, OMIT the next step instead of inventing a generic one.
 
-A "likely reason" is a plausible cause drawn from the question and general world / business knowledge (e.g. why one group leads, why a season spikes). It is a HYPOTHESIS: ALWAYS introduce it with a hedge ("likely", "may reflect", "consistent with") so it is unmistakably an explanation and not a measured fact, and NEVER attach a number to it (numbers stay in the measured headline). This keeps the chart's "why" consistent with the answer envelope's hedged causal lane.
+The "WHY: " line is a plausible cause drawn from the question and general world / business knowledge (e.g. why one group leads, why a season spikes). It is a HYPOTHESIS: ALWAYS introduce it with a hedge ("likely", "may reflect", "consistent with") so it is unmistakably an explanation and not a measured fact, and NEVER attach a number to it (numbers stay in the measured headline). This keeps the chart's "why" consistent with the answer envelope's hedged causal lane. If there is no credible reason, OMIT the WHY line entirely — never pad it.
 
 NEVER META-HEDGE: do not describe your OWN reasoning or the evidence as uncertain/undefined/incomplete (banned: "HHI is undefined", "CV not informative", "cannot be stated from the supplied evidence", "the data may be mis-coded or not populated", "from this slice alone"). When a series is ALL ZERO (or every value is the same), do not analyze its (non-existent) spread — state the plain, likely DOMAIN reason for the flatness in one sentence (e.g. "Adherence is 0% for every planned type here because it is only recorded on Market-Working days — the other types are not measurement opportunities, not low performers."), then stop. A flat-zero metric is an expected structural fact, not a data-quality problem to speculate about.
 
@@ -551,6 +580,10 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
         result.keyInsight || "Data shows interesting patterns worth investigating"
       );
     }
+
+    // Hedge-gate the WHY: lane before anything else uses the text — an unhedged
+    // or numbered "why" is dropped, the headline + DO lane survive (L-022).
+    modelKeyInsight = sanitizeChartWhyLane(modelKeyInsight);
 
     const candidate = truncateInsight(modelKeyInsight);
 
@@ -601,15 +634,16 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
     }
 
     if (!passes && topX !== undefined && typeof topY === 'number' && !isNaN(topY)) {
-      // Wave 2 · prefer the pattern-driven fallback when patterns are usable
-      // (it produces 4-claim narratives keyed off concentration / dispersion /
-      // trend / relationship / diagnostic families instead of the formulaic
-      // "prioritize the leader, lift the laggards" template).
+      // Prefer the pattern-driven fallback when patterns are usable — keyed off
+      // concentration / dispersion / trend / relationship / diagnostic families
+      // instead of the formulaic "prioritize the leader, lift the laggards"
+      // template. The SHORT variant emits HEADLINE + a DO lane only (no verbose
+      // driver/risk wall, no speculative WHY), matching the manager-grade shape.
       const usePatternFallback =
         pivotPatterns.topPerformers.length > 0 && pivotPatterns.rowCount >= 2;
 
       if (usePatternFallback) {
-        const { text } = buildPatternDrivenFallback({
+        const { text } = buildPatternDrivenFallbackShort({
           patterns: pivotPatterns,
           chartSpec,
           dimensionLabel: topPerfDimension,

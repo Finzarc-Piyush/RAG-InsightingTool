@@ -75,15 +75,20 @@ export interface CausalClaimReport {
 
 /** Statistic-shaped numbers: percent, decimal, thousands-grouped, or a number
  *  with a quantitative unit / multiplier. Plain small integers, ordinals
- *  ("1st"), and category labels ("Pclass 3") are intentionally NOT matched. */
-const STAT_NUMBER_RE =
+ *  ("1st"), and category labels ("Pclass 3") are intentionally NOT matched.
+ *  Exported so the per-chart insight generator can hold its in-`keyInsight`
+ *  WHY lane to the SAME "no number in a mechanism" rail as the envelope. */
+export const STAT_NUMBER_RE =
   /\b\d[\d,]*\.?\d*\s*%|\b\d+\.\d+\b|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s?(?:x|×|pp|bps|k|m|bn|million|billion)\b/i;
 
 /** Causal connectives that ASSERT a cause — banned in the measured layer. */
 const MEASURED_CAUSAL_RE =
   /\b(?:because(?:\s+of)?|caused by|due to|as a result of|driven by|the reason|attributable to|owing to|stems from|results? from)\b/i;
 
-function hasHedge(text: string): boolean {
+/** True iff `text` opens its causal claim with a hedge from the frozen
+ *  `CAUSAL_HEDGE_TERMS` vocabulary. Exported so the per-chart insight generator
+ *  reuses the SAME hedge rail as the answer-envelope's likelyDrivers lane. */
+export function hasHedge(text: string): boolean {
   const lower = text.toLowerCase();
   return CAUSAL_HEDGE_TERMS.some((t) => lower.includes(t));
 }

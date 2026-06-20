@@ -6,6 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { ColumnsDisplay } from './ColumnsDisplay';
 import type {
   ColumnCurrency,
+  ColumnDuration,
   DateTimeColumnPair,
   DimensionHierarchy,
   TemporalDisplayGrain,
@@ -13,6 +14,7 @@ import type {
   WideFormatTransform,
 } from '@/shared/schema';
 import type { IndicatorEntry } from '@/components/IndicatorColumnsBanner';
+import { formatHoursAsDuration } from '@/lib/duration';
 import { formatDateCellForGrain, inferTemporalGrainFromSample } from '@/lib/temporalDisplayFormat';
 import { facetColumnHeaderLabel, isTemporalFacetFieldId } from '@/lib/temporalFacetDisplay';
 import { parseDateLike } from '@/lib/parseDateLike';
@@ -60,6 +62,8 @@ interface DataPreviewProps {
   } | null;
   /** WF9 — per-column currency tag (server-detected). */
   currencyByColumn?: Record<string, ColumnCurrency>;
+  /** DUR1 — per-column duration tag (server-detected elapsed-time measures). */
+  durationByColumn?: Record<string, ColumnDuration>;
   /** WF9 — wide-format auto-melt metadata; renders the banner. */
   wideFormatTransform?: WideFormatTransform;
   /** H6 — declared dimension hierarchies; renders the banner. */
@@ -91,6 +95,7 @@ export function DataPreview({
   preEnrichmentSnapshot = null,
   postEnrichmentSnapshot = null,
   currencyByColumn,
+  durationByColumn,
   wideFormatTransform,
   dimensionHierarchies,
   sessionIdForHierarchyEdit,
@@ -208,6 +213,7 @@ export function DataPreview({
         totalRows={totalRows}
         totalColumns={totalColumns}
         currencyByColumn={currencyByColumn}
+        durationByColumn={durationByColumn}
         wideFormatTransform={wideFormatTransform}
         dimensionHierarchies={dimensionHierarchies}
         dateTimeColumnPairs={dateTimeColumnPairs}
@@ -322,7 +328,11 @@ export function DataPreview({
                       let displayValue: string = value as string;
                       
                       if (value !== null && value !== undefined) {
-                        if (displayAsDateColumns.has(col)) {
+                        const dur = durationByColumn?.[col];
+                        if (dur && typeof value === 'number') {
+                          // DUR1 · render the decimal-hours measure as a duration.
+                          displayValue = formatHoursAsDuration(value, dur.format);
+                        } else if (displayAsDateColumns.has(col)) {
                           const g = resolvedGrainsByColumn[col];
                           const formatted =
                             g !== undefined ? formatDateCellForGrain(value, g) : null;
