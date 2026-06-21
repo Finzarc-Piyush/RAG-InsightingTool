@@ -65,7 +65,7 @@ jobs:
       AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Guard — required secrets present
         run: |
