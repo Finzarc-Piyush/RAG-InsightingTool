@@ -63,6 +63,7 @@ import {
 import { filterCollidingRects } from "@/lib/charts/labelCollision";
 import {
   maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { resolveReferenceLines } from "@/lib/charts/layers";
@@ -118,7 +119,8 @@ export interface BarRendererProps {
   ariaLabel?: string;
 }
 
-const MARGIN_V = { top: 16, right: 56, bottom: 36, left: 56 };
+// bottom 52 for vertical bars: room for -45° rotate-to-fit category labels.
+const MARGIN_V = { top: 16, right: 56, bottom: 52, left: 56 };
 const MARGIN_H = { top: 16, right: 56, bottom: 36, left: 120 };
 
 type Orientation = "vertical" | "horizontal";
@@ -214,23 +216,34 @@ function BarRendererImpl({
   const MARGIN = orientation === "vertical" ? MARGIN_V : MARGIN_H;
   const innerWidth = Math.max(0, width - MARGIN.left - MARGIN.right);
   const innerHeight = Math.max(0, height - MARGIN.top - MARGIN.bottom);
-  // Width-aware category-label budget (no fixed cap). Categories sit on the X
-  // axis for vertical bars (horizontal labels — budget driven by label text
-  // width) and the Y axis for horizontal bars (labels stacked vertically —
-  // budget driven by line height, modeled as a 90° rotation), so size to
-  // whichever extent carries the labels.
+  // Width-aware category-label density (no fixed cap). For VERTICAL bars the
+  // categories sit on the X axis: the shared authority decides both how many
+  // fit AND whether to tilt them -45° (rotate-to-fit). For HORIZONTAL bars the
+  // categories stack on the Y axis (line-height bound, modeled as 90°) and are
+  // never tilted — keep that footprint, no x-axis rotation.
+  const xTickPlan = useMemo(() => {
+    if (orientation === "vertical") {
+      return xAxisTickBudget({
+        axisWidthPx: innerWidth,
+        labels: xValues,
+        dataPointCount: xValues.length,
+        fontSizePx: 11,
+      });
+    }
+    return {
+      max: maxXAxisLabels({
+        axisWidthPx: innerHeight,
+        labels: xValues,
+        dataPointCount: xValues.length,
+        fontSizePx: 11,
+        rotationDeg: 90,
+      }),
+      rotateDeg: 0,
+    };
+  }, [xValues, orientation, innerWidth, innerHeight]);
   const xCategoryTicks = useMemo(
-    () =>
-      pickEvenlySpacedTicks(
-        xValues,
-        maxXAxisLabels({
-          axisWidthPx: orientation === "vertical" ? innerWidth : innerHeight,
-          labels: xValues,
-          fontSizePx: 11,
-          rotationDeg: orientation === "vertical" ? 0 : 90,
-        }),
-      ),
-    [xValues, orientation, innerWidth, innerHeight],
+    () => pickEvenlySpacedTicks(xValues, xTickPlan.max),
+    [xValues, xTickPlan.max],
   );
   const grid = useChartGrid();
   // WD2-wiring-bar · when this bar chart renders inside a dashboard tile,
@@ -1199,7 +1212,9 @@ function BarRendererImpl({
                   fill: "hsl(var(--muted-foreground))",
                   fontSize: 11,
                   fontFamily: "var(--font-sans)",
-                  textAnchor: "middle",
+                  textAnchor: xTickPlan.rotateDeg ? "end" : "middle",
+                  angle: xTickPlan.rotateDeg,
+                  dy: xTickPlan.rotateDeg ? "0.25em" : undefined,
                 })}
                 tickValues={xCategoryTicks}
               />

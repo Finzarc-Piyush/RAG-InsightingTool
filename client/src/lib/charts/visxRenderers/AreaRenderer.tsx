@@ -37,7 +37,7 @@ import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import { ChartTooltip } from "@/components/charts/ChartTooltip";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
-  maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import {
@@ -84,7 +84,8 @@ export interface AreaRendererProps {
   ariaLabel?: string;
 }
 
-const MARGIN = { top: 16, right: 16, bottom: 36, left: 48 };
+// bottom 52 (not 36): room for -45° rotate-to-fit x labels (see LineRenderer).
+const MARGIN = { top: 16, right: 16, bottom: 52, left: 48 };
 
 interface SeriesPoint {
   x: unknown;
@@ -435,29 +436,30 @@ function AreaRendererImpl({
     [xCh.field],
   );
 
-  // Width-aware x-axis label budget (no fixed cap) — see LineRenderer.
-  const xTickValues = useMemo<Array<Date | string>>(() => {
-    if (isTemporal) {
-      const maxLabels = maxXAxisLabels({
-        axisWidthPx: innerWidth,
-        avgLabelChars: 8,
-        fontSizePx: 11,
-        rotationDeg: 0,
-      });
-      const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
-        maxLabels,
-      );
-      return pickEvenlySpacedTicks(candidates, maxLabels);
-    }
-    const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
-    const maxLabels = maxXAxisLabels({
+  // Width-aware x-axis label density (no fixed cap) — see LineRenderer. One
+  // shared-authority plan decides both count AND -45° rotate-to-fit.
+  const xTickPlan = useMemo(() => {
+    const domain = isTemporal
+      ? undefined
+      : (xScale as ReturnType<typeof scalePoint<string>>).domain();
+    return xAxisTickBudget({
       axisWidthPx: innerWidth,
       labels: domain,
+      dataPointCount: isTemporal ? data.length : domain?.length,
       fontSizePx: 11,
-      rotationDeg: 0,
     });
-    return pickEvenlySpacedTicks(domain, maxLabels);
-  }, [xScale, isTemporal, innerWidth]);
+  }, [xScale, isTemporal, innerWidth, data.length]);
+
+  const xTickValues = useMemo<Array<Date | string>>(() => {
+    if (isTemporal) {
+      const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
+        xTickPlan.max,
+      );
+      return pickEvenlySpacedTicks(candidates, xTickPlan.max);
+    }
+    const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
+    return pickEvenlySpacedTicks(domain, xTickPlan.max);
+  }, [xScale, isTemporal, xTickPlan.max]);
   const yTickFormat = useMemo(
     () => makeAxisTickFormatter(yCh.field),
     [yCh.field],
@@ -737,7 +739,9 @@ function AreaRendererImpl({
             fill: "hsl(var(--muted-foreground))",
             fontSize: 11,
             fontFamily: "var(--font-sans)",
-            textAnchor: "middle",
+            textAnchor: xTickPlan.rotateDeg ? "end" : "middle",
+            angle: xTickPlan.rotateDeg,
+            dy: xTickPlan.rotateDeg ? "0.25em" : undefined,
           })}
           tickValues={xTickValues}
         />

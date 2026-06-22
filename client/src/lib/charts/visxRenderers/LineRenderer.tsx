@@ -39,7 +39,7 @@ import {
 } from "@/lib/charts/format";
 import { placeLabelsNoOverlap } from "@/lib/charts/labelCollision";
 import {
-  maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
@@ -99,7 +99,9 @@ export interface LineRendererProps {
   ariaLabel?: string;
 }
 
-const MARGIN = { top: 16, right: 16, bottom: 36, left: 48 };
+// bottom 52 (not 36): reserves room for -45° rotate-to-fit x labels so tilted
+// date/category labels don't clip. Horizontal short labels just get more breath.
+const MARGIN = { top: 16, right: 16, bottom: 52, left: 48 };
 
 interface SeriesPoint {
   x: unknown;
@@ -318,32 +320,33 @@ function LineRendererImpl({
     });
   }, [isTemporal, data, xCh, innerWidth, zoomRange]);
 
-  // Width-aware x-axis label budget (no fixed cap): fit as many labels as the
-  // plot width allows. Temporal — ask D3 for that many nice ticks, then thin.
-  // Categorical — thin the visible domain to the budget. Labels are horizontal
-  // (fontSize 11), so the budget scales with label text length.
-  const xTickValues = useMemo<Array<Date | string>>(() => {
-    if (isTemporal) {
-      const maxLabels = maxXAxisLabels({
-        axisWidthPx: innerWidth,
-        avgLabelChars: 8,
-        fontSizePx: 11,
-        rotationDeg: 0,
-      });
-      const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
-        maxLabels,
-      );
-      return pickEvenlySpacedTicks(candidates, maxLabels);
-    }
-    const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
-    const maxLabels = maxXAxisLabels({
+  // Width-aware x-axis label density (no fixed cap): ONE plan — the shared
+  // authority every chart surface uses — decides both how many labels fit AND
+  // whether to tilt them (-45° rotate-to-fit for long/many labels, horizontal
+  // for short/few). The data-point count caps it so a short series is never
+  // thinned, and nothing is ever clamped to a magic number.
+  const xTickPlan = useMemo(() => {
+    const domain = isTemporal
+      ? undefined
+      : (xScale as ReturnType<typeof scalePoint<string>>).domain();
+    return xAxisTickBudget({
       axisWidthPx: innerWidth,
       labels: domain,
+      dataPointCount: isTemporal ? data.length : domain?.length,
       fontSizePx: 11,
-      rotationDeg: 0,
     });
-    return pickEvenlySpacedTicks(domain, maxLabels);
-  }, [xScale, isTemporal, innerWidth]);
+  }, [xScale, isTemporal, innerWidth, data.length]);
+
+  const xTickValues = useMemo<Array<Date | string>>(() => {
+    if (isTemporal) {
+      const candidates = (xScale as ReturnType<typeof scaleTime>).ticks(
+        xTickPlan.max,
+      );
+      return pickEvenlySpacedTicks(candidates, xTickPlan.max);
+    }
+    const domain = (xScale as ReturnType<typeof scalePoint<string>>).domain();
+    return pickEvenlySpacedTicks(domain, xTickPlan.max);
+  }, [xScale, isTemporal, xTickPlan.max]);
 
   const yScale = useMemo(() => {
     const flat: number[] = [];
@@ -1129,7 +1132,9 @@ function LineRendererImpl({
               fill: "hsl(var(--muted-foreground))",
               fontSize: 11,
               fontFamily: "var(--font-sans)",
-              textAnchor: "middle",
+              textAnchor: xTickPlan.rotateDeg ? "end" : "middle",
+              angle: xTickPlan.rotateDeg,
+              dy: xTickPlan.rotateDeg ? "0.25em" : undefined,
             })}
             tickValues={xTickValues}
           />

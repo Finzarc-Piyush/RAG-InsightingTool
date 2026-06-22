@@ -19,7 +19,7 @@ import { AxisBottom, AxisLeft } from "@visx/axis";
 import { GridRows } from "@visx/grid";
 import type { ChartSpecV2 } from "@/shared/schema";
 import {
-  maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import {
@@ -58,7 +58,8 @@ export interface WaterfallRendererProps {
   ariaLabel?: string;
 }
 
-const MARGIN = { top: 20, right: 16, bottom: 36, left: 56 };
+// bottom 52 (not 36): room for -45° rotate-to-fit category labels.
+const MARGIN = { top: 20, right: 16, bottom: 52, left: 56 };
 
 interface WaterfallBar {
   category: string;
@@ -131,20 +132,21 @@ function WaterfallRendererImpl({
     [xValues, innerWidth],
   );
 
-  // Width-aware category-label budget (no fixed cap): fit as many horizontal
-  // labels as the plot width allows.
-  const xTickValues = useMemo(
+  // Width-aware category-label density (no fixed cap): the shared authority
+  // decides both how many fit AND whether to tilt them -45° (rotate-to-fit).
+  const xTickPlan = useMemo(
     () =>
-      pickEvenlySpacedTicks(
-        xValues,
-        maxXAxisLabels({
-          axisWidthPx: innerWidth,
-          labels: xValues,
-          fontSizePx: 11,
-          rotationDeg: 0,
-        }),
-      ),
+      xAxisTickBudget({
+        axisWidthPx: innerWidth,
+        labels: xValues,
+        dataPointCount: xValues.length,
+        fontSizePx: 11,
+      }),
     [xValues, innerWidth],
+  );
+  const xTickValues = useMemo(
+    () => pickEvenlySpacedTicks(xValues, xTickPlan.max),
+    [xValues, xTickPlan.max],
   );
 
   const yScale = useMemo(() => {
@@ -297,7 +299,9 @@ function WaterfallRendererImpl({
             fill: "hsl(var(--muted-foreground))",
             fontSize: 11,
             fontFamily: "var(--font-sans)",
-            textAnchor: "middle",
+            textAnchor: xTickPlan.rotateDeg ? "end" : "middle",
+            angle: xTickPlan.rotateDeg,
+            dy: xTickPlan.rotateDeg ? "0.25em" : undefined,
           })}
           tickValues={xTickValues}
         />

@@ -34,7 +34,7 @@ import {
   makeAxisTickFormatter,
 } from "@/lib/charts/format";
 import {
-  maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
@@ -130,20 +130,21 @@ function RectRendererImpl({
     }
     return { rows: rs, rowRawByKey: rRaw, cols: cs, colRawByKey: cRaw };
   }, [data, rowCh, colCh]);
-  // Width-aware column-label budget (no fixed cap): fit as many horizontal
-  // labels as the heatmap width allows.
-  const colTicks = useMemo(
+  // Width-aware column-label density (no fixed cap): the shared authority
+  // decides both how many fit AND whether to tilt them -45° (rotate-to-fit).
+  const colTickPlan = useMemo(
     () =>
-      pickEvenlySpacedTicks(
-        cols,
-        maxXAxisLabels({
-          axisWidthPx: innerWidth,
-          labels: cols,
-          fontSizePx: 10,
-          rotationDeg: 0,
-        }),
-      ),
+      xAxisTickBudget({
+        axisWidthPx: innerWidth,
+        labels: cols,
+        dataPointCount: cols.length,
+        fontSizePx: 10,
+      }),
     [cols, innerWidth],
+  );
+  const colTicks = useMemo(
+    () => pickEvenlySpacedTicks(cols, colTickPlan.max),
+    [cols, colTickPlan.max],
   );
 
   const valueExtent = useMemo(() => {
@@ -334,7 +335,9 @@ function RectRendererImpl({
             fill: "hsl(var(--muted-foreground))",
             fontSize: 10,
             fontFamily: "var(--font-sans)",
-            textAnchor: "middle",
+            textAnchor: colTickPlan.rotateDeg ? "end" : "middle",
+            angle: colTickPlan.rotateDeg,
+            dy: colTickPlan.rotateDeg ? "0.25em" : undefined,
           })}
           tickValues={colTicks}
         />

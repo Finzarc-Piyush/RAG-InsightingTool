@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 /**
  * Observe an element's content-box width in px. Returns `[ref, width]`.
@@ -19,7 +19,13 @@ export function useContainerWidth<T extends HTMLElement = HTMLDivElement>(): [
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
 
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): the priming `clientWidth` read below runs
+  // synchronously after DOM mutation but BEFORE the browser paints, so the very
+  // first painted frame already has the real width — no one-frame flash at the
+  // width-unknown fallback budget (e.g. the old "stuck at 10 labels"). SSR-safe:
+  // returns early when ResizeObserver/DOM is absent, and these chart surfaces
+  // are client-only.
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
 

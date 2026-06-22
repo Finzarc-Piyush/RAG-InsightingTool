@@ -31,7 +31,7 @@ import { qualitativeColor } from "@/lib/charts/palette";
 import { makeAxisTickFormatter } from "@/lib/charts/format";
 import { targetYTickCount } from "@/lib/charts/yAxisTickCount";
 import {
-  maxXAxisLabels,
+  xAxisTickBudget,
   pickEvenlySpacedTicks,
 } from "@/lib/charts/xAxisLabelCap";
 import { useDashboardTileContext } from "@/pages/Dashboard/lib/dashboardTileContext";
@@ -57,7 +57,8 @@ export interface ComboRendererProps {
   ariaLabel?: string;
 }
 
-const MARGIN = { top: 16, right: 56, bottom: 36, left: 56 };
+// bottom 52 (not 36): room for -45° rotate-to-fit category labels.
+const MARGIN = { top: 16, right: 56, bottom: 52, left: 56 };
 
 function ComboRendererImpl({
   spec,
@@ -97,20 +98,21 @@ function ComboRendererImpl({
     () => distinctOrdered(data, xCh.accessor),
     [data, xCh],
   );
-  // Width-aware category-label budget (no fixed cap): fit as many horizontal
-  // labels as the plot width allows.
-  const xCategoryTicks = useMemo(
+  // Width-aware category-label density (no fixed cap): the shared authority
+  // decides both how many fit AND whether to tilt them -45° (rotate-to-fit).
+  const xTickPlan = useMemo(
     () =>
-      pickEvenlySpacedTicks(
-        xValues,
-        maxXAxisLabels({
-          axisWidthPx: innerWidth,
-          labels: xValues,
-          fontSizePx: 11,
-          rotationDeg: 0,
-        }),
-      ),
+      xAxisTickBudget({
+        axisWidthPx: innerWidth,
+        labels: xValues,
+        dataPointCount: xValues.length,
+        fontSizePx: 11,
+      }),
     [xValues, innerWidth],
+  );
+  const xCategoryTicks = useMemo(
+    () => pickEvenlySpacedTicks(xValues, xTickPlan.max),
+    [xValues, xTickPlan.max],
   );
 
   const xScale = useMemo(
@@ -259,7 +261,9 @@ function ComboRendererImpl({
             fill: "hsl(var(--muted-foreground))",
             fontSize: 11,
             fontFamily: "var(--font-sans)",
-            textAnchor: "middle",
+            textAnchor: xTickPlan.rotateDeg ? "end" : "middle",
+            angle: xTickPlan.rotateDeg,
+            dy: xTickPlan.rotateDeg ? "0.25em" : undefined,
           })}
           tickValues={xCategoryTicks}
         />

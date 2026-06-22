@@ -26,10 +26,13 @@
 export const MIN_X_AXIS_LABELS = 2;
 
 /**
- * Generous absolute guard so pathologically short labels (1–2 chars) on a very
- * wide axis can't request hundreds of ticks. Not a UX target — a backstop.
+ * Pathological-DOM safety guard ONLY — never a UX target. It exists so that
+ * 1–2 char labels on an absurdly wide axis can't request thousands of <text>
+ * nodes. The real upper bound on a normal chart is the data-point count (you
+ * can't label more buckets than exist) and the no-overlap pixel density — both
+ * cap first, well below this. Set high enough that it never governs a real chart.
  */
-export const ABS_MAX_X_AXIS_LABELS = 60;
+export const ABS_MAX_X_AXIS_LABELS = 200;
 
 /** Fallback budget used only when the axis pixel width is unknown. */
 export const DEFAULT_MAX_X_AXIS_LABELS = 10;
@@ -45,7 +48,7 @@ export const MAX_X_AXIS_LABELS = DEFAULT_MAX_X_AXIS_LABELS;
 // SF/Inter average glyph advance ≈ 0.55–0.6 × fontSize; 0.6 biases conservative.
 const CHAR_WIDTH_FACTOR = 0.6;
 const LINE_HEIGHT_FACTOR = 1.2;
-const MIN_GAP_PX = 8;
+const MIN_GAP_PX = 6;
 const DEFAULT_FONT_PX = 11;
 const FALLBACK_LABEL_CHARS = 6;
 
@@ -64,8 +67,15 @@ export interface XAxisLabelBudgetOpts {
   fontSizePx?: number;
   /** Label rotation in degrees (0 = horizontal; e.g. -45 for recharts bars). */
   rotationDeg?: number;
-  /** Minimum gap between adjacent labels in px (default 8). */
+  /** Minimum gap between adjacent labels in px (default 6). */
   minGapPx?: number;
+  /**
+   * Number of distinct x data points / categories. The budget is never larger
+   * than this — you can't label more buckets than exist, so a 7-point series is
+   * never thinned no matter how wide the axis. When omitted, falls back to
+   * `labels.length`; when neither is given, width/density governs alone.
+   */
+  dataPointCount?: number;
 }
 
 /** Length (in chars) of the WIDEST label — the budget must guarantee it fits. */
@@ -85,9 +95,10 @@ function widestLabelChars(
 /**
  * Maximum number of x-axis tick labels that fit legibly in `axisWidthPx`.
  *
- * Returns `DEFAULT_MAX_X_AXIS_LABELS` when width is unknown/invalid so callers
- * that can't measure keep working. Result is always within
- * `[MIN_X_AXIS_LABELS, ABS_MAX_X_AXIS_LABELS]`.
+ * The result is `min(fitByWidth, dataPointCount, ABS_MAX_X_AXIS_LABELS)`, floored
+ * at `MIN_X_AXIS_LABELS` — i.e. governed by no-overlap pixel density and the data
+ * count, NOT a magic number. Returns `DEFAULT_MAX_X_AXIS_LABELS` only when width
+ * is unknown/invalid so callers that can't measure keep working.
  */
 export function maxXAxisLabels(opts: XAxisLabelBudgetOpts = {}): number {
   const { axisWidthPx } = opts;
@@ -134,7 +145,58 @@ export function maxXAxisLabels(opts: XAxisLabelBudgetOpts = {}): number {
     return DEFAULT_MAX_X_AXIS_LABELS;
   }
   const raw = Math.floor(axisWidthPx / footprintPx);
-  return Math.max(MIN_X_AXIS_LABELS, Math.min(ABS_MAX_X_AXIS_LABELS, raw));
+
+  // The real ceiling: never more labels than data points (or, lacking an
+  // explicit count, than the provided labels). The ABS guard is only a
+  // pathological-DOM backstop — data + density govern in every real case.
+  const dataCap =
+    Number.isFinite(opts.dataPointCount) && (opts.dataPointCount as number) > 0
+      ? Math.floor(opts.dataPointCount as number)
+      : opts.labels && opts.labels.length > 0
+        ? opts.labels.length
+        : Number.POSITIVE_INFINITY;
+  const ceiling = Math.min(ABS_MAX_X_AXIS_LABELS, dataCap);
+  return Math.max(MIN_X_AXIS_LABELS, Math.min(ceiling, raw));
+}
+
+/** A label-count budget plus whether the labels should be tilted to fit more. */
+export interface XAxisTickPlan {
+  /** Max number of tick labels to render (see `maxXAxisLabels`). */
+  max: number;
+  /** Degrees to rotate the labels (0 = horizontal; -45 = tilt-to-fit). */
+  rotateDeg: number;
+}
+
+/**
+ * THE single entry point every chart surface (recharts chat card + modals, visx
+ * renderers) delegates to, so the same chart shows the same density everywhere.
+ *
+ * It decides BOTH how many labels fit AND whether to tilt them from one set of
+ * area + data inputs — "rotate-to-fit": short/few labels stay horizontal (they
+ * already fit many), long or numerous labels tilt -45° so the axis packs far
+ * more than horizontal text would allow. The number of data points is never
+ * reduced; only the labels are thinned/rotated as the width demands.
+ */
+export function xAxisTickBudget(opts: {
+  axisWidthPx?: number;
+  labels?: ReadonlyArray<unknown>;
+  dataPointCount?: number;
+  fontSizePx?: number;
+  minGapPx?: number;
+}): XAxisTickPlan {
+  const widest = widestLabelChars(opts.labels, FALLBACK_LABEL_CHARS);
+  const count = opts.dataPointCount ?? opts.labels?.length ?? 0;
+  // Tilt when horizontal labels would crowd: long text OR many categories.
+  const rotateDeg = widest > 6 || count > 12 ? -45 : 0;
+  const max = maxXAxisLabels({
+    axisWidthPx: opts.axisWidthPx,
+    labels: opts.labels,
+    dataPointCount: opts.dataPointCount,
+    fontSizePx: opts.fontSizePx,
+    minGapPx: opts.minGapPx,
+    rotationDeg: rotateDeg,
+  });
+  return { max, rotateDeg };
 }
 
 export function pickEvenlySpacedTicks<T>(values: readonly T[], max: number = MAX_X_AXIS_LABELS): T[] {

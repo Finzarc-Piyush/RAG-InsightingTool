@@ -107,8 +107,6 @@ const X_AXIS_MARGIN_PX = 64;
 const DUAL_AXIS_EXTRA_MARGIN_PX = 40;
 // Min horizontal slot per bar in a compact chat tile so bars stay legible.
 const MIN_COMPACT_BAR_SLOT_PX = 14;
-// Upper guard on compact bars so a very wide tile doesn't render hairline mush.
-const MAX_COMPACT_BAR_LIMIT = 40;
 
 type FiltersUpdater = ActiveChartFilters | ((prev: ActiveChartFilters) => ActiveChartFilters);
 
@@ -439,7 +437,11 @@ export function ChartRenderer({
     if (chartWidth <= 0) return MAX_COMPACT_X_TICKS;
     const axisW = chartWidth - X_AXIS_MARGIN_PX;
     const fit = Math.floor(axisW / MIN_COMPACT_BAR_SLOT_PX);
-    return Math.max(MAX_COMPACT_X_TICKS, Math.min(MAX_COMPACT_BAR_LIMIT, fit));
+    // No magic upper cap: a wider tile keeps as many bars as fit at the legible
+    // 14px slot, floored at MAX_COMPACT_X_TICKS. Labels are then thinned to the
+    // width-aware budget by `maxXLabels` (the shared authority), so this only
+    // governs how many BARS render, not how many labels.
+    return Math.max(MAX_COMPACT_X_TICKS, fit);
   }, [chartWidth]);
 
   const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > compactBarLimit;

@@ -290,7 +290,11 @@ function cartesianOption(
       boundaryGap: true,
       axisLabel: {
         ...AXIS_LABEL,
-        interval: categories.length > 18 ? "auto" : 0,
+        // No hardcoded category threshold: let ECharts thin labels by actual
+        // rendered overlap (area-aware), the same way the on-screen charts do.
+        // When everything fits, "auto" still shows every label.
+        interval: "auto",
+        hideOverlap: true,
         rotate,
         formatter: (v: string) => trimLabel(String(v)),
       },
